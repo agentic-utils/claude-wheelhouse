@@ -71,6 +71,21 @@ def session_action(method):
     return guarded
 
 
+def item_rows(items, names) -> list[tuple]:
+    """Tasks and questions in inbox order, then each session's subagents grouped beneath
+    its name. Pairs of (item, None) for inbox rows, (item, position in its group) for agents."""
+    inbox = [(it, None) for it in items if it["kind"] != "agent"]
+    # sorted is stable, so each group keeps inbox order
+    agents = sorted((it for it in items if it["kind"] == "agent"),
+                    key=lambda it: (names.get(it["session_id"], ""), it["session_id"]))
+    grouped, last, n = [], None, 0
+    for it in agents:
+        n = n + 1 if it["session_id"] == last else 0
+        last = it["session_id"]
+        grouped.append((it, n))
+    return inbox + grouped
+
+
 def short(sid: str) -> str:
     return sid[:6]
 
@@ -392,11 +407,16 @@ class WheelhouseApp(App):
         keep = table.cursor_row
         table.clear()
         names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
-        for it in self.store.items(self.filter_sid, include_closed=False):
+        for it, nested in item_rows(self.store.items(self.filter_sid, include_closed=False), names):
             style = "bold #ffd300" if it["status"] == "open" else "bold #ff2a6d" \
                 if it["status"] in ("blocked", "waiting") else MATRIX
-            table.add_row(names.get(it["session_id"], "")[:14], it["ref"], Text(it["status"], style=style),
-                          it["title"], key=f"{it['session_id']}|{it['ref']}")
+            name = names.get(it["session_id"], "")[:14]
+            if nested is None:
+                cells = (name, it["ref"], Text(it["status"], style=style), it["title"])
+            else:   # a subagent, tucked under its session's name
+                cells = (name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
+                         Text(it["status"], style=style), Text(it["title"], style="dim"))
+            table.add_row(*cells, key=f"{it['session_id']}|{it['ref']}")
         if table.row_count:
             table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
         self.paint_detail()

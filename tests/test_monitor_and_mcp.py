@@ -11,11 +11,16 @@ from claude_wheelhouse import monitor
 
 
 @pytest.mark.parametrize("ref, body, expected, desc", [
-    ("Q1", "yes", "[wheelhouse] from the person on Q1: yes", "answer to a question"),
-    (None, "a\nb", "[wheelhouse] from the person (general): a ⏎ b", "general hint, newlines flattened"),
+    ("Q1", "yes", "[wheelhouse] from doug on Q1: yes", "answer to a question"),
+    (None, "a\nb", "[wheelhouse] from doug (general): a ⏎ b", "general hint, newlines flattened"),
 ])
 def test_format_message(ref, body, expected, desc):
-    assert monitor.format_message({"item_ref": ref, "body": body}) == expected, desc
+    assert monitor.format_message({"item_ref": ref, "body": body}, person="doug") == expected, desc
+
+
+def test_format_message_names_the_os_user(monkeypatch):
+    monkeypatch.setattr(monitor.getpass, "getuser", lambda: "ada")
+    assert monitor.format_message({"item_ref": "Q1", "body": "yes"}).startswith("[wheelhouse] from ada on Q1")
 
 
 def test_format_message_cuts_long_bodies():
@@ -47,9 +52,15 @@ def test_mcp_server_round_trip(store, sid, db_file):
                                                          "body": "detail"})).content[0].text
             store.send(sid, "postgres", ref)
             got = (await client.call_tool("get_input", {})).content[0].text
-            return ref, got
+            refused = [await client.call_tool("update_item", args) for args in (
+                {"ref": ref, "status": "done"}, {"ref": "Q9", "status": "closed"})]
+            return ref, got, refused
 
-    ref, got = anyio.run(drive)
+    ref, got, refused = anyio.run(drive)
+    assert [(r.is_error, r.content[0].text) for r in refused] == [
+        (True, "Error executing tool update_item: question status must be one of ['answered', 'closed', 'open']"),
+        (True, "Error executing tool update_item: no item Q9 in this session"),
+    ], "a refused call tells the session why"
     assert ref == "Q1"
     assert got == "[Q1] postgres"
     row = store.session(sid)
