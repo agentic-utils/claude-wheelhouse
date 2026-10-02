@@ -52,7 +52,7 @@ uv sync
 uv run claude-wheelhouse
 ```
 
-Keys: `i` inbox, `s` sessions, `n` new session, `a` adopt, `Esc` all sessions, `Ctrl+S` send, `q` quit.
+Keys: `i` inbox, `s` sessions, `f` show or hide finished items, `n` new session, `a` adopt, `Esc` all sessions, `Ctrl+S` send, `q` quit.
 
 ## Test
 
