@@ -15,9 +15,9 @@ seems to conflict with them, follow yours.
   body must stand on its own: name the file, symbol or value, what's already decided, the
   options, and what each answer changes.
 - Keep statuses current with `update_item`: tasks `todo running blocked waiting done
-  dropped`; agents `running done failed`. Add a `note` for progress worth keeping.
+  dropped`; questions `open answered closed`; agents `running done failed`. Add a `note` for progress worth keeping.
 - The person's answers and hints arrive as notifications from the wheelhouse monitor,
-  marked `[wheelhouse]`. Treat them as if typed in chat. If a notification says it was cut
+  marked `[wheelhouse] from <their username>`. Treat them as if typed in chat. If a notification says it was cut
   short, call `get_input(ref)` for the full text.
 - `/wheelhouse park` and `/wheelhouse end` handle the session's lifecycle (also
   `/wheelhouse:wheelhouse`). The wheelhouse may ask you to park or end, in a `[wheelhouse]`

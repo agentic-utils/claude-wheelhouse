@@ -10,6 +10,7 @@ import threading
 import time
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from .store import GONE_TEXT, SessionGone, Store
 
@@ -24,7 +25,8 @@ _sid = ""
 
 def wheelhouse_tool(fn):
     """Register a tool that answers plainly once the session's wheelhouse data has gone,
-    instead of failing with a raw database error."""
+    instead of failing with a raw database error. A refused call (bad kind, status or ref)
+    goes back as a ToolError so the session reads the reason, not a bare failure."""
     @functools.wraps(fn)
     def tool(*args, **kwargs):
         if _store.session(_sid) is None:
@@ -33,6 +35,8 @@ def wheelhouse_tool(fn):
             return fn(*args, **kwargs)
         except SessionGone:
             return GONE_TEXT
+        except (ValueError, KeyError) as e:
+            raise ToolError(e.args[0] if e.args else str(e)) from e
     TOOLS.append(fn)
     return server.tool()(tool)
 

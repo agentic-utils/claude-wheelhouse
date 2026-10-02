@@ -26,6 +26,23 @@ async def test_answer_reaches_the_session(store, sid):
 
 
 @pytest.mark.anyio
+async def test_subagents_sit_under_their_session(store, sid, tmp_path):
+    other = store.create_session(str(tmp_path), name="other")
+    store.post_item(sid, "agent", "fork one", status="running")
+    store.post_item(other, "agent", "fork two", status="running")
+    store.post_item(sid, "agent", "fork three", status="running")
+    q = store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        items = app.query_one("#items", DataTable)
+        rows = [[str(c) for c in items.get_row_at(i)][:2] for i in range(items.row_count)]
+    assert rows[0] == ["demo", q], "tasks and questions first, in inbox order"
+    assert [r[1] for r in rows[1:]] == ["└ A1", "└ A2", "└ A1"]
+    assert [r[0] for r in rows[1:]] == ["demo", "", "other"], "each session's agents grouped under its name"
+
+
+@pytest.mark.anyio
 async def test_restore_all_only_launches_dead_sessions(store, sid, tmp_path, monkeypatch):
     parked = store.create_session(str(tmp_path), name="parked")
     store.set_parked(parked, True)

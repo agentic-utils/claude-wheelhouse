@@ -2,6 +2,7 @@
 person as one line. Claude Code delivers each printed line to Claude as a notification.
 """
 
+import getpass
 import os
 import sqlite3
 import sys
@@ -13,12 +14,12 @@ POLL_SECONDS = 2
 INLINE_LIMIT = 1500
 
 
-def format_message(m) -> str:
+def format_message(m, person: str | None = None) -> str:
     body = " ⏎ ".join(m["body"].splitlines())
     where = f"on {m['item_ref']}" if m["item_ref"] else "(general)"
     if len(body) > INLINE_LIMIT:
         body = body[:INLINE_LIMIT] + f" … [cut short: call get_input(\"{m['item_ref']}\") for the rest]"
-    return f"[wheelhouse] from the person {where}: {body}"
+    return f"[wheelhouse] from {person or getpass.getuser()} {where}: {body}"
 
 
 REQUEST_TEXT = {
