@@ -21,6 +21,11 @@ separate from `update_item(note=...)`: a note records progress, a reply is part 
 conversation. The store marks which is which, so the thread view can show replies as
 conversation and notes as quieter progress lines.
 
+**Follow-ups reopen the question.** `reply(ref, text, asks=false)` takes an optional `asks`
+flag. When the session's reply asks the person something back, it sets `asks=true` and the
+question moves back to `open`, so it returns to the top of the inbox. The conversation stays
+on one ref rather than spreading across new questions.
+
 **Protocol line.** One line in protocol.md: "When a message arrives on a ref, answer it with
 `reply` as well as in chat." It says how to report, not what to do, in keeping with the
 rest of the protocol.
@@ -44,6 +49,13 @@ sit in an outbox until the person sends them:
 | `s` | send the selected session's queued answers as one message |
 | `S` | send every session's queued answers, one message per session |
 | Ctrl+X (in a compose box) | send this answer alone, now, for something urgent |
+
+The tabs move from `i` and `s` to `1` (Inbox) and `2` (Sessions), with `i` kept for the
+inbox, so `s` and `S` are free to send.
+
+`S` doesn't ask for confirmation. It's the action the outbox exists for, and a prompt every
+time would train people to press Enter without reading. The notification says what went
+where instead.
 
 There is no automatic send after a quiet spell. It would send a half-finished set of
 answers while the person checks something, which is exactly the surprise this design is
@@ -100,16 +112,3 @@ line per item instead; one line is the safe choice until that's confirmed.
 - **The app quits with answers queued.** They stay queued for next time.
 - **A reply arrives while the person is typing in the thread view.** It appears in the
   thread above the compose box; the typed text is untouched.
-
-## Open questions
-
-1. The `s` key opens the Sessions tab today. I'd move the tabs to `1` (Inbox) and `2`
-   (Sessions), keeping `i`, so `s` and `S` can send as agreed. The alternative is to send
-   with `d` and `D` (dispatch) and leave the tabs alone. Which?
-2. Should `S` (send to every session) ask for confirmation? It can't be undone, but it's
-   the action the outbox exists for, and a prompt every time would train people to press
-   Enter without reading. I'd not ask, and show what went where in the notification.
-3. When a session's reply asks a follow-up, should the question go back to `open` (and to
-   the top of the inbox) on its own, or only when the session sets it with `update_item`?
-   I'd give `reply` an optional `asks` flag that reopens the question, so the session
-   decides and the protocol line covers it.
