@@ -26,7 +26,7 @@ from textual.widgets import (
 )
 
 from . import adopt, launch, liveness
-from .store import SessionGone, Store
+from .store import CLOSED, SessionGone, Store
 
 MATRIX = "#00ff41"
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
@@ -280,6 +280,7 @@ class WheelhouseApp(App):
         Binding("escape", "clear_filter", "All sessions"),
         Binding("i", "show_tab('inbox')", "Inbox"),
         Binding("s", "show_tab('sessions')", "Sessions"),
+        Binding("f", "toggle_finished", "Finished"),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -290,6 +291,7 @@ class WheelhouseApp(App):
         self.waking = False
         self.frame = 0
         self.filter_sid: str | None = None
+        self.show_finished = False   # done, dropped, closed and failed items, after the rest
         self.selected: tuple[str, str] | None = None   # (session id, item ref)
         self.statuses: dict[str, str] = {}
         self.sessions = []
@@ -407,9 +409,13 @@ class WheelhouseApp(App):
         keep = table.cursor_row
         table.clear()
         names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
-        for it, nested in item_rows(self.store.items(self.filter_sid, include_closed=False), names):
-            style = "bold #ffd300" if it["status"] == "open" else "bold #ff2a6d" \
-                if it["status"] in ("blocked", "waiting") else MATRIX
+        items = self.store.items(self.filter_sid)
+        rows = item_rows([it for it in items if it["status"] not in CLOSED], names)
+        if self.show_finished:
+            rows += item_rows([it for it in items if it["status"] in CLOSED], names)
+        for it, nested in rows:
+            style = "dim" if it["status"] in CLOSED else "bold #ffd300" if it["status"] == "open" \
+                else "bold #ff2a6d" if it["status"] in ("blocked", "waiting") else MATRIX
             name = names.get(it["session_id"], "")[:14]
             if nested is None:
                 cells = (name, it["ref"], Text(it["status"], style=style), it["title"])
@@ -457,6 +463,12 @@ class WheelhouseApp(App):
     def action_clear_filter(self) -> None:
         self.filter_sid = None
         self.paint_items()
+
+    def action_toggle_finished(self) -> None:
+        if not isinstance(self.focused, (TextArea, Input)):
+            self.show_finished = not self.show_finished
+            self.notify("showing finished items" if self.show_finished else "hiding finished items")
+            self.paint_items()
 
     def action_show_tab(self, tab: str) -> None:
         if not isinstance(self.focused, (TextArea, Input)):

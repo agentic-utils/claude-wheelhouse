@@ -43,6 +43,34 @@ async def test_subagents_sit_under_their_session(store, sid, tmp_path):
 
 
 @pytest.mark.anyio
+async def test_finished_items_toggle_in_and_take_a_message(store, sid):
+    t = store.post_item(sid, "task", "build", status="running")
+    done = store.post_item(sid, "task", "ship", status="done")
+    closed = store.post_item(sid, "question", "which db?", status="closed")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        items = app.query_one("#items", DataTable)
+        refs = lambda: [str(items.get_row_at(i)[1]) for i in range(items.row_count)]
+        assert refs() == [t], "finished items hidden by default"
+        await pilot.press("f")
+        await pilot.pause()
+        assert refs()[0] == t and set(refs()[1:]) == {done, closed}, "finished items after the rest"
+        items.move_cursor(row=refs().index(closed))
+        await pilot.pause()
+        app.query_one("#answer", TextArea).text = "the punchline"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        app.query_one("#answer", TextArea).text = ""
+        app.query_one("#answer", TextArea).focus()
+        await pilot.press("f")
+        await pilot.pause()
+        assert len(refs()) == 3, "f types into the answer box instead of toggling"
+    assert [(m["item_ref"], m["body"]) for m in store.pending(sid)] == [(closed, "the punchline")]
+    assert store.item(sid, closed)["status"] == "closed", "a message on a finished item leaves its status alone"
+
+
+@pytest.mark.anyio
 async def test_restore_all_only_launches_dead_sessions(store, sid, tmp_path, monkeypatch):
     parked = store.create_session(str(tmp_path), name="parked")
     store.set_parked(parked, True)
