@@ -19,7 +19,7 @@ def test_wt_argv(over, title, cwd, desc):
     argv = launch.wt_argv(row(**over), python="/py", distro="Ubuntu", user="u", shell="/bin/zsh")
     assert argv[:8] == ["cmd.exe", "/c", "wt.exe", "-w", "0", "new-tab", "--title", title], desc
     assert argv[argv.index("--cd") + 1] == cwd, desc
-    assert argv[-4:] == ["--", "/bin/zsh", "-lc", "exec /py -m claude_wheelhouse run abc-123"], desc
+    assert argv[-4:] == ["--", "/bin/zsh", "-lic", "exec /py -m claude_wheelhouse run abc-123"], desc
 
 
 @pytest.mark.parametrize("over, resume, has, lacks, last, desc", [

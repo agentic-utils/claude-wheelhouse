@@ -10,7 +10,8 @@ its metacharacters are kept out of the title and refused in the directory.
 
 wsl.exe runs the command with no shell, so the user's profile never puts
 ~/.local/bin (where claude lives) on the PATH. The tab runs it through the user's
-login shell, giving it the environment of an ordinary WSL tab.
+interactive login shell, giving it the environment of an ordinary WSL tab: a login shell
+alone stops at ~/.bashrc's interactive guard, which skips anything set below it (brew).
 """
 
 import getpass
@@ -43,7 +44,7 @@ def wt_argv(session, *, python: str, distro: str, user: str, shell: str) -> list
     return [
         "cmd.exe", "/c", "wt.exe", "-w", "0", "new-tab", "--title", title.replace(";", ","),
         "wsl.exe", "-d", distro, "-u", user, "--cd", session["cwd"].replace(";", r"\;"),
-        "--", shell, "-lc", f"exec {shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}",
+        "--", shell, "-lic", f"exec {shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}",
     ]
 
 
