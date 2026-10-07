@@ -640,7 +640,7 @@ class WheelhouseApp(App):
         self.paint_items()
         self.paint_outbox()
         self.paint_synopsis()
-        if isinstance(self.screen, ThreadView):
+        if isinstance(self.screen, ThreadView) and self.screen.is_mounted:   # not before its widgets exist
             self.screen.paint()   # an action here (queue, take back) shows at once
 
     @property
