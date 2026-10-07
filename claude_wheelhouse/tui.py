@@ -159,9 +159,12 @@ class SessionList(DataTable):
     click, the first just moving the cursor there."""
 
     async def _on_click(self, event) -> None:
-        before = self.cursor_coordinate
-        await super()._on_click(event)
-        if self.cursor_coordinate != before:   # the table already selected it if unmoved
+        # Textual runs every class's _on_click in turn, DataTable's after this one, so don't
+        # call it here too: that made one click select twice and open two relaunch prompts
+        self.call_next(self._after_click, self.cursor_coordinate)
+
+    def _after_click(self, before) -> None:
+        if self.cursor_coordinate.row != before.row:   # the table selects it itself if unmoved
             self._post_selected_message()
 
 
@@ -326,8 +329,8 @@ class Confirm(ModalScreen):
         with Vertical(id="dialog"):
             yield Label(self.prompt)
             with Horizontal(classes="buttons"):
-                yield Button("[Y]es", variant="error", id="yes")
-                yield Button("[N]o", id="no")
+                yield Button(Text("[Y]es"), variant="error", id="yes")
+                yield Button(Text("[N]o"), id="no")
 
     def on_mount(self) -> None:
         self.query_one("#no", Button).focus()   # a reflex Enter must not confirm
@@ -353,9 +356,9 @@ class Choice(ModalScreen):
         with Vertical(id="dialog"):
             yield Label(self.prompt)
             with Horizontal(classes="buttons"):
-                yield Button("[C]ancel request", variant="success", id="cancel")
-                yield Button("[F]orce", variant="error", id="force")
-                yield Button("Leave it [Esc]", id="leave")
+                yield Button(Text("[C]ancel request"), variant="success", id="cancel")
+                yield Button(Text("[F]orce"), variant="error", id="force")
+                yield Button(Text("Leave it [Esc]"), id="leave")
 
     def on_key(self, event) -> None:
         keys = {"c": "cancel", "f": "force", "escape": "leave"}

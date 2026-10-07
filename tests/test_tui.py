@@ -4,7 +4,7 @@ import pytest
 from textual.widgets import DataTable, TextArea
 
 from claude_wheelhouse import launch, transcript
-from claude_wheelhouse.tui import MATRIX, VOICE, WheelhouseApp, Confirm, ThreadView, render
+from claude_wheelhouse.tui import MATRIX, VOICE, WheelhouseApp, Choice, Confirm, ThreadView, render
 
 
 @pytest.mark.anyio
@@ -570,3 +570,35 @@ async def test_unsent_text_stays_with_the_item_it_was_typed_for(store, sid, tmp_
         await pilot.press("escape")
         await pilot.pause()
         assert box.text == "SQLite", "and hands it back"
+
+
+@pytest.mark.anyio
+async def test_one_click_on_a_dead_session_opens_one_prompt_and_yes_closes_it(store, sid, tmp_path, monkeypatch):
+    other = store.create_session(str(tmp_path), name="other")
+    launched = []
+    monkeypatch.setattr(launch, "open_tab", lambda s, i: launched.append(i))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.query_one("#session-list", DataTable)
+        row = [table.coordinate_to_cell_key((i, 0)).row_key.value for i in range(table.row_count)].index(other)
+        await pilot.click("#session-list", offset=(4, row + 1))
+        await pilot.pause()
+        assert [type(s) for s in app.screen_stack[1:]] == [Confirm], "one click, one prompt"
+        await pilot.click("#yes")
+        await pilot.pause()
+        assert len(app.screen_stack) == 1 and launched == [other], "Yes relaunches and closes it"
+
+
+@pytest.mark.parametrize("screen, labels, desc", [
+    (lambda: Confirm("ok?"), ["[Y]es", "[N]o"], "the relaunch and destructive confirms"),
+    (lambda: Choice("hm?"), ["[C]ancel request", "[F]orce", "Leave it [Esc]"], "a pending request's choice"),
+])
+@pytest.mark.anyio
+async def test_button_labels_keep_their_key_hints(store, screen, labels, desc):
+    from textual.widgets import Button
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        app.push_screen(screen())
+        await pilot.pause()
+        assert [str(b.label) for b in app.screen.query(Button)] == labels, f"{desc}: not read as markup"
