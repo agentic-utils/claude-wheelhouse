@@ -658,3 +658,37 @@ async def test_typing_survives_refresh_ticks_even_when_items_arrive_above(store,
         await pilot.press(*"ite")
         assert app.selected == (sid, None if conversation else q), f"{desc}: the highlight stays put"
         assert (app.answer.text, app.answer.cursor_location) == ("SQLite", (0, 6)), f"{desc}: text and cursor untouched"
+
+
+@pytest.mark.parametrize("keys, expected, desc", [
+    (["h", "i", "space", "colon", "g", "r", "i", "tab"], "hi 😁", "Tab takes the first suggestion"),
+    (["colon", "t", "h", "u", "enter"], "👍", "so does Enter"),
+    (["o", "k", "space", "colon", "t", "a", "d", "a", "colon"], "ok 🎉", "a closed code turns into its emoji"),
+    (["o", "k", "enter", "x"], "ok\nx", "Enter with no suggestion is a new line"),
+])
+@pytest.mark.anyio
+async def test_emoji_codes_in_the_answer_box(store, sid, keys, expected, desc):
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#items", DataTable).move_cursor(row=0)
+        await pilot.click("#answer")
+        await pilot.press(*keys)
+        await pilot.pause()
+        assert app.answer.text == expected, desc
+
+
+@pytest.mark.anyio
+async def test_a_pasted_code_converts_on_send(store, sid):
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#items", DataTable).move_cursor(row=0)
+        await pilot.pause()
+        app.answer.text = "pasted :rocket: in"   # pasted, never typed: the send converts it
+        app.answer.focus()
+        await pilot.press("ctrl+enter")
+        await pilot.pause()
+    assert [m["body"] for m in store.pending(sid)] == ["pasted 🚀 in"]

@@ -3,6 +3,7 @@
 import functools
 import math
 import os
+import re
 import sqlite3
 import time
 
@@ -27,7 +28,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import adopt, launch, liveness, transcript
+from . import adopt, emoji, launch, liveness, transcript
 from .store import CLOSED, SessionGone, Store, needs_relaunch
 
 MATRIX = "#00ff41"
@@ -170,9 +171,40 @@ class SessionList(DataTable):
 
 class Compose(TextArea):
     """An answer box. Ctrl+Enter sends what's typed now. Most terminals (Windows Terminal
-    among them) send Ctrl+Enter as a line feed, which arrives as ctrl+j, so both are bound."""
+    among them) send Ctrl+Enter as a line feed, which arrives as ctrl+j, so both are bound.
+    Emoji: a complete :code: turns into its emoji as it's typed, and a code being typed
+    shows suggestions in the hint line, the first taken with Tab or Enter."""
     BINDINGS = [Binding("ctrl+enter", "app.send_now", "Send now"),
                 Binding("ctrl+j", "app.send_now", "Send now", show=False)]
+
+    def _before_cursor(self) -> tuple[int, int, str]:
+        row, col = self.cursor_location
+        return row, col, self.document.get_line(row)[:col]
+
+    def suggestions(self) -> tuple[str | None, list[tuple[str, str]]]:
+        code = emoji.partial(self._before_cursor()[2])
+        return code, emoji.suggest(code) if code else []
+
+    def on_text_area_changed(self, event) -> None:
+        row, col, before = self._before_cursor()
+        done = re.search(r":([a-z0-9_+\-]+):$", before)
+        if done and done.group(1) in emoji.EMOJI:   # a code just closed: swap it in place
+            self.replace(emoji.EMOJI[done.group(1)], (row, col - len(done.group(0))), (row, col))
+            return
+        hint = next(iter(self.parent.query(".answer-hint")), None)
+        if hint is not None:
+            _, found = self.suggestions()
+            hint.update(Text("  ".join(f"{g} :{c}:" for c, g in found) + "   ⇥ Tab takes the first")
+                        if found else HINT)
+
+    async def _on_key(self, event) -> None:
+        if event.key in ("tab", "enter"):
+            code, found = self.suggestions()
+            if found:
+                event.prevent_default()
+                event.stop()
+                row, col, _ = self._before_cursor()
+                self.replace(found[0][1], (row, col - len(code) - 1), (row, col))
 
 
 class ThreadView(Screen):
@@ -766,7 +798,7 @@ class WheelhouseApp(App):
         box, target = self.composing()
         if box is None:
             return None, None, None
-        text = box.text.strip()
+        text = emoji.convert(box.text.strip())
         if not text or not target:
             self.notify("pick an item and type something first", severity="warning")
             return None, None, None
