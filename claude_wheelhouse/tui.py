@@ -118,8 +118,8 @@ class Compose(TextArea):
 
 
 class ThreadView(Screen):
-    """One item full screen: its detail, the whole conversation and a compose box.
-    Refreshes on a timer, so a reply shows up while it's open; typed text is untouched."""
+    """One item full screen: its detail, the whole conversation and a compose box. The app's
+    refresh tick repaints it, so a reply shows up while it's open; typed text is untouched."""
     BINDINGS = [Binding("escape", "app.pop_screen", "Back")]
 
     def __init__(self, sid: str, ref: str):
@@ -137,7 +137,6 @@ class ThreadView(Screen):
     def on_mount(self) -> None:
         self.box = self.query_one(Compose)
         self.paint()
-        self.set_interval(1.0, self.paint)
         self.box.focus()
 
     def paint(self) -> None:
@@ -429,6 +428,8 @@ class WheelhouseApp(App):
         self.paint_items()
         self.paint_outbox()
         self.paint_synopsis()
+        if isinstance(self.screen, ThreadView):
+            self.screen.paint()   # an action here (queue, take back) shows at once
 
     def running(self, sid: str) -> bool:
         return self.statuses.get(sid) in RUNNING
