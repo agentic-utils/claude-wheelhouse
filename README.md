@@ -81,7 +81,7 @@ make run
 
 Keys: `1` (or `i`) inbox, `2` sessions, `Enter` open an item's thread (or follow a
 session's conversation, in the session list), `f` show or hide
-finished items, `n` new session, `a` adopt, `Esc` all sessions (or back from a thread),
+finished items, `x` close the highlighted question (or reopen a closed one as answered), `n` new session, `a` adopt, `Esc` all sessions (or back from a thread),
 `Ctrl+S` queue an answer, `Ctrl+Enter` send it now, `Ctrl+R` take a queued answer back, `s`
 send the selected session's queued answers, `S` send all, `q` quit.
 

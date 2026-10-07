@@ -19,8 +19,8 @@ seems to conflict with them, follow yours.
   running tasks, as items straight away. Check `list_items` first so you don't post twice.
 - Keep statuses current with `update_item`: tasks `todo running blocked waiting done
   dropped`; questions `open answered closed`; agents `running done failed`. Add a `note` for progress worth keeping.
-- Once the person has answered a question, leave it `answered`. Closing it is the
-  person's call, or happens once the work it unblocked is done.
+- Don't close a question yourself. Closing is the person's call (they press `x` in the
+  wheelhouse), unless the work it unblocked is done.
 - The person's answers and hints arrive as notifications from the wheelhouse monitor,
   marked `[wheelhouse] from <their username>`, several answers sometimes in one
   notification. Treat them as if typed in chat. If a notification says it was cut short,

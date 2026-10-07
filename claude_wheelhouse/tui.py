@@ -551,6 +551,7 @@ class WheelhouseApp(App):
         Binding("i", "show_tab('inbox')", "Inbox", show=False),
         Binding("2", "show_tab('sessions')", "Sessions"),
         Binding("f", "toggle_finished", "Finished"),
+        Binding("x", "close_question", "Close"),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -888,6 +889,26 @@ class WheelhouseApp(App):
             self.show_finished = not self.show_finished
             self.notify("showing finished items" if self.show_finished else "hiding finished items")
             self.paint_items()
+
+    @session_action
+    def action_close_question(self) -> None:
+        """Closing a question is the person's call: x closes the highlighted (or open) one,
+        and on a closed one (shown with f) reopens it as answered."""
+        if isinstance(self.focused, (TextArea, Input)):
+            return
+        target = self.composing()[1]
+        item = target and target[1] and self.store.item(*target)
+        if not item:
+            return
+        if item["kind"] != "question":
+            self.notify(f"{item['ref']} is a {item['kind']}: its status is the session's to set",
+                        severity="warning")
+            return
+        reopen = item["status"] == "closed"
+        self.store.update_item(*target, status="answered" if reopen else "closed")
+        self.notify(f"reopened {item['ref']} as answered" if reopen else
+                    f"closed {item['ref']}" + ("" if self.show_finished else ": f shows finished items"))
+        self.refresh_data()
 
     def action_show_tab(self, tab: str) -> None:
         if not isinstance(self.focused, (TextArea, Input)):

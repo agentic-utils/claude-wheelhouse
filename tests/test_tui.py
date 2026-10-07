@@ -791,3 +791,28 @@ async def test_a_refresh_racing_a_move_keeps_pane_and_highlight_together(store, 
         assert under_cursor == f"{app.selected[0]}|{app.selected[1] or ''}", desc
         if not new_item:
             assert app.selected == (sid, "Q1"), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("kind, status, finished, focus_box, expected, desc", [
+    ("question", "open", False, False, "closed", "x closes a question"),
+    ("question", "answered", False, False, "closed", "an answered one too"),
+    ("question", "closed", True, False, "answered", "x on a closed question (shown with f) reopens it"),
+    ("task", "running", False, False, "running", "a task's status is the session's: x leaves it"),
+    ("question", "open", False, True, "open", "in the answer box x is just a letter"),
+])
+async def test_x_closes_and_reopens_questions(store, sid, kind, status, finished, focus_box, expected, desc):
+    ref = store.post_item(sid, kind, "which db?", status=status)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if finished:
+            await pilot.press("f")
+        app.items_table.focus()
+        app.items_table.move_cursor(row=0)
+        await pilot.pause()
+        if focus_box:
+            app.answer.focus()
+        await pilot.press("x")
+        await pilot.pause()
+    assert store.item(sid, ref)["status"] == expected, desc
