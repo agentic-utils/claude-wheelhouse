@@ -155,6 +155,7 @@ class Follower:
         self.path: Path | None = None
         self.seen = None
         self.recs: list[dict] | None = None
+        self.blocks_key, self.blocks = None, None   # the app's rendering of recs, kept with them
 
     def read(self) -> list[dict] | None:
         if self.path is None:
