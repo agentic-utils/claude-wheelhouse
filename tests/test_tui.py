@@ -4,7 +4,7 @@ import pytest
 from textual.widgets import DataTable, TextArea
 
 from claude_wheelhouse import launch, transcript
-from claude_wheelhouse.tui import WheelhouseApp, Confirm, ThreadView
+from claude_wheelhouse.tui import MATRIX, VOICE, WheelhouseApp, Confirm, ThreadView, render
 
 
 @pytest.mark.anyio
@@ -438,3 +438,34 @@ async def test_the_screen_fits_so_the_tabs_never_scroll_off(store, sid, size, de
         app.push_screen(ThreadView(sid, store.post_item(sid, "task", "build")))
         await pilot.pause()
         assert app.screen.max_scroll_y == 0, f"{desc}: the thread view fits too"
+
+
+@pytest.mark.parametrize("who, colour, desc", [
+    ("you", MATRIX, "the person's prompts stay terminal green"),
+    ("wheelhouse", MATRIX, "so do their messages through the wheelhouse"),
+    ("claude", VOICE["claude"], "Claude's words are white, as in the Claude app"),
+])
+def test_each_voice_has_its_colour(who, colour, desc):
+    from rich.console import Console
+    console = Console(width=60)
+    segments = list(console.render(render([(who, "**label**\n\nhello there")])))
+    styles = {s.style.color.triplet.hex for s in segments if "hello" in s.text and s.style and s.style.color}
+    assert styles == {colour}, desc
+
+
+@pytest.mark.anyio
+async def test_a_long_conversation_is_one_widget(store, sid, tmp_path, monkeypatch):
+    folder = tmp_path / "projects/-home-u-repo"
+    folder.mkdir(parents=True)
+    recs = [{"type": "user" if i % 2 else "assistant", "timestamp": "2026-10-07T21:30:00Z",
+             "message": {"content": f"para one {i}\n\npara two\n\n- a\n- b"} if i % 2 else
+             {"content": [{"type": "text", "text": f"reply {i}\n\n```\ncode\n```\n\nmore"}]}} for i in range(200)]
+    folder.joinpath(f"{sid}.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)
+        await pilot.pause()
+        assert "para one 199" in app._detail_text
+        assert len(app.detail.children) == 0, "drawn as one renderable: a widget per paragraph made each keypress slow"

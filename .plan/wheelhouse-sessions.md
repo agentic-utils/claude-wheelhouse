@@ -282,7 +282,11 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   AskUserQuestion or ExitPlanMode call in the transcript shows as "waiting for you in its
   tab". A permission prompt leaves no record, so it can't be flagged this way; a
   `Notification` hook in the wheelhouse plugin could report it. Focusing the item list
-  switches the pane back to the highlighted item.
+  switches the pane back to the highlighted item. The person's words show in terminal green and Claude's in
+  white, here and in item threads. The pane is one widget drawing one Rich renderable, each
+  block's lines cached per width: as a Textual Markdown widget it made a child per
+  paragraph, and with a long conversation's ~900 children every layout pass took a quarter
+  of a second, so typing lagged and opening a session took over 3 seconds.
 - **Sessions tab.** Every session with status, name, ticket, directory, open-question
   and running counts. Restore on a dead row, parked or not (unparks only once the launch
   goes through), Restore All (dead and not parked), Park / unpark, End, New session,

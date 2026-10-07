@@ -6,6 +6,8 @@ import os
 import sqlite3
 import time
 
+from rich.markdown import Markdown as RichMarkdown
+from rich.segment import Segment
 from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
@@ -34,6 +36,9 @@ STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "
                 "dead": "bold #ff2a6d", "ending": "bold #d300c5", "parking": "bold #d300c5"}
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
 RUNNING = ("live", "stalled", "starting")
+# the person's words in terminal green, Claude's in white as in the Claude app
+VOICE = {"you": MATRIX, "wheelhouse": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
+         "warn": "bold #ffd300", "note": "#777777", "tool": "#777777"}
 PENDING = {"end": "ending", "park": "parking"}
 
 
@@ -95,26 +100,58 @@ def aimed(target) -> str:
     return target[1] or "the session"
 
 
-def thread_markdown(store: Store, sid: str, ref: str, session_name: str = "") -> str:
-    """An item's detail and conversation, oldest first: the person's messages (queued ones
-    marked), the session's replies, and its progress notes as quieter quotes."""
+def thread_blocks(store: Store, sid: str, ref: str, session_name: str = "") -> list[tuple[str, str]]:
+    """An item's detail and conversation, oldest first, as (who, markdown) blocks: the
+    person's messages (queued ones marked), the session's replies, and its progress notes
+    as quieter quotes."""
     item = store.item(sid, ref)
     if item is None:
-        return "_gone_"
+        return [("note", "_gone_")]
     msgs = store.thread(sid, ref)
     queued = any(m["draft"] for m in msgs)
     where = f"{session_name} · " if session_name else ""
-    lines = [f"## {ref} · {item['title']}", f"{where}`{item['kind']}` · **{item['status']}**"
-             f"{' · answer queued' if queued else ''} · updated {item['updated_at']}", "",
-             item["body"] or "_no detail_", ""]
+    out = [("head", f"## {ref} · {item['title']}\n\n{where}`{item['kind']}` · **{item['status']}**"
+                    f"{' · answer queued' if queued else ''} · updated {item['updated_at']}"),
+           ("claude", item["body"] or "_no detail_")]
     for m in msgs:
         if m["author"] == "person":
-            lines += [f"**you{' · queued' if m['draft'] else ''}** · {m['created_at']}", "", m["body"], ""]
+            out.append(("you", f"**you{' · queued' if m['draft'] else ''}** · {m['created_at']}\n\n{m['body']}"))
         elif m["kind"] == "reply":
-            lines += [f"**claude** · {m['created_at']}", "", m["body"], ""]
+            out.append(("claude", f"**claude** · {m['created_at']}\n\n{m['body']}"))
         else:   # a progress note (rows from before replies existed read as notes)
-            lines += [f"> _note · {m['created_at']}_", ">"] + [f"> {line}" for line in m["body"].splitlines()] + [""]
-    return "\n".join(lines)
+            out.append(("note", "\n".join([f"> _note · {m['created_at']}_", ">"]
+                                          + [f"> {line}" for line in m["body"].splitlines()])))
+    return out
+
+
+def thread_markdown(store: Store, sid: str, ref: str, session_name: str = "") -> str:
+    return "\n\n".join(md for _, md in thread_blocks(store, sid, ref, session_name))
+
+
+@functools.lru_cache(maxsize=2048)
+def _block_lines(who: str, md: str, width: int, console) -> list:
+    """A block's rendered segments at one width: rendered once, though Textual measures a
+    widget's height and then draws it, and a new turn leaves every older block as it was."""
+    r = Text(md.strip("`"), style=VOICE[who]) if who == "tool" else RichMarkdown(md, style=VOICE[who])
+    return list(console.render(r, console.options.update_width(width)))
+
+
+class Blocks:
+    """A conversation as one renderable for one widget. A Markdown widget makes a child per
+    paragraph, and a long conversation's thousand children made every layout pass (each
+    keypress, each refresh) take a quarter of a second."""
+
+    def __init__(self, blocks: list[tuple[str, str]]):
+        self.blocks = blocks
+
+    def __rich_console__(self, console, options):
+        for who, md in self.blocks:
+            yield from _block_lines(who, md, options.max_width, console)
+            yield Segment.line()
+
+
+def render(blocks: list[tuple[str, str]]) -> Blocks:
+    return Blocks(blocks)
 
 
 class SessionList(DataTable):
@@ -145,7 +182,7 @@ class ThreadView(Screen):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="thread-scroll", classes="panel"):
-            yield Markdown(id="thread")
+            yield Static(id="thread")
         yield Compose(id="thread-answer")
         yield Label(HINT, classes="answer-hint")
         yield Footer()
@@ -157,10 +194,11 @@ class ThreadView(Screen):
 
     def paint(self) -> None:
         s = self.app.store.session(self.sid)
-        text = thread_markdown(self.app.store, self.sid, self.ref, s and (s["name"] or short(self.sid)))
+        blocks = thread_blocks(self.app.store, self.sid, self.ref, s and (s["name"] or short(self.sid)))
+        text = "\n\n".join(md for _, md in blocks)
         if text != self.text:
             self.text = text
-            self.query_one("#thread", Markdown).update(text)
+            self.query_one("#thread", Static).update(render(blocks))
             self.query_one("#thread-scroll").scroll_end(animate=False)
 
 
@@ -335,7 +373,7 @@ class WheelhouseApp(App):
     #items-pane {{ width: 1fr; }}
     #detail-pane {{ width: 2fr; }}
     #detail-scroll {{ height: 1fr; }}
-    #detail {{ background: #000000; color: {MATRIX}; }}
+    #detail, #thread {{ background: #000000; color: {MATRIX}; }}
     #answer, #thread-answer {{ height: 8; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
     .answer-hint {{ color: #777777; height: 1; }}
     #outbox {{ height: 1; color: #05d9e8; background: #12122a; }}
@@ -396,8 +434,8 @@ class WheelhouseApp(App):
                         yield DataTable(id="items", cursor_type="row")
                     with Vertical(id="detail-pane", classes="panel"):
                         with VerticalScroll(id="detail-scroll"):
-                            yield Markdown("Select an item, or Enter on a session to follow its conversation.",
-                                           id="detail")
+                            yield Static("Select an item, or a session to follow its conversation.",
+                                         id="detail")
                         yield Compose(id="answer")
                         yield Label(HINT, classes="answer-hint")
             with TabPane("Sessions", id="sessions"):
@@ -418,7 +456,7 @@ class WheelhouseApp(App):
         # held, not queried: timers fire while a dialog is on top and during shutdown
         self.title_bar = self.query_one("#title", Static)
         self.items_table = self.query_one("#items", DataTable)
-        self.detail = self.query_one("#detail", Markdown)
+        self.detail = self.query_one("#detail", Static)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
         self.answer = self.query_one("#answer", Compose)
         self.outbox = self.query_one("#outbox", Static)
@@ -541,26 +579,27 @@ class WheelhouseApp(App):
 
     def paint_detail(self) -> None:
         if self.viewing:
-            text = self.conversation(self.viewing)
+            blocks = self.conversation(self.viewing)
         elif self.selected:
-            text = thread_markdown(self.store, *self.selected)
+            blocks = thread_blocks(self.store, *self.selected)
         else:
             return
+        text = "\n\n".join(md for _, md in blocks)
         if text != getattr(self, "_detail_text", None):
             following = self.viewing and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1
             self._detail_text = text
-            self.detail.update(text)
+            self.detail.update(render(blocks))
             if following:   # stay at the newest turn, unless the person has scrolled up to read
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 
-    def conversation(self, sid: str) -> str:
+    def conversation(self, sid: str) -> list[tuple[str, str]]:
         s = self.store.session(sid)
         if s is None:
             self.viewing = None
-            return "_gone_"
+            return [("note", "_gone_")]
         follower = self.followers.setdefault(sid, transcript.Follower(sid))
         queued = [m["body"] for m in self.store.drafts(sid) if m["item_ref"] is None]
-        return transcript.markdown(s["name"] or short(sid), launch.tab_title(s), follower.read(), queued)
+        return transcript.blocks(s["name"] or short(sid), launch.tab_title(s), follower.read(), queued)
 
     def paint_outbox(self) -> None:
         n = sum(s["drafts"] for s in self.sessions)

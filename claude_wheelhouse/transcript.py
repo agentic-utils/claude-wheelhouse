@@ -122,25 +122,29 @@ def _hhmm(at: str) -> str:
     return f" · {at[11:16]}Z" if len(at) >= 16 else ""
 
 
-def markdown(name: str, tab: str, recs: list[dict] | None, queued=()) -> str:
-    """The conversation, then the person's general messages still queued for it."""
-    lines = [f"## {name} · conversation",
-             f"_Tab: **{tab}**. Permission prompts and slash commands need that tab._", ""]
+def blocks(name: str, tab: str, recs: list[dict] | None, queued=()) -> list[tuple[str, str]]:
+    """The conversation as (who, markdown) blocks, then the person's general messages still
+    queued for it. who is head, warn, note, tool, you, wheelhouse or claude: the app colours
+    the person's words apart from Claude's."""
+    out = [("head", f"## {name} · conversation\n\n_Tab: **{tab}**. Permission prompts and slash "
+                    "commands need that tab._")]
     if recs is None:
-        lines += ["_No transcript found for this session yet._", ""]
+        out.append(("note", "_No transcript found for this session yet._"))
     elif waiting := waiting_in_tab(recs):
-        lines += [f"> ⚠ **Waiting for you in its tab:** {waiting}.", ""]
+        out.append(("warn", f"> ⚠ **Waiting for you in its tab:** {waiting}."))
     for e in entries(recs or []):
         if e.who == "tool":
-            call = e.text.replace("`", "'")
-            lines += [f"`⚙ {call}`", ""]
+            out.append(("tool", "`⚙ " + e.text.replace("`", "'") + "`"))
         elif e.who == "note":
-            lines += [f"_{e.text}{_hhmm(e.at)}_", ""]
+            out.append(("note", f"_{e.text}{_hhmm(e.at)}_"))
         else:
-            lines += [f"**{e.who}**{_hhmm(e.at)}", "", e.text, ""]
-    for body in queued:
-        lines += ["**you · queued**", "", body, ""]
-    return "\n".join(lines)
+            out.append((e.who, f"**{e.who}**{_hhmm(e.at)}\n\n{e.text}"))
+    out += [("you", f"**you · queued**\n\n{body}") for body in queued]
+    return out
+
+
+def markdown(name: str, tab: str, recs: list[dict] | None, queued=()) -> str:
+    return "\n\n".join(md for _, md in blocks(name, tab, recs, queued))
 
 
 class Follower:
