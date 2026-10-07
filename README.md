@@ -15,7 +15,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   to edit or drop. Emoji codes work as in chat apps: `:tada:` turns into 🎉, and while
   you type `:gri` the hint line suggests matches (Tab or Enter takes the first). Text you haven't sent stays with the item (or session) you typed it
   for: moving to another clears the box, and coming back restores it. Each session shows
-  its queued count (`✉ 3`). Answers reach the session
+  its queued count (`✉ 3`). Sending doesn't change a question's status: the session's
+  reply declares it, `open` while it still needs you or `answered`. Until it replies the
+  question shows as `⏳` (dimmed), awaiting the session. Answers reach the session
   as a notification, even when it's idle. A running session started from an older
   wheelhouse shows "needs relaunch" (`⟳` in the inbox list): it can't hold queued answers,
   so Ctrl+S sends to it straight away until you `/exit` it and restore or adopt it again.

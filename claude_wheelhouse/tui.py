@@ -715,6 +715,7 @@ class WheelhouseApp(App):
         if self.show_finished:
             rows += item_rows([it for it in items if it["status"] in CLOSED], names)
         queued = {(m["session_id"], m["item_ref"]) for m in self.store.drafts()}
+        awaiting = self.store.awaiting()
         if self.filter_sid:   # the session's own conversation, pinned first
             general = (self.filter_sid, None) in queued
             rows_out.append((f"{self.filter_sid}|", (names.get(self.filter_sid, "")[:14], Text("💬"),
@@ -727,7 +728,10 @@ class WheelhouseApp(App):
                 else "bold #ffd300" if status == "open" \
                 else "bold #ff2a6d" if status in ("blocked", "waiting") else MATRIX
             name = names.get(it["session_id"], "")[:14]
-            if nested is None:
+            if (it["session_id"], it["ref"]) in awaiting and status != "queued":
+                # the person spoke last: the ball is in the session's court until it replies
+                cells = (name, it["ref"], Text(f"⏳ {status}", style="dim"), Text(it["title"], style="dim"))
+            elif nested is None:
                 cells = (name, it["ref"], Text(status, style=style), it["title"])
             else:   # a subagent, tucked under its session's name
                 cells = (name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),

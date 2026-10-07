@@ -57,12 +57,14 @@ def update_item(ref: str, status: str | None = None, title: str | None = None,
 
 
 @wheelhouse_tool
-def reply(ref: str, text: str, asks: bool = False) -> str:
-    """Answer the person in an item's thread, when a message from them arrives on that ref
-    (a note records progress; a reply is part of the conversation). Set asks=true when the
-    reply asks the person something back: the question goes back to open."""
-    _store.reply(_sid, ref, text, asks)
-    return f"replied on {ref}" + (", question reopened" if asks else "")
+def reply(ref: str, text: str, status: str | None = None) -> str:
+    """Answer the person in an item's thread, every time a message from them arrives on that
+    ref (a note records progress; a reply is part of the conversation). On a question,
+    status is required: "open" if you are still waiting on the person (you answered their
+    clarification, or need more), "answered" once their input lets you proceed. On a task
+    or agent it is optional."""
+    _store.reply(_sid, ref, text, status)
+    return f"replied on {ref}" + (f", now {status}" if status else "")
 
 
 @wheelhouse_tool

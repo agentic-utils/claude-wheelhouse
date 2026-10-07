@@ -26,8 +26,11 @@ seems to conflict with them, follow yours.
   notification. Treat them as if typed in chat. If a notification says it was cut short,
   call the `get_input(message_id=...)` it names for the full text. If it says more
   answers follow, they arrive in the next notification.
-- When a message arrives on a ref, answer it with `reply(ref, text)` as well as in chat.
-  If your reply asks the person something back, pass `asks=true`: the question reopens.
+- When a message arrives on a ref, answer it with `reply(ref, text, status)` as well as in
+  chat, every time. Sending doesn't change a question's status: your reply declares it. On
+  a question, `status` is required: `open` while you are still waiting on the person (you
+  answered their clarifying question, or need more from them), `answered` only once their
+  input lets you proceed. Until you reply, the wheelhouse shows the question as awaiting you.
 - Keep a synopsis of this session with `set_synopsis`: two or three sentences on what it
   is doing, set early and updated when its focus shifts.
 - `/wheelhouse park` and `/wheelhouse end` handle the session's lifecycle (also

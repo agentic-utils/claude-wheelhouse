@@ -26,7 +26,7 @@ CLOSED = {"done", "dropped", "closed", "failed"}
 # Bump when a change means a session still running older code (its MCP server and monitor
 # keep the code they started with) would mishandle the store: the wheelhouse then shows
 # it as needing a relaunch. 2: queued answers (draft messages) that older code would deliver.
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS items (
     status     TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    reopened_after INTEGER,
+    reopened_after INTEGER,   -- unused: kept for MCP servers still running older code
     UNIQUE (session_id, ref)
 );
 CREATE TABLE IF NOT EXISTS messages (
@@ -342,24 +342,25 @@ class Store:
             if note:
                 self._said(db, sid, ref, note, "note")
 
-    def reply(self, sid: str, ref: str, text: str, asks: bool = False) -> None:
-        """The session's answer in an item's conversation. asks=True means it asks the person
-        something back, so a question goes back to open and the top of the inbox."""
+    def reply(self, sid: str, ref: str, text: str, status: str | None = None) -> None:
+        """The session's answer in an item's conversation, declaring where the item stands.
+        On a question the status is required: open (still waiting on the person, a
+        clarification answered included) or answered (the person's input lets it proceed)."""
         item = self.item(sid, ref)
         if self.session(sid) is None:
             raise SessionGone(sid)
         if item is None:
             raise KeyError(f"no item {ref} in this session")
-        if asks and item["kind"] != "question":
-            raise ValueError(f"asks=true reopens a question, and {ref} is a {item['kind']}: "
-                             "post a question for what you need to ask")
+        if item["kind"] == "question" and status not in ("open", "answered"):
+            raise ValueError(f"{ref} is a question: reply with status open (still waiting on the "
+                             "person) or answered (you have what you need)")
+        if status is not None:
+            self._check_status(item["kind"], status)
         with self.tx() as db:
             self._require(db, sid)
-            said = self._said(db, sid, ref, text, "reply")
-            # reopened_after: an answer queued before this reply doesn't answer the follow-up
-            db.execute("UPDATE items SET status = coalesce(?, status), updated_at = ?, "
-                       "reopened_after = coalesce(?, reopened_after) WHERE session_id = ? AND ref = ?",
-                       ("open" if asks else None, now(), said if asks else None, sid, ref))
+            self._said(db, sid, ref, text, "reply")
+            db.execute("UPDATE items SET status = coalesce(?, status), updated_at = ? "
+                       "WHERE session_id = ? AND ref = ?", (status, now(), sid, ref))
 
     @staticmethod
     def _said(db, sid, ref, text, kind) -> int:
@@ -391,11 +392,10 @@ class Store:
         """A message from the person, sent now; the session's monitor delivers it."""
         with self.tx() as db:
             self._require(db, sid)
-            sent = db.execute(
+            db.execute(
                 "INSERT INTO messages (session_id, item_ref, author, body, created_at) VALUES (?, ?, 'person', ?, ?)",
                 (sid, item_ref, body, now()),
-            ).lastrowid
-            self._answered(db, sid, [(item_ref, sent)])
+            )
 
     def notice(self, sid: str, body: str) -> None:
         """A message from the wheelhouse itself (not the person), sent now."""
@@ -426,22 +426,18 @@ class Store:
         message at once, so the session never sees part of a batch. Returns how many went."""
         with self.tx() as db:
             self._require(db, sid)
-            sent = [(r["item_ref"], r["id"]) for r in db.execute(
-                "UPDATE messages SET draft = 0 WHERE session_id = ? AND draft = 1 RETURNING item_ref, id", (sid,))]
-            self._answered(db, sid, sent)
+            sent = db.execute("UPDATE messages SET draft = 0 WHERE session_id = ? AND draft = 1 RETURNING id",
+                              (sid,)).fetchall()
         return len(sent)
 
-    @staticmethod
-    def _answered(db, sid, sent) -> None:
-        """Sent (ref, message id) pairs answer their open questions, unless the message was
-        written before the session reopened the question: that answer is to the earlier ask."""
-        for ref, msg_id in sent:
-            db.execute(
-                """UPDATE items SET status = 'answered', updated_at = ?
-                   WHERE session_id = ? AND ref = ? AND kind = 'question' AND status = 'open'
-                   AND (reopened_after IS NULL OR reopened_after < ?)""",
-                (now(), sid, ref, msg_id),
-            )
+    def awaiting(self) -> set[tuple[str, str]]:
+        """Items whose latest word is the person's: sent to the session, with no reply since.
+        The ball is in the session's court; the session's reply says where the item stands."""
+        return {(r["session_id"], r["item_ref"]) for r in self._all(
+            """SELECT session_id, item_ref FROM messages WHERE item_ref IS NOT NULL AND draft = 0
+               GROUP BY session_id, item_ref
+               HAVING max(CASE WHEN author = 'person' THEN id END) >
+                      coalesce(max(CASE WHEN author = 'claude' AND kind = 'reply' THEN id END), 0)""", ())}
 
     def pending(self, sid: str) -> list[sqlite3.Row]:
         return self._all(

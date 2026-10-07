@@ -125,12 +125,12 @@ def test_mcp_server_round_trip(store, sid, db_file):
             refused = [await client.call_tool("update_item", args) for args in (
                 {"ref": ref, "status": "done"}, {"ref": "Q9", "status": "closed"})]
             replied = (await client.call_tool("reply", {"ref": ref, "text": "which version?",
-                                                        "asks": True})).content[0].text
+                                                        "status": "open"})).content[0].text
             await client.call_tool("set_synopsis", {"text": "Choosing a database."})
             return ref, got, refused, replied
 
     ref, got, refused, replied = anyio.run(drive)
-    assert replied == "replied on Q1, question reopened"
+    assert replied == "replied on Q1, now open"
     assert store.item(sid, ref)["status"] == "open"
     assert store.session(sid)["synopsis"] == "Choosing a database."
     assert [(r.is_error, r.content[0].text) for r in refused] == [

@@ -29,7 +29,7 @@ async def test_answer_reaches_the_session(store, sid):
         await pilot.press("s")
         await pilot.pause()
     assert [m["body"] for m in store.pending(sid)] == ["SQLite, it's local"]
-    assert store.item(sid, q)["status"] == "answered"
+    assert store.item(sid, q)["status"] == "open", "the session's reply says whether it's answered"
 
 
 @pytest.mark.anyio
@@ -261,7 +261,7 @@ async def test_ctrl_enter_sends_one_answer_now(store, sid, key, sent, desc):
         await pilot.press(key)
         await pilot.pause()
     assert [m["body"] for m in store.pending(sid)] == (["now"] if sent else []), desc
-    assert store.item(sid, q)["status"] == ("answered" if sent else "open"), desc
+
 
 
 @pytest.mark.anyio
@@ -295,7 +295,7 @@ async def test_thread_view_holds_the_conversation(store, sid):
         await pilot.pause()
         assert isinstance(app.screen, ThreadView)
         await pilot.press(*"SQLite")
-        store.reply(sid, q, "noted, any version?", asks=True)
+        store.reply(sid, q, "noted, any version?", "open")
         app.screen.paint()
         await pilot.pause()
         thread = app.screen.text
@@ -362,7 +362,7 @@ async def test_a_session_on_older_code_cannot_queue(store, sid, monkeypatch, sta
         await pilot.press("ctrl+s")
         await pilot.pause()
     assert (len(store.drafts()), len(store.pending(sid))) == (queued, 1 - queued), desc
-    assert store.item(sid, q)["status"] == ("open" if queued else "answered"), desc
+
 
 
 @pytest.mark.anyio
@@ -816,3 +816,21 @@ async def test_x_closes_and_reopens_questions(store, sid, kind, status, finished
         await pilot.press("x")
         await pilot.pause()
     assert store.item(sid, ref)["status"] == expected, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("steps, shown, desc", [
+    ([], "open", "nothing said yet"),
+    (["send"], "⏳ open", "the person spoke last: awaiting the session's reply"),
+    (["send", "reply"], "open", "the session replied, still waiting on the person"),
+])
+async def test_the_item_list_shows_a_question_awaiting_the_session(store, sid, steps, shown, desc):
+    q = store.post_item(sid, "question", "which db?")
+    act = {"send": lambda: store.send(sid, "what's it for?", q),
+           "reply": lambda: store.reply(sid, q, "the cache", "open")}
+    for step in steps:
+        act[step]()
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert str(app.items_table.get_row_at(0)[2]) == shown, desc

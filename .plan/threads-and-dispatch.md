@@ -119,11 +119,9 @@ Where the build differs from the design above:
 
 - **Store calls.** `send()` still sends at once (Ctrl+Enter and the End/Park cancellations use
   it). Queuing is a separate `queue()`, and `dispatch(sid)` sends a session's drafts in one
-  transaction and marks their questions answered. `unqueue()` takes a draft back.
+  transaction. `unqueue()` takes a draft back.
 - **Editing or dropping a queued answer.** Ctrl+R in a compose box takes the item's latest
   queued answer back into the box, to edit and queue again, or to clear and so drop.
-- **`asks=true` on a task or agent** is refused with a pointer to post a question, since
-  only questions have an `open` status to go back to.
 - **One notification per poll.** The monitor prints everything sent since its last poll
   as one line (a single message reads as before). Two sends within one poll, or sends
   that waited for a dead session, share a line. A batch is split only when it won't fit:
@@ -136,10 +134,15 @@ Where the build differs from the design above:
   get_input(message_id=N)]`, so it survives any cut, which returns that message in
   full whether or not it has been delivered. The monitor confirms a message as it prints
   it, so a pointer to "what's undelivered" could never find a general message's rest.
-- **A follow-up isn't answered by a stale draft.** `reply(asks=true)` records the reply's
-  message id on the question (`items.reopened_after`). Sending marks the question
-  answered only with a message written after that, so an answer queued before the
-  follow-up is still sent but leaves the question open.
+- **The session declares a question's status (replaces `asks`).** Sending no longer
+  marks a question answered: the person's message may itself be a clarifying question.
+  `reply(ref, text, status)` requires `status` on a question, `open` (still waiting on
+  the person) or `answered` (their input lets the session proceed); on a task or agent it
+  is optional. While the person's message is the latest on an item, with no reply since,
+  the item list shows it dimmed as `⏳ <status>` (derived, `Store.awaiting()`). The old
+  `items.reopened_after` column is no longer used; it stays because MCP servers still
+  running older code write it. `PROTOCOL_VERSION` is 3, so those sessions show "needs
+  relaunch".
 - **Sessions on older code.** An MCP server or monitor started before drafts existed
   delivers a draft at once, and it keeps its old code until the session restarts. Each
   session row now carries `code_version`, stamped with `PROTOCOL_VERSION` when the

@@ -32,18 +32,22 @@ def test_post_item_refs_and_statuses(store, sid, posts, expected, desc):
     (lambda s, sid: s.post_item(sid, "task", "x", status="answered"), ValueError, "question status on a task"),
     (lambda s, sid: s.update_item(sid, "T9", status="done"), KeyError, "missing ref"),
     (lambda s, sid: s.reply(sid, "T9", "hi"), KeyError, "reply to a missing ref"),
-    (lambda s, sid: s.reply(sid, s.post_item(sid, "task", "x"), "which?", asks=True), ValueError,
-     "asks on a task: only a question reopens"),
+    (lambda s, sid: s.reply(sid, s.post_item(sid, "question", "x"), "which?"), ValueError,
+     "a reply on a question must say where it stands"),
+    (lambda s, sid: s.reply(sid, s.post_item(sid, "question", "x"), "ok", "closed"), ValueError,
+     "closing is the person's call"),
+    (lambda s, sid: s.reply(sid, s.post_item(sid, "task", "x"), "ok", "answered"), ValueError,
+     "a question status on a task"),
 ])
 def test_rejects_bad_writes(store, sid, call, error, desc):
     with pytest.raises(error):
         call(store, sid)
 
 
-def test_answer_marks_question_answered_and_waits_for_delivery(store, sid):
+def test_an_answer_waits_for_delivery_and_leaves_the_status_to_the_session(store, sid):
     q = store.post_item(sid, "question", "which db?", "full detail")
     store.send(sid, "postgres", q)
-    assert store.item(sid, q)["status"] == "answered"
+    assert store.item(sid, q)["status"] == "open", "the session's reply says whether it's answered"
     assert [m["body"] for m in store.pending(sid)] == ["postgres"]
     assert [m["body"] for m in store.take_pending(sid)] == ["postgres"]
     assert store.pending(sid) == [] and store.take_pending(sid) == []
@@ -128,7 +132,7 @@ def test_queued_answers_wait_until_dispatched(store, sid):
     assert store.sessions()[0]["drafts"] == 2
     assert store.dispatch(sid) == 2
     assert [m["body"] for m in store.claim(sid)] == ["SQLite", "keep it"], "one claim takes the whole batch"
-    assert {store.item(sid, r)["status"] for r in (q3, q4)} == {"answered"}
+    assert {store.item(sid, r)["status"] for r in (q3, q4)} == {"open"}, "sending leaves the status alone"
     assert store.drafts() == [] and store.dispatch(sid) == 0
 
 
@@ -139,16 +143,24 @@ def test_a_queued_answer_can_be_taken_back(store, sid):
     assert store.drafts() == [] and store.unqueue(draft["id"]) is None
 
 
-@pytest.mark.parametrize("asks, status, desc", [
-    (False, "answered", "a plain reply leaves the question as it was"),
-    (True, "open", "a reply that asks back reopens it"),
+@pytest.mark.parametrize("steps, status, awaiting, desc", [
+    (["send"], "open", True, "the person asked: the ball is in the session's court"),
+    (["send", "reply open"], "open", False, "a clarification answered: still waiting on the person"),
+    (["send", "reply answered"], "answered", False, "the session has what it needs"),
+    (["send", "reply answered", "send"], "answered", True, "a further word is awaiting a reply again"),
+    (["queue"], "open", False, "a queued answer isn't with the session yet"),
+    (["queue", "dispatch"], "open", True, "until it's sent"),
 ])
-def test_reply_joins_the_thread(store, sid, asks, status, desc):
+def test_the_session_declares_where_a_question_stands(store, sid, steps, status, awaiting, desc):
     q = store.post_item(sid, "question", "db?")
-    store.send(sid, "postgres?", q)
-    store.reply(sid, q, "postgres it is", asks=asks)
+    act = {"send": lambda: store.send(sid, "postgres?", q), "queue": lambda: store.queue(sid, "postgres?", q),
+           "dispatch": lambda: store.dispatch(sid),
+           "reply open": lambda: store.reply(sid, q, "it means the cache db", "open"),
+           "reply answered": lambda: store.reply(sid, q, "postgres it is", "answered")}
+    for step in steps:
+        act[step]()
     assert store.item(sid, q)["status"] == status, desc
-    assert [(m["author"], m["kind"]) for m in store.thread(sid, q)] == [("person", None), ("claude", "reply")]
+    assert ((sid, q) in store.awaiting()) == awaiting, desc
 
 
 def test_synopsis_is_stored_on_the_session(store, sid):
@@ -177,22 +189,6 @@ def test_an_older_database_gains_the_new_columns(tmp_path):
     assert store.session("s1")["synopsis"] == ""
     indexes = {r[1] for r in store.db.execute("PRAGMA index_list(messages)")}
     assert "messages_unsent" in indexes and "messages_pending" not in indexes
-
-
-@pytest.mark.parametrize("steps, expected, desc", [
-    (["queue", "dispatch"], "answered", "a queued answer marks the question answered when sent"),
-    (["queue", "reopen", "dispatch"], "open", "a stale answer queued before the follow-up leaves it open"),
-    (["queue", "reopen", "queue", "dispatch"], "answered", "an answer queued after the follow-up answers it"),
-    (["reopen", "send"], "answered", "an answer sent now after the follow-up answers it"),
-])
-def test_a_follow_up_is_answered_only_by_a_later_answer(store, sid, steps, expected, desc):
-    q = store.post_item(sid, "question", "db?")
-    act = {"queue": lambda: store.queue(sid, "SQLite", q), "dispatch": lambda: store.dispatch(sid),
-           "reopen": lambda: store.reply(sid, q, "which version?", asks=True),
-           "send": lambda: store.send(sid, "3.45", q)}
-    for step in steps:
-        act[step]()
-    assert store.item(sid, q)["status"] == expected, desc
 
 
 @pytest.mark.parametrize("stamp, expected, desc", [
