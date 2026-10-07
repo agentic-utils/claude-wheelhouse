@@ -27,7 +27,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   from the recent sessions in `~/.claude/projects` (one whose adoption failed is offered
   again). If it's still running, type `/exit` in
   its tab first (the wheelhouse never kills it), then press Adopt; it reopens in a new tab
-  with `claude --resume` and the wheelhouse's flags.
+  with `claude --resume` and the wheelhouse's flags. Its first notification asks it to
+  post the questions it is already waiting on you for and its running tasks, and to set
+  its synopsis.
 - **Durable.** State is in SQLite at `~/.local/state/claude-wheelhouse/wheelhouse.db`
   (override with `WHEELHOUSE_DB`), committed to disk on every change.
 
@@ -47,7 +49,8 @@ how to work.
 - [The `wheelhouse` MCP server](claude_wheelhouse/mcp_server.py): the tools the session
   posts and reads through. Each tool's description is its docstring.
 - [The monitor](claude_wheelhouse/monitor.py) ([plugin entry](claude_wheelhouse/plugin/monitors/monitors.json)):
-  delivers your answers and the End and Park requests as `[wheelhouse]` notifications.
+  delivers your answers, the End and Park requests, and the note an adopted session gets
+  on joining, as `[wheelhouse]` notifications.
 
 `claude-wheelhouse protocol` prints all of it in one go, exactly as a session receives it,
 along with the launch command.

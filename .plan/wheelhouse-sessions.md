@@ -254,6 +254,13 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   adopted session never sees `--append-system-prompt`. Checked on 2.1.287: with the
   default the resumed session didn't see an appended instruction, with `off` it did, and
   a later default resume lost it again. So adopted sessions launch with `off` every time.
+- **Open work comes with it.** A session adopted mid-conversation may already be waiting
+  on the person, but the wheelhouse only sees items posted after adoption. Once the tab
+  opens, Adopt queues a notice (`messages.kind = 'notice'`, printed as `[wheelhouse] ...`
+  with no sender) asking the session to post its open questions and running tasks,
+  skipping any already listed, and to set its synopsis. The notification triggers a
+  turn as soon as the monitor starts. The protocol says the same, for a session that
+  joins without the notice.
 
 ## TUI
 

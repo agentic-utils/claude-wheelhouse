@@ -86,7 +86,7 @@ def opening_prompt(session) -> str:
 def injected() -> str:
     """Everything a launched session receives, for `claude-wheelhouse protocol`: read it
     before letting the wheelhouse put standing instructions into your sessions."""
-    from . import mcp_server, monitor   # mcp_server pulls in the MCP SDK: only load it here
+    from . import adopt, mcp_server, monitor   # mcp_server pulls in the MCP SDK: only load it here
     from .store import GONE_TEXT
     skill = (PLUGIN_DIR / "skills/wheelhouse/SKILL.md").read_text()
     session = {"id": "<session-id>", "cwd": "<directory>", "name": "<name>", "ticket": None,
@@ -95,7 +95,8 @@ def injected() -> str:
     argv[argv.index(PROTOCOL)] = "<protocol.md, above>"
     tools = "\n\n".join(f"{t.__name__}\n    {t.__doc__.strip()}" for t in mcp_server.TOOLS)
     notices = "\n".join([monitor.format_message({"body": "<message>", "item_ref": "Q1"}),
-                         *monitor.REQUEST_TEXT.values(), GONE_TEXT])
+                         *monitor.REQUEST_TEXT.values(), GONE_TEXT,
+                         monitor.format_message({"body": adopt.JOINED_TEXT, "item_ref": None, "kind": "notice"})])
     return "\n\n".join([
         f"== protocol.md (appended to the system prompt) ==\n\n{PROTOCOL}",
         f"== /wheelhouse skill ({PLUGIN_DIR / 'skills/wheelhouse/SKILL.md'}) ==\n\n{skill}",

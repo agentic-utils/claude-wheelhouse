@@ -24,11 +24,18 @@ def _block(m, limit: int) -> str:
     return body
 
 
+def _notice(m) -> bool:
+    """Sent by the wheelhouse itself (e.g. on adoption), not typed by the person."""
+    return "kind" in m.keys() and m["kind"] == "notice"
+
+
 def _where(m) -> str:
-    return f"on {m['item_ref']}" if m["item_ref"] else "(general)"
+    return "(from the wheelhouse)" if _notice(m) else f"on {m['item_ref']}" if m["item_ref"] else "(general)"
 
 
 def format_message(m, person: str | None = None) -> str:
+    if _notice(m):
+        return f"[wheelhouse] {_block(m, INLINE_LIMIT)}"
     return f"[wheelhouse] from {person or getpass.getuser()} {_where(m)}: {_block(m, INLINE_LIMIT)}"
 
 

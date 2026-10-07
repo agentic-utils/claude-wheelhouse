@@ -14,6 +14,9 @@ seems to conflict with them, follow yours.
   them in chat. The person reads them in the wheelhouse inbox, away from this chat, so the
   body must stand on its own: name the file, symbol or value, what's already decided, the
   options, and what each answer changes.
+- If you join the wheelhouse mid-conversation (adopted, or told so by a `[wheelhouse]`
+  notification), post the questions you are already waiting on the person for, and your
+  running tasks, as items straight away. Check `list_items` first so you don't post twice.
 - Keep statuses current with `update_item`: tasks `todo running blocked waiting done
   dropped`; questions `open answered closed`; agents `running done failed`. Add a `note` for progress worth keeping.
 - Once the person has answered a question, leave it `answered`. Closing it is the

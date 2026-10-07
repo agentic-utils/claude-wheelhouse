@@ -12,12 +12,14 @@ from claude_wheelhouse import monitor
 from claude_wheelhouse.store import PROTOCOL_VERSION
 
 
-@pytest.mark.parametrize("ref, body, expected, desc", [
-    ("Q1", "yes", "[wheelhouse] from doug on Q1: yes", "answer to a question"),
-    (None, "a\nb", "[wheelhouse] from doug (general): a ⏎ b", "general hint, newlines flattened"),
+@pytest.mark.parametrize("ref, body, kind, expected, desc", [
+    ("Q1", "yes", None, "[wheelhouse] from doug on Q1: yes", "answer to a question"),
+    (None, "a\nb", None, "[wheelhouse] from doug (general): a ⏎ b", "general hint, newlines flattened"),
+    (None, "you joined", "notice", "[wheelhouse] you joined", "the wheelhouse's own notice names no sender"),
 ])
-def test_format_message(ref, body, expected, desc):
-    assert monitor.format_message({"id": 1, "item_ref": ref, "body": body}, person="doug") == expected, desc
+def test_format_message(ref, body, kind, expected, desc):
+    m = {"id": 1, "item_ref": ref, "body": body, "kind": kind}
+    assert monitor.format_message(m, person="doug") == expected, desc
 
 
 @pytest.mark.parametrize("msgs, expected, desc", [

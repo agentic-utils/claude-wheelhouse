@@ -172,6 +172,18 @@ def test_adopting_a_tracked_session_reuses_its_row(store, sessions, proc, name, 
     assert store.session(SID)["name"] == expected, desc
 
 
+@pytest.mark.parametrize("tracked, desc", [
+    (False, "a newly adopted session"),
+    (True, "a tracked session adopted again (it ran outside the wheelhouse meanwhile)"),
+])
+def test_adoption_asks_the_session_to_post_its_open_work(store, sessions, proc, tracked, desc):
+    if tracked:
+        store.create_session(REPO, name="Rare caper", sid=SID)
+    adopt.adopt(store, candidate(), "LG", sessions, proc, open_tab=lambda s, sid: None)
+    [m] = store.pending(SID)
+    assert (m["kind"], m["item_ref"], m["body"]) == ("notice", None, adopt.JOINED_TEXT), desc
+
+
 def test_a_failed_launch_leaves_no_row(store, sessions, proc):
     def boom(s, sid):
         raise RuntimeError("wt.exe missing")

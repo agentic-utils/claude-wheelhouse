@@ -25,6 +25,14 @@ CHUNK = 256 * 1024   # bytes read from each end of a transcript
 TITLE_WIDTH = 70
 
 
+# Delivered by the monitor as the adopted session starts: it triggers a turn, so work the
+# session was already doing shows up in the wheelhouse without waiting for its next post.
+JOINED_TEXT = ("You have just joined the wheelhouse, mid-conversation. Call list_items to see what it "
+               "already holds for this session, then post as items the questions you are already "
+               "waiting on the person for and the tasks you have running (skip any already there), "
+               "and set your synopsis. Then stop: don't resume other work because of this message.")
+
+
 class StillRunning(RuntimeError):
     def __init__(self, pid: int):
         super().__init__(f"the session is still running (pid {pid}): type /exit in its tab first")
@@ -156,6 +164,7 @@ def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSI
         if name:
             store.rename(c.id, name)
         open_tab(store, c.id)
+        store.notice(c.id, JOINED_TEXT)
         return c.id
     sid = store.create_session(c.cwd, name=name, sid=c.id)
     try:
@@ -165,4 +174,5 @@ def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSI
         # and then fails can't be seen from here; its row stays and is offered again.
         store.end(sid)
         raise
+    store.notice(sid, JOINED_TEXT)   # after the tab opens: the session takes seconds to start
     return sid

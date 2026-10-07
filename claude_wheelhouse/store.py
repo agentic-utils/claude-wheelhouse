@@ -397,6 +397,13 @@ class Store:
             ).lastrowid
             self._answered(db, sid, [(item_ref, sent)])
 
+    def notice(self, sid: str, body: str) -> None:
+        """A message from the wheelhouse itself (not the person), sent now."""
+        with self.tx() as db:
+            self._require(db, sid)
+            db.execute("INSERT INTO messages (session_id, author, body, created_at, kind) "
+                       "VALUES (?, 'person', ?, ?, 'notice')", (sid, body, now()))
+
     def queue(self, sid: str, body: str, item_ref: str | None = None) -> None:
         """A message from the person, held as a draft until dispatch() sends it."""
         with self.tx() as db:
