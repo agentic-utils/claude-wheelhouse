@@ -12,16 +12,24 @@ import time
 from .store import GONE_TEXT, Store
 
 POLL_SECONDS = 2
-INLINE_LIMIT = 1500   # characters of message text in one notification
-LINE_LIMIT = INLINE_LIMIT + 200   # the whole line: text, refs and pointers
-BLOCK_OVERHEAD = 80   # roughly a block's ref, separator and cut-short pointer
+# Claude Code cuts a monitor notification at 500 characters and appends "...(truncated)"
+# (observed on a 522-character line), so whatever follows the cut never reaches the
+# session. Lines stay under it, and a cut-short message's pointer comes first in its block.
+LINE_LIMIT = 480
+MIN_TEXT = 40   # characters of a cut-short message worth showing before it waits for the next line
+SEP = " ‖ "
 
 
-def _block(m, limit: int) -> str:
+def _pointer(m) -> str:
+    return f"[cut short, full text: get_input(message_id={m['id']})] "
+
+
+def _block(m, width: int) -> str:
+    """The message in at most width characters: whole, or the pointer then as much as fits."""
     body = " ⏎ ".join(m["body"].splitlines())
-    if len(body) > limit:
-        body = body[:limit] + f" … [cut short: call get_input(message_id={m['id']}) for the rest]"
-    return body
+    if len(body) <= width:
+        return body
+    return _pointer(m) + body[:max(0, width - len(_pointer(m)) - 1)] + "…"
 
 
 def _notice(m) -> bool:
@@ -34,26 +42,45 @@ def _where(m) -> str:
 
 
 def format_message(m, person: str | None = None) -> str:
-    if _notice(m):
-        return f"[wheelhouse] {_block(m, INLINE_LIMIT)}"
-    return f"[wheelhouse] from {person or getpass.getuser()} {_where(m)}: {_block(m, INLINE_LIMIT)}"
+    head = "[wheelhouse] " if _notice(m) else f"[wheelhouse] from {person or getpass.getuser()} {_where(m)}: "
+    return head + _block(m, LINE_LIMIT - len(head))
+
+
+def _widths(needs: list[int], room: int) -> list[int] | None:
+    """Share room between blocks: short ones whole, long ones cut to an equal width that
+    still shows MIN_TEXT of each. None if they can't all fit."""
+    if sum(needs) <= room:
+        return needs
+    for i, need in enumerate(sorted(needs)):   # the shortest whole, the rest share what's left
+        left = len(needs) - i
+        cap = (room - sum(sorted(needs)[:i])) // left
+        if cap < need:
+            break
+    if cap < MIN_TEXT + len("[cut short, full text: get_input(message_id=)] ") + 8:
+        return None
+    return [min(need, cap) for need in needs]
 
 
 def format_batch(msgs, person: str | None = None) -> tuple[str, int]:
     """Several messages sent together, as one notification so the session reads them all
-    before acting. Each block shares the inline limit. Returns the line and how many
-    messages it carries: blocks that would push the line past LINE_LIMIT are left out, with
-    a note that they follow, for the caller to release to the next poll."""
+    before acting. Returns the line and how many messages it carries: those that don't fit
+    in LINE_LIMIT are left out, with a note that they follow, for the caller to release to
+    the next poll."""
     person = person or getpass.getuser()
     if len(msgs) == 1:
         return format_message(msgs[0], person), 1
-    limit = max(100, INLINE_LIMIT // len(msgs) - BLOCK_OVERHEAD)
-    blocks = [f"{_where(m)}: {_block(m, limit)}" for m in msgs]
     for n in range(len(msgs), 0, -1):
-        rest = f" ‖ … {len(msgs) - n} more follow in the next notification" if n < len(msgs) else ""
-        line = f"[wheelhouse] from {person}, {len(msgs)} answers: " + " ‖ ".join(blocks[:n]) + rest
-        if len(line) <= LINE_LIMIT or n == 1:
-            return line, n
+        if n == 1:
+            rest = f"{SEP}… {len(msgs) - 1} more follow in the next notification"
+            head = f"[wheelhouse] from {person} {_where(msgs[0])}: "
+            return head + _block(msgs[0], LINE_LIMIT - len(head) - len(rest)) + rest, 1
+        rest = f"{SEP}… {len(msgs) - n} more follow in the next notification" if n < len(msgs) else ""
+        head = f"[wheelhouse] from {person}, {len(msgs)} answers: "
+        wheres = [f"{_where(m)}: " for m in msgs[:n]]
+        room = LINE_LIMIT - len(head) - len(rest) - len(SEP) * (n - 1) - sum(map(len, wheres))
+        widths = _widths([len(" ⏎ ".join(m["body"].splitlines())) for m in msgs[:n]], room)
+        if widths:
+            return head + SEP.join(w + _block(m, width) for w, m, width in zip(wheres, msgs, widths)) + rest, n
 
 
 REQUEST_TEXT = {

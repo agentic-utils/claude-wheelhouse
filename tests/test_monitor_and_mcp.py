@@ -35,14 +35,16 @@ def test_format_batch(msgs, expected, desc):
 
 @pytest.mark.parametrize("n, length, shown, desc", [
     (2, 5000, 2, "two long messages share the limit, each cut short"),
-    (15, 5000, 9, "past what fits, the rest follow"),
-    (30, 300, 9, "many medium messages: the line stays within the limit"),
-    (30, 20, 30, "many short messages all fit"),
+    (15, 5000, 3, "past what fits, the rest follow"),
+    (30, 300, 3, "many medium messages: the line stays within the limit"),
+    (30, 20, 13, "many short messages: as many as fit whole"),
+    (5, 30, 5, "a few short messages all fit"),
 ])
 def test_a_long_batch_stays_within_the_line_limit(n, length, shown, desc):
     msgs = [{"id": 100 + i, "item_ref": f"Q{i}", "body": "x" * length} for i in range(n)]
     line, got = monitor.format_batch(msgs, person="doug")
     assert (got, len(line) <= monitor.LINE_LIMIT) == (shown, True), desc
+    assert line[:500] == line, f"{desc}: Claude Code cuts a notification at 500 characters"
     if length > 100:
         assert "get_input(message_id=100)" in line, desc
     assert (f"{n - shown} more follow" in line) == (shown < n), desc
@@ -52,7 +54,7 @@ def test_messages_that_do_not_fit_come_in_the_next_notification(store, sid):
     for i in range(20):
         store.send(sid, "x" * 300, f"Q{i}")
     out = io.StringIO()
-    counts = [monitor.poll_once(store, sid, out) for _ in range(4)]
+    counts = [monitor.poll_once(store, sid, out) for _ in range(10)]
     assert sum(counts) == 20 and counts[0] < 20 and counts[-1] == 0, "released, then printed by later polls"
     assert all(len(line) <= monitor.LINE_LIMIT for line in out.getvalue().splitlines())
 
@@ -85,9 +87,15 @@ def test_format_message_names_the_os_user(monkeypatch):
     assert monitor.format_message({"id": 1, "item_ref": "Q1", "body": "yes"}).startswith("[wheelhouse] from ada on Q1")
 
 
-def test_format_message_cuts_long_bodies():
-    line = monitor.format_message({"id": 7, "item_ref": "Q2", "body": "x" * 5000})
-    assert "get_input(message_id=7)" in line and len(line) <= monitor.LINE_LIMIT
+@pytest.mark.parametrize("ref, kind, desc", [
+    ("Q2", None, "an answer on an item"),
+    (None, None, "a general message (Doug's 676-character message 25 lost its tail and pointer)"),
+    (None, "notice", "the wheelhouse's own notice"),
+])
+def test_a_long_message_shows_its_pointer_before_the_cut(ref, kind, desc):
+    line = monitor.format_message({"id": 7, "item_ref": ref, "kind": kind, "body": "x" * 676}, person="doug")
+    assert len(line) <= monitor.LINE_LIMIT < 500, desc
+    assert line.index("get_input(message_id=7)") < 100, f"{desc}: the pointer comes before the text"
 
 
 def test_poll_once_delivers_each_message_once(store, sid):

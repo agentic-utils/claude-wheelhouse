@@ -76,8 +76,8 @@ stored status stays `open` until the answer is sent, when it becomes `answered` 
 
 A send is one transaction, and the monitor's claim takes every sent message for the
 session at once, so a session never sees part of a batch. If the line would pass the
-inline limit (1,500 characters), the monitor prints what fits and points to `get_input()`
-for the rest, as it does for a single long message today.
+line limit, the monitor prints what fits and points to `get_input()` for the rest, as it
+does for a single long message today.
 
 To check during the build: how Claude Code's monitor turns stdout into notifications. If
 two lines printed together already arrive as one notification, the monitor could print a
@@ -127,9 +127,13 @@ Where the build differs from the design above:
 - **One notification per poll.** The monitor prints everything sent since its last poll
   as one line (a single message reads as before). Two sends within one poll, or sends
   that waited for a dead session, share a line. A batch is split only when it won't fit:
-  the line stays within 1,700 characters, blocks that don't fit are left for the next
-  poll, and the line says how many follow.
-- **Cut-short messages** point to `get_input(message_id=N)`, which returns that message in
+  the line stays within 480 characters, blocks that don't fit are left for the next
+  poll, and the line says how many follow. Claude Code cuts a monitor notification at 500
+  characters (appending "...(truncated)"), so anything past that never reaches the
+  session. Short messages go whole; long ones share what's left, each showing at least 40
+  characters.
+- **Cut-short messages** lead with their pointer, `[cut short, full text:
+  get_input(message_id=N)]`, so it survives any cut, which returns that message in
   full whether or not it has been delivered. The monitor confirms a message as it prints
   it, so a pointer to "what's undelivered" could never find a general message's rest.
 - **A follow-up isn't answered by a stale draft.** `reply(asks=true)` records the reply's

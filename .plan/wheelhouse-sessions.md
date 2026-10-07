@@ -348,7 +348,8 @@ new tab (confirmed by `launch.log`).
 
 1. Restore All after a reboot also catches sessions that died days ago and were never
    parked. Should Restore All only take sessions that were live in the last boot?
-2. Notification size: the monitor prints answers up to 1,500 characters inline and
-   points to `get_input(ref)` for longer ones. Is that the right cut-off?
+2. Notification size: Claude Code cuts a monitor notification at 500 characters, so the
+   monitor keeps each line within 480 and a longer message leads with a
+   `get_input(message_id=N)` pointer. Settled by the platform, not a choice.
 3. When to take the first step of "Path to a single tool": straight after the prototype
    settles, or once the wheelhouse has been in daily use for a while?
