@@ -325,6 +325,7 @@ class WheelhouseApp(App):
     CSS = f"""
     Screen {{ background: #0a0a12; }}
     #title {{ height: 1; background: #12122a; content-align: center middle; }}
+    TabbedContent {{ height: 1fr; }}   /* leaves room for the outbox and footer: no screen scroll */
     .panel {{ background: #000000; color: {MATRIX}; border: round #7b61ff; }}
     .panel:focus-within {{ border: round #ff2a6d; }}
     DataTable {{ background: #000000; color: {MATRIX}; }}

@@ -416,3 +416,25 @@ async def test_one_click_on_a_session_follows_it(store, sid, tmp_path):
         await pilot.click("#session-list", offset=(4, row + 1))   # below the header row
         await pilot.pause()
         assert app.viewing == other and "other · conversation" in app._detail_text
+
+
+@pytest.mark.parametrize("size, desc", [
+    ((80, 24), "a small terminal"),
+    ((120, 30), "a typical Windows Terminal tab"),
+    ((200, 50), "a large terminal"),
+])
+@pytest.mark.anyio
+async def test_the_screen_fits_so_the_tabs_never_scroll_off(store, sid, size, desc):
+    from textual import events
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        assert app.screen.max_scroll_y == 0, f"{desc}: nothing overflows the screen"
+        sessions = app.query_one("#session-list")
+        for _ in range(3):   # a wheel over a list too short to scroll bubbles up to the screen
+            sessions.post_message(events.MouseScrollDown(sessions, 5, 1, 0, 0, 0, False, False, False))
+        await pilot.pause()
+        assert app.query_one("#title").region.y == 0, f"{desc}: the title and tabs stay on screen"
+        app.push_screen(ThreadView(sid, store.post_item(sid, "task", "build")))
+        await pilot.pause()
+        assert app.screen.max_scroll_y == 0, f"{desc}: the thread view fits too"
