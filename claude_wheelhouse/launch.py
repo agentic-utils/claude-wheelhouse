@@ -28,6 +28,13 @@ from .store import Store, db_path, now
 
 PLUGIN_DIR = Path(__file__).parent / "plugin"
 PROTOCOL = (Path(__file__).parent / "protocol.md").read_text()
+# Sent whenever a tab resumes a conversation (adopt, Restore, relaunch): it triggers a turn,
+# so work the session was already doing shows up in the wheelhouse without waiting for its
+# next post. Safe to repeat: the session checks what the wheelhouse already holds.
+JOINED_TEXT = ("You have just been opened in the wheelhouse, mid-conversation. Call list_items to see "
+               "what it already holds for this session, then post as items the questions you are "
+               "already waiting on the person for and the tasks you have running (skip any already "
+               "there), and set your synopsis. Then stop: don't resume other work because of this message.")
 
 
 CMD_META = set('&|<>^%"')
@@ -91,7 +98,7 @@ def opening_prompt(session) -> str:
 def injected() -> str:
     """Everything a launched session receives, for `claude-wheelhouse protocol`: read it
     before letting the wheelhouse put standing instructions into your sessions."""
-    from . import adopt, mcp_server, monitor   # mcp_server pulls in the MCP SDK: only load it here
+    from . import mcp_server, monitor   # mcp_server pulls in the MCP SDK: only load it here
     from .store import GONE_TEXT
     skill = (PLUGIN_DIR / "skills/wheelhouse/SKILL.md").read_text()
     session = {"id": "<session-id>", "cwd": "<directory>", "name": "<name>", "ticket": None,
@@ -101,7 +108,7 @@ def injected() -> str:
     tools = "\n\n".join(f"{t.__name__}\n    {t.__doc__.strip()}" for t in mcp_server.TOOLS)
     notices = "\n".join([monitor.format_message({"body": "<message>", "item_ref": "Q1"}),
                          *monitor.REQUEST_TEXT.values(), GONE_TEXT,
-                         monitor.format_message({"body": adopt.JOINED_TEXT, "item_ref": None, "kind": "notice"})])
+                         monitor.format_message({"body": JOINED_TEXT, "item_ref": None, "kind": "notice"})])
     return "\n\n".join([
         f"== protocol.md (appended to the system prompt) ==\n\n{PROTOCOL}",
         f"== /wheelhouse skill ({PLUGIN_DIR / 'skills/wheelhouse/SKILL.md'}) ==\n\n{skill}",
@@ -132,6 +139,8 @@ def open_tab(store: Store, sid: str) -> None:
         # cmd.exe warns about (and ignores) a \\wsl$ working directory, so start it from C:
         subprocess.Popen(argv, cwd="/mnt/c", stdin=subprocess.DEVNULL, stdout=log,
                          stderr=subprocess.STDOUT, start_new_session=True)
+    if transcript_exists(sid):   # resuming: the session takes seconds to start, the notice waits
+        store.notice(sid, JOINED_TEXT)
 
 
 def run(sid: str) -> None:

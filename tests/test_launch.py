@@ -162,3 +162,16 @@ def test_login_shell(monkeypatch, env_shell, pw_shell, expected, desc):
     monkeypatch.setenv("SHELL", env_shell)
     monkeypatch.setattr(launch.pwd, "getpwuid", lambda uid: type("pw", (), {"pw_shell": pw_shell}))
     assert launch.login_shell() == expected, desc
+
+
+@pytest.mark.parametrize("resuming, notices, desc", [
+    (True, 1, "a tab resuming a conversation (adopt, Restore, relaunch) asks it to post its open work"),
+    (False, 0, "a fresh session has no open work to post"),
+])
+def test_open_tab_sends_the_join_notice_only_on_resume(store, sid, monkeypatch, resuming, notices, desc):
+    monkeypatch.setattr(launch.liveness, "is_alive", lambda *a: False)
+    monkeypatch.setattr(launch.subprocess, "Popen", lambda argv, **kw: None)
+    monkeypatch.setattr(launch, "transcript_exists", lambda sid: resuming)
+    launch.open_tab(store, sid)
+    got = [(m["kind"], m["body"]) for m in store.pending(sid)]
+    assert got == [("notice", launch.JOINED_TEXT)] * notices, desc
