@@ -107,7 +107,9 @@ def main(sid: str | None = None) -> None:
     store, reported = None, set()
     while True:
         try:
-            store = store or Store()
+            if store is None:
+                store = Store()
+                store.mark_version(sid)   # tells the wheelhouse this session runs current code
             if poll_once(store, sid) is None:
                 return
         except sqlite3.OperationalError as e:

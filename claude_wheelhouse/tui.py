@@ -26,7 +26,7 @@ from textual.widgets import (
 )
 
 from . import adopt, launch, liveness
-from .store import CLOSED, SessionGone, Store
+from .store import CLOSED, SessionGone, Store, needs_relaunch
 
 MATRIX = "#00ff41"
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
@@ -434,6 +434,10 @@ class WheelhouseApp(App):
     def running(self, sid: str) -> bool:
         return self.statuses.get(sid) in RUNNING
 
+    def stale(self, s) -> bool:
+        """Running older wheelhouse code, which would deliver a queued answer at once."""
+        return self.running(s["id"]) and needs_relaunch(s)
+
     @staticmethod
     def pending(s) -> str | None:
         """The request (end or park) a session has been asked to act on, if any."""
@@ -469,7 +473,11 @@ class WheelhouseApp(App):
                 label = Text(st, style=STATUS_STYLE[st])
                 if s["parked"]:
                     label.append(" · parked", style="#777777")
+                if self.stale(s):
+                    label.append(" · needs relaunch", style="bold #ff2a6d")
                 name = s["name"] or os.path.basename(s["cwd"]) or short(s["id"])
+                if compact and self.stale(s):
+                    name = Text.assemble(name, (" ⟳", "bold #ff2a6d"))
                 queued = Text(f"✉ {s['drafts']}", style="bold #05d9e8") if s["drafts"] else ""
                 if compact:
                     q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
@@ -588,9 +596,15 @@ class WheelhouseApp(App):
     def action_queue(self) -> None:
         box, target, text = self.typed()
         if box:
-            self.store.queue(target[0], text, target[1])
+            s = self.store.session(target[0])
+            if s and self.stale(s):   # its old monitor would deliver a draft at once anyway
+                self.store.send(target[0], text, target[1])
+                self.notify(f"sent to {target[1]} now: that session runs older wheelhouse code, "
+                            "so it can't queue until it's relaunched", severity="warning")
+            else:
+                self.store.queue(target[0], text, target[1])
+                self.notify(f"queued for {target[1]}: s sends it")
             box.text = ""
-            self.notify(f"queued for {target[1]}: s sends it")
             self.refresh_data()
 
     @session_action

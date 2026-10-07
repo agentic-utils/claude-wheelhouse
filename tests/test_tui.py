@@ -337,6 +337,29 @@ async def test_end_names_the_queued_answers_it_discards(store, sid):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("stamped, label, queued, desc", [
+    (True, "live", 1, "a session on current code queues the answer"),
+    (False, "live · needs relaunch", 0, "a session on older code would deliver a draft at once, so it's sent now"),
+])
+async def test_a_session_on_older_code_cannot_queue(store, sid, monkeypatch, stamped, label, queued, desc):
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    if stamped:
+        store.mark_version(sid)
+    q = store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert str(app.query_one("#session-table", DataTable).get_row_at(0)[0]) == label, desc
+        app.query_one("#items", DataTable).move_cursor(row=0)
+        app.query_one("#answer", TextArea).text = "SQLite"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    assert (len(store.drafts()), len(store.pending(sid))) == (queued, 1 - queued), desc
+    assert store.item(sid, q)["status"] == ("open" if queued else "answered"), desc
+
+
+@pytest.mark.anyio
 async def test_shift_s_with_nothing_left_to_send_says_so(store, sid, monkeypatch):
     store.queue(sid, "a", "Q1")
     app = WheelhouseApp(store)

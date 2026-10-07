@@ -136,3 +136,10 @@ Where the build differs from the design above:
   message id on the question (`items.reopened_after`). Sending marks the question
   answered only with a message written after that, so an answer queued before the
   follow-up is still sent but leaves the question open.
+- **Sessions on older code.** An MCP server or monitor started before drafts existed
+  delivers a draft at once, and it keeps its old code until the session restarts. Each
+  session row now carries `code_version`, stamped with `PROTOCOL_VERSION` when the
+  session registers, by the MCP server's heartbeat and when the monitor starts. A running
+  session with an older or missing stamp shows "needs relaunch", and Ctrl+S sends to it
+  at once (with a warning) instead of queuing. Bump `PROTOCOL_VERSION` whenever older
+  running code would mishandle the store.

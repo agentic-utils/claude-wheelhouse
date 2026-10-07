@@ -23,6 +23,10 @@ STATUSES = {
 }
 INITIAL_STATUS = {"task": "todo", "question": "open", "agent": "running"}
 CLOSED = {"done", "dropped", "closed", "failed"}
+# Bump when a change means a session still running older code (its MCP server and monitor
+# keep the code they started with) would mishandle the store: the wheelhouse then shows
+# it as needing a relaunch. 2: queued answers (draft messages) that older code would deliver.
+PROTOCOL_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -43,7 +47,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     end_told_at  TEXT,
     park_told_at TEXT,
     adopted      INTEGER NOT NULL DEFAULT 0,
-    synopsis     TEXT NOT NULL DEFAULT ''
+    synopsis     TEXT NOT NULL DEFAULT '',
+    code_version INTEGER
 );
 CREATE TABLE IF NOT EXISTS items (
     id         INTEGER PRIMARY KEY,
@@ -83,7 +88,8 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "end_told_at", "TEXT"), ("sessions", "park_told_at", "TEXT"),
                  ("messages", "claimed_at", "TEXT"), ("sessions", "adopted", "INTEGER NOT NULL DEFAULT 0"),
                  ("messages", "draft", "INTEGER NOT NULL DEFAULT 0"), ("messages", "kind", "TEXT"),
-                 ("sessions", "synopsis", "TEXT NOT NULL DEFAULT ''"), ("items", "reopened_after", "INTEGER")]
+                 ("sessions", "synopsis", "TEXT NOT NULL DEFAULT ''"), ("sessions", "code_version", "INTEGER"),
+                 ("items", "reopened_after", "INTEGER")]
 REQUESTS = ("end", "park")   # what the wheelhouse can ask a running session to do
 CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print is retaken
 
@@ -106,6 +112,12 @@ def now() -> str:
 def stamp() -> str:
     """A precise timestamp: tells one claim or request from the next within a second."""
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+def needs_relaunch(session) -> bool:
+    """The session's MCP server and monitor run code older than this store expects (or
+    stamp no version at all): it must be relaunched before it can take queued answers."""
+    return (session["code_version"] or 0) < PROTOCOL_VERSION
 
 
 def db_path() -> Path:
@@ -225,8 +237,9 @@ class Store:
     @staticmethod
     def _register(db, sid, pid, start, boot_id) -> None:
         db.execute(
-            "UPDATE sessions SET claude_pid = ?, claude_start = ?, boot_id = ?, heartbeat_at = ? WHERE id = ?",
-            (pid, start, boot_id, now(), sid),
+            "UPDATE sessions SET claude_pid = ?, claude_start = ?, boot_id = ?, heartbeat_at = ?, "
+            "code_version = ? WHERE id = ?",
+            (pid, start, boot_id, now(), PROTOCOL_VERSION, sid),
         )
 
     def request_end(self, sid: str) -> None:
@@ -272,7 +285,13 @@ class Store:
 
     def heartbeat(self, sid: str) -> None:
         with self.tx() as db:
-            db.execute("UPDATE sessions SET heartbeat_at = ? WHERE id = ?", (now(), sid))
+            db.execute("UPDATE sessions SET heartbeat_at = ?, code_version = ? WHERE id = ?",
+                       (now(), PROTOCOL_VERSION, sid))
+
+    def mark_version(self, sid: str) -> None:
+        """Stamp this code's PROTOCOL_VERSION on the session (the monitor, as it starts)."""
+        with self.tx() as db:
+            db.execute("UPDATE sessions SET code_version = ? WHERE id = ?", (PROTOCOL_VERSION, sid))
 
     def set_parked(self, sid: str, parked: bool) -> None:
         """Parking (by the session or by force) also settles any pending park request."""

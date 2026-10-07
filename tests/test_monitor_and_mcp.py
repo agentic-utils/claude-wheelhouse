@@ -1,6 +1,7 @@
 import io
 import os
 import sys
+import types
 
 import anyio
 import pytest
@@ -8,6 +9,7 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from claude_wheelhouse import monitor
+from claude_wheelhouse.store import PROTOCOL_VERSION
 
 
 @pytest.mark.parametrize("ref, body, expected, desc", [
@@ -130,6 +132,7 @@ def test_mcp_server_round_trip(store, sid, db_file):
     row = store.session(sid)
     assert row["claude_pid"] == 999999, "server leaves the pid registered by run() alone (review #4)"
     assert row["heartbeat_at"], "server beats once on start"
+    assert row["code_version"] == PROTOCOL_VERSION, "and stamps its code version"
 
 
 class BrokenOut:
@@ -232,7 +235,7 @@ def test_the_monitor_survives_a_locked_start_and_reports_each_error_once(sid, mo
         opens.append(1)
         if len(opens) == 1:
             raise sqlite3.OperationalError("database is locked")
-        return object()
+        return types.SimpleNamespace(mark_version=lambda sid: None)
 
     def poll(store, sid):
         polls.append(1)

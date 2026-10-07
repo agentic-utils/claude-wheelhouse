@@ -193,3 +193,18 @@ def test_a_follow_up_is_answered_only_by_a_later_answer(store, sid, steps, expec
     for step in steps:
         act[step]()
     assert store.item(sid, q)["status"] == expected, desc
+
+
+@pytest.mark.parametrize("stamp, expected, desc", [
+    (None, True, "a session that never stamped runs older code"),
+    ("register", False, "registering stamps the current version"),
+    ("heartbeat", False, "a heartbeat stamps it"),
+    ("mark_version", False, "the monitor stamps it on start"),
+])
+def test_needs_relaunch(store, sid, stamp, expected, desc):
+    from claude_wheelhouse.store import needs_relaunch
+    if stamp == "register":
+        store.register(sid, 1, 1, "boot")
+    elif stamp:
+        getattr(store, stamp)(sid)
+    assert needs_relaunch(store.session(sid)) is expected, desc
