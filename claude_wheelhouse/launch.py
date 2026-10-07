@@ -37,12 +37,17 @@ def login_shell() -> str:
     return os.environ.get("SHELL") or pwd.getpwuid(os.getuid()).pw_shell or "/bin/bash"
 
 
+def tab_title(session) -> str:
+    """The session's Windows Terminal tab title, kept clear of cmd and wt metacharacters."""
+    title = "".join(c for c in session["name"] or Path(session["cwd"]).name if c not in CMD_META)
+    return title.replace(";", ",")
+
+
 def wt_argv(session, *, python: str, distro: str, user: str, shell: str) -> list[str]:
     if CMD_META & set(session["cwd"]):
         raise ValueError(f"can't launch in {session['cwd']}: it contains one of {''.join(sorted(CMD_META))}")
-    title = "".join(c for c in session["name"] or Path(session["cwd"]).name if c not in CMD_META)
     return [
-        "cmd.exe", "/c", "wt.exe", "-w", "0", "new-tab", "--title", title.replace(";", ","),
+        "cmd.exe", "/c", "wt.exe", "-w", "0", "new-tab", "--title", tab_title(session),
         "wsl.exe", "-d", distro, "-u", user, "--cd", session["cwd"].replace(";", r"\;"),
         "--", shell, "-lic", f"exec {shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}",
     ]

@@ -25,7 +25,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import adopt, launch, liveness
+from . import adopt, launch, liveness, transcript
 from .store import CLOSED, SessionGone, Store, needs_relaunch
 
 MATRIX = "#00ff41"
@@ -90,6 +90,11 @@ def short(sid: str) -> str:
     return sid[:6]
 
 
+def aimed(target) -> str:
+    """What a message goes to: an item's ref, or the session itself (a general message)."""
+    return target[1] or "the session"
+
+
 def thread_markdown(store: Store, sid: str, ref: str, session_name: str = "") -> str:
     """An item's detail and conversation, oldest first: the person's messages (queued ones
     marked), the session's replies, and its progress notes as quieter quotes."""
@@ -110,6 +115,17 @@ def thread_markdown(store: Store, sid: str, ref: str, session_name: str = "") ->
         else:   # a progress note (rows from before replies existed read as notes)
             lines += [f"> _note · {m['created_at']}_", ">"] + [f"> {line}" for line in m["body"].splitlines()] + [""]
     return "\n".join(lines)
+
+
+class SessionList(DataTable):
+    """The inbox's sessions. One click selects a row: a plain table selects only on a second
+    click, the first just moving the cursor there."""
+
+    async def _on_click(self, event) -> None:
+        before = self.cursor_coordinate
+        await super()._on_click(event)
+        if self.cursor_coordinate != before:   # the table already selected it if unmoved
+            self._post_selected_message()
 
 
 class Compose(TextArea):
@@ -317,7 +333,8 @@ class WheelhouseApp(App):
     #sessions-pane {{ width: 34; }}
     #items-pane {{ width: 1fr; }}
     #detail-pane {{ width: 2fr; }}
-    #detail {{ height: 1fr; background: #000000; color: {MATRIX}; }}
+    #detail-scroll {{ height: 1fr; }}
+    #detail {{ background: #000000; color: {MATRIX}; }}
     #answer, #thread-answer {{ height: 8; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
     .answer-hint {{ color: #777777; height: 1; }}
     #outbox {{ height: 1; color: #05d9e8; background: #12122a; }}
@@ -361,6 +378,9 @@ class WheelhouseApp(App):
         self.filter_sid: str | None = None
         self.show_finished = False   # done, dropped, closed and failed items, after the rest
         self.selected: tuple[str, str] | None = None   # (session id, item ref)
+        # the session whose conversation the right pane follows, instead of the selected item
+        self.viewing: str | None = None
+        self.followers: dict[str, transcript.Follower] = {}
         self.statuses: dict[str, str] = {}
         self.sessions = []
 
@@ -370,11 +390,13 @@ class WheelhouseApp(App):
             with TabPane("Inbox", id="inbox"):
                 with Horizontal():
                     with Vertical(id="sessions-pane", classes="panel"):
-                        yield DataTable(id="session-list", cursor_type="row")
+                        yield SessionList(id="session-list", cursor_type="row")
                     with Vertical(id="items-pane", classes="panel"):
                         yield DataTable(id="items", cursor_type="row")
                     with Vertical(id="detail-pane", classes="panel"):
-                        yield Markdown("Select an item.", id="detail")
+                        with VerticalScroll(id="detail-scroll"):
+                            yield Markdown("Select an item, or Enter on a session to follow its conversation.",
+                                           id="detail")
                         yield Compose(id="answer")
                         yield Label(HINT, classes="answer-hint")
             with TabPane("Sessions", id="sessions"):
@@ -396,6 +418,7 @@ class WheelhouseApp(App):
         self.title_bar = self.query_one("#title", Static)
         self.items_table = self.query_one("#items", DataTable)
         self.detail = self.query_one("#detail", Markdown)
+        self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
         self.answer = self.query_one("#answer", Compose)
         self.outbox = self.query_one("#outbox", Static)
         self.synopsis = self.query_one("#synopsis", Markdown)
@@ -516,12 +539,27 @@ class WheelhouseApp(App):
         self.paint_detail()
 
     def paint_detail(self) -> None:
-        if not self.selected:
+        if self.viewing:
+            text = self.conversation(self.viewing)
+        elif self.selected:
+            text = thread_markdown(self.store, *self.selected)
+        else:
             return
-        text = thread_markdown(self.store, *self.selected)
         if text != getattr(self, "_detail_text", None):
+            following = self.viewing and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1
             self._detail_text = text
             self.detail.update(text)
+            if following:   # stay at the newest turn, unless the person has scrolled up to read
+                self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
+
+    def conversation(self, sid: str) -> str:
+        s = self.store.session(sid)
+        if s is None:
+            self.viewing = None
+            return "_gone_"
+        follower = self.followers.setdefault(sid, transcript.Follower(sid))
+        queued = [m["body"] for m in self.store.drafts(sid) if m["item_ref"] is None]
+        return transcript.markdown(s["name"] or short(sid), launch.tab_title(s), follower.read(), queued)
 
     def paint_outbox(self) -> None:
         n = sum(s["drafts"] for s in self.sessions)
@@ -540,16 +578,29 @@ class WheelhouseApp(App):
 
     @on(DataTable.RowSelected, "#session-list")
     def pick_session(self, event: DataTable.RowSelected) -> None:
-        self.filter_sid = event.row_key.value
+        self.follow(event.row_key.value)
+
+    def follow(self, sid: str) -> None:
+        """Filter the items to the session and follow its conversation on the right."""
+        self.filter_sid = self.viewing = sid
         self.paint_items()
+        self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 
     @on(DataTable.RowHighlighted, "#items")
     def pick_item(self, event: DataTable.RowHighlighted) -> None:
-        if event.row_key.value:
-            sid, ref = event.row_key.value.split("|")
-            if self.selected != (sid, ref):
-                self.selected = (sid, ref)
+        if not event.row_key.value:
+            return
+        sid, ref = event.row_key.value.split("|")
+        if self.selected != (sid, ref):
+            self.selected = (sid, ref)
+            if self.viewing is None:   # repainting the table moves its cursor too
                 self.paint_detail()
+
+    def on_descendant_focus(self, event) -> None:
+        """Going to the item list leaves a session's conversation for the highlighted item."""
+        if event.widget is self.items_table and self.viewing:
+            self.viewing = None
+            self.paint_detail()
 
     @on(DataTable.RowSelected, "#items")
     def open_thread(self, event: DataTable.RowSelected) -> None:
@@ -561,7 +612,7 @@ class WheelhouseApp(App):
         self.paint_synopsis()
 
     def action_clear_filter(self) -> None:
-        self.filter_sid = None
+        self.filter_sid = self.viewing = None
         self.paint_items()
 
     def action_toggle_finished(self) -> None:
@@ -579,7 +630,8 @@ class WheelhouseApp(App):
         if isinstance(self.screen, ThreadView):
             return self.screen.box, (self.screen.sid, self.screen.ref)
         if self.screen is self.screen_stack[0]:
-            return self.answer, self.selected
+            # following a conversation, the box sends the session a general message
+            return self.answer, (self.viewing, None) if self.viewing else self.selected
         return None, None   # a dialog is open: its keys are its own
 
     def typed(self):
@@ -599,11 +651,11 @@ class WheelhouseApp(App):
             s = self.store.session(target[0])
             if s and self.stale(s):   # its old monitor would deliver a draft at once anyway
                 self.store.send(target[0], text, target[1])
-                self.notify(f"sent to {target[1]} now: that session runs older wheelhouse code, "
+                self.notify(f"sent to {aimed(target)} now: that session runs older wheelhouse code, "
                             "so it can't queue until it's relaunched", severity="warning")
             else:
                 self.store.queue(target[0], text, target[1])
-                self.notify(f"queued for {target[1]}: s sends it")
+                self.notify(f"queued for {aimed(target)}: s sends it")
             box.text = ""
             self.refresh_data()
 
@@ -613,7 +665,7 @@ class WheelhouseApp(App):
         if box:
             self.store.send(target[0], text, target[1])
             box.text = ""
-            self.notify(f"sent to {target[1]}")
+            self.notify(f"sent to {aimed(target)}")
             self.refresh_data()
 
     def action_recall(self) -> None:
@@ -627,7 +679,7 @@ class WheelhouseApp(App):
         drafts = [m for m in self.store.drafts(target[0]) if m["item_ref"] == target[1]]
         body = drafts and self.store.unqueue(drafts[-1]["id"])
         if not body:
-            self.notify(f"nothing queued for {target[1]}")
+            self.notify(f"nothing queued for {aimed(target)}")
             return
         box.text = body
         self.notify("taken back: queue it again, or clear it to drop it")

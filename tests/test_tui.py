@@ -1,7 +1,9 @@
+import json
+
 import pytest
 from textual.widgets import DataTable, TextArea
 
-from claude_wheelhouse import launch
+from claude_wheelhouse import launch, transcript
 from claude_wheelhouse.tui import WheelhouseApp, Confirm, ThreadView
 
 
@@ -371,3 +373,46 @@ async def test_shift_s_with_nothing_left_to_send_says_so(store, sid, monkeypatch
         await pilot.press("S")
         await pilot.pause()
     assert notes == ["nothing queued"]
+
+
+@pytest.mark.anyio
+async def test_enter_on_a_session_follows_its_conversation(store, sid, tmp_path, monkeypatch):
+    folder = tmp_path / "projects/-home-u-repo"
+    folder.mkdir(parents=True)
+    recs = [{"type": "user", "timestamp": "2026-10-07T21:30:00Z", "message": {"content": "fix the VAT rounding"}},
+            {"type": "assistant", "timestamp": "2026-10-07T21:31:00Z", "message": {"content": [
+                {"type": "text", "text": "Found it in invoice.py."},
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "make test"}}]}}]
+    folder.joinpath(f"{sid}.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    q = store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#session-list", DataTable).focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        text = app._detail_text
+        assert "demo · conversation" in text and "fix the VAT rounding" in text and "`⚙ Bash: make test`" in text
+        assert "which db?" not in text, "the conversation, not the highlighted item"
+        app.query_one("#answer", TextArea).text = "ship it"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert [(m["item_ref"], m["body"]) for m in store.drafts(sid)] == [(None, "ship it")], "a general message"
+        assert "**you · queued**\n\nship it" in app._detail_text
+        app.query_one("#items", DataTable).focus()
+        await pilot.pause()
+        assert app.viewing is None and "## Q1 · which db?" in app._detail_text, "going to the items leaves it"
+
+
+@pytest.mark.anyio
+async def test_one_click_on_a_session_follows_it(store, sid, tmp_path):
+    other = store.create_session(str(tmp_path), name="other")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.query_one("#session-list", DataTable)
+        row = [table.coordinate_to_cell_key((i, 0)).row_key.value for i in range(table.row_count)].index(other)
+        await pilot.click("#session-list", offset=(4, row + 1))   # below the header row
+        await pilot.pause()
+        assert app.viewing == other and "other · conversation" in app._detail_text

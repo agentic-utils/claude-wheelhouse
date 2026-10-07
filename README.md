@@ -16,6 +16,15 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   as a notification, even when it's idle. A running session started from an older
   wheelhouse shows "needs relaunch" (`⟳` in the inbox list): it can't hold queued answers,
   so Ctrl+S sends to it straight away until you `/exit` it and restore or adopt it again.
+- **Follow a session.** Click a session in the inbox's list (or Enter on it) to follow
+  its conversation in the right-hand pane, read live from its transcript: your prompts,
+  Claude's replies and wheelhouse notifications in full, each tool call as one line, tool
+  output and subagents left out. The box underneath sends the session a general message,
+  queued and sent like any answer. The pane names the session's tab: permission prompts,
+  questions asked with Claude's question dialog, and slash commands still need that tab,
+  and the pane flags when the session is waiting for you there (a question or a plan;
+  permission prompts can't be seen from the transcript). Going to the item list switches
+  the pane back to the highlighted item.
 - **Sessions.** Select a session to read its synopsis, which the session keeps up to
   date itself. New session (directory, optional name, optional ticket, opening brief)
   opens a Windows Terminal tab running Claude. Restore brings back sessions that died
@@ -64,7 +73,8 @@ make run
 
 `make` on its own lists every command.
 
-Keys: `1` (or `i`) inbox, `2` sessions, `Enter` open an item's thread, `f` show or hide
+Keys: `1` (or `i`) inbox, `2` sessions, `Enter` open an item's thread (or follow a
+session's conversation, in the session list), `f` show or hide
 finished items, `n` new session, `a` adopt, `Esc` all sessions (or back from a thread),
 `Ctrl+S` queue an answer, `Ctrl+X` send it now, `Ctrl+R` take a queued answer back, `s`
 send the selected session's queued answers, `S` send all, `q` quit.

@@ -269,6 +269,20 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   every session, ordered: open questions, blocked or waiting tasks, running, the rest.
   Selecting a session filters; Esc clears. Detail on the right: body, thread, and an
   answer box. Ctrl+S sends (Ctrl+Enter where the terminal reports it).
+- **Session view.** Selecting a session (one click, or Enter) also puts its main
+  conversation in the right-hand pane, so the person can follow and talk to a session
+  without switching tabs. It is read from the transcript
+  (`~/.claude/projects/<project>/<id>.jsonl`), tail only (the last 1 MB, at most 80
+  entries), re-read when the file changes. Shown: prompts, Claude's text, `[wheelhouse]`
+  notifications; each tool call is one line; tool results, thinking, sidechain
+  (subagent) records and bookkeeping are left out. The answer box sends a general
+  message (no ref) through the same queue. It stays read-mostly: it never mirrors
+  permission prompts or slash commands. The pane names the session's tab, since
+  `wt` can only focus a tab by index, not by title, and tabs move. An unanswered
+  AskUserQuestion or ExitPlanMode call in the transcript shows as "waiting for you in its
+  tab". A permission prompt leaves no record, so it can't be flagged this way; a
+  `Notification` hook in the wheelhouse plugin could report it. Focusing the item list
+  switches the pane back to the highlighted item.
 - **Sessions tab.** Every session with status, name, ticket, directory, open-question
   and running counts. Restore on a dead row, parked or not (unparks only once the launch
   goes through), Restore All (dead and not parked), Park / unpark, End, New session,
