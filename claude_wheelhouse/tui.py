@@ -375,6 +375,9 @@ class WheelhouseApp(App):
     #detail-scroll {{ height: 1fr; }}
     #detail, #thread {{ background: #000000; color: {MATRIX}; }}
     #answer, #thread-answer {{ height: 8; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
+    #answer:focus, #thread-answer:focus {{ border: round #ff2a6d; }}
+    /* the default cursor is a pale grey cell: a hot block reads as "type here" on black */
+    Compose > .text-area--cursor {{ background: #ff2a6d; color: #000000; text-style: bold; }}
     .answer-hint {{ color: #777777; height: 1; }}
     #outbox {{ height: 1; color: #05d9e8; background: #12122a; }}
     #thread-scroll {{ height: 1fr; }}

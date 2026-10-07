@@ -520,3 +520,17 @@ async def test_declining_the_relaunch_leaves_a_dead_session_be(store, sid, monke
         await pilot.press("n")
         await pilot.pause()
         assert app.viewing == sid, "it still follows the session's conversation"
+
+
+@pytest.mark.anyio
+async def test_a_focused_answer_box_shows_a_hot_blinking_cursor(store, sid):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        box = app.query_one("#answer", TextArea)
+        unfocused = box.styles.border_top[1]
+        box.focus()
+        await pilot.pause()
+        assert box.cursor_blink and box.styles.border_top[1] != unfocused, "the box lights up when it has focus"
+        cursor = next(iter(box.render_line(0)))
+        assert cursor.style.bgcolor.triplet.hex == "#ff2a6d", "a hot pink block, not the pale default"
