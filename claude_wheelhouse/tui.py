@@ -158,6 +158,26 @@ def render(blocks: list[tuple[str, str]]) -> Blocks:
     return Blocks(blocks)
 
 
+def fill(table: DataTable, rows: list[tuple[str, tuple]]) -> bool:
+    """Show rows, (key, cells), in a table. With the same keys in the same order only the
+    changed cells are updated, so the cursor stays put. Otherwise the table is rebuilt
+    without posting RowHighlighted: clear() puts the cursor on row 0 and the first new row
+    highlights it, which made every refresh look like the person picking row 0 and back.
+    Returns whether it rebuilt; the caller then puts the cursor back."""
+    if [r.key.value for r in table.ordered_rows] == [k for k, _ in rows]:
+        columns = list(table.columns)
+        for key, cells in rows:
+            for col, new, old in zip(columns, cells, table.get_row(key)):
+                if new != old:
+                    table.update_cell(key, col, new)
+        return False
+    with table.prevent(DataTable.RowHighlighted):
+        table.clear()
+        for key, cells in rows:
+            table.add_row(*cells, key=key)
+    return True
+
+
 @functools.lru_cache(maxsize=2048)
 def _block_strips(who: str, md: str, width: int, console) -> tuple[tuple[Strip, ...], tuple[str, ...]]:
     """A block's lines as strips and as plain text (for selection), plus the gap after it."""
@@ -659,7 +679,7 @@ class WheelhouseApp(App):
         for table_id, compact in (("#session-list", True), ("#session-table", False)):
             table = self.tables[table_id]
             keep = table.cursor_row
-            table.clear()
+            rows = []
             for s in self.sessions:
                 st = self.shown_status(s)
                 if compact and s["parked"]:
@@ -677,17 +697,17 @@ class WheelhouseApp(App):
                 queued = Text(f"✉ {s['drafts']}", style="bold #05d9e8") if s["drafts"] else ""
                 if compact:
                     q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
-                    table.add_row(dot, name, q, queued, busy, key=s["id"])
+                    rows.append((s["id"], (dot, name, q, queued, busy)))
                 else:
-                    table.add_row(label, name, s["ticket"], s["cwd"],
-                                  str(s["open_questions"]), str(s["running"]), queued, busy, key=s["id"])
-            if table.row_count:
+                    rows.append((s["id"], (label, name, s["ticket"], s["cwd"], str(s["open_questions"]),
+                                           str(s["running"]), queued, busy)))
+            if fill(table, rows) and table.row_count:
                 table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
 
     def paint_items(self) -> None:
         table = self.items_table
         keep = table.cursor_row
-        table.clear()
+        rows_out = []
         names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
         items = self.store.items(self.filter_sid)
         rows = item_rows([it for it in items if it["status"] not in CLOSED], names)
@@ -696,9 +716,9 @@ class WheelhouseApp(App):
         queued = {(m["session_id"], m["item_ref"]) for m in self.store.drafts()}
         if self.filter_sid:   # the session's own conversation, pinned first
             general = (self.filter_sid, None) in queued
-            table.add_row(names.get(self.filter_sid, "")[:14], Text("💬"),
-                          Text("queued", style="bold #05d9e8") if general else "",
-                          Text("Conversation", style="bold"), key=f"{self.filter_sid}|")
+            rows_out.append((f"{self.filter_sid}|", (names.get(self.filter_sid, "")[:14], Text("💬"),
+                             Text("queued", style="bold #05d9e8") if general else "",
+                             Text("Conversation", style="bold"))))
         for it, nested in rows:
             # an open question with an answer waiting to be sent shows as queued; it's stored as open
             status = "queued" if it["status"] == "open" and (it["session_id"], it["ref"]) in queued else it["status"]
@@ -711,12 +731,16 @@ class WheelhouseApp(App):
             else:   # a subagent, tucked under its session's name
                 cells = (name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
                          Text(status, style=style), Text(it["title"], style="dim"))
-            table.add_row(*cells, key=f"{it['session_id']}|{it['ref']}")
-        key = self.selected and f"{self.selected[0]}|{self.selected[1] or ''}"
-        if key in table.rows:   # by key: items arriving above must not move the highlight
-            table.move_cursor(row=table.get_row_index(key), animate=False)
-        elif table.row_count:
-            table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
+            rows_out.append((f"{it['session_id']}|{it['ref']}", cells))
+        if fill(table, rows_out):
+            key = self.selected and f"{self.selected[0]}|{self.selected[1] or ''}"
+            with table.prevent(DataTable.RowHighlighted):
+                if key in table.rows:   # by key: items arriving above must not move the highlight
+                    table.move_cursor(row=table.get_row_index(key), animate=False)
+                elif table.row_count:
+                    table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
+            if key not in table.rows and table.row_count:   # its item went: take the one now under the cursor
+                self.select_row(table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value)
         self.paint_detail()
 
     def keep_unsent(self, box, old, new) -> None:
@@ -822,11 +846,13 @@ class WheelhouseApp(App):
 
     @on(DataTable.RowHighlighted, "#items")
     def pick_item(self, event: DataTable.RowHighlighted) -> None:
-        """The one place the pane and the answer box change target. A refresh restores the
-        highlight by key, so it lands here unchanged and swaps nothing."""
-        if not event.row_key.value:
-            return
-        sid, ref = event.row_key.value.split("|")
+        """The person moving the highlight: the pane and the answer box change target. A
+        refresh never posts one (see fill), so text being typed is never swapped under them."""
+        if event.row_key.value:
+            self.select_row(event.row_key.value)
+
+    def select_row(self, key: str) -> None:
+        sid, ref = key.split("|")
         if self.selected != (sid, ref or None):
             self.selected = (sid, ref or None)
             self.retarget()

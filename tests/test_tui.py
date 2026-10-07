@@ -737,3 +737,32 @@ async def test_ctrl_a_selects_all_of_the_answer_box(store, sid):
         app.answer.text = "one two\nthree"
         await pilot.press("ctrl+a")
         assert app.answer.selected_text == "one two\nthree", "Ctrl+A selects all, not line start"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("row, desc", [
+    (0, "the first question"),
+    (1, "a question below the first: each refresh used to highlight row 0 and come back"),
+])
+async def test_refresh_leaves_a_selection_in_the_answer_box(store, sid, row, desc):
+    from textual.widgets.text_area import Selection
+    store.post_item(sid, "question", "first q")
+    store.post_item(sid, "question", "second q")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        app.items_table.move_cursor(row=row)
+        await pilot.pause()
+        picked = app.selected
+        app.answer.focus()
+        app.answer.text = "hello world selection"
+        app.answer.selection = Selection((0, 0), (0, 5))
+        painted = []
+        app.paint_detail = lambda real=app.paint_detail: (painted.append(app.selected), real())
+        for _ in range(3):
+            app.refresh_data()
+            await pilot.pause()
+        assert app.answer.selection == Selection((0, 0), (0, 5)), desc
+        assert app.answer.text == "hello world selection", desc
+        assert set(painted) == {picked}, f"the pane never flips to another item: {desc}"

@@ -147,3 +147,9 @@ Where the build differs from the design above:
   session with an older or missing stamp shows "needs relaunch", and Ctrl+S sends to it
   at once (with a warning) instead of queuing. Bump `PROTOCOL_VERSION` whenever older
   running code would mishandle the store.
+- **Unsent text and refreshes.** Typed text is kept per row and swapped only when the
+  person moves the highlight. The once-a-second refresh changes table cells in place
+  when the rows are the same, and when it does rebuild a table it posts no
+  `RowHighlighted` (a rebuild's `clear()` puts the cursor on row 0, and the first new row
+  used to announce that as a selection, swapping the answer box out and back every second
+  and losing its cursor and selection).
