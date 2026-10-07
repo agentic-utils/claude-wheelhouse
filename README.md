@@ -12,7 +12,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   screen as a conversation, with the session's replies. Ctrl+S queues an answer, and
   queued answers go out together: `s` sends the selected session's as one message, `S`
   sends every session's. Ctrl+X sends one answer now. Ctrl+R takes a queued answer back
-  to edit or drop. Each session shows its queued count (`✉ 3`). Answers reach the session
+  to edit or drop. Text you haven't sent stays with the item (or session) you typed it
+  for: moving to another clears the box, and coming back restores it. Each session shows
+  its queued count (`✉ 3`). Answers reach the session
   as a notification, even when it's idle. A running session started from an older
   wheelhouse shows "needs relaunch" (`⟳` in the inbox list): it can't hold queued answers,
   so Ctrl+S sends to it straight away until you `/exit` it and restore or adopt it again.

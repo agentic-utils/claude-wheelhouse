@@ -173,7 +173,7 @@ class Compose(TextArea):
 class ThreadView(Screen):
     """One item full screen: its detail, the whole conversation and a compose box. The app's
     refresh tick repaints it, so a reply shows up while it's open; typed text is untouched."""
-    BINDINGS = [Binding("escape", "app.pop_screen", "Back")]
+    BINDINGS = [Binding("escape", "leave", "Back")]
 
     def __init__(self, sid: str, ref: str):
         super().__init__()
@@ -189,8 +189,17 @@ class ThreadView(Screen):
 
     def on_mount(self) -> None:
         self.box = self.query_one(Compose)
+        app, me = self.app, (self.sid, self.ref)
+        app.keep_unsent(app.answer, app.box_target, None)   # the inbox box's text, this item's included
+        app.box_target = None
+        app.keep_unsent(self.box, None, me)
         self.paint()
         self.box.focus()
+
+    def action_leave(self) -> None:
+        self.app.keep_unsent(self.box, (self.sid, self.ref), None)
+        self.app.pop_screen()
+        self.app.paint_detail()   # the inbox box takes back its target's text
 
     def paint(self) -> None:
         s = self.app.store.session(self.sid)
@@ -423,6 +432,9 @@ class WheelhouseApp(App):
         # the session whose conversation the right pane follows, instead of the selected item
         self.viewing: str | None = None
         self.followers: dict[str, transcript.Follower] = {}
+        # unsent text typed for each target, (session id, ref or None), kept in memory only
+        self.unsent: dict[tuple, str] = {}
+        self.box_target: tuple | None = None
         self.statuses: dict[str, str] = {}
         self.sessions = []
 
@@ -580,7 +592,22 @@ class WheelhouseApp(App):
             table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
         self.paint_detail()
 
+    def keep_unsent(self, box, old, new) -> None:
+        """Park what's typed for the old target and bring back what was typed for the new one."""
+        if old == new:
+            return
+        if old is not None:
+            if box.text.strip():
+                self.unsent[old] = box.text
+            else:
+                self.unsent.pop(old, None)
+        box.text = self.unsent.pop(new, "") if new is not None else ""
+
     def paint_detail(self) -> None:
+        if not isinstance(self.screen, ThreadView):   # which holds its item's text itself
+            target = (self.viewing, None) if self.viewing else self.selected
+            self.keep_unsent(self.answer, self.box_target, target)
+            self.box_target = target
         if self.viewing:
             blocks = self.conversation(self.viewing)
         elif self.selected:

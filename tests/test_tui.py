@@ -534,3 +534,39 @@ async def test_a_focused_answer_box_shows_a_hot_blinking_cursor(store, sid):
         assert box.cursor_blink and box.styles.border_top[1] != unfocused, "the box lights up when it has focus"
         cursor = next(iter(box.render_line(0)))
         assert cursor.style.bgcolor.triplet.hex == "#ff2a6d", "a hot pink block, not the pale default"
+
+
+@pytest.mark.anyio
+async def test_unsent_text_stays_with_the_item_it_was_typed_for(store, sid, tmp_path):
+    other = store.create_session(str(tmp_path), name="other")
+    q1 = store.post_item(sid, "question", "which db?")
+    q2 = store.post_item(sid, "question", "which port?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        items, box = app.query_one("#items", DataTable), app.query_one("#answer", TextArea)
+        row = lambda ref: [str(items.get_row_at(i)[1]) for i in range(items.row_count)].index(ref)
+        steps = [
+            (lambda: items.move_cursor(row=row(q1)), "", "a fresh item starts empty"),
+            (lambda: setattr(box, "text", "SQLite"), "SQLite", "typed for Q1"),
+            (lambda: items.move_cursor(row=row(q2)), "", "another item clears the box"),
+            (lambda: setattr(box, "text", "8080"), "8080", "typed for Q2"),
+            (lambda: app.follow(other), "", "a session's conversation has its own box"),
+            (lambda: app.action_clear_filter(), None, "leaving it: the highlighted item's text, whichever it is"),
+            (lambda: items.move_cursor(row=row(q1)), "SQLite", "Q1's text comes back"),
+            (lambda: items.move_cursor(row=row(q2)), "8080", "and Q2's"),
+        ]
+        for act, expected, desc in steps:
+            act()
+            await pilot.pause()
+            app.paint_detail()
+            assert expected is None or box.text == expected, desc
+        items.focus()
+        items.move_cursor(row=row(q1))
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.box.text == "SQLite", "the thread view picks up what was typed for its item"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert box.text == "SQLite", "and hands it back"
