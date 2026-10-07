@@ -4,7 +4,7 @@ import pytest
 from textual.widgets import DataTable, TextArea
 
 from claude_wheelhouse import launch, transcript
-from claude_wheelhouse.tui import MATRIX, VOICE, WheelhouseApp, Choice, Confirm, ThreadView, render
+from claude_wheelhouse.tui import MATRIX, VOICE, WheelhouseApp, Choice, Confirm, ThreadView, Transcript, render
 
 
 @pytest.mark.anyio
@@ -692,3 +692,48 @@ async def test_a_pasted_code_converts_on_send(store, sid):
         await pilot.press("ctrl+enter")
         await pilot.pause()
     assert [m["body"] for m in store.pending(sid)] == ["pasted 🚀 in"]
+
+
+async def drag_over_the_question(pilot, pane):
+    await pilot.mouse_down(pane, offset=(0, 0))
+    await pilot.hover(pane, offset=(5, 0))
+    await pilot.mouse_up(pane, offset=(5, 0))
+
+
+async def ctrl_a_in_the_pane(pilot, pane):
+    pane.focus()
+    await pilot.press("ctrl+a")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("select, expected, desc", [
+    (drag_over_the_question, "Q1 · w", "dragging the mouse selects part of the text"),
+    (ctrl_a_in_the_pane, "Q1 · which db?", "Ctrl+A selects all of it, starting at the top"),
+])
+async def test_the_detail_pane_selects_and_copies(store, sid, select, expected, desc):
+    store.post_item(sid, "question", "which db?", "Postgres or SQLite for the cache?")
+    app = WheelhouseApp(store)
+    copied = []
+    app.copy_to_clipboard = copied.append
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#items", DataTable).move_cursor(row=0)
+        await pilot.pause()
+        await select(pilot, app.query_one("#detail", Transcript))
+        await pilot.pause()
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+    assert copied and copied[0].startswith(expected), desc
+    if select is ctrl_a_in_the_pane:
+        assert copied[0].endswith("Postgres or SQLite for the cache?"), desc
+
+
+@pytest.mark.anyio
+async def test_ctrl_a_selects_all_of_the_answer_box(store, sid):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.answer.focus()
+        app.answer.text = "one two\nthree"
+        await pilot.press("ctrl+a")
+        assert app.answer.selected_text == "one two\nthree", "Ctrl+A selects all, not line start"

@@ -9,12 +9,15 @@ import time
 
 from rich.markdown import Markdown as RichMarkdown
 from rich.segment import Segment
+from rich.cells import cell_len
 from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
+from textual.strip import Strip
+from textual.widget import Widget
 from textual.widgets import (
     Button,
     DataTable,
@@ -155,6 +158,80 @@ def render(blocks: list[tuple[str, str]]) -> Blocks:
     return Blocks(blocks)
 
 
+@functools.lru_cache(maxsize=2048)
+def _block_strips(who: str, md: str, width: int, console) -> tuple[tuple[Strip, ...], tuple[str, ...]]:
+    """A block's lines as strips and as plain text (for selection), plus the gap after it."""
+    lines = list(Segment.split_lines(_block_lines(who, md, width, console))) + [[]]
+    return (tuple(Strip(line).crop_extend(0, width, None) for line in lines),
+            tuple("".join(seg.text for seg in line).rstrip() for line in lines))
+
+
+class Transcript(Widget, can_focus=True):
+    """A conversation or a thread: one widget drawing cached lines, as Blocks does, and
+    selectable. Drag selects, Ctrl+A selects it all, Ctrl+C copies (Textual's screen binding,
+    which copies through the terminal: OSC 52, which Windows Terminal supports)."""
+    ALLOW_SELECT = True
+    DEFAULT_CSS = "Transcript { height: auto; }"
+    BINDINGS = [Binding("ctrl+a", "select_all", "Select all", show=False)]
+
+    def __init__(self, placeholder: str = "", **kwargs):
+        super().__init__(**kwargs)
+        self.blocks: list[tuple[str, str]] = [("note", placeholder)] if placeholder else []
+        self._laid: tuple | None = None
+
+    def update(self, content: "Blocks | list[tuple[str, str]]") -> None:
+        self.blocks = content.blocks if isinstance(content, Blocks) else list(content)
+        self._laid = None
+        self.refresh(layout=True)
+
+    def _layout(self, width: int) -> tuple[list[Strip], list[str]]:
+        if self._laid is None or self._laid[0] != width:
+            strips, texts = [], []
+            for who, md in self.blocks:
+                s, t = _block_strips(who, md, width, self.app.console)
+                strips.extend(s)
+                texts.extend(t)
+            self._laid = (width, strips, texts)
+        return self._laid[1], self._laid[2]
+
+    def get_content_width(self, container, viewport) -> int:
+        return container.width
+
+    def get_content_height(self, container, viewport, width: int) -> int:
+        return len(self._layout(width)[0])
+
+    def render_line(self, y: int) -> Strip:
+        width = self.size.width
+        strips, texts = self._layout(width)
+        if y >= len(strips):
+            return Strip.blank(width, self.rich_style)
+        strip = strips[y]
+        selection = self.text_selection
+        if selection is not None and (span := selection.get_span(y)) is not None:
+            text = texts[y]
+            start, end = span
+            end = len(text) if end == -1 else min(end, len(text))
+            a, b = cell_len(text[:start]), cell_len(text[:end])
+            if b > a:
+                left, mid, right = strip.divide([a, b, strip.cell_length])
+                style = self.screen.get_component_rich_style("screen--selection")
+                mid = Strip(Segment.apply_style(list(mid), post_style=style), mid.cell_length)
+                strip = Strip.join([left, mid, right])
+        return strip.apply_offsets(0, y)
+
+    def get_selection(self, selection) -> tuple[str, str] | None:
+        width = self.size.width
+        if not width:
+            return None
+        return selection.extract("\n".join(self._layout(width)[1])), "\n"
+
+    def selection_updated(self, selection) -> None:
+        self.refresh()
+
+    def action_select_all(self) -> None:
+        self.text_select_all()
+
+
 class SessionList(DataTable):
     """The inbox's sessions. One click selects a row: a plain table selects only on a second
     click, the first just moving the cursor there."""
@@ -170,12 +247,13 @@ class SessionList(DataTable):
 
 
 class Compose(TextArea):
-    """An answer box. Ctrl+Enter sends what's typed now. Most terminals (Windows Terminal
+    """An answer box. Ctrl+A selects all of it, as in other editors (TextArea's own is line start). Ctrl+Enter sends what's typed now. Most terminals (Windows Terminal
     among them) send Ctrl+Enter as a line feed, which arrives as ctrl+j, so both are bound.
     Emoji: a complete :code: turns into its emoji as it's typed, and a code being typed
     shows suggestions in the hint line, the first taken with Tab or Enter."""
     BINDINGS = [Binding("ctrl+enter", "app.send_now", "Send now"),
-                Binding("ctrl+j", "app.send_now", "Send now", show=False)]
+                Binding("ctrl+j", "app.send_now", "Send now", show=False),
+                Binding("ctrl+a", "select_all", "Select all", show=False)]   # not line start
 
     def _before_cursor(self) -> tuple[int, int, str]:
         row, col = self.cursor_location
@@ -219,7 +297,7 @@ class ThreadView(Screen):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="thread-scroll", classes="panel"):
-            yield Static(id="thread")
+            yield Transcript(id="thread")
         yield Compose(id="thread-answer")
         yield Label(HINT, classes="answer-hint")
         yield Footer()
@@ -244,7 +322,7 @@ class ThreadView(Screen):
         text = "\n\n".join(md for _, md in blocks)
         if text != self.text:
             self.text = text
-            self.query_one("#thread", Static).update(render(blocks))
+            self.query_one("#thread", Transcript).update(render(blocks))
             self.query_one("#thread-scroll").scroll_end(animate=False)
 
 
@@ -485,7 +563,7 @@ class WheelhouseApp(App):
                         yield DataTable(id="items", cursor_type="row")
                     with Vertical(id="detail-pane", classes="panel"):
                         with VerticalScroll(id="detail-scroll"):
-                            yield Static("Select an item, or a session to follow its conversation.",
+                            yield Transcript("Select an item, or a session to follow its conversation.",
                                          id="detail")
                         yield Compose(id="answer")
                         yield Label(HINT, classes="answer-hint")
@@ -507,7 +585,7 @@ class WheelhouseApp(App):
         # held, not queried: timers fire while a dialog is on top and during shutdown
         self.title_bar = self.query_one("#title", Static)
         self.items_table = self.query_one("#items", DataTable)
-        self.detail = self.query_one("#detail", Static)
+        self.detail = self.query_one("#detail", Transcript)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
         self.answer = self.query_one("#answer", Compose)
         self.outbox = self.query_one("#outbox", Static)

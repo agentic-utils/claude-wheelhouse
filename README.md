@@ -85,6 +85,11 @@ finished items, `n` new session, `a` adopt, `Esc` all sessions (or back from a t
 `Ctrl+S` queue an answer, `Ctrl+Enter` send it now, `Ctrl+R` take a queued answer back, `s`
 send the selected session's queued answers, `S` send all, `q` quit.
 
+Text: drag the mouse over the conversation or a thread to select part of it, `Ctrl+A`
+selects all of the focused pane or answer box, and `Ctrl+C` copies the selection (through
+the terminal, which Windows Terminal supports). Hold `Shift` to drag with the terminal's
+own selection instead.
+
 ## Test
 
 ```
