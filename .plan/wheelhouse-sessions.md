@@ -64,7 +64,7 @@ inbox too, by design: parking is your own signal to set it aside.
   over 30 s means the machine slept, and the stalled hint is suppressed for 60 s while
   everything catches up.
 - **Never respawn automatically.** The Sessions page has Restore on each dead row and
-  Restore All. Both re-check the process immediately before launching and refuse a
+  Restore All, and selecting a dead session (in either list) asks "Relaunch it?" Both re-check the process immediately before launching and refuse a
   session that is still starting (launched under 90 s ago, not yet registered), so a
   double press opens one tab. The launch wrapper then checks and registers in a single
   compare-and-set transaction before it execs Claude, so two tabs racing for the same
@@ -255,8 +255,9 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   default the resumed session didn't see an appended instruction, with `off` it did, and
   a later default resume lost it again. So adopted sessions launch with `off` every time.
 - **Open work comes with it.** A session adopted mid-conversation may already be waiting
-  on the person, but the wheelhouse only sees items posted after adoption. Once the tab
-  opens, Adopt queues a notice (`messages.kind = 'notice'`, printed as `[wheelhouse] ...`
+  on the person, but the wheelhouse only sees items posted after adoption. Whenever a tab
+  resumes a conversation (Adopt, Restore, Restore All, relaunching a dead session),
+  `launch.open_tab` queues a notice (`messages.kind = 'notice'`, printed as `[wheelhouse] ...`
   with no sender) asking the session to post its open questions and running tasks,
   skipping any already listed, and to set its synopsis. The notification triggers a
   turn as soon as the monitor starts. The protocol says the same, for a session that

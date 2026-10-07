@@ -28,7 +28,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
 - **Sessions.** Select a session to read its synopsis, which the session keeps up to
   date itself. New session (directory, optional name, optional ticket, opening brief)
   opens a Windows Terminal tab running Claude. Restore brings back sessions that died
-  (reboot, crash), one at a time or all at once; nothing restarts on its own. Park
+  (reboot, crash), one at a time or all at once; selecting a dead (red) session also
+  offers to relaunch it. Nothing restarts on its own, and a resumed session is asked to
+  post the questions and tasks it already had open. Park
   hides a session until you restore it. End deletes its wheelhouse data. On a running
   session, Park and End only ask the session to do it (press again to cancel or force);
   the wheelhouse never deletes anything by itself.

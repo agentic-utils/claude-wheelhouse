@@ -619,6 +619,28 @@ class WheelhouseApp(App):
     @on(DataTable.RowSelected, "#session-list")
     def pick_session(self, event: DataTable.RowSelected) -> None:
         self.follow(event.row_key.value)
+        self.offer_relaunch(event.row_key.value)
+
+    @on(DataTable.RowSelected, "#session-table")
+    def pick_session_in_table(self, event: DataTable.RowSelected) -> None:
+        self.offer_relaunch(event.row_key.value)
+
+    @session_action
+    def offer_relaunch(self, sid: str) -> None:
+        """Selecting a session that has died (shown red) offers to bring it back."""
+        if self.statuses.get(sid) != "dead":
+            return
+        s = self.row(sid)
+        name = s["name"] or os.path.basename(s["cwd"]) or short(sid)
+        self.push_screen(Confirm(f"{name} isn't running. Relaunch it in a new tab?"),
+                         lambda yes: yes and self.relaunch(sid))
+
+    @session_action
+    def relaunch(self, sid: str) -> None:
+        if self.open_tab(sid):
+            self.store.set_parked(sid, False)
+            self.notify("relaunching in a new tab")
+            self.refresh_data()
 
     def follow(self, sid: str) -> None:
         """Filter the items to the session and follow its conversation on the right."""

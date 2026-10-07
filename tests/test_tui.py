@@ -390,7 +390,7 @@ async def test_enter_on_a_session_follows_its_conversation(store, sid, tmp_path,
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         app.query_one("#session-list", DataTable).focus()
-        await pilot.press("enter")
+        await pilot.press("enter", "n")   # it isn't running: decline the offer to relaunch it
         await pilot.pause()
         text = app._detail_text
         assert "demo · conversation" in text and "fix the VAT rounding" in text and "`⚙ Bash: make test`" in text
@@ -469,3 +469,54 @@ async def test_a_long_conversation_is_one_widget(store, sid, tmp_path, monkeypat
         await pilot.pause()
         assert "para one 199" in app._detail_text
         assert len(app.detail.children) == 0, "drawn as one renderable: a widget per paragraph made each keypress slow"
+
+
+async def restore_button(pilot):
+    await pilot.press("2")
+    await pilot.click("#restore")
+
+
+async def select_in_inbox(pilot):
+    pilot.app.query_one("#session-list", DataTable).focus()
+    await pilot.press("enter", "y")
+
+
+async def select_in_sessions_tab(pilot):
+    await pilot.press("2")
+    pilot.app.query_one("#session-table", DataTable).focus()
+    await pilot.press("enter", "y")
+
+
+@pytest.mark.parametrize("how, desc", [
+    (restore_button, "the Restore button"),
+    (select_in_inbox, "selecting the dead session in the inbox, then y"),
+    (select_in_sessions_tab, "selecting it in the Sessions tab, then y"),
+])
+@pytest.mark.anyio
+async def test_bringing_back_a_dead_session_resumes_it_with_the_join_notice(store, sid, monkeypatch, how, desc):
+    launched = []
+    monkeypatch.setattr(launch.liveness, "is_alive", lambda *a: False)
+    monkeypatch.setattr(launch.subprocess, "Popen", lambda argv, **kw: launched.append(argv))
+    monkeypatch.setattr(launch, "transcript_exists", lambda sid: True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await how(pilot)
+        await pilot.pause()
+    assert len(launched) == 1, desc
+    assert [m["body"] for m in store.pending(sid)] == [launch.JOINED_TEXT], desc
+
+
+@pytest.mark.anyio
+async def test_declining_the_relaunch_leaves_a_dead_session_be(store, sid, monkeypatch):
+    monkeypatch.setattr(launch, "open_tab", lambda s, i: pytest.fail("relaunched after n"))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#session-list", DataTable).focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, Confirm)
+        await pilot.press("n")
+        await pilot.pause()
+        assert app.viewing == sid, "it still follows the session's conversation"
