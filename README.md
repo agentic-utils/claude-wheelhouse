@@ -53,9 +53,11 @@ along with the launch command.
 ## Run
 
 ```
-uv sync
-uv run claude-wheelhouse
+make install
+make run
 ```
+
+`make` on its own lists every command.
 
 Keys: `1` (or `i`) inbox, `2` sessions, `Enter` open an item's thread, `f` show or hide
 finished items, `n` new session, `a` adopt, `Esc` all sessions (or back from a thread),
@@ -65,7 +67,7 @@ send the selected session's queued answers, `S` send all, `q` quit.
 ## Test
 
 ```
-uv run pytest
+make test
 ```
 
 ## Licence
