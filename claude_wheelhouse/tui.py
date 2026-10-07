@@ -650,8 +650,9 @@ class WheelhouseApp(App):
     def action_dispatch_all(self) -> None:
         if isinstance(self.focused, (TextArea, Input)) or self.composing()[0] is None:
             return
-        sent = [(sid, self.store.dispatch(sid)) for sid in dict.fromkeys(m["session_id"] for m in self.store.drafts())]
-        self.notify("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent if n) if sent else "nothing queued")
+        sent = [(sid, n) for sid in dict.fromkeys(m["session_id"] for m in self.store.drafts())
+                if (n := self.store.dispatch(sid))]
+        self.notify("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent) if sent else "nothing queued")
         self.refresh_data()
 
     # sessions page

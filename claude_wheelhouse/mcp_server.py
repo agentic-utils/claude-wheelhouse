@@ -74,10 +74,14 @@ def set_synopsis(text: str) -> str:
 
 
 @wheelhouse_tool
-def get_input(ref: str | None = None) -> str:
-    """Without ref: the person's undelivered messages (marked delivered).
-    With ref: that item's full body and thread (its messages count as delivered)."""
+def get_input(ref: str | None = None, message_id: int | None = None) -> str:
+    """Without arguments: the person's undelivered messages (marked delivered).
+    With ref: that item's full body and thread (its messages count as delivered).
+    With message_id: the full text of one message a notification cut short."""
     s = _store
+    if message_id is not None:
+        m = s.message(_sid, message_id)
+        return f"[{m['item_ref'] or 'general'}] {m['body']}" if m else f"no message {message_id}"
     if ref:
         item = s.item(_sid, ref)
         if item is None:

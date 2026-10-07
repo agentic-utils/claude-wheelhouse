@@ -12,14 +12,15 @@ import time
 from .store import GONE_TEXT, Store
 
 POLL_SECONDS = 2
-INLINE_LIMIT = 1500
+INLINE_LIMIT = 1500   # characters of message text in one notification
+LINE_LIMIT = INLINE_LIMIT + 200   # the whole line: text, refs and pointers
+BLOCK_OVERHEAD = 80   # roughly a block's ref, separator and cut-short pointer
 
 
 def _block(m, limit: int) -> str:
     body = " ⏎ ".join(m["body"].splitlines())
     if len(body) > limit:
-        where = f'get_input("{m["item_ref"]}")' if m["item_ref"] else "get_input()"
-        body = body[:limit] + f" … [cut short: call {where} for the rest]"
+        body = body[:limit] + f" … [cut short: call get_input(message_id={m['id']}) for the rest]"
     return body
 
 
@@ -31,14 +32,21 @@ def format_message(m, person: str | None = None) -> str:
     return f"[wheelhouse] from {person or getpass.getuser()} {_where(m)}: {_block(m, INLINE_LIMIT)}"
 
 
-def format_batch(msgs, person: str | None = None) -> str:
+def format_batch(msgs, person: str | None = None) -> tuple[str, int]:
     """Several messages sent together, as one notification so the session reads them all
-    before acting. Each block shares the inline limit."""
+    before acting. Each block shares the inline limit. Returns the line and how many
+    messages it carries: blocks that would push the line past LINE_LIMIT are left out, with
+    a note that they follow, for the caller to release to the next poll."""
+    person = person or getpass.getuser()
     if len(msgs) == 1:
-        return format_message(msgs[0], person)
-    limit = max(100, INLINE_LIMIT // len(msgs))
-    blocks = " ‖ ".join(f"{_where(m)}: {_block(m, limit)}" for m in msgs)
-    return f"[wheelhouse] from {person or getpass.getuser()}, {len(msgs)} answers: {blocks}"
+        return format_message(msgs[0], person), 1
+    limit = max(100, INLINE_LIMIT // len(msgs) - BLOCK_OVERHEAD)
+    blocks = [f"{_where(m)}: {_block(m, limit)}" for m in msgs]
+    for n in range(len(msgs), 0, -1):
+        rest = f" ‖ … {len(msgs) - n} more follow in the next notification" if n < len(msgs) else ""
+        line = f"[wheelhouse] from {person}, {len(msgs)} answers: " + " ‖ ".join(blocks[:n]) + rest
+        if len(line) <= LINE_LIMIT or n == 1:
+            return line, n
 
 
 REQUEST_TEXT = {
@@ -75,8 +83,9 @@ def poll_once(store: Store, sid: str, out=sys.stdout) -> int | None:
     shown = 0
     try:
         if msgs:   # everything sent since the last poll, as one notification
-            print(format_batch(msgs), file=out, flush=True)
-            shown = len(msgs)
+            line, n = format_batch(msgs)
+            print(line, file=out, flush=True)
+            shown = n   # any that didn't fit are released below, for the next poll
     finally:
         try:
             retry(lambda: store.confirm(msgs[:shown]))

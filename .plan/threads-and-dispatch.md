@@ -126,4 +126,13 @@ Where the build differs from the design above:
   only questions have an `open` status to go back to.
 - **One notification per poll.** The monitor prints everything sent since its last poll
   as one line (a single message reads as before). Two sends within one poll, or sends
-  that waited for a dead session, share a line; a batch is never split.
+  that waited for a dead session, share a line. A batch is split only when it won't fit:
+  the line stays within 1,700 characters, blocks that don't fit are left for the next
+  poll, and the line says how many follow.
+- **Cut-short messages** point to `get_input(message_id=N)`, which returns that message in
+  full whether or not it has been delivered. The monitor confirms a message as it prints
+  it, so a pointer to "what's undelivered" could never find a general message's rest.
+- **A follow-up isn't answered by a stale draft.** `reply(asks=true)` records the reply's
+  message id on the question (`items.reopened_after`). Sending marks the question
+  answered only with a message written after that, so an answer queued before the
+  follow-up is still sent but leaves the question open.

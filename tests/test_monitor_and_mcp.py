@@ -15,7 +15,7 @@ from claude_wheelhouse import monitor
     (None, "a\nb", "[wheelhouse] from doug (general): a ⏎ b", "general hint, newlines flattened"),
 ])
 def test_format_message(ref, body, expected, desc):
-    assert monitor.format_message({"item_ref": ref, "body": body}, person="doug") == expected, desc
+    assert monitor.format_message({"id": 1, "item_ref": ref, "body": body}, person="doug") == expected, desc
 
 
 @pytest.mark.parametrize("msgs, expected, desc", [
@@ -25,13 +25,45 @@ def test_format_message(ref, body, expected, desc):
      "a batch is one line, a block per message in order"),
 ])
 def test_format_batch(msgs, expected, desc):
-    got = monitor.format_batch([{"item_ref": r, "body": b} for r, b in msgs], person="doug")
-    assert got == expected, desc
+    got = monitor.format_batch([{"id": i, "item_ref": r, "body": b} for i, (r, b) in enumerate(msgs)], person="doug")
+    assert got == (expected, len(msgs)), desc
 
 
-def test_a_long_batch_shares_the_inline_limit():
-    line = monitor.format_batch([{"item_ref": "Q1", "body": "x" * 5000}, {"item_ref": None, "body": "y" * 5000}])
-    assert 'get_input("Q1")' in line and "get_input()" in line and len(line) < 1700
+@pytest.mark.parametrize("n, length, shown, desc", [
+    (2, 5000, 2, "two long messages share the limit, each cut short"),
+    (15, 5000, 9, "past what fits, the rest follow"),
+    (30, 300, 9, "many medium messages: the line stays within the limit"),
+    (30, 20, 30, "many short messages all fit"),
+])
+def test_a_long_batch_stays_within_the_line_limit(n, length, shown, desc):
+    msgs = [{"id": 100 + i, "item_ref": f"Q{i}", "body": "x" * length} for i in range(n)]
+    line, got = monitor.format_batch(msgs, person="doug")
+    assert (got, len(line) <= monitor.LINE_LIMIT) == (shown, True), desc
+    if length > 100:
+        assert "get_input(message_id=100)" in line, desc
+    assert (f"{n - shown} more follow" in line) == (shown < n), desc
+
+
+def test_messages_that_do_not_fit_come_in_the_next_notification(store, sid):
+    for i in range(20):
+        store.send(sid, "x" * 300, f"Q{i}")
+    out = io.StringIO()
+    counts = [monitor.poll_once(store, sid, out) for _ in range(4)]
+    assert sum(counts) == 20 and counts[0] < 20 and counts[-1] == 0, "released, then printed by later polls"
+    assert all(len(line) <= monitor.LINE_LIMIT for line in out.getvalue().splitlines())
+
+
+def test_a_cut_short_message_can_always_be_read_in_full(store, sid):
+    """Review: a general message is confirmed delivered as it prints, so get_input() can't find it."""
+    from claude_wheelhouse import mcp_server
+    store.send(sid, "y" * 5000)
+    out = io.StringIO()
+    monitor.poll_once(store, sid, out)
+    msg_id = store.db.execute("SELECT id FROM messages").fetchone()[0]
+    assert f"get_input(message_id={msg_id})" in out.getvalue()
+    mcp_server._store, mcp_server._sid = store, sid
+    assert mcp_server.get_input(message_id=msg_id) == "[general] " + "y" * 5000
+    assert mcp_server.get_input(message_id=msg_id + 1) == f"no message {msg_id + 1}"
 
 
 def test_a_dispatched_batch_arrives_as_one_notification(store, sid):
@@ -46,12 +78,12 @@ def test_a_dispatched_batch_arrives_as_one_notification(store, sid):
 
 def test_format_message_names_the_os_user(monkeypatch):
     monkeypatch.setattr(monitor.getpass, "getuser", lambda: "ada")
-    assert monitor.format_message({"item_ref": "Q1", "body": "yes"}).startswith("[wheelhouse] from ada on Q1")
+    assert monitor.format_message({"id": 1, "item_ref": "Q1", "body": "yes"}).startswith("[wheelhouse] from ada on Q1")
 
 
 def test_format_message_cuts_long_bodies():
-    line = monitor.format_message({"item_ref": "Q2", "body": "x" * 5000})
-    assert 'get_input("Q2")' in line and len(line) < 1700
+    line = monitor.format_message({"id": 7, "item_ref": "Q2", "body": "x" * 5000})
+    assert "get_input(message_id=7)" in line and len(line) <= monitor.LINE_LIMIT
 
 
 def test_poll_once_delivers_each_message_once(store, sid):

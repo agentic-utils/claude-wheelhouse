@@ -177,3 +177,19 @@ def test_an_older_database_gains_the_new_columns(tmp_path):
     assert store.session("s1")["synopsis"] == ""
     indexes = {r[1] for r in store.db.execute("PRAGMA index_list(messages)")}
     assert "messages_unsent" in indexes and "messages_pending" not in indexes
+
+
+@pytest.mark.parametrize("steps, expected, desc", [
+    (["queue", "dispatch"], "answered", "a queued answer marks the question answered when sent"),
+    (["queue", "reopen", "dispatch"], "open", "a stale answer queued before the follow-up leaves it open"),
+    (["queue", "reopen", "queue", "dispatch"], "answered", "an answer queued after the follow-up answers it"),
+    (["reopen", "send"], "answered", "an answer sent now after the follow-up answers it"),
+])
+def test_a_follow_up_is_answered_only_by_a_later_answer(store, sid, steps, expected, desc):
+    q = store.post_item(sid, "question", "db?")
+    act = {"queue": lambda: store.queue(sid, "SQLite", q), "dispatch": lambda: store.dispatch(sid),
+           "reopen": lambda: store.reply(sid, q, "which version?", asks=True),
+           "send": lambda: store.send(sid, "3.45", q)}
+    for step in steps:
+        act[step]()
+    assert store.item(sid, q)["status"] == expected, desc

@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS items (
     status     TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    reopened_after INTEGER,
     UNIQUE (session_id, ref)
 );
 CREATE TABLE IF NOT EXISTS messages (
@@ -82,7 +83,7 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "end_told_at", "TEXT"), ("sessions", "park_told_at", "TEXT"),
                  ("messages", "claimed_at", "TEXT"), ("sessions", "adopted", "INTEGER NOT NULL DEFAULT 0"),
                  ("messages", "draft", "INTEGER NOT NULL DEFAULT 0"), ("messages", "kind", "TEXT"),
-                 ("sessions", "synopsis", "TEXT NOT NULL DEFAULT ''")]
+                 ("sessions", "synopsis", "TEXT NOT NULL DEFAULT ''"), ("items", "reopened_after", "INTEGER")]
 REQUESTS = ("end", "park")   # what the wheelhouse can ask a running session to do
 CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print is retaken
 
@@ -335,17 +336,19 @@ class Store:
                              "post a question for what you need to ask")
         with self.tx() as db:
             self._require(db, sid)
-            self._said(db, sid, ref, text, "reply")
-            db.execute("UPDATE items SET status = coalesce(?, status), updated_at = ? "
-                       "WHERE session_id = ? AND ref = ?", ("open" if asks else None, now(), sid, ref))
+            said = self._said(db, sid, ref, text, "reply")
+            # reopened_after: an answer queued before this reply doesn't answer the follow-up
+            db.execute("UPDATE items SET status = coalesce(?, status), updated_at = ?, "
+                       "reopened_after = coalesce(?, reopened_after) WHERE session_id = ? AND ref = ?",
+                       ("open" if asks else None, now(), said if asks else None, sid, ref))
 
     @staticmethod
-    def _said(db, sid, ref, text, kind) -> None:
-        db.execute(
+    def _said(db, sid, ref, text, kind) -> int:
+        return db.execute(
             """INSERT INTO messages (session_id, item_ref, author, body, created_at, delivered_at, kind)
                VALUES (?, ?, 'claude', ?, ?, ?, ?)""",
             (sid, ref, text, now(), now(), kind),
-        )
+        ).lastrowid
 
     def item(self, sid: str, ref: str) -> sqlite3.Row | None:
         return self._one("SELECT * FROM items WHERE session_id = ? AND ref = ?", (sid, ref))
@@ -369,11 +372,11 @@ class Store:
         """A message from the person, sent now; the session's monitor delivers it."""
         with self.tx() as db:
             self._require(db, sid)
-            db.execute(
+            sent = db.execute(
                 "INSERT INTO messages (session_id, item_ref, author, body, created_at) VALUES (?, ?, 'person', ?, ?)",
                 (sid, item_ref, body, now()),
-            )
-            self._answered(db, sid, [item_ref])
+            ).lastrowid
+            self._answered(db, sid, [(item_ref, sent)])
 
     def queue(self, sid: str, body: str, item_ref: str | None = None) -> None:
         """A message from the person, held as a draft until dispatch() sends it."""
@@ -397,18 +400,21 @@ class Store:
         message at once, so the session never sees part of a batch. Returns how many went."""
         with self.tx() as db:
             self._require(db, sid)
-            refs = [r["item_ref"] for r in db.execute(
-                "UPDATE messages SET draft = 0 WHERE session_id = ? AND draft = 1 RETURNING item_ref", (sid,))]
-            self._answered(db, sid, refs)
-        return len(refs)
+            sent = [(r["item_ref"], r["id"]) for r in db.execute(
+                "UPDATE messages SET draft = 0 WHERE session_id = ? AND draft = 1 RETURNING item_ref, id", (sid,))]
+            self._answered(db, sid, sent)
+        return len(sent)
 
     @staticmethod
-    def _answered(db, sid, refs) -> None:
-        for ref in refs:
+    def _answered(db, sid, sent) -> None:
+        """Sent (ref, message id) pairs answer their open questions, unless the message was
+        written before the session reopened the question: that answer is to the earlier ask."""
+        for ref, msg_id in sent:
             db.execute(
                 """UPDATE items SET status = 'answered', updated_at = ?
-                   WHERE session_id = ? AND ref = ? AND kind = 'question' AND status = 'open'""",
-                (now(), sid, ref),
+                   WHERE session_id = ? AND ref = ? AND kind = 'question' AND status = 'open'
+                   AND (reopened_after IS NULL OR reopened_after < ?)""",
+                (now(), sid, ref, msg_id),
             )
 
     def pending(self, sid: str) -> list[sqlite3.Row]:
@@ -442,6 +448,12 @@ class Store:
             for m in claimed:
                 db.execute(f"UPDATE messages SET {assignment} WHERE id = ? AND claimed_at = ?",
                            (*params, m["id"], m["claimed_at"]))
+
+    def message(self, sid: str, msg_id: int) -> sqlite3.Row | None:
+        """One of the person's sent messages, delivered or not: the full text of one the
+        monitor cut short."""
+        return self._one("SELECT * FROM messages WHERE session_id = ? AND id = ? AND author = 'person' "
+                         "AND draft = 0", (sid, msg_id))
 
     def take_pending(self, sid: str, item_ref: str | None = None) -> list[sqlite3.Row]:
         """Claim and confirm in one go, for a caller that can't fail to show them."""

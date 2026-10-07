@@ -334,3 +334,17 @@ async def test_end_names_the_queued_answers_it_discards(store, sid):
         await pilot.click("#end")
         await pilot.pause()
         assert "1 queued answer(s) will be discarded" in app.screen.prompt
+
+
+@pytest.mark.anyio
+async def test_shift_s_with_nothing_left_to_send_says_so(store, sid, monkeypatch):
+    store.queue(sid, "a", "Q1")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        monkeypatch.setattr(store, "dispatch", lambda sid: 0)   # taken back meanwhile
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda text, **kw: notes.append(text))
+        await pilot.press("S")
+        await pilot.pause()
+    assert notes == ["nothing queued"]

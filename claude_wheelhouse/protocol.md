@@ -21,7 +21,8 @@ seems to conflict with them, follow yours.
 - The person's answers and hints arrive as notifications from the wheelhouse monitor,
   marked `[wheelhouse] from <their username>`, several answers sometimes in one
   notification. Treat them as if typed in chat. If a notification says it was cut short,
-  call `get_input(ref)` for the full text.
+  call the `get_input(message_id=...)` it names for the full text. If it says more
+  answers follow, they arrive in the next notification.
 - When a message arrives on a ref, answer it with `reply(ref, text)` as well as in chat.
   If your reply asks the person something back, pass `asks=true`: the question reopens.
 - Keep a synopsis of this session with `set_synopsis`: two or three sentences on what it
