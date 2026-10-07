@@ -24,7 +24,7 @@ def fake_status(monkeypatch, state):
 
 
 async def press(app, pilot, button, *keys):
-    await pilot.press("s")
+    await pilot.press("2")
     await pilot.pause()
     await pilot.click(button)
     await pilot.pause()
@@ -105,7 +105,7 @@ async def test_a_pending_request_can_be_cancelled_or_forced(
     fake_status(monkeypatch, "live")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("s")
+        await pilot.press("2")
         await pilot.pause()
         label = "ending" if flag == "end" else "parking"
         assert label in str(app.tables["#session-table"].get_row_at(0)[0]), "pending state shows"
@@ -304,7 +304,7 @@ async def test_a_button_on_a_vanished_row_does_not_crash(store, sid, monkeypatch
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         seen = notices(app, monkeypatch)
-        await pilot.press("s")
+        await pilot.press("2")
         await pilot.pause()
         stale = store.sessions()
         store.end(sid)

@@ -112,3 +112,18 @@ line per item instead; one line is the safe choice until that's confirmed.
 - **The app quits with answers queued.** They stay queued for next time.
 - **A reply arrives while the person is typing in the thread view.** It appears in the
   thread above the compose box; the typed text is untouched.
+
+## As built
+
+Where the build differs from the design above:
+
+- **Store calls.** `send()` still sends at once (Ctrl+X and the End/Park cancellations use
+  it). Queuing is a separate `queue()`, and `dispatch(sid)` sends a session's drafts in one
+  transaction and marks their questions answered. `unqueue()` takes a draft back.
+- **Editing or dropping a queued answer.** Ctrl+R in a compose box takes the item's latest
+  queued answer back into the box, to edit and queue again, or to clear and so drop.
+- **`asks=true` on a task or agent** is refused with a pointer to post a question, since
+  only questions have an `open` status to go back to.
+- **One notification per poll.** The monitor prints everything sent since its last poll
+  as one line (a single message reads as before). Two sends within one poll, or sends
+  that waited for a dead session, share a line; a batch is never split.

@@ -64,16 +64,23 @@ CREATE TABLE IF NOT EXISTS messages (
     body         TEXT NOT NULL,
     created_at   TEXT NOT NULL,
     claimed_at   TEXT,
-    delivered_at TEXT
+    delivered_at TEXT,
+    draft        INTEGER NOT NULL DEFAULT 0,
+    kind         TEXT
 );
-CREATE INDEX IF NOT EXISTS messages_pending
-    ON messages (session_id) WHERE delivered_at IS NULL;
+"""
+# run after ADDED_COLUMNS, which may have just added the columns they use
+INDEXES = """
+DROP INDEX IF EXISTS messages_pending;
+CREATE INDEX IF NOT EXISTS messages_unsent
+    ON messages (session_id) WHERE delivered_at IS NULL AND draft = 0;
 """
 
 # columns added after the first release: (table, column, type)
 ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_requested_at", "TEXT"),
                  ("sessions", "end_told_at", "TEXT"), ("sessions", "park_told_at", "TEXT"),
-                 ("messages", "claimed_at", "TEXT"), ("sessions", "adopted", "INTEGER NOT NULL DEFAULT 0")]
+                 ("messages", "claimed_at", "TEXT"), ("sessions", "adopted", "INTEGER NOT NULL DEFAULT 0"),
+                 ("messages", "draft", "INTEGER NOT NULL DEFAULT 0"), ("messages", "kind", "TEXT")]
 REQUESTS = ("end", "park")   # what the wheelhouse can ask a running session to do
 CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print is retaken
 
@@ -124,6 +131,9 @@ class Store:
             for table, column, kind in ADDED_COLUMNS:
                 if column not in {r[1] for r in db.execute(f"PRAGMA table_info({table})")}:
                     db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+            for statement in INDEXES.split(";"):
+                if statement.strip():
+                    db.execute(statement)
 
     @contextmanager
     def tx(self):
@@ -174,7 +184,8 @@ class Store:
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id
                     AND i.kind = 'question' AND i.status = 'open') AS open_questions,
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id
-                    AND i.status = 'running') AS running
+                    AND i.status = 'running') AS running,
+                 (SELECT count(*) FROM messages m WHERE m.session_id = s.id AND m.draft = 1) AS drafts
                FROM sessions s ORDER BY s.created_at"""
         )
 
@@ -302,11 +313,32 @@ class Store:
                 (status, title, body, now(), sid, ref),
             )
             if note:
-                db.execute(
-                    """INSERT INTO messages (session_id, item_ref, author, body, created_at, delivered_at)
-                       VALUES (?, ?, 'claude', ?, ?, ?)""",
-                    (sid, ref, note, now(), now()),
-                )
+                self._said(db, sid, ref, note, "note")
+
+    def reply(self, sid: str, ref: str, text: str, asks: bool = False) -> None:
+        """The session's answer in an item's conversation. asks=True means it asks the person
+        something back, so a question goes back to open and the top of the inbox."""
+        item = self.item(sid, ref)
+        if self.session(sid) is None:
+            raise SessionGone(sid)
+        if item is None:
+            raise KeyError(f"no item {ref} in this session")
+        if asks and item["kind"] != "question":
+            raise ValueError(f"asks=true reopens a question, and {ref} is a {item['kind']}: "
+                             "post a question for what you need to ask")
+        with self.tx() as db:
+            self._require(db, sid)
+            self._said(db, sid, ref, text, "reply")
+            db.execute("UPDATE items SET status = coalesce(?, status), updated_at = ? "
+                       "WHERE session_id = ? AND ref = ?", ("open" if asks else None, now(), sid, ref))
+
+    @staticmethod
+    def _said(db, sid, ref, text, kind) -> None:
+        db.execute(
+            """INSERT INTO messages (session_id, item_ref, author, body, created_at, delivered_at, kind)
+               VALUES (?, ?, 'claude', ?, ?, ?, ?)""",
+            (sid, ref, text, now(), now(), kind),
+        )
 
     def item(self, sid: str, ref: str) -> sqlite3.Row | None:
         return self._one("SELECT * FROM items WHERE session_id = ? AND ref = ?", (sid, ref))
@@ -327,22 +359,54 @@ class Store:
     # messages
 
     def send(self, sid: str, body: str, item_ref: str | None = None) -> None:
-        """A message from the person; the session's monitor delivers it."""
+        """A message from the person, sent now; the session's monitor delivers it."""
         with self.tx() as db:
             self._require(db, sid)
             db.execute(
                 "INSERT INTO messages (session_id, item_ref, author, body, created_at) VALUES (?, ?, 'person', ?, ?)",
                 (sid, item_ref, body, now()),
             )
+            self._answered(db, sid, [item_ref])
+
+    def queue(self, sid: str, body: str, item_ref: str | None = None) -> None:
+        """A message from the person, held as a draft until dispatch() sends it."""
+        with self.tx() as db:
+            self._require(db, sid)
+            db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, draft) "
+                       "VALUES (?, ?, 'person', ?, ?, 1)", (sid, item_ref, body, now()))
+
+    def drafts(self, sid: str | None = None) -> list[sqlite3.Row]:
+        return self._all("SELECT * FROM messages WHERE draft = 1 AND (? IS NULL OR session_id = ?) ORDER BY id",
+                         (sid, sid))
+
+    def unqueue(self, draft_id: int) -> str | None:
+        """Take a draft back (to edit it, or to drop it). Its text, or None if it was sent meanwhile."""
+        with self.tx() as db:
+            row = db.execute("DELETE FROM messages WHERE id = ? AND draft = 1 RETURNING body", (draft_id,)).fetchone()
+        return row["body"] if row else None
+
+    def dispatch(self, sid: str) -> int:
+        """Send the session's drafts together, in one transaction: the monitor claims every sent
+        message at once, so the session never sees part of a batch. Returns how many went."""
+        with self.tx() as db:
+            self._require(db, sid)
+            refs = [r["item_ref"] for r in db.execute(
+                "UPDATE messages SET draft = 0 WHERE session_id = ? AND draft = 1 RETURNING item_ref", (sid,))]
+            self._answered(db, sid, refs)
+        return len(refs)
+
+    @staticmethod
+    def _answered(db, sid, refs) -> None:
+        for ref in refs:
             db.execute(
                 """UPDATE items SET status = 'answered', updated_at = ?
                    WHERE session_id = ? AND ref = ? AND kind = 'question' AND status = 'open'""",
-                (now(), sid, item_ref),
+                (now(), sid, ref),
             )
 
     def pending(self, sid: str) -> list[sqlite3.Row]:
         return self._all(
-            "SELECT * FROM messages WHERE session_id = ? AND delivered_at IS NULL ORDER BY id", (sid,)
+            "SELECT * FROM messages WHERE session_id = ? AND delivered_at IS NULL AND draft = 0 ORDER BY id", (sid,)
         )
 
     def claim(self, sid: str, item_ref: str | None = None) -> list[sqlite3.Row]:
@@ -353,7 +417,7 @@ class Store:
         with self.tx() as db:
             rows = db.execute(
                 """UPDATE messages SET claimed_at = ? WHERE session_id = ? AND delivered_at IS NULL
-                   AND (claimed_at IS NULL OR claimed_at < ?) AND (? IS NULL OR item_ref = ?)
+                   AND draft = 0 AND (claimed_at IS NULL OR claimed_at < ?) AND (? IS NULL OR item_ref = ?)
                    RETURNING *""", (stamp(), sid, stale, item_ref, item_ref)
             ).fetchall()
         return sorted(rows, key=lambda m: m["id"])   # RETURNING order is unspecified
@@ -379,11 +443,12 @@ class Store:
         return rows
 
     def thread(self, sid: str, ref: str, in_flight: bool = True) -> list[sqlite3.Row]:
-        """An item's messages. in_flight=False leaves out ones another reader has claimed
-        but not yet delivered: the monitor is printing those."""
+        """An item's messages, the person's drafts included. in_flight=False is the session's
+        view: no drafts, and none another reader has claimed but not yet delivered (the
+        monitor is printing those)."""
         return self._all(
             """SELECT * FROM messages WHERE session_id = ? AND item_ref = ?
-               AND (? OR delivered_at IS NOT NULL OR claimed_at IS NULL) ORDER BY id""",
+               AND (? OR ((delivered_at IS NOT NULL OR claimed_at IS NULL) AND draft = 0)) ORDER BY id""",
             (sid, ref, in_flight),
         )
 

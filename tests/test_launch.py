@@ -150,7 +150,7 @@ def test_protocol_shows_everything_a_session_receives(db_file):
     for part, desc in parts:
         assert part in text, desc
     assert {t.__name__ for t in mcp_server.TOOLS} == {
-        "post_item", "update_item", "get_input", "list_items", "park_session", "end_session"}
+        "post_item", "update_item", "reply", "get_input", "list_items", "park_session", "end_session"}
 
 
 @pytest.mark.parametrize("env_shell, pw_shell, expected, desc", [

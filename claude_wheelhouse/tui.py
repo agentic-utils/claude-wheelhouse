@@ -10,8 +10,8 @@ from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Button,
     DataTable,
@@ -88,6 +88,68 @@ def item_rows(items, names) -> list[tuple]:
 
 def short(sid: str) -> str:
     return sid[:6]
+
+
+def thread_markdown(store: Store, sid: str, ref: str, session_name: str = "") -> str:
+    """An item's detail and conversation, oldest first: the person's messages (queued ones
+    marked), the session's replies, and its progress notes as quieter quotes."""
+    item = store.item(sid, ref)
+    if item is None:
+        return "_gone_"
+    msgs = store.thread(sid, ref)
+    queued = any(m["draft"] for m in msgs)
+    where = f"{session_name} · " if session_name else ""
+    lines = [f"## {ref} · {item['title']}", f"{where}`{item['kind']}` · **{item['status']}**"
+             f"{' · answer queued' if queued else ''} · updated {item['updated_at']}", "",
+             item["body"] or "_no detail_", ""]
+    for m in msgs:
+        if m["author"] == "person":
+            lines += [f"**you{' · queued' if m['draft'] else ''}** · {m['created_at']}", "", m["body"], ""]
+        elif m["kind"] == "reply":
+            lines += [f"**claude** · {m['created_at']}", "", m["body"], ""]
+        else:   # a progress note (rows from before replies existed read as notes)
+            lines += [f"> _note · {m['created_at']}_", ">"] + [f"> {line}" for line in m["body"].splitlines()] + [""]
+    return "\n".join(lines)
+
+
+class Compose(TextArea):
+    """An answer box. Ctrl+X sends what's typed now instead of cutting it."""
+    BINDINGS = [Binding("ctrl+x", "app.send_now", "Send now")]
+
+
+class ThreadView(Screen):
+    """One item full screen: its detail, the whole conversation and a compose box.
+    Refreshes on a timer, so a reply shows up while it's open; typed text is untouched."""
+    BINDINGS = [Binding("escape", "app.pop_screen", "Back")]
+
+    def __init__(self, sid: str, ref: str):
+        super().__init__()
+        self.sid, self.ref = sid, ref
+        self.text = None
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="thread-scroll", classes="panel"):
+            yield Markdown(id="thread")
+        yield Compose(id="thread-answer")
+        yield Label(HINT, classes="answer-hint")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.box = self.query_one(Compose)
+        self.paint()
+        self.set_interval(1.0, self.paint)
+        self.box.focus()
+
+    def paint(self) -> None:
+        s = self.app.store.session(self.sid)
+        text = thread_markdown(self.app.store, self.sid, self.ref, s and (s["name"] or short(self.sid)))
+        if text != self.text:
+            self.text = text
+            self.query_one("#thread", Markdown).update(text)
+            self.query_one("#thread-scroll").scroll_end(animate=False)
+
+
+HINT = "Ctrl+S queues · Ctrl+X sends now · Ctrl+R takes a queued answer back to edit or drop"
 
 
 class NewSession(ModalScreen):
@@ -257,8 +319,10 @@ class WheelhouseApp(App):
     #items-pane {{ width: 1fr; }}
     #detail-pane {{ width: 2fr; }}
     #detail {{ height: 1fr; background: #000000; color: {MATRIX}; }}
-    #answer {{ height: 8; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
-    #answer-hint {{ color: #777777; height: 1; }}
+    #answer, #thread-answer {{ height: 8; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
+    .answer-hint {{ color: #777777; height: 1; }}
+    #outbox {{ height: 1; color: #05d9e8; background: #12122a; }}
+    #thread-scroll {{ height: 1fr; }}
     Markdown {{ background: #000000; color: {MATRIX}; }}
     #session-buttons {{ height: 3; }}
     #dialog {{ width: 80; height: auto; padding: 1 2; background: #000000; color: {MATRIX};
@@ -273,13 +337,17 @@ class WheelhouseApp(App):
     """
 
     BINDINGS = [
-        Binding("ctrl+s", "send", "Send"),
-        Binding("ctrl+enter", "send", "Send", show=False),
+        Binding("ctrl+s", "queue", "Queue"),
+        Binding("ctrl+enter", "queue", "Queue", show=False),
+        Binding("ctrl+r", "recall", "Edit queued", show=False),
+        Binding("s", "dispatch", "Send session"),
+        Binding("S", "dispatch_all", "Send all"),
         Binding("n", "new_session", "New session"),
         Binding("a", "adopt", "Adopt"),
         Binding("escape", "clear_filter", "All sessions"),
-        Binding("i", "show_tab('inbox')", "Inbox"),
-        Binding("s", "show_tab('sessions')", "Sessions"),
+        Binding("1", "show_tab('inbox')", "Inbox"),
+        Binding("i", "show_tab('inbox')", "Inbox", show=False),
+        Binding("2", "show_tab('sessions')", "Sessions"),
         Binding("f", "toggle_finished", "Finished"),
         Binding("q", "quit", "Quit"),
     ]
@@ -307,9 +375,8 @@ class WheelhouseApp(App):
                         yield DataTable(id="items", cursor_type="row")
                     with Vertical(id="detail-pane", classes="panel"):
                         yield Markdown("Select an item.", id="detail")
-                        yield TextArea(id="answer")
-                        yield Label("Ctrl+S sends to the session (Ctrl+Enter if your terminal reports it)",
-                                    id="answer-hint")
+                        yield Compose(id="answer")
+                        yield Label(HINT, classes="answer-hint")
             with TabPane("Sessions", id="sessions"):
                 with Vertical(classes="panel"):
                     yield DataTable(id="session-table", cursor_type="row")
@@ -320,6 +387,7 @@ class WheelhouseApp(App):
                         yield Button("Restore all", id="restore-all", variant="warning")
                         yield Button("Park / unpark", id="park")
                         yield Button("End", id="end", variant="error")
+        yield Static(id="outbox")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -327,13 +395,14 @@ class WheelhouseApp(App):
         self.title_bar = self.query_one("#title", Static)
         self.items_table = self.query_one("#items", DataTable)
         self.detail = self.query_one("#detail", Markdown)
-        self.answer = self.query_one("#answer", TextArea)
+        self.answer = self.query_one("#answer", Compose)
+        self.outbox = self.query_one("#outbox", Static)
         self.tables = {"#session-list": self.query_one("#session-list", DataTable),
                        "#session-table": self.query_one("#session-table", DataTable)}
         self.eye_cols = {
-            "#session-list": self.tables["#session-list"].add_columns("", "session", "?", "")[-1],
+            "#session-list": self.tables["#session-list"].add_columns("", "session", "?", "✉", "")[-1],
             "#session-table": self.tables["#session-table"].add_columns(
-                "status", "name", "ticket", "dir", "open Q", "running", "")[-1],
+                "status", "name", "ticket", "dir", "open Q", "running", "queued", "")[-1],
         }
         self.items_table.add_columns("session", "ref", "status", "title")
         self.set_interval(0.1, self.animate)
@@ -355,6 +424,7 @@ class WheelhouseApp(App):
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
         self.paint_sessions()
         self.paint_items()
+        self.paint_outbox()
 
     def running(self, sid: str) -> bool:
         return self.statuses.get(sid) in RUNNING
@@ -395,12 +465,13 @@ class WheelhouseApp(App):
                 if s["parked"]:
                     label.append(" · parked", style="#777777")
                 name = s["name"] or os.path.basename(s["cwd"]) or short(s["id"])
+                queued = Text(f"✉ {s['drafts']}", style="bold #05d9e8") if s["drafts"] else ""
                 if compact:
                     q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
-                    table.add_row(dot, name, q, busy, key=s["id"])
+                    table.add_row(dot, name, q, queued, busy, key=s["id"])
                 else:
                     table.add_row(label, name, s["ticket"], s["cwd"],
-                                  str(s["open_questions"]), str(s["running"]), busy, key=s["id"])
+                                  str(s["open_questions"]), str(s["running"]), queued, busy, key=s["id"])
             if table.row_count:
                 table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
 
@@ -413,15 +484,19 @@ class WheelhouseApp(App):
         rows = item_rows([it for it in items if it["status"] not in CLOSED], names)
         if self.show_finished:
             rows += item_rows([it for it in items if it["status"] in CLOSED], names)
+        queued = {(m["session_id"], m["item_ref"]) for m in self.store.drafts()}
         for it, nested in rows:
-            style = "dim" if it["status"] in CLOSED else "bold #ffd300" if it["status"] == "open" \
-                else "bold #ff2a6d" if it["status"] in ("blocked", "waiting") else MATRIX
+            # an open question with an answer waiting to be sent shows as queued; it's stored as open
+            status = "queued" if it["status"] == "open" and (it["session_id"], it["ref"]) in queued else it["status"]
+            style = "dim" if status in CLOSED else "bold #05d9e8" if status == "queued" \
+                else "bold #ffd300" if status == "open" \
+                else "bold #ff2a6d" if status in ("blocked", "waiting") else MATRIX
             name = names.get(it["session_id"], "")[:14]
             if nested is None:
-                cells = (name, it["ref"], Text(it["status"], style=style), it["title"])
+                cells = (name, it["ref"], Text(status, style=style), it["title"])
             else:   # a subagent, tucked under its session's name
                 cells = (name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
-                         Text(it["status"], style=style), Text(it["title"], style="dim"))
+                         Text(status, style=style), Text(it["title"], style="dim"))
             table.add_row(*cells, key=f"{it['session_id']}|{it['ref']}")
         if table.row_count:
             table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
@@ -430,20 +505,14 @@ class WheelhouseApp(App):
     def paint_detail(self) -> None:
         if not self.selected:
             return
-        sid, ref = self.selected
-        item = self.store.item(sid, ref)
-        if item is None:
-            self.detail.update("_gone_")
-            return
-        lines = [f"## {ref} · {item['title']}", f"`{item['kind']}` · **{item['status']}** · "
-                 f"updated {item['updated_at']}", "", item["body"] or "_no detail_", ""]
-        for m in self.store.thread(sid, ref):
-            who = "you" if m["author"] == "person" else "claude"
-            lines += [f"**{who}** · {m['created_at']}", "", m["body"], ""]
-        text = "\n".join(lines)
+        text = thread_markdown(self.store, *self.selected)
         if text != getattr(self, "_detail_text", None):
             self._detail_text = text
             self.detail.update(text)
+
+    def paint_outbox(self) -> None:
+        n = sum(s["drafts"] for s in self.sessions)
+        self.outbox.update(f" ✉ {n} queued: s sends the selected session's, S sends all" if n else "")
 
     # selection
 
@@ -460,6 +529,11 @@ class WheelhouseApp(App):
                 self.selected = (sid, ref)
                 self.paint_detail()
 
+    @on(DataTable.RowSelected, "#items")
+    def open_thread(self, event: DataTable.RowSelected) -> None:
+        sid, ref = event.row_key.value.split("|")
+        self.push_screen(ThreadView(sid, ref))
+
     def action_clear_filter(self) -> None:
         self.filter_sid = None
         self.paint_items()
@@ -474,18 +548,93 @@ class WheelhouseApp(App):
         if not isinstance(self.focused, (TextArea, Input)):
             self.query_one(TabbedContent).active = tab
 
-    @session_action
-    def action_send(self) -> None:
-        box = self.answer
+    def composing(self):
+        """The compose box in use and the item it answers: the thread view's, or the inbox's."""
+        if isinstance(self.screen, ThreadView):
+            return self.screen.box, (self.screen.sid, self.screen.ref)
+        if self.screen is self.screen_stack[0]:
+            return self.answer, self.selected
+        return None, None   # a dialog is open: its keys are its own
+
+    def typed(self):
+        box, target = self.composing()
+        if box is None:
+            return None, None, None
         text = box.text.strip()
-        if not text or not self.selected:
+        if not text or not target:
             self.notify("pick an item and type something first", severity="warning")
+            return None, None, None
+        return box, target, text
+
+    @session_action
+    def action_queue(self) -> None:
+        box, target, text = self.typed()
+        if box:
+            self.store.queue(target[0], text, target[1])
+            box.text = ""
+            self.notify(f"queued for {target[1]}: s sends it")
+            self.refresh_data()
+
+    @session_action
+    def action_send_now(self) -> None:
+        box, target, text = self.typed()
+        if box:
+            self.store.send(target[0], text, target[1])
+            box.text = ""
+            self.notify(f"sent to {target[1]}")
+            self.refresh_data()
+
+    def action_recall(self) -> None:
+        """Take this item's latest queued answer back into the box, to edit it or drop it."""
+        box, target = self.composing()
+        if box is None or not target:
             return
-        sid, ref = self.selected
-        self.store.send(sid, text, ref)
-        box.text = ""
-        self.notify(f"sent to {ref}")
-        self.paint_items()
+        if box.text.strip():
+            self.notify("the box isn't empty: queue or clear it first", severity="warning")
+            return
+        drafts = [m for m in self.store.drafts(target[0]) if m["item_ref"] == target[1]]
+        body = drafts and self.store.unqueue(drafts[-1]["id"])
+        if not body:
+            self.notify(f"nothing queued for {target[1]}")
+            return
+        box.text = body
+        self.notify("taken back: queue it again, or clear it to drop it")
+        self.refresh_data()
+
+    def dispatch_target(self) -> str | None:
+        """The selected session: the thread's, the Sessions tab's row, else the inbox filter or
+        the selected item's session."""
+        if isinstance(self.screen, ThreadView):
+            return self.screen.sid
+        if self.query_one(TabbedContent).active == "sessions":
+            return self.current_session()
+        return self.filter_sid or (self.selected[0] if self.selected else None)
+
+    def sent_note(self, sid: str, n: int) -> str:
+        s = self.store.session(sid)
+        name = (s["name"] or short(sid)) if s else short(sid)
+        late = "" if self.running(sid) else " (not running: delivered when it's restored)"
+        return f"{n} to {name}{late}"
+
+    @session_action
+    def action_dispatch(self) -> None:
+        if isinstance(self.focused, (TextArea, Input)) or self.composing()[0] is None:
+            return
+        sid = self.dispatch_target()
+        if sid is None:
+            self.notify("select a session first", severity="warning")
+            return
+        n = self.store.dispatch(sid)
+        self.notify(f"sent {self.sent_note(sid, n)}" if n else "nothing queued for that session")
+        self.refresh_data()
+
+    @session_action
+    def action_dispatch_all(self) -> None:
+        if isinstance(self.focused, (TextArea, Input)) or self.composing()[0] is None:
+            return
+        sent = [(sid, self.store.dispatch(sid)) for sid in dict.fromkeys(m["session_id"] for m in self.store.drafts())]
+        self.notify("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent if n) if sent else "nothing queued")
+        self.refresh_data()
 
     # sessions page
 
@@ -593,9 +742,11 @@ class WheelhouseApp(App):
     def end_pressed(self) -> None:
         sid = self.current_session()
         if sid:
+            n = len(self.store.drafts(sid))
+            lost = f" {n} queued answer(s) will be discarded." if n else ""
             self.lifecycle(sid, "end",
-                           ask=f"Ask {self.label(sid)} to end? Claude does its own session-end steps, then deletes its wheelhouse data.",
-                           act=f"End {self.label(sid)} and delete its wheelhouse data?")
+                           ask=f"Ask {self.label(sid)} to end? Claude does its own session-end steps, then deletes its wheelhouse data.{lost}",
+                           act=f"End {self.label(sid)} and delete its wheelhouse data?{lost}")
 
     def lifecycle(self, sid: str, what: str, ask: str, act: str) -> None:
         """Park or End. A running session is only asked; a dead one is acted on at once."""

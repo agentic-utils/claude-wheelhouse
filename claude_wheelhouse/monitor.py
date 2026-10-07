@@ -1,5 +1,6 @@
-"""Plugin monitor: runs for the whole session and prints each new message from the
-person as one line. Claude Code delivers each printed line to Claude as a notification.
+"""Plugin monitor: runs for the whole session and prints the person's new messages as one
+line, every message sent since the last poll together. Claude Code delivers each printed
+line to Claude as a notification.
 """
 
 import getpass
@@ -14,12 +15,30 @@ POLL_SECONDS = 2
 INLINE_LIMIT = 1500
 
 
-def format_message(m, person: str | None = None) -> str:
+def _block(m, limit: int) -> str:
     body = " ⏎ ".join(m["body"].splitlines())
-    where = f"on {m['item_ref']}" if m["item_ref"] else "(general)"
-    if len(body) > INLINE_LIMIT:
-        body = body[:INLINE_LIMIT] + f" … [cut short: call get_input(\"{m['item_ref']}\") for the rest]"
-    return f"[wheelhouse] from {person or getpass.getuser()} {where}: {body}"
+    if len(body) > limit:
+        where = f'get_input("{m["item_ref"]}")' if m["item_ref"] else "get_input()"
+        body = body[:limit] + f" … [cut short: call {where} for the rest]"
+    return body
+
+
+def _where(m) -> str:
+    return f"on {m['item_ref']}" if m["item_ref"] else "(general)"
+
+
+def format_message(m, person: str | None = None) -> str:
+    return f"[wheelhouse] from {person or getpass.getuser()} {_where(m)}: {_block(m, INLINE_LIMIT)}"
+
+
+def format_batch(msgs, person: str | None = None) -> str:
+    """Several messages sent together, as one notification so the session reads them all
+    before acting. Each block shares the inline limit."""
+    if len(msgs) == 1:
+        return format_message(msgs[0], person)
+    limit = max(100, INLINE_LIMIT // len(msgs))
+    blocks = " ‖ ".join(f"{_where(m)}: {_block(m, limit)}" for m in msgs)
+    return f"[wheelhouse] from {person or getpass.getuser()}, {len(msgs)} answers: {blocks}"
 
 
 REQUEST_TEXT = {
@@ -55,9 +74,9 @@ def poll_once(store: Store, sid: str, out=sys.stdout) -> int | None:
     msgs = store.claim(sid)
     shown = 0
     try:
-        for m in msgs:
-            print(format_message(m), file=out, flush=True)
-            shown += 1
+        if msgs:   # everything sent since the last poll, as one notification
+            print(format_batch(msgs), file=out, flush=True)
+            shown = len(msgs)
     finally:
         try:
             retry(lambda: store.confirm(msgs[:shown]))

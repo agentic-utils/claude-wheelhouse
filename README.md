@@ -8,8 +8,12 @@ A sidecar for running several Claude Code sessions in parallel, on Windows with 
 Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
 
 - **Inbox.** Every task, question and subagent status from every session in one list,
-  open questions first. Pick one to read its full detail and thread, type an answer,
-  Ctrl+S to send. The answer reaches that session as a notification, even when it's idle.
+  open questions first. Pick one to preview its detail and thread; Enter opens it full
+  screen as a conversation, with the session's replies. Ctrl+S queues an answer, and
+  queued answers go out together: `s` sends the selected session's as one message, `S`
+  sends every session's. Ctrl+X sends one answer now. Ctrl+R takes a queued answer back
+  to edit or drop. Each session shows its queued count (`✉ 3`). Answers reach the session
+  as a notification, even when it's idle.
 - **Sessions.** New session (directory, optional name, optional ticket, opening brief)
   opens a Windows Terminal tab running Claude. Restore brings back sessions that died
   (reboot, crash), one at a time or all at once; nothing restarts on its own. Park
@@ -52,7 +56,10 @@ uv sync
 uv run claude-wheelhouse
 ```
 
-Keys: `i` inbox, `s` sessions, `f` show or hide finished items, `n` new session, `a` adopt, `Esc` all sessions, `Ctrl+S` send, `q` quit.
+Keys: `1` (or `i`) inbox, `2` sessions, `Enter` open an item's thread, `f` show or hide
+finished items, `n` new session, `a` adopt, `Esc` all sessions (or back from a thread),
+`Ctrl+S` queue an answer, `Ctrl+X` send it now, `Ctrl+R` take a queued answer back, `s`
+send the selected session's queued answers, `S` send all, `q` quit.
 
 ## Test
 

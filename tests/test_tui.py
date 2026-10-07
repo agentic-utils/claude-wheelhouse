@@ -2,7 +2,7 @@ import pytest
 from textual.widgets import DataTable, TextArea
 
 from claude_wheelhouse import launch
-from claude_wheelhouse.tui import WheelhouseApp, Confirm
+from claude_wheelhouse.tui import WheelhouseApp, Confirm, ThreadView
 
 
 @pytest.mark.anyio
@@ -20,6 +20,11 @@ async def test_answer_reaches_the_session(store, sid):
         assert app.selected == (sid, q)
         app.query_one("#answer", TextArea).text = "SQLite, it's local"
         await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert store.pending(sid) == [], "Ctrl+S queues"
+        assert str(items.get_row_at(0)[2]) == "queued", "the item list shows the queued answer"
+        assert "✉ 1" in str(app.query_one("#session-list", DataTable).get_row_at(0)[3])
+        await pilot.press("s")
         await pilot.pause()
     assert [m["body"] for m in store.pending(sid)] == ["SQLite, it's local"]
     assert store.item(sid, q)["status"] == "answered"
@@ -66,7 +71,7 @@ async def test_finished_items_toggle_in_and_take_a_message(store, sid):
         await pilot.press("f")
         await pilot.pause()
         assert len(refs()) == 3, "f types into the answer box instead of toggling"
-    assert [(m["item_ref"], m["body"]) for m in store.pending(sid)] == [(closed, "the punchline")]
+    assert [(m["item_ref"], m["body"]) for m in store.drafts(sid)] == [(closed, "the punchline")]
     assert store.item(sid, closed)["status"] == "closed", "a message on a finished item leaves its status alone"
 
 
@@ -78,7 +83,7 @@ async def test_restore_all_only_launches_dead_sessions(store, sid, tmp_path, mon
     monkeypatch.setattr(launch, "open_tab", lambda s, i: launched.append(i))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("s")
+        await pilot.press("2")
         await pilot.click("#restore-all")
         await pilot.press("y")
         await pilot.pause()
@@ -127,7 +132,7 @@ async def test_a_refused_restore_leaves_the_session_parked(store, sid, monkeypat
     monkeypatch.setattr(launch, "open_tab", refuse)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("s")
+        await pilot.press("2")
         await pilot.pause()
         await pilot.click("#restore")
         await pilot.pause()
@@ -235,3 +240,81 @@ async def test_escape_closes_adopt(store, monkeypatch):
         await pilot.press("escape")
         await pilot.pause()
         assert [type(s).__name__ for s in app.screen_stack] == ["Screen"]
+
+
+@pytest.mark.anyio
+async def test_ctrl_x_sends_one_answer_now(store, sid):
+    q = store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#items", DataTable).move_cursor(row=0)
+        app.query_one("#answer", TextArea).focus()
+        await pilot.press(*"now")
+        await pilot.press("ctrl+x")
+        await pilot.pause()
+        assert app.query_one("#answer", TextArea).text == "", "sent, not cut"
+    assert [m["body"] for m in store.pending(sid)] == ["now"]
+    assert store.item(sid, q)["status"] == "answered"
+
+
+@pytest.mark.anyio
+async def test_shift_s_sends_every_session(store, sid, tmp_path):
+    other = store.create_session(str(tmp_path), name="other")
+    store.queue(sid, "a", "Q1")
+    store.queue(sid, "b", "Q2")
+    store.queue(other, "c")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert "3 queued" in str(app.query_one("#outbox").render())
+        await pilot.press("S")
+        await pilot.pause()
+        assert str(app.query_one("#outbox").render()).strip() == ""
+    assert store.drafts() == []
+    assert [m["body"] for m in store.pending(sid)] == ["a", "b"]
+    assert [m["body"] for m in store.pending(other)] == ["c"]
+
+
+@pytest.mark.anyio
+async def test_thread_view_holds_the_conversation(store, sid):
+    q = store.post_item(sid, "question", "which db?", "Postgres or SQLite?")
+    store.update_item(sid, q, note="looked at both")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        items = app.query_one("#items", DataTable)
+        items.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, ThreadView)
+        await pilot.press(*"SQLite")
+        store.reply(sid, q, "noted, any version?", asks=True)
+        app.screen.paint()
+        await pilot.pause()
+        thread = app.screen.text
+        assert "noted, any version?" in thread and "> looked at both" in thread, "replies and quieter notes"
+        assert app.screen.box.text == "SQLite", "a reply arriving leaves typed text alone"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert "you · queued" in app.screen.text
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        assert app.screen.box.text == "SQLite" and store.drafts() == [], "taken back to edit"
+        await pilot.press("ctrl+s")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, ThreadView)
+    assert [m["body"] for m in store.drafts(sid)] == ["SQLite"]
+
+
+@pytest.mark.anyio
+async def test_end_names_the_queued_answers_it_discards(store, sid):
+    store.queue(sid, "a", "Q1")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.click("#end")
+        await pilot.pause()
+        assert "1 queued answer(s) will be discarded" in app.screen.prompt

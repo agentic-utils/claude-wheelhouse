@@ -31,6 +31,9 @@ def test_post_item_refs_and_statuses(store, sid, posts, expected, desc):
     (lambda s, sid: s.post_item(sid, "bug", "x"), ValueError, "unknown kind"),
     (lambda s, sid: s.post_item(sid, "task", "x", status="answered"), ValueError, "question status on a task"),
     (lambda s, sid: s.update_item(sid, "T9", status="done"), KeyError, "missing ref"),
+    (lambda s, sid: s.reply(sid, "T9", "hi"), KeyError, "reply to a missing ref"),
+    (lambda s, sid: s.reply(sid, s.post_item(sid, "task", "x"), "which?", asks=True), ValueError,
+     "asks on a task: only a question reopens"),
 ])
 def test_rejects_bad_writes(store, sid, call, error, desc):
     with pytest.raises(error):
@@ -112,3 +115,58 @@ def test_take_pending_delivers_each_message_once(db_file, store, sid):
     for t in threads:
         t.join()
     assert sorted(seen) == sorted(set(seen)) and len(seen) == 200
+
+
+def test_queued_answers_wait_until_dispatched(store, sid):
+    q3, q4 = store.post_item(sid, "question", "db?"), store.post_item(sid, "question", "flag?")
+    store.queue(sid, "SQLite", q3)
+    store.queue(sid, "keep it", q4)
+    assert store.pending(sid) == [] and store.claim(sid) == [], "drafts are not delivered"
+    assert store.item(sid, q3)["status"] == "open", "a queued answer leaves the question open"
+    assert [m["body"] for m in store.thread(sid, q3)] == ["SQLite"], "the person's thread shows it"
+    assert store.thread(sid, q3, in_flight=False) == [], "the session's view of the thread doesn't"
+    assert store.sessions()[0]["drafts"] == 2
+    assert store.dispatch(sid) == 2
+    assert [m["body"] for m in store.claim(sid)] == ["SQLite", "keep it"], "one claim takes the whole batch"
+    assert {store.item(sid, r)["status"] for r in (q3, q4)} == {"answered"}
+    assert store.drafts() == [] and store.dispatch(sid) == 0
+
+
+def test_a_queued_answer_can_be_taken_back(store, sid):
+    store.queue(sid, "oops", "Q1")
+    draft = store.drafts(sid)[0]
+    assert store.unqueue(draft["id"]) == "oops"
+    assert store.drafts() == [] and store.unqueue(draft["id"]) is None
+
+
+@pytest.mark.parametrize("asks, status, desc", [
+    (False, "answered", "a plain reply leaves the question as it was"),
+    (True, "open", "a reply that asks back reopens it"),
+])
+def test_reply_joins_the_thread(store, sid, asks, status, desc):
+    q = store.post_item(sid, "question", "db?")
+    store.send(sid, "postgres?", q)
+    store.reply(sid, q, "postgres it is", asks=asks)
+    assert store.item(sid, q)["status"] == status, desc
+    assert [(m["author"], m["kind"]) for m in store.thread(sid, q)] == [("person", None), ("claude", "reply")]
+
+
+def test_an_older_database_gains_the_new_columns(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript("""CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
+        ticket TEXT NOT NULL DEFAULT '', brief TEXT NOT NULL DEFAULT '', cwd TEXT NOT NULL,
+        parked INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, launched_at TEXT, claude_pid INTEGER,
+        claude_start INTEGER, boot_id TEXT, heartbeat_at TEXT);
+        CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, item_ref TEXT,
+        author TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, delivered_at TEXT);
+        CREATE INDEX messages_pending ON messages (session_id) WHERE delivered_at IS NULL;
+        INSERT INTO sessions (id, cwd, created_at) VALUES ('s1', '/tmp', '2026-10-01T00:00:00+00:00');
+        INSERT INTO messages (session_id, author, body, created_at) VALUES ('s1', 'person', 'hi', '2026-10-01T00:00:00+00:00');""")
+    old.commit()
+    old.close()
+    store = Store(path)
+    assert [m["body"] for m in store.pending("s1")] == ["hi"], "existing rows read as sent"
+    indexes = {r[1] for r in store.db.execute("PRAGMA index_list(messages)")}
+    assert "messages_unsent" in indexes and "messages_pending" not in indexes

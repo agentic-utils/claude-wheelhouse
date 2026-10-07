@@ -18,6 +18,32 @@ def test_format_message(ref, body, expected, desc):
     assert monitor.format_message({"item_ref": ref, "body": body}, person="doug") == expected, desc
 
 
+@pytest.mark.parametrize("msgs, expected, desc", [
+    ([("Q1", "yes")], "[wheelhouse] from doug on Q1: yes", "one message reads as before"),
+    ([("Q3", "use SQLite"), ("Q4", "yes,\nkeep the flag"), (None, "ship it tonight")],
+     "[wheelhouse] from doug, 3 answers: on Q3: use SQLite ‖ on Q4: yes, ⏎ keep the flag ‖ (general): ship it tonight",
+     "a batch is one line, a block per message in order"),
+])
+def test_format_batch(msgs, expected, desc):
+    got = monitor.format_batch([{"item_ref": r, "body": b} for r, b in msgs], person="doug")
+    assert got == expected, desc
+
+
+def test_a_long_batch_shares_the_inline_limit():
+    line = monitor.format_batch([{"item_ref": "Q1", "body": "x" * 5000}, {"item_ref": None, "body": "y" * 5000}])
+    assert 'get_input("Q1")' in line and "get_input()" in line and len(line) < 1700
+
+
+def test_a_dispatched_batch_arrives_as_one_notification(store, sid):
+    store.queue(sid, "SQLite", "Q3")
+    store.queue(sid, "yes", "Q4")
+    out = io.StringIO()
+    assert monitor.poll_once(store, sid, out) == 0, "drafts wait"
+    store.dispatch(sid)
+    assert monitor.poll_once(store, sid, out) == 2
+    assert out.getvalue().count("\n") == 1 and "2 answers" in out.getvalue()
+
+
 def test_format_message_names_the_os_user(monkeypatch):
     monkeypatch.setattr(monitor.getpass, "getuser", lambda: "ada")
     assert monitor.format_message({"item_ref": "Q1", "body": "yes"}).startswith("[wheelhouse] from ada on Q1")
@@ -46,7 +72,7 @@ def test_mcp_server_round_trip(store, sid, db_file):
         async with stdio_client(params) as (r, w), ClientSession(r, w) as client:
             await client.initialize()
             names = {t.name for t in (await client.list_tools()).tools}
-            assert {"post_item", "update_item", "get_input", "list_items",
+            assert {"post_item", "update_item", "reply", "get_input", "list_items",
                     "park_session", "end_session"} <= names
             ref = (await client.call_tool("post_item", {"kind": "question", "title": "db?",
                                                          "body": "detail"})).content[0].text
@@ -54,9 +80,13 @@ def test_mcp_server_round_trip(store, sid, db_file):
             got = (await client.call_tool("get_input", {})).content[0].text
             refused = [await client.call_tool("update_item", args) for args in (
                 {"ref": ref, "status": "done"}, {"ref": "Q9", "status": "closed"})]
-            return ref, got, refused
+            replied = (await client.call_tool("reply", {"ref": ref, "text": "which version?",
+                                                        "asks": True})).content[0].text
+            return ref, got, refused, replied
 
-    ref, got, refused = anyio.run(drive)
+    ref, got, refused, replied = anyio.run(drive)
+    assert replied == "replied on Q1, question reopened"
+    assert store.item(sid, ref)["status"] == "open"
     assert [(r.is_error, r.content[0].text) for r in refused] == [
         (True, "Error executing tool update_item: question status must be one of ['answered', 'closed', 'open']"),
         (True, "Error executing tool update_item: no item Q9 in this session"),

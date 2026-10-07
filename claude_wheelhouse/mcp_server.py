@@ -57,6 +57,15 @@ def update_item(ref: str, status: str | None = None, title: str | None = None,
 
 
 @wheelhouse_tool
+def reply(ref: str, text: str, asks: bool = False) -> str:
+    """Answer the person in an item's thread, when a message from them arrives on that ref
+    (a note records progress; a reply is part of the conversation). Set asks=true when the
+    reply asks the person something back: the question goes back to open."""
+    _store.reply(_sid, ref, text, asks)
+    return f"replied on {ref}" + (", question reopened" if asks else "")
+
+
+@wheelhouse_tool
 def get_input(ref: str | None = None) -> str:
     """Without ref: the person's undelivered messages (marked delivered).
     With ref: that item's full body and thread (its messages count as delivered)."""
