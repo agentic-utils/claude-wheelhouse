@@ -11,7 +11,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   open questions first. Pick one to preview its detail and thread; Enter opens it full
   screen as a conversation, with the session's replies. Ctrl+S queues an answer, and
   queued answers go out together: `s` sends the selected session's as one message, `S`
-  sends every session's. Ctrl+X sends one answer now. Ctrl+R takes a queued answer back
+  sends every session's. Ctrl+Enter sends one answer now. Ctrl+R takes a queued answer back
   to edit or drop. Text you haven't sent stays with the item (or session) you typed it
   for: moving to another clears the box, and coming back restores it. Each session shows
   its queued count (`✉ 3`). Answers reach the session
@@ -81,7 +81,7 @@ make run
 Keys: `1` (or `i`) inbox, `2` sessions, `Enter` open an item's thread (or follow a
 session's conversation, in the session list), `f` show or hide
 finished items, `n` new session, `a` adopt, `Esc` all sessions (or back from a thread),
-`Ctrl+S` queue an answer, `Ctrl+X` send it now, `Ctrl+R` take a queued answer back, `s`
+`Ctrl+S` queue an answer, `Ctrl+Enter` send it now, `Ctrl+R` take a queued answer back, `s`
 send the selected session's queued answers, `S` send all, `q` quit.
 
 ## Test

@@ -169,8 +169,10 @@ class SessionList(DataTable):
 
 
 class Compose(TextArea):
-    """An answer box. Ctrl+X sends what's typed now instead of cutting it."""
-    BINDINGS = [Binding("ctrl+x", "app.send_now", "Send now")]
+    """An answer box. Ctrl+Enter sends what's typed now. Most terminals (Windows Terminal
+    among them) send Ctrl+Enter as a line feed, which arrives as ctrl+j, so both are bound."""
+    BINDINGS = [Binding("ctrl+enter", "app.send_now", "Send now"),
+                Binding("ctrl+j", "app.send_now", "Send now", show=False)]
 
 
 class ThreadView(Screen):
@@ -214,7 +216,7 @@ class ThreadView(Screen):
             self.query_one("#thread-scroll").scroll_end(animate=False)
 
 
-HINT = "Ctrl+S queues · Ctrl+X sends now · Ctrl+R takes a queued answer back to edit or drop"
+HINT = "Ctrl+S queues · Ctrl+Enter sends now · Ctrl+R takes a queued answer back to edit or drop"
 
 
 class NewSession(ModalScreen):
@@ -409,7 +411,6 @@ class WheelhouseApp(App):
 
     BINDINGS = [
         Binding("ctrl+s", "queue", "Queue"),
-        Binding("ctrl+enter", "queue", "Queue", show=False),
         Binding("ctrl+r", "recall", "Edit queued", show=False),
         Binding("s", "dispatch", "Send session"),
         Binding("S", "dispatch_all", "Send all"),

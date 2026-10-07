@@ -48,7 +48,7 @@ sit in an outbox until the person sends them:
 | Ctrl+S (in a compose box) | queue this answer |
 | `s` | send the selected session's queued answers as one message |
 | `S` | send every session's queued answers, one message per session |
-| Ctrl+X (in a compose box) | send this answer alone, now, for something urgent |
+| Ctrl+Enter (in a compose box; terminals that send it as a line feed give ctrl+j, also bound) | send this answer alone, now, for something urgent |
 
 The tabs move from `i` and `s` to `1` (Inbox) and `2` (Sessions), with `i` kept for the
 inbox, so `s` and `S` are free to send.
@@ -93,7 +93,7 @@ line per item instead; one line is the safe choice until that's confirmed.
   `reply`. Existing rows read as notes.
 - `claim`, `pending` and `get_input` skip drafts. The pending-messages index gains
   `AND draft = 0`.
-- `send()` gains `draft=True` by default; Ctrl+X and the End/Park cancellation messages
+- `send()` gains `draft=True` by default; Ctrl+Enter and the End/Park cancellation messages
   pass `draft=False`. Marking a question answered moves from writing the message to
   sending it.
 - Half-typed text in a compose box is not stored. It lives in the app until queued, and is
@@ -117,7 +117,7 @@ line per item instead; one line is the safe choice until that's confirmed.
 
 Where the build differs from the design above:
 
-- **Store calls.** `send()` still sends at once (Ctrl+X and the End/Park cancellations use
+- **Store calls.** `send()` still sends at once (Ctrl+Enter and the End/Park cancellations use
   it). Queuing is a separate `queue()`, and `dispatch(sid)` sends a session's drafts in one
   transaction and marks their questions answered. `unqueue()` takes a draft back.
 - **Editing or dropping a queued answer.** Ctrl+R in a compose box takes the item's latest

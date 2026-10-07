@@ -269,7 +269,7 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   and a Cylon scanner while anything is running; parked sessions are left out). Items in the centre from
   every session, ordered: open questions, blocked or waiting tasks, running, the rest.
   Selecting a session filters; Esc clears. Detail on the right: body, thread, and an
-  answer box. Ctrl+S sends (Ctrl+Enter where the terminal reports it).
+  answer box. Ctrl+S queues; Ctrl+Enter (ctrl+j) sends now.
 - **Session view.** Selecting a session (one click, or Enter) also puts its main
   conversation in the right-hand pane, so the person can follow and talk to a session
   without switching tabs. It is read from the transcript

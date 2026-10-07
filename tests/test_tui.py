@@ -244,8 +244,13 @@ async def test_escape_closes_adopt(store, monkeypatch):
         assert [type(s).__name__ for s in app.screen_stack] == ["Screen"]
 
 
+@pytest.mark.parametrize("key, sent, desc", [
+    ("ctrl+enter", True, "Ctrl+Enter where the terminal reports it"),
+    ("ctrl+j", True, "Ctrl+Enter as most terminals send it, a line feed"),
+    ("ctrl+x", False, "Ctrl+X no longer sends"),
+])
 @pytest.mark.anyio
-async def test_ctrl_x_sends_one_answer_now(store, sid):
+async def test_ctrl_enter_sends_one_answer_now(store, sid, key, sent, desc):
     q = store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -253,11 +258,10 @@ async def test_ctrl_x_sends_one_answer_now(store, sid):
         app.query_one("#items", DataTable).move_cursor(row=0)
         app.query_one("#answer", TextArea).focus()
         await pilot.press(*"now")
-        await pilot.press("ctrl+x")
+        await pilot.press(key)
         await pilot.pause()
-        assert app.query_one("#answer", TextArea).text == "", "sent, not cut"
-    assert [m["body"] for m in store.pending(sid)] == ["now"]
-    assert store.item(sid, q)["status"] == "answered"
+    assert [m["body"] for m in store.pending(sid)] == (["now"] if sent else []), desc
+    assert store.item(sid, q)["status"] == ("answered" if sent else "open"), desc
 
 
 @pytest.mark.anyio
