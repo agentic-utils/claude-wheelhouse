@@ -18,8 +18,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   as a notification, even when it's idle. A running session started from an older
   wheelhouse shows "needs relaunch" (`⟳` in the inbox list): it can't hold queued answers,
   so Ctrl+S sends to it straight away until you `/exit` it and restore or adopt it again.
-- **Follow a session.** Click a session in the inbox's list (or Enter on it) to follow
-  its conversation in the right-hand pane, read live from its transcript: your prompts
+- **Follow a session.** Click a session in the inbox's list (or Enter on it): its items
+  list gains a pinned first row, 💬 Conversation, highlighted, and the right-hand pane
+  follows its conversation, read live from its transcript: your prompts
   (in green) and wheelhouse notifications, and Claude's replies (in white), in full, each tool call as one line, tool
   output and subagents left out. The box underneath sends the session a general message,
   queued and sent like any answer. The pane names the session's tab: permission prompts,

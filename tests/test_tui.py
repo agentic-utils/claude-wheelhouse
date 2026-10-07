@@ -400,9 +400,17 @@ async def test_enter_on_a_session_follows_its_conversation(store, sid, tmp_path,
         await pilot.pause()
         assert [(m["item_ref"], m["body"]) for m in store.drafts(sid)] == [(None, "ship it")], "a general message"
         assert "**you · queued**\n\nship it" in app._detail_text
-        app.query_one("#items", DataTable).focus()
+        items = app.query_one("#items", DataTable)
+        assert [str(items.get_row_at(i)[3]) for i in range(items.row_count)] == ["Conversation", "which db?"], \
+            "the session's conversation is the pinned first row, and it is highlighted, not the question"
+        assert items.cursor_row == 0
+        items.focus()
+        await pilot.press("down")
         await pilot.pause()
-        assert app.viewing is None and "## Q1 · which db?" in app._detail_text, "going to the items leaves it"
+        assert app.viewing is None and "## Q1 · which db?" in app._detail_text, "moving to the question leaves it"
+        await pilot.press("up")
+        await pilot.pause()
+        assert app.viewing == sid and app.answer.text == "", "and back: the queued message is in the pane, not the box"
 
 
 @pytest.mark.anyio
@@ -602,3 +610,47 @@ async def test_button_labels_keep_their_key_hints(store, screen, labels, desc):
         app.push_screen(screen())
         await pilot.pause()
         assert [str(b.label) for b in app.screen.query(Button)] == labels, f"{desc}: not read as markup"
+
+
+@pytest.mark.anyio
+async def test_restored_text_is_typed_onto_at_the_end(store, sid):
+    q = store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        items = app.query_one("#items", DataTable)
+        items.move_cursor(row=0)
+        await pilot.pause()
+        await pilot.click("#answer")
+        await pilot.press(*"SQL")
+        items.focus()
+        await pilot.press("enter")   # open the question full screen: its text comes along
+        await pilot.pause()
+        await pilot.press(*"ite")
+        await pilot.pause(1.2)   # across a refresh tick
+        await pilot.press(*"!")
+        assert app.screen.box.text == "SQLite!", "typing carries on at the end, not the start"
+
+
+@pytest.mark.parametrize("conversation, desc", [
+    (False, "answering a question"),
+    (True, "writing to the session from its conversation row"),
+])
+@pytest.mark.anyio
+async def test_typing_survives_refresh_ticks_even_when_items_arrive_above(store, sid, conversation, desc):
+    q = store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if conversation:
+            app.follow(sid)
+        else:
+            app.query_one("#items", DataTable).move_cursor(row=0)
+        await pilot.pause()
+        await pilot.click("#answer")
+        await pilot.press(*"SQL")
+        store.post_item(sid, "question", "which port?")   # sorts into the list during typing
+        await pilot.pause(2.2)
+        await pilot.press(*"ite")
+        assert app.selected == (sid, None if conversation else q), f"{desc}: the highlight stays put"
+        assert (app.answer.text, app.answer.cursor_location) == ("SQLite", (0, 6)), f"{desc}: text and cursor untouched"

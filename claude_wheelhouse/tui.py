@@ -202,7 +202,7 @@ class ThreadView(Screen):
     def action_leave(self) -> None:
         self.app.keep_unsent(self.box, (self.sid, self.ref), None)
         self.app.pop_screen()
-        self.app.paint_detail()   # the inbox box takes back its target's text
+        self.app.call_after_refresh(self.app.retarget)   # the inbox box takes back its target's text
 
     def paint(self) -> None:
         s = self.app.store.session(self.sid)
@@ -431,9 +431,9 @@ class WheelhouseApp(App):
         self.frame = 0
         self.filter_sid: str | None = None
         self.show_finished = False   # done, dropped, closed and failed items, after the rest
-        self.selected: tuple[str, str] | None = None   # (session id, item ref)
-        # the session whose conversation the right pane follows, instead of the selected item
-        self.viewing: str | None = None
+        # the highlighted row: (session id, item ref), or (session id, None) for the
+        # session's conversation, the first row while a session is selected
+        self.selected: tuple[str, str | None] | None = None
         self.followers: dict[str, transcript.Follower] = {}
         # unsent text typed for each target, (session id, ref or None), kept in memory only
         self.unsent: dict[tuple, str] = {}
@@ -511,6 +511,11 @@ class WheelhouseApp(App):
         if isinstance(self.screen, ThreadView):
             self.screen.paint()   # an action here (queue, take back) shows at once
 
+    @property
+    def viewing(self) -> str | None:
+        """The session whose conversation the right pane follows, if that row is highlighted."""
+        return self.selected[0] if self.selected and self.selected[1] is None else None
+
     def running(self, sid: str) -> bool:
         return self.statuses.get(sid) in RUNNING
 
@@ -578,6 +583,11 @@ class WheelhouseApp(App):
         if self.show_finished:
             rows += item_rows([it for it in items if it["status"] in CLOSED], names)
         queued = {(m["session_id"], m["item_ref"]) for m in self.store.drafts()}
+        if self.filter_sid:   # the session's own conversation, pinned first
+            general = (self.filter_sid, None) in queued
+            table.add_row(names.get(self.filter_sid, "")[:14], Text("💬"),
+                          Text("queued", style="bold #05d9e8") if general else "",
+                          Text("Conversation", style="bold"), key=f"{self.filter_sid}|")
         for it, nested in rows:
             # an open question with an answer waiting to be sent shows as queued; it's stored as open
             status = "queued" if it["status"] == "open" and (it["session_id"], it["ref"]) in queued else it["status"]
@@ -591,7 +601,10 @@ class WheelhouseApp(App):
                 cells = (name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
                          Text(status, style=style), Text(it["title"], style="dim"))
             table.add_row(*cells, key=f"{it['session_id']}|{it['ref']}")
-        if table.row_count:
+        key = self.selected and f"{self.selected[0]}|{self.selected[1] or ''}"
+        if key in table.rows:   # by key: items arriving above must not move the highlight
+            table.move_cursor(row=table.get_row_index(key), animate=False)
+        elif table.row_count:
             table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
         self.paint_detail()
 
@@ -604,13 +617,21 @@ class WheelhouseApp(App):
                 self.unsent[old] = box.text
             else:
                 self.unsent.pop(old, None)
-        box.text = self.unsent.pop(new, "") if new is not None else ""
+        text = self.unsent.pop(new, "") if new is not None else ""
+        if box.text != text:
+            box.text = text   # which puts the cursor at the start: carry on typing at the end
+            box.move_cursor(box.document.end)
+
+    def retarget(self) -> None:
+        """The answer box follows what the pane shows. Called on the person's selections
+        only, never from the refresh tick, so text being typed is never swapped under them."""
+        if isinstance(self.screen, ThreadView):   # which holds its item's text itself
+            return
+        target = self.selected
+        self.keep_unsent(self.answer, self.box_target, target)
+        self.box_target = target
 
     def paint_detail(self) -> None:
-        if not isinstance(self.screen, ThreadView):   # which holds its item's text itself
-            target = (self.viewing, None) if self.viewing else self.selected
-            self.keep_unsent(self.answer, self.box_target, target)
-            self.box_target = target
         if self.viewing:
             blocks = self.conversation(self.viewing)
         elif self.selected:
@@ -628,7 +649,7 @@ class WheelhouseApp(App):
     def conversation(self, sid: str) -> list[tuple[str, str]]:
         s = self.store.session(sid)
         if s is None:
-            self.viewing = None
+            self.selected = None
             return [("note", "_gone_")]
         follower = self.followers.setdefault(sid, transcript.Follower(sid))
         recs = follower.read()
@@ -680,39 +701,46 @@ class WheelhouseApp(App):
             self.refresh_data()
 
     def follow(self, sid: str) -> None:
-        """Filter the items to the session and follow its conversation on the right."""
-        self.filter_sid = self.viewing = sid
+        """Filter the items to the session and highlight its conversation row, so the right
+        pane follows the conversation rather than whichever question comes first."""
+        self.filter_sid = sid
+        self.selected = (sid, None)
+        self.retarget()
         self.paint_items()
         self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 
     @on(DataTable.RowHighlighted, "#items")
     def pick_item(self, event: DataTable.RowHighlighted) -> None:
+        """The one place the pane and the answer box change target. A refresh restores the
+        highlight by key, so it lands here unchanged and swaps nothing."""
         if not event.row_key.value:
             return
         sid, ref = event.row_key.value.split("|")
-        if self.selected != (sid, ref):
-            self.selected = (sid, ref)
-            if self.viewing is None:   # repainting the table moves its cursor too
-                self.paint_detail()
-
-    def on_descendant_focus(self, event) -> None:
-        """Going to the item list leaves a session's conversation for the highlighted item."""
-        if event.widget is self.items_table and self.viewing:
-            self.viewing = None
+        if self.selected != (sid, ref or None):
+            self.selected = (sid, ref or None)
+            self.retarget()
             self.paint_detail()
+            if self.viewing:
+                self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 
     @on(DataTable.RowSelected, "#items")
     def open_thread(self, event: DataTable.RowSelected) -> None:
         sid, ref = event.row_key.value.split("|")
-        self.push_screen(ThreadView(sid, ref))
+        if ref:
+            self.push_screen(ThreadView(sid, ref))
+        else:   # the conversation is already in the pane: Enter goes to its box
+            self.answer.focus()
 
     @on(DataTable.RowHighlighted, "#session-table")
     def pick_session_row(self) -> None:
         self.paint_synopsis()
 
     def action_clear_filter(self) -> None:
-        self.filter_sid = self.viewing = None
+        self.filter_sid = None
+        if self.viewing:   # its row goes with the filter; the highlight lands on an item
+            self.selected = None
         self.paint_items()
+        self.retarget()
 
     def action_toggle_finished(self) -> None:
         if not isinstance(self.focused, (TextArea, Input)):
@@ -730,7 +758,7 @@ class WheelhouseApp(App):
             return self.screen.box, (self.screen.sid, self.screen.ref)
         if self.screen is self.screen_stack[0]:
             # following a conversation, the box sends the session a general message
-            return self.answer, (self.viewing, None) if self.viewing else self.selected
+            return self.answer, self.selected
         return None, None   # a dialog is open: its keys are its own
 
     def typed(self):
@@ -781,6 +809,7 @@ class WheelhouseApp(App):
             self.notify(f"nothing queued for {aimed(target)}")
             return
         box.text = body
+        box.move_cursor(box.document.end)
         self.notify("taken back: queue it again, or clear it to drop it")
         self.refresh_data()
 

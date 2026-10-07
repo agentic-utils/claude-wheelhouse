@@ -282,8 +282,13 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   `wt` can only focus a tab by index, not by title, and tabs move. An unanswered
   AskUserQuestion or ExitPlanMode call in the transcript shows as "waiting for you in its
   tab". A permission prompt leaves no record, so it can't be flagged this way; a
-  `Notification` hook in the wheelhouse plugin could report it. Focusing the item list
-  switches the pane back to the highlighted item. The person's words show in terminal green and Claude's in
+  `Notification` hook in the wheelhouse plugin could report it. Selecting a session pins a
+  "💬 Conversation" row first in its filtered item list and highlights it, so no question
+  is selected while the pane shows the conversation; moving to a question shows that
+  question. With no session selected there is no conversation row: the list is in inbox
+  order, not grouped by session. The pane and the answer box change target only when the
+  person moves the highlight. The one-second refresh restores the highlight by the row's
+  key, not its position, so an item arriving above doesn't swap the text being typed. The person's words show in terminal green and Claude's in
   white, here and in item threads. The pane is one widget drawing one Rich renderable, each
   block's lines cached per width: as a Textual Markdown widget it made a child per
   paragraph, and with a long conversation's ~900 children every layout pass took a quarter
