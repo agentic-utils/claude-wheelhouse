@@ -323,6 +323,7 @@ class WheelhouseApp(App):
     .answer-hint {{ color: #777777; height: 1; }}
     #outbox {{ height: 1; color: #05d9e8; background: #12122a; }}
     #thread-scroll {{ height: 1fr; }}
+    #synopsis {{ height: 7; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
     Markdown {{ background: #000000; color: {MATRIX}; }}
     #session-buttons {{ height: 3; }}
     #dialog {{ width: 80; height: auto; padding: 1 2; background: #000000; color: {MATRIX};
@@ -380,6 +381,7 @@ class WheelhouseApp(App):
             with TabPane("Sessions", id="sessions"):
                 with Vertical(classes="panel"):
                     yield DataTable(id="session-table", cursor_type="row")
+                    yield Markdown(id="synopsis")
                     with Horizontal(id="session-buttons"):
                         yield Button("New session", id="new", variant="success")
                         yield Button("Adopt", id="adopt-open")
@@ -397,6 +399,7 @@ class WheelhouseApp(App):
         self.detail = self.query_one("#detail", Markdown)
         self.answer = self.query_one("#answer", Compose)
         self.outbox = self.query_one("#outbox", Static)
+        self.synopsis = self.query_one("#synopsis", Markdown)
         self.tables = {"#session-list": self.query_one("#session-list", DataTable),
                        "#session-table": self.query_one("#session-table", DataTable)}
         self.eye_cols = {
@@ -425,6 +428,7 @@ class WheelhouseApp(App):
         self.paint_sessions()
         self.paint_items()
         self.paint_outbox()
+        self.paint_synopsis()
 
     def running(self, sid: str) -> bool:
         return self.statuses.get(sid) in RUNNING
@@ -514,6 +518,15 @@ class WheelhouseApp(App):
         n = sum(s["drafts"] for s in self.sessions)
         self.outbox.update(f" ✉ {n} queued: s sends the selected session's, S sends all" if n else "")
 
+    def paint_synopsis(self) -> None:
+        sid = self.current_session()
+        s = sid and self.store.session(sid)
+        text = (f"**{s['name'] or os.path.basename(s['cwd']) or short(sid)}**\n\n{s['synopsis'] or '_No synopsis yet._'}"
+                if s else "_Select a session to see its synopsis._")
+        if text != getattr(self, "_synopsis_text", None):
+            self._synopsis_text = text
+            self.synopsis.update(text)
+
     # selection
 
     @on(DataTable.RowSelected, "#session-list")
@@ -533,6 +546,10 @@ class WheelhouseApp(App):
     def open_thread(self, event: DataTable.RowSelected) -> None:
         sid, ref = event.row_key.value.split("|")
         self.push_screen(ThreadView(sid, ref))
+
+    @on(DataTable.RowHighlighted, "#session-table")
+    def pick_session_row(self) -> None:
+        self.paint_synopsis()
 
     def action_clear_filter(self) -> None:
         self.filter_sid = None

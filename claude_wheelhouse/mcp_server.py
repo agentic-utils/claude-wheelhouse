@@ -66,6 +66,14 @@ def reply(ref: str, text: str, asks: bool = False) -> str:
 
 
 @wheelhouse_tool
+def set_synopsis(text: str) -> str:
+    """Two or three sentences on what this session is doing, shown in the wheelhouse's
+    Sessions tab. Set it early; update it when the session's focus shifts."""
+    _store.set_synopsis(_sid, text)
+    return "synopsis set"
+
+
+@wheelhouse_tool
 def get_input(ref: str | None = None) -> str:
     """Without ref: the person's undelivered messages (marked delivered).
     With ref: that item's full body and thread (its messages count as delivered)."""

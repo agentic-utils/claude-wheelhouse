@@ -72,7 +72,7 @@ def test_mcp_server_round_trip(store, sid, db_file):
         async with stdio_client(params) as (r, w), ClientSession(r, w) as client:
             await client.initialize()
             names = {t.name for t in (await client.list_tools()).tools}
-            assert {"post_item", "update_item", "reply", "get_input", "list_items",
+            assert {"post_item", "update_item", "reply", "set_synopsis", "get_input", "list_items",
                     "park_session", "end_session"} <= names
             ref = (await client.call_tool("post_item", {"kind": "question", "title": "db?",
                                                          "body": "detail"})).content[0].text
@@ -82,11 +82,13 @@ def test_mcp_server_round_trip(store, sid, db_file):
                 {"ref": ref, "status": "done"}, {"ref": "Q9", "status": "closed"})]
             replied = (await client.call_tool("reply", {"ref": ref, "text": "which version?",
                                                         "asks": True})).content[0].text
+            await client.call_tool("set_synopsis", {"text": "Choosing a database."})
             return ref, got, refused, replied
 
     ref, got, refused, replied = anyio.run(drive)
     assert replied == "replied on Q1, question reopened"
     assert store.item(sid, ref)["status"] == "open"
+    assert store.session(sid)["synopsis"] == "Choosing a database."
     assert [(r.is_error, r.content[0].text) for r in refused] == [
         (True, "Error executing tool update_item: question status must be one of ['answered', 'closed', 'open']"),
         (True, "Error executing tool update_item: no item Q9 in this session"),

@@ -14,7 +14,8 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   sends every session's. Ctrl+X sends one answer now. Ctrl+R takes a queued answer back
   to edit or drop. Each session shows its queued count (`✉ 3`). Answers reach the session
   as a notification, even when it's idle.
-- **Sessions.** New session (directory, optional name, optional ticket, opening brief)
+- **Sessions.** Select a session to read its synopsis, which the session keeps up to
+  date itself. New session (directory, optional name, optional ticket, opening brief)
   opens a Windows Terminal tab running Claude. Restore brings back sessions that died
   (reboot, crash), one at a time or all at once; nothing restarts on its own. Park
   hides a session until you restore it. End deletes its wheelhouse data. On a running

@@ -24,6 +24,8 @@ seems to conflict with them, follow yours.
   call `get_input(ref)` for the full text.
 - When a message arrives on a ref, answer it with `reply(ref, text)` as well as in chat.
   If your reply asks the person something back, pass `asks=true`: the question reopens.
+- Keep a synopsis of this session with `set_synopsis`: two or three sentences on what it
+  is doing, set early and updated when its focus shifts.
 - `/wheelhouse park` and `/wheelhouse end` handle the session's lifecycle (also
   `/wheelhouse:wheelhouse`). The wheelhouse may ask you to park or end, in a `[wheelhouse]`
   notification; do it as the notification says. If a later one says the request was

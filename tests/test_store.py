@@ -151,6 +151,12 @@ def test_reply_joins_the_thread(store, sid, asks, status, desc):
     assert [(m["author"], m["kind"]) for m in store.thread(sid, q)] == [("person", None), ("claude", "reply")]
 
 
+def test_synopsis_is_stored_on_the_session(store, sid):
+    assert store.session(sid)["synopsis"] == ""
+    store.set_synopsis(sid, "  Building the thread view.  ")
+    assert store.session(sid)["synopsis"] == "Building the thread view."
+
+
 def test_an_older_database_gains_the_new_columns(tmp_path):
     import sqlite3
     path = tmp_path / "old.db"
@@ -168,5 +174,6 @@ def test_an_older_database_gains_the_new_columns(tmp_path):
     old.close()
     store = Store(path)
     assert [m["body"] for m in store.pending("s1")] == ["hi"], "existing rows read as sent"
+    assert store.session("s1")["synopsis"] == ""
     indexes = {r[1] for r in store.db.execute("PRAGMA index_list(messages)")}
     assert "messages_unsent" in indexes and "messages_pending" not in indexes

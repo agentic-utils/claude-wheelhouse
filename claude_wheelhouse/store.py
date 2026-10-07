@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     park_requested_at TEXT,
     end_told_at  TEXT,
     park_told_at TEXT,
-    adopted      INTEGER NOT NULL DEFAULT 0
+    adopted      INTEGER NOT NULL DEFAULT 0,
+    synopsis     TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS items (
     id         INTEGER PRIMARY KEY,
@@ -80,7 +81,8 @@ CREATE INDEX IF NOT EXISTS messages_unsent
 ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_requested_at", "TEXT"),
                  ("sessions", "end_told_at", "TEXT"), ("sessions", "park_told_at", "TEXT"),
                  ("messages", "claimed_at", "TEXT"), ("sessions", "adopted", "INTEGER NOT NULL DEFAULT 0"),
-                 ("messages", "draft", "INTEGER NOT NULL DEFAULT 0"), ("messages", "kind", "TEXT")]
+                 ("messages", "draft", "INTEGER NOT NULL DEFAULT 0"), ("messages", "kind", "TEXT"),
+                 ("sessions", "synopsis", "TEXT NOT NULL DEFAULT ''")]
 REQUESTS = ("end", "park")   # what the wheelhouse can ask a running session to do
 CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print is retaken
 
@@ -192,6 +194,11 @@ class Store:
     def rename(self, sid: str, name: str) -> None:
         with self.tx() as db:
             db.execute("UPDATE sessions SET name = ? WHERE id = ?", (name, sid))
+
+    def set_synopsis(self, sid: str, text: str) -> None:
+        with self.tx() as db:
+            self._require(db, sid)
+            db.execute("UPDATE sessions SET synopsis = ? WHERE id = ?", (text.strip(), sid))
 
     def mark_launched(self, sid: str) -> None:
         """A (re)launch also drops any request left over from the last run."""

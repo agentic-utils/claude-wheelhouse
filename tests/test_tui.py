@@ -309,6 +309,22 @@ async def test_thread_view_holds_the_conversation(store, sid):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("synopsis, shown, desc", [
+    ("Building the thread view for issue 11.", "Building the thread view for issue 11.", "the session's own words"),
+    ("", "No synopsis yet", "a placeholder until the session sets one"),
+])
+async def test_sessions_tab_shows_the_synopsis(store, sid, synopsis, shown, desc):
+    store.set_synopsis(sid, synopsis)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        app.query_one("#session-table", DataTable).move_cursor(row=0)
+        await pilot.pause()
+        assert shown in app._synopsis_text, desc
+
+
+@pytest.mark.anyio
 async def test_end_names_the_queued_answers_it_discards(store, sid):
     store.queue(sid, "a", "Q1")
     app = WheelhouseApp(store)
