@@ -766,3 +766,28 @@ async def test_refresh_leaves_a_selection_in_the_answer_box(store, sid, row, des
         assert app.answer.selection == Selection((0, 0), (0, 5)), desc
         assert app.answer.text == "hello world selection", desc
         assert set(painted) == {picked}, f"the pane never flips to another item: {desc}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("new_item, desc", [
+    (False, "a move just before an unchanged refresh lands (the flaky test: the rebuild's own "
+            "highlight of row 0 used to arrive after it and take the pane back)"),
+    (True, "a move overtaken by a rebuild is dropped, so the pane shows what is highlighted"),
+])
+async def test_a_refresh_racing_a_move_keeps_pane_and_highlight_together(store, sid, new_item, desc):
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)
+        await pilot.pause()
+        items = app.items_table
+        items.move_cursor(row=1)   # its RowHighlighted is queued, not yet handled
+        if new_item:
+            store.post_item(sid, "question", "which cache?")
+        app.refresh_data()
+        await pilot.pause()
+        under_cursor = items.coordinate_to_cell_key((items.cursor_row, 0)).row_key.value
+        assert under_cursor == f"{app.selected[0]}|{app.selected[1] or ''}", desc
+        if not new_item:
+            assert app.selected == (sid, "Q1"), desc

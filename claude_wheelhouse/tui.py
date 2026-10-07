@@ -848,8 +848,12 @@ class WheelhouseApp(App):
     def pick_item(self, event: DataTable.RowHighlighted) -> None:
         """The person moving the highlight: the pane and the answer box change target. A
         refresh never posts one (see fill), so text being typed is never swapped under them."""
-        if event.row_key.value:
-            self.select_row(event.row_key.value)
+        table = self.items_table
+        if not event.row_key.value or not table.row_count:
+            return
+        if table.coordinate_to_cell_key((table.cursor_row, 0)).row_key != event.row_key:
+            return   # stale: a rebuild put the cursor back before this was handled
+        self.select_row(event.row_key.value)
 
     def select_row(self, key: str) -> None:
         sid, ref = key.split("|")
