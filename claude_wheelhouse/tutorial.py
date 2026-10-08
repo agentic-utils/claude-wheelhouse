@@ -19,6 +19,7 @@ from .store import Store
 
 NAME = "tutorial"
 OFFER_KEY = "tutorial_offer"   # settings: unset until the first-run offer is taken or dismissed
+SEEN_KEY = "tutorial_seen"     # settings: the steps only the screen knows about, for the current tutorial
 STOP_WAIT = 5.0   # seconds an earlier tutorial's host gets to exit before it is told to
 # what the tutorial's directory allows and asks: the wheelhouse's own tools run without a
 # prompt, and one harmless command always asks, so a permission item appears even in auto mode
@@ -108,6 +109,27 @@ def steps(store: Store, sid: str, seen: set[str]) -> list[tuple[str, str, str, b
     return [(key, what, how, done[key]) for key, what, how in STEPS]
 
 
+def seen(store: Store, sid: str) -> set[str]:
+    """The steps the person has done that only the screen sees (a question opened, the
+    decision read, the conversation followed). Kept in the store, so a restart keeps them."""
+    try:
+        kept = json.loads(store.setting(SEEN_KEY) or "{}")
+    except ValueError:
+        return set()
+    return set(kept.get("seen", [])) if kept.get("sid") == sid else set()
+
+
+def see(store: Store, sid: str, step: str) -> None:
+    store.set_setting(SEEN_KEY, json.dumps({"sid": sid, "seen": sorted(seen(store, sid) | {step})}))
+
+
+def stopped(session) -> str | None:
+    """Why the tutorial's session stopped, if its host recorded a reason (Claude Code didn't
+    start, say), so the checklist can say so rather than wait on a dead session."""
+    activity = session["activity"] or ""
+    return activity if activity.startswith("stopped") else None
+
+
 def stop_earlier(store: Store) -> None:
     """End any earlier tutorial session. Its host sees the row go and exits within a
     second; one that hasn't after STOP_WAIT is told to."""
@@ -142,8 +164,12 @@ def prepare(store: Store) -> str:
 
 
 def start(store: Store) -> str:
-    """prepare(), then launch the session's host."""
+    """prepare(), then launch the session's host. Refuses before creating anything if
+    Claude Code isn't installed: the host starts detached, so its own failure to start
+    comes later, as the session's stop reason, which the checklist shows."""
     from .launch import open_host
+    if shutil.which("claude") is None:
+        raise RuntimeError("Claude Code (claude) isn't on PATH: install it, then run the tutorial")
     sid = prepare(store)
     try:
         open_host(store, sid)

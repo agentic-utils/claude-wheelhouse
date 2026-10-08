@@ -864,7 +864,6 @@ class WheelhouseApp(App):
         self.sessions = []
         # the tutorial steps only the screen sees (a question opened, the conversation
         # followed), by tutorial session
-        self.tutorial_seen: dict[str, set[str]] = {}
 
     def compose(self) -> ComposeResult:
         yield Static(id="title")
@@ -1211,9 +1210,14 @@ class WheelhouseApp(App):
         if sid is None:
             self.checklist.display = False
             return
-        steps = tutorial.steps(self.store, sid, self.tutorial_seen.get(sid, set()))
+        steps = tutorial.steps(self.store, sid, tutorial.seen(self.store, sid))
         nxt = next((key for key, *_, done in steps if not done), None)
         text = Text.assemble(("TUTORIAL", "bold #ffd300"), ("  ? lists every key", "#777777"))
+        session = next(s for s in self.sessions if s["id"] == sid)
+        why = tutorial.stopped(session) if not self.running(sid) else None
+        if why:
+            text.append(f"\n{why}", style="bold #ff2a6d")
+            text.append("\nmake tutorial starts it afresh", style="#e8e8e8")
         for key, what, how, done in steps:
             if done:
                 text.append(f"\n✔ {what}", style="dim")
@@ -1237,7 +1241,7 @@ class WheelhouseApp(App):
             item = ref and self.store.item(sid, ref)
             step = "follow" if ref is None else {"question": "open", "decision": "decision"}.get(item and item["kind"])
         if step:
-            self.tutorial_seen.setdefault(sid, set()).add(step)
+            tutorial.see(self.store, sid, step)
             self.paint_checklist()
 
     def paint_synopsis(self) -> None:

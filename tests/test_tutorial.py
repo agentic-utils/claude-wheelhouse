@@ -15,6 +15,18 @@ def tut(store):
     return tutorial.prepare(store)
 
 
+@pytest.fixture
+def fake_claude(tmp_path, monkeypatch):
+    """A `claude` on PATH that fails at once, as a broken install would."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    claude = bin_dir / "claude"
+    claude.write_text('#!/bin/sh\necho "claude: broken install" >&2\nexit 1\n')
+    claude.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    return claude
+
+
 def setup_items(store, sid):
     """What the tutorial's session posts first."""
     store.post_item(sid, "task", "Draft the welcome message", status="running")
@@ -125,7 +137,7 @@ def test_when_the_tutorial_is_offered(store, tmp_path, sessions, setting, offere
     assert real_should_offer(store) is offered, desc
 
 
-def test_start_launches_the_host_and_settles_the_offer(store, monkeypatch):
+def test_start_launches_the_host_and_settles_the_offer(store, monkeypatch, fake_claude):
     launched = []
     monkeypatch.setattr(launch, "open_host", lambda s, i: launched.append(i))
     sid = tutorial.start(store)
@@ -138,7 +150,7 @@ def test_start_launches_the_host_and_settles_the_offer(store, monkeypatch):
     ("escape", False, "dismissed", "Esc dismisses it"),
 ])
 @pytest.mark.anyio
-async def test_the_first_run_offer_takes_one_key(store, monkeypatch, key, started, setting, desc):
+async def test_the_first_run_offer_takes_one_key(store, monkeypatch, fake_claude, key, started, setting, desc):
     monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
     launched = []
     monkeypatch.setattr(launch, "open_host", lambda s, i: launched.append(i))
@@ -238,14 +250,34 @@ def test_prepare_deletes_only_its_own_directory(store, marked, refused, desc):
     assert path.name == "claude-wheelhouse-tutorial", "a folder of its own name beside the database"
 
 
-def test_a_failed_start_leaves_no_session(store, monkeypatch):
-    def fail(s, i):
-        raise FileNotFoundError("claude")
-    monkeypatch.setattr(launch, "open_host", fail)
-    with pytest.raises(FileNotFoundError):
+def test_start_refuses_without_claude(store, tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))   # no claude anywhere
+    with pytest.raises(RuntimeError, match="isn't on PATH"):
         tutorial.start(store)
-    assert tutorial.session_id(store) is None, "no dead tutorial session, so no checklist"
+    assert tutorial.session_id(store) is None, "nothing created, so no dead session and no checklist"
     assert store.setting(tutorial.OFFER_KEY) is None
+
+
+@pytest.mark.anyio
+async def test_a_host_that_cant_start_says_why(store, fake_claude):
+    """The real path: the host starts detached (setsid returns at once), then Claude Code
+    fails to start inside it. The host records why, and the checklist says so."""
+    import asyncio
+    sid = tutorial.start(store)
+    for _ in range(300):
+        why = tutorial.stopped(store.session(sid))
+        if why:
+            break
+        await asyncio.sleep(0.1)
+    assert why and why.startswith("stopped: Claude Code didn't start"), why
+    assert "\n" not in why, "one line"
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        for _ in range(50):   # the host's own exit, a moment after it records why
+            await pilot.pause(0.1)
+            if why in app._checklist_text:
+                break
+        assert why in app._checklist_text and "make tutorial starts it afresh" in app._checklist_text
 
 
 def test_an_earlier_host_that_exits_as_its_told_is_no_error(store, monkeypatch):
@@ -282,3 +314,6 @@ async def test_reading_the_decision_ticks_only_when_the_person_does(store, sid, 
             items.move_cursor(row=keys.index(f"{tut}|{ref}"))
             await pilot.pause()
         assert "✔ Read the decision" in app._checklist_text, "the person highlighting it does"
+    async with WheelhouseApp(store).run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert "✔ Read the decision" in pilot.app._checklist_text, "kept across a restart of the app"

@@ -113,7 +113,11 @@ really use.
   Each step is worked out from the store on the refresh: both questions answered, the
   answers sent, a reply after they went, the decision seen, the permission allowed. The two
   only the screen knows (a question highlighted or opened, the conversation followed) are
-  recorded as the person does them, never by the app's own automatic selection. The next
-  step shows how to do it; the rest are one line each.
+  recorded as the person does them, never by the app's own automatic selection, and kept
+  in the store (`tutorial_seen`), so a restart of the app keeps them. The next step shows
+  how to do it; the rest are one line each.
+- Starting refuses before creating anything if `claude` isn't on PATH. The host starts
+  detached, so a later failure (Claude Code won't start) arrives as the host's stop reason;
+  the checklist shows it, with `make tutorial` to start afresh.
 - `?` opens every key, generated from the bindings themselves (a test fails if a binding
   has no description), the mouse, every button and the send-mode rules.
