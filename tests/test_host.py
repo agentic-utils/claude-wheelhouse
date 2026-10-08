@@ -1,11 +1,14 @@
 import asyncio
 import json
+import os
+import subprocess
+import time
 from types import SimpleNamespace
 
 import pytest
 
 from claude_wheelhouse import host as host_mod, launch
-from claude_wheelhouse.host import (CANCELLED, COMPACT_ASK, HOST_QUESTION, NO_NOTES, Host, format_turn,
+from claude_wheelhouse.host import (AWAITING_NOTES, CANCELLED, COMPACT_ASK, HOST_QUESTION, NO_NOTES, Host, format_turn,
                                     keep_notes, question_answers, question_item, tool_summary)
 from claude_wheelhouse.store import SessionGone
 from claude_wheelhouse.monitor import REQUEST_TEXT
@@ -87,6 +90,8 @@ TWO = {"questions": [{"question": "Colour?", "options": []}, {"question": "Size?
     (TWO, "1: at 2:30, 2: large", {"Colour?": "at 2:30", "Size?": "large"}, "a time isn't a marker"),
     (TWO, "1: red, 7: huge", {"Colour?": "red, 7: huge", "Size?": "1: red, 7: huge"},
      "a number past the last question isn't a marker"),
+    (TWO, "Q1: red, q2: large", {"Colour?": "red", "Size?": "large"}, "Q-numbered parts"),
+    (TWO, "1:30pm works", {"Colour?": "1:30pm works", "Size?": "1:30pm works"}, "a leading time isn't a marker"),
 ])
 def test_question_answers(inp, reply, expected, desc):
     assert question_answers(inp, reply) == expected, desc
@@ -104,6 +109,18 @@ def test_keep_notes(text, expected, desc):
     assert keep_notes(text) == expected, desc
 
 
+@pytest.mark.parametrize("text, expected, desc", [
+    ('<keep id="ab12">notes</keep>', "notes", "the request's block"),
+    ("<keep id=ab12>notes</keep>", "notes", "unquoted id"),
+    ("<keep>notes</keep>", None, "a block without the id"),
+    ('<keep id="zz99">old</keep>', None, "another request's block"),
+    ('I\'ll put them between <keep id="ab12"> and </keep>.\n<keep id="ab12">- Q3</keep>', "- Q3",
+     "a quoted tag before the real block"),
+])
+def test_keep_notes_by_id(text, expected, desc):
+    assert keep_notes(text, "ab12") == expected, desc
+
+
 def test_question_item_lists_options():
     title, body = question_item(ONE)
     assert title == "Format"
@@ -115,12 +132,14 @@ def test_question_item_lists_options():
     (lambda s, sid: s.queue(sid, "later", "Q1"), [], "a queued draft waits for Send"),
     (lambda s, sid: s.request_end(sid), [REQUEST_TEXT["end"]], "End is passed on as a turn"),
     (lambda s, sid: s.notice(sid, "hello"), ["[wheelhouse] hello"], "a notice"),
-    (lambda s, sid: s.command(sid, "compact"), [COMPACT_ASK], "Compact asks for the notes first"),
+    (lambda s, sid: s.command(sid, "compact"), [lambda h: COMPACT_ASK.format(nonce=h.compact_nonce)],
+     "Compact asks for the notes first, under its own id"),
 ])
 def test_poll_turns(host, store, sid, setup, expected, desc):
     store.post_item(sid, "question", "q")
     setup(store, sid)
     assert run(host.poll()) is True, desc
+    expected = [e(host) if callable(e) else e for e in expected]
     assert host.client.queries == expected, desc
     assert run(host.poll()) is True and host.client.queries == expected, f"{desc}: once only"
 
@@ -188,20 +207,6 @@ def test_ask_user_question(host, store, sid, answer, behavior, desc):
         assert result.updated_input["answers"] == {"Which format?": "CSV"}, desc
         assert item["status"] == "answered", desc
     assert host.client.queries == [], f"{desc}: the answer is not also a turn"
-
-
-@pytest.mark.parametrize("results, expected, desc", [
-    (["<keep>- Q3 open\n- PR 17</keep>"], ["/compact - Q3 open\n- PR 17"], "the reply's notes"),
-    (["background task done", "ok <keep>x</keep> bye"], ["/compact x"],
-     "a turn Claude Code started itself is passed over"),
-    (["no notes at all"], [], "no notes yet: nothing compacted"),
-])
-def test_compact_sends_the_notes(host, store, sid, results, expected, desc):
-    store.command(sid, "compact")
-    run(host.poll())
-    for text in results:
-        run(host.finished(SimpleNamespace(result=text, is_error=False, subtype="success")))
-    assert host.client.queries == [COMPACT_ASK, *expected], desc
 
 
 def test_finished_reports_compaction(host, store, sid):
@@ -372,30 +377,6 @@ def test_turn_not_sent_stays_undelivered(store, sid, monkeypatch):
     assert [m["body"] for m in store.claim(sid)] == ["hello"], "released, so the next host takes it"
 
 
-@pytest.mark.parametrize("results, pending, activity, still, desc", [
-    ([("no tags here", False)], 0, NO_NOTES, 0, "no notes and nothing else running: say so"),
-    ([("boom", True)], 0, "error: boom", 0, "an error ends the wait"),
-    ([("background done", False)], 1, None, 1, "a turn still to come may hold them"),
-])
-def test_compact_without_notes(host, store, sid, results, pending, activity, still, desc):
-    store.command(sid, "compact")
-    run(host.poll())
-    host.pending = pending
-    for text, error in results:
-        run(host.finished(SimpleNamespace(result=text, is_error=error, subtype="error" if error else "success")))
-    assert host.compacting == still, desc
-    if activity:
-        assert store.session(sid)["activity"] == activity, desc
-
-
-def test_interrupt_ends_compact(host, store, sid):
-    store.command(sid, "compact")
-    run(host.poll())
-    store.command(sid, "interrupt")
-    run(host.poll())
-    assert host.compacting == 0
-
-
 def test_deny_stale_closes_only_what_the_host_asked(host, store, sid):
     perm = store.post_item(sid, "permission", "Bash: ls")
     asked = store.post_item(sid, "question", "Format")
@@ -491,40 +472,6 @@ def test_run_refuses_a_taken_session(store, sid, monkeypatch):
         run(h.run())
 
 
-@pytest.mark.parametrize("taken, desc", [
-    (False, "the host registers itself again and reconnects"),
-    (True, "a Restore got there first: the host stops rather than share the session"),
-])
-def test_shell_hand_back(host, store, sid, monkeypatch, taken, desc):
-    """Real registration: the host gives the session up, then must win it back."""
-    monkeypatch.setattr(host_mod, "SHELL_POLL_SECONDS", 0)
-    states = iter(["live", "dead"])
-    monkeypatch.setattr(host_mod.liveness, "status", lambda session: next(states))
-    assert host.register(), "the host holds the session to start with"
-    pending = store.post_item(sid, "permission", "Bash: ls")   # open when the old client went
-
-    def open_tab(s, i):
-        assert s.session(i)["claude_pid"] is None, f"{desc}: free before the tab opens"
-        if taken:   # another process registers while the tab runs
-            s.register(i, 1, liveness_start(1), host_mod.liveness.boot_id())
-    host.open_tab = open_tab
-    store.command(sid, "shell")
-
-    async def go():
-        host.reader = asyncio.create_task(asyncio.sleep(3600))
-        await host.poll()
-        host.reader.cancel()
-    run(go())
-    session = store.session(sid)
-    if taken:
-        assert host.stopping and session["claude_pid"] == 1, desc
-        assert host.stop_reason.startswith("stopped: another process"), desc
-    else:
-        assert not host.stopping and session["shell"] is None and host.client.connected, desc
-        assert session["claude_pid"] == host_mod.os.getpid(), desc
-        assert store.item(sid, pending)["status"] == "denied", f"{desc}: a stale permission is closed"
-
-
 def liveness_start(pid):
     return host_mod.liveness.start_time(pid)
 
@@ -565,3 +512,227 @@ def test_open_host_detaches(store, sid, monkeypatch, resuming, desc):
     log = store.path.parent / "hosts" / f"{sid}.log"
     assert ("resume" if resuming else "new") in log.read_text(), desc
     assert any(m["kind"] == "notice" for m in store.pending(sid)) == resuming, desc
+
+
+# round-2 review fixes (T30): Compact by id, the shell hand-back, redelivery, withdrawn answers
+
+def text(t):
+    from claude_agent_sdk import AssistantMessage
+    from claude_agent_sdk.types import TextBlock
+    return AssistantMessage(content=[TextBlock(text=t)], model="m")
+
+
+@pytest.fixture
+def streamed(store, sid, monkeypatch):
+    monkeypatch.setattr(host_mod, "transcript_exists", lambda sid: True)
+    h = Host(store, sid, client_factory=StreamClient, person="doug")
+    asyncio.run(h.connect())
+    return h
+
+
+NOTES = 'Saved.\n<keep id="{nonce}">- Q3 open\n- PR 17</keep>'
+
+
+@pytest.mark.parametrize("stream, compacted, activity, desc", [
+    ([text(NOTES), result()], True, "compacting", "the ask's reply carries the notes"),
+    ([result("background task done"), text(NOTES), result()], True, "compacting",
+     "a turn Claude Code started itself ends first"),
+    ([result("overloaded", error=True), text(NOTES), result()], True, "compacting",
+     "an error in a turn queued ahead doesn't cancel it"),
+    ([result(NOTES)], True, "compacting", "notes only in the turn's result"),
+    ([text("<keep>- Q3</keep>"), result()], False, AWAITING_NOTES, "a block without the id isn't the notes"),
+    ([text("I'll save first."), result()], False, AWAITING_NOTES, "no notes yet: it keeps waiting"),
+])
+def test_compact_by_id(streamed, store, sid, stream, compacted, activity, desc):
+    """Through the real read(): the notes go to /compact whichever turn they arrive in."""
+    h = streamed
+    store.command(sid, "compact")
+
+    async def go():
+        await h.poll()
+        nonce = h.compact_nonce
+        for m in stream:
+            if hasattr(m, "result") and m.result:
+                m.result = m.result.format(nonce=nonce)
+            if hasattr(m, "content"):
+                for b in m.content:
+                    b.text = b.text.format(nonce=nonce)
+            h.client.feed.put_nowait(m)
+        h.client.feed.put_nowait(None)
+        await h.read()
+        return nonce
+    nonce = run(go())
+    sent = h.client.queries[1:]
+    assert sent == (["/compact - Q3 open\n- PR 17"] if compacted else []), desc
+    assert (h.compact_nonce is None) == compacted, desc
+    assert store.session(sid)["activity"] == activity, desc
+    assert nonce and h.client.queries[0] == COMPACT_ASK.format(nonce=nonce), desc
+
+
+@pytest.mark.parametrize("ending, activity, desc", [
+    ("interrupt", "interrupted", "Interrupt cancels Compact"),
+    ("timeout", NO_NOTES, "no notes in time: give up and say so"),
+])
+def test_compact_abandoned(host, store, sid, ending, activity, desc):
+    store.command(sid, "compact")
+    run(host.poll())
+    if ending == "interrupt":
+        store.command(sid, "interrupt")
+    else:
+        host.compact_asked = time.monotonic() - host_mod.COMPACT_TIMEOUT - 1
+    run(host.poll())
+    assert host.compact_nonce is None, desc
+    assert store.session(sid)["activity"] == activity, desc
+
+
+def other_owner(s, i):
+    """A Restore's host: registered as a live process, shell flag cleared, its own activity."""
+    s.register(i, 1, liveness_start(1), host_mod.liveness.boot_id())
+    s.set_shell(i, None)
+    s.set_activity(i, "new owner")
+
+
+@pytest.mark.parametrize("after_exit, takes_back, desc", [
+    ([], True, "the tab exits: the host takes the session back"),
+    ([other_owner], False, "a Restore's host took it as the tab exited: let go quietly"),
+    ([lambda s, i: s.mark_launched(i), other_owner], False,
+     "a Restore launching (starting), then registering: let go quietly"),
+    ([lambda s, i: s.set_parked(i, True)], False, "parked meanwhile: stop"),
+])
+def test_shell_hand_back(store, sid, monkeypatch, after_exit, takes_back, desc):
+    """Real processes and registration: the tab is a live process that exits."""
+    monkeypatch.setattr(host_mod, "transcript_exists", lambda sid: True)
+    monkeypatch.setattr(host_mod, "POLL_SECONDS", 0.01)
+    h = Host(store, sid, client_factory=StreamClient, person="doug")
+    tab = subprocess.Popen(["sleep", "60"])
+
+    def open_tab(s, i):
+        assert s.session(i)["claude_pid"] is None and s.session(i)["shell"] == "tab", desc
+        s.register(i, tab.pid, liveness_start(tab.pid), host_mod.liveness.boot_id())
+        with s.tx() as db:   # the tab ran a while: a relaunch after it is a new launch, to the second
+            db.execute("UPDATE sessions SET heartbeat_at = ? WHERE id = ?", ("2026-01-01T00:00:00+00:00", i))
+
+    def exit_tab():
+        tab.kill()
+        tab.wait()
+    # each step runs in one of the host's waits; the first change after the exit lands in
+    # the same wait, before the host looks again
+    first = after_exit[0] if after_exit else (lambda s, i: None)
+    steps = iter([lambda: None, lambda: (exit_tab(), first(store, sid)),
+                  *[lambda f=f: f(store, sid) for f in after_exit[1:]]])
+
+    async def wait():
+        await asyncio.sleep(0)
+        next(steps, lambda: None)()
+    h.open_tab, h.shell_wait = open_tab, wait
+
+    async def until(cond):
+        for _ in range(500):
+            if cond():
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError(desc)
+
+    async def go():
+        task = asyncio.create_task(h.run())
+        await until(lambda: store.session(sid)["claude_pid"] == os.getpid())
+        store.command(sid, "shell")
+        if takes_back:
+            await until(lambda: h.client is not None and h.client.connected and store.session(sid)["shell"] is None
+                        and store.session(sid)["claude_pid"] == os.getpid())
+            store.set_parked(sid, True)
+        await asyncio.wait_for(task, 5)
+    try:
+        run(go())
+    finally:
+        if tab.poll() is None:
+            exit_tab()
+    session = store.session(sid)
+    assert h.owner == takes_back, desc
+    if after_exit and after_exit[-1] is other_owner:
+        assert session["claude_pid"] == 1 and session["activity"] == "new owner", \
+            f"{desc}: the new owner's activity isn't overwritten"
+
+
+class LockingStore:
+    """Wraps the store: confirm() fails with a locked database while `locked` is set."""
+
+    def __init__(self, store):
+        self._store, self.locked = store, True
+
+    def __getattr__(self, name):
+        return getattr(self._store, name)
+
+    def confirm(self, claimed):
+        import sqlite3
+        if self.locked:
+            raise sqlite3.OperationalError("database is locked")
+        self._store.confirm(claimed)
+
+
+def test_lock_on_confirm_never_resends(store, sid, monkeypatch):
+    """Sent, then confirm fails on every try: once the claim goes stale and the message is
+    claimed again, it is confirmed, not sent a second time."""
+    monkeypatch.setattr(host_mod, "transcript_exists", lambda sid: True)
+    monkeypatch.setattr(host_mod, "CONFIRM_TRIES", (0,))
+    monkeypatch.setattr("claude_wheelhouse.store.CLAIM_TIMEOUT", -1)   # every claim is stale at once
+    locking = LockingStore(store)
+    h = Host(locking, sid, client_factory=FakeClient, person="doug")
+    run(h.connect())
+    store.send(sid, "hello")
+    run(h.poll())
+    locking.locked = False
+    run(h.poll())
+    assert h.client.queries == ["[wheelhouse] from doug (general):\nhello"]
+    assert store.pending(sid) == []
+
+
+@pytest.mark.parametrize("name, inp, desc", [
+    ("Bash", {"command": "ls"}, "a permission"),
+    ("AskUserQuestion", ONE, "a question from Claude's dialog"),
+])
+def test_answer_to_a_withdrawn_call_is_a_turn(host, store, sid, name, inp, desc):
+    """The person's message reached the call, then Claude Code withdrew it before reading
+    it: the message goes out as the next turn, and the item is closed."""
+    async def go():
+        task = asyncio.create_task(host.can_use_tool(name, inp, ctx()))
+        item = await until_open(store, sid)
+        store.send(sid, "use the other one", item["ref"])
+        await host.poll()   # routed to the waiting call
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await host.poll()
+        return item["ref"]
+    ref = run(go())
+    assert host.client.queries == [f"[wheelhouse] from doug on {ref}:\nuse the other one"], desc
+    assert store.item(sid, ref)["status"] != "open", desc
+
+
+class DyingClient(FakeClient):
+    async def query(self, text):
+        raise ConnectionError("Claude Code exited")
+
+
+def test_send_failure_leaves_a_stop_reason(store, sid, monkeypatch):
+    monkeypatch.setattr(host_mod, "transcript_exists", lambda sid: True)
+    monkeypatch.setattr(host_mod, "POLL_SECONDS", 0.01)
+
+    class Client(StreamClient, DyingClient):
+        pass
+    h = Host(store, sid, client_factory=Client, person="doug")
+    store.send(sid, "hello")
+    run(asyncio.wait_for(h.run(), 5))
+    assert store.session(sid)["activity"] == "stopped: Claude Code exited"
+    assert [m["body"] for m in store.pending(sid)] == ["hello"], "left for the next host"
+
+
+def test_get_input_ref_hides_what_the_host_will_send(store, tmp_path, monkeypatch):
+    from claude_wheelhouse import mcp_server
+    sid = store.create_session(str(tmp_path), runner="sdk")
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_sid", sid)
+    get_input = next(t for t in mcp_server.TOOLS if t.__name__ == "get_input")
+    ref = store.post_item(sid, "question", "q")
+    store.send(sid, "on its way", ref)
+    assert "on its way" not in get_input(ref=ref)

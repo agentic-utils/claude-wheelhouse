@@ -16,10 +16,12 @@ import getpass
 import json
 import os
 import re
+import secrets
 import shutil
 import signal
 import sqlite3
 import sys
+import time
 
 from . import liveness
 from .launch import PROTOCOL_SDK, opening_prompt, transcript_exists
@@ -28,20 +30,24 @@ from .store import SessionGone, Store, db_path, now
 
 POLL_SECONDS = 1.0
 SHELL_POLL_SECONDS = 2.0
-# Claude Code asks this of a session when the person presses Compact; the session's answer
-# becomes /compact's instructions
+CONFIRM_TRIES = (0.1, 0.5, 2.0)   # waits between tries to mark sent messages delivered
+COMPACT_TIMEOUT = 600   # seconds Compact waits for the session's notes
+# asked of a session when the person presses Compact; the notes in its reply, inside the
+# block carrying this request's id, become /compact's instructions
 COMPACT_ASK = ("[wheelhouse] The person pressed Compact in the wheelhouse. If your own instructions say to "
                "do anything before compaction (save a transcript or handoff note, say), do it now. Then "
                "reply with the notes you want carried through compaction (open threads, decisions, file "
-               "paths, refs and next steps, as a terse list) between <keep> and </keep>.")
+               "paths, refs and next steps, as a terse list) between <keep id=\"{nonce}\"> and </keep>.")
 CLOSED_UNANSWERED = "The person closed this in the wheelhouse without answering."
 LOST_ON_RESTART = "The wheelhouse host restarted while this was waiting: Claude Code will ask again if it still needs it."
 # Claude Code withdrew the call it was asking about (an interrupt, or the host letting go for a shell tab)
 CANCELLED = "cancelled: Claude Code withdrew this (interrupted, or handed to a shell tab), so nothing is waiting on it"
 HOST_QUESTION = '{"from": "AskUserQuestion"}'   # an item's answer column marks a question the host asked
-NO_NOTES = "idle · Compact got no notes back, so nothing was compacted"
-# an answer's `n:` markers: at the start, or after a comma, semicolon or line break
-ANSWER_MARK = re.compile(r"(?:^|[,;\n])\s*(\d+)\s*:")
+NO_NOTES = f"idle · Compact got no notes back in {COMPACT_TIMEOUT // 60} minutes, so nothing was compacted"
+AWAITING_NOTES = "idle · Compact is waiting for the session's notes (Interrupt cancels it)"
+# an answer's `n:` or `Qn:` markers: at the start, or after a comma, semicolon or line
+# break, and never a time (`1:30`)
+ANSWER_MARK = re.compile(r"(?:^|[,;\n])\s*[Qq]?(\d+)\s*:(?!\d)")
 
 
 def where(m) -> str:
@@ -61,9 +67,13 @@ def format_turn(msgs, person: str | None = None) -> str:
     return "\n\n".join(parts)
 
 
-def keep_notes(text: str | None) -> str | None:
-    """The notes in a reply's last complete <keep>…</keep> block, or None if it has none."""
+def keep_notes(text: str | None, nonce: str | None = None) -> str | None:
+    """The notes in a reply's last complete <keep>…</keep> block, or None if it has none.
+    With a nonce, only a block carrying that id counts: <keep id="nonce">…</keep>."""
     text = text or ""
+    if nonce is not None:
+        blocks = re.findall(rf"<keep\s+id=[\"']?{re.escape(nonce)}[\"']?\s*>(.*?)</keep>", text, re.DOTALL)
+        return blocks[-1].strip() if blocks else None
     end = text.rfind("</keep>")
     start = text.rfind("<keep>", 0, end) if end >= 0 else -1
     if start < 0:
@@ -142,13 +152,19 @@ class Host:
         self.client = None
         self.waiting: dict[str, asyncio.Future] = {}   # question refs an AskUserQuestion waits on
         self.asking: set[str] = set()   # permission refs a can_use_tool call waits on
+        self.routed: dict[str, str] = {}   # a message poll handed to a waiting call, by ref
+        # answers handed to a call Claude Code then withdrew: they go out as the next turn
+        self.orphans: list[dict] = []
+        self.delivered: set[int] = set()   # ids of messages this host has passed on
         # turns sent and not yet finished. Claude Code also starts turns by itself (a
         # background task finishing), so a finished turn never takes this below zero.
         self.pending = 0
-        # Compact asked for the notes: how many more turns may end before the reply holding
-        # <keep> does (those queued ahead of the ask, and one Claude Code starts itself)
-        self.compacting = 0
+        # Compact's request: the id its notes come back under, and when it was asked
+        self.compact_nonce: str | None = None
+        self.compact_asked = 0.0
+        self.compact_notes: str | None = None   # seen in a reply, sent as /compact once the turn ends
         self.compacted_from = None   # tokens before the last compaction, until its turn ends
+        self.owner = False   # registered as the session's process: only then does it write the activity
         self.stopping = False
         self.stop_reason = ""
 
@@ -200,24 +216,26 @@ class Host:
     async def can_use_tool(self, name: str, inp: dict, ctx):
         """Claude Code waits on this. It cancels the call when it withdraws the request (an
         interrupt, or the host disconnecting for a shell tab): the item then closes, so it
-        never shows buttons nothing is waiting on."""
+        never shows buttons nothing is waiting on, and a message the person had sent on it
+        goes out as a turn instead of into a denial nobody reads."""
         if name == "AskUserQuestion":
             return await self.ask_question(inp)
         from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
         ref = self.store.post_item(self.sid, "permission", tool_summary(name, inp), permission_body(name, inp, ctx))
         self.store.set_activity(self.sid, f"waiting on {ref}")
         self.asking.add(ref)
-        item = None
         try:
             while True:
                 item = self.store.item(self.sid, ref)
                 if item is None or item["status"] != "open":
                     break
                 await asyncio.sleep(POLL_SECONDS / 2)
+        except asyncio.CancelledError:
+            self.withdrawn(ref, "permission")
+            raise
         finally:
             self.asking.discard(ref)
-            if item is not None and item["status"] == "open":   # cancelled while waiting
-                self.close_quietly(ref, "permission")
+            self.routed.pop(ref, None)
         self.store.set_activity(self.sid, "thinking")
         answer = json.loads(item["answer"] or "{}") if item else {}
         if answer.get("decision") in ("allow", "always"):
@@ -235,15 +253,29 @@ class Host:
         self.waiting[ref] = fut
         try:
             reply = await fut
+        except asyncio.CancelledError:
+            self.withdrawn(ref, "question")
+            raise
         finally:
             self.waiting.pop(ref, None)
-            if fut.cancelled() or not fut.done():   # cancelled while waiting (which cancels fut too)
-                self.close_quietly(ref, "question")
+            self.routed.pop(ref, None)
         if reply is None:
             return PermissionResultDeny(message=CLOSED_UNANSWERED)
         self.store.reply(self.sid, ref, "Passed to Claude as the answer.", status="answered")
         self.store.set_activity(self.sid, "thinking")
         return PermissionResultAllow(updated_input={**inp, "answers": question_answers(inp, reply)})
+
+    def withdrawn(self, ref: str, kind: str) -> None:
+        """Claude Code withdrew the call waiting on this item: close it if still open, and if
+        the person's message had already been handed to the call, send it as a turn."""
+        if ref in self.routed:
+            self.orphans.append({"body": self.routed[ref], "item_ref": ref, "kind": None})
+        try:
+            item = self.store.item(self.sid, ref)
+        except sqlite3.OperationalError:
+            item = None
+        if item is None or item["status"] == "open" or ref in self.routed:
+            self.close_quietly(ref, kind)
 
     def close_quietly(self, ref: str, kind: str, why: str = CANCELLED) -> None:
         """Close a permission or host question nothing will answer, saying why. Never raises:
@@ -258,57 +290,86 @@ class Host:
 
     # the store, polled
 
+    async def confirm(self, msgs) -> None:
+        """Mark messages delivered, retrying a locked database. They are remembered first, so
+        if every try fails, a later claim of the same messages confirms them, never resends."""
+        self.delivered.update(m["id"] for m in msgs)
+        for wait in (*CONFIRM_TRIES, None):
+            try:
+                self.store.confirm(msgs)
+                return
+            except sqlite3.OperationalError as e:
+                if wait is None:
+                    print(f"{now()} {e}: delivery not recorded, will confirm on the next claim",
+                          file=sys.stderr, flush=True)
+                    return
+                await asyncio.sleep(wait)
+
     async def poll(self) -> bool:
         """One pass: the person's messages, End and Park requests, a host command. False once
-        the session has gone or parked, which ends the host."""
+        the session has gone or parked, or the host has let go of it, which ends the host."""
         session = self.store.session(self.sid)
         if session is None or session["parked"]:
             return False
         msgs = self.store.claim(self.sid)
-        turn, routed = [], []
+        again = [m for m in msgs if m["id"] in self.delivered]   # passed on, but never marked
+        turn, routed = [], list(again)
         for m in msgs:
+            if m["id"] in self.delivered:
+                continue
             ref = m["item_ref"]
             if ref in self.waiting and not self.waiting[ref].done():
                 self.waiting[ref].set_result(m["body"])
+                self.routed[ref] = m["body"]
                 routed.append(m)
                 continue
             if ref in self.asking:
                 try:
                     self.store.answer_permission(self.sid, ref, "deny", m["body"])
+                    self.routed[ref] = m["body"]
                     routed.append(m)
                     continue
                 except KeyError:   # answered with a button meanwhile: the message is a turn
                     pass
             turn.append(m)
-        self.store.confirm(routed)
+        await self.confirm(routed)
         # closed unanswered: after the messages, so a reply sent just before X still counts
         for ref, fut in list(self.waiting.items()):
             item = self.store.item(self.sid, ref)
             if (item is None or item["status"] == "closed") and not fut.done():
                 fut.set_result(None)
-        if turn:
+        orphans, self.orphans = self.orphans, []
+        if turn or orphans:
             try:
-                await self.turn(format_turn(turn, self.person))
+                await self.turn(format_turn(orphans + turn, self.person))
             except BaseException:   # not sent: left for the next host to deliver
                 self.store.release(turn)
+                self.orphans = orphans + self.orphans
                 raise
-            self.store.confirm(turn)
+            await self.confirm(turn)
         for what, text in REQUEST_TEXT.items():
             asked = session[f"{what}_requested_at"]
             if asked and session[f"{what}_told_at"] != asked and self.store.tell_request(self.sid, what, asked):
                 await self.turn(text)
+        if self.compact_nonce and time.monotonic() - self.compact_asked > COMPACT_TIMEOUT:
+            self.end_compact()
+            self.store.set_activity(self.sid, NO_NOTES)
         command = self.store.take_command(self.sid)
         if command == "interrupt":
             await self.client.interrupt()
-            self.compacting = 0
+            self.end_compact()
             self.store.set_activity(self.sid, "interrupted")
         elif command == "compact":
-            await self.turn(COMPACT_ASK)
-            self.compacting = self.pending + 1
+            nonce = secrets.token_hex(4)
+            await self.turn(COMPACT_ASK.format(nonce=nonce))
+            self.compact_nonce, self.compact_asked, self.compact_notes = nonce, time.monotonic(), None
             self.store.set_activity(self.sid, "compacting: collecting notes")
         elif command == "shell":
             await self.shell()
-        return True
+        return not self.stopping
+
+    def end_compact(self) -> None:
+        self.compact_nonce, self.compact_notes = None, None
 
     # Claude Code's messages
 
@@ -319,6 +380,8 @@ class Host:
             try:
                 if isinstance(m, AssistantMessage):
                     for b in m.content:
+                        if isinstance(b, TextBlock) and self.compact_nonce:   # the last block wins
+                            self.compact_notes = keep_notes(b.text, self.compact_nonce) or self.compact_notes
                         if isinstance(b, ToolUseBlock):
                             self.store.set_activity(self.sid, f"running {tool_summary(b.name, b.input or {})}")
                         elif isinstance(b, ThinkingBlock):
@@ -337,18 +400,17 @@ class Host:
                 print(f"{now()} {e}: activity not recorded", file=sys.stderr, flush=True)
 
     async def finished(self, m) -> None:
-        """A turn ended. The reply with the notes to keep hands them to /compact."""
-        if self.compacting:
-            notes = None if m.is_error else keep_notes(m.result)
+        """A turn ended. Once a reply has carried Compact's notes, they go to /compact,
+        whichever turn they came in: one queued ahead of the ask, an error in another turn
+        or a turn Claude Code started itself doesn't lose them."""
+        if self.compact_nonce:
+            notes = self.compact_notes
+            if notes is None and not m.is_error:
+                notes = keep_notes(m.result, self.compact_nonce)
             if notes is not None:
-                self.compacting = 0
+                self.end_compact()
                 await self.turn(f"/compact {notes}".rstrip())
                 self.store.set_activity(self.sid, "compacting")
-                return
-            # all the turns sent have ended without notes: stop looking, and say so
-            self.compacting = 0 if m.is_error or not self.pending else self.compacting - 1
-            if not self.compacting and not self.pending and not m.is_error:
-                self.store.set_activity(self.sid, NO_NOTES)
                 return
         tokens = await self.context()
         if not self.pending:
@@ -356,6 +418,8 @@ class Host:
                 activity = f"error: {(m.result or m.subtype)[:80]}"
             elif self.compacted_from is not None:
                 activity = f"idle · compacted {self.compacted_from // 1000}k → {(tokens or 0) // 1000}k tokens"
+            elif self.compact_nonce:
+                activity = AWAITING_NOTES
             else:
                 activity = "idle"
             self.store.set_activity(self.sid, activity)
@@ -377,12 +441,17 @@ class Host:
 
     async def shell(self) -> None:
         """Give the session to an interactive Claude Code tab, wait for the tab to exit, then
-        take it back. One process per session: the client is gone before the tab opens."""
+        take it back. One process per session: the client is gone before the tab opens.
+
+        Another host taking the session meanwhile (a Restore once the tab has exited) clears
+        the shell flag as it starts, and holds the registration: either way this host lets
+        go without a word, since the session's activity line is the new owner's."""
         self.store.set_activity(self.sid, "opening a shell tab")
         if self.pending:
             await self.client.interrupt()
         await self.disconnect()
         self.store.unregister(self.sid)
+        self.owner = False
         self.store.set_shell(self.sid, "tab")
         try:
             (self.open_tab or default_open_tab)(self.store, self.sid)
@@ -390,31 +459,34 @@ class Host:
             print(f"{now()} shell tab failed: {e}", file=sys.stderr, flush=True)
         self.store.set_activity(self.sid, "in a shell tab")
         while True:   # the tab registers itself while "starting"; dead once it has exited
-            await asyncio.sleep(SHELL_POLL_SECONDS)
+            await self.shell_wait()
             session = self.store.session(self.sid)
-            if session is None or session["parked"]:
+            if session is None or session["parked"] or session["shell"] != "tab":
                 self.stopping = True
                 return
             if liveness.status(session) == "dead":
                 break
-        if not self.register():   # something else (a Restore) took the session meanwhile
+        if not self.register():   # something else took the session between those two reads
             self.stopping = True
-            self.stop_reason = "stopped: another process took the session back from the shell tab"
             return
         self.store.set_shell(self.sid, None)
         self.pending = 0
-        self.compacting = 0
+        self.end_compact()
         self.reader.cancel()
         self.deny_stale()
         await self.connect()
         self.reader = asyncio.create_task(self.read())
 
+    async def shell_wait(self) -> None:
+        await asyncio.sleep(SHELL_POLL_SECONDS)
+
     # lifecycle
 
     def register(self) -> bool:
         pid = os.getpid()
-        return self.store.register_if_free(self.sid, pid, liveness.start_time(pid), liveness.boot_id(),
-                                           liveness.is_alive)
+        self.owner = self.store.register_if_free(self.sid, pid, liveness.start_time(pid), liveness.boot_id(),
+                                                 liveness.is_alive)
+        return self.owner
 
     async def disconnect(self) -> None:
         if self.client is not None:
@@ -456,12 +528,15 @@ class Host:
                     print(f"{now()} {e}: retrying", file=sys.stderr, flush=True)
                 except SessionGone:   # force-ended mid-pass
                     break
+                except Exception as e:   # Claude Code gone mid-send, say: stop, saying why
+                    self.stop_reason = f"stopped: {e}"[:120]
+                    break
                 await asyncio.sleep(POLL_SECONDS)
         finally:
             self.reader.cancel()
             await self.disconnect()
             try:
-                if self.store.session(self.sid) is not None:
+                if self.owner and self.store.session(self.sid) is not None:
                     self.store.set_activity(self.sid, self.stop_reason)
             except sqlite3.OperationalError:
                 pass
