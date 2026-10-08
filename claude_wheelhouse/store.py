@@ -32,12 +32,13 @@ INITIAL_STATUS = {"task": "todo", "question": "open", "agent": "running", "decis
 CLOSED = {"done", "dropped", "closed", "failed", "allowed", "denied"}
 # what a decision records besides its title (what was decided): post_item's keyword name, label
 DECISION_FIELDS = (("alternative", "Alternative"), ("why", "Why"), ("reverse", "To reverse"))
-# Bump when a change means a session still running older code (its MCP server and monitor
-# keep the code they started with) would mishandle the store: the wheelhouse then shows
-# it as needing a relaunch. 2: queued answers (draft messages) that older code would deliver.
+# Bump when a session still running older code (its MCP server and monitor keep the code
+# they started with) would mishandle the store or miss new behaviour: the wheelhouse then
+# shows it as needing a relaunch. 2: queued answers (draft messages) that older code would deliver.
 # 3: reply declares a question's status. 4: decisions. 5: SDK-hosted sessions and permission items.
 # 6: decisions listed in a report are posted as items.
 PROTOCOL_VERSION = 6
+DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.
 DEFAULT_MODE = "queued"
@@ -165,8 +166,14 @@ def default_runner() -> str:
 
 def needs_relaunch(session) -> bool:
     """The session's MCP server and monitor run code older than this store expects (or
-    stamp no version at all): it must be relaunched before it can take queued answers."""
+    stamp no version at all): a relaunch picks up the new code."""
     return (session["code_version"] or 0) < PROTOCOL_VERSION
+
+
+def can_queue(session) -> bool:
+    """The session's code holds a queued answer until it is sent. Older code (or none
+    stamped) would deliver it at once, so the wheelhouse sends instead."""
+    return (session["code_version"] or 0) >= DRAFTS_VERSION
 
 
 def renamed_since(session, at: str) -> bool:

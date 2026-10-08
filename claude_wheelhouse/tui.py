@@ -36,7 +36,8 @@ from textual.widgets import (
 )
 
 from . import adopt, api, emoji, launch, liveness, transcript, tutorial
-from .store import CLOSED, SessionGone, Store, default_runner, mode, needs_relaunch, renamed_since, runner
+from .store import (CLOSED, SessionGone, Store, can_queue, default_runner, mode, needs_relaunch, renamed_since,
+                    runner)
 
 MATRIX = "#00ff41"
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
@@ -1049,8 +1050,13 @@ class WheelhouseApp(App):
         return self.statuses.get(sid) in RUNNING
 
     def stale(self, s) -> bool:
-        """Running older wheelhouse code, which would deliver a queued answer at once."""
+        """Running older wheelhouse code: a relaunch picks up the new code."""
         return self.running(s["id"]) and needs_relaunch(s)
+
+    def sends_now(self, s) -> bool:
+        """Running code from before queued answers, which would deliver one at once: so
+        Ctrl+Enter sends, whatever the mode."""
+        return self.running(s["id"]) and not can_queue(s)
 
     @staticmethod
     def pending(s) -> str | None:
@@ -1251,11 +1257,11 @@ class WheelhouseApp(App):
         total = sum(x["drafts"] for x in self.sessions)
         if s is None:
             bar.show("mode", "Mode", True)
-        elif self.stale(s):   # its old monitor would deliver a draft at once anyway
+        elif self.sends_now(s):   # its old monitor would deliver a draft at once anyway
             bar.show("mode", "Sends now: needs relaunch", True)
         else:
             bar.show("mode", f"Mode: {mode(s).capitalize()}", False)
-        sends = "send" if s is not None and (mode(s) == "immediate" or self.stale(s)) else "queue"
+        sends = "send" if s is not None and (mode(s) == "immediate" or self.sends_now(s)) else "queue"
         for h in self.screen.query(Hint):
             h.set_base(hint(sends))
         n = s["drafts"] if s else 0
@@ -1528,7 +1534,7 @@ class WheelhouseApp(App):
         if mode(s) == "immediate":
             self.store.send(target[0], text, target[1])
             self.notify(f"sent to {aimed(target)}")
-        elif self.stale(s):   # its old monitor would deliver a draft at once anyway
+        elif self.sends_now(s):   # its old monitor would deliver a draft at once anyway
             self.store.send(target[0], text, target[1])
             self.notify(f"sent to {aimed(target)} now: that session runs older wheelhouse code, "
                         "so it can't queue until it's relaunched", severity="warning")

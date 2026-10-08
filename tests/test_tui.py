@@ -5,6 +5,7 @@ from rich.text import Text
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, TextArea
 
 from claude_wheelhouse import launch, transcript
+from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.tui import (MATRIX, VOICE, WheelhouseApp, Choice, Confirm, Folders, Hint, SendBar, ThreadView,
                                    Transcript, render)
 
@@ -416,21 +417,26 @@ async def test_end_names_the_queued_answers_it_discards(store, sid):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("stamped, label, queued, desc", [
-    (True, "live", 1, "a session on current code queues the answer"),
-    (False, "live · needs relaunch", 0, "a session on older code would deliver a draft at once, so it's sent now"),
+@pytest.mark.parametrize("version, label, bar, queued, desc", [
+    (PROTOCOL_VERSION, "live", "Mode: Queued", 1, "a session on current code queues the answer"),
+    (PROTOCOL_VERSION - 1, "live · needs relaunch", "Mode: Queued", 1,
+     "one on older code that holds queued answers still queues: a relaunch only brings the new code"),
+    (1, "live · needs relaunch", "Sends now: needs relaunch", 0,
+     "one from before queued answers would deliver one at once, so it's sent now"),
+    (None, "live · needs relaunch", "Sends now: needs relaunch", 0, "as is one that never stamped its version"),
 ])
-async def test_a_session_on_older_code_cannot_queue(store, sid, monkeypatch, stamped, label, queued, desc):
+async def test_a_session_on_older_code_cannot_queue(store, sid, monkeypatch, version, label, bar, queued, desc):
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
-    if stamped:
-        store.mark_version(sid)
+    store.db.execute("UPDATE sessions SET code_version = ?", (version,))
     q = store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         assert str(app.query_one("#session-table", DataTable).get_row_at(0)[0]) == label, desc
         app.query_one("#items", DataTable).move_cursor(row=0)
+        await pilot.pause()
+        assert str(app.query_one("#mode", Button).label) == bar, desc
         app.query_one("#answer", TextArea).text = "SQLite"
         await pilot.press("ctrl+enter")
         await pilot.pause()
@@ -1214,16 +1220,16 @@ def test_hosted_busy(activity, busy, desc):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("mode, stale, expected, desc", [
+@pytest.mark.parametrize("mode, sends_now, expected, desc", [
     (None, False, "Ctrl+Enter to queue", "a new session queues"),
     ("immediate", False, "Ctrl+Enter to send", "immediate mode sends"),
-    (None, True, "Ctrl+Enter to send", "a session on older code sends whatever its mode"),
+    (None, True, "Ctrl+Enter to send", "a session from before queued answers sends whatever its mode"),
 ])
-async def test_the_hint_says_what_ctrl_enter_does(store, sid, mode, stale, expected, desc, monkeypatch):
+async def test_the_hint_says_what_ctrl_enter_does(store, sid, mode, sends_now, expected, desc, monkeypatch):
     if mode:
         store.set_mode(sid, mode)
-    if stale:
-        monkeypatch.setattr(WheelhouseApp, "stale", lambda self, s: True)
+    if sends_now:
+        monkeypatch.setattr(WheelhouseApp, "sends_now", lambda self, s: True)
     store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:

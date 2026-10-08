@@ -157,9 +157,10 @@ Where the build differs from the design above:
   delivers a draft at once, and it keeps its old code until the session restarts. Each
   session row now carries `code_version`, stamped with `PROTOCOL_VERSION` when the
   session registers, by the MCP server's heartbeat and when the monitor starts. A running
-  session with an older or missing stamp shows "needs relaunch", and Ctrl+Enter sends to
-  it at once (with a warning) instead of queuing. Bump `PROTOCOL_VERSION` whenever older
-  running code would mishandle the store.
+  session with an older or missing stamp shows "needs relaunch". Only one stamped before
+  drafts (below `DRAFTS_VERSION`, 2, or unstamped) has Ctrl+Enter send to it at once
+  (with a warning) instead of queuing: later versions all hold drafts. Bump
+  `PROTOCOL_VERSION` whenever older running code would mishandle the store.
 - **Unsent text and refreshes.** Typed text is kept per row and swapped only when the
   person moves the highlight. The once-a-second refresh changes table cells in place
   when the rows are the same, and when it does rebuild a table it posts no

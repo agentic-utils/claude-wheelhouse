@@ -24,9 +24,10 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   reply declares it, `open` while it still needs you or `answered`. Until it replies the
   question shows as `⏳` (dimmed), awaiting the session. Answers reach the session
   as a notification, even when it's idle. A running session started from an older
-  wheelhouse shows "needs relaunch" (`⟳` in the inbox list): it can't hold queued answers,
-  so Ctrl+Enter sends to it straight away, whatever its mode, until you `/exit` it and
-  restore or adopt it again.
+  wheelhouse shows "needs relaunch" (`⟳` in the inbox list): `/exit` it and restore or
+  adopt it again to give it the new wheelhouse code. It still queues answers as usual,
+  unless it is old enough to predate queued answers: then it can't hold them, so
+  Ctrl+Enter sends to it straight away, whatever its mode, until it's relaunched.
 - **Decisions.** If your own instructions let a session decide some things without asking
   you, it reports each one as a decision (`D1`): what it decided, the alternative, why, and
   how to reverse it. Decisions block nothing. Each session counts its unseen ones (the `D`
