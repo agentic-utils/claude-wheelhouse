@@ -146,29 +146,60 @@ def title(name):
     return {"type": "custom-title", "customTitle": name, "sessionId": "abc"}
 
 
-def test_title_watch_follows_renames_reading_only_what_is_new(tmp_path):
+def renamed(name, at=AT):
+    """What /rename prints, after its custom-title record."""
+    return {"type": "system", "subtype": "local_command", "timestamp": at,
+            "content": f"<local-command-stdout>Session renamed to: {name}</local-command-stdout>"}
+
+
+def rename(name, at=AT):
+    return [title(name), renamed(name, at)]
+
+
+LATER = "2026-10-07T22:00:00.000Z"
+
+
+@pytest.mark.parametrize("recs, expected, desc", [
+    ([user("hi")], None, "never renamed"),
+    ([title("demo"), user("hi"), title("demo")], None, "a launch's -n and Claude Code's repeats of it aren't a rename"),
+    (rename("Columbo check"), ("2026-10-07T21:30:00.000000+00:00", "Columbo check"), "a /rename, with its time"),
+    (rename("a") + [user("hi"), title("a")] + rename("b", LATER), ("2026-10-07T22:00:00.000000+00:00", "b"),
+     "the latest one"),
+    (rename("a") + rename("a", LATER), ("2026-10-07T22:00:00.000000+00:00", "a"), "one back to the same name is newer"),
+    ([renamed("login-successful")], ("2026-10-07T21:30:00.000000+00:00", "login-successful"),
+     "its custom-title record cut off the tail: the printed name"),
+])
+def test_title_watch_finds_the_latest_rename(tmp_path, recs, expected, desc):
     folder = tmp_path / "-home-u-repo"
     folder.mkdir()
-    watch = transcript.TitleWatch("abc", projects=tmp_path)
+    (folder / "abc.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
+    got = transcript.TitleWatch("abc", projects=tmp_path).read()
+    assert (got and (got.at, got.title)) == expected, desc
+
+
+def test_title_watch_reads_only_what_is_new(tmp_path):
+    folder = tmp_path / "-home-u-repo"
+    folder.mkdir()
+    watch = transcript.TitleWatch("abc", projects=tmp_path, cwd="/home/u/repo")
     assert watch.read() is None, "no transcript yet"
     path = folder / "abc.jsonl"
     path.write_text(json.dumps(user("hi")) + "\n")
     assert watch.read() is None, "never renamed"
     with open(path, "a") as f:
-        f.write(json.dumps(title("Columbo check")) + "\n" + json.dumps(user("more")) + "\n")
-    assert watch.read() == "Columbo check", "a /rename"
+        f.write("".join(json.dumps(r) + "\n" for r in rename("Columbo check")))
+    assert watch.read().title == "Columbo check", "a /rename"
     with open(path, "a") as f:
-        f.write(json.dumps(title("Second")))   # no newline yet: still being written
-    assert watch.read() == "Columbo check", "a half-written record waits"
+        f.write(json.dumps(title("Second")) + "\n" + json.dumps(renamed("Second", LATER)))   # still being written
+    assert watch.read().title == "Columbo check", "a half-written record waits"
     with open(path, "a") as f:
         f.write("\n")
-    assert watch.read() == "Second", "then counts once complete"
+    assert watch.read().title == "Second", "then counts once complete"
 
 
 def test_title_watch_reads_the_tail_of_a_long_transcript(tmp_path, monkeypatch):
-    monkeypatch.setattr(transcript, "TAIL_BYTES", 400)
+    monkeypatch.setattr(transcript, "TAIL_BYTES", 600)
     folder = tmp_path / "-home-u-repo"
     folder.mkdir()
-    recs = [title("old")] + [user(f"prompt {i}") for i in range(20)] + [title("new"), user("last")]
+    recs = rename("old") + [user(f"prompt {i}") for i in range(20)] + rename("new") + [user("last")]
     (folder / "abc.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
-    assert transcript.TitleWatch("abc", projects=tmp_path).read() == "new"
+    assert transcript.TitleWatch("abc", projects=tmp_path).read().title == "new"

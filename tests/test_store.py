@@ -1,6 +1,6 @@
 import pytest
 
-from claude_wheelhouse.store import Store
+from claude_wheelhouse.store import SessionGone, Store
 
 
 def test_pragmas_make_every_commit_durable(store):
@@ -275,15 +275,30 @@ def test_decisions_seen_before_they_stayed_are_closed_once(db_file, sid, store):
     assert Store(db_file).item(sid, fresh)["status"] == "seen", "the migration runs once"
 
 
+def minute(m: int) -> str:
+    return f"2026-10-09T10:{m:02d}:00.000000+00:00"
+
+
 @pytest.mark.parametrize("steps, expected, desc", [
-    ([("take", "Columbo check")], ("Columbo check", True), "a /rename is taken"),
-    ([("take", "Columbo check"), ("rename", "mine"), ("take", "Columbo check")], ("mine", False),
-     "a wheelhouse rename since isn't undone by the transcript's older title"),
-    ([("take", "a"), ("rename", "mine"), ("take", "b")], ("b", True), "a newer /rename wins"),
-    ([("take", "demo")], ("demo", True), "the launch's own -n: recorded, the name unchanged"),
+    ([(20, "take", "Columbo check")], ("Columbo check", True), "a /rename made since the session was created"),
+    ([(5, "take", "old")], ("demo", False), "one from before it was created (adopted under a new name) isn't taken"),
+    ([(20, "rename", "mine"), (15, "take", "old")], ("mine", False),
+     "a rename in the wheelhouse isn't undone by an older /rename"),
+    ([(20, "take", "a"), (30, "rename", "mine"), (40, "take", "b")], ("b", True), "a newer /rename wins"),
+    ([(20, "take", "a"), (30, "rename", "mine"), (40, "take", "a")], ("a", True),
+     "so does a newer /rename back to the name it had"),
+    ([(20, "take", "a"), (20, "take", "a")], ("a", False), "the same /rename read again changes nothing"),
 ])
-def test_take_title(store, sid, steps, expected, desc):
+def test_the_most_recent_rename_wins(store, tmp_path, monkeypatch, steps, expected, desc):
+    monkeypatch.setattr("claude_wheelhouse.store.now", lambda: minute(10))
+    sid = store.create_session(str(tmp_path), name="demo")
     took = None
-    for step, value in steps:
-        took = store.take_title(sid, value) if step == "take" else store.rename(sid, value)
+    for at, step, value in steps:
+        monkeypatch.setattr("claude_wheelhouse.store.stamp", lambda at=at: minute(at))
+        took = store.take_title(sid, minute(at), value) if step == "take" else store.rename(sid, value)
     assert (store.session(sid)["name"], took) == expected, desc
+
+
+def test_renaming_a_session_that_has_gone_says_so(store):
+    with pytest.raises(SessionGone):
+        store.rename("gone", "x")

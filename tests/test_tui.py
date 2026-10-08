@@ -1182,7 +1182,7 @@ async def test_host_buttons(store, tmp_path, monkeypatch, runner_, live, shown, 
 ])
 async def test_new_session_runner(store, tmp_path, monkeypatch, tick, runner_, desc):
     launched = []
-    monkeypatch.setattr(launch, "open_session", lambda s, i: launched.append(s.session(i)["runner"]))
+    monkeypatch.setattr(launch, "open_session", lambda s, i, watch=None: launched.append(s.session(i)["runner"]))
     monkeypatch.setenv("WHEELHOUSE_RUNNER", "sdk")
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
@@ -1319,8 +1319,20 @@ async def test_rename_a_session(store, sid, typed, keys, expected, desc):
     assert store.session(sid)["name"] == expected, desc
 
 
+def renamed_in_claude_code(name, at):
+    return "".join(json.dumps(r) + "\n" for r in [
+        {"type": "custom-title", "customTitle": name},
+        {"type": "system", "subtype": "local_command", "timestamp": at,
+         "content": f"<local-command-stdout>Session renamed to: {name}</local-command-stdout>"}])
+
+
 @pytest.mark.anyio
-async def test_a_rename_in_claude_code_is_picked_up(store, sid, tmp_path, monkeypatch):
+@pytest.mark.parametrize("renamed_first, at, expected, desc", [
+    (False, "2999-01-01T00:00:00.000Z", "Columbo check", "a /rename made in Claude Code is picked up"),
+    (True, "2000-01-01T00:00:00.000Z", "mine", "a rename in the wheelhouse before the first look keeps its name"),
+])
+async def test_a_rename_in_claude_code_is_picked_up(store, sid, tmp_path, monkeypatch, renamed_first, at,
+                                                    expected, desc):
     folder = tmp_path / "projects/-home-u-repo"
     folder.mkdir(parents=True)
     monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
@@ -1329,9 +1341,36 @@ async def test_a_rename_in_claude_code_is_picked_up(store, sid, tmp_path, monkey
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        path.write_text(json.dumps({"type": "custom-title", "customTitle": "Columbo check"}) + "\n")
+        if renamed_first:
+            app.rename(sid, "mine")
+        path.write_text(renamed_in_claude_code("Columbo check", at))
         for _ in range(5):   # a look every TITLE_TICKS refreshes
             app.refresh_data()
+        await app.workers.wait_for_complete()
         await pilot.pause()
-        assert store.session(sid)["name"] == "Columbo check"
-        assert str(app.query_one("#session-list", DataTable).get_row_at(0)[1]) == "Columbo check"
+        assert store.session(sid)["name"] == expected, desc
+        assert str(app.query_one("#session-list", DataTable).get_row_at(0)[1]) == expected, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("ends, desc", [
+    ("while the dialog is open", "renaming a session that ended while its dialog was open"),
+    ("before the button", "pressing Rename on a session that has just ended"),
+])
+async def test_renaming_a_session_that_has_gone_says_so(store, sid, monkeypatch, ends, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        if ends == "before the button":
+            store.end(sid)
+            monkeypatch.setattr(app, "current_session", lambda: sid)   # the row still showing it
+        await pilot.click("#rename")
+        await pilot.pause()
+        if ends == "while the dialog is open":
+            store.end(sid)
+            app.screen.query_one("#new-name", Input).value = "Columbo check"
+            await pilot.press("enter")
+            await pilot.pause()
+        assert app.is_running and store.session(sid) is None, desc
+        assert [n.message for n in app._notifications] == ["session no longer exists"], desc

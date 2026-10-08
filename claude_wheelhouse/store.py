@@ -120,7 +120,7 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "runner", "TEXT"), ("sessions", "activity", "TEXT NOT NULL DEFAULT ''"),
                  ("sessions", "host_command", "TEXT"), ("sessions", "shell", "TEXT"),
                  ("sessions", "context_tokens", "INTEGER"), ("sessions", "context_max", "INTEGER"),
-                 ("items", "answer", "TEXT"), ("sessions", "transcript_title", "TEXT")]
+                 ("items", "answer", "TEXT"), ("sessions", "renamed_at", "TEXT")]
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
 REQUESTS = ("end", "park")   # what the wheelhouse can ask a running session to do
 CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print is retaken
@@ -167,6 +167,13 @@ def needs_relaunch(session) -> bool:
     """The session's MCP server and monitor run code older than this store expects (or
     stamp no version at all): it must be relaunched before it can take queued answers."""
     return (session["code_version"] or 0) < PROTOCOL_VERSION
+
+
+def renamed_since(session, at: str) -> bool:
+    """Whether a rename at `at` (an ISO time) is newer than the session's last one: its
+    last rename in the wheelhouse or /rename taken, else its creation."""
+    last = session["renamed_at"] or session["created_at"]
+    return datetime.fromisoformat(at) > datetime.fromisoformat(last)
 
 
 def db_path() -> Path:
@@ -319,16 +326,23 @@ class Store:
         )
 
     def rename(self, sid: str, name: str) -> None:
+        """A rename in the wheelhouse. Stamped, so a /rename made in Claude Code before it
+        doesn't undo it, and one made after it wins (take_title)."""
         with self.tx() as db:
-            db.execute("UPDATE sessions SET name = ? WHERE id = ?", (name, sid))
+            self._require(db, sid)
+            db.execute("UPDATE sessions SET name = ?, renamed_at = ? WHERE id = ?", (name, stamp(), sid))
 
-    def take_title(self, sid: str, title: str) -> bool:
-        """The name the session's transcript records (Claude Code's /rename, or a launch's
-        -n): taken as the session's name when it changes there, so a rename made in the
-        wheelhouse since isn't undone by the transcript's older one. True if renamed."""
+    def take_title(self, sid: str, at: str, title: str) -> bool:
+        """A /rename made in Claude Code at `at` (transcript.TitleWatch): taken as the
+        session's name if it is newer than the session's last rename, wherever that was
+        made, or than its creation (an adoption under a new name). The most recent rename
+        wins. True if the name changed."""
         with self.tx() as db:
-            return db.execute("UPDATE sessions SET name = ?, transcript_title = ? WHERE id = ? "
-                              "AND transcript_title IS NOT ?", (title, title, sid, title)).rowcount > 0
+            row = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if row is None or not renamed_since(row, at):
+                return False
+            db.execute("UPDATE sessions SET name = ?, renamed_at = ? WHERE id = ?", (title, at, sid))
+        return row["name"] != title
 
     def set_synopsis(self, sid: str, text: str) -> None:
         with self.tx() as db:

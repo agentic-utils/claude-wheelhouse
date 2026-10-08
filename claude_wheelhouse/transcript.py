@@ -15,7 +15,9 @@ without the `[wheelhouse] from <person> (general):` prefix.
 
 import json
 import re
+import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECTS = Path.home() / ".claude/projects"
@@ -47,8 +49,18 @@ class Entry:
     at: str = ""  # ISO timestamp, UTC
 
 
-def locate(sid: str, projects: Path | None = None) -> Path | None:
-    return next((projects or PROJECTS).glob(f"*/{sid}.jsonl"), None)
+def project_folder(cwd: str) -> str:
+    """How Claude Code names a project's transcript folder."""
+    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+
+
+def locate(sid: str, projects: Path | None = None, cwd: str | None = None) -> Path | None:
+    """The session's transcript: in its directory's project folder if cwd is given and it
+    is there, else wherever it is."""
+    projects = projects or PROJECTS
+    if cwd and (path := projects / project_folder(cwd) / f"{sid}.jsonl").is_file():
+        return path
+    return next(projects.glob(f"*/{sid}.jsonl"), None)
 
 
 def tail_records(path: Path, limit: int = TAIL_BYTES) -> list[dict]:
@@ -191,44 +203,78 @@ def markdown(name: str, tab: str, recs: list[dict] | None, queued=()) -> str:
     return "\n\n".join(md for _, md in blocks(name, tab, recs, queued))
 
 
-class TitleWatch:
-    """The latest name a session's transcript records: Claude Code writes a custom-title
-    record for /rename and for a launch's -n, and writes it again as the conversation goes
-    on. The tail is read once, then only what has been appended since."""
+@dataclass
+class Rename:
+    at: str      # when it was made, ISO, UTC
+    title: str
 
-    def __init__(self, sid: str, projects: Path | None = None):
-        self.sid, self.projects = sid, projects
+
+RENAMED = "Session renamed to: "   # what Claude Code's /rename prints, recorded with its time
+
+
+class TitleWatch:
+    """The latest /rename made in Claude Code, from the session's transcript. /rename writes
+    a custom-title record with the new name, then a local-command record with its output,
+    "Session renamed to: …", and the time. A launch's -n writes a custom-title record too,
+    and Claude Code writes the name again as the conversation goes on, but neither prints
+    that output: so only a /rename counts, and one back to the same name counts again. The
+    tail is read once, then only what has been appended since. Thread-safe: the app's worker
+    and a launch share one watch."""
+
+    def __init__(self, sid: str, projects: Path | None = None, cwd: str | None = None):
+        self.sid, self.projects, self.cwd = sid, projects, cwd
         self.path: Path | None = None
         self.offset: int | None = None
-        self.title: str | None = None
+        self.title: str | None = None   # the latest custom-title record's
+        self.renamed: Rename | None = None
+        self.lock = threading.Lock()
 
-    def read(self) -> str | None:
+    def read(self) -> Rename | None:
+        with self.lock:
+            return self._read()
+
+    def _read(self) -> Rename | None:
         if self.path is None:
-            self.path = locate(self.sid, self.projects)
+            self.path = locate(self.sid, self.projects, self.cwd)
             if self.path is None:
                 return None
         try:
             with open(self.path, "rb") as f:
                 size = f.seek(0, 2)
                 if size == self.offset:
-                    return self.title
+                    return self.renamed
                 start = max(0, size - TAIL_BYTES) if self.offset is None or size < self.offset else self.offset
                 f.seek(start)
                 data = f.read(size - start)
         except OSError:
             self.path = self.offset = None
-            return self.title
+            return self.renamed
         data = data[:data.rfind(b"\n") + 1]   # a record still being written waits for the next read
         self.offset = start + len(data)
         for line in data.splitlines():
-            if b"custom-title" in line:
+            if b"custom-title" in line or RENAMED.encode() in line:
                 try:
                     rec = json.loads(line)
                 except ValueError:   # the tail's first line, cut mid-record
                     continue
-                if isinstance(rec, dict) and rec.get("type") == "custom-title" and rec.get("customTitle"):
-                    self.title = rec["customTitle"]
-        return self.title
+                if isinstance(rec, dict):
+                    self._take(rec)
+        return self.renamed
+
+    def _take(self, rec: dict) -> None:
+        if rec.get("type") == "custom-title" and rec.get("customTitle"):
+            self.title = rec["customTitle"]
+            return
+        content = rec.get("content")
+        if rec.get("type") != "system" or not isinstance(content, str) or RENAMED not in content:
+            return
+        try:
+            at = datetime.fromisoformat(rec.get("timestamp") or "").astimezone(timezone.utc)
+        except ValueError:
+            return
+        said = content.split(RENAMED, 1)[1].split("</local-command-stdout>", 1)[0].strip()
+        if title := self.title or said:   # the custom-title record written just before
+            self.renamed = Rename(at.isoformat(timespec="microseconds"), title)
 
 
 class Follower:

@@ -9,7 +9,6 @@ protocol and /wheelhouse commands.
 """
 
 import json
-import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -17,6 +16,7 @@ from pathlib import Path
 
 from . import launch, liveness
 from .store import Store
+from .transcript import project_folder
 
 PROJECTS = Path.home() / ".claude/projects"
 WINDOW_DAYS = 14     # transcripts touched longer ago than this aren't offered
@@ -42,11 +42,6 @@ class Candidate:
     active: float         # last prompt or reply, epoch seconds
     running_pid: int | None
     name: str = ""        # its name in the wheelhouse, if it is already tracked there
-
-
-def project_folder(cwd: str) -> str:
-    """How Claude Code names a project's transcript folder."""
-    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
 
 
 def _records(data: bytes):
