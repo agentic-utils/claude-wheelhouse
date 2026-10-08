@@ -21,6 +21,9 @@ from typing import Callable
 
 WHEELHOUSE_API = 1                 # bumped on any breaking change, matched exactly
 GROUP = "claude_wheelhouse.modules"
+OWN = ("stats",)                   # declared in this package's pyproject.toml
+# an installed copy older than the entry points in pyproject.toml has no record of them
+STALE = "not found: the installed package is out of date. Reinstall it with make install"
 SLOTS = ("inbox.side",)            # under the inbox's item list; tabs come with the first tab pane
 
 
@@ -57,12 +60,25 @@ class Loaded:
     error: str | None = None
 
 
+@dataclass
+class Missing:
+    """One of the hub's own modules with no entry point installed."""
+    name: str
+
+
 def load(entries=None) -> list[Loaded]:
     """Every module installed, in name order. One that fails to import, isn't a Module, or
-    was written against another API is reported with the reason, never raised."""
-    found = importlib.metadata.entry_points(group=GROUP) if entries is None else entries
+    was written against another API is reported with the reason, never raised; so is one
+    of the hub's own that wasn't found, which means the package needs reinstalling."""
+    found = list(importlib.metadata.entry_points(group=GROUP) if entries is None else entries)
+    if entries is None:
+        names = {ep.name for ep in found}
+        found += [Missing(name) for name in OWN if name not in names]
     out = []
     for ep in sorted(found, key=lambda ep: ep.name):
+        if isinstance(ep, Missing):
+            out.append(Loaded(ep.name, None, STALE))
+            continue
         try:
             module = ep.load()
         except Exception as e:

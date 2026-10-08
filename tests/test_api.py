@@ -38,6 +38,12 @@ def test_load(loads, error, desc):
     assert found.error == error, desc
 
 
+def test_the_stats_module_missing_says_to_reinstall(monkeypatch):
+    """An installed copy older than the stats entry point: the slot says why it's empty."""
+    monkeypatch.setattr(api.importlib.metadata, "entry_points", lambda group: [])
+    assert [(m.name, m.error) for m in api.load()] == [("stats", api.STALE)]
+
+
 @pytest.mark.parametrize("loaded, ids, desc", [
     ([api.Loaded("a", module("a"))], [("a", True)], "a running module's pane"),
     ([api.Loaded("a", module("a", slot="tab"))], [], "a pane for another slot"),
@@ -54,21 +60,27 @@ class Breaks(Widget):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("loaded, card, desc", [
-    ([api.Loaded("demo", None, "failed to load: boom")], "demo: failed to load: boom",
+@pytest.mark.parametrize("loaded, cards, desc", [
+    ([api.Loaded("demo", None, "failed to load: boom")], ["demo: failed to load: boom"],
      "a module that didn't load shows why in its slot"),
-    ([api.Loaded("demo", module(widget=Breaks))], "demo: ValueError: bad tick",
+    ([api.Loaded("demo", module(widget=Breaks))], ["demo: ValueError: bad tick"],
      "a pane that raises is swapped for a card saying so"),
+    ([api.Loaded("demo", module(widget=lambda: "a pane"))], ["demo: its tui surface made a str, not a widget"],
+     "a factory that makes something other than a widget"),
+    ([api.Loaded("a", module("demo")), api.Loaded("b", module("demo"))], ["b: its id 'demo' is taken by a"],
+     "a second module with the same id: the first runs"),
+    ([api.Loaded("stats", None, api.STALE)], [f"stats: {api.STALE}"], "the stats module not installed"),
+    ([api.Loaded("demo", module())], [], "a pane with no hooks runs: Textual's own Widget.animate isn't one"),
 ])
-async def test_a_broken_module_leaves_the_app_running(store, monkeypatch, loaded, card, desc):
+async def test_a_broken_module_leaves_the_app_running(store, monkeypatch, loaded, cards, desc):
     monkeypatch.setattr(api, "load", lambda: loaded)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         app.refresh_data()
-        await pilot.pause()
+        await pilot.pause(0.3)   # animate's turn too
         assert app.is_running, desc
         shown = [str(w.render()) for w in app.query(".module-error")]
-        assert shown == [card], desc
+        assert shown == cards, desc
 
 
 @pytest.mark.anyio

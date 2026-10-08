@@ -948,6 +948,7 @@ class WheelhouseApp(App):
         self.modules = api.load()
         self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
+        self.module_ids: dict[str, str] = {}   # each pane's widget id: the module that has it
         # unsent text typed for each target, (session id, ref or None), kept in memory only
         self.unsent: dict[tuple, str] = {}
         self.box_target: tuple | None = None
@@ -1213,13 +1214,19 @@ class WheelhouseApp(App):
     # the modules' panes (api.py)
 
     def hosted(self, slot: str):
-        """The widgets for a slot: each module's pane, or a card saying why it isn't running."""
+        """The widgets for a slot: each module's pane, or a card saying why it isn't running
+        (it didn't load, its factory raised or made no widget, or its id is taken)."""
         for item, pane in api.panes(self.modules, slot):
             try:
                 if pane is None:
                     raise RuntimeError(item.error)
+                if (other := self.module_ids.get(item.module.id)) is not None:
+                    raise RuntimeError(f"its id {item.module.id!r} is taken by {other}")
                 widget = pane.surfaces["tui"](self.ctx)
+                if not isinstance(widget, Widget):
+                    raise TypeError(f"its tui surface made a {type(widget).__name__}, not a widget")
                 widget.id = item.module.id
+                self.module_ids[item.module.id] = item.name
                 self.panes.append(widget)
             except Exception as e:
                 widget = Static(Text(f"{item.name}: {e}", style="dim"), classes="module-error")
@@ -1227,11 +1234,12 @@ class WheelhouseApp(App):
 
     def each_pane(self, hook: str, *args) -> None:
         """Calls a hook on every pane that has it. One that raises is swapped for a card
-        saying so; the app and the other panes carry on."""
+        saying so; the app and the other panes carry on. Textual's own Widget.animate is
+        not the hook: a pane without one isn't called."""
         for widget in list(self.panes):
             try:
-                if fn := getattr(widget, hook, None):
-                    fn(*args)
+                if getattr(type(widget), hook, None) not in (None, getattr(Widget, hook, None)):
+                    getattr(widget, hook)(*args)
             except Exception as e:
                 self.panes.remove(widget)
                 card = Static(Text(f"{widget.id}: {type(e).__name__}: {e}", style="dim"), classes="module-error")

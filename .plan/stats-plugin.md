@@ -46,9 +46,13 @@ keeps its one animation clock, and a module never needs to know what has focus.
   slot, with the module's id as the widget's id. `each_pane(hook)` calls the hooks.
   `focus_sid()` and `module_sessions()` back the `Context`. Nothing in `tui.py` imports
   `stats`.
-- **Isolation.** A module that didn't start shows a card with its reason in its slot. A
-  pane whose hook raises is swapped for a card naming the exception; the app and the
-  other panes carry on. With no module in a slot, the slot collapses: the items table
+- **Isolation.** A module that didn't start shows a card with its reason in its slot, as
+  does one whose factory raises or makes something other than a widget, and a second
+  module with an id already taken. The hub's own stats module missing from the installed
+  entry points (a copy installed before they were declared) shows a card saying to
+  reinstall with `make install`. A pane whose hook raises is swapped for a card naming
+  the exception; the app and the other panes carry on. Only hooks the pane defines are
+  called: Textual's own `Widget.animate` isn't one. With no module in a slot, the slot collapses: the items table
   takes the whole column.
 
 ## Not built yet
