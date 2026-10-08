@@ -944,9 +944,13 @@ async def test_a_decision_is_seen_once_viewed_and_steps_aside_after(store, sid):
     ([("ctrl", 2), ("click", 3)], [], "a plain click starts afresh"),
 ])
 @pytest.mark.anyio
-async def test_marking_rows(store, sid, steps, marked, desc):
-    for title in "abcd":
-        store.post_item(sid, "question", title)
+async def test_marking_rows(store, sid, steps, marked, desc, monkeypatch):
+    # one timestamp, so Q1-Q4 keep their order: under load they could straddle a second,
+    # and the newest-first inbox would put the later ones above Q1
+    with monkeypatch.context() as m:
+        m.setattr("claude_wheelhouse.store.now", lambda: "2026-10-08T10:00:00+00:00")
+        for title in "abcd":
+            store.post_item(sid, "question", title)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -1110,3 +1114,20 @@ async def test_new_session_runner(store, tmp_path, monkeypatch, tick, runner_, d
         await pilot.click("#launch")
         await pilot.pause()
     assert launched == [runner_], desc
+
+
+@pytest.mark.parametrize("activity, busy, desc", [
+    ("thinking", True, "working"),
+    ("running Bash: ls", True, "running a tool"),
+    ("idle", False, "idle"),
+    ("idle · compacted 48k → 8k tokens", False, "idle after a compaction"),
+    ("error: overloaded", False, "an errored session isn't busy"),
+    ("stopped: Claude Code died", False, "stopped with a reason"),
+    ("in a shell tab", False, "handed to a shell tab"),
+    ("interrupted", False, "interrupted"),
+])
+def test_hosted_busy(activity, busy, desc):
+    from types import SimpleNamespace
+    s = {"id": "s1", "running": 0, "runner": "sdk", "activity": activity}
+    app = SimpleNamespace(statuses={"s1": "live"})
+    assert WheelhouseApp.busy(app, s) is busy, desc

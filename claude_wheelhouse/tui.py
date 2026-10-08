@@ -39,6 +39,8 @@ from .store import CLOSED, SessionGone, Store, default_runner, mode, needs_relau
 
 MATRIX = "#00ff41"
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
+# a hosted session's activity when nothing is under way: errored and stopped count as resting
+RESTING = ("idle", "interrupted", "stopped", "in a shell tab", "error")
 MARKED = Style(bgcolor="#3a1060")   # rows picked to close together
 DECISION = "bold #b967ff"   # an unseen decision: noticeable, not urgent
 STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "#05d9e8",
@@ -924,7 +926,9 @@ class WheelhouseApp(App):
         self.title_bar.update(shimmer(self.frame))
         if self.frame % 2 == 0:
             self.sweep_eyes()
-            if not isinstance(self.focused, Compose):   # it rests while you type
+            # it rests while you type. No screen at all while the app shuts down, when
+            # asking what has focus would raise
+            if self.screen_stack and not isinstance(self.focused, Compose):
                 self.stats.shimmer(self.frame // 2)   # 5 frames a second, as in the dashboard
 
     def refresh_data(self) -> None:
@@ -964,8 +968,7 @@ class WheelhouseApp(App):
         return PENDING[what] if what and st in RUNNING else st
 
     def busy(self, s) -> bool:
-        working = bool(s["running"]) or (runner(s) == "sdk" and (s["activity"] or "idle").split()[0]
-                                         not in ("idle", "interrupted", "stopped", "in"))
+        working = bool(s["running"]) or (runner(s) == "sdk" and not (s["activity"] or "idle").startswith(RESTING))
         return working and self.statuses.get(s["id"]) in ("live", "stalled")
 
     def sweep_eyes(self) -> None:
