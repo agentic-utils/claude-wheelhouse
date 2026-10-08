@@ -8,9 +8,10 @@ no tool results, thinking, subagent (sidechain) records or bookkeeping. Only the
 file is read, so a transcript of many megabytes costs the same as a short one.
 
 What the inbox already shows elsewhere is left out too: answers on an item (its thread
-holds them), the wheelhouse's own notices and the default opening prompt, and Claude's
-wheelhouse tool calls (posting, replying, synopsis). A general message keeps its words
-without the `[wheelhouse] from <person> (general):` prefix.
+holds them), the wheelhouse's own notices and the default opening prompt (a ticket line
+before it stays), and Claude's wheelhouse tool calls (posting, replying, synopsis). A
+general message keeps its words without the `[wheelhouse] from <person> (general):`
+prefix, and one a notification cut short is shown whole, from the wheelhouse's copy.
 """
 
 import json
@@ -39,7 +40,10 @@ WHEELHOUSE_TOOL = re.compile(r"^mcp__(?:.*_)?wheelhouse__")
 # with blocks split by " ‖ " and each message's newlines flattened to " ⏎ ".
 BATCH = re.compile(r"\[wheelhouse\] from \S+, \d+ answers: ")
 FROM = re.compile(r"(?:\[wheelhouse\] from \S+ )?(on \S+|\(general\)):\s")
-CUT = re.compile(r"\[cut short, full text: get_input\(message_id=\d+\)\] ")
+CUT = re.compile(r"\[cut short, full text: get_input\(message_id=(\d+)\)\] ")
+CUT_MARK = " [cut short]"   # a message shown as it arrived, cut, when its full text has gone
+# the opening prompt of a session started with a ticket and no brief (launch.opening_prompt)
+OPENING = re.compile(r"(?:Ticket: [^\n]*\n\n)?" + re.escape(NO_BRIEF))
 
 
 @dataclass
@@ -90,9 +94,11 @@ def _text(content) -> str:
     return ""
 
 
-def general_text(text: str) -> str | None:
+def general_text(text: str, full=None) -> str | None:
     """The person's general messages in what the wheelhouse delivered, prefixes stripped and
-    newlines restored; None if it carried only answers on items or the wheelhouse's notices."""
+    newlines restored; None if it carried only answers on items or the wheelhouse's notices.
+    One the monitor cut short is shown whole from full(message id), the wheelhouse's copy,
+    or as it arrived and marked as cut if that has gone."""
     if batch := BATCH.match(text):   # a monitor line carrying several messages
         parts = text[batch.end():].split(" ‖ ")
     else:   # a host's turn, a block per message, or a monitor line carrying one
@@ -101,7 +107,12 @@ def general_text(text: str) -> str | None:
     for part in parts:
         head = FROM.match(part)
         if head and head.group(1) == "(general)":
-            kept.append(CUT.sub("", part[head.end():].strip(), count=1).replace(" ⏎ ", "\n"))
+            said = part[head.end():].strip()
+            if cut := CUT.match(said):
+                said = (full and full(int(cut.group(1)))) or said[cut.end():].replace(" ⏎ ", "\n") + CUT_MARK
+            else:
+                said = said.replace(" ⏎ ", "\n")
+            kept.append(said)
     return "\n\n".join(kept) or None
 
 
@@ -115,7 +126,8 @@ def tool_line(name: str, args) -> str:
     return line if len(line) <= TOOL_WIDTH else line[:TOOL_WIDTH - 1] + "…"
 
 
-def entries(recs: list[dict]) -> list[Entry]:
+def entries(recs: list[dict], full=None) -> list[Entry]:
+    """full: the person's message by id, for one a notification cut short (general_text)."""
     out = []
     for rec in recs:
         kind, at = rec.get("type"), rec.get("timestamp", "")
@@ -129,13 +141,16 @@ def entries(recs: list[dict]) -> list[Entry]:
             origin = (rec.get("origin") or {}).get("kind")
             if origin == "task-notification" or text.startswith("<task-notification>"):
                 event = EVENT.search(text)
-                if event and (said := general_text(event.group(1).strip())):
+                if event and (said := general_text(event.group(1).strip(), full)):
                     out.append(Entry("you", said, at))
             elif text.startswith("[wheelhouse]"):   # a host's turn: the person's messages, or a notice
-                if said := general_text(text):
+                if said := general_text(text, full):
                     out.append(Entry("you", said, at))
-            elif text and not text.startswith("<") and text != NO_BRIEF:
-                out.append(Entry("you", text, at))
+            elif text and not text.startswith("<"):
+                if OPENING.fullmatch(text):   # its ticket line stays; the default sentence goes
+                    text = text[:-len(NO_BRIEF)].strip()
+                if text:
+                    out.append(Entry("you", text, at))
         elif kind == "assistant":
             for part in msg.get("content") or []:
                 if not isinstance(part, dict):
@@ -174,11 +189,12 @@ def _hhmm(at: str) -> str:
     return f" · {at[11:16]}Z" if len(at) >= 16 else ""
 
 
-def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=()) -> list[tuple[str, str]]:
+def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=None) -> list[tuple[str, str]]:
     """The conversation as (who, markdown) blocks, then the person's general messages still
     queued for it. who is head, warn, note, tool, you or claude: the app colours
     the person's words apart from Claude's. tab None: the session runs in the wheelhouse,
-    where its permission prompts and questions are items, so there's no tab to wait in."""
+    where its permission prompts and questions are items, so there's no tab to wait in.
+    full: the person's message by id (entries)."""
     where = (f"_Tab: **{tab}**. Permission prompts and slash commands need that tab._" if tab else
              "_Runs in the wheelhouse: its permission prompts and questions come to the inbox. "
              "Shell opens it in a terminal tab._")
@@ -187,7 +203,7 @@ def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=()) -> li
         out.append(("note", "_No transcript found for this session yet._"))
     elif tab and (waiting := waiting_in_tab(recs)):
         out.append(("warn", f"> ⚠ **Waiting for you in its tab:** {waiting}."))
-    for e in entries(recs or []):
+    for e in entries(recs or [], full):
         if e.who == "tool":
             out.append(("tool", "`⚙ " + e.text.replace("`", "'") + "`"))
         elif e.who == "note":

@@ -1197,6 +1197,11 @@ class WheelhouseApp(App):
             if following:   # stay at the newest turn, unless the person has scrolled up to read
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 
+    def sent(self, sid: str, msg_id: int) -> str | None:
+        """The full text of a message the person sent, for one a notification cut short."""
+        m = self.store.message(sid, msg_id)
+        return m["body"] if m else None
+
     def conversation(self, sid: str) -> list[tuple[str, str]]:
         s = self.store.session(sid)
         if s is None:
@@ -1208,7 +1213,7 @@ class WheelhouseApp(App):
         tab = None if runner(s) == "sdk" and not s["shell"] else launch.tab_title(s)
         key = (s["name"] or short(sid), tab, follower.seen, queued)
         if follower.blocks_key != key:   # parsed once per change, not on every refresh tick
-            follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued)
+            follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued, functools.partial(self.sent, sid))
         return follower.blocks
 
     # the modules' panes (api.py)

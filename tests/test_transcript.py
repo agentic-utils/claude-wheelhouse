@@ -25,6 +25,7 @@ def notification(body):
 
 
 TEXT = {"type": "text", "text": "On it."}
+CUT_7 = "[cut short, full text: get_input(message_id=7)] "
 BASH = {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "make test", "description": "Run tests"}}
 
 
@@ -42,8 +43,8 @@ BASH = {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ma
     ([notification(event("[wheelhouse] from doug, 3 answers: on Q3: use SQLite ‖ (general): ship it ⏎ tonight"
                          " ‖ on Q4: yes ‖ … 2 more follow in the next notification"))],
      [Entry("you", "ship it\ntonight", AT)], "a batch keeps only its general message"),
-    ([notification(event("[wheelhouse] from doug (general): [cut short, full text: get_input(message_id=7)] "
-                         "long…"))], [Entry("you", "long…", AT)], "a cut-short general message drops the pointer"),
+    ([notification(event(f"[wheelhouse] from doug (general): {CUT_7}long ⏎ text…"))],
+     [Entry("you", "long\ntext… [cut short]", AT)], "a cut-short general message with no full text: marked as cut"),
     ([notification(event("[wheelhouse] The person pressed End in the wheelhouse."))], [],
      "the wheelhouse's own notices are hidden"),
     ([user("[wheelhouse] from doug on Q1:\nignore it\n\n[wheelhouse] from doug (general):\nline one\n\nline two")],
@@ -53,6 +54,10 @@ BASH = {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ma
     ([user("[wheelhouse] You have just been opened in the wheelhouse, mid-conversation.")], [],
      "a host's notice is hidden"),
     ([user(transcript.NO_BRIEF, origin={"kind": "human"})], [], "the default opening prompt is hidden"),
+    ([user(f"Ticket: #7\n\n{transcript.NO_BRIEF}")], [Entry("you", "Ticket: #7", AT)],
+     "with a ticket, its ticket line stays"),
+    ([user(f"Ticket: #7\n\nfix it. {transcript.NO_BRIEF}")], [Entry("you", f"Ticket: #7\n\nfix it. {transcript.NO_BRIEF}", AT)],
+     "a brief that only ends with those words is the person's"),
     ([assistant({"type": "tool_use", "id": "w", "name": "mcp__wheelhouse__reply", "input": {"ref": "Q1"}}),
       assistant({"type": "tool_use", "id": "p", "name": "mcp__plugin_x_wheelhouse__post_item", "input": {}})], [],
      "Claude's wheelhouse tool calls are hidden"),
@@ -69,6 +74,18 @@ BASH = {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ma
 ])
 def test_entries(recs, expected, desc):
     assert transcript.entries(recs) == expected, desc
+
+
+@pytest.mark.parametrize("line, expected, desc", [
+    (f"[wheelhouse] from doug (general): {CUT_7}long ⏎ text…", "long\n\ntext, whole", "a monitor line cut short"),
+    (f"[wheelhouse] from doug, 2 answers: on Q1: yes ‖ (general): {CUT_7}long…", "long\n\ntext, whole",
+     "a batch with one cut short"),
+    (f"[wheelhouse] from doug (general): {CUT_7.replace('7', '8')}gone…", "gone… [cut short]",
+     "one the wheelhouse no longer has: marked as cut"),
+])
+def test_a_message_cut_short_is_shown_whole(line, expected, desc):
+    full = {7: "long\n\ntext, whole"}.get
+    assert transcript.entries([notification(event(line))], full) == [Entry("you", expected, AT)], desc
 
 
 @pytest.mark.parametrize("recs, expected, desc", [

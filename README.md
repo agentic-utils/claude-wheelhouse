@@ -36,11 +36,12 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
 - **Follow a session.** Click a session in the inbox's list (or Enter on it): its items
   list gains a pinned first row, 💬 Conversation, highlighted, and the right-hand pane
   follows its conversation, read live from its transcript: your prompts and general
-  messages (in green, line breaks kept, without the `[wheelhouse] from …` prefix) and
-  Claude's replies (in white), in full, each tool call as one line. Tool output and
-  subagents are left out, and so is what the inbox already shows: answers on an item (its
-  thread has them), the wheelhouse's own notices, the default opening prompt and Claude's
-  wheelhouse tool calls. The box underneath sends the session a general message,
+  messages (in green, line breaks kept, without the `[wheelhouse] from …` prefix, and in
+  full even when the notification that delivered one was cut short) and Claude's replies
+  (in white), in full, each tool call as one line. Tool output and subagents are left
+  out, and so is what the inbox already shows: answers on an item (its thread has them),
+  the wheelhouse's own notices, the default opening prompt (its ticket line stays) and
+  Claude's wheelhouse tool calls. The box underneath sends the session a general message,
   queued and sent like any answer. The pane names the session's tab: permission prompts,
   questions asked with Claude's question dialog, and slash commands still need that tab,
   and the pane flags when the session is waiting for you there (a question or a plan;

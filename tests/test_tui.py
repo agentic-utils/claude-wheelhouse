@@ -458,6 +458,21 @@ async def test_send_all_with_nothing_left_to_send_says_so(store, sid, monkeypatc
     assert notes == ["nothing queued"]
 
 
+def test_a_general_message_cut_short_shows_whole_in_the_conversation(store, sid, tmp_path, monkeypatch):
+    long = " ".join(["word"] * 200)
+    store.send(sid, long)
+    [m] = store.pending(sid)
+    line = f"[wheelhouse] from doug (general): [cut short, full text: get_input(message_id={m['id']})] word word…"
+    folder = tmp_path / "projects/-home-u-repo"
+    folder.mkdir(parents=True)
+    folder.joinpath(f"{sid}.jsonl").write_text(json.dumps(
+        {"type": "user", "timestamp": "2026-10-07T21:30:00Z", "origin": {"kind": "task-notification"},
+         "message": {"content": f"<task-notification><event>{line}</event></task-notification>"}}) + "\n")
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    [(who, md)] = [b for b in WheelhouseApp(store).conversation(sid) if b[0] == "you"]
+    assert md.endswith(long), "the wheelhouse's copy, whole"
+
+
 @pytest.mark.anyio
 async def test_enter_on_a_session_follows_its_conversation(store, sid, tmp_path, monkeypatch):
     folder = tmp_path / "projects/-home-u-repo"
