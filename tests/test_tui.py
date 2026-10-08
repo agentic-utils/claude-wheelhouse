@@ -2,10 +2,10 @@ import json
 
 import pytest
 from rich.text import Text
-from textual.widgets import Checkbox, DataTable, Input, Label, TextArea
+from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, TextArea
 
 from claude_wheelhouse import launch, transcript
-from claude_wheelhouse.tui import MATRIX, VOICE, WheelhouseApp, Choice, Confirm, Hint, ThreadView, Transcript, render
+from claude_wheelhouse.tui import MATRIX, VOICE, WheelhouseApp, Choice, Confirm, Hint, SendBar, ThreadView, Transcript, render
 
 
 @pytest.mark.anyio
@@ -1208,3 +1208,25 @@ async def test_the_hint_says_what_ctrl_enter_does(store, sid, mode, stale, expec
         await pilot.pause()
         assert isinstance(app.screen, ThreadView)
         assert str(app.screen.query_one(Hint).content).startswith(expected + " · "), f"{desc}, in a thread"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("screen, desc", [
+    ("inbox", "the inbox's send bar"),
+    ("thread", "an item's, full screen"),
+])
+async def test_send_bar_buttons_sit_above_the_footer(store, sid, screen, desc):
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if screen == "thread":
+            app.items_table.move_cursor(row=0)
+            app.items_table.focus()
+            await pilot.press("enter")
+            await pilot.pause()
+        bar, footer = app.screen.query_one(SendBar), app.screen.query_one(Footer)
+        for button in bar.query(Button):
+            if button.display:
+                assert button.region.height == 1 and button.region.y == bar.region.y, f"{desc}: {button.id}"
+        assert bar.region.bottom <= footer.region.y, desc

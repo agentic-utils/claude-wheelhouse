@@ -438,20 +438,20 @@ class SendBar(Horizontal):
     real Claude Code, in a tab), and a line saying what it's doing now."""
     DEFAULT_CSS = """
     SendBar { height: 1; background: #12122a; }
-    SendBar Button { height: 1; min-width: 12; border: none; margin: 0 1 0 0; padding: 0 1; }
+    SendBar Button { min-width: 12; margin: 0 1 0 0; padding: 0 1; }
     SendBar #activity { width: 1fr; height: 1; color: #05d9e8; text-style: italic; padding: 0 1; }
     """
 
     def compose(self) -> ComposeResult:
-        yield Button("Mode", id="mode")
-        yield Button("Send", id="send", variant="primary")
-        yield Button("Send all", id="send-all", variant="warning")
-        yield Button("Allow", id="allow", variant="success")
-        yield Button("Always", id="always", variant="primary")
-        yield Button("Deny", id="deny", variant="error")
-        yield Button("Interrupt", id="interrupt", variant="error")
-        yield Button("Compact", id="compact")
-        yield Button("Shell", id="shell")
+        # compact: a variant's own border (tall, top and bottom) outranks the bar's
+        # "border: none", and made each button two rows high in a one-row bar, its caption
+        # on the row the footer covers
+        for label, id_, variant in (("Mode", "mode", "default"), ("Send", "send", "primary"),
+                                    ("Send all", "send-all", "warning"), ("Allow", "allow", "success"),
+                                    ("Always", "always", "primary"), ("Deny", "deny", "error"),
+                                    ("Interrupt", "interrupt", "error"), ("Compact", "compact", "default"),
+                                    ("Shell", "shell", "default")):
+            yield Button(label, variant, id=id_, compact=True)
         yield Label("", id="activity")
 
     def on_mount(self) -> None:
