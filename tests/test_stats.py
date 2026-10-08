@@ -180,23 +180,79 @@ def usage(**pct) -> stats.AccountUsage:
     return u
 
 
-@pytest.mark.parametrize("u, width, expect, desc", [
-    (usage(session=23, weekly_all=5), 50, ["session", "23%", "weekly", "5%", "resets"], "both bars at 50 columns"),
-    (usage(session=23, weekly_all=5), 80, ["session", "23%", "weekly", "5%"], "both bars at 80 columns"),
-    (usage(session=97), 50, ["97%"], "one limit only"),
-    (stats.AccountUsage(), 50, ["usage loading…"], "before the first fetch"),
+@pytest.mark.parametrize("view, u, width, expect, desc", [
+    (None, usage(session=23, weekly_all=5), 50, ["session", "23%", "weekly", "5%", "resets"], "both bars at 50 columns"),
+    (None, usage(session=23, weekly_all=5), 80, ["session", "23%", "weekly", "5%"], "both bars at 80 columns"),
+    (None, usage(session=97), 50, ["97%"], "one limit only"),
+    (None, stats.AccountUsage(), 50, ["usage loading…"], "before the first fetch"),
+    (snap(83_000, 600), usage(session=23), 50, ["context", "8%", "83k/1M", "session", "23%"], "a session's context too"),
 ])
-def test_usage_lines(u, width, expect, desc):
-    rows = stats.usage_lines(u, NOW, 0, width)
+def test_gauges(view, u, width, expect, desc):
+    rows = stats.gauges(view, u, NOW, width)
     text = "\n".join(r.plain for r in rows)
     assert all(e in text for e in expect), desc
     assert all(len(r.plain) <= width for r in rows), f"{desc}: fits the pane"
+    bars = [r.plain.index("%") for r in rows if "█" in r.plain or "░" in r.plain]
+    assert len(set(bars)) <= 1, f"{desc}: the bars line up"
 
 
 def test_usage_unavailable_after_a_failed_fetch():
     u = stats.AccountUsage()
     u.failed = True
-    assert [r.plain for r in stats.usage_lines(u, NOW, 0, 50)] == ["usage unavailable"]
+    assert [r.plain for r in stats.gauges(None, u, NOW, 50)] == ["usage unavailable"]
+
+
+@pytest.mark.parametrize("now, shown, desc", [
+    (NOW - NOW % 2, stats.HOT, "on even seconds a flashing gauge is lit"),
+    (NOW - NOW % 2 + 1, tuple(int(c * 0.22) for c in stats.HOT), "on odd ones it's dark, as in the dashboard"),
+])
+def test_flashing(now, shown, desc):
+    assert stats.flash(stats.HOT, True, now) == shown, desc
+    assert stats.flash(stats.HOT, False, now) == stats.HOT, "a steady colour never flashes"
+
+
+def test_the_panel_holds_the_gauges_then_the_stats():
+    """Doug's layout (#43): the three gauges at the top with a blank line under each, then
+    the cache and compaction rows, all inside one border the width of the pane."""
+    s = snap(83_000, 600)
+    s.compactions = [stats.Compaction(NOW - 600, "manual", 201_000, 11_000)]
+    rows, _ = stats.layout(s, "holly", None, usage(session=23, weekly_all=5), NOW, 56, 40)
+    assert {r.cell_len for r in rows} == {56}, "every row is the pane's width"
+    assert rows[0].plain.startswith("╭─ holly · Opus 5.5 · 1M window ") and rows[-1].plain.startswith("╰")
+    inside = [r.plain[1:-1].split(" ")[0] or "-" for r in rows[1:-1]]
+    assert inside == ["context", "-", "session", "-", "weekly", "-", "cache", "compact"]
+
+
+@pytest.mark.parametrize("height, kinds, bars, desc", [
+    (60, ["assembly", "output"], 20, "a tall pane: each chart 40% of the one before"),
+    (30, ["assembly", "output"], 7, "a middling pane: as tall as fits, under 40%"),
+    (21, ["assembly", "output"], 3, "a short pane: both, short"),
+    (17, ["assembly"], 3, "too short for two: context assembly alone"),
+    (14, [], None, "too short for either"),
+])
+def test_charts_fit_under_the_panel(height, kinds, bars, desc):
+    rows, shown = stats.layout(snap(83_000, 600), "holly", None, usage(session=23, weekly_all=5), NOW, 56, height)
+    assert [c.kind for c in shown] == kinds, desc
+    assert all(c.height == bars for c in shown), f"{desc}: {[c.height for c in shown]}"
+    drawn = stats.render(rows, shown, 0).plain.split("\n")
+    assert len(drawn) <= height, f"{desc}: {len(drawn)} rows in {height}"
+
+
+def test_the_output_chart_stacks_output_tokens():
+    [turn], _ = stats.parse(lines(response("m1", read=5)), set(), main=True)
+    assert turn.output == 10
+    c = stats.chart([turn], NOW, width=56, height=4, kind="output")
+    assert c.maxt == 10 and any(base == stats.CO["output"] for col in c.columns for base, _ in col)
+    assert stats.chart_lines(c, 0, ticks=False)[-1].plain.strip().startswith("0 └"), "no hour ticks: they go under the last"
+
+
+@pytest.mark.parametrize("colour, f, rgb, desc", [
+    ((52, 224, 150), 1.0, (52, 224, 150), "full brightness is the colour itself"),
+    ((52, 224, 150), 0.5, (26, 112, 75), "halved, truncated as the dashboard does"),
+    ((255, 88, 96), 0.37, (94, 32, 35), "no rounding to a few dozen shades"),
+])
+def test_shade_is_the_dashboards(colour, f, rgb, desc):
+    assert stats.shade(colour, f).color.triplet == rgb, desc
 
 
 @pytest.mark.parametrize("pct, colour, flashing, desc", [
@@ -324,3 +380,14 @@ def test_hour_ticks_sit_on_local_hours(monkeypatch, zone, desc):
     finally:
         monkeypatch.undo()
         time.tzset()
+
+
+@pytest.mark.parametrize("view, note, desc", [
+    (None, "couldn't read the transcript: transcript gone", "a failed read with nothing to show"),
+    (snap(83_000, 600), "couldn't read the transcript: transcript gone", "a failed read beside what was read before"),
+])
+def test_a_note_wraps_inside_the_panel(view, note, desc):
+    rows, _ = stats.layout(view, "holly", note, usage(session=23), NOW, 40, 30)
+    assert {r.cell_len for r in rows} == {40}, f"{desc}: the border holds"
+    inside = " ".join(r.plain[1:-1].strip() for r in rows[1:-1])
+    assert note in inside, desc

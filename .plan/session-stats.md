@@ -20,43 +20,62 @@ highlighted item.
 - **Cache.** The time-to-live (TTL) in use (5m or 1h), warm or cold, and when it goes
   cold, as a clock time and a countdown. Once cold: "cold since 10:12 BST".
 - **Compactions.** Count, time of the last one, and its before and after sizes.
-- **Histogram.** A small version of claude-dashboard's "context assembly" chart for this
-  session, with the shimmer. It spans the last 2 hours, split into as many buckets as
-  the chart has columns, each stacking tokens read from cache (green), new input (blue)
-  and cache misses (red).
+- **Histograms.** Small versions of claude-dashboard's "context assembly" and "output
+  tokens" charts for this session, with the shimmer. They span the last 2 hours, split
+  into as many buckets as the charts have columns. Context assembly stacks tokens read
+  from cache (green), new input (blue) and cache misses (red); output is yellow.
 
 With no session in context, the panel shows totals across the running sessions.
 
 ## Layout
 
-On a 200-column terminal the middle column is 55 wide (53 inside the border). On a 50-row
-terminal each half is about 20 rows inside. Sketch, widths checked by script:
+On a 200-column terminal the middle column is 55 wide (53 inside the border). Since #43
+the pane follows claude-dashboard's look: a panel with the dashboard's rounded border
+(its dimmest colour, the title in its cyan accent) holds the three gauges, each with a
+blank line under it, then the cache and compaction rows. The gauges are the dashboard's:
+a solid bar on a dotted track and the percentage bold in the bar's colour, one bar width
+for all three so they line up. Below the panel, two charts share one hour axis. Sketch at
+53 columns and 26 rows, from `stats.render` (colours stripped):
 
 ```
-╭─ items ─────────────────────────────────────────────╮
-│ref  status    title                                 │
-│Q15  answered  Q15 bar reword                        │
-│T20  running   Q15 bar reword + rerun                │
-│...                                                  │
-├─ stats ─────────────────────────────────────────────┤
-│holly · Opus 5.5 · 1M window                         │
-│context ▕████▋               ▏  83k / 1M     8%      │
-│cache   1h · warm · cold at 11:12 BST (in 42m)       │
-│compact 2× · last 10:18 BST · 201k → 11k             │
-│                                                     │
-│▸ context assembly  ▆ cache ▆ new ▆ miss             │
-│  120k       ▂▅                         █▆           │
-│             ██▃     ▁                  ██▄          │
-│   60k     ▃████▆   ▅█▃       ▂▃       ▃███          │
-│          ▅██████▇▃▆███▅    ▄███▆     ▅████          │
-│     0 └─────────────────────────────────────────────│
-│        8:00      9:00      10:00     11:00          │
-╰─────────────────────────────────────────────────────╯
+╭─ holly · Opus 5.5 · 1M window ────────────────────╮
+│context ███░░░░░░░░░░░░░░  18% 183k/1M             │
+│                                                   │
+│session ████░░░░░░░░░░░░░  23% resets Fri 01:18 BST│
+│                                                   │
+│weekly  █████████████░░░░  74% resets Tue 15:01 BST│
+│                                                   │
+│cache   1h · warm · cold at 00:45 BST (in 50m)     │
+│compact 1× · last 23:05 BST · 201k → 11k           │
+╰───────────────────────────────────────────────────╯
+▸ context assembly  ▆ cache  ▆ new  ▆ miss
+          ▇                █▆▂    █   █ █▅       ▇
+531k  ▇   █ █  ▄ ▂      ▃  ███  ▅ █  ▄█ ██▄▅     █ ▄▄
+      █▇ ▂█ █▄▇█▅█▁  ▇ ██▃ ███  █ █  ██ ████ ▇ ▇▄█ ██
+265k  ██▁██▇███████▁▃█████▇███ ▁█▆█▅▄██▃██████████▁██
+      ████████████████████████▅██████████████████████
+    0 └──────────────────────────────────────────────
+
+▸ output  ▆ output tokens
+                                      █
+ 18k   ▄  ▅                ▅ ▂  ▅     █          ▇
+       █  █  ▃    ▁      ▁ █ █  █ ▂  ▂█  ▆█▆▃  ▂ █
+  9k  ██  █▃▇█▇▃▆▄█▅ ▃▁▇▇█▅███ ▁█ █▄ ██ ▆████ ▃█▇█ ▆▁
+      ███▇████████████████████▅█████▆████████████████
+    0 └──────────────────────────────────────────────
+        22:00                  23:00
 ```
 
-In Textual, `#items-pane` becomes a `Vertical` holding the items table (`height: 1fr`)
-and a new `SessionStats` widget (`height: 1fr`). Below about 12 rows the chart is dropped
-and only the four text rows remain.
+- **Chart height.** Each chart is 40% of the height the single chart had before #43 (the
+  pane less six text rows and the chart's own three), and no taller than fits under the
+  panel. A short pane drops the output chart first, then the context assembly chart
+  (below two rows of bars each). A blank line separates the two charts when there's room.
+- **Notes** ("reading …", a failed read) wrap inside the panel instead of being cut off at
+  its border.
+
+In Textual, `#items-pane` is a `Vertical` holding the items table (`height: 1fr`) and the
+`SessionStats` widget (`height: 1fr`), which draws what `stats.layout` and `stats.render`
+return.
 
 ## Data sources
 

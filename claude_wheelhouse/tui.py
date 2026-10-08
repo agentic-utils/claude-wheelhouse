@@ -348,11 +348,11 @@ def marked(cells: tuple) -> tuple:
 
 
 class SessionStats(Widget):
-    """Under the items: the session in context's context size, cache and compactions, and a
-    chart of its last two hours; with none in context, the running sessions' totals. The
-    account's session and weekly usage go under either. The
-    text and the chart's columns are rebuilt on the 1-second refresh; the shimmer, on the
-    animation tick, only recolours the columns."""
+    """Under the items: a bordered panel of the context, session and weekly gauges and the
+    cache and compaction rows, then charts of the last two hours' context assembly and
+    output; with no session in context, the running sessions' totals. The panel and the
+    charts' columns are rebuilt on the 1-second refresh; the shimmer, on the animation tick,
+    only recolours the columns. What it draws is stats.layout's and stats.render's."""
 
     DEFAULT_CSS = "SessionStats { height: 1fr; background: #000000; border-top: solid #7b61ff; }"
 
@@ -362,7 +362,7 @@ class SessionStats(Widget):
         self.note: str | None = None   # what shows with nothing to show
         self.usage = stats.AccountUsage()
         self.rows: list[Text] = []
-        self.chart: stats.Chart | None = None
+        self.charts: list[stats.Chart] = []
         self.frame = 0
 
     def show(self, view, name: str, now: float, note: str | None = None) -> None:
@@ -370,17 +370,8 @@ class SessionStats(Widget):
         self.rebuild()
 
     def rebuild(self) -> None:
-        width, height = self.size.width, self.size.height
-        if self.view is None or width < stats.MARGIN + 4:
-            self.rows, self.chart = [Text(self.note or "no sessions running", style="dim")], None
-        else:
-            self.rows = stats.summary(self.view, self.name_, self.now, self.frame, width)
-            if self.note:   # beside a view: something went wrong reading it
-                self.rows.append(Text(self.note, style="dim"))
-        self.rows += stats.usage_lines(self.usage, self.now, self.frame, width)
-        if self.view is not None and width >= stats.MARGIN + 4:
-            bars = height - len(self.rows) - 3   # the legend, baseline and hour ticks
-            self.chart = stats.chart(self.view.turns, self.now, width, bars) if bars >= 3 else None
+        self.rows, self.charts = stats.layout(self.view, self.name_, self.note, self.usage, self.now,
+                                              self.size.width, self.size.height)
         self.refresh()
 
     def on_resize(self) -> None:
@@ -388,12 +379,11 @@ class SessionStats(Widget):
 
     def shimmer(self, frame: int) -> None:
         self.frame = frame
-        if self.chart and self.display:
+        if self.charts and self.display:
             self.refresh()
 
     def render(self) -> Text:
-        lines = self.rows + (stats.chart_lines(self.chart, self.frame) if self.chart else [])
-        return Text("\n", no_wrap=True, overflow="crop").join(lines)
+        return stats.render(self.rows, self.charts, self.frame)
 
 
 class Compose(TextArea):

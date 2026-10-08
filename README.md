@@ -45,14 +45,17 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   permission prompts can't be seen from the transcript). Going to the item list switches
   the pane back to the highlighted item.
 - **Stats.** Under the item list, the session in context's numbers, read from its
-  transcripts: context size against its window (green to flashing red), whether its
-  prompt cache is warm and when it goes cold (once cold, what the next turn re-pays), its
-  compactions, and a chart of how each turn's context was assembled over the last two
-  hours (read from cache, new, cache miss), subagents included. With no session in
-  context, the running sessions' totals. Under either, the account's session and weekly
-  usage with their reset times, as `/usage` shows them, fetched once a minute. The chart's
-  shimmer rests while you type in an answer box. Transcripts are read off the UI thread,
-  so a big one says "reading …" for a moment rather than freezing the app.
+  transcripts, in claude-dashboard's colours. A bordered panel, titled with the session,
+  model and window, holds three gauges: context size against its window (green to
+  flashing red), and the account's session and weekly usage with their reset times, as
+  `/usage` shows them, fetched once a minute. Under them, whether the prompt cache is warm
+  and when it goes cold (once cold, what the next turn re-pays), and its compactions.
+  Below the panel, two charts of the last two hours, subagents included: how each turn's
+  context was assembled (read from cache, new, cache miss) and the output tokens it made.
+  A short pane drops the output chart first, then both. With no session in context, the
+  running sessions' totals. The charts' shimmer rests while you type in an answer box.
+  Transcripts are read off the UI thread, so a big one says "reading …" for a moment
+  rather than freezing the app.
 - **Sessions.** Select a session to read its synopsis, which the session keeps up to
   date itself. New session (directory, optional name, optional ticket, opening brief)
   runs Claude in the wheelhouse (below), or in a Windows Terminal tab if you tick the box.

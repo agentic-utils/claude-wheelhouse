@@ -1066,7 +1066,8 @@ async def test_a_failed_transcript_read_is_shown_not_fatal(store, sid, monkeypat
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert app.is_running, "the app carries on"
-        assert "couldn't read the transcript: transcript gone" in app.stats.render().plain
+        shown = " ".join(line[1:-1].strip() for line in app.stats.render().plain.split("\n"))   # wrapped in the panel
+        assert "couldn't read the transcript: transcript gone" in shown
 
 
 @pytest.mark.anyio

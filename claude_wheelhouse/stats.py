@@ -1,36 +1,47 @@
 """A session's token use, read from its Claude Code transcripts for the inbox's stats pane:
-how big its context is, whether its prompt cache is still warm, its compactions, and a
-small "context assembly" chart of the last two hours.
+how big its context is, whether its prompt cache is still warm, its compactions, and two
+small charts of the last two hours: how its context was assembled and the output it made.
 
-The numbers and the chart are claude-dashboard's, ported: its usage parse, `build_column`,
-palette, shimmer and context grades. See .plan/session-stats.md.
+The numbers, the charts and their look are claude-dashboard's, ported: its usage parse,
+`build_column`, palette, shimmer, gauges, panel border and context grades. See
+.plan/session-stats.md.
 """
 
+import functools
 import json
 import math
 import os
 import re
+import textwrap
 import time
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from rich.color import Color
+from rich.style import Style
 from rich.text import Text
 
 from . import transcript
 
-SPAN = 2 * 3600                    # the chart's last two hours
+SPAN = 2 * 3600                    # the charts' last two hours
 TTL = {"1h": 3600, "5m": 300}
 WRITE_PRICE = {"1h": 2.0, "5m": 1.25}   # cache write, times the base input price
-MARGIN = 6                         # the chart's Y-axis labels
+MARGIN = 6                         # the charts' Y-axis labels
+LABEL = 8                          # the gauges' and stats rows' labels
 PARTIAL = " ▁▂▃▄▅▆▇█"              # 0..8 eighths of a cell, bottom up
-GAUGE = " ▏▎▍▌▋▊▉█"                # the same, left to right
-CO = {"read": (52, 224, 150), "new": (84, 160, 255), "miss": (255, 88, 96)}   # green, blue, red
-SERIES = ("read", "new", "miss")
-LEGEND = {"read": "cache", "new": "new", "miss": "miss"}
+# the dashboard's truecolour palette
+CO = {"read": (52, 224, 150), "new": (84, 160, 255), "miss": (255, 88, 96),   # green, blue, red
+      "output": (255, 205, 82)}                                               # yellow
 OK, WARN, AMBER, HOT = (52, 224, 150), (255, 205, 82), (255, 138, 56), (255, 88, 96)
-DIM, TEXT = "#7c809e", "#d8dcf0"
+ACCENT, TEXT, DIM, DIM2 = (90, 232, 232), (216, 220, 240), (124, 128, 158), (72, 74, 102)
+# the charts: title, and the series stacked in each column with their legend labels
+CHARTS = {"assembly": ("context assembly", (("read", "cache"), ("new", "new"), ("miss", "miss"))),
+          "output": ("output", (("output", "output tokens"),))}
+SERIES = tuple(k for _, series in CHARTS.values() for k, _ in series)
+CHART_SHARE = 0.4                  # each chart's height, against the one chart the pane had before (#43)
+CHART_MIN = 2                      # rows of bars, below which a chart is left out
 
 
 def epoch(at: str) -> float | None:
@@ -51,6 +62,7 @@ class Turn:
     ttl: str | None   # the cache it wrote, if any
     model: str | None
     main: bool
+    output: int = 0
 
 
 @dataclass
@@ -97,7 +109,7 @@ def parse(lines, seen: set, main: bool) -> tuple[list[Turn], list[Compaction]]:
         ttl = "1h" if cc.get("ephemeral_1h_input_tokens") else "5m" if cc.get("ephemeral_5m_input_tokens") else None
         fresh = inp + made
         turns.append(Turn(at, read, fresh if read else 0, 0 if read else fresh, inp + made + read, ttl,
-                          msg.get("model"), main and not rec.get("isSidechain")))
+                          msg.get("model"), main and not rec.get("isSidechain"), usage.get("output_tokens", 0) or 0))
     return turns, compactions
 
 
@@ -328,12 +340,6 @@ def cache_lines(snap: Snapshot, now: float) -> list[str]:
     return [f"{snap.ttl} · cold since {clock(snap.expires)}", cold_cost(snap)]
 
 
-def gauge(size: int, window: int, width: int) -> str:
-    eighths = min(width * 8, round(size / window * width * 8)) if window else 0
-    full, part = divmod(eighths, 8)
-    return ("█" * full + (GAUGE[part] if part else "")).ljust(width)
-
-
 @dataclass
 class Totals:
     """The pane with no session in context: every running session's, added up."""
@@ -352,31 +358,119 @@ def combine(snaps: dict[str, Snapshot], names: dict[str, str], now: float) -> To
                   sorted((t for s in snaps.values() for t in s.turns), key=lambda t: t.at))
 
 
-def summary(view, name: str, now: float, frame: int, width: int) -> list[Text]:
-    """The text rows above the chart."""
-    label = lambda s: Text(s.ljust(8), style=DIM)
+def hexc(c: tuple) -> str:
+    return "#%02x%02x%02x" % c
+
+
+def label(s: str) -> Text:
+    return Text(s.ljust(LABEL), style=hexc(DIM))
+
+
+def flash(colour: tuple, flashing: bool, now: float) -> tuple:
+    """A flashing colour goes dark on alternate seconds, as the dashboard's gauges do."""
+    return tuple(int(c * 0.22) for c in colour) if flashing and int(now) % 2 else colour
+
+
+def meter(name: str, pct: float, colour: tuple, width: int, tail: str) -> Text:
+    """One gauge, the dashboard's: a solid bar on a dotted track, then the percentage bold
+    in the bar's colour."""
+    pct = max(0.0, min(pct, 100.0))
+    fill = round(pct / 100 * width)
+    return (label(name) + Text("█" * fill, style=hexc(colour)) + Text("░" * (width - fill), style=hexc(DIM2))
+            + Text(f" {pct:3.0f}%", style=f"bold {hexc(colour)}") + Text(tail, style=hexc(DIM)))
+
+
+def gauges(view, usage: "AccountUsage", now: float, width: int) -> list[Text]:
+    """The context, session and weekly gauges, at one bar width so they line up. Across
+    every running session the context is a sum with no one window: a number, not a gauge."""
+    bars = []   # (name, percent, colour, tail)
+    if isinstance(view, Snapshot):
+        colour, flashing = grade(view.context, view.window)
+        bars.append(("context", view.context * 100 / view.window, flash(colour, flashing, now),
+                     f" {tokens(view.context)}/{tokens(view.window)}"))
+    for kind, name in LIMITS:
+        if kind in usage.limits:
+            pct, at = usage.limits[kind]
+            colour, flashing = usage_grade(pct)
+            bars.append((name, pct, flash(colour, flashing, now), f" {resets(at, now)}" if at else ""))
+    width = max(4, width - LABEL - 5 - max((len(b[3]) for b in bars), default=0))
+    out = [meter(name, pct, colour, width, tail) for name, pct, colour, tail in bars]
     if isinstance(view, Totals):
-        out = [Text(f"all running sessions · {view.sessions}", style=f"bold {TEXT}"),
-               label("context") + Text(f"{tokens(view.context)} across {view.sessions}", style=TEXT)]
+        out.insert(0, label("context") + Text(f"{tokens(view.context)} across {view.sessions}", style=hexc(TEXT)))
+    if not any(kind in usage.limits for kind, _ in LIMITS):
+        out.append(Text("usage unavailable" if usage.failed else "usage loading…", style=hexc(DIM)))
+    return out
+
+
+def stat_rows(view, now: float) -> list[Text]:
+    """The cache and compaction rows under the gauges."""
+    if isinstance(view, Totals):
         cache = f"{view.warm} of {view.sessions} warm"
         if view.next_cold:
             at, who = view.next_cold
             cache += f" · next cold {who} at {clock(at)} (in {until(at - now)})"
-        return out + [label("cache") + Text(cache, style=TEXT)]
-    snap = view
-    out = [Text(f"{name} · {model_name(snap.model)} · {tokens(snap.window)} window", style=f"bold {TEXT}")]
-    colour, flashing = grade(snap.context, snap.window)
-    hue = "#%02x%02x%02x" % (tuple(int(c * 0.3) for c in colour) if flashing and frame // 10 % 2 else colour)
-    bar = max(4, width - 8 - 18)
-    out.append(label("context") + Text("▕" + gauge(snap.context, snap.window, bar) + "▏", style=hue)
-               + Text(f" {tokens(snap.context)}/{tokens(snap.window)} {snap.context * 100 // snap.window}%", style=TEXT))
-    for i, line in enumerate(cache_lines(snap, now)):
-        out.append(label("cache" if i == 0 else "") + Text(line, style=TEXT if snap.warm(now) or i else "#ff5860"))
-    if snap.compactions:
-        c = snap.compactions[-1]
-        out.append(label("compact") + Text(f"{len(snap.compactions)}× · last {clock(c.at)} · "
-                                           f"{tokens(c.pre)} → {tokens(c.post)}", style=TEXT))
-    return out
+        return [label("cache") + Text(cache, style=hexc(TEXT))]
+    out = [label("cache" if i == 0 else "") + Text(line, style=hexc(TEXT if view.warm(now) or i else HOT))
+           for i, line in enumerate(cache_lines(view, now))]
+    if view.compactions:
+        c = view.compactions[-1]
+        compact = f"{len(view.compactions)}× · last {clock(c.at)} · {tokens(c.pre)} → {tokens(c.post)}"
+    else:
+        compact = "none yet"
+    return out + [label("compact") + Text(compact, style=hexc(TEXT if view.compactions else DIM))]
+
+
+def title(view, name: str) -> str:
+    if isinstance(view, Totals):
+        return f"all running sessions · {view.sessions}"
+    return f"{name} · {model_name(view.model)} · {tokens(view.window)} window"
+
+
+def panel(head: str, rows: list[Text], width: int) -> list[Text]:
+    """The dashboard's panel: a rounded border in its dimmest colour, titled in its accent.
+    Rows are cut or padded to fit inside."""
+    inner = width - 2
+    if inner < 8:
+        return rows
+    border = hexc(DIM2)
+    name = Text(head, style=f"bold {hexc(ACCENT)}")
+    name.truncate(inner - 4)
+    out = [Text("╭─ ", style=border) + name + Text(" " + "─" * (inner - 3 - name.cell_len) + "╮", style=border)]
+    for row in rows:
+        row = row.copy()
+        row.truncate(inner, pad=True)
+        out.append(Text("│", style=border) + row + Text("│", style=border))
+    return out + [Text("╰" + "─" * inner + "╯", style=border)]
+
+
+def said(note: str, width: int) -> list[Text]:
+    """A note, dim, wrapped to the panel rather than cut off at its border."""
+    return [Text(line, style=hexc(DIM)) for line in textwrap.wrap(note, max(width, 1))]
+
+
+def spaced(rows: list[Text]) -> list[Text]:
+    return [r for row in rows for r in (row, Text())]
+
+
+def layout(view, name: str, note: str | None, usage: "AccountUsage", now: float, width: int,
+           height: int) -> tuple[list[Text], list["Chart"]]:
+    """The pane at a size: a bordered panel of the gauges (a blank line under each) and the
+    cache and compaction rows, then as many of the charts as fit under it."""
+    if view is None:
+        body = said(note or "no sessions running", width - 2) + [Text()] + spaced(gauges(None, usage, now, width - 2))
+        return panel("stats", body, width), []
+    body = spaced(gauges(view, usage, now, width - 2)) + stat_rows(view, now)
+    if note:   # beside a view: something went wrong reading it
+        body += said(note, width - 2)
+    rows = panel(title(view, name), body, width)
+    return rows, charts(view.turns, now, width, height - len(rows), height)
+
+
+def render(rows: list[Text], shown: list["Chart"], frame: int) -> Text:
+    lines = list(rows)
+    for i, c in enumerate(shown):
+        lines += chart_lines(c, frame, ticks=i == len(shown) - 1)
+    return Text("\n", no_wrap=True, overflow="crop").join(lines)
 
 
 # the account's usage limits: the same numbers as Claude Code's /usage
@@ -449,22 +543,7 @@ def resets(at: float | None, now: float) -> str:
     return "resets " + time.strftime("%H:%M %Z" if same_day else "%a %H:%M %Z", time.localtime(at))
 
 
-def usage_lines(usage: AccountUsage, now: float, frame: int, width: int) -> list[Text]:
-    shown = [(label, usage.limits[kind]) for kind, label in LIMITS if kind in usage.limits]
-    if not shown:
-        return [Text("usage unavailable" if usage.failed else "usage loading…", style=DIM)]
-    tails = [f" {pct:3.0f}% {resets(at, now)}" for _, (pct, at) in shown]
-    bar = max(4, width - 10 - max(map(len, tails)))   # one width, so the bars line up
-    out = []
-    for (label, (pct, at)), tail in zip(shown, tails):
-        colour, flashing = usage_grade(pct)
-        hue = "#%02x%02x%02x" % (tuple(int(c * 0.3) for c in colour) if flashing and frame // 10 % 2 else colour)
-        out.append(Text(label.ljust(8), style=DIM) + Text("▕" + gauge(int(pct), 100, bar) + "▏", style=hue)
-                   + Text(tail, style=TEXT))
-    return out
-
-
-# the chart
+# the charts
 
 def buckets(turns: list[Turn], now: float, columns: int, span: int = SPAN) -> list[dict]:
     """The span cut into `columns` equal buckets, oldest first, each summing its turns."""
@@ -475,9 +554,8 @@ def buckets(turns: list[Turn], now: float, columns: int, span: int = SPAN) -> li
     for t in turns:
         if start <= t.at <= now:
             b = out[min(int((t.at - start) / width), columns - 1)]
-            b["read"] += t.read
-            b["new"] += t.new
-            b["miss"] += t.miss
+            for k in SERIES:
+                b[k] += getattr(t, k)
     return out
 
 
@@ -528,31 +606,58 @@ class Chart:
     height: int
     start: float
     span: int
+    kind: str = "assembly"
+    gap: bool = False   # a blank line above it
 
 
-def chart(turns: list[Turn], now: float, width: int, height: int, span: int = SPAN) -> Chart:
+def chart(turns: list[Turn], now: float, width: int, height: int, kind: str = "assembly", span: int = SPAN,
+          gap: bool = False) -> Chart:
+    keys = [k for k, _ in CHARTS[kind][1]]
     bs = buckets(turns, now, width - MARGIN, span)
-    totals = [sum(b.values()) for b in bs]
+    totals = [sum(b[k] for k in keys) for b in bs]
     maxt = max(totals, default=0)
-    return Chart([build_column([(CO[k], b[k]) for k in SERIES], t, maxt, height) for b, t in zip(bs, totals)],
-                 maxt, height, now - span, span)
+    return Chart([build_column([(CO[k], b[k]) for k in keys], t, maxt, height) for b, t in zip(bs, totals)],
+                 maxt, height, now - span, span, kind, gap)
 
 
-def shade(c: tuple, f: float) -> str:
-    f = round(f * 32) / 32   # a few dozen shades, so Rich's style cache keeps hitting
-    return "#%02x%02x%02x" % (int(c[0] * f), int(c[1] * f), int(c[2] * f))
+def charts(turns: list[Turn], now: float, width: int, room: int, height: int) -> list[Chart]:
+    """Both charts if they fit in `room` rows, else the context assembly alone, else none.
+    Each is CHART_SHARE of the height the one chart had before #43 (the pane less six text
+    rows and its own three), and no taller than fits."""
+    target = round(CHART_SHARE * (height - 9))
+    for kinds in (("assembly", "output"), ("assembly",)):
+        n = len(kinds)
+        fixed = 2 * n + 1   # each chart's header and baseline, and the hour ticks under the last
+        bars = min(target, (room - fixed) // n)
+        if bars >= CHART_MIN:
+            gap = room - fixed - n * bars >= n - 1   # a blank line between them, room permitting
+            return [chart(turns, now, width, bars, kind, gap=bool(i) and gap) for i, kind in enumerate(kinds)]
+    return []
 
 
-def chart_lines(c: Chart, frame: int) -> list[Text]:
-    """The chart's legend, bars, baseline and hourly ticks, at animation frame `frame`."""
-    head = Text("▸ ", style="bold #5ae8e8") + Text("context assembly", style=f"bold {TEXT}")
-    for k in SERIES:
-        head += Text("  ▆", style=shade(CO[k], 1)) + Text(" " + LEGEND[k], style=DIM)
-    out = [head]
+def shade(c: tuple, f: float) -> Style:
+    """The dashboard's shade, as a Rich style."""
+    return style_of((int(c[0] * f), int(c[1] * f), int(c[2] * f)))
+
+
+@functools.cache
+def style_of(rgb: tuple) -> Style:
+    """Built once per colour, not parsed from a string every frame: a few hundred at most."""
+    return Style(color=Color.from_rgb(*rgb))
+
+
+def chart_lines(c: Chart, frame: int, ticks: bool = True) -> list[Text]:
+    """A chart's legend, bars and baseline at animation frame `frame`, and with `ticks` the
+    hourly ticks under it. The shimmer and gradient are the dashboard's."""
+    name, series = CHARTS[c.kind]
+    head = Text("▸ ", style=f"bold {hexc(ACCENT)}") + Text(name, style=f"bold {hexc(TEXT)}")
+    for k, legend in series:
+        head += Text("  ▆", style=hexc(CO[k])) + Text(" " + legend, style=hexc(DIM))
+    out = ([Text()] if c.gap else []) + [head]
     for row in range(c.height - 1, -1, -1):
         f = 0.5 + 0.5 * row / (c.height - 1) if c.height > 1 else 1.0
-        label = tokens(round(c.maxt * (row + 1) / c.height)) if row % 2 and c.maxt else ""
-        line = Text(label.rjust(MARGIN - 2) + "  ", style=DIM)
+        value = tokens(round(c.maxt * (row + 1) / c.height)) if row % 2 and c.maxt else ""
+        line = Text(value.rjust(MARGIN - 2) + "  ", style=hexc(DIM))
         for i, col in enumerate(c.columns):
             base, ch = col[row]
             if base:
@@ -562,7 +667,9 @@ def chart_lines(c: Chart, frame: int) -> list[Text]:
                 line.append(" ")
         out.append(line)
     n = len(c.columns)
-    out.append(Text("0".rjust(MARGIN - 1) + " └" + "─" * max(n - 1, 0), style=DIM))
+    out.append(Text("0".rjust(MARGIN - 1) + " ", style=hexc(DIM)) + Text("└" + "─" * max(n - 1, 0), style=hexc(DIM2)))
+    if not ticks:
+        return out
     axis = [" "] * n
     lt = time.localtime(c.start)
     tick = int(c.start) - lt.tm_min * 60 - lt.tm_sec + 3600   # the next local hour: not UTC's, which is off by half an hour in some zones
@@ -572,5 +679,5 @@ def chart_lines(c: Chart, frame: int) -> list[Text]:
         if pos + len(lab) <= n:   # a label that doesn't fit at its hour is left out, not moved off it
             axis[pos:pos + len(lab)] = lab
         tick += 3600
-    out.append(Text(" " * MARGIN + "".join(axis), style=DIM))
+    out.append(Text(" " * MARGIN + "".join(axis), style=hexc(DIM)))
     return out
