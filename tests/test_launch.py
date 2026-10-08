@@ -175,3 +175,19 @@ def test_open_tab_sends_the_join_notice_only_on_resume(store, sid, monkeypatch, 
     launch.open_tab(store, sid)
     got = [(m["kind"], m["body"]) for m in store.pending(sid)]
     assert got == [("notice", launch.JOINED_TEXT)] * notices, desc
+
+
+@pytest.mark.parametrize("env, has_decisions, desc", [
+    (None, True, "the decisions section is on by default"),
+    ("1", True, "on when asked"),
+    ("0", False, "WHEELHOUSE_DECISIONS=0 leaves it out, for the priming A/B test"),
+])
+def test_decisions_section_is_separable(monkeypatch, env, has_decisions, desc):
+    if env is None:
+        monkeypatch.delenv("WHEELHOUSE_DECISIONS", raising=False)
+    else:
+        monkeypatch.setenv("WHEELHOUSE_DECISIONS", env)
+    text = launch.protocol()
+    assert text.startswith("# Wheelhouse protocol"), desc
+    assert ("## Decisions" in text) == has_decisions, desc
+    assert "only if your own instructions already have you decide" in launch.DECISIONS

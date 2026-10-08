@@ -14,6 +14,9 @@ def test_refuses_windows_mount(monkeypatch):
         Store()
 
 
+DECIDED = {"alternative": "Postgres", "why": "no server to run", "reverse": "swap the DSN"}
+
+
 @pytest.mark.parametrize("posts, expected, desc", [
     ([("task", None)], [("T1", "todo")], "task starts todo"),
     ([("question", None)], [("Q1", "open")], "question starts open"),
@@ -38,6 +41,15 @@ def test_post_item_refs_and_statuses(store, sid, posts, expected, desc):
      "closing is the person's call"),
     (lambda s, sid: s.reply(sid, s.post_item(sid, "task", "x"), "ok", "answered"), ValueError,
      "a question status on a task"),
+    (lambda s, sid: s.post_item(sid, "decision", "used SQLite", alternative="Postgres", why="local"),
+     ValueError, "a decision needs how to reverse it"),
+    (lambda s, sid: s.post_item(sid, "decision", "x", status="seen", **DECIDED), ValueError,
+     "a decision's status is the person's"),
+    (lambda s, sid: s.post_item(sid, "task", "x", why="because"), ValueError, "only a decision takes why"),
+    (lambda s, sid: s.update_item(sid, s.post_item(sid, "decision", "x", **DECIDED), status="seen"),
+     ValueError, "the session can't mark its decision seen"),
+    (lambda s, sid: s.reply(sid, s.post_item(sid, "decision", "x", **DECIDED), "ok", "seen"), ValueError,
+     "a reply on a decision takes no status"),
 ])
 def test_rejects_bad_writes(store, sid, call, error, desc):
     with pytest.raises(error):
@@ -204,3 +216,25 @@ def test_needs_relaunch(store, sid, stamp, expected, desc):
     elif stamp:
         getattr(store, stamp)(sid)
     assert needs_relaunch(store.session(sid)) is expected, desc
+
+
+def test_decision_records_its_fields_and_turns_seen_once_viewed(store, sid):
+    d = store.post_item(sid, "decision", "cache in SQLite", "Picked for the prototype.", **DECIDED)
+    item = store.item(sid, d)
+    assert (d, item["status"]) == ("D1", "unseen")
+    assert item["body"] == ("Picked for the prototype.\n\n**Alternative:** Postgres\n\n"
+                            "**Why:** no server to run\n\n**To reverse:** swap the DSN")
+    assert store.sessions()[0]["unseen_decisions"] == 1
+    assert store.sessions()[0]["open_questions"] == 0, "a decision doesn't ask for attention"
+    assert store.mark_seen(sid, d) and not store.mark_seen(sid, d), "seen once"
+    assert store.item(sid, d)["status"] == "seen"
+    assert store.sessions()[0]["unseen_decisions"] == 0
+    assert [r["ref"] for r in store.items(sid, include_closed=False)] == [], "a seen decision is finished"
+    store.reply(sid, d, "Reversed: back on Postgres.")   # pushing back is a thread reply
+    assert store.thread(sid, d)[-1]["kind"] == "reply"
+
+
+def test_mark_seen_leaves_other_kinds_alone(store, sid):
+    q = store.post_item(sid, "question", "which?")
+    assert not store.mark_seen(sid, q)
+    assert store.item(sid, q)["status"] == "open"

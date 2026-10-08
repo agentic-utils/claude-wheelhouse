@@ -21,6 +21,11 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   as a notification, even when it's idle. A running session started from an older
   wheelhouse shows "needs relaunch" (`⟳` in the inbox list): it can't hold queued answers,
   so Ctrl+S sends to it straight away until you `/exit` it and restore or adopt it again.
+- **Decisions.** If your own instructions let a session decide some things without asking
+  you, it reports each one as a decision (`D1`): what it decided, the alternative, why, and
+  how to reverse it. Decisions block nothing. Each session counts its unseen ones (the `D`
+  column); viewing one marks it seen, and it moves to the finished items (`f`) once you move
+  on. To push back, answer in its thread ("reverse that").
 - **Follow a session.** Click a session in the inbox's list (or Enter on it): its items
   list gains a pinned first row, 💬 Conversation, highlighted, and the right-hand pane
   follows its conversation, read live from its transcript: your prompts
@@ -60,7 +65,10 @@ Read these before you launch a session from the wheelhouse. They tell the sessio
 report to the wheelhouse, and defer to your own instructions (CLAUDE.md and the like) on
 how to work.
 
-- [`protocol.md`](claude_wheelhouse/protocol.md): appended to the session's system prompt.
+- [`protocol.md`](claude_wheelhouse/protocol.md): appended to the session's system prompt,
+  followed by [`protocol_decisions.md`](claude_wheelhouse/protocol_decisions.md), which
+  applies only if your instructions already let the session decide some things itself.
+  `WHEELHOUSE_DECISIONS=0` launches sessions without that section.
 - [The `/wheelhouse` skill](claude_wheelhouse/plugin/skills/wheelhouse/SKILL.md):
   `/wheelhouse park` and `/wheelhouse end`.
 - [The `wheelhouse` MCP server](claude_wheelhouse/mcp_server.py): the tools the session

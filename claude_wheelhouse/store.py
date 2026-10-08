@@ -15,18 +15,22 @@ from pathlib import Path
 
 DEFAULT_DB = Path.home() / ".local/state/claude-wheelhouse/wheelhouse.db"
 
-KINDS = {"task": "T", "question": "Q", "agent": "A"}
+KINDS = {"task": "T", "question": "Q", "agent": "A", "decision": "D"}
 STATUSES = {
     "task": {"todo", "running", "blocked", "waiting", "done", "dropped"},
     "question": {"open", "answered", "closed"},
     "agent": {"running", "done", "failed"},
+    "decision": {"unseen", "seen"},   # the person's state, set by viewing it: never the session's
 }
-INITIAL_STATUS = {"task": "todo", "question": "open", "agent": "running"}
-CLOSED = {"done", "dropped", "closed", "failed"}
+INITIAL_STATUS = {"task": "todo", "question": "open", "agent": "running", "decision": "unseen"}
+CLOSED = {"done", "dropped", "closed", "failed", "seen"}
+# what a decision records besides its title (what was decided): post_item's keyword name, label
+DECISION_FIELDS = (("alternative", "Alternative"), ("why", "Why"), ("reverse", "To reverse"))
 # Bump when a change means a session still running older code (its MCP server and monitor
 # keep the code they started with) would mishandle the store: the wheelhouse then shows
 # it as needing a relaunch. 2: queued answers (draft messages) that older code would deliver.
-PROTOCOL_VERSION = 3
+# 3: reply declares a question's status. 4: decisions.
+PROTOCOL_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -200,7 +204,9 @@ class Store:
                     AND i.kind = 'question' AND i.status = 'open') AS open_questions,
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id
                     AND i.status = 'running') AS running,
-                 (SELECT count(*) FROM messages m WHERE m.session_id = s.id AND m.draft = 1) AS drafts
+                 (SELECT count(*) FROM messages m WHERE m.session_id = s.id AND m.draft = 1) AS drafts,
+                 (SELECT count(*) FROM items i WHERE i.session_id = s.id
+                    AND i.kind = 'decision' AND i.status = 'unseen') AS unseen_decisions
                FROM sessions s ORDER BY s.created_at"""
         )
 
@@ -306,9 +312,17 @@ class Store:
 
     # items
 
-    def post_item(self, sid: str, kind: str, title: str, body: str = "", status: str | None = None) -> str:
+    def post_item(self, sid: str, kind: str, title: str, body: str = "", status: str | None = None,
+                  **decision: str) -> str:
+        """A decision also takes alternative, why and reverse (DECISION_FIELDS), all required,
+        which join its body; its status is the person's (unseen until they view it)."""
         if kind not in KINDS:
             raise ValueError(f"kind must be one of {sorted(KINDS)}")
+        if kind == "decision":
+            body = decision_body(body, status, decision)
+            status = None
+        elif any(decision.values()):
+            raise ValueError(f"{', '.join(k for k, v in decision.items() if v)}: only a decision takes these")
         status = status or INITIAL_STATUS[kind]
         self._check_status(kind, status)
         with self.tx() as db:
@@ -331,7 +345,7 @@ class Store:
         if item is None:
             raise KeyError(f"no item {ref} in this session")
         if status is not None:
-            self._check_status(item["kind"], status)
+            self._check_session_status(item, status)
         with self.tx() as db:
             self._require(db, sid)
             db.execute(
@@ -355,7 +369,7 @@ class Store:
             raise ValueError(f"{ref} is a question: reply with status open (still waiting on the "
                              "person) or answered (you have what you need)")
         if status is not None:
-            self._check_status(item["kind"], status)
+            self._check_session_status(item, status)
         with self.tx() as db:
             self._require(db, sid)
             self._said(db, sid, ref, text, "reply")
@@ -380,6 +394,20 @@ class Store:
         if not include_closed:
             rows = [r for r in rows if r["status"] not in CLOSED]
         return sorted(rows, key=inbox_rank)
+
+    def mark_seen(self, sid: str, ref: str) -> bool:
+        """The person has viewed a decision: True if it was unseen until now."""
+        with self.tx() as db:
+            return db.execute("UPDATE items SET status = 'seen', updated_at = ? WHERE session_id = ? "
+                              "AND ref = ? AND kind = 'decision' AND status = 'unseen'",
+                              (now(), sid, ref)).rowcount > 0
+
+    @classmethod
+    def _check_session_status(cls, item, status: str) -> None:
+        if item["kind"] == "decision":
+            raise ValueError(f"{item['ref']} is a decision: whether it has been seen is the person's, "
+                             "set when they view it. Reply without a status.")
+        cls._check_status(item["kind"], status)
 
     @staticmethod
     def _check_status(kind: str, status: str) -> None:
@@ -494,7 +522,23 @@ class Store:
         )
 
 
-RANK = {"open": 0, "blocked": 1, "waiting": 1, "answered": 2, "running": 3, "todo": 4}
+RANK = {"open": 0, "blocked": 1, "waiting": 1, "answered": 2, "unseen": 2, "seen": 2, "running": 3, "todo": 4}
+
+
+def decision_body(body: str, status, fields: dict) -> str:
+    """A decision's body: its detail, then each of DECISION_FIELDS under its label."""
+    if status not in (None, "unseen"):
+        raise ValueError("a decision's status is the person's: post it without one")
+    unknown = set(fields) - {k for k, _ in DECISION_FIELDS}
+    if unknown:
+        raise ValueError(f"unknown decision field(s): {', '.join(sorted(unknown))}")
+    missing = [k for k, _ in DECISION_FIELDS if not (fields.get(k) or "").strip()]
+    if missing:
+        raise ValueError(f"a decision needs {', '.join(missing)}: what you decided goes in title "
+                         "(and body), plus the alternative, why, and how to reverse it")
+    parts = [body.strip()] if body.strip() else []
+    parts += [f"**{label}:** {fields[k].strip()}" for k, label in DECISION_FIELDS]
+    return "\n\n".join(parts)
 
 
 def inbox_rank(item) -> tuple:

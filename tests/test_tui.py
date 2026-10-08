@@ -25,7 +25,7 @@ async def test_answer_reaches_the_session(store, sid):
         await pilot.pause()
         assert store.pending(sid) == [], "Ctrl+S queues"
         assert str(items.get_row_at(0)[2]) == "queued", "the item list shows the queued answer"
-        assert "✉ 1" in str(app.query_one("#session-list", DataTable).get_row_at(0)[3])
+        assert "✉ 1" in str(app.query_one("#session-list", DataTable).get_row_at(0)[4])
         await pilot.press("s")
         await pilot.pause()
     assert [m["body"] for m in store.pending(sid)] == ["SQLite, it's local"]
@@ -834,3 +834,27 @@ async def test_the_item_list_shows_a_question_awaiting_the_session(store, sid, s
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         assert str(app.items_table.get_row_at(0)[2]) == shown, desc
+
+
+@pytest.mark.anyio
+async def test_a_decision_is_seen_once_viewed_and_steps_aside_after(store, sid):
+    q = store.post_item(sid, "question", "which db?")
+    d = store.post_item(sid, "decision", "cache in SQLite", alternative="Postgres",
+                        why="no server to run", reverse="swap the DSN")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        items, sessions = app.items_table, app.query_one("#session-list", DataTable)
+        assert [items.get_row_at(i)[1] for i in range(items.row_count)] == [q, d], "the question ranks first"
+        assert str(items.get_row_at(1)[2]) == "unseen"
+        assert str(sessions.get_row_at(0)[3]) == "1", "the session list counts unseen decisions"
+        assert store.item(sid, d)["status"] == "unseen", "not seen until the person looks"
+        items.focus()
+        items.move_cursor(row=1)
+        await pilot.pause(1.2)   # past a refresh tick
+        assert store.item(sid, d)["status"] == "seen", "viewing it marks it seen"
+        assert items.get_row_at(1)[1] == d, "it stays put while it's being viewed"
+        assert str(sessions.get_row_at(0)[3]) == ""
+        items.move_cursor(row=0)
+        await pilot.pause(1.2)
+        assert [items.get_row_at(i)[1] for i in range(items.row_count)] == [q], "then it's finished"

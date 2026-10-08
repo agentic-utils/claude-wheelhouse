@@ -27,7 +27,20 @@ from . import liveness
 from .store import Store, db_path, now
 
 PLUGIN_DIR = Path(__file__).parent / "plugin"
-PROTOCOL = (Path(__file__).parent / "protocol.md").read_text()
+# The decisions section is separable so its effect on how sessions behave (priming) can be
+# A/B tested: WHEELHOUSE_DECISIONS=0 launches sessions without it. See
+# .plan/decisions-priming-test.md.
+DECISIONS = (Path(__file__).parent / "protocol_decisions.md").read_text()
+
+
+def protocol(decisions: bool | None = None) -> str:
+    if decisions is None:
+        decisions = os.environ.get("WHEELHOUSE_DECISIONS", "1") != "0"
+    base = (Path(__file__).parent / "protocol.md").read_text()
+    return base + "\n" + DECISIONS if decisions else base
+
+
+PROTOCOL = protocol()
 # Sent whenever a tab resumes a conversation (adopt, Restore, relaunch): it triggers a turn,
 # so work the session was already doing shows up in the wheelhouse without waiting for its
 # next post. Safe to repeat: the session checks what the wheelhouse already holds.
@@ -110,7 +123,7 @@ def injected() -> str:
                          *monitor.REQUEST_TEXT.values(), GONE_TEXT,
                          monitor.format_message({"body": JOINED_TEXT, "item_ref": None, "kind": "notice"})])
     return "\n\n".join([
-        f"== protocol.md (appended to the system prompt) ==\n\n{PROTOCOL}",
+        f"== protocol.md and protocol_decisions.md (appended to the system prompt) ==\n\n{PROTOCOL}",
         f"== /wheelhouse skill ({PLUGIN_DIR / 'skills/wheelhouse/SKILL.md'}) ==\n\n{skill}",
         f"== MCP server \"wheelhouse\" ==\n\n{mcp_server.server.instructions}\n\n{tools}",
         f"== Notifications from the wheelhouse monitor ==\n\n{notices}",

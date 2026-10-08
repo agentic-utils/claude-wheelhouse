@@ -36,6 +36,7 @@ from .store import CLOSED, SessionGone, Store, needs_relaunch
 
 MATRIX = "#00ff41"
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
+DECISION = "bold #b967ff"   # an unseen decision: noticeable, not urgent
 STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "#05d9e8",
                 "dead": "bold #ff2a6d", "ending": "bold #d300c5", "parking": "bold #d300c5"}
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
@@ -614,9 +615,9 @@ class WheelhouseApp(App):
         self.tables = {"#session-list": self.query_one("#session-list", DataTable),
                        "#session-table": self.query_one("#session-table", DataTable)}
         self.eye_cols = {
-            "#session-list": self.tables["#session-list"].add_columns("", "session", "?", "✉", "")[-1],
+            "#session-list": self.tables["#session-list"].add_columns("", "session", "?", "D", "✉", "")[-1],
             "#session-table": self.tables["#session-table"].add_columns(
-                "status", "name", "ticket", "dir", "open Q", "running", "queued", "")[-1],
+                "status", "name", "ticket", "dir", "open Q", "running", "unseen D", "queued", "")[-1],
         }
         self.items_table.add_columns("session", "ref", "status", "title")
         self.set_interval(0.1, self.animate)
@@ -696,12 +697,14 @@ class WheelhouseApp(App):
                 if compact and self.stale(s):
                     name = Text.assemble(name, (" ⟳", "bold #ff2a6d"))
                 queued = Text(f"✉ {s['drafts']}", style="bold #05d9e8") if s["drafts"] else ""
+                # decisions inform, they don't block: counted, but not blinking like questions
+                unseen = Text(str(s["unseen_decisions"]), style=DECISION) if s["unseen_decisions"] else ""
                 if compact:
                     q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
-                    rows.append((s["id"], (dot, name, q, queued, busy)))
+                    rows.append((s["id"], (dot, name, q, unseen, queued, busy)))
                 else:
                     rows.append((s["id"], (label, name, s["ticket"], s["cwd"], str(s["open_questions"]),
-                                           str(s["running"]), queued, busy)))
+                                           str(s["running"]), unseen, queued, busy)))
             if fill(table, rows) and table.row_count:
                 table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
 
@@ -711,9 +714,13 @@ class WheelhouseApp(App):
         rows_out = []
         names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
         items = self.store.items(self.filter_sid)
-        rows = item_rows([it for it in items if it["status"] not in CLOSED], names)
+        # a decision turns seen as it's viewed: keep the one being viewed in place until the
+        # person moves on, rather than pull it from under them
+        shown = [it for it in items if it["status"] not in CLOSED
+                 or (it["kind"] == "decision" and self.selected == (it["session_id"], it["ref"]))]
+        rows = item_rows(shown, names)
         if self.show_finished:
-            rows += item_rows([it for it in items if it["status"] in CLOSED], names)
+            rows += item_rows([it for it in items if it not in shown], names)
         queued = {(m["session_id"], m["item_ref"]) for m in self.store.drafts()}
         awaiting = self.store.awaiting()
         if self.filter_sid:   # the session's own conversation, pinned first
@@ -725,7 +732,7 @@ class WheelhouseApp(App):
             # an open question with an answer waiting to be sent shows as queued; it's stored as open
             status = "queued" if it["status"] == "open" and (it["session_id"], it["ref"]) in queued else it["status"]
             style = "dim" if status in CLOSED else "bold #05d9e8" if status == "queued" \
-                else "bold #ffd300" if status == "open" \
+                else "bold #ffd300" if status == "open" else DECISION if status == "unseen" \
                 else "bold #ff2a6d" if status in ("blocked", "waiting") else MATRIX
             name = names.get(it["session_id"], "")[:14]
             if (it["session_id"], it["ref"]) in awaiting and status != "queued":
@@ -864,6 +871,8 @@ class WheelhouseApp(App):
         sid, ref = key.split("|")
         if self.selected != (sid, ref or None):
             self.selected = (sid, ref or None)
+            if ref:
+                self.store.mark_seen(sid, ref)   # a no-op unless it's an unseen decision
             self.retarget()
             self.paint_detail()
             if self.viewing:
@@ -903,6 +912,9 @@ class WheelhouseApp(App):
         target = self.composing()[1]
         item = target and target[1] and self.store.item(*target)
         if not item:
+            return
+        if item["kind"] == "decision":
+            self.notify(f"{item['ref']} is a decision: it's marked seen as you view it", severity="warning")
             return
         if item["kind"] != "question":
             self.notify(f"{item['ref']} is a {item['kind']}: its status is the session's to set",

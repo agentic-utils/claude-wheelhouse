@@ -42,10 +42,14 @@ def wheelhouse_tool(fn):
 
 
 @wheelhouse_tool
-def post_item(kind: str, title: str, body: str = "", status: str | None = None) -> str:
-    """Create a task, question or agent item in the wheelhouse. kind: task | question | agent.
-    Returns the item's ref (T1, Q1, A1...). Write the full detail in body, once."""
-    return _store.post_item(_sid, kind, title, body, status)
+def post_item(kind: str, title: str, body: str = "", status: str | None = None,
+              alternative: str = "", why: str = "", reverse: str = "") -> str:
+    """Create a task, question, agent or decision item in the wheelhouse. kind: task |
+    question | agent | decision. Returns the item's ref (T1, Q1, A1, D1...). Write the full
+    detail in body, once. A decision (see the protocol) also needs alternative, why and
+    reverse (how to undo it), and takes no status."""
+    return _store.post_item(_sid, kind, title, body, status,
+                            alternative=alternative, why=why, reverse=reverse)
 
 
 @wheelhouse_tool
