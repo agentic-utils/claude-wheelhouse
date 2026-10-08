@@ -49,13 +49,30 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   context, the running sessions' totals.
 - **Sessions.** Select a session to read its synopsis, which the session keeps up to
   date itself. New session (directory, optional name, optional ticket, opening brief)
-  opens a Windows Terminal tab running Claude. Restore brings back sessions that died
+  runs Claude in the wheelhouse (below), or in a Windows Terminal tab if you tick the box.
+  Restore brings back sessions that died
   (reboot, crash), one at a time or all at once; selecting a dead (red) session also
   offers to relaunch it. Nothing restarts on its own, and a resumed session is asked to
   post the questions and tasks it already had open. Park
   hides a session until you restore it. End deletes its wheelhouse data. On a running
   session, Park and End only ask the session to do it (press again to cancel or force);
   the wheelhouse never deletes anything by itself.
+- **Run in the wheelhouse.** New sessions run through the Claude Agent SDK in a small
+  host process of their own (`claude-wheelhouse host`), with no tab: you read them in the
+  conversation pane and answer from the inbox, where your messages arrive as ordinary
+  turns. Claude Code still loads your CLAUDE.md, settings, permission mode, hooks,
+  plugins, skills and MCP servers. A tool call your permission settings would have asked
+  about becomes a permission item (`P1`): Allow, Always (keeps the rule Claude Code
+  suggests) or Deny, from the bar; a message typed on it denies the call with your text as
+  what to do instead. A question Claude asks with its question dialog becomes a question
+  item. The bar also has Interrupt, Compact (the session is asked what to keep, then
+  compacted with that, and the bar reports the token drop) and Shell, which hands the
+  session to the real Claude Code in a tab and takes it back when you `/exit` there, plus
+  a line saying what the session is doing. Closing the wheelhouse leaves the hosts
+  running. `WHEELHOUSE_RUNNER=tab` makes tabs the default again; sessions from before
+  hosts existed stay tabs. Host logs are under `~/.local/state/claude-wheelhouse/hosts/`.
+  This runs on your own Claude login, which Anthropic's terms allow for individual use;
+  see `.plan/sdk-sessions.md` before offering it to others.
 - **Adopt.** Brings a session the wheelhouse didn't launch into the wheelhouse: pick it
   from the recent sessions in `~/.claude/projects` (one whose adoption failed is offered
   again). If it's still running, type `/exit` in
@@ -77,16 +94,19 @@ report to the wheelhouse, and defer to your own instructions (CLAUDE.md and the 
 how to work.
 
 - [`protocol.md`](claude_wheelhouse/protocol.md): appended to the session's system prompt,
-  followed by [`protocol_decisions.md`](claude_wheelhouse/protocol_decisions.md), which
+  followed by how your messages reach it ([`protocol_sdk.md`](claude_wheelhouse/protocol_sdk.md)
+  in the wheelhouse, [`protocol_tab.md`](claude_wheelhouse/protocol_tab.md) in a tab) and
+  [`protocol_decisions.md`](claude_wheelhouse/protocol_decisions.md), which
   has the session report the choices it makes without asking.
   `WHEELHOUSE_DECISIONS=0` launches sessions without that section.
-- [The `/wheelhouse` skill](claude_wheelhouse/plugin/skills/wheelhouse/SKILL.md):
+- In a tab, [the `/wheelhouse` skill](claude_wheelhouse/plugin/skills/wheelhouse/SKILL.md):
   `/wheelhouse park` and `/wheelhouse end`.
 - [The `wheelhouse` MCP server](claude_wheelhouse/mcp_server.py): the tools the session
   posts and reads through. Each tool's description is its docstring.
-- [The monitor](claude_wheelhouse/monitor.py) ([plugin entry](claude_wheelhouse/plugin/monitors/monitors.json)):
+- In a tab, [the monitor](claude_wheelhouse/monitor.py) ([plugin entry](claude_wheelhouse/plugin/monitors/monitors.json))
   delivers your answers, the End and Park requests, and the note an adopted session gets
-  on joining, as `[wheelhouse]` notifications.
+  on joining, as `[wheelhouse]` notifications. In the wheelhouse, [the host](claude_wheelhouse/host.py)
+  sends the same as turns.
 
 `claude-wheelhouse protocol` prints all of it in one go, exactly as a session receives it,
 along with the launch command.

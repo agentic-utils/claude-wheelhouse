@@ -128,7 +128,9 @@ def injected() -> str:
                          *monitor.REQUEST_TEXT.values(), GONE_TEXT,
                          monitor.format_message({"body": JOINED_TEXT, "item_ref": None, "kind": "notice"})])
     return "\n\n".join([
-        f"== protocol.md and protocol_decisions.md (appended to the system prompt) ==\n\n{PROTOCOL}",
+        f"== protocol.md, protocol_tab.md and protocol_decisions.md (appended to the system prompt) ==\n\n{PROTOCOL}",
+        "== protocol_sdk.md (in place of protocol_tab.md for a session run in the wheelhouse) ==\n\n"
+        + (Path(__file__).parent / "protocol_sdk.md").read_text(),
         f"== /wheelhouse skill ({PLUGIN_DIR / 'skills/wheelhouse/SKILL.md'}) ==\n\n{skill}",
         f"== MCP server \"wheelhouse\" ==\n\n{mcp_server.server.instructions}\n\n{tools}",
         f"== Notifications from the wheelhouse monitor ==\n\n{notices}",

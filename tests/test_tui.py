@@ -2,7 +2,7 @@ import json
 
 import pytest
 from rich.text import Text
-from textual.widgets import DataTable, TextArea
+from textual.widgets import Checkbox, DataTable, Input, Label, TextArea
 
 from claude_wheelhouse import launch, transcript
 from claude_wheelhouse.tui import MATRIX, VOICE, WheelhouseApp, Choice, Confirm, ThreadView, Transcript, render
@@ -312,7 +312,7 @@ async def test_send_bar_buttons_follow_the_queues(store, sid, tmp_path):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        bar = lambda: {b.id: (str(b.label), b.disabled) for b in app.screen.query("SendBar Button")}
+        bar = lambda: {b.id: (str(b.label), b.disabled) for b in app.screen.query("SendBar Button") if b.display}
         assert bar() == {"mode": ("Mode", True), "send": ("Send (0)", True), "send-all": ("Send all (0)", True)}, \
             "no session in context, nothing queued"
         store.post_item(sid, "question", "which db?")   # highlighted as it arrives: its session is in context
@@ -1012,3 +1012,72 @@ async def test_the_stats_pane_follows_the_session_in_context(store, sid, tmp_pat
         shown = app.stats.render().plain
         assert "demo · Opus 5.5" in shown and "83k/1M" in shown and "1h · warm" in shown
         assert "context assembly" in shown, "half the column is room enough for the chart"
+
+
+def shown_buttons(app) -> set[str]:
+    return {b.id for b in app.screen.query("SendBar Button") if b.display}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("press, status, decision, desc", [
+    ("#allow", "allowed", "allow", "allow once"),
+    ("#always", "allowed", "always", "allow, and keep the rule"),
+    ("#deny", "denied", "deny", "deny"),
+])
+async def test_permission_buttons(store, tmp_path, press, status, decision, desc):
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    ref = store.post_item(sid, "permission", "Bash: rm -rf build")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        assert {"allow", "always", "deny"} <= shown_buttons(app), desc
+        await pilot.click(press)
+        await pilot.pause()
+        assert not {"allow", "always", "deny"} & shown_buttons(app), f"{desc}: answered, the buttons go"
+    item = store.item(sid, ref)
+    assert item["status"] == status and json.loads(item["answer"])["decision"] == decision, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("runner_, live, shown, desc", [
+    ("sdk", True, True, "a running hosted session"),
+    ("sdk", False, False, "not while it isn't running"),
+    ("tab", True, False, "a tab has its own terminal"),
+])
+async def test_host_buttons(store, tmp_path, monkeypatch, runner_, live, shown, desc):
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live" if live else "dead")
+    sid = store.create_session(str(tmp_path), name="hosted", runner=runner_)
+    store.post_item(sid, "task", "work")
+    store.set_activity(sid, "running Bash: make test")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        assert ({"interrupt", "compact", "shell"} <= shown_buttons(app)) == shown, desc
+        activity = str(app.screen.query_one("#activity", Label).content)
+        assert (activity == "running Bash: make test") == shown, desc
+        if shown:
+            await pilot.click("#interrupt")
+            await pilot.pause()
+            assert store.session(sid)["host_command"] == "interrupt", desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tick, runner_, desc", [
+    (False, "sdk", "runs in the wheelhouse by default"),
+    (True, "tab", "the box opens a tab instead"),
+])
+async def test_new_session_runner(store, tmp_path, monkeypatch, tick, runner_, desc):
+    launched = []
+    monkeypatch.setattr(launch, "open_session", lambda s, i: launched.append(s.session(i)["runner"]))
+    monkeypatch.setenv("WHEELHOUSE_RUNNER", "sdk")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.press("n")
+        await pilot.pause()
+        app.screen.query_one("#cwd", Input).value = str(tmp_path)
+        if tick:
+            app.screen.query_one("#tab", Checkbox).value = True
+        await pilot.click("#launch")
+        await pilot.pause()
+    assert launched == [runner_], desc

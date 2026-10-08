@@ -3,6 +3,13 @@ import pytest
 from claude_wheelhouse.store import Store
 
 
+@pytest.fixture(autouse=True)
+def tab_runner(monkeypatch):
+    """Sessions made in tests run as tabs (launch is stubbed per test) unless a test picks
+    sdk: a real host would start Claude Code."""
+    monkeypatch.setenv("WHEELHOUSE_RUNNER", "tab")
+
+
 @pytest.fixture
 def db_file(tmp_path, monkeypatch):
     path = tmp_path / "wheelhouse.db"

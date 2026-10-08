@@ -22,6 +22,7 @@ from textual.strip import Strip
 from textual.widget import Widget
 from textual.widgets import (
     Button,
+    Checkbox,
     DataTable,
     Footer,
     Input,
@@ -34,7 +35,7 @@ from textual.widgets import (
 )
 
 from . import adopt, emoji, launch, liveness, stats, transcript
-from .store import CLOSED, SessionGone, Store, mode, needs_relaunch
+from .store import CLOSED, SessionGone, Store, default_runner, mode, needs_relaunch, runner
 
 MATRIX = "#00ff41"
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
@@ -430,28 +431,46 @@ class SendBar(Horizontal):
     """Always on screen above the footer: the current session's send mode, its queue, and
     every session's. Send all has no key: Windows Terminal sends Ctrl+Shift+S and
     Ctrl+Alt+S as plain Ctrl+S. The buttons never take focus, so clicking one leaves the
-    answer box (and what's typed in it) where it was."""
+    answer box (and what's typed in it) where it was.
+
+    A session run by a wheelhouse host also gets what its terminal would have given:
+    Allow, Always and Deny on an open permission item, Interrupt, Compact and Shell (the
+    real Claude Code, in a tab), and a line saying what it's doing now."""
     DEFAULT_CSS = """
     SendBar { height: 1; background: #12122a; }
     SendBar Button { height: 1; min-width: 12; border: none; margin: 0 1 0 0; padding: 0 1; }
+    SendBar #activity { width: 1fr; height: 1; color: #05d9e8; text-style: italic; padding: 0 1; }
     """
 
     def compose(self) -> ComposeResult:
         yield Button("Mode", id="mode")
         yield Button("Send", id="send", variant="primary")
         yield Button("Send all", id="send-all", variant="warning")
+        yield Button("Allow", id="allow", variant="success")
+        yield Button("Always", id="always", variant="primary")
+        yield Button("Deny", id="deny", variant="error")
+        yield Button("Interrupt", id="interrupt", variant="error")
+        yield Button("Compact", id="compact")
+        yield Button("Shell", id="shell")
+        yield Label("", id="activity")
 
     def on_mount(self) -> None:
         for button in self.query(Button):
             button.can_focus = False
 
-    def show(self, button_id: str, label: str, disabled: bool) -> None:
+    def show(self, button_id: str, label: str, disabled: bool, shown: bool = True) -> None:
         button = next(iter(self.query(f"#{button_id}")), None)
         if button is None:   # the app's first refresh can come before the bar's buttons mount
             return
         if str(button.label) != label:
             button.label = label
         button.disabled = disabled
+        button.display = shown
+
+    def activity(self, text: str) -> None:
+        label = next(iter(self.query("#activity")), None)
+        if label is not None and str(label.content) != text:
+            label.update(text)
 
 
 class ThreadView(Screen):
@@ -510,6 +529,7 @@ class NewSession(ModalScreen):
             yield Input(placeholder="name (optional)", id="name")
             yield Input(placeholder="ticket: #42, owner/repo#42 or ABC-123 (optional)", id="ticket")
             yield TextArea(id="brief")
+            yield Checkbox("Open in a terminal tab instead of the wheelhouse", default_runner() == "tab", id="tab")
             with Horizontal(classes="buttons"):
                 yield Button("Launch", variant="success", id="launch")
                 yield Button("Cancel", id="cancel")
@@ -522,7 +542,8 @@ class NewSession(ModalScreen):
             return
         self.dismiss({"cwd": cwd, "name": self.query_one("#name", Input).value.strip(),
                       "ticket": self.query_one("#ticket", Input).value.strip(),
-                      "brief": self.query_one("#brief", TextArea).text.strip()})
+                      "brief": self.query_one("#brief", TextArea).text.strip(),
+                      "runner": "tab" if self.query_one("#tab", Checkbox).value else "sdk"})
 
     @on(Button.Pressed, "#cancel")
     def cancel(self) -> None:
@@ -823,7 +844,9 @@ class WheelhouseApp(App):
         return PENDING[what] if what and st in RUNNING else st
 
     def busy(self, s) -> bool:
-        return bool(s["running"]) and self.statuses.get(s["id"]) in ("live", "stalled")
+        working = bool(s["running"]) or (runner(s) == "sdk" and (s["activity"] or "idle").split()[0]
+                                         not in ("idle", "interrupted", "stopped", "in"))
+        return working and self.statuses.get(s["id"]) in ("live", "stalled")
 
     def sweep_eyes(self) -> None:
         """Move the Cylon eye on busy rows without rebuilding the tables."""
@@ -1001,6 +1024,18 @@ class WheelhouseApp(App):
         n = s["drafts"] if s else 0
         bar.show("send", f"Send ({n})", not n)
         bar.show("send-all", f"Send all ({total})", not total)
+        hosted = s is not None and runner(s) == "sdk" and self.running(s["id"]) and not s["shell"]
+        for button in ("interrupt", "compact", "shell"):
+            bar.show(button, button.capitalize(), False, hosted)
+        item = self.bar_item(self.screen)
+        item = item and self.store.item(*item)
+        asking = bool(item) and item["kind"] == "permission" and item["status"] == "open"
+        for button in ("allow", "always", "deny"):
+            bar.show(button, button.capitalize(), False, asking)
+        if s is not None and runner(s) == "sdk":
+            bar.activity("in a shell tab" if s["shell"] else (s["activity"] or "") if self.running(s["id"]) else "")
+        else:
+            bar.activity("")
 
     def paint_synopsis(self) -> None:
         sid = self.current_session()
@@ -1034,7 +1069,7 @@ class WheelhouseApp(App):
 
     @session_action
     def relaunch(self, sid: str) -> None:
-        if self.open_tab(sid):
+        if self.open_session(sid):
             self.store.set_parked(sid, False)
             self.notify("relaunching in a new tab")
             self.refresh_data()
@@ -1226,6 +1261,14 @@ class WheelhouseApp(App):
             return self.current_session()
         return self.filter_sid or (self.selected[0] if self.selected else None)
 
+    def bar_item(self, screen) -> tuple[str, str] | None:
+        """The item in context on a screen: the thread's, else the inbox's selected item."""
+        if isinstance(screen, ThreadView):
+            return (screen.sid, screen.ref)
+        if self.tabs.active == "inbox" and self.selected and self.selected[1]:
+            return self.selected
+        return None
+
     def sent_note(self, sid: str, n: int) -> str:
         s = self.store.session(sid)
         name = (s["name"] or short(sid)) if s else short(sid)
@@ -1289,6 +1332,40 @@ class WheelhouseApp(App):
     def send_all_pressed(self) -> None:
         self.send_all()
 
+    @on(Button.Pressed, "#allow, #always, #deny")
+    def permission_pressed(self, event: Button.Pressed) -> None:
+        """Answer a permission item. A message typed on it instead denies with that text."""
+        target = self.bar_item(event.button.screen)
+        if not target:
+            return
+        try:
+            self.store.answer_permission(*target, event.button.id)
+        except (KeyError, SessionGone) as e:   # answered meanwhile, or the session went
+            self.notify(str(e.args[0] if e.args else e), severity="warning")
+        self.refresh_data()
+
+    @on(Button.Pressed, "#interrupt, #compact, #shell")
+    def host_pressed(self, event: Button.Pressed) -> None:
+        sid = self.bar_session(event.button.screen)
+        if not sid:
+            return
+        what = event.button.id
+        if what == "interrupt":
+            self.host_command(sid, what)
+            return
+        ask = {"compact": f"Compact {self.label(sid)}? It's asked for what to keep, then compacted with that.",
+               "shell": f"Open {self.label(sid)} in a terminal tab? The wheelhouse hands it over, and takes "
+                        "it back when you /exit the tab."}[what]
+        self.push_screen(Confirm(ask), lambda yes: yes and self.host_command(sid, what))
+
+    def host_command(self, sid: str, what: str) -> None:
+        try:
+            self.store.command(sid, what)
+        except SessionGone:
+            return
+        self.notify({"interrupt": "interrupting", "compact": "compacting: asking what to keep",
+                     "shell": "opening a terminal tab"}[what])
+
     # sessions page
 
     def current_session(self) -> str | None:
@@ -1306,7 +1383,7 @@ class WheelhouseApp(App):
         if not form:
             return
         sid = self.store.create_session(**form)
-        self.open_tab(sid)
+        self.open_session(sid)
 
     def action_adopt(self) -> None:
         if isinstance(self.focused, (TextArea, Input)):
@@ -1325,12 +1402,13 @@ class WheelhouseApp(App):
         except Exception as e:   # came back to life, wt.exe missing...
             self.notify(str(e), severity="error")
             return
-        self.notify(f"adopting {form['name'] or short(form['candidate'].id)} in a new tab")
+        self.notify(f"adopting {form['name'] or short(form['candidate'].id)}")
         self.refresh_data()
 
-    def open_tab(self, sid: str) -> bool:
+    def open_session(self, sid: str) -> bool:
+        """Launch or restore a session the way it runs: a host, or a tab."""
         try:
-            launch.open_tab(self.store, sid)
+            launch.open_session(self.store, sid)
         except Exception as e:   # already running, wt.exe missing...
             self.notify(str(e), severity="error")
             return False
@@ -1360,7 +1438,7 @@ class WheelhouseApp(App):
         if self.statuses.get(sid) != "dead":
             self.notify("only a dead session can be restored", severity="warning")
             return
-        if self.open_tab(sid):
+        if self.open_session(sid):
             self.store.set_parked(sid, False)
 
     @on(Button.Pressed, "#restore-all")
@@ -1372,9 +1450,9 @@ class WheelhouseApp(App):
 
         def go(yes: bool) -> None:
             if yes:
-                n = sum(self.open_tab(sid) for sid in dead)
+                n = sum(self.open_session(sid) for sid in dead)
                 self.notify(f"restoring {n} session(s)")
-        self.push_screen(Confirm(f"Restore {len(dead)} dead session(s) in new tabs?"), go)
+        self.push_screen(Confirm(f"Restore {len(dead)} dead session(s)?"), go)
 
     @on(Button.Pressed, "#park")
     @session_action
