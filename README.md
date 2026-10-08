@@ -61,7 +61,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   date itself. New session (directory, optional name, optional ticket, opening brief)
   runs Claude in the wheelhouse (below), or in a Windows Terminal tab if you tick the box.
   Browse… picks the directory from a tree (Enter opens a folder, Backspace goes up,
-  Ctrl+Enter or Choose takes the highlighted one).
+  Ctrl+Enter or Choose takes the highlighted one). Rename changes a session's name; a
+  `/rename` in Claude Code is picked up too, within a few seconds while the wheelhouse is
+  open, and before a restore relaunches it.
   Restore brings back sessions that died
   (reboot, crash), one at a time or all at once; selecting a dead (red) session also
   offers to relaunch it. Nothing restarts on its own, and a resumed session is asked to

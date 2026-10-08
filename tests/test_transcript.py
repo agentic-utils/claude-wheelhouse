@@ -140,3 +140,35 @@ def test_the_persons_line_breaks_survive_rendering():
 def test_hosted_session_header_has_no_tab():
     out = transcript.blocks("demo", None, [])
     assert "Runs in the wheelhouse" in out[0][1] and not any(who == "warn" for who, _ in out)
+
+
+def title(name):
+    return {"type": "custom-title", "customTitle": name, "sessionId": "abc"}
+
+
+def test_title_watch_follows_renames_reading_only_what_is_new(tmp_path):
+    folder = tmp_path / "-home-u-repo"
+    folder.mkdir()
+    watch = transcript.TitleWatch("abc", projects=tmp_path)
+    assert watch.read() is None, "no transcript yet"
+    path = folder / "abc.jsonl"
+    path.write_text(json.dumps(user("hi")) + "\n")
+    assert watch.read() is None, "never renamed"
+    with open(path, "a") as f:
+        f.write(json.dumps(title("Columbo check")) + "\n" + json.dumps(user("more")) + "\n")
+    assert watch.read() == "Columbo check", "a /rename"
+    with open(path, "a") as f:
+        f.write(json.dumps(title("Second")))   # no newline yet: still being written
+    assert watch.read() == "Columbo check", "a half-written record waits"
+    with open(path, "a") as f:
+        f.write("\n")
+    assert watch.read() == "Second", "then counts once complete"
+
+
+def test_title_watch_reads_the_tail_of_a_long_transcript(tmp_path, monkeypatch):
+    monkeypatch.setattr(transcript, "TAIL_BYTES", 400)
+    folder = tmp_path / "-home-u-repo"
+    folder.mkdir()
+    recs = [title("old")] + [user(f"prompt {i}") for i in range(20)] + [title("new"), user("last")]
+    (folder / "abc.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+    assert transcript.TitleWatch("abc", projects=tmp_path).read() == "new"

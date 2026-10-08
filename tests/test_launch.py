@@ -191,3 +191,15 @@ def test_decisions_section_is_separable(monkeypatch, env, has_decisions, desc):
     assert text.startswith("# Wheelhouse protocol"), desc
     assert ("## Decisions" in text) == has_decisions, desc
     assert "This section is about reporting, not deciding" in launch.DECISIONS
+
+
+def test_a_restore_takes_a_rename_made_in_claude_code_first(store, sid, tmp_path, monkeypatch):
+    from claude_wheelhouse import transcript
+    folder = tmp_path / "projects/-home-u-repo"
+    folder.mkdir(parents=True)
+    (folder / f"{sid}.jsonl").write_text(json.dumps({"type": "custom-title", "customTitle": "Columbo check"}) + "\n")
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    launched = []
+    monkeypatch.setattr(launch, "open_tab", lambda s, i: launched.append(s.session(i)["name"]))
+    launch.open_session(store, sid)
+    assert launched == ["Columbo check"], "the launch's -n carries the new name"

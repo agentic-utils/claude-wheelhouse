@@ -5,7 +5,8 @@ from rich.text import Text
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, TextArea
 
 from claude_wheelhouse import launch, transcript
-from claude_wheelhouse.tui import MATRIX, VOICE, WheelhouseApp, Choice, Confirm, Folders, Hint, SendBar, ThreadView, Transcript, render
+from claude_wheelhouse.tui import (MATRIX, VOICE, WheelhouseApp, Choice, Confirm, Folders, Hint, SendBar, ThreadView,
+                                   Transcript, render)
 
 
 @pytest.mark.anyio
@@ -1295,3 +1296,42 @@ async def test_browse_fills_in_the_working_directory(store, tmp_path):
         await pilot.press("ctrl+j")   # and take it
         await pilot.pause()
         assert app.screen.query_one("#cwd", Input).value == str(tmp_path)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("typed, keys, expected, desc", [
+    ("Columbo check", ["enter"], "Columbo check", "Enter renames"),
+    ("", ["enter"], "", "empty clears it: the session shows its directory"),
+    ("Columbo check", ["escape"], "demo", "Esc leaves it"),
+])
+async def test_rename_a_session(store, sid, typed, keys, expected, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.click("#rename")
+        await pilot.pause()
+        box = app.screen.query_one("#new-name", Input)
+        assert box.value == "demo", "it starts from the current name"
+        box.value = typed
+        await pilot.press(*keys)
+        await pilot.pause()
+    assert store.session(sid)["name"] == expected, desc
+
+
+@pytest.mark.anyio
+async def test_a_rename_in_claude_code_is_picked_up(store, sid, tmp_path, monkeypatch):
+    folder = tmp_path / "projects/-home-u-repo"
+    folder.mkdir(parents=True)
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    path = folder / f"{sid}.jsonl"
+    path.write_text("")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        path.write_text(json.dumps({"type": "custom-title", "customTitle": "Columbo check"}) + "\n")
+        for _ in range(5):   # a look every TITLE_TICKS refreshes
+            app.refresh_data()
+        await pilot.pause()
+        assert store.session(sid)["name"] == "Columbo check"
+        assert str(app.query_one("#session-list", DataTable).get_row_at(0)[1]) == "Columbo check"

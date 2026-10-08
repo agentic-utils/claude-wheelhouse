@@ -191,6 +191,46 @@ def markdown(name: str, tab: str, recs: list[dict] | None, queued=()) -> str:
     return "\n\n".join(md for _, md in blocks(name, tab, recs, queued))
 
 
+class TitleWatch:
+    """The latest name a session's transcript records: Claude Code writes a custom-title
+    record for /rename and for a launch's -n, and writes it again as the conversation goes
+    on. The tail is read once, then only what has been appended since."""
+
+    def __init__(self, sid: str, projects: Path | None = None):
+        self.sid, self.projects = sid, projects
+        self.path: Path | None = None
+        self.offset: int | None = None
+        self.title: str | None = None
+
+    def read(self) -> str | None:
+        if self.path is None:
+            self.path = locate(self.sid, self.projects)
+            if self.path is None:
+                return None
+        try:
+            with open(self.path, "rb") as f:
+                size = f.seek(0, 2)
+                if size == self.offset:
+                    return self.title
+                start = max(0, size - TAIL_BYTES) if self.offset is None or size < self.offset else self.offset
+                f.seek(start)
+                data = f.read(size - start)
+        except OSError:
+            self.path = self.offset = None
+            return self.title
+        data = data[:data.rfind(b"\n") + 1]   # a record still being written waits for the next read
+        self.offset = start + len(data)
+        for line in data.splitlines():
+            if b"custom-title" in line:
+                try:
+                    rec = json.loads(line)
+                except ValueError:   # the tail's first line, cut mid-record
+                    continue
+                if isinstance(rec, dict) and rec.get("type") == "custom-title" and rec.get("customTitle"):
+                    self.title = rec["customTitle"]
+        return self.title
+
+
 class Follower:
     """One session's transcript, re-read only when the file has changed."""
 

@@ -53,6 +53,7 @@ VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777"}
 PENDING = {"end": "ending", "park": "parking"}
 CLOSABLE = {"question": "answered", "decision": "seen"}   # what X closes, and what reopening makes it
+TITLE_TICKS = 5   # refreshes (seconds) between looks for a /rename in the transcripts
 
 
 def cylon(frame: int, width: int = 8) -> Text:
@@ -651,6 +652,37 @@ class PickDirectory(ModalScreen):
             self.dismiss(None)
 
 
+class RenameSession(ModalScreen):
+    """A session's name: Enter keeps it, Esc leaves it as it was. Empty clears it, and the
+    session shows its directory's name."""
+
+    def __init__(self, name: str):
+        super().__init__()
+        self.current = name
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("RENAME SESSION", classes="dialog-title")
+            yield Input(value=self.current, placeholder="name (empty: its directory's name)", id="new-name")
+            with Horizontal(classes="buttons"):
+                yield Button("Rename", variant="success", id="ok")
+                yield Button("Cancel", id="cancel")
+
+    @on(Input.Submitted)
+    @on(Button.Pressed, "#ok")
+    def ok(self) -> None:
+        self.dismiss(self.query_one("#new-name", Input).value.strip())
+
+    @on(Button.Pressed, "#cancel")
+    def cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            event.stop()
+            self.dismiss(None)
+
+
 def ago(epoch: float, now: float | None = None) -> str:
     mins = int(((now or time.time()) - epoch) // 60)
     return f"{mins}m ago" if mins < 60 else f"{mins // 60}h ago" if mins < 48 * 60 else f"{mins // 1440}d ago"
@@ -828,6 +860,7 @@ BUTTONS = {
     "adopt-open": "Adopt: take on a Claude Code session started outside the wheelhouse",
     "restore": "Restore: bring back a dead session where it left off",
     "restore-all": "Restore all: every dead session that isn't parked",
+    "rename": "Rename: the session's name in the wheelhouse (a /rename in Claude Code is picked up too)",
     "park": "Park / unpark: drop a session off the inbox, or bring it back",
     "end": "End: the session does its own end steps, then its wheelhouse data is deleted",
 }
@@ -901,6 +934,7 @@ class WheelhouseApp(App):
     .dialog-title {{ color: #ffd300; text-style: bold; }}
     #dialog TextArea {{ height: 8; }}
     .buttons {{ height: 3; }}
+    RenameSession {{ align: center middle; }}
     #dialog.wide {{ width: 120; }}
     #adopt-list {{ height: 16; }}
     #adopt-hint {{ color: #ffd300; }}
@@ -946,6 +980,8 @@ class WheelhouseApp(App):
         # session's conversation, the first row while a session is selected
         self.selected: tuple[str, str | None] | None = None
         self.followers: dict[str, transcript.Follower] = {}
+        self.titles: dict[str, transcript.TitleWatch] = {}
+        self.ticks = 0
         self.usage: dict[str, stats.UsageFollower] = {}
         # unsent text typed for each target, (session id, ref or None), kept in memory only
         self.unsent: dict[tuple, str] = {}
@@ -981,6 +1017,7 @@ class WheelhouseApp(App):
                         yield Button("Adopt", id="adopt-open")
                         yield Button("Restore", id="restore")
                         yield Button("Restore all", id="restore-all", variant="warning")
+                        yield Button("Rename", id="rename")
                         yield Button("Park / unpark", id="park")
                         yield Button("End", id="end", variant="error")
         yield SendBar()
@@ -1026,6 +1063,9 @@ class WheelhouseApp(App):
     def refresh_data(self) -> None:
         self.waking = self.wake.tick()
         self.sessions = self.store.sessions()
+        self.ticks += 1
+        if self.ticks % TITLE_TICKS == 1:
+            self.watch_titles()
         # liveness only: the wheelhouse never deletes or parks anything by itself
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
         self.paint_sessions()
@@ -1792,6 +1832,31 @@ class WheelhouseApp(App):
         self.lifecycle(sid, "park",
                        ask=f"Ask {self.label(sid)} to park? It brings its items up to date, then parks.",
                        act=f"Park {self.label(sid)}? It drops off the inbox and Restore all.")
+
+    @on(Button.Pressed, "#rename")
+    def rename_pressed(self) -> None:
+        sid = self.current_session()
+        if sid:
+            self.push_screen(RenameSession(self.row(sid)["name"]), lambda name: self.rename(sid, name))
+
+    @session_action
+    def rename(self, sid: str, name: str | None) -> None:
+        if name is None:
+            return
+        self.store.rename(sid, name)
+        self.notify(f"renamed to {name}" if name else "name cleared: it shows its directory")
+        self.refresh_data()
+
+    def watch_titles(self) -> None:
+        """Pick up a rename made in Claude Code (/rename) from each session's transcript."""
+        present = {s["id"] for s in self.sessions}
+        for sid in [sid for sid in self.titles if sid not in present]:   # ended: its watch goes
+            del self.titles[sid]
+        for s in self.sessions:
+            watch = self.titles.setdefault(s["id"], transcript.TitleWatch(s["id"]))
+            title = watch.read()
+            if title and title != s["transcript_title"] and self.store.take_title(s["id"], title):
+                self.sessions = self.store.sessions()
 
     @on(Button.Pressed, "#end")
     @session_action

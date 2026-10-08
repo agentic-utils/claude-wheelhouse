@@ -273,3 +273,17 @@ def test_decisions_seen_before_they_stayed_are_closed_once(db_file, sid, store):
     fresh = store.post_item(sid, "decision", "new", **DECIDED)
     store.mark_seen(sid, fresh)
     assert Store(db_file).item(sid, fresh)["status"] == "seen", "the migration runs once"
+
+
+@pytest.mark.parametrize("steps, expected, desc", [
+    ([("take", "Columbo check")], ("Columbo check", True), "a /rename is taken"),
+    ([("take", "Columbo check"), ("rename", "mine"), ("take", "Columbo check")], ("mine", False),
+     "a wheelhouse rename since isn't undone by the transcript's older title"),
+    ([("take", "a"), ("rename", "mine"), ("take", "b")], ("b", True), "a newer /rename wins"),
+    ([("take", "demo")], ("demo", True), "the launch's own -n: recorded, the name unchanged"),
+])
+def test_take_title(store, sid, steps, expected, desc):
+    took = None
+    for step, value in steps:
+        took = store.take_title(sid, value) if step == "take" else store.rename(sid, value)
+    assert (store.session(sid)["name"], took) == expected, desc

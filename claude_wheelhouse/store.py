@@ -120,7 +120,7 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "runner", "TEXT"), ("sessions", "activity", "TEXT NOT NULL DEFAULT ''"),
                  ("sessions", "host_command", "TEXT"), ("sessions", "shell", "TEXT"),
                  ("sessions", "context_tokens", "INTEGER"), ("sessions", "context_max", "INTEGER"),
-                 ("items", "answer", "TEXT")]
+                 ("items", "answer", "TEXT"), ("sessions", "transcript_title", "TEXT")]
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
 REQUESTS = ("end", "park")   # what the wheelhouse can ask a running session to do
 CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print is retaken
@@ -321,6 +321,14 @@ class Store:
     def rename(self, sid: str, name: str) -> None:
         with self.tx() as db:
             db.execute("UPDATE sessions SET name = ? WHERE id = ?", (name, sid))
+
+    def take_title(self, sid: str, title: str) -> bool:
+        """The name the session's transcript records (Claude Code's /rename, or a launch's
+        -n): taken as the session's name when it changes there, so a rename made in the
+        wheelhouse since isn't undone by the transcript's older one. True if renamed."""
+        with self.tx() as db:
+            return db.execute("UPDATE sessions SET name = ?, transcript_title = ? WHERE id = ? "
+                              "AND transcript_title IS NOT ?", (title, title, sid, title)).rowcount > 0
 
     def set_synopsis(self, sid: str, text: str) -> None:
         with self.tx() as db:

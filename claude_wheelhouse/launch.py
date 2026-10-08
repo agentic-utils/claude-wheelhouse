@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 from . import liveness
-from .transcript import NO_BRIEF
+from .transcript import NO_BRIEF, TitleWatch
 from .store import Store, db_path, default_runner, now, runner
 
 PLUGIN_DIR = Path(__file__).parent / "plugin"
@@ -142,10 +142,14 @@ def injected() -> str:
 
 
 def open_session(store: Store, sid: str) -> None:
-    """Launch (or restore) a session the way it runs: a host for sdk, a tab for tab."""
+    """Launch (or restore) a session the way it runs: a host for sdk, a tab for tab. A
+    /rename made in Claude Code since the wheelhouse last looked is taken first, so the
+    launch's -n carries it rather than the old name."""
     session = store.session(sid)
     if session is None:
         raise KeyError(sid)
+    if title := TitleWatch(sid).read():
+        store.take_title(sid, title)
     (open_host if runner(session) == "sdk" else open_tab)(store, sid)
 
 
