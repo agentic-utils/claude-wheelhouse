@@ -10,5 +10,7 @@ otherwise would have asked about.
 - The bar is a choice the person might reasonably want to know about. Not every naming or
   formatting choice. The bar decides only what you report: whether to ask first is up to
   your own instructions, exactly as it would be without this section.
+- Provisional work while a question is open isn't a decision: carry on as you would without
+  this section.
 - A decision takes no status: whether the person has seen it is theirs. If they reply on
   its ref (for example "reverse that"), act on it and answer with `reply(ref, text)`.
