@@ -9,11 +9,13 @@ import time
 
 from rich.markdown import Markdown as RichMarkdown
 from rich.segment import Segment
+from rich.style import Style
 from rich.cells import cell_len
 from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.message import Message
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.strip import Strip
@@ -36,6 +38,7 @@ from .store import CLOSED, SessionGone, Store, mode, needs_relaunch
 
 MATRIX = "#00ff41"
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
+MARKED = Style(bgcolor="#3a1060")   # rows picked to close together
 DECISION = "bold #b967ff"   # an unseen decision: noticeable, not urgent
 STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "#05d9e8",
                 "dead": "bold #ff2a6d", "ending": "bold #d300c5", "parking": "bold #d300c5"}
@@ -265,6 +268,79 @@ class SessionList(DataTable):
     def _after_click(self, before) -> None:
         if self.cursor_coordinate.row != before.row:   # the table selects it itself if unmoved
             self._post_selected_message()
+
+
+class ItemList(DataTable):
+    """The inbox's items, with a multi-selection to close questions in one go, by row key
+    so it survives refreshes. Ctrl+click toggles a row, Shift+click takes the range from the
+    last one toggled; Space and Shift+Up/Down do the same from the keyboard, for terminals
+    that keep Shift+click for their own text selection."""
+
+    BINDINGS = [Binding("space", "toggle_mark", "Mark", show=False),
+                Binding("shift+up", "extend(-1)", "Extend up", show=False),
+                Binding("shift+down", "extend(1)", "Extend down", show=False)]
+
+    class MarksChanged(Message):
+        pass
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.marked: set[str] = set()
+        self.anchor: str | None = None
+
+    def keys(self) -> list[str]:
+        return [r.key.value for r in self.ordered_rows]
+
+    def cursor_key(self) -> str | None:
+        return self.keys()[self.cursor_row] if self.row_count else None
+
+    def set_marks(self, marks: set[str], anchor: str | None = None) -> None:
+        self.marked = {k for k in marks if not k.endswith("|")}   # not the conversation row
+        self.anchor = anchor
+        self.post_message(self.MarksChanged())
+
+    def toggle(self, key: str) -> None:
+        # the first toggle starts from the highlighted row, as file managers do
+        marks = set(self.marked) or {self.cursor_key()} - {None, key}
+        self.set_marks(marks ^ {key}, key)
+
+    def extend_to(self, key: str) -> None:
+        keys = self.keys()
+        anchor = self.anchor if self.anchor in keys else self.cursor_key()
+        lo, hi = sorted((keys.index(anchor), keys.index(key)))
+        self.set_marks(set(keys[lo:hi + 1]), anchor)
+
+    async def _on_click(self, event) -> None:
+        meta = event.style.meta
+        if "row" not in meta or meta["row"] < 0:
+            return
+        key = self.keys()[meta["row"]]
+        if event.ctrl or event.shift:
+            event.prevent_default()   # not DataTable's: a click on the highlighted row opens it
+            self.toggle(key) if event.ctrl else self.extend_to(key)
+            self.move_cursor(row=meta["row"], animate=False)
+        elif self.marked or self.anchor:   # a plain click starts afresh
+            self.set_marks(set(), key)
+
+    def action_toggle_mark(self) -> None:
+        if self.cursor_key():
+            self.toggle(self.cursor_key())
+
+    def action_extend(self, step: int) -> None:
+        if not self.row_count:
+            return
+        if self.anchor not in self.keys():
+            self.anchor = self.cursor_key()
+        self.move_cursor(row=max(0, min(self.cursor_row + step, self.row_count - 1)), animate=False)
+        self.extend_to(self.cursor_key())
+
+
+def marked(cells: tuple) -> tuple:
+    """A marked row's cells, on a background distinct from the cursor's."""
+    out = tuple(c.copy() if isinstance(c, Text) else Text(str(c)) for c in cells)
+    for c in out:   # the base style, which the table also pads the cell with
+        c.style = (Style.parse(c.style) if isinstance(c.style, str) else c.style) + MARKED
+    return out
 
 
 class Compose(TextArea):
@@ -614,7 +690,7 @@ class WheelhouseApp(App):
                     with Vertical(id="sessions-pane", classes="panel"):
                         yield SessionList(id="session-list", cursor_type="row")
                     with Vertical(id="items-pane", classes="panel"):
-                        yield DataTable(id="items", cursor_type="row")
+                        yield ItemList(id="items", cursor_type="row")
                     with Vertical(id="detail-pane", classes="panel"):
                         with VerticalScroll(id="detail-scroll"):
                             yield Transcript("Select an item, or a session to follow its conversation.",
@@ -638,7 +714,7 @@ class WheelhouseApp(App):
     def on_mount(self) -> None:
         # held, not queried: timers fire while a dialog is on top and during shutdown
         self.title_bar = self.query_one("#title", Static)
-        self.items_table = self.query_one("#items", DataTable)
+        self.items_table = self.query_one("#items", ItemList)
         self.detail = self.query_one("#detail", Transcript)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
         self.answer = self.query_one("#answer", Compose)
@@ -776,6 +852,8 @@ class WheelhouseApp(App):
                 cells = (name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
                          Text(status, style=style), Text(it["title"], style="dim"))
             rows_out.append((f"{it['session_id']}|{it['ref']}", cells))
+        table.marked &= {k for k, _ in rows_out}   # a marked item that went is unmarked
+        rows_out = [(k, marked(cells) if k in table.marked else cells) for k, cells in rows_out]
         if fill(table, rows_out):
             key = self.selected and f"{self.selected[0]}|{self.selected[1] or ''}"
             with table.prevent(DataTable.RowHighlighted):
@@ -942,7 +1020,14 @@ class WheelhouseApp(App):
     def tab_changed(self) -> None:
         self.paint_sendbar()
 
+    @on(ItemList.MarksChanged)
+    def marks_changed(self) -> None:
+        self.paint_items()
+
     def action_clear_filter(self) -> None:
+        if self.items_table.marked:   # Esc drops a multi-selection first
+            self.items_table.set_marks(set())
+            return
         self.filter_sid = None
         if self.viewing:   # its row goes with the filter; the highlight lands on an item
             self.selected = None
@@ -961,6 +1046,9 @@ class WheelhouseApp(App):
         and on a closed one (shown with f) reopens it as answered."""
         if isinstance(self.focused, (TextArea, Input)):
             return
+        if self.items_table.marked and self.screen is self.screen_stack[0]:
+            self.close_marked()
+            return
         target = self.composing()[1]
         item = target and target[1] and self.store.item(*target)
         if not item:
@@ -976,6 +1064,28 @@ class WheelhouseApp(App):
         self.store.update_item(*target, status="answered" if reopen else "closed")
         self.notify(f"reopened {item['ref']} as answered" if reopen else
                     f"closed {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
+        self.refresh_data()
+
+    def close_marked(self) -> None:
+        """X on a multi-selection: closes its questions, or reopens them as answered if
+        they're all closed. Tasks, decisions and subagents in it are left alone."""
+        questions = [it for key in self.items_table.keys() if key in self.items_table.marked
+                     if (it := self.store.item(*key.split("|"))) and it["kind"] == "question"]
+        if not questions:
+            self.notify("no questions among the marked rows", severity="warning")
+            return
+        reopen = all(it["status"] == "closed" for it in questions)
+        done = []
+        for it in questions:
+            if reopen or it["status"] != "closed":
+                try:
+                    self.store.update_item(it["session_id"], it["ref"], status="answered" if reopen else "closed")
+                except SessionGone:   # ended meanwhile: the rest still go
+                    continue
+                done.append(it["ref"])
+        self.items_table.set_marks(set())
+        self.notify(("reopened " if reopen else "closed ") + ", ".join(done)
+                    + ("" if reopen or self.show_finished else ": F shows finished items"))
         self.refresh_data()
 
     def action_show_tab(self, tab: str) -> None:

@@ -103,6 +103,13 @@ from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's 
 Immediate, `Ctrl+R` take a queued answer back, `Q` quit. Send all is a button, in the bar
 above the footer.
 
+Closing several questions at once: in the item list, `Ctrl`+click marks or unmarks a row
+and `Shift`+click marks the range from the last one marked; from the keyboard, `Space`
+marks or unmarks the highlighted row and `Shift+Up`/`Shift+Down` extend the range (Windows
+Terminal keeps `Shift`+click for its own text selection). `X` then closes the marked
+questions, or reopens them if they're all closed, `Esc` clears the marks, and a plain click
+starts afresh.
+
 Text: drag the mouse over the conversation or a thread to select part of it, `Ctrl+A`
 selects all of the focused pane or answer box, and `Ctrl+C` copies the selection (through
 the terminal, which Windows Terminal supports). Hold `Shift` to drag with the terminal's

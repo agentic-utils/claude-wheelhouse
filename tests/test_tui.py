@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from rich.text import Text
 from textual.widgets import DataTable, TextArea
 
 from claude_wheelhouse import launch, transcript
@@ -930,3 +931,61 @@ async def test_a_decision_is_seen_once_viewed_and_steps_aside_after(store, sid):
         items.move_cursor(row=0)
         await pilot.pause(1.2)
         assert [items.get_row_at(i)[1] for i in range(items.row_count)] == [q], "then it's finished"
+
+
+@pytest.mark.parametrize("steps, marked, desc", [
+    ([("ctrl", 2)], ["Q1", "Q3"], "Ctrl+click adds to the highlighted row"),
+    ([("ctrl", 2), ("ctrl", 2)], ["Q1"], "a second Ctrl+click unmarks"),
+    ([("click", 1), ("shift", 3)], ["Q2", "Q3", "Q4"], "Shift+click marks the range"),
+    ([("ctrl", 0), ("ctrl", 1), ("shift", 3)], ["Q2", "Q3", "Q4"], "the range runs from the last one toggled"),
+    ([("key", "space"), ("key", "down"), ("key", "down"), ("key", "space")], ["Q1", "Q3"], "Space toggles"),
+    ([("key", "shift+down"), ("key", "shift+down")], ["Q1", "Q2", "Q3"], "Shift+Down extends"),
+    ([("ctrl", 2), ("key", "escape")], [], "Esc clears the marks"),
+    ([("ctrl", 2), ("click", 3)], [], "a plain click starts afresh"),
+])
+@pytest.mark.anyio
+async def test_marking_rows(store, sid, steps, marked, desc):
+    for title in "abcd":
+        store.post_item(sid, "question", title)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        items = app.items_table
+        items.focus()
+        for how, arg in steps:
+            if how == "key":
+                await pilot.press(arg)
+            else:
+                await pilot.click("#items", offset=(20, 1 + arg), control=how == "ctrl", shift=how == "shift")
+            await pilot.pause()
+        assert sorted(k.split("|")[1] for k in items.marked) == marked, desc
+        shaded = [items.get_row_at(i)[1] for i in range(items.row_count)
+                  if isinstance(cell := items.get_row_at(i)[3], Text) and cell.style.bgcolor]
+        assert [str(r) for r in shaded] == marked, f"{desc}: marked rows are shaded"
+
+
+@pytest.mark.anyio
+async def test_x_closes_the_marked_questions_and_reopens_them(store, sid):
+    q1, q2, q3 = (store.post_item(sid, "question", t) for t in "abc")
+    t = store.post_item(sid, "task", "build", status="running")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        items = app.items_table
+        items.focus()
+        await pilot.click("#items", offset=(20, 3), control=True)   # Q1 and Q3
+        await pilot.click("#items", offset=(20, 4), control=True)   # and the task
+        store.post_item(sid, "question", "d")   # a rebuild: the marks are by key
+        await pilot.pause(1.2)
+        assert sorted(k.split("|")[1] for k in items.marked) == [q1, q3, t], "marks survive a refresh"
+        await pilot.press("x")
+        await pilot.pause()
+        assert [store.item(sid, r)["status"] for r in (q1, q2, q3, t)] == ["closed", "open", "closed", "running"]
+        assert items.marked == set()
+        await pilot.press("f")
+        await pilot.pause()
+        items.set_marks({f"{sid}|{q1}", f"{sid}|{q3}"})
+        await pilot.pause()
+        await pilot.press("x")
+        await pilot.pause()
+    assert [store.item(sid, r)["status"] for r in (q1, q3)] == ["answered", "answered"], "all closed: X reopens"
