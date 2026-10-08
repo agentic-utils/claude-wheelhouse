@@ -69,7 +69,7 @@ day one. The overlay is cheap and is where people will look once the tutorial is
 Shape of B:
 
 - `make tutorial` (and a hint on first run when the database is empty) launches the demo
-  session in `~/.local/state/claude-wheelhouse/tutorial/`, a scratch directory it owns.
+  session in `~/.local/state/claude-wheelhouse/claude-wheelhouse-tutorial/`, a scratch directory it owns.
 - A short checklist in the side pane advances as the user does each step: open a question,
   queue two answers, send with Ctrl+S, see the reply, read the decision, follow the
   conversation, end the session. Steps are detected from store state, not timers.
@@ -95,9 +95,9 @@ really use.
 
 - `make tutorial` runs `claude-wheelhouse tutorial`: it ends any earlier tutorial session
   (its items go with it; a host that hasn't exited after 5 seconds gets SIGTERM), recreates
-  `tutorial/` next to the database, creates a session there run in the wheelhouse, starts
+  `claude-wheelhouse-tutorial/` next to the database (deleted on a restart only if it carries the tutorial's marker file), creates a session there run in the wheelhouse, starts
   its host, then opens the app.
-- The tutorial session is simply the one whose directory is `tutorial/`: no schema column.
+- The tutorial session is simply the one whose directory is `claude-wheelhouse-tutorial/`: no schema column.
   Its `.claude/settings.json` allows the wheelhouse's own tools (so a tester in default
   permission mode isn't asked about each post) and always asks for `touch tutorial-ok`,
   so a permission item appears even in auto mode.

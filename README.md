@@ -127,8 +127,8 @@ New to the wheelhouse? `make tutorial` starts a short demo session, run in the w
 that posts a task, two related questions and a decision, then asks permission for one
 harmless command; a checklist at the top of the right-hand pane walks you through
 answering, sending, allowing and ending it. It always starts afresh (any earlier tutorial
-is ended), in its own scratch directory, `tutorial/` next to the database, and costs a few
-cents of your usual model's tokens. The first time the wheelhouse opens with no sessions it
+is ended), in its own scratch directory, `claude-wheelhouse-tutorial/` next to the
+database, and costs a few cents of your usual model's tokens. The first time the wheelhouse opens with no sessions it
 offers the tutorial in one line: `Enter` takes it, `Esc` dismisses it for good.
 
 Keys, shown in upper case as usual (X means the x key, not Shift+X): `1` inbox, `2`

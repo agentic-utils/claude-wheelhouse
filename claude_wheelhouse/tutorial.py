@@ -63,8 +63,11 @@ STEPS = (
 )
 
 
+MARKER = ".wheelhouse-tutorial"   # written into the directory: only a directory carrying it is ever deleted
+
+
 def tutorial_dir(store: Store) -> Path:
-    return store.path.parent / "tutorial"
+    return store.path.parent / "claude-wheelhouse-tutorial"
 
 
 def is_tutorial(store: Store, session) -> bool:
@@ -83,7 +86,8 @@ def should_offer(store: Store) -> bool:
 
 def steps(store: Store, sid: str, seen: set[str]) -> list[tuple[str, str, str, bool]]:
     """Each step and whether it's done, from what the store records; `seen` holds the
-    steps only the screen knows about (a question opened, the conversation followed)."""
+    steps only the screen knows about (a question opened, the decision read, the
+    conversation followed)."""
     items = {it["ref"]: it for it in store.items(sid)}
     questions = {ref for ref, it in items.items() if it["kind"] == "question"}
     msgs = store.messages(sid)
@@ -96,7 +100,7 @@ def steps(store: Store, sid: str, seen: set[str]) -> list[tuple[str, str, str, b
         "reply": first_sent is not None and any(
             m["author"] == "claude" and m["kind"] == "reply" and m["item_ref"] in questions
             and m["id"] > first_sent for m in msgs),
-        "decision": any(it["kind"] == "decision" and it["status"] == "seen" for it in items.values()),
+        "decision": "decision" in seen,   # not the item's seen status: automatic selection sets that
         "permission": any(it["kind"] == "permission" and it["status"] == "allowed" for it in items.values()),
         "follow": "follow" in seen,
         "end": False,   # the checklist goes with the session
@@ -116,7 +120,10 @@ def stop_earlier(store: Store) -> None:
         while liveness.is_alive(pid, start, boot) and time.monotonic() < deadline:
             time.sleep(0.2)
         if liveness.is_alive(pid, start, boot):
-            os.kill(pid, signal.SIGTERM)
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:   # it went in the meantime
+                pass
 
 
 def prepare(store: Store) -> str:
@@ -124,8 +131,12 @@ def prepare(store: Store) -> str:
     create its session (run in the wheelhouse). Returns the new session's id."""
     stop_earlier(store)
     path = tutorial_dir(store)
-    shutil.rmtree(path, ignore_errors=True)
+    if path.exists():
+        if not (path / MARKER).exists():
+            raise FileExistsError(f"{path} exists and isn't the tutorial's: move it, then run the tutorial again")
+        shutil.rmtree(path)
     (path / ".claude").mkdir(parents=True)
+    (path / MARKER).write_text("The wheelhouse tutorial's scratch directory: recreated each time it starts.\n")
     (path / ".claude/settings.json").write_text(json.dumps(SETTINGS, indent=2) + "\n")
     return store.create_session(str(path), name=NAME, brief=BRIEF, runner="sdk")
 
@@ -134,6 +145,10 @@ def start(store: Store) -> str:
     """prepare(), then launch the session's host."""
     from .launch import open_host
     sid = prepare(store)
-    open_host(store, sid)
+    try:
+        open_host(store, sid)
+    except BaseException:
+        store.end(sid)   # no dead tutorial session left behind, nor its checklist
+        raise
     store.set_setting(OFFER_KEY, "taken")
     return sid

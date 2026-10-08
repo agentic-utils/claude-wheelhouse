@@ -62,10 +62,11 @@ def reply_first(store, sid, q1, q2):   # a reply before anything was sent doesn'
     ([reply_first, answer], set(), {"open", "queue"}, "a reply from before the answers went isn't the reply"),
     ([answer, send], set(), {"open", "queue", "send"}, "sent"),
     ([answer, send, reply], set(), {"open", "queue", "send", "reply"}, "the session replied after they went"),
-    ([see_decision], set(), {"decision"}, "the decision viewed"),
+    ([see_decision], set(), set(), "its seen status alone doesn't tick it: automatic selection sets that"),
+    ([], {"decision"}, {"decision"}, "the person reading the decision is seen on screen"),
     ([allow], set(), {"permission"}, "the permission allowed"),
     ([], {"follow"}, {"follow"}, "the conversation followed"),
-    ([answer, send, reply, see_decision, allow], {"follow"},
+    ([answer, send, reply, see_decision, allow], {"follow", "decision"},
      {"open", "queue", "send", "reply", "decision", "permission", "follow"}, "all but end, which goes with the session"),
 ])
 def test_checklist_steps_come_from_the_store(store, tut, actions, seen, done, desc):
@@ -215,3 +216,69 @@ async def test_question_mark_opens_the_keys_and_types_in_a_box(store, sid):
         await pilot.pause()
         assert not isinstance(app.screen, KeysHelp)
         assert app.query_one("#answer", TextArea).text == "?"
+
+
+@pytest.mark.parametrize("marked, refused, desc", [
+    (True, False, "its own directory, carrying the marker, is recreated"),
+    (False, True, "a directory it didn't make is refused, never deleted"),
+])
+def test_prepare_deletes_only_its_own_directory(store, marked, refused, desc):
+    path = tutorial.tutorial_dir(store)
+    path.mkdir()
+    (path / "precious.txt").write_text("keep")
+    if marked:
+        (path / tutorial.MARKER).touch()
+    if refused:
+        with pytest.raises(FileExistsError):
+            tutorial.prepare(store)
+        assert (path / "precious.txt").exists() and tutorial.session_id(store) is None, desc
+    else:
+        tutorial.prepare(store)
+        assert not (path / "precious.txt").exists() and (path / tutorial.MARKER).exists(), desc
+    assert path.name == "claude-wheelhouse-tutorial", "a folder of its own name beside the database"
+
+
+def test_a_failed_start_leaves_no_session(store, monkeypatch):
+    def fail(s, i):
+        raise FileNotFoundError("claude")
+    monkeypatch.setattr(launch, "open_host", fail)
+    with pytest.raises(FileNotFoundError):
+        tutorial.start(store)
+    assert tutorial.session_id(store) is None, "no dead tutorial session, so no checklist"
+    assert store.setting(tutorial.OFFER_KEY) is None
+
+
+def test_an_earlier_host_that_exits_as_its_told_is_no_error(store, monkeypatch):
+    sid = tutorial.prepare(store)
+    store.register(sid, 4242, 1, "boot")
+    monkeypatch.setattr(tutorial, "STOP_WAIT", 0)
+    monkeypatch.setattr(tutorial.liveness, "is_alive", lambda pid, start, boot: True)
+
+    def gone(pid, sig):
+        raise ProcessLookupError(pid)
+    monkeypatch.setattr(tutorial.os, "kill", gone)
+    assert tutorial.prepare(store) != sid
+
+
+@pytest.mark.anyio
+async def test_reading_the_decision_ticks_only_when_the_person_does(store, sid, tut):
+    setup_items(store, tut)
+    store.post_item(tut, "permission", "Bash: touch tutorial-ok")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        items = app.query_one("#items", DataTable)
+        keys = [items.coordinate_to_cell_key((i, 0)).row_key.value for i in range(items.row_count)]
+        items.move_cursor(row=keys.index(f"{tut}|P1"))
+        await pilot.pause()
+        store.answer_permission(tut, "P1", "allow")
+        app.refresh_data()
+        await pilot.pause()
+        assert app.selected == (tut, "D1") and store.item(tut, "D1")["status"] == "seen", \
+            "P1 went, so D1 under the cursor was selected (and marked seen) automatically"
+        assert "✔ Read the decision" not in app._checklist_text, "automatic selection doesn't tick it"
+        keys = [items.coordinate_to_cell_key((i, 0)).row_key.value for i in range(items.row_count)]
+        for ref in ("T1", "D1"):
+            items.move_cursor(row=keys.index(f"{tut}|{ref}"))
+            await pilot.pause()
+        assert "✔ Read the decision" in app._checklist_text, "the person highlighting it does"

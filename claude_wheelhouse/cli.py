@@ -1,6 +1,7 @@
 """claude-wheelhouse: the TUI by default, plus the per-session processes it launches."""
 
 import argparse
+import sys
 
 
 def main() -> None:
@@ -34,7 +35,10 @@ def main() -> None:
         from .tui import WheelhouseApp
         from .tutorial import start
         store = Store()
-        start(store)
+        try:
+            start(store)
+        except Exception as e:
+            sys.exit(f"couldn't start the tutorial: {e}")
         WheelhouseApp(store).run()
     elif args.cmd == "monitor":
         from .monitor import main as monitor_main
