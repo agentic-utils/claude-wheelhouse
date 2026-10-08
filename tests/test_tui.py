@@ -1014,6 +1014,35 @@ async def test_the_stats_pane_follows_the_session_in_context(store, sid, tmp_pat
         assert "context assembly" in shown, "half the column is room enough for the chart"
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("focus_answer, moves, desc", [
+    (False, True, "the shimmer runs while the answer box is idle"),
+    (True, False, "the shimmer rests while you type"),
+])
+async def test_the_stats_shimmer_rests_while_typing(store, sid, focus_answer, moves, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if focus_answer:
+            app.answer.focus()
+            await pilot.pause()
+        before = app.stats.frame
+        for _ in range(4):
+            app.animate()
+        assert (app.stats.frame != before) == moves, desc
+
+
+@pytest.mark.anyio
+async def test_the_stats_pane_shows_account_usage(store, sid):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        app.stats.usage.limits = {"session": (23.0, None), "weekly_all": (5.0, None)}
+        app.refresh_data()
+        await pilot.pause()
+        shown = app.stats.render().plain
+        assert "session" in shown and "23%" in shown and "weekly" in shown, "usage shows with no session in context"
+
+
 def shown_buttons(app) -> set[str]:
     return {b.id for b in app.screen.query("SendBar Button") if b.display}
 

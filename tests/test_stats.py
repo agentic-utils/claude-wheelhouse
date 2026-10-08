@@ -138,3 +138,60 @@ def test_context_grades(size, window, colour, flashing, desc):
 ])
 def test_model_names(model, name, desc):
     assert stats.model_name(model) == name, desc
+
+
+# account usage
+
+SOON = NOW + 2 * 3600
+
+
+@pytest.mark.parametrize("body, expected, desc", [
+    ({"limits": [{"kind": "session", "percent": 23, "resets_at": "2026-10-08T12:39:59.772001+00:00"},
+                 {"kind": "weekly_all", "percent": 5, "resets_at": "2026-10-14T23:59:59+00:00"}]},
+     {"session": 23.0, "weekly_all": 5.0}, "both limits, as the endpoint sends them"),
+    ({"limits": [{"kind": "session", "percent": 40}]}, {"session": 40.0}, "no reset time still shows the bar"),
+    ({"limits": [{"kind": "session"}, "junk", {"kind": "weekly_all", "percent": None}]}, {}, "malformed entries are skipped"),
+    ({}, {}, "no limits at all"),
+    (None, {}, "no body"),
+])
+def test_usage_limits_parse(body, expected, desc):
+    assert {k: pct for k, (pct, _) in stats.limits(body).items()} == expected, desc
+
+
+def usage(**pct) -> stats.AccountUsage:
+    u = stats.AccountUsage()
+    u.limits = {kind: (p, SOON) for kind, p in pct.items()}
+    return u
+
+
+@pytest.mark.parametrize("u, width, expect, desc", [
+    (usage(session=23, weekly_all=5), 50, ["session", "23%", "weekly", "5%", "resets"], "both bars at 50 columns"),
+    (usage(session=23, weekly_all=5), 80, ["session", "23%", "weekly", "5%"], "both bars at 80 columns"),
+    (usage(session=97), 50, ["97%"], "one limit only"),
+    (stats.AccountUsage(), 50, ["usage loading…"], "before the first fetch"),
+])
+def test_usage_lines(u, width, expect, desc):
+    rows = stats.usage_lines(u, NOW, 0, width)
+    text = "\n".join(r.plain for r in rows)
+    assert all(e in text for e in expect), desc
+    assert all(len(r.plain) <= width for r in rows), f"{desc}: fits the pane"
+
+
+def test_usage_unavailable_after_a_failed_fetch():
+    u = stats.AccountUsage()
+    u.failed = True
+    assert [r.plain for r in stats.usage_lines(u, NOW, 0, 50)] == ["usage unavailable"]
+
+
+@pytest.mark.parametrize("pct, colour, flashing, desc", [
+    (50, stats.OK, False, "green to 70"), (75, stats.WARN, False, "yellow to 80"),
+    (85, stats.AMBER, False, "amber to 90"), (93, stats.HOT, False, "red to 95"),
+    (97, stats.HOT, True, "flashing red over 95"),
+])
+def test_usage_grade(pct, colour, flashing, desc):
+    assert stats.usage_grade(pct) == (colour, flashing), desc
+
+
+def test_usage_is_fetched_at_most_once_a_minute():
+    u = stats.AccountUsage()
+    assert [u.due(NOW), u.due(NOW + 30), u.due(NOW + 61)] == [True, False, True]

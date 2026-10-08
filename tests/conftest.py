@@ -10,6 +10,12 @@ def tab_runner(monkeypatch):
     monkeypatch.setenv("WHEELHOUSE_RUNNER", "tab")
 
 
+@pytest.fixture(autouse=True)
+def no_usage_fetch(monkeypatch):
+    """The stats pane's account usage comes from a live endpoint: never called in tests."""
+    monkeypatch.setattr("claude_wheelhouse.stats.AccountUsage.fetch", lambda self: None)
+
+
 @pytest.fixture
 def db_file(tmp_path, monkeypatch):
     path = tmp_path / "wheelhouse.db"

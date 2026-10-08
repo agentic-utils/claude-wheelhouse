@@ -347,6 +347,7 @@ def marked(cells: tuple) -> tuple:
 class SessionStats(Widget):
     """Under the items: the session in context's context size, cache and compactions, and a
     chart of its last two hours; with none in context, the running sessions' totals. The
+    account's session and weekly usage go under either. The
     text and the chart's columns are rebuilt on the 1-second refresh; the shimmer, on the
     animation tick, only recolours the columns."""
 
@@ -355,6 +356,7 @@ class SessionStats(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.view, self.name_, self.now = None, "", 0.0
+        self.usage = stats.AccountUsage()
         self.rows: list[Text] = []
         self.chart: stats.Chart | None = None
         self.frame = 0
@@ -369,6 +371,8 @@ class SessionStats(Widget):
             self.rows, self.chart = [Text("no sessions running", style="dim")], None
         else:
             self.rows = stats.summary(self.view, self.name_, self.now, self.frame, width)
+        self.rows += stats.usage_lines(self.usage, self.now, self.frame, width)
+        if self.view is not None and width >= stats.MARGIN + 4:
             bars = height - len(self.rows) - 3   # the legend, baseline and hour ticks
             self.chart = stats.chart(self.view.turns, self.now, width, bars) if bars >= 3 else None
         self.refresh()
@@ -806,7 +810,8 @@ class WheelhouseApp(App):
         self.title_bar.update(shimmer(self.frame))
         if self.frame % 2 == 0:
             self.sweep_eyes()
-            self.stats.shimmer(self.frame // 2)   # 5 frames a second, as in the dashboard
+            if not isinstance(self.focused, Compose):   # it rests while you type
+                self.stats.shimmer(self.frame // 2)   # 5 frames a second, as in the dashboard
 
     def refresh_data(self) -> None:
         self.waking = self.wake.tick()
@@ -993,6 +998,8 @@ class WheelhouseApp(App):
         """The stats pane: the session in context's, else every running session's added up.
         Each session's transcripts are read only when they've grown."""
         now = time.time()
+        if self.stats.usage.due(now):
+            self.run_worker(self.stats.usage.fetch, thread=True, group="usage")
         sid = self.filter_sid or (self.selected[0] if self.selected else None)
         names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
         if sid in names:

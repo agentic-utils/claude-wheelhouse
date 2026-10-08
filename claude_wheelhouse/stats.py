@@ -8,8 +8,10 @@ palette, shimmer and context grades. See .plan/session-stats.md.
 
 import json
 import math
+import os
 import re
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -277,6 +279,80 @@ def summary(view, name: str, now: float, frame: int, width: int) -> list[Text]:
         c = snap.compactions[-1]
         out.append(label("compact") + Text(f"{len(snap.compactions)}× · last {clock(c.at)} · "
                                            f"{tokens(c.pre)} → {tokens(c.post)}", style=TEXT))
+    return out
+
+
+# the account's usage limits: the same numbers as Claude Code's /usage
+
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+USAGE_EVERY = 60                   # seconds between fetches: an external endpoint
+LIMITS = (("session", "session"), ("weekly_all", "weekly"))
+
+
+def limits(data) -> dict[str, tuple[float, float | None]]:
+    """The usage endpoint's body as {kind: (percent, resets at)}, skipping what's malformed."""
+    out = {}
+    for lim in (data or {}).get("limits") or []:
+        if isinstance(lim, dict) and isinstance(lim.get("percent"), (int, float)):
+            out[lim.get("kind")] = (float(lim["percent"]), epoch(lim.get("resets_at") or ""))
+    return out
+
+
+class AccountUsage:
+    """Session and weekly usage for the logged-in account, fetched at most once a minute,
+    off the UI thread. The last good numbers stay up while a fetch fails."""
+
+    def __init__(self):
+        self.limits: dict = {}
+        self.at = 0.0
+        self.failed = False
+
+    def due(self, now: float) -> bool:
+        if now - self.at < USAGE_EVERY:
+            return False
+        self.at = now   # claimed here, so one fetch is in flight at a time
+        return True
+
+    def fetch(self) -> None:
+        home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+        try:
+            with open(os.path.join(home, ".credentials.json")) as f:
+                token = json.load(f)["claudeAiOauth"]["accessToken"]
+            req = urllib.request.Request(USAGE_URL, headers={
+                "Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20",
+                "anthropic-version": "2023-06-01", "User-Agent": "claude-wheelhouse"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                self.limits, self.failed = limits(json.load(r)), False
+        except Exception:
+            self.failed = True
+
+
+def usage_grade(pct: float) -> tuple[tuple, bool]:
+    """claude-dashboard's allowance tiers: green to 70, yellow to 80, amber to 90, red, flashing over 95."""
+    if pct > 90:
+        return HOT, pct > 95
+    return (AMBER if pct > 80 else WARN if pct > 70 else OK), False
+
+
+def resets(at: float | None, now: float) -> str:
+    if not at:
+        return ""
+    same_day = time.localtime(at)[:3] == time.localtime(now)[:3]
+    return "resets " + time.strftime("%H:%M %Z" if same_day else "%a %H:%M %Z", time.localtime(at))
+
+
+def usage_lines(usage: AccountUsage, now: float, frame: int, width: int) -> list[Text]:
+    shown = [(label, usage.limits[kind]) for kind, label in LIMITS if kind in usage.limits]
+    if not shown:
+        return [Text("usage unavailable" if usage.failed else "usage loading…", style=DIM)]
+    tails = [f" {pct:3.0f}% {resets(at, now)}" for _, (pct, at) in shown]
+    bar = max(4, width - 10 - max(map(len, tails)))   # one width, so the bars line up
+    out = []
+    for (label, (pct, at)), tail in zip(shown, tails):
+        colour, flashing = usage_grade(pct)
+        hue = "#%02x%02x%02x" % (tuple(int(c * 0.3) for c in colour) if flashing and frame // 10 % 2 else colour)
+        out.append(Text(label.ljust(8), style=DIM) + Text("▕" + gauge(int(pct), 100, bar) + "▏", style=hue)
+                   + Text(tail, style=TEXT))
     return out
 
 
