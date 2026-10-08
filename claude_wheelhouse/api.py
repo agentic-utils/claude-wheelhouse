@@ -1,0 +1,91 @@
+"""The module protocol: what a module gives the wheelhouse and what the wheelhouse gives
+it back. A module is any package that declares an entry point in the group
+`claude_wheelhouse.modules` pointing at a `Module`; the hub finds it at startup, with
+nothing to register by hand. The hub's own stats pane is one, declared in this package's
+pyproject.toml the same way. See .plan/suite-architecture.md ("Module protocol") and
+.plan/stats-plugin.md.
+
+A pane's `tui` surface is a factory taking the `Context` and returning a Textual widget.
+The hub mounts it in the pane's slot, with the module's id as its id, and calls two
+optional methods on it:
+
+- `tick()`: once a second, and as soon as the session in context changes.
+- `animate(frame)`: five times a second, except while the person types in an answer box,
+  when animation rests.
+"""
+
+import importlib.metadata
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable
+
+WHEELHOUSE_API = 1                 # bumped on any breaking change, matched exactly
+GROUP = "claude_wheelhouse.modules"
+SLOTS = ("inbox.side",)            # under the inbox's item list; tabs come with the first tab pane
+
+
+@dataclass
+class Pane:
+    title: str
+    slot: str                                          # one of SLOTS
+    surfaces: dict[str, Callable[["Context"], object]]   # {"tui": make_widget}
+
+
+@dataclass
+class Module:
+    id: str                        # its widget's id, and later its tab, CLI word and database
+    title: str
+    version: str
+    api: int                       # the WHEELHOUSE_API it was written against
+    panes: list[Pane] = field(default_factory=list)
+
+
+@dataclass
+class Context:
+    """All a module gets from the hub. Read-only: a module never writes the hub's data."""
+    state_dir: Path
+    sessions: Callable[[], list[dict]]   # the hub's sessions: id, name and whether it's running
+    focus: Callable[[], str | None]      # the session in context (highlighted or followed), if any
+    config: dict = field(default_factory=dict)
+
+
+@dataclass
+class Loaded:
+    """A module found at startup, and why it isn't running if it isn't."""
+    name: str
+    module: Module | None
+    error: str | None = None
+
+
+def load(entries=None) -> list[Loaded]:
+    """Every module installed, in name order. One that fails to import, isn't a Module, or
+    was written against another API is reported with the reason, never raised."""
+    found = importlib.metadata.entry_points(group=GROUP) if entries is None else entries
+    out = []
+    for ep in sorted(found, key=lambda ep: ep.name):
+        try:
+            module = ep.load()
+        except Exception as e:
+            out.append(Loaded(ep.name, None, f"failed to load: {e}"))
+            continue
+        if not isinstance(module, Module):
+            out.append(Loaded(ep.name, None, f"{ep.value} is not a Module"))
+        elif module.api != WHEELHOUSE_API:
+            out.append(Loaded(ep.name, module, f"written for API {module.api}; this wheelhouse has {WHEELHOUSE_API}"))
+        else:
+            out.append(Loaded(ep.name, module))
+    return out
+
+
+def panes(loaded: list[Loaded], slot: str) -> list[tuple[Loaded, Pane | None]]:
+    """What goes in a slot: each running module's panes for it, and each module that
+    couldn't start, so its error shows there instead (the stats pane's slot shows a broken
+    stats module's reason, not nothing)."""
+    out = []
+    for item in loaded:
+        if item.error:
+            if item.module is None or any(p.slot == slot for p in item.module.panes):
+                out.append((item, None))
+        else:
+            out += [(item, p) for p in item.module.panes if p.slot == slot]
+    return out

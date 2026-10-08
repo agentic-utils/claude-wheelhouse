@@ -35,7 +35,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import adopt, emoji, launch, liveness, stats, transcript, tutorial
+from . import adopt, api, emoji, launch, liveness, transcript, tutorial
 from .store import CLOSED, SessionGone, Store, default_runner, mode, needs_relaunch, runner
 
 MATRIX = "#00ff41"
@@ -348,45 +348,6 @@ def marked(cells: tuple) -> tuple:
     for c in out:   # the base style, which the table also pads the cell with
         c.style = (Style.parse(c.style) if isinstance(c.style, str) else c.style) + MARKED
     return out
-
-
-class SessionStats(Widget):
-    """Under the items: a bordered panel of the context, session and weekly gauges and the
-    cache and compaction rows, then charts of the last two hours' context assembly and
-    output; with no session in context, the running sessions' totals. The panel and the
-    charts' columns are rebuilt on the 1-second refresh; the shimmer, on the animation tick,
-    only recolours the columns. What it draws is stats.layout's and stats.render's."""
-
-    DEFAULT_CSS = "SessionStats { height: 1fr; background: #000000; border-top: solid #7b61ff; }"
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.view, self.name_, self.now = None, "", 0.0
-        self.note: str | None = None   # what shows with nothing to show
-        self.usage = stats.AccountUsage()
-        self.rows: list[Text] = []
-        self.charts: list[stats.Chart] = []
-        self.frame = 0
-
-    def show(self, view, name: str, now: float, note: str | None = None) -> None:
-        self.view, self.name_, self.now, self.note = view, name, now, note
-        self.rebuild()
-
-    def rebuild(self) -> None:
-        self.rows, self.charts = stats.layout(self.view, self.name_, self.note, self.usage, self.now,
-                                              self.size.width, self.size.height)
-        self.refresh()
-
-    def on_resize(self) -> None:
-        self.rebuild()
-
-    def shimmer(self, frame: int) -> None:
-        self.frame = frame
-        if self.charts and self.display:
-            self.refresh()
-
-    def render(self) -> Text:
-        return stats.render(self.rows, self.charts, self.frame)
 
 
 class Compose(TextArea):
@@ -982,7 +943,9 @@ class WheelhouseApp(App):
         self.followers: dict[str, transcript.Follower] = {}
         self.titles: dict[str, transcript.TitleWatch] = {}
         self.ticks = 0
-        self.usage: dict[str, stats.UsageFollower] = {}
+        self.modules = api.load()
+        self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid)
+        self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
         # unsent text typed for each target, (session id, ref or None), kept in memory only
         self.unsent: dict[tuple, str] = {}
         self.box_target: tuple | None = None
@@ -1000,7 +963,7 @@ class WheelhouseApp(App):
                         yield SessionList(id="session-list", cursor_type="row")
                     with Vertical(id="items-pane", classes="panel"):
                         yield ItemList(id="items", cursor_type="row")
-                        yield SessionStats(id="stats")
+                        yield from self.hosted("inbox.side")
                     with Vertical(id="detail-pane", classes="panel"):
                         yield Static(id="checklist")
                         with VerticalScroll(id="detail-scroll"):
@@ -1027,7 +990,6 @@ class WheelhouseApp(App):
         # held, not queried: timers fire while a dialog is on top and during shutdown
         self.title_bar = self.query_one("#title", Static)
         self.items_table = self.query_one("#items", ItemList)
-        self.stats = self.query_one("#stats", SessionStats)
         self.detail = self.query_one("#detail", Transcript)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
         self.answer = self.query_one("#answer", Compose)
@@ -1058,7 +1020,7 @@ class WheelhouseApp(App):
             # it rests while you type. No screen at all while the app shuts down, when
             # asking what has focus would raise
             if self.screen_stack and not isinstance(self.focused, Compose):
-                self.stats.shimmer(self.frame // 2)   # 5 frames a second, as in the dashboard
+                self.each_pane("animate", self.frame // 2)   # 5 frames a second, as in the dashboard
 
     def refresh_data(self) -> None:
         self.waking = self.wake.tick()
@@ -1070,7 +1032,7 @@ class WheelhouseApp(App):
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
         self.paint_sessions()
         self.paint_items()
-        self.paint_stats()
+        self.each_pane("tick")
         self.paint_synopsis()
         self.paint_sendbar()
         self.paint_checklist()
@@ -1241,65 +1203,42 @@ class WheelhouseApp(App):
             follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued)
         return follower.blocks
 
-    def stats_sids(self) -> list[str]:
-        """The sessions the stats pane shows: the one in context, else every running one."""
-        sid = self.filter_sid or (self.selected[0] if self.selected else None)
-        if any(s["id"] == sid for s in self.sessions):
-            return [sid]
-        return [s["id"] for s in self.sessions if self.running(s["id"])]
+    # the modules' panes (api.py)
 
-    def paint_stats(self) -> None:
-        """The stats pane: the session in context's, else every running session's added up.
-        Transcripts are read on worker threads, never here: a first read of a big one takes
-        a while, and even a steady one stats every subagent file."""
-        now = time.time()
-        if self.stats.usage.due(now):
-            self.run_worker(self.stats.usage.fetch, thread=True, group="usage", exit_on_error=False)
-        present = {s["id"] for s in self.sessions}
-        for sid in [sid for sid in self.usage if sid not in present]:   # ended: its follower goes
-            del self.usage[sid]
-        for sid in self.stats_sids():
-            follower = self.usage.setdefault(sid, stats.UsageFollower(sid))
-            if not follower.reading:
-                follower.reading = True
-                self.run_worker(functools.partial(self.read_usage, follower, now), thread=True, group="stats",
-                                exit_on_error=False)
-        self.show_stats(now)
-
-    def read_usage(self, follower: stats.UsageFollower, now: float) -> None:
-        """On a worker thread: one read of a session's transcripts, then a repaint if it
-        brought anything (or was the first)."""
-        first = not follower.ready
-        try:
-            changed = follower.read(now)
-            follower.error = None
-        except Exception as e:   # a transcript gone between stat and open, say: the pane says so, the app carries on
-            changed, follower.error = True, f"couldn't read the transcript: {e}"[:120]
-        finally:
-            follower.reading = False
-        if changed or first:
+    def hosted(self, slot: str):
+        """The widgets for a slot: each module's pane, or a card saying why it isn't running."""
+        for item, pane in api.panes(self.modules, slot):
             try:
-                self.call_from_thread(self.show_stats)
-            except RuntimeError:   # the app is closing
-                pass
+                if pane is None:
+                    raise RuntimeError(item.error)
+                widget = pane.surfaces["tui"](self.ctx)
+                widget.id = item.module.id
+                self.panes.append(widget)
+            except Exception as e:
+                widget = Static(Text(f"{item.name}: {e}", style="dim"), classes="module-error")
+            yield widget
 
-    def show_stats(self, now: float | None = None) -> None:
-        now = time.time() if now is None else now
-        names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
-        sids = [sid for sid in self.stats_sids() if sid in self.usage]
+    def each_pane(self, hook: str, *args) -> None:
+        """Calls a hook on every pane that has it. One that raises is swapped for a card
+        saying so; the app and the other panes carry on."""
+        for widget in list(self.panes):
+            try:
+                if fn := getattr(widget, hook, None):
+                    fn(*args)
+            except Exception as e:
+                self.panes.remove(widget)
+                card = Static(Text(f"{widget.id}: {type(e).__name__}: {e}", style="dim"), classes="module-error")
+                widget.parent.mount(card, after=widget)
+                widget.remove()
+
+    def focus_sid(self) -> str | None:
+        """The session in context, for the modules: followed, else the highlighted item's."""
         sid = self.filter_sid or (self.selected[0] if self.selected else None)
-        if sid in names:
-            follower = self.usage.get(sid)
-            if follower and follower.ready:
-                self.stats.show(follower.snap, names[sid], now, follower.error)
-            else:
-                self.stats.show(None, names[sid], now, (follower and follower.error)
-                                or f"reading {names[sid]}'s transcript…")
-            return
-        snaps = {sid: self.usage[sid].snap for sid in sids if self.usage[sid].ready}
-        waiting = len(snaps) < len(sids)
-        self.stats.show(stats.combine(snaps, names, now) if snaps else None, "", now,
-                        "reading transcripts…" if waiting else None)
+        return sid if any(s["id"] == sid for s in self.sessions) else None
+
+    def module_sessions(self) -> list[dict]:
+        return [{"id": s["id"], "name": s["name"] or short(s["id"]), "running": self.running(s["id"])}
+                for s in self.sessions]
 
     def paint_sendbar(self) -> None:
         """The bar on the screen in front: the mode and queue of the session in context there."""
@@ -1441,7 +1380,7 @@ class WheelhouseApp(App):
                 self.store.mark_seen(sid, ref)   # a no-op unless it's an unseen decision
             self.retarget()
             self.paint_detail()
-            self.paint_stats()
+            self.each_pane("tick")
             if self.viewing:
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 

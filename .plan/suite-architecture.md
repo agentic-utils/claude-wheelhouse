@@ -170,6 +170,9 @@ Anyone can add a module, the review and dashboard modules included, by
 writing a package against one public protocol. The hub has no private hooks
 for its own modules: if review needs something, it goes into the protocol.
 
+A first slice of this protocol is built, with stats as its first module (#43): see
+`.plan/stats-plugin.md` for what exists and what doesn't yet.
+
 ### Discovery
 
 A module is a Python package that declares one entry point in the group

@@ -1036,18 +1036,18 @@ async def test_the_stats_pane_follows_the_session_in_context(store, sid, tmp_pat
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert "no sessions running" in app.stats.render().plain, "nothing in context and none running"
+        assert "no sessions running" in app.query_one("#stats").render().plain, "nothing in context and none running"
         app.follow(sid)
         app.refresh_data()
         await app.workers.wait_for_complete()
         await pilot.pause()
-        shown = app.stats.render().plain
+        shown = app.query_one("#stats").render().plain
         assert "demo · Opus 5.5" in shown and "83k/1M" in shown and "1h · warm" in shown
         assert "context assembly" in shown, "half the column is room enough for the chart"
         store.end(sid)
         app.refresh_data()
         await pilot.pause()
-        assert sid not in app.usage, "an ended session's follower goes"
+        assert sid not in app.query_one("#stats").followers, "an ended session's follower goes"
 
 
 @pytest.mark.anyio
@@ -1069,11 +1069,11 @@ async def test_the_stats_pane_never_reads_on_the_ui_thread(store, sid, monkeypat
         app.follow(sid)
         app.refresh_data()
         await pilot.pause()
-        assert "reading demo's transcript…" in app.stats.render().plain, "a first read in flight shows as such"
+        assert "reading demo's transcript…" in app.query_one("#stats").render().plain, "a first read in flight shows as such"
         release.set()
         await app.workers.wait_for_complete()
         await pilot.pause()
-        assert "reading" not in app.stats.render().plain, "and is replaced once it lands"
+        assert "reading" not in app.query_one("#stats").render().plain, "and is replaced once it lands"
     assert threads and ui not in threads, "reads ran on worker threads"
 
 
@@ -1094,7 +1094,7 @@ async def test_a_failed_transcript_read_is_shown_not_fatal(store, sid, monkeypat
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert app.is_running, "the app carries on"
-        shown = " ".join(line[1:-1].strip() for line in app.stats.render().plain.split("\n"))   # wrapped in the panel
+        shown = " ".join(line[1:-1].strip() for line in app.query_one("#stats").render().plain.split("\n"))   # wrapped in the panel
         assert "couldn't read the transcript: transcript gone" in shown
 
 
@@ -1110,20 +1110,20 @@ async def test_the_stats_shimmer_rests_while_typing(store, sid, focus_answer, mo
         if focus_answer:
             app.answer.focus()
             await pilot.pause()
-        before = app.stats.frame
+        before = app.query_one("#stats").frame
         for _ in range(4):
             app.animate()
-        assert (app.stats.frame != before) == moves, desc
+        assert (app.query_one("#stats").frame != before) == moves, desc
 
 
 @pytest.mark.anyio
 async def test_the_stats_pane_shows_account_usage(store, sid):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        app.stats.usage.limits = {"session": (23.0, None), "weekly_all": (5.0, None)}
+        app.query_one("#stats").usage.limits = {"session": (23.0, None), "weekly_all": (5.0, None)}
         app.refresh_data()
         await pilot.pause()
-        shown = app.stats.render().plain
+        shown = app.query_one("#stats").render().plain
         assert "session" in shown and "23%" in shown and "weekly" in shown, "usage shows with no session in context"
 
 
