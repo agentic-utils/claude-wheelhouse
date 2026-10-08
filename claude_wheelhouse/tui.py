@@ -411,11 +411,11 @@ class Compose(TextArea):
         if done and done.group(1) in emoji.EMOJI:   # a code just closed: swap it in place
             self.replace(emoji.EMOJI[done.group(1)], (row, col - len(done.group(0))), (row, col))
             return
-        hint = next(iter(self.parent.query(".answer-hint")), None)
+        hint = next(iter(self.parent.query(Hint)), None)
         if hint is not None:
             _, found = self.suggestions()
-            hint.update(Text("  ".join(f"{g} :{c}:" for c, g in found) + "   ⇥ Tab takes the first")
-                        if found else HINT)
+            hint.suggest(Text("  ".join(f"{g} :{c}:" for c, g in found) + "   ⇥ Tab takes the first")
+                         if found else None)
 
     async def _on_key(self, event) -> None:
         if event.key in ("tab", "enter"):
@@ -487,7 +487,7 @@ class ThreadView(Screen):
         with VerticalScroll(id="thread-scroll", classes="panel"):
             yield Transcript(id="thread")
         yield Compose(id="thread-answer")
-        yield Label(HINT, classes="answer-hint")
+        yield Hint(classes="answer-hint")
         yield SendBar()
         yield Footer()
 
@@ -501,6 +501,7 @@ class ThreadView(Screen):
         self.box.focus()
 
     def action_leave(self) -> None:
+        app.paint_sendbar()   # its hint and bar now, not at the next refresh
         self.app.keep_unsent(self.box, (self.sid, self.ref), None)
         self.app.pop_screen()
         self.app.call_after_refresh(self.app.retarget)   # the inbox box takes back its target's text, the bar its session
@@ -515,8 +516,29 @@ class ThreadView(Screen):
             self.query_one("#thread-scroll").scroll_end(animate=False)
 
 
-HINT = ("Ctrl+Enter submits (queued or sent now, by the session's mode) · Ctrl+S sends its queue"
-        " · Ctrl+T switches mode · Ctrl+R takes a queued answer back")
+def hint(sends: str) -> str:
+    """The line under an answer box. sends: what Ctrl+Enter does for the session in context
+    by its mode, queue or send."""
+    return (f"Ctrl+Enter to {sends} · Ctrl+S sends its queue · Ctrl+T switches mode"
+            " · Ctrl+R takes a queued answer back")
+
+
+class Hint(Label):
+    """Under an answer box: what the keys do, or emoji suggestions while a :code: is typed."""
+
+    def __init__(self, **kwargs):
+        super().__init__(hint("queue"), **kwargs)
+        self.base, self.suggesting = hint("queue"), None
+
+    def set_base(self, text: str) -> None:
+        if text != self.base:
+            self.base = text
+            if self.suggesting is None:
+                self.update(text)
+
+    def suggest(self, text: Text | None) -> None:
+        self.suggesting = text
+        self.update(self.base if text is None else text)
 
 
 class NewSession(ModalScreen):
@@ -872,7 +894,7 @@ class WheelhouseApp(App):
                             yield Transcript("Select an item, or a session to follow its conversation.",
                                          id="detail")
                         yield Compose(id="answer")
-                        yield Label(HINT, classes="answer-hint")
+                        yield Hint(classes="answer-hint")
             with TabPane("Sessions", id="sessions"):
                 with Vertical(classes="panel"):
                     yield DataTable(id="session-table", cursor_type="row")
@@ -1293,6 +1315,9 @@ class WheelhouseApp(App):
             return   # stale: a rebuild put the cursor back before this was handled
         self.select_row(event.row_key.value)
         self.saw(*self.selected)
+        sends = "send" if s is not None and (mode(s) == "immediate" or self.stale(s)) else "queue"
+        for h in self.screen.query(Hint):
+            h.set_base(hint(sends))
 
     def select_row(self, key: str) -> None:
         sid, ref = key.split("|")

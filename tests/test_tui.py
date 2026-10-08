@@ -5,7 +5,7 @@ from rich.text import Text
 from textual.widgets import Checkbox, DataTable, Input, Label, TextArea
 
 from claude_wheelhouse import launch, transcript
-from claude_wheelhouse.tui import MATRIX, VOICE, WheelhouseApp, Choice, Confirm, ThreadView, Transcript, render
+from claude_wheelhouse.tui import MATRIX, VOICE, WheelhouseApp, Choice, Confirm, Hint, ThreadView, Transcript, render
 
 
 @pytest.mark.anyio
@@ -1183,3 +1183,28 @@ def test_hosted_busy(activity, busy, desc):
     s = {"id": "s1", "running": 0, "runner": "sdk", "activity": activity}
     app = SimpleNamespace(statuses={"s1": "live"})
     assert WheelhouseApp.busy(app, s) is busy, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode, stale, expected, desc", [
+    (None, False, "Ctrl+Enter to queue", "a new session queues"),
+    ("immediate", False, "Ctrl+Enter to send", "immediate mode sends"),
+    (None, True, "Ctrl+Enter to send", "a session on older code sends whatever its mode"),
+])
+async def test_the_hint_says_what_ctrl_enter_does(store, sid, mode, stale, expected, desc, monkeypatch):
+    if mode:
+        store.set_mode(sid, mode)
+    if stale:
+        monkeypatch.setattr(WheelhouseApp, "stale", lambda self, s: True)
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=0)
+        await pilot.pause(1.2)
+        assert str(app.screen.query_one(Hint).content).startswith(expected + " · "), desc
+        app.items_table.focus()
+        await pilot.press("enter")   # the item full screen has its own box and hint
+        await pilot.pause()
+        assert isinstance(app.screen, ThreadView)
+        assert str(app.screen.query_one(Hint).content).startswith(expected + " · "), f"{desc}, in a thread"

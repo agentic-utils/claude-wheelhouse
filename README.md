@@ -12,7 +12,8 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   screen as a conversation, with the session's replies. Ctrl+Enter submits an answer, and
   each session has a send mode: in Queued mode (where every session starts) answers wait
   and go out together, Ctrl+S sending the session's as one message; in Immediate mode each
-  goes as you submit it. Ctrl+T switches the session's mode. A bar above the footer always
+  goes as you submit it. The line under the answer box says which: "Ctrl+Enter to queue"
+  or "Ctrl+Enter to send". Ctrl+T switches the session's mode. A bar above the footer always
   shows the mode and two buttons: Send (this session's queue) and Send all (every
   session's), each greyed out while its queue is empty. Send all has no key: Windows
   Terminal sends Ctrl+Shift+S and Ctrl+Alt+S as plain Ctrl+S. Ctrl+R takes a queued answer
