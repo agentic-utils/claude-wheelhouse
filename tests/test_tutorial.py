@@ -53,6 +53,10 @@ def see_decision(store, sid, q1, q2):
     store.mark_seen(sid, "D1")
 
 
+def close_decision(store, sid, q1, q2):
+    store.close_decision(sid, "D1")
+
+
 def allow(store, sid, q1, q2):
     store.post_item(sid, "permission", "Bash: touch tutorial-ok")
     store.answer_permission(sid, "P1", "allow")
@@ -74,11 +78,11 @@ def reply_first(store, sid, q1, q2):   # a reply before anything was sent doesn'
     ([reply_first, answer], set(), {"open", "queue"}, "a reply from before the answers went isn't the reply"),
     ([answer, send], set(), {"open", "queue", "send"}, "sent"),
     ([answer, send, reply], set(), {"open", "queue", "send", "reply"}, "the session replied after they went"),
-    ([see_decision], set(), set(), "its seen status alone doesn't tick it: automatic selection sets that"),
-    ([], {"decision"}, {"decision"}, "the person reading the decision is seen on screen"),
+    ([see_decision], set(), set(), "its seen status doesn't tick it: automatic selection sets that"),
+    ([see_decision, close_decision], set(), {"decision"}, "the person closing the decision does"),
     ([allow], set(), {"permission"}, "the permission allowed"),
     ([], {"follow"}, {"follow"}, "the conversation followed"),
-    ([answer, send, reply, see_decision, allow], {"follow", "decision"},
+    ([answer, send, reply, see_decision, close_decision, allow], {"follow"},
      {"open", "queue", "send", "reply", "decision", "permission", "follow"}, "all but end, which goes with the session"),
 ])
 def test_checklist_steps_come_from_the_store(store, tut, actions, seen, done, desc):
@@ -293,10 +297,11 @@ def test_an_earlier_host_that_exits_as_its_told_is_no_error(store, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_reading_the_decision_ticks_only_when_the_person_does(store, sid, tut):
+async def test_closing_the_decision_ticks_it(store, sid, tut):
     setup_items(store, tut)
     store.post_item(tut, "permission", "Bash: touch tutorial-ok")
     app = WheelhouseApp(store)
+    step = "✔ Read and close the decision"
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         items = app.query_one("#items", DataTable)
@@ -308,12 +313,16 @@ async def test_reading_the_decision_ticks_only_when_the_person_does(store, sid, 
         await pilot.pause()
         assert app.selected == (tut, "D1") and store.item(tut, "D1")["status"] == "seen", \
             "P1 went, so D1 under the cursor was selected (and marked seen) automatically"
-        assert "✔ Read the decision" not in app._checklist_text, "automatic selection doesn't tick it"
+        assert step not in app._checklist_text, "automatic selection doesn't tick it"
         keys = [items.coordinate_to_cell_key((i, 0)).row_key.value for i in range(items.row_count)]
         for ref in ("T1", "D1"):
             items.move_cursor(row=keys.index(f"{tut}|{ref}"))
             await pilot.pause()
-        assert "✔ Read the decision" in app._checklist_text, "the person highlighting it does"
+        assert step not in app._checklist_text, "nor does reading it"
+        items.focus()
+        await pilot.press("x")
+        await pilot.pause()
+        assert store.item(tut, "D1")["status"] == "closed" and step in app._checklist_text, "closing it with X does"
     async with WheelhouseApp(store).run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert "✔ Read the decision" in pilot.app._checklist_text, "kept across a restart of the app"
+        assert step in pilot.app._checklist_text, "kept across a restart of the app"

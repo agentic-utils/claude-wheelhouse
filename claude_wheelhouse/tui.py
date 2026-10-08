@@ -1321,14 +1321,14 @@ class WheelhouseApp(App):
         self.checklist.display = True
 
     def saw(self, sid: str, ref: str | None, step: str | None = None) -> None:
-        """The person opened something of the tutorial's: a question, its decision, or its
-        conversation. Called only from what the person does, never from automatic selection."""
+        """The person opened something of the tutorial's: a question or its conversation.
+        Called only from what the person does, never from automatic selection."""
         s = next((s for s in self.sessions if s["id"] == sid), None)
         if not tutorial.is_tutorial(self.store, s):
             return
         if step is None:
             item = ref and self.store.item(sid, ref)
-            step = "follow" if ref is None else {"question": "open", "decision": "decision"}.get(item and item["kind"])
+            step = "follow" if ref is None else {"question": "open"}.get(item and item["kind"])
         if step:
             tutorial.see(self.store, sid, step)
             self.paint_checklist()

@@ -57,7 +57,7 @@ STEPS = (
     ("queue", "Answer both questions", "type in the box, Ctrl+Enter queues each answer"),
     ("send", "Send them together", "Ctrl+S, or the Send button below"),
     ("reply", "See the session's reply", "⏳ turns to answered as it replies"),
-    ("decision", "Read the decision", "highlight D1: viewing it marks it seen"),
+    ("decision", "Read and close the decision", "highlight D1 to read it, then X closes it, as it does a question"),
     ("permission", "Allow the permission prompt", "highlight P1, then the Allow button"),
     ("follow", "Follow the conversation", "the 💬 Conversation row, or the session on the left"),
     ("end", "End the session", "Sessions tab (2), then End: its items go with it"),
@@ -87,8 +87,7 @@ def should_offer(store: Store) -> bool:
 
 def steps(store: Store, sid: str, seen: set[str]) -> list[tuple[str, str, str, bool]]:
     """Each step and whether it's done, from what the store records; `seen` holds the
-    steps only the screen knows about (a question opened, the decision read, the
-    conversation followed)."""
+    steps only the screen knows about (a question opened, the conversation followed)."""
     items = {it["ref"]: it for it in store.items(sid)}
     questions = {ref for ref, it in items.items() if it["kind"] == "question"}
     msgs = store.messages(sid)
@@ -101,7 +100,8 @@ def steps(store: Store, sid: str, seen: set[str]) -> list[tuple[str, str, str, b
         "reply": first_sent is not None and any(
             m["author"] == "claude" and m["kind"] == "reply" and m["item_ref"] in questions
             and m["id"] > first_sent for m in msgs),
-        "decision": "decision" in seen,   # not the item's seen status: automatic selection sets that
+        # closed, not seen: automatic selection marks a decision seen, but only the person closes one
+        "decision": any(it["kind"] == "decision" and it["status"] == "closed" for it in items.values()),
         "permission": any(it["kind"] == "permission" and it["status"] == "allowed" for it in items.values()),
         "follow": "follow" in seen,
         "end": False,   # the checklist goes with the session
@@ -111,7 +111,7 @@ def steps(store: Store, sid: str, seen: set[str]) -> list[tuple[str, str, str, b
 
 def seen(store: Store, sid: str) -> set[str]:
     """The steps the person has done that only the screen sees (a question opened, the
-    decision read, the conversation followed). Kept in the store, so a restart keeps them."""
+    conversation followed). Kept in the store, so a restart keeps them."""
     try:
         kept = json.loads(store.setting(SEEN_KEY) or "{}")
     except ValueError:

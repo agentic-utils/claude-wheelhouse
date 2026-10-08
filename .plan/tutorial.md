@@ -71,7 +71,7 @@ Shape of B:
 - `make tutorial` (and a hint on first run when the database is empty) launches the demo
   session in `~/.local/state/claude-wheelhouse/claude-wheelhouse-tutorial/`, a scratch directory it owns.
 - A short checklist in the side pane advances as the user does each step: open a question,
-  queue two answers, send with Ctrl+S, see the reply, read the decision, follow the
+  queue two answers, send with Ctrl+S, see the reply, read the decision and close it with X, follow the
   conversation, end the session. Steps are detected from store state, not timers.
 - The brief tells the session to explain nothing in chat that the checklist covers, so
   the lesson happens in the wheelhouse.
@@ -111,7 +111,8 @@ really use.
   it; either way the setting is written and it never comes back.
 - The checklist sits at the top of the right-hand pane while the tutorial session exists.
   Each step is worked out from the store on the refresh: both questions answered, the
-  answers sent, a reply after they went, the decision seen, the permission allowed. The two
+  answers sent, a reply after they went, the decision closed (not just seen: the app's
+  automatic selection marks a decision seen), the permission allowed. The two
   only the screen knows (a question highlighted or opened, the conversation followed) are
   recorded as the person does them, never by the app's own automatic selection, and kept
   in the store (`tutorial_seen`), so a restart of the app keeps them. The next step shows
