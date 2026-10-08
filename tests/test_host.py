@@ -181,6 +181,14 @@ def test_compact_sends_the_notes(host, store, sid):
     assert host.compact_turn is None
 
 
+def test_finished_reports_compaction(host, store, sid):
+    host.sent = host.results = 1
+    host.compacted_from = 48174
+    run(host.finished(SimpleNamespace(result="", is_error=False, subtype="success")))
+    assert store.session(sid)["activity"] == "idle · compacted 48k → 1k tokens"
+    assert host.compacted_from is None
+
+
 def test_finished_records_context(host, store, sid):
     host.sent = host.results = 1
     run(host.finished(SimpleNamespace(result="", is_error=False, subtype="success")))
@@ -246,3 +254,28 @@ def test_sessions_cannot_post_permissions(store, sid, monkeypatch):
     post_item = next(t for t in mcp_server.TOOLS if t.__name__ == "post_item")
     with pytest.raises(ValueError, match="kind must be"):
         post_item("permission", "x")
+
+
+def test_shell_hands_over_and_takes_back(host, store, sid, monkeypatch):
+    """Shell: the client goes and the session is free before the tab opens; the host takes
+    the session back once the tab has exited."""
+    opened, states = [], iter(["starting", "live", "live", "dead"])
+    monkeypatch.setattr(host_mod, "SHELL_POLL_SECONDS", 0)
+    monkeypatch.setattr(host_mod.liveness, "status", lambda session: next(states))
+    monkeypatch.setattr(host, "register", lambda: True)
+    first = host.client
+
+    def open_tab(s, i):
+        assert not first.connected and s.session(i)["claude_pid"] is None and s.session(i)["shell"] == "tab"
+        opened.append(i)
+    host.open_tab = open_tab
+    store.command(sid, "shell")
+
+    async def go():
+        host.reader = asyncio.create_task(asyncio.sleep(3600))
+        await host.poll()
+        host.reader.cancel()
+    run(go())
+    assert opened == [sid]
+    assert host.client is not first and host.client.connected
+    assert store.session(sid)["shell"] is None

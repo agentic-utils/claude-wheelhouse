@@ -127,6 +127,7 @@ class Host:
         self.sent = 0       # turns sent to the client
         self.results = 0    # turns it has finished
         self.compact_turn = None   # the turn whose reply holds the notes to compact with
+        self.compacted_from = None   # tokens before the last compaction, until its turn ends
         self.stopping = False
 
     # options and connection
@@ -263,8 +264,7 @@ class Host:
                 self.store.set_activity(self.sid, "thinking")
             elif isinstance(m, SystemMessage) and m.subtype == "compact_boundary":
                 meta = m.data.get("compact_metadata") or m.data.get("compactMetadata") or {}
-                pre = meta.get("pre_tokens") or meta.get("preTokens")
-                self.store.set_activity(self.sid, f"compacted from {pre // 1000}k tokens" if pre else "compacted")
+                self.compacted_from = meta.get("pre_tokens") or meta.get("preTokens") or 0
             elif isinstance(m, ResultMessage):
                 self.results += 1
                 await self.finished(m)
@@ -277,20 +277,28 @@ class Host:
             await self.turn(f"/compact {notes}".rstrip())
             self.store.set_activity(self.sid, "compacting")
             return
+        tokens = await self.context()
         if self.results >= self.sent:
-            activity = self.store.session(self.sid)
-            if activity is not None and not (activity["activity"] or "").startswith("compacted"):
-                self.store.set_activity(self.sid, "idle" if not m.is_error else f"error: {(m.result or m.subtype)[:80]}")
-        await self.context()
+            if m.is_error:
+                activity = f"error: {(m.result or m.subtype)[:80]}"
+            elif self.compacted_from is not None:
+                activity = f"idle · compacted {self.compacted_from // 1000}k → {(tokens or 0) // 1000}k tokens"
+            else:
+                activity = "idle"
+            self.store.set_activity(self.sid, activity)
+        self.compacted_from = None
 
-    async def context(self) -> None:
+    async def context(self) -> int | None:
+        """Record the context size Claude Code reports, as /context does. Returns the tokens."""
         try:
             usage = await self.client.get_context_usage()
         except Exception:   # a nicety: never worth the session
-            return
+            return None
         tokens, top = usage.get("totalTokens"), usage.get("maxTokens")
         if isinstance(tokens, int) and isinstance(top, int):
             self.store.set_context(self.sid, tokens, top)
+            return tokens
+        return None
 
     # hand-over to an interactive tab
 
