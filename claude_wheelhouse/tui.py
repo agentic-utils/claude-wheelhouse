@@ -24,6 +24,7 @@ from textual.widgets import (
     Button,
     Checkbox,
     DataTable,
+    DirectoryTree,
     Footer,
     Input,
     Label,
@@ -547,7 +548,9 @@ class NewSession(ModalScreen):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label("NEW SESSION", classes="dialog-title")
-            yield Input(value=os.getcwd(), placeholder="working directory", id="cwd")
+            with Horizontal(id="cwd-row"):
+                yield Input(value=os.getcwd(), placeholder="working directory", id="cwd")
+                yield Button("Browse…", id="browse")
             yield Input(placeholder="name (optional)", id="name")
             yield Input(placeholder="ticket: #42, owner/repo#42 or ABC-123 (optional)", id="ticket")
             yield TextArea(id="brief")
@@ -566,6 +569,76 @@ class NewSession(ModalScreen):
                       "ticket": self.query_one("#ticket", Input).value.strip(),
                       "brief": self.query_one("#brief", TextArea).text.strip(),
                       "runner": "tab" if self.query_one("#tab", Checkbox).value else "sdk"})
+
+    @on(Button.Pressed, "#cancel")
+    def cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#browse")
+    def browse(self) -> None:
+        box = self.query_one("#cwd", Input)
+        self.app.push_screen(PickDirectory(box.value.strip()), lambda path: path and setattr(box, "value", path))
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            event.stop()
+            self.dismiss(None)
+
+
+class Folders(DirectoryTree):
+    """Directories only. Hidden ones are left out, but for .worktrees, where a branch's
+    worktree lives."""
+
+    def filter_paths(self, paths):
+        return [p for p in paths if self._safe_is_dir(p) and (not p.name.startswith(".") or p.name == ".worktrees")]
+
+
+class PickDirectory(ModalScreen):
+    """The new session's working directory, picked from a tree: Enter opens a folder,
+    Backspace (or Up) goes to the parent, Ctrl+Enter (or Choose) takes the highlighted one."""
+    BINDINGS = [Binding("ctrl+enter", "choose", "Choose", show=False),
+                Binding("ctrl+j", "choose", "Choose", show=False),
+                Binding("backspace", "up", "Up", show=False)]
+
+    def __init__(self, start: str = ""):
+        super().__init__()
+        start = os.path.expanduser(start)
+        self.start = start if os.path.isdir(start) else os.path.expanduser("~")
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("WORKING DIRECTORY", classes="dialog-title")
+            yield Label(self.start, id="picked")
+            yield Folders(self.start, id="folders")
+            yield Label("Enter opens · Backspace goes up · Ctrl+Enter chooses · Esc cancels",
+                        classes="answer-hint")
+            with Horizontal(classes="buttons"):
+                yield Button("Choose", variant="success", id="choose")
+                yield Button("Up", id="up")
+                yield Button("Cancel", id="cancel")
+
+    def on_mount(self) -> None:
+        self.query_one(Folders).focus()
+
+    @property
+    def picked(self) -> str:
+        return str(self.query_one("#picked", Label).content)
+
+    @on(DirectoryTree.NodeHighlighted)
+    def highlighted(self, event) -> None:
+        if event.node.data is not None:
+            self.query_one("#picked", Label).update(str(event.node.data.path))
+
+    @on(Button.Pressed, "#choose")
+    def action_choose(self) -> None:
+        self.dismiss(self.picked)
+
+    @on(Button.Pressed, "#up")
+    def action_up(self) -> None:
+        tree = self.query_one(Folders)
+        parent = os.path.dirname(os.path.abspath(str(tree.path)))
+        tree.path = parent
+        self.query_one("#picked", Label).update(parent)
 
     @on(Button.Pressed, "#cancel")
     def cancel(self) -> None:
@@ -830,7 +903,10 @@ class WheelhouseApp(App):
     #dialog.wide {{ width: 120; }}
     #adopt-list {{ height: 16; }}
     #adopt-hint {{ color: #ffd300; }}
-    NewSession, Confirm, Choice, AdoptSession, KeysHelp {{ align: center middle; }}
+    NewSession, PickDirectory, Confirm, Choice, AdoptSession, KeysHelp {{ align: center middle; }}
+    #cwd-row {{ height: auto; }}
+    #cwd {{ width: 1fr; }}
+    #folders {{ height: 20; background: #000000; }}
     TutorialOffer {{ align: center top; }}
     #offer {{ width: 100%; height: 1; background: #12122a; color: #e8e8e8; padding: 0 1; }}
     #keys-dialog {{ width: 100; max-width: 100%; height: 90%; background: #000000; color: {MATRIX};

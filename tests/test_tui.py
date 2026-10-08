@@ -5,7 +5,7 @@ from rich.text import Text
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, TextArea
 
 from claude_wheelhouse import launch, transcript
-from claude_wheelhouse.tui import MATRIX, VOICE, WheelhouseApp, Choice, Confirm, Hint, SendBar, ThreadView, Transcript, render
+from claude_wheelhouse.tui import MATRIX, VOICE, WheelhouseApp, Choice, Confirm, Folders, Hint, SendBar, ThreadView, Transcript, render
 
 
 @pytest.mark.anyio
@@ -1230,3 +1230,41 @@ async def test_send_bar_buttons_sit_above_the_footer(store, sid, screen, desc):
             if button.display:
                 assert button.region.height == 1 and button.region.y == bar.region.y, f"{desc}: {button.id}"
         assert bar.region.bottom <= footer.region.y, desc
+
+
+@pytest.mark.parametrize("name, shown, desc", [
+    ("src", True, "a directory"),
+    (".git", False, "hidden directories are left out"),
+    (".worktrees", True, "but for a repo's worktrees"),
+    ("notes.md", False, "files are left out"),
+])
+def test_the_picker_shows_directories(tmp_path, name, shown, desc):
+    path = tmp_path / name
+    path.mkdir() if "." not in name[1:] else path.write_text("x")
+    assert (path in list(Folders(tmp_path).filter_paths([path]))) == shown, desc
+
+
+@pytest.mark.anyio
+async def test_browse_fills_in_the_working_directory(store, tmp_path):
+    (tmp_path / "repo").mkdir()
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await pilot.press("n")
+        await pilot.pause()
+        app.screen.query_one("#cwd", Input).value = str(tmp_path)
+        await pilot.click("#browse")
+        await pilot.pause(0.5)
+        assert type(app.screen).__name__ == "PickDirectory"
+        await pilot.press("down")   # from the root to repo
+        await pilot.pause()
+        await pilot.press("ctrl+j")
+        await pilot.pause()
+        assert type(app.screen).__name__ == "NewSession"
+        assert app.screen.query_one("#cwd", Input).value == str(tmp_path / "repo")
+        await pilot.click("#browse")
+        await pilot.pause(0.5)
+        await pilot.press("backspace")   # from repo up a level
+        await pilot.pause()
+        await pilot.press("ctrl+j")   # and take it
+        await pilot.pause()
+        assert app.screen.query_one("#cwd", Input).value == str(tmp_path)

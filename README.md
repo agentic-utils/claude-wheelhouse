@@ -60,6 +60,8 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
 - **Sessions.** Select a session to read its synopsis, which the session keeps up to
   date itself. New session (directory, optional name, optional ticket, opening brief)
   runs Claude in the wheelhouse (below), or in a Windows Terminal tab if you tick the box.
+  Browse… picks the directory from a tree (Enter opens a folder, Backspace goes up,
+  Ctrl+Enter or Choose takes the highlighted one).
   Restore brings back sessions that died
   (reboot, crash), one at a time or all at once; selecting a dead (red) session also
   offers to relaunch it. Nothing restarts on its own, and a resumed session is asked to
