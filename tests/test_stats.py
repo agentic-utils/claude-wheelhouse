@@ -301,17 +301,26 @@ def test_the_usage_token_never_follows_a_redirect(tmp_path, monkeypatch):
     ("Asia/Kolkata", "a half-hour zone: ticks on its own hours, not UTC's"),
 ])
 def test_hour_ticks_sit_on_local_hours(monkeypatch, zone, desc):
+    """At fixed times either side of an hour (not the clock's, which made this pass or fail
+    by time of day): every label sits on its own hour, and one that wouldn't fit there at
+    the right-hand end is left out rather than moved off it."""
     monkeypatch.setenv("TZ", zone)
     time.tzset()
     try:
-        c = stats.chart([], NOW, width=stats.MARGIN + 120, height=4)
-        axis = stats.chart_lines(c, 0)[-1].plain[stats.MARGIN:]
-        for m in re.finditer(r"(\d+):00", axis):
-            at = c.start + m.start() / len(c.columns) * c.span
-            local = time.localtime(at)
-            minutes = local.tm_min + local.tm_sec / 60
-            assert min(minutes, 60 - minutes) <= c.span / len(c.columns) / 60 + 0.5, f"{desc}: {m[0]} at {local.tm_hour}:{local.tm_min:02d}"
-            assert int(m[1]) == (local.tm_hour + (1 if local.tm_min >= 30 else 0)) % 24, desc
+        hour = 1791460800   # on a UTC hour, so a half-hour zone's hours fall mid-way
+        for minutes_past in (0, 2, 3, 4, 5, 30, 57, 58, 59.5, 60):
+            now = hour + minutes_past * 60
+            c = stats.chart([], now, width=stats.MARGIN + 120, height=4)
+            axis = stats.chart_lines(c, 0)[-1].plain[stats.MARGIN:]
+            labels = list(re.finditer(r"(\d+):00", axis))
+            assert len(labels) >= 1, f"{desc}, {minutes_past} past: at least one hour labelled"
+            for m in labels:
+                at = c.start + m.start() / len(c.columns) * c.span
+                local = time.localtime(at)
+                minutes = local.tm_min + local.tm_sec / 60
+                assert min(minutes, 60 - minutes) <= c.span / len(c.columns) / 60 + 0.5, \
+                    f"{desc}, {minutes_past} past: {m[0]} at {local.tm_hour}:{local.tm_min:02d}"
+                assert int(m[1]) == (local.tm_hour + (1 if local.tm_min >= 30 else 0)) % 24, desc
     finally:
         monkeypatch.undo()
         time.tzset()

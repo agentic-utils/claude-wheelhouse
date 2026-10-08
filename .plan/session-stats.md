@@ -120,10 +120,15 @@ names against a live transcript (`~/.claude/projects/-home-doug/<id>.jsonl`, 8 O
     a 159 MB transcript with 1,683 subagent files: the first read went from 3.3 s (on the
     UI thread) to 0.8 s (off it), and the steady per-second cost from 27 ms to 0.2 ms, since
     subagent files finished before the span aren't looked at again until the folder
-    changes or a minute passes.
+    changes or 10 seconds pass (on the worker, so the re-listing costs the UI nothing, and a
+    resumed subagent reaches the chart within 10 seconds).
+  - **A failed read** (a transcript deleted between `stat` and `open`, say) is shown dimly
+    in the pane; the worker never takes the app down with it.
   - **Skipped:** Claude Code's `<synthetic>` stand-in replies (errors, interrupts) and
     any response with no usage: no request was made, so they say nothing about the
     context or the cache.
+- **Hour ticks** sit on local hours. A label that wouldn't fit at its hour at the
+  right-hand end is left out, never moved off its hour.
 - **The countdown is genuinely clock-driven.** Time passes without any event, so the
   cache row is repainted on the existing 1-second tick. It's one line of text.
 - **The shimmer is animation.** It runs on the existing 0.1-second `animate` tick, every

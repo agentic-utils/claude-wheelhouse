@@ -374,6 +374,8 @@ class SessionStats(Widget):
             self.rows, self.chart = [Text(self.note or "no sessions running", style="dim")], None
         else:
             self.rows = stats.summary(self.view, self.name_, self.now, self.frame, width)
+            if self.note:   # beside a view: something went wrong reading it
+                self.rows.append(Text(self.note, style="dim"))
         self.rows += stats.usage_lines(self.usage, self.now, self.frame, width)
         if self.view is not None and width >= stats.MARGIN + 4:
             bars = height - len(self.rows) - 3   # the legend, baseline and hour ticks
@@ -1126,7 +1128,7 @@ class WheelhouseApp(App):
         a while, and even a steady one stats every subagent file."""
         now = time.time()
         if self.stats.usage.due(now):
-            self.run_worker(self.stats.usage.fetch, thread=True, group="usage")
+            self.run_worker(self.stats.usage.fetch, thread=True, group="usage", exit_on_error=False)
         present = {s["id"] for s in self.sessions}
         for sid in [sid for sid in self.usage if sid not in present]:   # ended: its follower goes
             del self.usage[sid]
@@ -1134,7 +1136,8 @@ class WheelhouseApp(App):
             follower = self.usage.setdefault(sid, stats.UsageFollower(sid))
             if not follower.reading:
                 follower.reading = True
-                self.run_worker(functools.partial(self.read_usage, follower, now), thread=True, group="stats")
+                self.run_worker(functools.partial(self.read_usage, follower, now), thread=True, group="stats",
+                                exit_on_error=False)
         self.show_stats(now)
 
     def read_usage(self, follower: stats.UsageFollower, now: float) -> None:
@@ -1143,6 +1146,9 @@ class WheelhouseApp(App):
         first = not follower.ready
         try:
             changed = follower.read(now)
+            follower.error = None
+        except Exception as e:   # a transcript gone between stat and open, say: the pane says so, the app carries on
+            changed, follower.error = True, f"couldn't read the transcript: {e}"[:120]
         finally:
             follower.reading = False
         if changed or first:
@@ -1159,9 +1165,10 @@ class WheelhouseApp(App):
         if sid in names:
             follower = self.usage.get(sid)
             if follower and follower.ready:
-                self.stats.show(follower.snap, names[sid], now)
+                self.stats.show(follower.snap, names[sid], now, follower.error)
             else:
-                self.stats.show(None, names[sid], now, f"reading {names[sid]}'s transcript…")
+                self.stats.show(None, names[sid], now, (follower and follower.error)
+                                or f"reading {names[sid]}'s transcript…")
             return
         snaps = {sid: self.usage[sid].snap for sid in sids if self.usage[sid].ready}
         waiting = len(snaps) < len(sids)

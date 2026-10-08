@@ -1051,6 +1051,26 @@ async def test_the_stats_pane_never_reads_on_the_ui_thread(store, sid, monkeypat
 
 
 @pytest.mark.anyio
+async def test_a_failed_transcript_read_is_shown_not_fatal(store, sid, monkeypatch):
+    """A worker's read raising (the transcript deleted between stat and open, say) leaves
+    the app running and says so in the pane."""
+    from claude_wheelhouse import stats
+
+    def broken(self, now=None):
+        raise FileNotFoundError("transcript gone")
+    monkeypatch.setattr(stats.UsageFollower, "read", broken)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)
+        app.refresh_data()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.is_running, "the app carries on"
+        assert "couldn't read the transcript: transcript gone" in app.stats.render().plain
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("focus_answer, moves, desc", [
     (False, True, "the shimmer runs while the answer box is idle"),
     (True, False, "the shimmer rests while you type"),

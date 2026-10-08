@@ -146,7 +146,7 @@ class Snapshot:
 
 
 CHUNK = 4 << 20                    # bytes a first read takes at a time
-REGLOB = 60                        # seconds between re-listing the subagent files, at most
+REGLOB = 10                        # seconds between re-listing the subagent files (a worker's job, off the UI)
 STAMP = re.compile(rb'"timestamp":\s*"([^"]+)"')
 MAIN_REPLY = re.compile(rb'"type":\s*"assistant"')
 
@@ -220,6 +220,7 @@ class UsageFollower:
         self.seen: set = set()
         self.snap = Snapshot()
         self.ready = False      # a first read has finished
+        self.error: str | None = None   # the last read's failure, shown dimly in the pane
         self.reading = False    # a read is in flight (set and cleared by the app)
         self.subagents: list[Path] = []
         self.listed: tuple | None = None   # (the subagents folder's mtime, when listed)
@@ -567,10 +568,9 @@ def chart_lines(c: Chart, frame: int) -> list[Text]:
     tick = int(c.start) - lt.tm_min * 60 - lt.tm_sec + 3600   # the next local hour: not UTC's, which is off by half an hour in some zones
     while tick <= c.start + c.span and n:
         lab = f"{time.localtime(tick).tm_hour}:00"
-        pos = min(round((tick - c.start) / c.span * n), n - len(lab))
-        for i, ch in enumerate(lab):
-            if 0 <= pos + i < n:
-                axis[pos + i] = ch
+        pos = round((tick - c.start) / c.span * n)
+        if pos + len(lab) <= n:   # a label that doesn't fit at its hour is left out, not moved off it
+            axis[pos:pos + len(lab)] = lab
         tick += 3600
     out.append(Text(" " * MARGIN + "".join(axis), style=DIM))
     return out
