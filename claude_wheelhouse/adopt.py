@@ -149,8 +149,8 @@ def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = livenes
 
 
 def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSIONS,
-          proc: Path = liveness.PROC, open_tab=launch.open_tab) -> str:
-    """Register the session and open it in a new tab. Refuses while it is still running.
+          proc: Path = liveness.PROC, open_tab=launch.open_session) -> str:
+    """Register the session and open it (a host, or a tab: see store.default_runner). Refuses while it is still running.
     A session the wheelhouse already tracks keeps its row (and its items), renamed if asked."""
     pid = liveness.running_pid(c.id, sessions, proc)
     if pid:

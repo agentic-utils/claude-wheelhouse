@@ -9,6 +9,8 @@ def main() -> None:
     sub.add_parser("tui", help="the wheelhouse app (default)")
     run = sub.add_parser("run", help="inside a launched tab: exec Claude for a session")
     run.add_argument("session_id")
+    host = sub.add_parser("host", help="run a session through the Agent SDK (started by the wheelhouse)")
+    host.add_argument("session_id")
     sub.add_parser("mcp", help="the per-session MCP server (stdio)")
     sub.add_parser("monitor", help="the per-session plugin monitor")
     sub.add_parser("protocol", help="print everything wheelhouse puts into a launched session")
@@ -17,6 +19,9 @@ def main() -> None:
     if args.cmd == "run":
         from .launch import run as run_session
         run_session(args.session_id)
+    elif args.cmd == "host":
+        from .host import main as host_main
+        host_main(args.session_id)
     elif args.cmd == "mcp":
         from .mcp_server import main as mcp_main
         mcp_main()

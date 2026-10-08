@@ -5,6 +5,7 @@ synchronous=FULL in WAL mode, fsynced) before the call returns, so a crash
 never loses a change the caller was told about.
 """
 
+import json
 import os
 import sqlite3
 import threading
@@ -15,26 +16,37 @@ from pathlib import Path
 
 DEFAULT_DB = Path.home() / ".local/state/claude-wheelhouse/wheelhouse.db"
 
-KINDS = {"task": "T", "question": "Q", "agent": "A", "decision": "D"}
+# permission: a tool call waiting for the person's approval, posted by a session's SDK host
+# (never by the session itself). Allow or Deny answer it; a message on it denies with that text.
+KINDS = {"task": "T", "question": "Q", "agent": "A", "decision": "D", "permission": "P"}
 STATUSES = {
     "task": {"todo", "running", "blocked", "waiting", "done", "dropped"},
     "question": {"open", "answered", "closed"},
     "agent": {"running", "done", "failed"},
     "decision": {"unseen", "seen"},   # the person's state, set by viewing it: never the session's
+    "permission": {"open", "allowed", "denied"},
 }
-INITIAL_STATUS = {"task": "todo", "question": "open", "agent": "running", "decision": "unseen"}
-CLOSED = {"done", "dropped", "closed", "failed", "seen"}
+INITIAL_STATUS = {"task": "todo", "question": "open", "agent": "running", "decision": "unseen",
+                  "permission": "open"}
+CLOSED = {"done", "dropped", "closed", "failed", "seen", "allowed", "denied"}
 # what a decision records besides its title (what was decided): post_item's keyword name, label
 DECISION_FIELDS = (("alternative", "Alternative"), ("why", "Why"), ("reverse", "To reverse"))
 # Bump when a change means a session still running older code (its MCP server and monitor
 # keep the code they started with) would mishandle the store: the wheelhouse then shows
 # it as needing a relaunch. 2: queued answers (draft messages) that older code would deliver.
-# 3: reply declares a question's status. 4: decisions.
-PROTOCOL_VERSION = 4
+# 3: reply declares a question's status. 4: decisions. 5: SDK-hosted sessions and permission items.
+PROTOCOL_VERSION = 5
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.
 DEFAULT_MODE = "queued"
 MODES = ("queued", "immediate")
+# How a session runs: "sdk" in a wheelhouse host process (claude-wheelhouse host), "tab" as
+# interactive Claude Code in a Windows Terminal tab. Stored per session; NULL (rows from before
+# hosts existed) means tab. New sessions take WHEELHOUSE_RUNNER, else DEFAULT_RUNNER.
+RUNNERS = ("sdk", "tab")
+DEFAULT_RUNNER = "sdk"
+# What the person can ask a running host to do, handed over in sessions.host_command
+HOST_COMMANDS = ("interrupt", "shell", "compact")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -98,7 +110,11 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("messages", "claimed_at", "TEXT"), ("sessions", "adopted", "INTEGER NOT NULL DEFAULT 0"),
                  ("messages", "draft", "INTEGER NOT NULL DEFAULT 0"), ("messages", "kind", "TEXT"),
                  ("sessions", "synopsis", "TEXT NOT NULL DEFAULT ''"), ("sessions", "code_version", "INTEGER"),
-                 ("items", "reopened_after", "INTEGER"), ("sessions", "send_mode", "TEXT")]
+                 ("items", "reopened_after", "INTEGER"), ("sessions", "send_mode", "TEXT"),
+                 ("sessions", "runner", "TEXT"), ("sessions", "activity", "TEXT NOT NULL DEFAULT ''"),
+                 ("sessions", "host_command", "TEXT"), ("sessions", "shell", "TEXT"),
+                 ("sessions", "context_tokens", "INTEGER"), ("sessions", "context_max", "INTEGER"),
+                 ("items", "answer", "TEXT")]
 REQUESTS = ("end", "park")   # what the wheelhouse can ask a running session to do
 CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print is retaken
 
@@ -126,6 +142,18 @@ def stamp() -> str:
 def mode(session) -> str:
     """The session's send mode: queued or immediate."""
     return session["send_mode"] or DEFAULT_MODE
+
+
+def runner(session) -> str:
+    """How the session runs: sdk (a wheelhouse host) or tab (interactive Claude Code)."""
+    return (session["runner"] if "runner" in session.keys() else None) or "tab"
+
+
+def default_runner() -> str:
+    r = os.environ.get("WHEELHOUSE_RUNNER") or DEFAULT_RUNNER
+    if r not in RUNNERS:
+        raise ValueError(f"WHEELHOUSE_RUNNER must be one of {', '.join(RUNNERS)}, not {r!r}")
+    return r
 
 
 def needs_relaunch(session) -> bool:
@@ -193,16 +221,68 @@ class Store:
     # sessions
 
     def create_session(self, cwd: str, name: str = "", ticket: str = "", brief: str = "",
-                       sid: str | None = None) -> str:
+                       sid: str | None = None, runner: str | None = None) -> str:
         """A new session, or (with sid) an adopted one keeping its Claude session id."""
         adopted = sid is not None
         sid = sid or str(uuid.uuid4())
+        runner = runner or default_runner()
+        if runner not in RUNNERS:
+            raise ValueError(f"runner must be one of {', '.join(RUNNERS)}, not {runner!r}")
         with self.tx() as db:
             db.execute(
-                "INSERT INTO sessions (id, name, ticket, brief, cwd, created_at, adopted) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (sid, name, ticket, brief, cwd, now(), int(adopted)),
+                "INSERT INTO sessions (id, name, ticket, brief, cwd, created_at, adopted, runner) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (sid, name, ticket, brief, cwd, now(), int(adopted), runner),
             )
         return sid
+
+    def set_runner(self, sid: str, runner: str) -> None:
+        if runner not in RUNNERS:
+            raise ValueError(f"runner must be one of {', '.join(RUNNERS)}, not {runner!r}")
+        with self.tx() as db:
+            self._require(db, sid)
+            db.execute("UPDATE sessions SET runner = ? WHERE id = ?", (runner, sid))
+
+    # a session's SDK host
+
+    def set_activity(self, sid: str, text: str) -> None:
+        """What the host's session is doing now, one line: idle, thinking, running Bash..."""
+        with self.tx() as db:
+            db.execute("UPDATE sessions SET activity = ? WHERE id = ?", (text, sid))
+
+    def set_context(self, sid: str, tokens: int, max_tokens: int) -> None:
+        with self.tx() as db:
+            db.execute("UPDATE sessions SET context_tokens = ?, context_max = ? WHERE id = ?",
+                       (tokens, max_tokens, sid))
+
+    def command(self, sid: str, what: str) -> None:
+        """Ask the session's host to interrupt, hand over to a shell tab, or compact. A newer
+        command replaces one the host hasn't taken yet."""
+        if what not in HOST_COMMANDS:
+            raise ValueError(f"command must be one of {', '.join(HOST_COMMANDS)}, not {what!r}")
+        with self.tx() as db:
+            self._require(db, sid)
+            db.execute("UPDATE sessions SET host_command = ? WHERE id = ?", (what, sid))
+
+    def take_command(self, sid: str) -> str | None:
+        """The host takes the pending command, once."""
+        with self.tx() as db:   # read and clear in one write transaction
+            row = db.execute("SELECT host_command FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if row and row[0]:
+                db.execute("UPDATE sessions SET host_command = NULL WHERE id = ?", (sid,))
+        return row[0] if row else None
+
+    def set_shell(self, sid: str, state: str | None) -> None:
+        """tab: the host has handed the session to an interactive tab and waits for it to exit."""
+        with self.tx() as db:
+            db.execute("UPDATE sessions SET shell = ? WHERE id = ?", (state, sid))
+
+    def unregister(self, sid: str) -> None:
+        """The registered process is letting go of the session (a host handing over to a tab):
+        forget it and the launch, so the next launch isn't refused as running or starting."""
+        with self.tx() as db:
+            db.execute("UPDATE sessions SET claude_pid = NULL, claude_start = NULL, launched_at = NULL "
+                       "WHERE id = ?", (sid,))
 
     def session(self, sid: str) -> sqlite3.Row | None:
         return self._one("SELECT * FROM sessions WHERE id = ?", (sid,))
@@ -411,6 +491,20 @@ class Store:
         if not include_closed:
             rows = [r for r in rows if r["status"] not in CLOSED]
         return sorted(rows, key=inbox_rank)
+
+    def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
+        """The person's answer to a permission item: allow, always (allow, and keep the rule
+        Claude suggested) or deny (with what to do instead, optionally)."""
+        if decision not in ("allow", "always", "deny"):
+            raise ValueError(f"decision must be allow, always or deny, not {decision!r}")
+        with self.tx() as db:
+            self._require(db, sid)
+            done = db.execute("UPDATE items SET status = ?, answer = ?, updated_at = ? WHERE session_id = ? "
+                              "AND ref = ? AND kind = 'permission' AND status = 'open'",
+                              ("denied" if decision == "deny" else "allowed",
+                               json.dumps({"decision": decision, "message": message}), now(), sid, ref)).rowcount
+        if not done:
+            raise KeyError(f"no open permission {ref} in this session")
 
     def mark_seen(self, sid: str, ref: str) -> bool:
         """The person has viewed a decision: True if it was unseen until now."""

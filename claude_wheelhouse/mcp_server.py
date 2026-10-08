@@ -48,6 +48,8 @@ def post_item(kind: str, title: str, body: str = "", status: str | None = None,
     question | agent | decision. Returns the item's ref (T1, Q1, A1, D1...). Write the full
     detail in body, once. A decision (see the protocol) also needs alternative, why and
     reverse (how to undo it), and takes no status."""
+    if kind == "permission":   # the host posts these from Claude Code's own permission check
+        raise ValueError("kind must be task, question, agent or decision")
     return _store.post_item(_sid, kind, title, body, status,
                             alternative=alternative, why=why, reverse=reverse)
 
