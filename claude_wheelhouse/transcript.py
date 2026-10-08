@@ -2,10 +2,15 @@
 session view.
 
 Claude Code appends one JSON record per line to ~/.claude/projects/<project>/<id>.jsonl as
-the conversation happens. The view shows the person's prompts, Claude's text and the
-wheelhouse's notifications in full, each tool call as one line, and nothing else: no tool
-results, thinking, subagent (sidechain) records or bookkeeping. Only the tail of the file
-is read, so a transcript of many megabytes costs the same as a short one.
+the conversation happens. The view shows the person's prompts, their general messages sent
+from the wheelhouse and Claude's text in full, each tool call as one line, and nothing else:
+no tool results, thinking, subagent (sidechain) records or bookkeeping. Only the tail of the
+file is read, so a transcript of many megabytes costs the same as a short one.
+
+What the inbox already shows elsewhere is left out too: answers on an item (its thread
+holds them), the wheelhouse's own notices and the default opening prompt, and Claude's
+wheelhouse tool calls (posting, replying, synopsis). A general message keeps its words
+without the `[wheelhouse] from <person> (general):` prefix.
 """
 
 import json
@@ -22,11 +27,22 @@ TOOL_WIDTH = 90
 # prompts leave no trace in the transcript and can't be seen this way.
 ASKS_IN_TAB = {"AskUserQuestion": "a question", "ExitPlanMode": "a plan to approve"}
 EVENT = re.compile(r"<event>(.*?)</event>", re.S)
+# the opening prompt of a session started without a brief (launch.opening_prompt)
+NO_BRIEF = "Session started from the wheelhouse. Wait for instructions."
+# Claude's calls to the wheelhouse's own MCP tools, however the server is named
+WHEELHOUSE_TOOL = re.compile(r"^mcp__(?:.*_)?wheelhouse__")
+# One message from the person as the wheelhouse delivers it: "from <person> on Q1:" or "from
+# <person> (general):" heads each one. A host types them as a user turn, a block each; a tab
+# session's monitor prints them as one notification line, a batch "from <person>, 3 answers:"
+# with blocks split by " ‖ " and each message's newlines flattened to " ⏎ ".
+BATCH = re.compile(r"\[wheelhouse\] from \S+, \d+ answers: ")
+FROM = re.compile(r"(?:\[wheelhouse\] from \S+ )?(on \S+|\(general\)):\s")
+CUT = re.compile(r"\[cut short, full text: get_input\(message_id=\d+\)\] ")
 
 
 @dataclass
 class Entry:
-    who: str     # you | claude | tool | wheelhouse | note
+    who: str     # you | claude | tool | note
     text: str
     at: str = ""  # ISO timestamp, UTC
 
@@ -62,6 +78,21 @@ def _text(content) -> str:
     return ""
 
 
+def general_text(text: str) -> str | None:
+    """The person's general messages in what the wheelhouse delivered, prefixes stripped and
+    newlines restored; None if it carried only answers on items or the wheelhouse's notices."""
+    if batch := BATCH.match(text):   # a monitor line carrying several messages
+        parts = text[batch.end():].split(" ‖ ")
+    else:   # a host's turn, a block per message, or a monitor line carrying one
+        parts = re.split(r"\n\n(?=\[wheelhouse\] )", text)
+    kept = []
+    for part in parts:
+        head = FROM.match(part)
+        if head and head.group(1) == "(general)":
+            kept.append(CUT.sub("", part[head.end():].strip(), count=1).replace(" ⏎ ", "\n"))
+    return "\n\n".join(kept) or None
+
+
 def tool_line(name: str, args) -> str:
     args = args if isinstance(args, dict) else {}
     detail = next((args[k] for k in ("description", "command", "file_path", "pattern", "url", "query", "prompt")
@@ -86,9 +117,12 @@ def entries(recs: list[dict]) -> list[Entry]:
             origin = (rec.get("origin") or {}).get("kind")
             if origin == "task-notification" or text.startswith("<task-notification>"):
                 event = EVENT.search(text)
-                if event and event.group(1).lstrip().startswith("[wheelhouse]"):
-                    out.append(Entry("wheelhouse", event.group(1).strip(), at))
-            elif text and not text.startswith("<"):
+                if event and (said := general_text(event.group(1).strip())):
+                    out.append(Entry("you", said, at))
+            elif text.startswith("[wheelhouse]"):   # a host's turn: the person's messages, or a notice
+                if said := general_text(text):
+                    out.append(Entry("you", said, at))
+            elif text and not text.startswith("<") and text != NO_BRIEF:
                 out.append(Entry("you", text, at))
         elif kind == "assistant":
             for part in msg.get("content") or []:
@@ -99,7 +133,7 @@ def entries(recs: list[dict]) -> list[Entry]:
                         out[-1].text += "\n\n" + part["text"].strip()
                     else:
                         out.append(Entry("claude", part["text"].strip(), at))
-                elif part.get("type") == "tool_use":
+                elif part.get("type") == "tool_use" and not WHEELHOUSE_TOOL.match(part.get("name", "")):
                     out.append(Entry("tool", tool_line(part.get("name", "?"), part.get("input")), at))
     return out[-MAX_ENTRIES:]
 
@@ -118,13 +152,19 @@ def waiting_in_tab(recs: list[dict]) -> str | None:
     return ASKS_IN_TAB[asked["name"]] if asked and asked.get("id") not in answered else None
 
 
+def hard_breaks(text: str) -> str:
+    """The person's text as markdown that keeps their line breaks: markdown would join
+    lines split by a single newline into one paragraph."""
+    return re.sub(r"(?<!\n)\n(?!\n)", "  \n", text)
+
+
 def _hhmm(at: str) -> str:
     return f" · {at[11:16]}Z" if len(at) >= 16 else ""
 
 
 def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=()) -> list[tuple[str, str]]:
     """The conversation as (who, markdown) blocks, then the person's general messages still
-    queued for it. who is head, warn, note, tool, you, wheelhouse or claude: the app colours
+    queued for it. who is head, warn, note, tool, you or claude: the app colours
     the person's words apart from Claude's. tab None: the session runs in the wheelhouse,
     where its permission prompts and questions are items, so there's no tab to wait in."""
     where = (f"_Tab: **{tab}**. Permission prompts and slash commands need that tab._" if tab else
@@ -141,8 +181,9 @@ def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=()) -> li
         elif e.who == "note":
             out.append(("note", f"_{e.text}{_hhmm(e.at)}_"))
         else:
-            out.append((e.who, f"**{e.who}**{_hhmm(e.at)}\n\n{e.text}"))
-    out += [("you", f"**you · queued**\n\n{body}") for body in queued]
+            text = hard_breaks(e.text) if e.who == "you" else e.text
+            out.append((e.who, f"**{e.who}**{_hhmm(e.at)}\n\n{text}"))
+    out += [("you", f"**you · queued**\n\n{hard_breaks(body)}") for body in queued]
     return out
 
 

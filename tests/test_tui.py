@@ -526,7 +526,6 @@ async def test_the_screen_fits_so_the_tabs_never_scroll_off(store, sid, size, de
 
 @pytest.mark.parametrize("who, colour, desc", [
     ("you", MATRIX, "the person's prompts stay terminal green"),
-    ("wheelhouse", MATRIX, "so do their messages through the wheelhouse"),
     ("claude", VOICE["claude"], "Claude's words are white, as in the Claude app"),
 ])
 def test_each_voice_has_its_colour(who, colour, desc):

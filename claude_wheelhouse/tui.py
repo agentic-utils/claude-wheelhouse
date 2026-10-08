@@ -48,7 +48,7 @@ STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
 RUNNING = ("live", "stalled", "starting")
 # the person's words in terminal green, Claude's in white as in the Claude app
-VOICE = {"you": MATRIX, "wheelhouse": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
+VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777"}
 PENDING = {"end": "ending", "park": "parking"}
 
@@ -126,7 +126,8 @@ def thread_blocks(store: Store, sid: str, ref: str, session_name: str = "") -> l
            ("claude", item["body"] or "_no detail_")]
     for m in msgs:
         if m["author"] == "person":
-            out.append(("you", f"**you{' · queued' if m['draft'] else ''}** · {m['created_at']}\n\n{m['body']}"))
+            out.append(("you", f"**you{' · queued' if m['draft'] else ''}** · {m['created_at']}\n\n"
+                               f"{transcript.hard_breaks(m['body'])}"))
         elif m["kind"] == "reply":
             out.append(("claude", f"**claude** · {m['created_at']}\n\n{m['body']}"))
         else:   # a progress note (rows from before replies existed read as notes)

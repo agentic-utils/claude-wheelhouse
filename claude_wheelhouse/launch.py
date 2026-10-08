@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 from . import liveness
+from .transcript import NO_BRIEF
 from .store import Store, db_path, default_runner, now, runner
 
 PLUGIN_DIR = Path(__file__).parent / "plugin"
@@ -107,7 +108,7 @@ def opening_prompt(session) -> str:
     lines = []
     if session["ticket"]:
         lines.append(f"Ticket: {session['ticket']}")
-    lines.append(session["brief"] or "Session started from the wheelhouse. Wait for instructions.")
+    lines.append(session["brief"] or NO_BRIEF)
     prompt = "\n\n".join(lines)
     # claude reads a leading "-" as an option ("unknown option"), e.g. a pasted bullet list
     return f"Brief:\n{prompt}" if prompt.startswith("-") else prompt

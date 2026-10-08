@@ -16,6 +16,10 @@ def assistant(*parts):
     return {"type": "assistant", "timestamp": AT, "message": {"role": "assistant", "content": list(parts)}}
 
 
+def event(line):
+    return f"<task-notification><summary>Monitor event</summary><event>{line}</event></task-notification>"
+
+
 def notification(body):
     return user(body, origin={"kind": "task-notification"})
 
@@ -32,9 +36,26 @@ BASH = {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ma
     ([user("caveat", isMeta=True)], [], "meta records are hidden"),
     ([user("summary", isCompactSummary=True)], [], "the compaction summary is hidden"),
     ([user([{"type": "tool_result", "tool_use_id": "t1", "content": "176 passed"}])], [], "tool results are hidden"),
-    ([notification("<task-notification><summary>Monitor event</summary>"
-                   "<event>[wheelhouse] from doug on Q1: yes</event></task-notification>")],
-     [Entry("wheelhouse", "[wheelhouse] from doug on Q1: yes", AT)], "a wheelhouse notification"),
+    ([notification(event("[wheelhouse] from doug on Q1: yes"))], [], "an answer on an item: its thread has it"),
+    ([notification(event("[wheelhouse] from doug (general): a ⏎ b"))], [Entry("you", "a\nb", AT)],
+     "a general message: prefix stripped, newlines restored"),
+    ([notification(event("[wheelhouse] from doug, 3 answers: on Q3: use SQLite ‖ (general): ship it ⏎ tonight"
+                         " ‖ on Q4: yes ‖ … 2 more follow in the next notification"))],
+     [Entry("you", "ship it\ntonight", AT)], "a batch keeps only its general message"),
+    ([notification(event("[wheelhouse] from doug (general): [cut short, full text: get_input(message_id=7)] "
+                         "long…"))], [Entry("you", "long…", AT)], "a cut-short general message drops the pointer"),
+    ([notification(event("[wheelhouse] The person pressed End in the wheelhouse."))], [],
+     "the wheelhouse's own notices are hidden"),
+    ([user("[wheelhouse] from doug on Q1:\nignore it\n\n[wheelhouse] from doug (general):\nline one\n\nline two")],
+     [Entry("you", "line one\n\nline two", AT)], "a host's turn keeps only its general message, paragraphs and all"),
+    ([user("[wheelhouse] from doug on Q1:\nyes\n\n[wheelhouse] from doug on Q2:\nno")], [],
+     "a host's turn of answers only is hidden"),
+    ([user("[wheelhouse] You have just been opened in the wheelhouse, mid-conversation.")], [],
+     "a host's notice is hidden"),
+    ([user(transcript.NO_BRIEF, origin={"kind": "human"})], [], "the default opening prompt is hidden"),
+    ([assistant({"type": "tool_use", "id": "w", "name": "mcp__wheelhouse__reply", "input": {"ref": "Q1"}}),
+      assistant({"type": "tool_use", "id": "p", "name": "mcp__plugin_x_wheelhouse__post_item", "input": {}})], [],
+     "Claude's wheelhouse tool calls are hidden"),
     ([notification("<task-notification><summary>Agent finished</summary></task-notification>")], [],
      "other task notifications are hidden"),
     ([assistant({"type": "thinking", "thinking": "hmm"}, TEXT)], [Entry("claude", "On it.", AT)],
@@ -100,6 +121,20 @@ def test_follower_rereads_only_when_the_file_changes(tmp_path):
     with open(path, "a") as f:
         f.write(json.dumps(user("two")) + "\n")
     assert [r["message"]["content"] for r in follower.read()] == ["one", "two"]
+
+
+@pytest.mark.parametrize("text, expected, desc", [
+    ("one\ntwo", "one  \ntwo", "a single newline becomes a hard break"),
+    ("one\n\ntwo", "one\n\ntwo", "a paragraph break is left alone"),
+    ("one", "one", "one line"),
+])
+def test_hard_breaks(text, expected, desc):
+    assert transcript.hard_breaks(text) == expected, desc
+
+
+def test_the_persons_line_breaks_survive_rendering():
+    text = transcript.markdown("demo", None, [user("first line\nsecond line")])
+    assert "first line  \nsecond line" in text
 
 
 def test_hosted_session_header_has_no_tab():
