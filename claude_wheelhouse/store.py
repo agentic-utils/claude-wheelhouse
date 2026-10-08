@@ -23,12 +23,13 @@ STATUSES = {
     "task": {"todo", "running", "blocked", "waiting", "done", "dropped"},
     "question": {"open", "answered", "closed"},
     "agent": {"running", "done", "failed"},
-    "decision": {"unseen", "seen"},   # the person's state, set by viewing it: never the session's
+    # the person's state, never the session's: seen once viewed, closed when they close it
+    "decision": {"unseen", "seen", "closed"},
     "permission": {"open", "allowed", "denied"},
 }
 INITIAL_STATUS = {"task": "todo", "question": "open", "agent": "running", "decision": "unseen",
                   "permission": "open"}
-CLOSED = {"done", "dropped", "closed", "failed", "seen", "allowed", "denied"}
+CLOSED = {"done", "dropped", "closed", "failed", "allowed", "denied"}
 # what a decision records besides its title (what was decided): post_item's keyword name, label
 DECISION_FIELDS = (("alternative", "Alternative"), ("why", "Why"), ("reverse", "To reverse"))
 # Bump when a change means a session still running older code (its MCP server and monitor
@@ -120,6 +121,7 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "host_command", "TEXT"), ("sessions", "shell", "TEXT"),
                  ("sessions", "context_tokens", "INTEGER"), ("sessions", "context_max", "INTEGER"),
                  ("items", "answer", "TEXT")]
+DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
 REQUESTS = ("end", "park")   # what the wheelhouse can ask a running session to do
 CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print is retaken
 
@@ -196,6 +198,11 @@ class Store:
             for statement in INDEXES.split(";"):
                 if statement.strip():
                     db.execute(statement)
+            # a decision used to be finished once seen, and now stays until closed: those
+            # seen before then are closed, once, rather than come back to the inbox
+            if db.execute("SELECT 1 FROM settings WHERE key = ?", (DECISIONS_CLOSE,)).fetchone() is None:
+                db.execute("UPDATE items SET status = 'closed' WHERE kind = 'decision' AND status = 'seen'")
+                db.execute("INSERT INTO settings (key, value) VALUES (?, '1')", (DECISIONS_CLOSE,))
 
     @contextmanager
     def tx(self):
@@ -523,6 +530,15 @@ class Store:
             return db.execute("UPDATE items SET status = 'seen', updated_at = ? WHERE session_id = ? "
                               "AND ref = ? AND kind = 'decision' AND status = 'unseen'",
                               (now(), sid, ref)).rowcount > 0
+
+    def close_decision(self, sid: str, ref: str, closed: bool = True) -> None:
+        """The person closes a decision (or reopens it, as seen)."""
+        with self.tx() as db:
+            self._require(db, sid)
+            done = db.execute("UPDATE items SET status = ?, updated_at = ? WHERE session_id = ? AND ref = ? "
+                              "AND kind = 'decision'", ("closed" if closed else "seen", now(), sid, ref)).rowcount
+        if not done:
+            raise KeyError(f"no decision {ref} in this session")
 
     @classmethod
     def _check_session_status(cls, item, status: str) -> None:

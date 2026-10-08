@@ -50,6 +50,10 @@ def test_post_item_refs_and_statuses(store, sid, posts, expected, desc):
      ValueError, "the session can't mark its decision seen"),
     (lambda s, sid: s.reply(sid, s.post_item(sid, "decision", "x", **DECIDED), "ok", "seen"), ValueError,
      "a reply on a decision takes no status"),
+    (lambda s, sid: s.update_item(sid, s.post_item(sid, "decision", "x", **DECIDED), status="closed"),
+     ValueError, "the session can't close its decision"),
+    (lambda s, sid: s.close_decision(sid, s.post_item(sid, "question", "x")), KeyError,
+     "close_decision is for decisions only"),
 ])
 def test_rejects_bad_writes(store, sid, call, error, desc):
     with pytest.raises(error):
@@ -218,7 +222,7 @@ def test_needs_relaunch(store, sid, stamp, expected, desc):
     assert needs_relaunch(store.session(sid)) is expected, desc
 
 
-def test_decision_records_its_fields_and_turns_seen_once_viewed(store, sid):
+def test_decision_records_its_fields_and_stays_until_closed(store, sid):
     d = store.post_item(sid, "decision", "cache in SQLite", "Picked for the prototype.", **DECIDED)
     item = store.item(sid, d)
     assert (d, item["status"]) == ("D1", "unseen")
@@ -229,7 +233,11 @@ def test_decision_records_its_fields_and_turns_seen_once_viewed(store, sid):
     assert store.mark_seen(sid, d) and not store.mark_seen(sid, d), "seen once"
     assert store.item(sid, d)["status"] == "seen"
     assert store.sessions()[0]["unseen_decisions"] == 0
-    assert [r["ref"] for r in store.items(sid, include_closed=False)] == [], "a seen decision is finished"
+    assert [r["ref"] for r in store.items(sid, include_closed=False)] == [d], "a seen decision stays"
+    store.close_decision(sid, d)
+    assert (store.item(sid, d)["status"], store.items(sid, include_closed=False)) == ("closed", []), "closed: finished"
+    store.close_decision(sid, d, closed=False)
+    assert store.item(sid, d)["status"] == "seen", "reopened as seen"
     store.reply(sid, d, "Reversed: back on Postgres.")   # pushing back is a thread reply
     assert store.thread(sid, d)[-1]["kind"] == "reply"
 
@@ -255,3 +263,13 @@ def test_send_mode(store, sid, set_to, expected, desc):
 def test_send_mode_refuses_a_made_up_mode(store, sid):
     with pytest.raises(ValueError):
         store.set_mode(sid, "eventually")
+
+
+def test_decisions_seen_before_they_stayed_are_closed_once(db_file, sid, store):
+    seen = store.post_item(sid, "decision", "old", **DECIDED)
+    store.db.execute("UPDATE items SET status = 'seen' WHERE ref = ?", (seen,))
+    store.db.execute("DELETE FROM settings WHERE key = 'migrated_decisions_close'")   # as before the change
+    assert Store(db_file).item(sid, seen)["status"] == "closed", "seen under the old rule: closed"
+    fresh = store.post_item(sid, "decision", "new", **DECIDED)
+    store.mark_seen(sid, fresh)
+    assert Store(db_file).item(sid, fresh)["status"] == "seen", "the migration runs once"

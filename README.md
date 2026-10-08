@@ -30,8 +30,8 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
 - **Decisions.** If your own instructions let a session decide some things without asking
   you, it reports each one as a decision (`D1`): what it decided, the alternative, why, and
   how to reverse it. Decisions block nothing. Each session counts its unseen ones (the `D`
-  column); viewing one marks it seen, and it moves to the finished items (F) once you move
-  on. To push back, answer in its thread ("reverse that").
+  column); viewing one marks it seen, and it stays in the inbox until you close it with
+  `X`, as with a question. To push back, answer in its thread ("reverse that").
 - **Follow a session.** Click a session in the inbox's list (or Enter on it): its items
   list gains a pinned first row, 💬 Conversation, highlighted, and the right-hand pane
   follows its conversation, read live from its transcript: your prompts and general
@@ -143,18 +143,18 @@ offers the tutorial in one line: `Enter` takes it, `Esc` dismisses it for good.
 
 Keys, shown in upper case as usual (X means the x key, not Shift+X): `1` inbox, `2`
 sessions, `Enter` open an item's thread (or follow a session's conversation, in the
-session list), `F` show or hide finished items, `X` close the highlighted question (or
-reopen a closed one as answered), `N` new session, `A` adopt, `Esc` all sessions (or back
+session list), `F` show or hide finished items, `X` close the highlighted question or
+decision (or reopen a closed one: a question as answered, a decision as seen), `N` new session, `A` adopt, `Esc` all sessions (or back
 from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue, `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back, `?` list every key and button, `Q` quit. Send all is a button, in the bar
 above the footer.
 
-Closing several questions at once: in the item list, `Ctrl`+click marks or unmarks a row
+Closing several questions or decisions at once: in the item list, `Ctrl`+click marks or unmarks a row
 and `Shift`+click marks the range from the last one marked; from the keyboard, `Space`
 marks or unmarks the highlighted row and `Shift+Up`/`Shift+Down` extend the range (Windows
 Terminal keeps `Shift`+click for its own text selection). `X` then closes the marked
-questions, or reopens them if they're all closed, `Esc` clears the marks, and a plain click
+questions and decisions, or reopens them if they're all closed, `Esc` clears the marks, and a plain click
 starts afresh.
 
 Text: drag the mouse over the conversation or a thread to select part of it, `Ctrl+A`

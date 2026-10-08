@@ -909,7 +909,7 @@ async def test_the_item_list_shows_a_question_awaiting_the_session(store, sid, s
 
 
 @pytest.mark.anyio
-async def test_a_decision_is_seen_once_viewed_and_steps_aside_after(store, sid):
+async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid):
     q = store.post_item(sid, "question", "which db?")
     d = store.post_item(sid, "decision", "cache in SQLite", alternative="Postgres",
                         why="no server to run", reverse="swap the DSN")
@@ -925,11 +925,38 @@ async def test_a_decision_is_seen_once_viewed_and_steps_aside_after(store, sid):
         items.move_cursor(row=1)
         await pilot.pause(1.2)   # past a refresh tick
         assert store.item(sid, d)["status"] == "seen", "viewing it marks it seen"
-        assert items.get_row_at(1)[1] == d, "it stays put while it's being viewed"
         assert str(sessions.get_row_at(0)[3]) == ""
         items.move_cursor(row=0)
         await pilot.pause(1.2)
+        assert [items.get_row_at(i)[1] for i in range(items.row_count)] == [q, d], "moving on leaves it there"
+        items.move_cursor(row=1)
+        await pilot.press("x")
+        await pilot.pause()
+        assert store.item(sid, d)["status"] == "closed", "x closes it"
         assert [items.get_row_at(i)[1] for i in range(items.row_count)] == [q], "then it's finished"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("start, finished, expected, desc", [
+    ("unseen", False, "closed", "x closes an unseen decision"),
+    ("seen", False, "closed", "and a seen one"),
+    ("closed", True, "seen", "x on a closed decision (shown with f) reopens it as seen"),
+])
+async def test_x_closes_and_reopens_decisions(store, sid, start, finished, expected, desc):
+    d = store.post_item(sid, "decision", "cache in SQLite", alternative="Postgres", why="local", reverse="swap")
+    if start == "closed":
+        store.close_decision(sid, d)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if finished:
+            await pilot.press("f")
+        app.items_table.focus()
+        app.items_table.move_cursor(row=0)
+        await pilot.pause()
+        await pilot.press("x")
+        await pilot.pause()
+    assert store.item(sid, d)["status"] == expected, desc
 
 
 @pytest.mark.parametrize("steps, marked, desc", [

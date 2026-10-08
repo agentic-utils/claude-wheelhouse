@@ -52,6 +52,7 @@ RUNNING = ("live", "stalled", "starting")
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777"}
 PENDING = {"end": "ending", "park": "parking"}
+CLOSABLE = {"question": "answered", "decision": "seen"}   # what X closes, and what reopening makes it
 
 
 def cylon(frame: int, width: int = 8) -> Text:
@@ -803,7 +804,7 @@ DESCRIBE = {
     "show_tab('inbox')": "Inbox tab",
     "show_tab('sessions')": "Sessions tab",
     "toggle_finished": "Show or hide finished items",
-    "close_question": "Close the question (or every marked one); on a closed one, reopen it",
+    "close_question": "Close the question or decision (or every marked one); on a closed one, reopen it",
     "help": "This list",
     "quit": "Quit the wheelhouse (sessions carry on without it)",
     "toggle_mark": "Mark or unmark the highlighted row",
@@ -1107,10 +1108,7 @@ class WheelhouseApp(App):
         rows_out = []
         names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
         items = self.store.items(self.filter_sid)
-        # a decision turns seen as it's viewed: keep the one being viewed in place until the
-        # person moves on, rather than pull it from under them
-        shown = [it for it in items if it["status"] not in CLOSED
-                 or (it["kind"] == "decision" and self.selected == (it["session_id"], it["ref"]))]
+        shown = [it for it in items if it["status"] not in CLOSED]
         rows = item_rows(shown, names)
         if self.show_finished:
             rows += item_rows([it for it in items if it not in shown], names)
@@ -1447,8 +1445,9 @@ class WheelhouseApp(App):
 
     @session_action
     def action_close_question(self) -> None:
-        """Closing a question is the person's call: x closes the highlighted (or open) one,
-        and on a closed one (shown with f) reopens it as answered."""
+        """Closing a question or a decision is the person's call: x closes the highlighted
+        (or open) one, and on a closed one (shown with f) reopens it, a question as
+        answered and a decision as seen."""
         if isinstance(self.focused, (TextArea, Input)):
             return
         if self.items_table.marked and self.screen is self.screen_stack[0]:
@@ -1458,33 +1457,37 @@ class WheelhouseApp(App):
         item = target and target[1] and self.store.item(*target)
         if not item:
             return
-        if item["kind"] == "decision":
-            self.notify(f"{item['ref']} is a decision: it's marked seen as you view it", severity="warning")
-            return
-        if item["kind"] != "question":
+        if item["kind"] not in CLOSABLE:
             self.notify(f"{item['ref']} is a {item['kind']}: its status is the session's to set",
                         severity="warning")
             return
         reopen = item["status"] == "closed"
-        self.store.update_item(*target, status="answered" if reopen else "closed")
-        self.notify(f"reopened {item['ref']} as answered" if reopen else
+        self.close(item, not reopen)
+        self.notify(f"reopened {item['ref']} as {CLOSABLE[item['kind']]}" if reopen else
                     f"closed {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
         self.refresh_data()
 
+    def close(self, item, closed: bool) -> None:
+        """Close a question or decision, or reopen it: a question as answered, a decision as seen."""
+        if item["kind"] == "decision":
+            self.store.close_decision(item["session_id"], item["ref"], closed)
+        else:
+            self.store.update_item(item["session_id"], item["ref"], status="closed" if closed else "answered")
+
     def close_marked(self) -> None:
-        """X on a multi-selection: closes its questions, or reopens them as answered if
-        they're all closed. Tasks, decisions and subagents in it are left alone."""
-        questions = [it for key in self.items_table.keys() if key in self.items_table.marked
-                     if (it := self.store.item(*key.split("|"))) and it["kind"] == "question"]
-        if not questions:
-            self.notify("no questions among the marked rows", severity="warning")
+        """X on a multi-selection: closes its questions and decisions, or reopens them if
+        they're all closed. Tasks and subagents in it are left alone."""
+        closable = [it for key in self.items_table.keys() if key in self.items_table.marked
+                     if (it := self.store.item(*key.split("|"))) and it["kind"] in CLOSABLE]
+        if not closable:
+            self.notify("no questions or decisions among the marked rows", severity="warning")
             return
-        reopen = all(it["status"] == "closed" for it in questions)
+        reopen = all(it["status"] == "closed" for it in closable)
         done = []
-        for it in questions:
+        for it in closable:
             if reopen or it["status"] != "closed":
                 try:
-                    self.store.update_item(it["session_id"], it["ref"], status="answered" if reopen else "closed")
+                    self.close(it, not reopen)
                 except SessionGone:   # ended meanwhile: the rest still go
                     continue
                 done.append(it["ref"])
