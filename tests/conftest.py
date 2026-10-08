@@ -16,6 +16,13 @@ def no_usage_fetch(monkeypatch):
     monkeypatch.setattr("claude_wheelhouse.stats.AccountUsage.fetch", lambda self: None)
 
 
+@pytest.fixture(autouse=True)
+def no_tutorial_offer(monkeypatch):
+    """The first-run tutorial offer would sit over every test that starts from an empty
+    wheelhouse: tests of the offer itself put it back."""
+    monkeypatch.setattr("claude_wheelhouse.tutorial.should_offer", lambda store: False)
+
+
 @pytest.fixture
 def db_file(tmp_path, monkeypatch):
     path = tmp_path / "wheelhouse.db"

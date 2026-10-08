@@ -7,6 +7,7 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="claude-wheelhouse", description="Sidecar for parallel Claude Code sessions")
     sub = p.add_subparsers(dest="cmd")
     sub.add_parser("tui", help="the wheelhouse app (default)")
+    sub.add_parser("tutorial", help="start the tutorial afresh, then open the wheelhouse app")
     run = sub.add_parser("run", help="inside a launched tab: exec Claude for a session")
     run.add_argument("session_id")
     host = sub.add_parser("host", help="run a session through the Agent SDK (started by the wheelhouse)")
@@ -28,6 +29,13 @@ def main() -> None:
     elif args.cmd == "protocol":
         from .launch import injected
         print(injected())
+    elif args.cmd == "tutorial":
+        from .store import Store
+        from .tui import WheelhouseApp
+        from .tutorial import start
+        store = Store()
+        start(store)
+        WheelhouseApp(store).run()
     elif args.cmd == "monitor":
         from .monitor import main as monitor_main
         monitor_main()

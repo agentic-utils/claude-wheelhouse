@@ -34,7 +34,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import adopt, emoji, launch, liveness, stats, transcript
+from . import adopt, emoji, launch, liveness, stats, transcript, tutorial
 from .store import CLOSED, SessionGone, Store, default_runner, mode, needs_relaunch, runner
 
 MATRIX = "#00ff41"
@@ -679,6 +679,106 @@ class Choice(ModalScreen):
         self.dismiss(event.button.id)
 
 
+class TutorialOffer(ModalScreen):
+    """The first-run offer, one line: Enter takes the tutorial, Esc dismisses it for good."""
+
+    def compose(self) -> ComposeResult:
+        yield Label(Text.assemble(("New here? ", "bold #ffd300"), ("Enter", "bold"), ": take the tutorial · ",
+                                  ("Esc", "bold"), ": dismiss  (make tutorial runs it any time)"), id="offer")
+
+    def on_key(self, event) -> None:
+        if event.key in ("enter", "escape"):
+            event.stop()
+            self.dismiss(event.key == "enter")
+
+
+def key_name(key: str) -> str:
+    """A binding's key as the person reads it: Ctrl+S, Shift+Up, Space, ?."""
+    names = {"question_mark": "?", "escape": "Esc", "enter": "Enter", "space": "Space"}
+    return "+".join(names.get(part, part.capitalize() if len(part) > 1 else part.upper())
+                    for part in key.split("+"))
+
+
+# what each key does, by its action, for the ? overlay; every binding must have one
+DESCRIBE = {
+    "submit": "Submit what's typed: queued, or sent at once, by the session's mode",
+    "app.submit": "Submit what's typed: queued, or sent at once, by the session's mode",
+    "send_session": "Send the current session's queue",
+    "toggle_mode": "Switch the session between Queued and Immediate",
+    "recall": "Take this item's latest queued answer back into the box",
+    "new_session": "New session",
+    "adopt": "Adopt a Claude Code session that isn't in the wheelhouse yet",
+    "clear_filter": "Clear the marks, else show every session's items again",
+    "show_tab('inbox')": "Inbox tab",
+    "show_tab('sessions')": "Sessions tab",
+    "toggle_finished": "Show or hide finished items",
+    "close_question": "Close the question (or every marked one); on a closed one, reopen it",
+    "help": "This list",
+    "quit": "Quit the wheelhouse (sessions carry on without it)",
+    "toggle_mark": "Mark or unmark the highlighted row",
+    "extend(-1)": "Extend the marks up",
+    "extend(1)": "Extend the marks down",
+    "select_all": "Select all of it, to copy",
+    "leave": "Back to the inbox",
+}
+# the send bar's buttons and the Sessions tab's, by id
+BUTTONS = {
+    "mode": "Mode: the session's send mode, Queued or Immediate (Ctrl+T)",
+    "send": "Send (n): send this session's queued answers as one message (Ctrl+S)",
+    "send-all": "Send all (n): send every session's queue",
+    "allow": "Allow: let the tool call a permission item asks about run",
+    "always": "Always: allow it, and keep the rule Claude Code suggests",
+    "deny": "Deny: refuse it (or type a message on the item: denied, with what to do instead)",
+    "interrupt": "Interrupt: stop the session's current turn, like Esc in Claude Code",
+    "compact": "Compact: the session says what to keep, then is compacted with that",
+    "shell": "Shell: open the session in a real Claude Code tab; it comes back when you /exit",
+    "new": "New session",
+    "adopt-open": "Adopt: take on a Claude Code session started outside the wheelhouse",
+    "restore": "Restore: bring back a dead session where it left off",
+    "restore-all": "Restore all: every dead session that isn't parked",
+    "park": "Park / unpark: drop a session off the inbox, or bring it back",
+    "end": "End: the session does its own end steps, then its wheelhouse data is deleted",
+}
+SEND_RULES = (
+    "**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the "
+    "session's queue as one message, so related answers arrive together; ✉ counts what's queued. "
+    "**Immediate**: Ctrl+Enter sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
+    "queued answer back to edit.")
+MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
+         "keep Shift+click for itself: Space and Shift+Up/Down do the same), then X closes them together.")
+
+
+def keys_help() -> str:
+    """The ? overlay: every key, from the bindings themselves, and every button."""
+    sections = [("Everywhere", WheelhouseApp.BINDINGS), ("The item list", ItemList.BINDINGS),
+                ("An answer box", Compose.BINDINGS), ("The conversation pane", Transcript.BINDINGS),
+                ("An item opened full screen", ThreadView.BINDINGS)]
+    out = ["# Keys"]
+    for title, bindings in sections:
+        out.append(f"## {title}")
+        actions: dict[str, list[str]] = {}
+        for b in bindings:
+            actions.setdefault(b.action, []).append(key_name(b.key))
+        out += [f"- **{' or '.join(keys)}**: {DESCRIBE[action]}" for action, keys in actions.items()]
+    out += ["## Mouse", MOUSE, "## Buttons", *[f"- {text}" for text in BUTTONS.values()],
+            "## Sending", SEND_RULES,
+            "## The tutorial", "`make tutorial` starts it afresh any time. Esc or ? closes this list."]
+    return "\n\n".join(out)
+
+
+class KeysHelp(ModalScreen):
+    """? : every key and button, and how sending works."""
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="keys-dialog"):
+            yield Static(RichMarkdown(keys_help()), id="keys")
+
+    def on_key(self, event) -> None:
+        if event.key in ("escape", "question_mark", "q"):
+            event.stop()
+            self.dismiss(None)
+
+
 class WheelhouseApp(App):
     CSS = f"""
     Screen {{ background: #0a0a12; }}
@@ -712,7 +812,13 @@ class WheelhouseApp(App):
     #dialog.wide {{ width: 120; }}
     #adopt-list {{ height: 16; }}
     #adopt-hint {{ color: #ffd300; }}
-    NewSession, Confirm, Choice, AdoptSession {{ align: center middle; }}
+    NewSession, Confirm, Choice, AdoptSession, KeysHelp {{ align: center middle; }}
+    TutorialOffer {{ align: center top; }}
+    #offer {{ width: 100%; height: 1; background: #12122a; color: #e8e8e8; padding: 0 1; }}
+    #keys-dialog {{ width: 100; max-width: 100%; height: 90%; background: #000000; color: {MATRIX};
+                    border: thick #ff2a6d; padding: 0 1; }}
+    #checklist {{ height: auto; display: none; background: #000000; color: #e8e8e8;
+                  border-bottom: solid #7b61ff; padding: 0 1; }}
     """
 
     # keys shown in upper case, the usual convention: X is the x key, not Shift+X
@@ -729,6 +835,7 @@ class WheelhouseApp(App):
         Binding("2", "show_tab('sessions')", "Sessions"),
         Binding("f", "toggle_finished", "Finished", key_display="F"),
         Binding("x", "close_question", "Close", key_display="X"),
+        Binding("question_mark", "help", "Keys", key_display="?"),
         Binding("q", "quit", "Quit", key_display="Q"),
     ]
 
@@ -750,6 +857,9 @@ class WheelhouseApp(App):
         self.box_target: tuple | None = None
         self.statuses: dict[str, str] = {}
         self.sessions = []
+        # the tutorial steps only the screen sees (a question opened, the conversation
+        # followed), by tutorial session
+        self.tutorial_seen: dict[str, set[str]] = {}
 
     def compose(self) -> ComposeResult:
         yield Static(id="title")
@@ -762,6 +872,7 @@ class WheelhouseApp(App):
                         yield ItemList(id="items", cursor_type="row")
                         yield SessionStats(id="stats")
                     with Vertical(id="detail-pane", classes="panel"):
+                        yield Static(id="checklist")
                         with VerticalScroll(id="detail-scroll"):
                             yield Transcript("Select an item, or a session to follow its conversation.",
                                          id="detail")
@@ -799,9 +910,12 @@ class WheelhouseApp(App):
                 "status", "name", "ticket", "dir", "open Q", "running", "unseen D", "queued", "")[-1],
         }
         self.items_table.add_columns("session", "ref", "status", "title")
+        self.checklist = self.query_one("#checklist", Static)
         self.set_interval(0.1, self.animate)
         self.set_interval(1.0, self.refresh_data)
         self.refresh_data()
+        if tutorial.should_offer(self.store):
+            self.push_screen(TutorialOffer(), self.offer_answered)
 
     # periodic work
 
@@ -823,6 +937,7 @@ class WheelhouseApp(App):
         self.paint_stats()
         self.paint_synopsis()
         self.paint_sendbar()
+        self.paint_checklist()
         if isinstance(self.screen, ThreadView) and self.screen.is_mounted:   # not before its widgets exist
             self.screen.paint()   # an action here (queue, take back) shows at once
 
@@ -1045,6 +1160,40 @@ class WheelhouseApp(App):
         else:
             bar.activity("")
 
+    def paint_checklist(self) -> None:
+        """While the tutorial's session exists: its steps, at the top of the right pane."""
+        sid = next((s["id"] for s in self.sessions if tutorial.is_tutorial(self.store, s)), None)
+        if sid is None:
+            self.checklist.display = False
+            return
+        steps = tutorial.steps(self.store, sid, self.tutorial_seen.get(sid, set()))
+        nxt = next((key for key, *_, done in steps if not done), None)
+        text = Text.assemble(("TUTORIAL", "bold #ffd300"), ("  ? lists every key", "#777777"))
+        for key, what, how, done in steps:
+            if done:
+                text.append(f"\n✔ {what}", style="dim")
+            elif key == nxt:
+                text.append(f"\n▶ {what}", style="bold #05d9e8")
+                text.append(f": {how}", style="#e8e8e8")
+            else:
+                text.append(f"\n☐ {what}", style="#777777")
+        if getattr(self, "_checklist_text", None) != text.plain:
+            self._checklist_text = text.plain
+            self.checklist.update(text)
+        self.checklist.display = True
+
+    def saw(self, sid: str, ref: str | None, step: str | None = None) -> None:
+        """The person opened something of the tutorial's: a question, or its conversation."""
+        s = next((s for s in self.sessions if s["id"] == sid), None)
+        if not tutorial.is_tutorial(self.store, s):
+            return
+        if step is None:
+            item = ref and self.store.item(sid, ref)
+            step = "follow" if ref is None else "open" if item and item["kind"] == "question" else None
+        if step:
+            self.tutorial_seen.setdefault(sid, set()).add(step)
+            self.paint_checklist()
+
     def paint_synopsis(self) -> None:
         sid = self.current_session()
         s = sid and self.store.session(sid)
@@ -1087,6 +1236,7 @@ class WheelhouseApp(App):
         pane follows the conversation rather than whichever question comes first."""
         self.filter_sid = sid
         self.selected = (sid, None)
+        self.saw(sid, None)
         self.retarget()
         self.paint_items()
         self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
@@ -1101,6 +1251,7 @@ class WheelhouseApp(App):
         if table.coordinate_to_cell_key((table.cursor_row, 0)).row_key != event.row_key:
             return   # stale: a rebuild put the cursor back before this was handled
         self.select_row(event.row_key.value)
+        self.saw(*self.selected)
 
     def select_row(self, key: str) -> None:
         sid, ref = key.split("|")
@@ -1117,6 +1268,7 @@ class WheelhouseApp(App):
     @on(DataTable.RowSelected, "#items")
     def open_thread(self, event: DataTable.RowSelected) -> None:
         sid, ref = event.row_key.value.split("|")
+        self.saw(sid, ref or None)
         if ref:
             self.push_screen(ThreadView(sid, ref))
         else:   # the conversation is already in the pane: Enter goes to its box
@@ -1202,6 +1354,25 @@ class WheelhouseApp(App):
     def action_show_tab(self, tab: str) -> None:
         if not isinstance(self.focused, (TextArea, Input)):
             self.tabs.active = tab
+
+    def action_help(self) -> None:
+        if not isinstance(self.focused, (TextArea, Input)):
+            self.push_screen(KeysHelp())
+
+    def offer_answered(self, take: bool) -> None:
+        """The first-run offer, answered either way: it never comes back."""
+        if not take:
+            self.store.set_setting(tutorial.OFFER_KEY, "dismissed")
+            self.notify("make tutorial runs the tutorial any time; ? lists every key")
+            return
+        try:
+            tutorial.start(self.store)
+        except Exception as e:   # claude missing, say
+            self.store.set_setting(tutorial.OFFER_KEY, "dismissed")
+            self.notify(f"couldn't start the tutorial: {e}", severity="error")
+            return
+        self.notify("tutorial started: follow the checklist on the right")
+        self.refresh_data()
 
     def composing(self):
         """The compose box in use and the item it answers: the thread view's, or the inbox's."""

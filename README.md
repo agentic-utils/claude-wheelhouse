@@ -122,13 +122,21 @@ make run
 
 `make` on its own lists every command.
 
+New to the wheelhouse? `make tutorial` starts a short demo session, run in the wheelhouse,
+that posts a task, two related questions and a decision, then asks permission for one
+harmless command; a checklist at the top of the right-hand pane walks you through
+answering, sending, allowing and ending it. It always starts afresh (any earlier tutorial
+is ended), in its own scratch directory, `tutorial/` next to the database, and costs a few
+cents of your usual model's tokens. The first time the wheelhouse opens with no sessions it
+offers the tutorial in one line: `Enter` takes it, `Esc` dismisses it for good.
+
 Keys, shown in upper case as usual (X means the x key, not Shift+X): `1` inbox, `2`
 sessions, `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `F` show or hide finished items, `X` close the highlighted question (or
 reopen a closed one as answered), `N` new session, `A` adopt, `Esc` all sessions (or back
 from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue, `Ctrl+T` switch the session between Queued and
-Immediate, `Ctrl+R` take a queued answer back, `Q` quit. Send all is a button, in the bar
+Immediate, `Ctrl+R` take a queued answer back, `?` list every key and button, `Q` quit. Send all is a button, in the bar
 above the footer.
 
 Closing several questions at once: in the item list, `Ctrl`+click marks or unmarks a row

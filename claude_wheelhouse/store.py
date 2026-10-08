@@ -96,6 +96,10 @@ CREATE TABLE IF NOT EXISTS messages (
     draft        INTEGER NOT NULL DEFAULT 0,
     kind         TEXT
 );
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 # run after ADDED_COLUMNS, which may have just added the columns they use
 INDEXES = """
@@ -525,7 +529,22 @@ class Store:
         if status not in STATUSES[kind]:
             raise ValueError(f"{kind} status must be one of {sorted(STATUSES[kind])}")
 
+    # settings: the wheelhouse's own, such as whether the first-run tutorial offer was answered
+
+    def setting(self, key: str) -> str | None:
+        row = self._one("SELECT value FROM settings WHERE key = ?", (key,))
+        return row["value"] if row else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self.tx() as db:
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
+                       "ON CONFLICT (key) DO UPDATE SET value = excluded.value", (key, value))
+
     # messages
+
+    def messages(self, sid: str) -> list[sqlite3.Row]:
+        """Every message in a session, both voices, drafts included, oldest first."""
+        return self._all("SELECT * FROM messages WHERE session_id = ? ORDER BY id", (sid,))
 
     def send(self, sid: str, body: str, item_ref: str | None = None) -> None:
         """A message from the person, sent now; the session's monitor delivers it."""
