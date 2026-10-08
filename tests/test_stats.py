@@ -1,0 +1,140 @@
+import json
+import time
+
+import pytest
+
+from claude_wheelhouse import stats, transcript
+from claude_wheelhouse.stats import Snapshot, Turn
+
+NOW = float(int(time.time()))   # near the files' real modification times
+
+
+def at(seconds_ago: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(NOW - seconds_ago))
+
+
+def response(mid, ago=60, inp=2, made=0, read=0, ttl="1h", **over):
+    cc = {"ephemeral_1h_input_tokens": made if ttl == "1h" else 0,
+          "ephemeral_5m_input_tokens": made if ttl == "5m" else 0}
+    return {"type": "assistant", "timestamp": at(ago), "requestId": f"req-{mid}",
+            "message": {"id": mid, "model": "claude-opus-5-5", "content": [],
+                        "usage": {"input_tokens": inp, "cache_creation_input_tokens": made,
+                                  "cache_read_input_tokens": read, "output_tokens": 10, "cache_creation": cc}}} | over
+
+
+def compacted(ago=60, pre=200_000, post=11_000):
+    return {"type": "system", "subtype": "compact_boundary", "timestamp": at(ago),
+            "compactMetadata": {"trigger": "manual", "preTokens": pre, "postTokens": post}}
+
+
+def lines(*recs) -> list[bytes]:
+    return [json.dumps(r).encode() for r in recs]
+
+
+@pytest.mark.parametrize("recs, context, ttl, turns, compactions, desc", [
+    ([response("m1", made=800, read=80_000)], 80_802, "1h", 1, 0, "context is input, cache written and cache read"),
+    ([response("m1", read=5), response("m1", read=5), response("m1", read=5)], 7, None, 1, 0,
+     "a response written as several lines counts once"),
+    ([response("m1", made=900, ttl="5m")], 902, "5m", 1, 0, "a 5-minute cache write is seen as one"),
+    ([response("m1", made=900), response("m2", ago=30, read=902)], 904, "1h",
+     2, 0, "a read-only response keeps the TTL of the last write"),
+    ([compacted(), response("m1", read=11_000)], 11_002, None, 1, 1, "a compaction is counted, with its sizes"),
+    ([{"type": "user", "timestamp": at(60), "message": {"content": "hi"}}], 0, None, 0, 0, "no usage, nothing counted"),
+    ([response("m1", read=50_000, isSidechain=True)], 0, None, 1, 0,
+     "a sidechain response is spend, not the main thread's context"),
+])
+def test_usage_parse(recs, context, ttl, turns, compactions, desc):
+    follower = stats.UsageFollower("s")
+    parsed = stats.parse(lines(*recs), follower.seen, main=True)
+    follower.take(*parsed)
+    snap = follower.snap
+    assert (snap.context, snap.ttl, len(snap.turns), len(snap.compactions)) == (context, ttl, turns, compactions), desc
+
+
+@pytest.mark.parametrize("read, fresh, new, miss, desc", [
+    (80_000, 900, 900, 0, "on top of a cache read, fresh tokens are new input"),
+    (0, 80_900, 0, 80_900, "with nothing read, they're a cache miss"),
+])
+def test_assembly_splits_new_from_miss(read, fresh, new, miss, desc):
+    [turn], _ = stats.parse(lines(response("m1", inp=0, made=fresh, read=read)), set(), main=True)
+    assert (turn.read, turn.new, turn.miss) == (read, new, miss), desc
+
+
+def test_the_follower_reads_only_whats_appended_and_finds_subagents(tmp_path):
+    folder = tmp_path / "-home-u-repo"
+    (folder / "s" / "subagents").mkdir(parents=True)
+    main = folder / "s.jsonl"
+    main.write_bytes(b"\n".join(lines(response("m1", made=1000))) + b"\n")
+    follower = stats.UsageFollower("s", tmp_path)
+    assert follower.read(NOW) and follower.snap.context == 1002
+    assert not follower.read(NOW), "nothing new: nothing read"
+    with open(main, "ab") as f:
+        f.write(b"\n".join(lines(response("m2", ago=30, read=1002))) + b"\n" + b'{"type": "assist')
+    (folder / "s/subagents/agent-x.jsonl").write_bytes(b"\n".join(lines(response("x1", read=40_000))) + b"\n")
+    assert follower.read(NOW)
+    assert follower.snap.context == 1004, "the main thread's latest, not the subagent's"
+    assert len(follower.snap.turns) == 3, "the subagent's turn counts in the chart"
+    assert follower.files[main][0] < main.stat().st_size, "a half-written line waits for the next read"
+
+
+@pytest.mark.parametrize("columns, ago, index, desc", [
+    (60, 7199, 0, "the oldest moment in the span is the first bucket"),
+    (60, 0, 59, "now is the last"),
+    (60, 3600, 30, "an hour ago is halfway, at 60 columns of 2 minutes"),
+    (80, 3600, 40, "and halfway at 80 columns of 90 seconds"),
+    (60, 7300, None, "older than two hours is left out"),
+])
+def test_buckets_fill_the_width_with_two_hours(columns, ago, index, desc):
+    turn = Turn(NOW - ago, 5, 1, 0, 6, None, None, True)
+    bs = stats.buckets([turn], NOW, columns)
+    assert len(bs) == columns, desc
+    assert [i for i, b in enumerate(bs) if b["read"]] == ([] if index is None else [index]), desc
+
+
+def test_the_chart_is_as_wide_as_the_pane():
+    c = stats.chart([Turn(NOW - 60, 5, 1, 0, 6, None, None, True)], NOW, width=56, height=6)
+    assert len(c.columns) == 56 - stats.MARGIN
+    assert all(t.cell_len <= 56 for t in stats.chart_lines(c, frame=3))
+
+
+def snap(context, expires_in, ttl="1h"):
+    return Snapshot(model="claude-opus-5-5", context=context, peak=context, last_at=NOW + expires_in - stats.TTL[ttl],
+                    ttl=ttl, turns=[Turn(NOW - 60, context, 0, 0, context, ttl, None, True)])
+
+
+def test_totals_across_sessions():
+    snaps = {"a": snap(83_000, 600), "b": snap(40_000, 120), "c": snap(10_000, -60)}
+    t = stats.combine(snaps, {"a": "alpha", "b": "beta", "c": "gamma"}, NOW)
+    assert (t.sessions, t.context, t.warm) == (3, 133_000, 2)
+    assert t.next_cold == (NOW + 120, "beta"), "the warm cache that goes cold first"
+    assert len(t.turns) == 3
+
+
+@pytest.mark.parametrize("s, expected, desc", [
+    (snap(83_000, 600), None, "warm: no cost line"),
+    (snap(83_000, -60), "next turn re-pays ~83k (~166k effective)", "a cold 1h cache re-pays twice over"),
+    (snap(80_000, -60, ttl="5m"), "next turn re-pays ~80k (~100k effective)", "a cold 5m one at 1.25"),
+])
+def test_cold_cost_line(s, expected, desc):
+    got = stats.cache_lines(s, NOW)
+    assert (got[1] if len(got) > 1 else None) == expected, desc
+    assert got[0].startswith("1h · warm" if expected is None else s.ttl + " · cold since"), desc
+
+
+@pytest.mark.parametrize("size, window, colour, flashing, desc", [
+    (100_000, 1_000_000, stats.OK, False, "100k of 1M is green"),
+    (400_000, 1_000_000, stats.AMBER, False, "400k of 1M is amber"),
+    (700_000, 1_000_000, stats.HOT, True, "past 600k of 1M flashes"),
+    (130_000, 200_000, stats.AMBER, False, "130k of 200k is amber"),
+])
+def test_context_grades(size, window, colour, flashing, desc):
+    assert stats.grade(size, window) == (colour, flashing), desc
+
+
+@pytest.mark.parametrize("model, name, desc", [
+    ("claude-opus-5-5", "Opus 5.5", "major and minor"),
+    ("claude-sonnet-5", "Sonnet 5", "major only"),
+    (None, "model unknown", "none logged yet"),
+])
+def test_model_names(model, name, desc):
+    assert stats.model_name(model) == name, desc

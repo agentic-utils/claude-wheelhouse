@@ -41,6 +41,12 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   and the pane flags when the session is waiting for you there (a question or a plan;
   permission prompts can't be seen from the transcript). Going to the item list switches
   the pane back to the highlighted item.
+- **Stats.** Under the item list, the session in context's numbers, read from its
+  transcripts: context size against its window (green to flashing red), whether its
+  prompt cache is warm and when it goes cold (once cold, what the next turn re-pays), its
+  compactions, and a chart of how each turn's context was assembled over the last two
+  hours (read from cache, new, cache miss), subagents included. With no session in
+  context, the running sessions' totals.
 - **Sessions.** Select a session to read its synopsis, which the session keeps up to
   date itself. New session (directory, optional name, optional ticket, opening brief)
   opens a Windows Terminal tab running Claude. Restore brings back sessions that died

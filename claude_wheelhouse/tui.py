@@ -33,7 +33,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import adopt, emoji, launch, liveness, transcript
+from . import adopt, emoji, launch, liveness, stats, transcript
 from .store import CLOSED, SessionGone, Store, mode, needs_relaunch
 
 MATRIX = "#00ff41"
@@ -343,6 +343,48 @@ def marked(cells: tuple) -> tuple:
     return out
 
 
+class SessionStats(Widget):
+    """Under the items: the session in context's context size, cache and compactions, and a
+    chart of its last two hours; with none in context, the running sessions' totals. The
+    text and the chart's columns are rebuilt on the 1-second refresh; the shimmer, on the
+    animation tick, only recolours the columns."""
+
+    DEFAULT_CSS = "SessionStats { height: 1fr; background: #000000; border-top: solid #7b61ff; }"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.view, self.name_, self.now = None, "", 0.0
+        self.rows: list[Text] = []
+        self.chart: stats.Chart | None = None
+        self.frame = 0
+
+    def show(self, view, name: str, now: float) -> None:
+        self.view, self.name_, self.now = view, name, now
+        self.rebuild()
+
+    def rebuild(self) -> None:
+        width, height = self.size.width, self.size.height
+        if self.view is None or width < stats.MARGIN + 4:
+            self.rows, self.chart = [Text("no sessions running", style="dim")], None
+        else:
+            self.rows = stats.summary(self.view, self.name_, self.now, self.frame, width)
+            bars = height - len(self.rows) - 3   # the legend, baseline and hour ticks
+            self.chart = stats.chart(self.view.turns, self.now, width, bars) if bars >= 3 else None
+        self.refresh()
+
+    def on_resize(self) -> None:
+        self.rebuild()
+
+    def shimmer(self, frame: int) -> None:
+        self.frame = frame
+        if self.chart and self.display:
+            self.refresh()
+
+    def render(self) -> Text:
+        lines = self.rows + (stats.chart_lines(self.chart, self.frame) if self.chart else [])
+        return Text("\n", no_wrap=True, overflow="crop").join(lines)
+
+
 class Compose(TextArea):
     """An answer box. Ctrl+A selects all of it, as in other editors (TextArea's own is line
     start). Ctrl+Enter submits what's typed: queued or sent at once, by the session's mode.
@@ -624,6 +666,7 @@ class WheelhouseApp(App):
     DataTable > .datatable--cursor {{ background: #003b0f; color: #ffffff; }}
     #sessions-pane {{ width: 34; }}
     #items-pane {{ width: 1fr; }}
+    #items {{ height: 1fr; }}   /* the top half; the stats the bottom */
     #detail-pane {{ width: 2fr; }}
     #detail-scroll {{ height: 1fr; }}
     #detail, #thread {{ background: #000000; color: {MATRIX}; }}
@@ -676,6 +719,7 @@ class WheelhouseApp(App):
         # session's conversation, the first row while a session is selected
         self.selected: tuple[str, str | None] | None = None
         self.followers: dict[str, transcript.Follower] = {}
+        self.usage: dict[str, stats.UsageFollower] = {}
         # unsent text typed for each target, (session id, ref or None), kept in memory only
         self.unsent: dict[tuple, str] = {}
         self.box_target: tuple | None = None
@@ -691,6 +735,7 @@ class WheelhouseApp(App):
                         yield SessionList(id="session-list", cursor_type="row")
                     with Vertical(id="items-pane", classes="panel"):
                         yield ItemList(id="items", cursor_type="row")
+                        yield SessionStats(id="stats")
                     with Vertical(id="detail-pane", classes="panel"):
                         with VerticalScroll(id="detail-scroll"):
                             yield Transcript("Select an item, or a session to follow its conversation.",
@@ -715,6 +760,7 @@ class WheelhouseApp(App):
         # held, not queried: timers fire while a dialog is on top and during shutdown
         self.title_bar = self.query_one("#title", Static)
         self.items_table = self.query_one("#items", ItemList)
+        self.stats = self.query_one("#stats", SessionStats)
         self.detail = self.query_one("#detail", Transcript)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
         self.answer = self.query_one("#answer", Compose)
@@ -739,6 +785,7 @@ class WheelhouseApp(App):
         self.title_bar.update(shimmer(self.frame))
         if self.frame % 2 == 0:
             self.sweep_eyes()
+            self.stats.shimmer(self.frame // 2)   # 5 frames a second, as in the dashboard
 
     def refresh_data(self) -> None:
         self.waking = self.wake.tick()
@@ -747,6 +794,7 @@ class WheelhouseApp(App):
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
         self.paint_sessions()
         self.paint_items()
+        self.paint_stats()
         self.paint_synopsis()
         self.paint_sendbar()
         if isinstance(self.screen, ThreadView) and self.screen.is_mounted:   # not before its widgets exist
@@ -917,6 +965,25 @@ class WheelhouseApp(App):
             follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued)
         return follower.blocks
 
+    def paint_stats(self) -> None:
+        """The stats pane: the session in context's, else every running session's added up.
+        Each session's transcripts are read only when they've grown."""
+        now = time.time()
+        sid = self.filter_sid or (self.selected[0] if self.selected else None)
+        names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
+        if sid in names:
+            follower = self.usage.setdefault(sid, stats.UsageFollower(sid))
+            follower.read(now)
+            self.stats.show(follower.snap, names[sid], now)
+            return
+        snaps = {}
+        for s in self.sessions:
+            if self.running(s["id"]):
+                follower = self.usage.setdefault(s["id"], stats.UsageFollower(s["id"]))
+                follower.read(now)
+                snaps[s["id"]] = follower.snap
+        self.stats.show(stats.combine(snaps, names, now) if snaps else None, "", now)
+
     def paint_sendbar(self) -> None:
         """The bar on the screen in front: the mode and queue of the session in context there."""
         bar = next(iter(self.screen.query(SendBar)), None)
@@ -1000,6 +1067,7 @@ class WheelhouseApp(App):
                 self.store.mark_seen(sid, ref)   # a no-op unless it's an unseen decision
             self.retarget()
             self.paint_detail()
+            self.paint_stats()
             if self.viewing:
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 

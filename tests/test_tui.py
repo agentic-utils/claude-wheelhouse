@@ -989,3 +989,26 @@ async def test_x_closes_the_marked_questions_and_reopens_them(store, sid):
         await pilot.press("x")
         await pilot.pause()
     assert [store.item(sid, r)["status"] for r in (q1, q3)] == ["answered", "answered"], "all closed: X reopens"
+
+
+@pytest.mark.anyio
+async def test_the_stats_pane_follows_the_session_in_context(store, sid, tmp_path, monkeypatch):
+    import time
+    folder = tmp_path / "projects/-home-u-repo"
+    folder.mkdir(parents=True)
+    now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+    rec = {"type": "assistant", "timestamp": now, "message": {"id": "m1", "model": "claude-opus-5-5", "content": [],
+           "usage": {"input_tokens": 2, "cache_creation_input_tokens": 829, "cache_read_input_tokens": 82_000,
+                     "cache_creation": {"ephemeral_1h_input_tokens": 829}}}}
+    folder.joinpath(f"{sid}.jsonl").write_text(json.dumps(rec) + "\n")
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert "no sessions running" in app.stats.render().plain, "nothing in context and none running"
+        app.follow(sid)
+        app.refresh_data()
+        await pilot.pause()
+        shown = app.stats.render().plain
+        assert "demo · Opus 5.5" in shown and "83k/1M" in shown and "1h · warm" in shown
+        assert "context assembly" in shown, "half the column is room enough for the chart"

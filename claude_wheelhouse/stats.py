@@ -1,0 +1,392 @@
+"""A session's token use, read from its Claude Code transcripts for the inbox's stats pane:
+how big its context is, whether its prompt cache is still warm, its compactions, and a
+small "context assembly" chart of the last two hours.
+
+The numbers and the chart are claude-dashboard's, ported: its usage parse, `build_column`,
+palette, shimmer and context grades. See .plan/session-stats.md.
+"""
+
+import json
+import math
+import re
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+from rich.text import Text
+
+from . import transcript
+
+SPAN = 2 * 3600                    # the chart's last two hours
+TTL = {"1h": 3600, "5m": 300}
+WRITE_PRICE = {"1h": 2.0, "5m": 1.25}   # cache write, times the base input price
+MARGIN = 6                         # the chart's Y-axis labels
+PARTIAL = " ▁▂▃▄▅▆▇█"              # 0..8 eighths of a cell, bottom up
+GAUGE = " ▏▎▍▌▋▊▉█"                # the same, left to right
+CO = {"read": (52, 224, 150), "new": (84, 160, 255), "miss": (255, 88, 96)}   # green, blue, red
+SERIES = ("read", "new", "miss")
+LEGEND = {"read": "cache", "new": "new", "miss": "miss"}
+OK, WARN, AMBER, HOT = (52, 224, 150), (255, 205, 82), (255, 138, 56), (255, 88, 96)
+DIM, TEXT = "#7c809e", "#d8dcf0"
+
+
+def epoch(at: str) -> float | None:
+    try:
+        return datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, ValueError):
+        return None
+
+
+@dataclass
+class Turn:
+    """One API response: when, what it cost to assemble, and (main thread only) its size."""
+    at: float
+    read: int
+    new: int      # written to cache, or uncached, on top of a cache read
+    miss: int     # the same with nothing read: the cache was cold
+    context: int
+    ttl: str | None   # the cache it wrote, if any
+    model: str | None
+    main: bool
+
+
+@dataclass
+class Compaction:
+    at: float
+    trigger: str
+    pre: int
+    post: int
+
+
+def parse(lines, seen: set, main: bool) -> tuple[list[Turn], list[Compaction]]:
+    """The turns and compactions in some transcript lines. One response is written as
+    several lines sharing a message id: `seen` counts each once, across reads."""
+    turns, compactions = [], []
+    for line in lines:
+        if b'"usage"' not in line and b"compact_boundary" not in line:
+            continue   # most lines: no need to parse them
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict) or (at := epoch(rec.get("timestamp", ""))) is None:
+            continue
+        if rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
+            meta = rec.get("compactMetadata") or {}
+            compactions.append(Compaction(at, meta.get("trigger", "?"), meta.get("preTokens", 0) or 0,
+                                          meta.get("postTokens", 0) or 0))
+            continue
+        msg = rec.get("message") or {}
+        usage = msg.get("usage") if rec.get("type") == "assistant" else None
+        if not usage:
+            continue
+        key = msg.get("id") or rec.get("requestId")
+        if key is not None:
+            if key in seen:
+                continue
+            seen.add(key)
+        inp = usage.get("input_tokens", 0) or 0
+        made = usage.get("cache_creation_input_tokens", 0) or 0
+        read = usage.get("cache_read_input_tokens", 0) or 0
+        cc = usage.get("cache_creation") or {}
+        ttl = "1h" if cc.get("ephemeral_1h_input_tokens") else "5m" if cc.get("ephemeral_5m_input_tokens") else None
+        fresh = inp + made
+        turns.append(Turn(at, read, fresh if read else 0, 0 if read else fresh, inp + made + read, ttl,
+                          msg.get("model"), main and not rec.get("isSidechain")))
+    return turns, compactions
+
+
+# the dashboard's context grades
+
+def max_window(model: str | None) -> int:
+    """The 1M context is a request header, stripped from the logged model id: Opus and
+    Sonnet can have it, so they're graded against 1M."""
+    m = (model or "").lower()
+    return 1_000_000 if "opus" in m or "sonnet" in m else 200_000
+
+
+def window_for(model: str | None, peak: int) -> int:
+    return 1_000_000 if peak > 200_000 else max_window(model)
+
+
+def grade(size: int, window: int) -> tuple[tuple, bool]:
+    """Colour, and whether it flashes: green, yellow, amber, red, flashing red."""
+    g, y, a, r = (150_000, 300_000, 450_000, 600_000) if window >= 1_000_000 else (100_000, 125_000, 150_000, 175_000)
+    if size > r:
+        return HOT, True
+    return (HOT if size > a else AMBER if size > y else WARN if size > g else OK), False
+
+
+@dataclass
+class Snapshot:
+    """What the pane shows for one session."""
+    model: str | None = None
+    context: int = 0
+    peak: int = 0
+    last_at: float | None = None   # the main thread's latest response
+    ttl: str | None = None         # the cache its latest writing response used
+    compactions: list[Compaction] = field(default_factory=list)
+    turns: list[Turn] = field(default_factory=list)   # the span's, main thread and subagents
+
+    @property
+    def window(self) -> int:
+        return window_for(self.model, self.peak)
+
+    @property
+    def expires(self) -> float | None:
+        return self.last_at + TTL[self.ttl] if self.last_at and self.ttl else None
+
+    def warm(self, now: float) -> bool:
+        return bool(self.expires and now < self.expires)
+
+
+class UsageFollower:
+    """One session's usage, read incrementally: each file's new bytes, when its size or
+    modification time has changed. The main transcript, and its subagents' beside it."""
+
+    def __init__(self, sid: str, projects: Path | None = None):
+        self.sid, self.projects = sid, projects
+        self.main: Path | None = None
+        self.files: dict[Path, tuple[int, tuple]] = {}   # path: (offset read to, (size, mtime))
+        self.seen: set = set()
+        self.snap = Snapshot()
+
+    def paths(self) -> list[Path]:
+        if self.main is None:
+            self.main = transcript.locate(self.sid, self.projects)
+            if self.main is None:
+                return []
+        return [self.main, *sorted((self.main.parent / self.sid / "subagents").glob("agent-*.jsonl"))]
+
+    def read(self, now: float | None = None) -> bool:
+        """Takes in what's been appended since the last read. True if anything was."""
+        now = time.time() if now is None else now
+        changed = False
+        for path in self.paths():
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            offset, stamp = self.files.get(path, (0, None))
+            if (st.st_size, st.st_mtime_ns) == stamp:
+                continue
+            if path != self.main and offset == 0 and st.st_mtime < now - SPAN:
+                self.files[path] = (st.st_size, (st.st_size, st.st_mtime_ns))   # finished before the span
+                continue
+            with open(path, "rb") as f:
+                f.seek(offset)
+                data = f.read()
+            end = data.rfind(b"\n") + 1   # a half-written last line waits for the next read
+            self.files[path] = (offset + end, (st.st_size, st.st_mtime_ns))
+            turns, compactions = parse(data[:end].splitlines(), self.seen, path == self.main)
+            self.take(turns, compactions)
+            changed = changed or bool(turns or compactions)
+        self.snap.turns = [t for t in self.snap.turns if t.at >= now - SPAN]
+        return changed
+
+    def take(self, turns: list[Turn], compactions: list[Compaction]) -> None:
+        s = self.snap
+        s.compactions += compactions
+        for t in turns:
+            s.turns.append(t)
+            if t.main:
+                s.model, s.context, s.peak, s.last_at = t.model or s.model, t.context, max(s.peak, t.context), t.at
+                s.ttl = t.ttl or s.ttl
+
+
+# what the pane says
+
+def tokens(n: float) -> str:
+    return f"{n / 1_000_000:.1f}".removesuffix(".0") + "M" if n >= 1_000_000 else f"{n / 1_000:.0f}k" if n >= 1_000 else str(int(n))
+
+
+def clock(at: float) -> str:
+    return time.strftime("%H:%M %Z", time.localtime(at))
+
+
+def until(seconds: float) -> str:
+    m = max(0, int(seconds // 60))
+    return f"{m // 60}h{m % 60:02d}m" if m >= 60 else f"{m}m"
+
+
+def model_name(model: str | None) -> str:
+    m = re.match(r"claude-([a-z]+)-(\d+)(?:-(\d+))?", model or "")
+    return f"{m[1].capitalize()} {m[2]}{'.' + m[3] if m[3] else ''}" if m else (model or "model unknown")
+
+
+def cold_cost(snap: Snapshot) -> str:
+    """What the next turn costs to rebuild a cold cache: its context, at the write price."""
+    price = WRITE_PRICE.get(snap.ttl or "1h", 2.0)
+    return f"next turn re-pays ~{tokens(snap.context)} (~{tokens(snap.context * price)} effective)"
+
+
+def cache_lines(snap: Snapshot, now: float) -> list[str]:
+    if not snap.expires:
+        return ["no cache written yet"]
+    if snap.warm(now):
+        return [f"{snap.ttl} · warm · cold at {clock(snap.expires)} (in {until(snap.expires - now)})"]
+    return [f"{snap.ttl} · cold since {clock(snap.expires)}", cold_cost(snap)]
+
+
+def gauge(size: int, window: int, width: int) -> str:
+    eighths = min(width * 8, round(size / window * width * 8)) if window else 0
+    full, part = divmod(eighths, 8)
+    return ("█" * full + (GAUGE[part] if part else "")).ljust(width)
+
+
+@dataclass
+class Totals:
+    """The pane with no session in context: every running session's, added up."""
+    sessions: int
+    context: int
+    warm: int
+    next_cold: tuple[float, str] | None   # when, and whose
+    turns: list[Turn]
+
+
+def combine(snaps: dict[str, Snapshot], names: dict[str, str], now: float) -> Totals:
+    warm = {sid: s for sid, s in snaps.items() if s.warm(now)}
+    soonest = min(warm, key=lambda sid: warm[sid].expires, default=None)
+    return Totals(len(snaps), sum(s.context for s in snaps.values()), len(warm),
+                  (warm[soonest].expires, names.get(soonest, soonest)) if soonest else None,
+                  sorted((t for s in snaps.values() for t in s.turns), key=lambda t: t.at))
+
+
+def summary(view, name: str, now: float, frame: int, width: int) -> list[Text]:
+    """The text rows above the chart."""
+    label = lambda s: Text(s.ljust(8), style=DIM)
+    if isinstance(view, Totals):
+        out = [Text(f"all running sessions · {view.sessions}", style=f"bold {TEXT}"),
+               label("context") + Text(f"{tokens(view.context)} across {view.sessions}", style=TEXT)]
+        cache = f"{view.warm} of {view.sessions} warm"
+        if view.next_cold:
+            at, who = view.next_cold
+            cache += f" · next cold {who} at {clock(at)} (in {until(at - now)})"
+        return out + [label("cache") + Text(cache, style=TEXT)]
+    snap = view
+    out = [Text(f"{name} · {model_name(snap.model)} · {tokens(snap.window)} window", style=f"bold {TEXT}")]
+    colour, flashing = grade(snap.context, snap.window)
+    hue = "#%02x%02x%02x" % (tuple(int(c * 0.3) for c in colour) if flashing and frame // 10 % 2 else colour)
+    bar = max(4, width - 8 - 18)
+    out.append(label("context") + Text("▕" + gauge(snap.context, snap.window, bar) + "▏", style=hue)
+               + Text(f" {tokens(snap.context)}/{tokens(snap.window)} {snap.context * 100 // snap.window}%", style=TEXT))
+    for i, line in enumerate(cache_lines(snap, now)):
+        out.append(label("cache" if i == 0 else "") + Text(line, style=TEXT if snap.warm(now) or i else "#ff5860"))
+    if snap.compactions:
+        c = snap.compactions[-1]
+        out.append(label("compact") + Text(f"{len(snap.compactions)}× · last {clock(c.at)} · "
+                                           f"{tokens(c.pre)} → {tokens(c.post)}", style=TEXT))
+    return out
+
+
+# the chart
+
+def buckets(turns: list[Turn], now: float, columns: int, span: int = SPAN) -> list[dict]:
+    """The span cut into `columns` equal buckets, oldest first, each summing its turns."""
+    out = [dict.fromkeys(SERIES, 0) for _ in range(max(columns, 0))]
+    if not out:
+        return out
+    start, width = now - span, span / columns
+    for t in turns:
+        if start <= t.at <= now:
+            b = out[min(int((t.at - start) / width), columns - 1)]
+            b["read"] += t.read
+            b["new"] += t.new
+            b["miss"] += t.miss
+    return out
+
+
+def build_column(vc: list[tuple], total: float, maxt: float, height: int) -> list[tuple]:
+    """`height` cells bottom to top as (colour or None, char), in eighths of a cell, each
+    non-empty segment at least one eighth. The dashboard's, unchanged."""
+    col = [(None, " ")] * height
+    if total <= 0 or maxt <= 0:
+        return col
+    units = height * 8
+    sub = min(max(int(round(total / maxt * units)), 1), units)
+    nz = [i for i, (_, v) in enumerate(vc) if v > 0]
+    alloc = [0] * len(vc)
+    if sub >= len(nz):
+        for i in nz:
+            alloc[i] = 1
+        fr = []
+        for i in nz:
+            e = vc[i][1] / total * sub
+            alloc[i] += max(int(e) - 1, 0)
+            fr.append((e - int(e), i))
+        for _, i in sorted(fr, reverse=True)[:max(sub - sum(alloc), 0)]:
+            alloc[i] += 1
+    else:
+        for i in sorted(nz, key=lambda i: vc[i][1], reverse=True)[:sub]:
+            alloc[i] = 1
+    contrib = [dict() for _ in range(height)]
+    filled = [0] * height
+    pos = 0
+    for (colour, _), n in zip(vc, alloc):
+        for _ in range(n):
+            ci = pos // 8
+            if ci < height:
+                contrib[ci][colour] = contrib[ci].get(colour, 0) + 1
+                filled[ci] += 1
+            pos += 1
+    for ci in range(height):
+        if filled[ci]:
+            col[ci] = (max(contrib[ci].items(), key=lambda kv: kv[1])[0], PARTIAL[min(filled[ci], 8)])
+    return col
+
+
+@dataclass
+class Chart:
+    """The columns, built when the data or the size changes; the shimmer only recolours them."""
+    columns: list[list[tuple]]
+    maxt: float
+    height: int
+    start: float
+    span: int
+
+
+def chart(turns: list[Turn], now: float, width: int, height: int, span: int = SPAN) -> Chart:
+    bs = buckets(turns, now, width - MARGIN, span)
+    totals = [sum(b.values()) for b in bs]
+    maxt = max(totals, default=0)
+    return Chart([build_column([(CO[k], b[k]) for k in SERIES], t, maxt, height) for b, t in zip(bs, totals)],
+                 maxt, height, now - span, span)
+
+
+def shade(c: tuple, f: float) -> str:
+    f = round(f * 32) / 32   # a few dozen shades, so Rich's style cache keeps hitting
+    return "#%02x%02x%02x" % (int(c[0] * f), int(c[1] * f), int(c[2] * f))
+
+
+def chart_lines(c: Chart, frame: int) -> list[Text]:
+    """The chart's legend, bars, baseline and hourly ticks, at animation frame `frame`."""
+    head = Text("▸ ", style="bold #5ae8e8") + Text("context assembly", style=f"bold {TEXT}")
+    for k in SERIES:
+        head += Text("  ▆", style=shade(CO[k], 1)) + Text(" " + LEGEND[k], style=DIM)
+    out = [head]
+    for row in range(c.height - 1, -1, -1):
+        f = 0.5 + 0.5 * row / (c.height - 1) if c.height > 1 else 1.0
+        label = tokens(round(c.maxt * (row + 1) / c.height)) if row % 2 and c.maxt else ""
+        line = Text(label.rjust(MARGIN - 2) + "  ", style=DIM)
+        for i, col in enumerate(c.columns):
+            base, ch = col[row]
+            if base:
+                wave = 1.0 + 0.18 * math.sin(0.20 * i + 0.45 * row - 0.11 * frame)
+                line.append(ch, style=shade(base, max(0.12, min(1.0, f * wave))))
+            else:
+                line.append(" ")
+        out.append(line)
+    n = len(c.columns)
+    out.append(Text("0".rjust(MARGIN - 1) + " └" + "─" * max(n - 1, 0), style=DIM))
+    axis = [" "] * n
+    tick = (int(c.start) // 3600 + 1) * 3600
+    while tick <= c.start + c.span and n:
+        lab = time.strftime("%-H:00", time.localtime(tick))
+        pos = min(round((tick - c.start) / c.span * n), n - len(lab))
+        for i, ch in enumerate(lab):
+            if 0 <= pos + i < n:
+                axis[pos + i] = ch
+        tick += 3600
+    out.append(Text(" " * MARGIN + "".join(axis), style=DIM))
+    return out
