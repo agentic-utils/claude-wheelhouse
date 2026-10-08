@@ -7,6 +7,9 @@ otherwise would have asked about.
   `post_item(kind="decision")`: what you decided in `title` (detail in `body` if it needs
   it), the option you passed over in `alternative`, your reason in `why`, and how to undo
   it in `reverse`. It doesn't block anything; the person reads it when they choose.
+- If you list decisions in a report ("decided without asking" or similar), each one is also
+  a decision item, never only in chat. Post them before or with the report, and refer to them
+  by ref.
 - The bar is a choice the person might reasonably want to know about. Not every naming or
   formatting choice. The bar decides only what you report: whether to ask first is up to
   your own instructions, exactly as it would be without this section.

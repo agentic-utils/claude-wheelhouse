@@ -35,7 +35,8 @@ DECISION_FIELDS = (("alternative", "Alternative"), ("why", "Why"), ("reverse", "
 # keep the code they started with) would mishandle the store: the wheelhouse then shows
 # it as needing a relaunch. 2: queued answers (draft messages) that older code would deliver.
 # 3: reply declares a question's status. 4: decisions. 5: SDK-hosted sessions and permission items.
-PROTOCOL_VERSION = 5
+# 6: decisions listed in a report are posted as items.
+PROTOCOL_VERSION = 6
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.
 DEFAULT_MODE = "queued"
