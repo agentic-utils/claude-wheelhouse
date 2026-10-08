@@ -1,11 +1,9 @@
 ## Decisions
 
-This section applies only if your own instructions already have you decide some things
-yourself, without asking the person first. It doesn't ask you to decide anything you
-otherwise would have asked about. If your instructions don't give you that latitude,
-there is nothing to report here: ask as usual.
+This section is about reporting, not deciding: it doesn't ask you to decide anything you
+otherwise would have asked about.
 
-- When you have made such a decision, report it with `post_item(kind="decision")`: what you
+- Whenever you make a choice yourself rather than asking the person, report it with `post_item(kind="decision")`: what you
   decided in `title` (detail in `body` if it needs it), the option you passed over in
   `alternative`, your reason in `why`, and how to undo it in `reverse`. It doesn't block
   anything; the person reads it when they choose.

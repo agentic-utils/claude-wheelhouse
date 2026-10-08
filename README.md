@@ -72,7 +72,7 @@ how to work.
 
 - [`protocol.md`](claude_wheelhouse/protocol.md): appended to the session's system prompt,
   followed by [`protocol_decisions.md`](claude_wheelhouse/protocol_decisions.md), which
-  applies only if your instructions already let the session decide some things itself.
+  has the session report the choices it makes without asking.
   `WHEELHOUSE_DECISIONS=0` launches sessions without that section.
 - [The `/wheelhouse` skill](claude_wheelhouse/plugin/skills/wheelhouse/SKILL.md):
   `/wheelhouse park` and `/wheelhouse end`.

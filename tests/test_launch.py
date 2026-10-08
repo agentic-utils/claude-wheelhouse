@@ -190,4 +190,4 @@ def test_decisions_section_is_separable(monkeypatch, env, has_decisions, desc):
     text = launch.protocol()
     assert text.startswith("# Wheelhouse protocol"), desc
     assert ("## Decisions" in text) == has_decisions, desc
-    assert "only if your own instructions already have you decide" in launch.DECISIONS
+    assert "This section is about reporting, not deciding" in launch.DECISIONS
