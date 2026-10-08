@@ -245,7 +245,7 @@ class Host:
             raise
         finally:
             self.asking.discard(ref)
-        await self.taken(ref)
+        await self.taken(ref, "permission")
         self.store.set_activity(self.sid, "thinking")
         answer = json.loads(item["answer"] or "{}") if item else {}
         if answer.get("decision") in ("allow", "always"):
@@ -268,19 +268,28 @@ class Host:
             raise
         finally:
             self.waiting.pop(ref, None)
-        await self.taken(ref)
+        await self.taken(ref, "question")
         if reply is None:
             return PermissionResultDeny(message=CLOSED_UNANSWERED)
         self.store.reply(self.sid, ref, "Passed to Claude as the answer.", status="answered")
         self.store.set_activity(self.sid, "thinking")
         return PermissionResultAllow(updated_input={**inp, "answers": question_answers(inp, reply)})
 
-    async def taken(self, ref: str) -> None:
+    async def taken(self, ref: str, kind: str) -> None:
         """The call waiting on this item has the person's message (if one was handed to it):
-        now it is delivered."""
-        msg = self.handed.pop(ref, None)
-        if msg is not None:
+        now it is delivered. It stays handed until that's recorded: withdrawn while a locked
+        database holds the confirm up, the call never returns, so the message is released to
+        go out as a turn rather than marked delivered unread."""
+        msg = self.handed.get(ref)
+        if msg is None:
+            return
+        try:
             await self.confirm([msg])
+        except asyncio.CancelledError:
+            self.delivered.discard(msg["id"])
+            self.withdrawn(ref, kind)
+            raise
+        self.handed.pop(ref, None)
 
     def withdrawn(self, ref: str, kind: str) -> None:
         """Claude Code withdrew the call waiting on this item: close it if still open, and if
@@ -338,6 +347,7 @@ class Host:
         if session is None or session["parked"]:
             return False
         msgs = self.store.claim(self.sid)
+        self.forget_delivered()
         handed = {m["id"]: ref for ref, m in self.handed.items()}
         again, turn = [], []
         for m in msgs:
@@ -387,6 +397,14 @@ class Host:
         elif command == "shell":
             await self.shell()
         return not self.stopping
+
+    def forget_delivered(self) -> None:
+        """Drop remembered ids someone else has since recorded as delivered (a shell tab's
+        monitor): a claim never returns those, so nothing else would."""
+        for i in list(self.delivered):
+            m = self.store.message(self.sid, i)
+            if m is None or m["delivered_at"] is not None:
+                self.delivered.discard(i)
 
     def denied_with(self, ref: str, m) -> bool:
         """A message on a permission item denies the call with its text. False if a button
@@ -506,14 +524,14 @@ class Host:
                 return
             if liveness.status(session) == "dead":
                 break
-        if not self.register():   # something else took the session between those two reads
+        if not await self.steady(self.register):   # something else took the session between those two reads
             self.stopping = True
             return
-        self.store.set_shell(self.sid, None)
+        await self.steady(self.store.set_shell, self.sid, None)
         self.pending, self.turn_text = 0, []
         self.end_compact()
         self.reader.cancel()
-        self.deny_stale()
+        await self.steady(self.deny_stale)
         await self.connect()
         self.reader = asyncio.create_task(self.read())
 
@@ -521,12 +539,11 @@ class Host:
         await asyncio.sleep(SHELL_POLL_SECONDS)
 
     @staticmethod
-    async def steady(write, *args) -> None:
+    async def steady(write, *args):
         """A store write the hand-over can't skip, retried through a locked database."""
         for wait in (*STEADY_TRIES, None):
             try:
-                write(*args)
-                return
+                return write(*args)
             except sqlite3.OperationalError:
                 if wait is None:
                     raise
@@ -568,6 +585,9 @@ class Host:
                 self.store.set_shell(self.sid, None)   # a host killed while its shell tab was open left this
                 self.deny_stale()
                 await self.connect()
+            except sqlite3.OperationalError as e:   # the store, not Claude Code: say which
+                self.stop_reason = stopped(f"the wheelhouse database was busy at start: {e}")
+                return
             except Exception as e:   # Claude Code wouldn't start (or resume): say why, not just "dead"
                 self.stop_reason = stopped(f"Claude Code didn't start: {e}")
                 return

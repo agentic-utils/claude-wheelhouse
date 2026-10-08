@@ -118,7 +118,9 @@ def get_input(ref: str | None = None, message_id: int | None = None) -> str:
         for m in s.thread(_sid, ref, in_flight=hosted):
             if m["draft"]:
                 continue
-            via = " (reaches you as a user turn)" if hosted and m["author"] == "person" and m["delivered_at"] is None else ""
+            via = ""
+            if hosted and m["author"] == "person" and m["delivered_at"] is None:   # claimed: already passed on
+                via = " (passed to you)" if m["claimed_at"] else " (reaches you as a user turn)"
             lines.append(f"{m['author']} @ {m['created_at']}{via}: {m['body']}")
         return "\n".join(lines)
     msgs = s.take_pending(_sid)

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import sqlite3
 import subprocess
 import time
 from types import SimpleNamespace
@@ -798,8 +799,8 @@ def test_send_failure_leaves_a_stop_reason(store, sid, monkeypatch):
 
 @pytest.mark.parametrize("state, shown, desc", [
     (lambda s, i: None, "(reaches you as a user turn): on its way", "not yet sent: marked, so it isn't acted on twice"),
-    (lambda s, i: s.claim(i), "(reaches you as a user turn): on its way",
-     "sent by the host but not yet marked delivered: still shown"),
+    (lambda s, i: s.claim(i), "(passed to you): on its way",
+     "passed on by the host (a turn, or a waiting call) but not yet marked delivered: still shown"),
     (lambda s, i: s.take_pending(i), ": on its way", "delivered: shown plainly"),
 ])
 def test_get_input_ref_in_a_hosted_session(store, tmp_path, monkeypatch, state, shown, desc):
@@ -814,7 +815,7 @@ def test_get_input_ref_in_a_hosted_session(store, tmp_path, monkeypatch, state, 
     state(store, sid)
     out = get_input(ref=ref)
     assert out.splitlines()[-1].endswith(shown), desc
-    assert ("(reaches you" in out) == ("reaches" in shown), desc
+    assert ("(reaches you" in out) == ("reaches" in shown) and ("(passed" in out) == ("passed" in shown), desc
     assert "a draft" not in out, f"{desc}: drafts never show"
 
 
@@ -851,3 +852,104 @@ def test_steady_writes_through_a_lock(monkeypatch, fails, raises, desc):
     else:
         run(Host.steady(write, "x"))
     assert len(calls) == (5 if raises else fails + 1), desc
+
+
+@pytest.mark.parametrize("name, inp, desc", [
+    ("AskUserQuestion", ONE, "a question from Claude's dialog"),
+    ("Bash", {"command": "ls"}, "a permission"),
+])
+def test_withdrawn_during_a_locked_confirm(host, store, sid, monkeypatch, name, inp, desc):
+    """The call took the person's message, but a locked database holds up recording it, and
+    Claude Code withdraws the call meanwhile: the call never returns, so the message goes out
+    as a turn, once, rather than being marked delivered unread."""
+    real, tries = store.confirm, []
+
+    def locked_once(msgs):
+        if msgs:
+            tries.append(1)
+            if len(tries) == 1:
+                raise sqlite3.OperationalError("database is locked")
+        return real(msgs)
+    monkeypatch.setattr(store, "confirm", locked_once)
+    monkeypatch.setattr(host_mod, "CONFIRM_TRIES", (1.0,))
+    monkeypatch.setattr("claude_wheelhouse.store.CLAIM_TIMEOUT", -1)   # every claim is stale at once
+
+    async def go():
+        task = asyncio.create_task(host.can_use_tool(name, inp, ctx()))
+        item = await until_open(store, sid)
+        store.send(sid, "use the other one", item["ref"])
+        await host.poll()   # handed to the call
+        while not tries:   # the call has resumed, and waits out the locked confirm
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await host.poll()
+        await host.poll()
+        return item["ref"]
+    ref = run(go())
+    assert host.client.queries == [f"[wheelhouse] from doug on {ref}:\nuse the other one"], desc
+    assert store.pending(sid) == [] and host.handed == {} and host.delivered == set(), desc
+    assert store.item(sid, ref)["status"] != "open", desc
+
+
+@pytest.mark.parametrize("name, inp, desc", [
+    ("AskUserQuestion", ONE, "a question from Claude's dialog"),
+    ("Bash", {"command": "ls"}, "a permission"),
+])
+def test_reclaimed_while_its_call_waits(host, store, sid, monkeypatch, name, inp, desc):
+    """A message handed to a call and claimed again as stale before the call takes it is
+    neither sent as a turn nor left behind."""
+    monkeypatch.setattr("claude_wheelhouse.store.CLAIM_TIMEOUT", -1)
+
+    async def go():
+        task = asyncio.create_task(host.can_use_tool(name, inp, ctx()))
+        item = await until_open(store, sid)
+        store.send(sid, "answer", item["ref"])
+        for _ in range(3):
+            await host.poll()
+        await asyncio.wait_for(task, 5)
+        await host.poll()
+    run(go())
+    assert host.client.queries == [], desc
+    assert store.pending(sid) == [] and host.handed == {} and host.delivered == set(), desc
+
+
+def test_delivered_elsewhere_is_forgotten(host, store, sid):
+    """An id remembered after a failed confirm, then delivered by someone else (a shell tab's
+    monitor): a claim never returns it, so the next pass drops it."""
+    store.send(sid, "hello")
+    m = store.take_pending(sid)[0]
+    host.delivered.add(m["id"])
+    run(host.poll())
+    assert host.delivered == set()
+
+
+class LockedAtStart(LockingStore):
+    def set_shell(self, *args):
+        raise sqlite3.OperationalError("database is locked")
+
+
+def test_run_says_a_locked_database_isnt_claude_code(store, sid, monkeypatch):
+    monkeypatch.setattr(host_mod, "transcript_exists", lambda sid: True)
+    h = Host(LockedAtStart(store), sid, client_factory=StreamClient, person="doug")
+    run(asyncio.wait_for(h.run(), 5))
+    activity = store.session(sid)["activity"]
+    assert "database" in activity and "Claude Code didn't start" not in activity, activity
+
+
+@pytest.mark.parametrize("locks, returns, desc", [
+    (0, True, "no lock: the write's own result"),
+    (2, True, "locked twice, then through: still its result"),
+    (0, False, "a refused registration comes back as False"),
+])
+def test_steady_rides_out_a_lock(monkeypatch, locks, returns, desc):
+    monkeypatch.setattr(host_mod, "STEADY_TRIES", (0, 0, 0))
+    left = [locks]
+
+    def write():
+        if left[0]:
+            left[0] -= 1
+            raise sqlite3.OperationalError("database is locked")
+        return returns
+    assert run(Host.steady(write)) is returns, desc
