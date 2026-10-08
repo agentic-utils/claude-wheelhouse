@@ -983,7 +983,8 @@ class WheelhouseApp(App):
         follower = self.followers.setdefault(sid, transcript.Follower(sid))
         recs = follower.read()
         queued = tuple(m["body"] for m in self.store.drafts(sid) if m["item_ref"] is None)
-        key = (s["name"] or short(sid), launch.tab_title(s), follower.seen, queued)
+        tab = None if runner(s) == "sdk" and not s["shell"] else launch.tab_title(s)
+        key = (s["name"] or short(sid), tab, follower.seen, queued)
         if follower.blocks_key != key:   # parsed once per change, not on every refresh tick
             follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued)
         return follower.blocks

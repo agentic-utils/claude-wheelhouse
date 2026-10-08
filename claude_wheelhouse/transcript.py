@@ -122,15 +122,18 @@ def _hhmm(at: str) -> str:
     return f" · {at[11:16]}Z" if len(at) >= 16 else ""
 
 
-def blocks(name: str, tab: str, recs: list[dict] | None, queued=()) -> list[tuple[str, str]]:
+def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=()) -> list[tuple[str, str]]:
     """The conversation as (who, markdown) blocks, then the person's general messages still
     queued for it. who is head, warn, note, tool, you, wheelhouse or claude: the app colours
-    the person's words apart from Claude's."""
-    out = [("head", f"## {name} · conversation\n\n_Tab: **{tab}**. Permission prompts and slash "
-                    "commands need that tab._")]
+    the person's words apart from Claude's. tab None: the session runs in the wheelhouse,
+    where its permission prompts and questions are items, so there's no tab to wait in."""
+    where = (f"_Tab: **{tab}**. Permission prompts and slash commands need that tab._" if tab else
+             "_Runs in the wheelhouse: its permission prompts and questions come to the inbox. "
+             "Shell opens it in a terminal tab._")
+    out = [("head", f"## {name} · conversation\n\n{where}")]
     if recs is None:
         out.append(("note", "_No transcript found for this session yet._"))
-    elif waiting := waiting_in_tab(recs):
+    elif tab and (waiting := waiting_in_tab(recs)):
         out.append(("warn", f"> ⚠ **Waiting for you in its tab:** {waiting}."))
     for e in entries(recs or []):
         if e.who == "tool":

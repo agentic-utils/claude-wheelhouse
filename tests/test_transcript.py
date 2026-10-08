@@ -100,3 +100,8 @@ def test_follower_rereads_only_when_the_file_changes(tmp_path):
     with open(path, "a") as f:
         f.write(json.dumps(user("two")) + "\n")
     assert [r["message"]["content"] for r in follower.read()] == ["one", "two"]
+
+
+def test_hosted_session_header_has_no_tab():
+    out = transcript.blocks("demo", None, [])
+    assert "Runs in the wheelhouse" in out[0][1] and not any(who == "warn" for who, _ in out)
