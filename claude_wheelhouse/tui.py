@@ -498,10 +498,10 @@ class ThreadView(Screen):
         app.box_target = None
         app.keep_unsent(self.box, None, me)
         self.paint()
+        app.paint_sendbar()   # its hint and bar now, not at the next refresh
         self.box.focus()
 
     def action_leave(self) -> None:
-        app.paint_sendbar()   # its hint and bar now, not at the next refresh
         self.app.keep_unsent(self.box, (self.sid, self.ref), None)
         self.app.pop_screen()
         self.app.call_after_refresh(self.app.retarget)   # the inbox box takes back its target's text, the bar its session
@@ -1201,6 +1201,9 @@ class WheelhouseApp(App):
             bar.show("mode", "Sends now: needs relaunch", True)
         else:
             bar.show("mode", f"Mode: {mode(s).capitalize()}", False)
+        sends = "send" if s is not None and (mode(s) == "immediate" or self.stale(s)) else "queue"
+        for h in self.screen.query(Hint):
+            h.set_base(hint(sends))
         n = s["drafts"] if s else 0
         bar.show("send", f"Send ({n})", not n)
         bar.show("send-all", f"Send all ({total})", not total)
@@ -1315,9 +1318,6 @@ class WheelhouseApp(App):
             return   # stale: a rebuild put the cursor back before this was handled
         self.select_row(event.row_key.value)
         self.saw(*self.selected)
-        sends = "send" if s is not None and (mode(s) == "immediate" or self.stale(s)) else "queue"
-        for h in self.screen.query(Hint):
-            h.set_base(hint(sends))
 
     def select_row(self, key: str) -> None:
         sid, ref = key.split("|")
