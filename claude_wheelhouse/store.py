@@ -31,6 +31,10 @@ DECISION_FIELDS = (("alternative", "Alternative"), ("why", "Why"), ("reverse", "
 # it as needing a relaunch. 2: queued answers (draft messages) that older code would deliver.
 # 3: reply declares a question's status. 4: decisions.
 PROTOCOL_VERSION = 4
+# How a session's answers go until the person toggles it: "queued" holds them until sent,
+# "immediate" sends each as it's submitted. Stored per session; NULL means this default.
+DEFAULT_MODE = "queued"
+MODES = ("queued", "immediate")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -52,7 +56,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     park_told_at TEXT,
     adopted      INTEGER NOT NULL DEFAULT 0,
     synopsis     TEXT NOT NULL DEFAULT '',
-    code_version INTEGER
+    code_version INTEGER,
+    send_mode    TEXT
 );
 CREATE TABLE IF NOT EXISTS items (
     id         INTEGER PRIMARY KEY,
@@ -93,7 +98,7 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("messages", "claimed_at", "TEXT"), ("sessions", "adopted", "INTEGER NOT NULL DEFAULT 0"),
                  ("messages", "draft", "INTEGER NOT NULL DEFAULT 0"), ("messages", "kind", "TEXT"),
                  ("sessions", "synopsis", "TEXT NOT NULL DEFAULT ''"), ("sessions", "code_version", "INTEGER"),
-                 ("items", "reopened_after", "INTEGER")]
+                 ("items", "reopened_after", "INTEGER"), ("sessions", "send_mode", "TEXT")]
 REQUESTS = ("end", "park")   # what the wheelhouse can ask a running session to do
 CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print is retaken
 
@@ -116,6 +121,11 @@ def now() -> str:
 def stamp() -> str:
     """A precise timestamp: tells one claim or request from the next within a second."""
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+def mode(session) -> str:
+    """The session's send mode: queued or immediate."""
+    return session["send_mode"] or DEFAULT_MODE
 
 
 def needs_relaunch(session) -> bool:
@@ -298,6 +308,13 @@ class Store:
         """Stamp this code's PROTOCOL_VERSION on the session (the monitor, as it starts)."""
         with self.tx() as db:
             db.execute("UPDATE sessions SET code_version = ? WHERE id = ?", (PROTOCOL_VERSION, sid))
+
+    def set_mode(self, sid: str, mode: str) -> None:
+        if mode not in MODES:
+            raise ValueError(f"mode must be one of {', '.join(MODES)}, not {mode!r}")
+        with self.tx() as db:
+            self._require(db, sid)
+            db.execute("UPDATE sessions SET send_mode = ? WHERE id = ?", (mode, sid))
 
     def set_parked(self, sid: str, parked: bool) -> None:
         """Parking (by the session or by force) also settles any pending park request."""

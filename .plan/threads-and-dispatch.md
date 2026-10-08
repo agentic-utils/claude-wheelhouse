@@ -117,8 +117,18 @@ line per item instead; one line is the safe choice until that's confirmed.
 
 Where the build differs from the design above:
 
-- **Store calls.** `send()` still sends at once (Ctrl+Enter and the End/Park cancellations use
-  it). Queuing is a separate `queue()`, and `dispatch(sid)` sends a session's drafts in one
+- **Send mode per session, and the keys (#38).** Each session has a send mode, Queued or
+  Immediate (`sessions.send_mode`; NULL means `store.DEFAULT_MODE`, `"queued"`). Ctrl+Enter
+  (and `ctrl+j`, as Windows Terminal sends it) submits: queued, or sent at once in
+  Immediate mode. Ctrl+T switches the session in context. Ctrl+S sends that session's
+  queue. Send all is a button only: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S as
+  plain Ctrl+S. A bar above the footer, on the inbox and in the thread view, always
+  shows the mode button, Send (n) and Send all (n), each disabled while its queue is empty;
+  its buttons take no focus. The session in context is the thread's, the Sessions tab's
+  highlighted row, or the inbox's filter or selected item's session. The `s`, `S` and `i`
+  keys are gone, and keys are shown in upper case, the usual convention.
+- **Store calls.** `send()` still sends at once (Immediate mode and the End/Park
+  cancellations use it). Queuing is a separate `queue()`, and `dispatch(sid)` sends a session's drafts in one
   transaction. `unqueue()` takes a draft back.
 - **Editing or dropping a queued answer.** Ctrl+R in a compose box takes the item's latest
   queued answer back into the box, to edit and queue again, or to clear and so drop.
@@ -147,8 +157,8 @@ Where the build differs from the design above:
   delivers a draft at once, and it keeps its old code until the session restarts. Each
   session row now carries `code_version`, stamped with `PROTOCOL_VERSION` when the
   session registers, by the MCP server's heartbeat and when the monitor starts. A running
-  session with an older or missing stamp shows "needs relaunch", and Ctrl+S sends to it
-  at once (with a warning) instead of queuing. Bump `PROTOCOL_VERSION` whenever older
+  session with an older or missing stamp shows "needs relaunch", and Ctrl+Enter sends to
+  it at once (with a warning) instead of queuing. Bump `PROTOCOL_VERSION` whenever older
   running code would mishandle the store.
 - **Unsent text and refreshes.** Typed text is kept per row and swapped only when the
   person moves the highlight. The once-a-second refresh changes table cells in place

@@ -32,7 +32,7 @@ from textual.widgets import (
 )
 
 from . import adopt, emoji, launch, liveness, transcript
-from .store import CLOSED, SessionGone, Store, needs_relaunch
+from .store import CLOSED, SessionGone, Store, mode, needs_relaunch
 
 MATRIX = "#00ff41"
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
@@ -268,12 +268,14 @@ class SessionList(DataTable):
 
 
 class Compose(TextArea):
-    """An answer box. Ctrl+A selects all of it, as in other editors (TextArea's own is line start). Ctrl+Enter sends what's typed now. Most terminals (Windows Terminal
-    among them) send Ctrl+Enter as a line feed, which arrives as ctrl+j, so both are bound.
+    """An answer box. Ctrl+A selects all of it, as in other editors (TextArea's own is line
+    start). Ctrl+Enter submits what's typed: queued or sent at once, by the session's mode.
+    Most terminals (Windows Terminal among them) send Ctrl+Enter as a line feed, which
+    arrives as ctrl+j, so both are bound.
     Emoji: a complete :code: turns into its emoji as it's typed, and a code being typed
     shows suggestions in the hint line, the first taken with Tab or Enter."""
-    BINDINGS = [Binding("ctrl+enter", "app.send_now", "Send now"),
-                Binding("ctrl+j", "app.send_now", "Send now", show=False),
+    BINDINGS = [Binding("ctrl+enter", "app.submit", "Submit", show=False),   # the app's shows in the footer
+                Binding("ctrl+j", "app.submit", "Submit", show=False),
                 Binding("ctrl+a", "select_all", "Select all", show=False)]   # not line start
 
     def _before_cursor(self) -> tuple[int, int, str]:
@@ -306,10 +308,38 @@ class Compose(TextArea):
                 self.replace(found[0][1], (row, col - len(code) - 1), (row, col))
 
 
+class SendBar(Horizontal):
+    """Always on screen above the footer: the current session's send mode, its queue, and
+    every session's. Send all has no key: Windows Terminal sends Ctrl+Shift+S and
+    Ctrl+Alt+S as plain Ctrl+S. The buttons never take focus, so clicking one leaves the
+    answer box (and what's typed in it) where it was."""
+    DEFAULT_CSS = """
+    SendBar { height: 1; background: #12122a; }
+    SendBar Button { height: 1; min-width: 12; border: none; margin: 0 1 0 0; padding: 0 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Button("Mode", id="mode")
+        yield Button("Send", id="send", variant="primary")
+        yield Button("Send all", id="send-all", variant="warning")
+
+    def on_mount(self) -> None:
+        for button in self.query(Button):
+            button.can_focus = False
+
+    def show(self, button_id: str, label: str, disabled: bool) -> None:
+        button = next(iter(self.query(f"#{button_id}")), None)
+        if button is None:   # the app's first refresh can come before the bar's buttons mount
+            return
+        if str(button.label) != label:
+            button.label = label
+        button.disabled = disabled
+
+
 class ThreadView(Screen):
     """One item full screen: its detail, the whole conversation and a compose box. The app's
     refresh tick repaints it, so a reply shows up while it's open; typed text is untouched."""
-    BINDINGS = [Binding("escape", "leave", "Back")]
+    BINDINGS = [Binding("escape", "leave", "Back", key_display="Esc")]
 
     def __init__(self, sid: str, ref: str):
         super().__init__()
@@ -321,6 +351,7 @@ class ThreadView(Screen):
             yield Transcript(id="thread")
         yield Compose(id="thread-answer")
         yield Label(HINT, classes="answer-hint")
+        yield SendBar()
         yield Footer()
 
     def on_mount(self) -> None:
@@ -335,7 +366,7 @@ class ThreadView(Screen):
     def action_leave(self) -> None:
         self.app.keep_unsent(self.box, (self.sid, self.ref), None)
         self.app.pop_screen()
-        self.app.call_after_refresh(self.app.retarget)   # the inbox box takes back its target's text
+        self.app.call_after_refresh(self.app.retarget)   # the inbox box takes back its target's text, the bar its session
 
     def paint(self) -> None:
         s = self.app.store.session(self.sid)
@@ -347,7 +378,8 @@ class ThreadView(Screen):
             self.query_one("#thread-scroll").scroll_end(animate=False)
 
 
-HINT = "Ctrl+S queues · Ctrl+Enter sends now · Ctrl+R takes a queued answer back to edit or drop"
+HINT = ("Ctrl+Enter submits (queued or sent now, by the session's mode) · Ctrl+S sends its queue"
+        " · Ctrl+T switches mode · Ctrl+R takes a queued answer back")
 
 
 class NewSession(ModalScreen):
@@ -508,7 +540,7 @@ class WheelhouseApp(App):
     CSS = f"""
     Screen {{ background: #0a0a12; }}
     #title {{ height: 1; background: #12122a; content-align: center middle; }}
-    TabbedContent {{ height: 1fr; }}   /* leaves room for the outbox and footer: no screen scroll */
+    TabbedContent {{ height: 1fr; }}   /* leaves room for the send bar and footer: no screen scroll */
     .panel {{ background: #000000; color: {MATRIX}; border: round #7b61ff; }}
     .panel:focus-within {{ border: round #ff2a6d; }}
     DataTable {{ background: #000000; color: {MATRIX}; }}
@@ -524,7 +556,6 @@ class WheelhouseApp(App):
     /* the default cursor is a pale grey cell: a hot block reads as "type here" on black */
     Compose > .text-area--cursor {{ background: #ff2a6d; color: #000000; text-style: bold; }}
     .answer-hint {{ color: #777777; height: 1; }}
-    #outbox {{ height: 1; color: #05d9e8; background: #12122a; }}
     #thread-scroll {{ height: 1fr; }}
     #synopsis {{ height: 7; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
     Markdown {{ background: #000000; color: {MATRIX}; }}
@@ -540,20 +571,21 @@ class WheelhouseApp(App):
     NewSession, Confirm, Choice, AdoptSession {{ align: center middle; }}
     """
 
+    # keys shown in upper case, the usual convention: X is the x key, not Shift+X
     BINDINGS = [
-        Binding("ctrl+s", "queue", "Queue"),
-        Binding("ctrl+r", "recall", "Edit queued", show=False),
-        Binding("s", "dispatch", "Send session"),
-        Binding("S", "dispatch_all", "Send all"),
-        Binding("n", "new_session", "New session"),
-        Binding("a", "adopt", "Adopt"),
-        Binding("escape", "clear_filter", "All sessions"),
+        Binding("ctrl+enter", "submit", "Submit", key_display="Ctrl+Enter"),
+        Binding("ctrl+j", "submit", "Submit", show=False),   # Ctrl+Enter, as most terminals send it
+        Binding("ctrl+s", "send_session", "Send", key_display="Ctrl+S"),
+        Binding("ctrl+t", "toggle_mode", "Mode", key_display="Ctrl+T"),
+        Binding("ctrl+r", "recall", "Edit queued", show=False, key_display="Ctrl+R"),
+        Binding("n", "new_session", "New session", key_display="N"),
+        Binding("a", "adopt", "Adopt", key_display="A"),
+        Binding("escape", "clear_filter", "All sessions", key_display="Esc"),
         Binding("1", "show_tab('inbox')", "Inbox"),
-        Binding("i", "show_tab('inbox')", "Inbox", show=False),
         Binding("2", "show_tab('sessions')", "Sessions"),
-        Binding("f", "toggle_finished", "Finished"),
-        Binding("x", "close_question", "Close"),
-        Binding("q", "quit", "Quit"),
+        Binding("f", "toggle_finished", "Finished", key_display="F"),
+        Binding("x", "close_question", "Close", key_display="X"),
+        Binding("q", "quit", "Quit", key_display="Q"),
     ]
 
     def __init__(self, store: Store | None = None):
@@ -600,7 +632,7 @@ class WheelhouseApp(App):
                         yield Button("Restore all", id="restore-all", variant="warning")
                         yield Button("Park / unpark", id="park")
                         yield Button("End", id="end", variant="error")
-        yield Static(id="outbox")
+        yield SendBar()
         yield Footer()
 
     def on_mount(self) -> None:
@@ -610,7 +642,7 @@ class WheelhouseApp(App):
         self.detail = self.query_one("#detail", Transcript)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
         self.answer = self.query_one("#answer", Compose)
-        self.outbox = self.query_one("#outbox", Static)
+        self.tabs = self.query_one(TabbedContent)
         self.synopsis = self.query_one("#synopsis", Markdown)
         self.tables = {"#session-list": self.query_one("#session-list", DataTable),
                        "#session-table": self.query_one("#session-table", DataTable)}
@@ -639,8 +671,8 @@ class WheelhouseApp(App):
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
         self.paint_sessions()
         self.paint_items()
-        self.paint_outbox()
         self.paint_synopsis()
+        self.paint_sendbar()
         if isinstance(self.screen, ThreadView) and self.screen.is_mounted:   # not before its widgets exist
             self.screen.paint()   # an action here (queue, take back) shows at once
 
@@ -772,6 +804,7 @@ class WheelhouseApp(App):
     def retarget(self) -> None:
         """The answer box follows what the pane shows. Called on the person's selections
         only, never from the refresh tick, so text being typed is never swapped under them."""
+        self.paint_sendbar()
         if isinstance(self.screen, ThreadView):   # which holds its item's text itself
             return
         target = self.selected
@@ -806,9 +839,23 @@ class WheelhouseApp(App):
             follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued)
         return follower.blocks
 
-    def paint_outbox(self) -> None:
-        n = sum(s["drafts"] for s in self.sessions)
-        self.outbox.update(f" ✉ {n} queued: s sends the selected session's, S sends all" if n else "")
+    def paint_sendbar(self) -> None:
+        """The bar on the screen in front: the mode and queue of the session in context there."""
+        bar = next(iter(self.screen.query(SendBar)), None)
+        if bar is None:
+            return
+        sessions = {s["id"]: s for s in self.sessions}
+        s = sessions.get(self.bar_session(self.screen))
+        total = sum(x["drafts"] for x in self.sessions)
+        if s is None:
+            bar.show("mode", "Mode", True)
+        elif self.stale(s):   # its old monitor would deliver a draft at once anyway
+            bar.show("mode", "Sends now: needs relaunch", True)
+        else:
+            bar.show("mode", f"Mode: {mode(s).capitalize()}", False)
+        n = s["drafts"] if s else 0
+        bar.show("send", f"Send ({n})", not n)
+        bar.show("send-all", f"Send all ({total})", not total)
 
     def paint_synopsis(self) -> None:
         sid = self.current_session()
@@ -889,6 +936,11 @@ class WheelhouseApp(App):
     @on(DataTable.RowHighlighted, "#session-table")
     def pick_session_row(self) -> None:
         self.paint_synopsis()
+        self.paint_sendbar()
+
+    @on(TabbedContent.TabActivated)
+    def tab_changed(self) -> None:
+        self.paint_sendbar()
 
     def action_clear_filter(self) -> None:
         self.filter_sid = None
@@ -923,12 +975,12 @@ class WheelhouseApp(App):
         reopen = item["status"] == "closed"
         self.store.update_item(*target, status="answered" if reopen else "closed")
         self.notify(f"reopened {item['ref']} as answered" if reopen else
-                    f"closed {item['ref']}" + ("" if self.show_finished else ": f shows finished items"))
+                    f"closed {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
         self.refresh_data()
 
     def action_show_tab(self, tab: str) -> None:
         if not isinstance(self.focused, (TextArea, Input)):
-            self.query_one(TabbedContent).active = tab
+            self.tabs.active = tab
 
     def composing(self):
         """The compose box in use and the item it answers: the thread view's, or the inbox's."""
@@ -950,28 +1002,24 @@ class WheelhouseApp(App):
         return box, target, text
 
     @session_action
-    def action_queue(self) -> None:
+    def action_submit(self) -> None:
+        """Ctrl+Enter: queued or sent at once, by the session's mode."""
         box, target, text = self.typed()
-        if box:
-            s = self.store.session(target[0])
-            if s and self.stale(s):   # its old monitor would deliver a draft at once anyway
-                self.store.send(target[0], text, target[1])
-                self.notify(f"sent to {aimed(target)} now: that session runs older wheelhouse code, "
-                            "so it can't queue until it's relaunched", severity="warning")
-            else:
-                self.store.queue(target[0], text, target[1])
-                self.notify(f"queued for {aimed(target)}: s sends it")
-            box.text = ""
-            self.refresh_data()
-
-    @session_action
-    def action_send_now(self) -> None:
-        box, target, text = self.typed()
-        if box:
+        if not box:
+            return
+        s = self.row(target[0])
+        if mode(s) == "immediate":
             self.store.send(target[0], text, target[1])
-            box.text = ""
             self.notify(f"sent to {aimed(target)}")
-            self.refresh_data()
+        elif self.stale(s):   # its old monitor would deliver a draft at once anyway
+            self.store.send(target[0], text, target[1])
+            self.notify(f"sent to {aimed(target)} now: that session runs older wheelhouse code, "
+                        "so it can't queue until it's relaunched", severity="warning")
+        else:
+            self.store.queue(target[0], text, target[1])
+            self.notify(f"queued for {aimed(target)}: Ctrl+S or Send sends the session's queue")
+        box.text = ""
+        self.refresh_data()
 
     def action_recall(self) -> None:
         """Take this item's latest queued answer back into the box, to edit it or drop it."""
@@ -988,15 +1036,15 @@ class WheelhouseApp(App):
             return
         box.text = body
         box.move_cursor(box.document.end)
-        self.notify("taken back: queue it again, or clear it to drop it")
+        self.notify("taken back: submit it again, or clear it to drop it")
         self.refresh_data()
 
-    def dispatch_target(self) -> str | None:
-        """The selected session: the thread's, the Sessions tab's row, else the inbox filter or
-        the selected item's session."""
-        if isinstance(self.screen, ThreadView):
-            return self.screen.sid
-        if self.query_one(TabbedContent).active == "sessions":
+    def bar_session(self, screen) -> str | None:
+        """The session in context on a screen: the thread's; the Sessions tab's highlighted
+        row; else the inbox's filter or the selected item's session."""
+        if isinstance(screen, ThreadView):
+            return screen.sid
+        if self.tabs.active == "sessions":
             return self.current_session()
         return self.filter_sid or (self.selected[0] if self.selected else None)
 
@@ -1006,26 +1054,62 @@ class WheelhouseApp(App):
         late = "" if self.running(sid) else " (not running: delivered when it's restored)"
         return f"{n} to {name}{late}"
 
-    @session_action
-    def action_dispatch(self) -> None:
-        if isinstance(self.focused, (TextArea, Input)) or self.composing()[0] is None:
-            return
-        sid = self.dispatch_target()
+    def context_session(self) -> str | None:
+        """The session a key acts on, or None (said so) with no session in context. A dialog
+        in front has its own keys."""
+        if self.composing()[0] is None:
+            return None
+        sid = self.bar_session(self.screen)
         if sid is None:
             self.notify("select a session first", severity="warning")
-            return
+        return sid
+
+    def action_send_session(self) -> None:
+        if sid := self.context_session():
+            self.send_session(sid)
+
+    @session_action
+    def send_session(self, sid: str) -> None:
         n = self.store.dispatch(sid)
         self.notify(f"sent {self.sent_note(sid, n)}" if n else "nothing queued for that session")
         self.refresh_data()
 
     @session_action
-    def action_dispatch_all(self) -> None:
-        if isinstance(self.focused, (TextArea, Input)) or self.composing()[0] is None:
-            return
+    def send_all(self) -> None:
         sent = [(sid, n) for sid in dict.fromkeys(m["session_id"] for m in self.store.drafts())
                 if (n := self.store.dispatch(sid))]
         self.notify("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent) if sent else "nothing queued")
         self.refresh_data()
+
+    def action_toggle_mode(self) -> None:
+        if sid := self.context_session():
+            self.toggle_mode(sid)
+
+    @session_action
+    def toggle_mode(self, sid: str) -> None:
+        s = self.row(sid)
+        new = "immediate" if mode(s) == "queued" else "queued"
+        self.store.set_mode(sid, new)
+        name = s["name"] or short(sid)
+        self.notify(f"{name}: answers now send as you submit them" if new == "immediate" else
+                    f"{name}: answers now queue until you send them (Ctrl+S)")
+        if new == "immediate" and (n := len(self.store.drafts(sid))):
+            self.notify(f"{n} answer(s) still queued for {name}: Ctrl+S sends them")
+        self.refresh_data()
+
+    @on(Button.Pressed, "#mode")
+    def mode_pressed(self, event: Button.Pressed) -> None:
+        if sid := self.bar_session(event.button.screen):
+            self.toggle_mode(sid)
+
+    @on(Button.Pressed, "#send")
+    def send_pressed(self, event: Button.Pressed) -> None:
+        if sid := self.bar_session(event.button.screen):
+            self.send_session(sid)
+
+    @on(Button.Pressed, "#send-all")
+    def send_all_pressed(self) -> None:
+        self.send_all()
 
     # sessions page
 

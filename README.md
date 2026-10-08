@@ -9,10 +9,14 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
 
 - **Inbox.** Every task, question and subagent status from every session in one list,
   open questions first. Pick one to preview its detail and thread; Enter opens it full
-  screen as a conversation, with the session's replies. Ctrl+S queues an answer, and
-  queued answers go out together: `s` sends the selected session's as one message, `S`
-  sends every session's. Ctrl+Enter sends one answer now. Ctrl+R takes a queued answer back
-  to edit or drop. Emoji codes work as in chat apps: `:tada:` turns into 🎉, and while
+  screen as a conversation, with the session's replies. Ctrl+Enter submits an answer, and
+  each session has a send mode: in Queued mode (where every session starts) answers wait
+  and go out together, Ctrl+S sending the session's as one message; in Immediate mode each
+  goes as you submit it. Ctrl+T switches the session's mode. A bar above the footer always
+  shows the mode and two buttons: Send (this session's queue) and Send all (every
+  session's), each greyed out while its queue is empty. Send all has no key: Windows
+  Terminal sends Ctrl+Shift+S and Ctrl+Alt+S as plain Ctrl+S. Ctrl+R takes a queued answer
+  back to edit or drop. Emoji codes work as in chat apps: `:tada:` turns into 🎉, and while
   you type `:gri` the hint line suggests matches (Tab or Enter takes the first). Text you haven't sent stays with the item (or session) you typed it
   for: moving to another clears the box, and coming back restores it. Each session shows
   its queued count (`✉ 3`). Sending doesn't change a question's status: the session's
@@ -20,11 +24,12 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   question shows as `⏳` (dimmed), awaiting the session. Answers reach the session
   as a notification, even when it's idle. A running session started from an older
   wheelhouse shows "needs relaunch" (`⟳` in the inbox list): it can't hold queued answers,
-  so Ctrl+S sends to it straight away until you `/exit` it and restore or adopt it again.
+  so Ctrl+Enter sends to it straight away, whatever its mode, until you `/exit` it and
+  restore or adopt it again.
 - **Decisions.** If your own instructions let a session decide some things without asking
   you, it reports each one as a decision (`D1`): what it decided, the alternative, why, and
   how to reverse it. Decisions block nothing. Each session counts its unseen ones (the `D`
-  column); viewing one marks it seen, and it moves to the finished items (`f`) once you move
+  column); viewing one marks it seen, and it moves to the finished items (F) once you move
   on. To push back, answer in its thread ("reverse that").
 - **Follow a session.** Click a session in the inbox's list (or Enter on it): its items
   list gains a pinned first row, 💬 Conversation, highlighted, and the right-hand pane
@@ -89,11 +94,14 @@ make run
 
 `make` on its own lists every command.
 
-Keys: `1` (or `i`) inbox, `2` sessions, `Enter` open an item's thread (or follow a
-session's conversation, in the session list), `f` show or hide
-finished items, `x` close the highlighted question (or reopen a closed one as answered), `n` new session, `a` adopt, `Esc` all sessions (or back from a thread),
-`Ctrl+S` queue an answer, `Ctrl+Enter` send it now, `Ctrl+R` take a queued answer back, `s`
-send the selected session's queued answers, `S` send all, `q` quit.
+Keys, shown in upper case as usual (X means the x key, not Shift+X): `1` inbox, `2`
+sessions, `Enter` open an item's thread (or follow a session's conversation, in the
+session list), `F` show or hide finished items, `X` close the highlighted question (or
+reopen a closed one as answered), `N` new session, `A` adopt, `Esc` all sessions (or back
+from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
+`Ctrl+S` send the session's queue, `Ctrl+T` switch the session between Queued and
+Immediate, `Ctrl+R` take a queued answer back, `Q` quit. Send all is a button, in the bar
+above the footer.
 
 Text: drag the mouse over the conversation or a thread to select part of it, `Ctrl+A`
 selects all of the focused pane or answer box, and `Ctrl+C` copies the selection (through

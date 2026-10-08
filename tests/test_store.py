@@ -238,3 +238,20 @@ def test_mark_seen_leaves_other_kinds_alone(store, sid):
     q = store.post_item(sid, "question", "which?")
     assert not store.mark_seen(sid, q)
     assert store.item(sid, q)["status"] == "open"
+
+
+@pytest.mark.parametrize("set_to, expected, desc", [
+    (None, "queued", "a new session starts in the default mode, queued"),
+    ("immediate", "immediate", "the person switched it"),
+    ("queued", "queued", "and back"),
+])
+def test_send_mode(store, sid, set_to, expected, desc):
+    from claude_wheelhouse.store import mode
+    if set_to:
+        store.set_mode(sid, set_to)
+    assert mode(store.session(sid)) == expected, desc
+
+
+def test_send_mode_refuses_a_made_up_mode(store, sid):
+    with pytest.raises(ValueError):
+        store.set_mode(sid, "eventually")

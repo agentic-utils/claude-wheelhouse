@@ -21,12 +21,12 @@ async def test_answer_reaches_the_session(store, sid):
         await pilot.pause()
         assert app.selected == (sid, q)
         app.query_one("#answer", TextArea).text = "SQLite, it's local"
-        await pilot.press("ctrl+s")
+        await pilot.press("ctrl+enter")
         await pilot.pause()
-        assert store.pending(sid) == [], "Ctrl+S queues"
+        assert store.pending(sid) == [], "Ctrl+Enter queues: sessions start in queued mode"
         assert str(items.get_row_at(0)[2]) == "queued", "the item list shows the queued answer"
         assert "✉ 1" in str(app.query_one("#session-list", DataTable).get_row_at(0)[4])
-        await pilot.press("s")
+        await pilot.press("ctrl+s")
         await pilot.pause()
     assert [m["body"] for m in store.pending(sid)] == ["SQLite, it's local"]
     assert store.item(sid, q)["status"] == "open", "the session's reply says whether it's answered"
@@ -66,7 +66,7 @@ async def test_finished_items_toggle_in_and_take_a_message(store, sid):
         items.move_cursor(row=refs().index(closed))
         await pilot.pause()
         app.query_one("#answer", TextArea).text = "the punchline"
-        await pilot.press("ctrl+s")
+        await pilot.press("ctrl+enter")
         await pilot.pause()
         app.query_one("#answer", TextArea).text = ""
         app.query_one("#answer", TextArea).focus()
@@ -119,7 +119,7 @@ async def test_sending_to_an_ended_session_does_not_crash(store, sid):
         assert app.selected == (sid, q)
         store.end(sid)
         app.query_one("#answer", TextArea).text = "too late"
-        await pilot.press("ctrl+s")
+        await pilot.press("ctrl+enter")
         await pilot.pause()
     assert store.session(sid) is None
 
@@ -151,9 +151,9 @@ async def test_a_send_racing_an_end_does_not_crash(store, sid, monkeypatch):
         app.query_one("#items", DataTable).move_cursor(row=0)
         await pilot.pause()
         store.end(sid)
-        monkeypatch.setattr(store, "session", lambda s: {"id": s})   # the check still sees it
+        monkeypatch.setattr(store, "session", lambda s: {"id": s, "send_mode": None})   # the check still sees it
         app.query_one("#answer", TextArea).text = "too late"
-        await pilot.press("ctrl+s")
+        await pilot.press("ctrl+enter")
         await pilot.pause()
 
 
@@ -244,14 +244,18 @@ async def test_escape_closes_adopt(store, monkeypatch):
         assert [type(s).__name__ for s in app.screen_stack] == ["Screen"]
 
 
-@pytest.mark.parametrize("key, sent, desc", [
-    ("ctrl+enter", True, "Ctrl+Enter where the terminal reports it"),
-    ("ctrl+j", True, "Ctrl+Enter as most terminals send it, a line feed"),
-    ("ctrl+x", False, "Ctrl+X no longer sends"),
+@pytest.mark.parametrize("mode, key, queued, sent, desc", [
+    (None, "ctrl+enter", ["now"], [], "a new session starts in queued mode: Ctrl+Enter queues"),
+    ("immediate", "ctrl+enter", [], ["now"], "in immediate mode Ctrl+Enter sends at once"),
+    ("immediate", "ctrl+j", [], ["now"], "Ctrl+Enter as most terminals send it, a line feed"),
+    ("queued", "ctrl+j", ["now"], [], "the line feed queues too, in queued mode"),
+    ("immediate", "ctrl+x", [], [], "Ctrl+X cuts, it doesn't send"),
 ])
 @pytest.mark.anyio
-async def test_ctrl_enter_sends_one_answer_now(store, sid, key, sent, desc):
-    q = store.post_item(sid, "question", "which db?")
+async def test_ctrl_enter_submits_by_the_sessions_mode(store, sid, mode, key, queued, sent, desc):
+    if mode:
+        store.set_mode(sid, mode)
+    store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -260,26 +264,93 @@ async def test_ctrl_enter_sends_one_answer_now(store, sid, key, sent, desc):
         await pilot.press(*"now")
         await pilot.press(key)
         await pilot.pause()
-    assert [m["body"] for m in store.pending(sid)] == (["now"] if sent else []), desc
-
+    assert ([m["body"] for m in store.drafts(sid)], [m["body"] for m in store.pending(sid)]) == (queued, sent), desc
 
 
 @pytest.mark.anyio
-async def test_shift_s_sends_every_session(store, sid, tmp_path):
+async def test_ctrl_t_switches_the_sessions_mode(store, sid, tmp_path):
     other = store.create_session(str(tmp_path), name="other")
-    store.queue(sid, "a", "Q1")
-    store.queue(sid, "b", "Q2")
-    store.queue(other, "c")
+    store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert "3 queued" in str(app.query_one("#outbox").render())
-        await pilot.press("S")
+        app.query_one("#items", DataTable).move_cursor(row=0)
         await pilot.pause()
-        assert str(app.query_one("#outbox").render()).strip() == ""
+        mode_label = lambda: str(app.screen.query_one("#mode").label)
+        assert mode_label() == "Mode: Queued"
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert mode_label() == "Mode: Immediate"
+        assert store.session(sid)["send_mode"] == "immediate"
+        assert store.session(other)["send_mode"] is None, "only the session in context changes"
+        await pilot.click("#mode")
+        await pilot.pause()
+        assert mode_label() == "Mode: Queued", "the mode button toggles it too"
+
+
+@pytest.mark.anyio
+async def test_ctrl_s_sends_only_the_current_sessions_queue(store, sid, tmp_path):
+    other = store.create_session(str(tmp_path), name="other")
+    store.post_item(sid, "question", "which db?")
+    store.queue(sid, "a", "Q1")
+    store.queue(other, "b")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#items", DataTable).move_cursor(row=0)
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    assert [m["body"] for m in store.pending(sid)] == ["a"]
+    assert [m["body"] for m in store.drafts(other)] == ["b"], "another session's queue waits"
+
+
+@pytest.mark.anyio
+async def test_send_bar_buttons_follow_the_queues(store, sid, tmp_path):
+    other = store.create_session(str(tmp_path), name="other")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        bar = lambda: {b.id: (str(b.label), b.disabled) for b in app.screen.query("SendBar Button")}
+        assert bar() == {"mode": ("Mode", True), "send": ("Send (0)", True), "send-all": ("Send all (0)", True)}, \
+            "no session in context, nothing queued"
+        store.post_item(sid, "question", "which db?")   # highlighted as it arrives: its session is in context
+        store.queue(sid, "a", "Q1")
+        store.queue(other, "b")
+        store.queue(other, "c")
+        app.refresh_data()
+        await pilot.pause()
+        assert bar() == {"mode": ("Mode: Queued", False), "send": ("Send (1)", False),
+                         "send-all": ("Send all (3)", False)}
+        assert all(not b.can_focus for b in app.screen.query("SendBar Button")), "clicks leave focus alone"
+        await pilot.click("#send-all")
+        await pilot.pause()
+        assert bar()["send-all"] == ("Send all (0)", True)
     assert store.drafts() == []
-    assert [m["body"] for m in store.pending(sid)] == ["a", "b"]
-    assert [m["body"] for m in store.pending(other)] == ["c"]
+    assert [m["body"] for m in store.pending(sid)] == ["a"]
+    assert [m["body"] for m in store.pending(other)] == ["b", "c"]
+
+
+@pytest.mark.anyio
+async def test_the_thread_views_bar_is_its_sessions(store, sid, tmp_path):
+    other = store.create_session(str(tmp_path), name="other")
+    q = store.post_item(other, "question", "which db?")
+    store.queue(sid, "a")
+    store.queue(other, "b", q)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)   # the inbox's context is the first session
+        await pilot.pause()
+        app.push_screen(ThreadView(other, q))
+        await pilot.pause()
+        app.refresh_data()
+        await pilot.pause()
+        assert str(app.screen.query_one("#send").label) == "Send (1)"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    assert [m["body"] for m in store.pending(other)] == ["b"], "the thread's session, not the inbox's"
+    assert [m["body"] for m in store.drafts(sid)] == ["a"]
 
 
 @pytest.mark.anyio
@@ -301,13 +372,13 @@ async def test_thread_view_holds_the_conversation(store, sid):
         thread = app.screen.text
         assert "noted, any version?" in thread and "> looked at both" in thread, "replies and quieter notes"
         assert app.screen.box.text == "SQLite", "a reply arriving leaves typed text alone"
-        await pilot.press("ctrl+s")
+        await pilot.press("ctrl+enter")
         await pilot.pause()
         assert "you · queued" in app.screen.text
         await pilot.press("ctrl+r")
         await pilot.pause()
         assert app.screen.box.text == "SQLite" and store.drafts() == [], "taken back to edit"
-        await pilot.press("ctrl+s")
+        await pilot.press("ctrl+enter")
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, ThreadView)
@@ -359,14 +430,14 @@ async def test_a_session_on_older_code_cannot_queue(store, sid, monkeypatch, sta
         assert str(app.query_one("#session-table", DataTable).get_row_at(0)[0]) == label, desc
         app.query_one("#items", DataTable).move_cursor(row=0)
         app.query_one("#answer", TextArea).text = "SQLite"
-        await pilot.press("ctrl+s")
+        await pilot.press("ctrl+enter")
         await pilot.pause()
     assert (len(store.drafts()), len(store.pending(sid))) == (queued, 1 - queued), desc
 
 
 
 @pytest.mark.anyio
-async def test_shift_s_with_nothing_left_to_send_says_so(store, sid, monkeypatch):
+async def test_send_all_with_nothing_left_to_send_says_so(store, sid, monkeypatch):
     store.queue(sid, "a", "Q1")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -374,7 +445,7 @@ async def test_shift_s_with_nothing_left_to_send_says_so(store, sid, monkeypatch
         monkeypatch.setattr(store, "dispatch", lambda sid: 0)   # taken back meanwhile
         notes = []
         monkeypatch.setattr(app, "notify", lambda text, **kw: notes.append(text))
-        await pilot.press("S")
+        await pilot.click("#send-all")
         await pilot.pause()
     assert notes == ["nothing queued"]
 
@@ -400,7 +471,7 @@ async def test_enter_on_a_session_follows_its_conversation(store, sid, tmp_path,
         assert "demo · conversation" in text and "fix the VAT rounding" in text and "`⚙ Bash: make test`" in text
         assert "which db?" not in text, "the conversation, not the highlighted item"
         app.query_one("#answer", TextArea).text = "ship it"
-        await pilot.press("ctrl+s")
+        await pilot.press("ctrl+enter")
         await pilot.pause()
         assert [(m["item_ref"], m["body"]) for m in store.drafts(sid)] == [(None, "ship it")], "a general message"
         assert "**you · queued**\n\nship it" in app._detail_text
@@ -687,6 +758,7 @@ async def test_a_pasted_code_converts_on_send(store, sid):
         await pilot.pause()
         app.query_one("#items", DataTable).move_cursor(row=0)
         await pilot.pause()
+        store.set_mode(sid, "immediate")
         app.answer.text = "pasted :rocket: in"   # pasted, never typed: the send converts it
         app.answer.focus()
         await pilot.press("ctrl+enter")
