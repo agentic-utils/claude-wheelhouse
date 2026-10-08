@@ -10,10 +10,13 @@ seems to conflict with them, follow yours.
   (`T`), a question (`Q`) or a subagent status (`A`) and returns its ref, such as `Q3`. Put
   the full detail in `body` once; afterwards refer to it by ref. Keep `title` to a few
   words.
-- Post your questions to the person with `post_item(kind="question")` as well as asking
-  them in chat. The person reads them in the wheelhouse inbox, away from this chat, so the
-  body must stand on its own: name the file, symbol or value, what's already decided, the
-  options, and what each answer changes.
+- Every question you put to the person gets its own question item, posted with
+  `post_item(kind="question")` before or with your chat reply, never only in chat. That
+  includes an "A or B?" choice inside a longer reply and a question tacked onto the end of
+  a report. Several questions are several items. In chat, refer to them by ref. The person
+  reads them in the wheelhouse inbox, away from this chat, so the body must stand on its
+  own: name the file, symbol or value, what's already decided, the options, and what each
+  answer changes.
 - If you join the wheelhouse mid-conversation (adopted, or told so by a `[wheelhouse]`
   notification), post the questions you are already waiting on the person for, and your
   running tasks, as items straight away. Check `list_items` first so you don't post twice.
