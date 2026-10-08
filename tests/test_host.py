@@ -172,17 +172,21 @@ def test_ask_user_question(host, store, sid, answer, behavior, desc):
     assert host.client.queries == [], f"{desc}: the answer is not also a turn"
 
 
-def test_compact_sends_the_notes(host, store, sid):
+@pytest.mark.parametrize("results, expected, desc", [
+    (["<keep>- Q3 open\n- PR 17</keep>"], ["/compact - Q3 open\n- PR 17"], "the reply's notes"),
+    (["background task done", "ok <keep>x</keep> bye"], ["/compact x"],
+     "a turn Claude Code started itself is passed over"),
+    (["no notes at all"], [], "no notes yet: nothing compacted"),
+])
+def test_compact_sends_the_notes(host, store, sid, results, expected, desc):
     store.command(sid, "compact")
     run(host.poll())
-    host.results = 1
-    run(host.finished(SimpleNamespace(result="- keep Q3\n- PR 17", is_error=False, subtype="success")))
-    assert host.client.queries == [COMPACT_ASK, "/compact - keep Q3\n- PR 17"]
-    assert host.compact_turn is None
+    for text in results:
+        run(host.finished(SimpleNamespace(result=text, is_error=False, subtype="success")))
+    assert host.client.queries == [COMPACT_ASK, *expected], desc
 
 
 def test_finished_reports_compaction(host, store, sid):
-    host.sent = host.results = 1
     host.compacted_from = 48174
     run(host.finished(SimpleNamespace(result="", is_error=False, subtype="success")))
     assert store.session(sid)["activity"] == "idle · compacted 48k → 1k tokens"
@@ -190,7 +194,6 @@ def test_finished_reports_compaction(host, store, sid):
 
 
 def test_finished_records_context(host, store, sid):
-    host.sent = host.results = 1
     run(host.finished(SimpleNamespace(result="", is_error=False, subtype="success")))
     s = store.session(sid)
     assert (s["activity"], s["context_tokens"], s["context_max"]) == ("idle", 1234, 200000)

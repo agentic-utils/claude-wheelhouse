@@ -31,8 +31,8 @@ SHELL_POLL_SECONDS = 2.0
 # becomes /compact's instructions
 COMPACT_ASK = ("[wheelhouse] The person pressed Compact in the wheelhouse. If your own instructions say to "
                "do anything before compaction (save a transcript or handoff note, say), do it now. Then "
-               "reply with only the notes you want carried through compaction: open threads, decisions, "
-               "file paths, refs and next steps, as a terse list. Nothing else in the reply.")
+               "reply with the notes you want carried through compaction (open threads, decisions, file "
+               "paths, refs and next steps, as a terse list) between <keep> and </keep>.")
 CLOSED_UNANSWERED = "The person closed this in the wheelhouse without answering."
 LOST_ON_RESTART = "The wheelhouse host restarted while this was waiting: Claude Code will ask again if it still needs it."
 
@@ -52,6 +52,15 @@ def format_turn(msgs, person: str | None = None) -> str:
         else:
             parts.append(f"[wheelhouse] from {person} {where(m)}:\n{m['body']}")
     return "\n\n".join(parts)
+
+
+def keep_notes(text: str | None) -> str | None:
+    """The notes between <keep> and </keep> in a reply, or None if it has none."""
+    text = text or ""
+    start, end = text.find("<keep>"), text.rfind("</keep>")
+    if start < 0 or end < start:
+        return None
+    return text[start + len("<keep>"):end].strip()
 
 
 def tool_summary(name: str, inp: dict) -> str:
@@ -124,9 +133,10 @@ class Host:
         self.person = person or getpass.getuser()
         self.client = None
         self.waiting: dict[str, asyncio.Future] = {}   # question refs an AskUserQuestion waits on
-        self.sent = 0       # turns sent to the client
-        self.results = 0    # turns it has finished
-        self.compact_turn = None   # the turn whose reply holds the notes to compact with
+        # turns sent and not yet finished. Claude Code also starts turns by itself (a
+        # background task finishing), so a finished turn never takes this below zero.
+        self.pending = 0
+        self.compacting = False   # Compact asked for the notes: the reply holding <keep> gets compacted
         self.compacted_from = None   # tokens before the last compaction, until its turn ends
         self.stopping = False
 
@@ -164,13 +174,11 @@ class Host:
         else:
             self.store.set_activity(self.sid, "idle")
 
-    async def turn(self, text: str) -> int:
+    async def turn(self, text: str) -> None:
         """Send a user turn; Claude Code queues it behind any turn still running."""
         await self.client.query(text)
-        self.sent += 1
-        if self.results < self.sent:
-            self.store.set_activity(self.sid, "thinking")
-        return self.sent
+        self.pending += 1
+        self.store.set_activity(self.sid, "thinking")
 
     # Claude Code's permission check
 
@@ -240,7 +248,8 @@ class Host:
             await self.client.interrupt()
             self.store.set_activity(self.sid, "interrupted")
         elif command == "compact":
-            self.compact_turn = await self.turn(COMPACT_ASK)
+            self.compacting = True
+            await self.turn(COMPACT_ASK)
             self.store.set_activity(self.sid, "compacting: collecting notes")
         elif command == "shell":
             await self.shell()
@@ -266,19 +275,19 @@ class Host:
                 meta = m.data.get("compact_metadata") or m.data.get("compactMetadata") or {}
                 self.compacted_from = meta.get("pre_tokens") or meta.get("preTokens") or 0
             elif isinstance(m, ResultMessage):
-                self.results += 1
+                self.pending = max(0, self.pending - 1)
                 await self.finished(m)
 
     async def finished(self, m) -> None:
-        """A turn ended. The compact notes turn hands its reply to /compact."""
-        if self.compact_turn is not None and self.results >= self.compact_turn:
-            self.compact_turn = None
-            notes = (m.result or "").strip() if not m.is_error else ""
+        """A turn ended. The reply with the notes to keep hands them to /compact."""
+        notes = keep_notes(m.result) if self.compacting and not m.is_error else None
+        if notes is not None:
+            self.compacting = False
             await self.turn(f"/compact {notes}".rstrip())
             self.store.set_activity(self.sid, "compacting")
             return
         tokens = await self.context()
-        if self.results >= self.sent:
+        if not self.pending:
             if m.is_error:
                 activity = f"error: {(m.result or m.subtype)[:80]}"
             elif self.compacted_from is not None:
@@ -306,7 +315,7 @@ class Host:
         """Give the session to an interactive Claude Code tab, wait for the tab to exit, then
         take it back. One process per session: the client is gone before the tab opens."""
         self.store.set_activity(self.sid, "opening a shell tab")
-        if self.results < self.sent:
+        if self.pending:
             await self.client.interrupt()
         await self.disconnect()
         self.store.unregister(self.sid)
@@ -326,8 +335,8 @@ class Host:
                 break
         self.store.set_shell(self.sid, None)
         self.register()
-        self.sent = self.results = 0
-        self.compact_turn = None
+        self.pending = 0
+        self.compacting = False
         self.reader.cancel()
         await self.connect()
         self.reader = asyncio.create_task(self.read())
