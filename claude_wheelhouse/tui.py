@@ -1271,14 +1271,14 @@ class WheelhouseApp(App):
             return
         s = self.row(sid)
         name = s["name"] or os.path.basename(s["cwd"]) or short(sid)
-        self.push_screen(Confirm(f"{name} isn't running. Relaunch it in a new tab?"),
+        self.push_screen(Confirm(f"{name} isn't running. Relaunch it?"),
                          lambda yes: yes and self.relaunch(sid))
 
     @session_action
     def relaunch(self, sid: str) -> None:
-        if self.open_session(sid):
+        if self.open_session(sid, restore=True):
             self.store.set_parked(sid, False)
-            self.notify("relaunching in a new tab")
+            self.notify("relaunching")
             self.refresh_data()
 
     def follow(self, sid: str) -> None:
@@ -1634,10 +1634,11 @@ class WheelhouseApp(App):
         self.notify(f"adopting {form['name'] or short(form['candidate'].id)}")
         self.refresh_data()
 
-    def open_session(self, sid: str) -> bool:
-        """Launch or restore a session the way it runs: a host, or a tab."""
+    def open_session(self, sid: str, restore: bool = False) -> bool:
+        """Launch a session the way it runs, a host or a tab; a restore runs it the way new
+        sessions run now (launch.restore_session)."""
         try:
-            launch.open_session(self.store, sid)
+            (launch.restore_session if restore else launch.open_session)(self.store, sid)
         except Exception as e:   # already running, wt.exe missing...
             self.notify(str(e), severity="error")
             return False
@@ -1667,7 +1668,7 @@ class WheelhouseApp(App):
         if self.statuses.get(sid) != "dead":
             self.notify("only a dead session can be restored", severity="warning")
             return
-        if self.open_session(sid):
+        if self.open_session(sid, restore=True):
             self.store.set_parked(sid, False)
 
     @on(Button.Pressed, "#restore-all")
@@ -1679,7 +1680,7 @@ class WheelhouseApp(App):
 
         def go(yes: bool) -> None:
             if yes:
-                n = sum(self.open_session(sid) for sid in dead)
+                n = sum(self.open_session(sid, restore=True) for sid in dead)
                 self.notify(f"restoring {n} session(s)")
         self.push_screen(Confirm(f"Restore {len(dead)} dead session(s)?"), go)
 

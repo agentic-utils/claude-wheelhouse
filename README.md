@@ -72,8 +72,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   compacted with that, and the bar reports the token drop) and Shell, which hands the
   session to the real Claude Code in a tab and takes it back when you `/exit` there, plus
   a line saying what the session is doing. Closing the wheelhouse leaves the hosts
-  running. `WHEELHOUSE_RUNNER=tab` makes tabs the default again; sessions from before
-  hosts existed stay tabs. Host logs are under `~/.local/state/claude-wheelhouse/hosts/`.
+  running. `WHEELHOUSE_RUNNER=tab` makes tabs the default again. Restore and Adopt bring a
+  session back the way new sessions run, so a tab from before hosts existed comes back as
+  a host once you `/exit` it; Shell is the way back to a tab. Host logs are under `~/.local/state/claude-wheelhouse/hosts/`.
   This runs on your own Claude login, which Anthropic's terms allow for individual use;
   see `.plan/sdk-sessions.md` before offering it to others.
 - **Adopt.** Brings a session the wheelhouse didn't launch into the wheelhouse: pick it

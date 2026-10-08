@@ -953,3 +953,28 @@ def test_steady_rides_out_a_lock(monkeypatch, locks, returns, desc):
             raise sqlite3.OperationalError("database is locked")
         return returns
     assert run(Host.steady(write)) is returns, desc
+
+
+@pytest.mark.parametrize("stored, env, alive, opened, recorded, desc", [
+    ("tab", None, False, "host", "sdk", "a stored tab session is restored as a host"),
+    ("tab", "tab", False, "tab", "tab", "WHEELHOUSE_RUNNER=tab keeps it a tab"),
+    ("sdk", "tab", False, "tab", "tab", "and brings a hosted session back as a tab"),
+    ("tab", None, True, None, "tab", "a running session is refused and keeps its runner"),
+])
+def test_restore_session(store, tmp_path, monkeypatch, stored, env, alive, opened, recorded, desc):
+    sid = store.create_session(str(tmp_path), runner=stored)
+    if env:
+        monkeypatch.setenv("WHEELHOUSE_RUNNER", env)
+    else:
+        monkeypatch.delenv("WHEELHOUSE_RUNNER")
+    monkeypatch.setattr(launch.liveness, "is_alive", lambda *a: alive)
+    seen = []
+    monkeypatch.setattr(launch, "open_host", lambda s, i: seen.append("host"))
+    monkeypatch.setattr(launch, "open_tab", lambda s, i: seen.append("tab"))
+    if alive:
+        with pytest.raises(RuntimeError, match="already running"):
+            launch.restore_session(store, sid)
+    else:
+        launch.restore_session(store, sid)
+    assert seen == ([opened] if opened else []), desc
+    assert store.session(sid)["runner"] == recorded, desc

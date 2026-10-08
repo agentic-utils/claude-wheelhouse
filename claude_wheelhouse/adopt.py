@@ -3,9 +3,9 @@
 The wheelhouse lists recent transcripts from ~/.claude/projects, plus sessions it already
 tracks whose process has gone (e.g. an adoption whose tab failed). If the chosen session is
 still running, the person types /exit in its tab first; the wheelhouse never kills it. Then
-the wheelhouse registers the session under its own id and opens it in a new tab like any
-restore: `claude --resume <id>` with the wheelhouse's MCP server, monitor, protocol and
-/wheelhouse commands.
+the wheelhouse registers the session under its own id and opens it like any restore (a host,
+or a tab under WHEELHOUSE_RUNNER=tab), resuming it by id with the wheelhouse's MCP server,
+protocol and /wheelhouse commands.
 """
 
 import json
@@ -149,8 +149,9 @@ def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = livenes
 
 
 def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSIONS,
-          proc: Path = liveness.PROC, open_tab=launch.open_session) -> str:
-    """Register the session and open it (a host, or a tab: see store.default_runner). Refuses while it is still running.
+          proc: Path = liveness.PROC, open_tab=launch.restore_session) -> str:
+    """Register the session and open it (a host, or a tab: see store.default_runner, which a
+    tracked session is switched to as well). Refuses while it is still running.
     A session the wheelhouse already tracks keeps its row (and its items), renamed if asked."""
     pid = liveness.running_pid(c.id, sessions, proc)
     if pid:

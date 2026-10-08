@@ -216,7 +216,7 @@ experimentation is low".
 | Decision | Alternative | Why |
 | --- | --- | --- |
 | New sessions run in a host by default (`DEFAULT_RUNNER = "sdk"`); a box in New session opens a tab instead; `WHEELHOUSE_RUNNER=tab` restores the old default | Keep tabs the default behind a flag | The whole point of the change, and it works end to end; one env var reverts it |
-| Sessions created before this stay tabs (runner NULL means tab) | Migrate them | Their running tabs would otherwise be misread |
+| Sessions created before this stay tabs while they run (runner NULL means tab); Restore and Adopt bring any session back with the current default runner (Q27, option A) | Migrate them; or keep each session's stored runner on Restore | A running tab would otherwise be misread; a stored runner left pre-host sessions as tabs for good, and Shell covers wanting a tab |
 | The host passes no permission mode | Pass `auto` explicitly | Never override the user's settings: SDK sessions already start in the user's `defaultMode`, verified |
 | `cli_path` is the user's `claude` | The SDK's bundled CLI | One Claude Code version for tabs and hosts |
 | The host always renders the system prompt fresh (`--system-prompt-snapshot off`), and a hosted session opened in a shell tab does too | Only for adopted sessions | Its recorded prompt would be the other runner's protocol |

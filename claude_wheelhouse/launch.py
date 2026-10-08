@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 from . import liveness
-from .store import Store, db_path, now, runner
+from .store import Store, db_path, default_runner, now, runner
 
 PLUGIN_DIR = Path(__file__).parent / "plugin"
 # The decisions section is separable so its effect on how sessions behave (priming) can be
@@ -146,6 +146,18 @@ def open_session(store: Store, sid: str) -> None:
     if session is None:
         raise KeyError(sid)
     (open_host if runner(session) == "sdk" else open_tab)(store, sid)
+
+
+def restore_session(store: Store, sid: str) -> None:
+    """Restore (or adopt) a session that isn't running, the way new sessions run now: a tab
+    from before hosts existed comes back as a host unless WHEELHOUSE_RUNNER=tab. The check
+    comes first, so a running tab is never recorded as hosted."""
+    session = store.session(sid)
+    if session is None:
+        raise KeyError(sid)
+    check_free(session)
+    store.set_runner(sid, default_runner())
+    open_session(store, sid)
 
 
 def check_free(session) -> None:
