@@ -113,7 +113,17 @@ names against a live transcript (`~/.claude/projects/-home-doug/<id>.jsonl`, 8 O
     busy session, so the histogram can't reuse it.
   - **First read:** the first time a session is shown, the follower reads from the start
     of the span: it seeks to the byte offset of the first record inside the window, found
-    by a backwards scan.
+    by a backwards scan that goes no further back than the main thread's latest response.
+    Before that offset only compactions are picked out, by a byte search.
+  - **Off the UI thread:** every read runs on a worker thread and swaps in a new snapshot
+    when done; until a session's first read lands the pane says "reading …". Measured on
+    a 159 MB transcript with 1,683 subagent files: the first read went from 3.3 s (on the
+    UI thread) to 0.8 s (off it), and the steady per-second cost from 27 ms to 0.2 ms, since
+    subagent files finished before the span aren't looked at again until the folder
+    changes or a minute passes.
+  - **Skipped:** Claude Code's `<synthetic>` stand-in replies (errors, interrupts) and
+    any response with no usage: no request was made, so they say nothing about the
+    context or the cache.
 - **The countdown is genuinely clock-driven.** Time passes without any event, so the
   cache row is repainted on the existing 1-second tick. It's one line of text.
 - **The shimmer is animation.** It runs on the existing 0.1-second `animate` tick, every

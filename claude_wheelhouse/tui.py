@@ -358,19 +358,20 @@ class SessionStats(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.view, self.name_, self.now = None, "", 0.0
+        self.note: str | None = None   # what shows with nothing to show
         self.usage = stats.AccountUsage()
         self.rows: list[Text] = []
         self.chart: stats.Chart | None = None
         self.frame = 0
 
-    def show(self, view, name: str, now: float) -> None:
-        self.view, self.name_, self.now = view, name, now
+    def show(self, view, name: str, now: float, note: str | None = None) -> None:
+        self.view, self.name_, self.now, self.note = view, name, now, note
         self.rebuild()
 
     def rebuild(self) -> None:
         width, height = self.size.width, self.size.height
         if self.view is None or width < stats.MARGIN + 4:
-            self.rows, self.chart = [Text("no sessions running", style="dim")], None
+            self.rows, self.chart = [Text(self.note or "no sessions running", style="dim")], None
         else:
             self.rows = stats.summary(self.view, self.name_, self.now, self.frame, width)
         self.rows += stats.usage_lines(self.usage, self.now, self.frame, width)
@@ -1112,26 +1113,60 @@ class WheelhouseApp(App):
             follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued)
         return follower.blocks
 
+    def stats_sids(self) -> list[str]:
+        """The sessions the stats pane shows: the one in context, else every running one."""
+        sid = self.filter_sid or (self.selected[0] if self.selected else None)
+        if any(s["id"] == sid for s in self.sessions):
+            return [sid]
+        return [s["id"] for s in self.sessions if self.running(s["id"])]
+
     def paint_stats(self) -> None:
         """The stats pane: the session in context's, else every running session's added up.
-        Each session's transcripts are read only when they've grown."""
+        Transcripts are read on worker threads, never here: a first read of a big one takes
+        a while, and even a steady one stats every subagent file."""
         now = time.time()
         if self.stats.usage.due(now):
             self.run_worker(self.stats.usage.fetch, thread=True, group="usage")
-        sid = self.filter_sid or (self.selected[0] if self.selected else None)
-        names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
-        if sid in names:
+        present = {s["id"] for s in self.sessions}
+        for sid in [sid for sid in self.usage if sid not in present]:   # ended: its follower goes
+            del self.usage[sid]
+        for sid in self.stats_sids():
             follower = self.usage.setdefault(sid, stats.UsageFollower(sid))
-            follower.read(now)
-            self.stats.show(follower.snap, names[sid], now)
+            if not follower.reading:
+                follower.reading = True
+                self.run_worker(functools.partial(self.read_usage, follower, now), thread=True, group="stats")
+        self.show_stats(now)
+
+    def read_usage(self, follower: stats.UsageFollower, now: float) -> None:
+        """On a worker thread: one read of a session's transcripts, then a repaint if it
+        brought anything (or was the first)."""
+        first = not follower.ready
+        try:
+            changed = follower.read(now)
+        finally:
+            follower.reading = False
+        if changed or first:
+            try:
+                self.call_from_thread(self.show_stats)
+            except RuntimeError:   # the app is closing
+                pass
+
+    def show_stats(self, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
+        sids = [sid for sid in self.stats_sids() if sid in self.usage]
+        sid = self.filter_sid or (self.selected[0] if self.selected else None)
+        if sid in names:
+            follower = self.usage.get(sid)
+            if follower and follower.ready:
+                self.stats.show(follower.snap, names[sid], now)
+            else:
+                self.stats.show(None, names[sid], now, f"reading {names[sid]}'s transcript…")
             return
-        snaps = {}
-        for s in self.sessions:
-            if self.running(s["id"]):
-                follower = self.usage.setdefault(s["id"], stats.UsageFollower(s["id"]))
-                follower.read(now)
-                snaps[s["id"]] = follower.snap
-        self.stats.show(stats.combine(snaps, names, now) if snaps else None, "", now)
+        snaps = {sid: self.usage[sid].snap for sid in sids if self.usage[sid].ready}
+        waiting = len(snaps) < len(sids)
+        self.stats.show(stats.combine(snaps, names, now) if snaps else None, "", now,
+                        "reading transcripts…" if waiting else None)
 
     def paint_sendbar(self) -> None:
         """The bar on the screen in front: the mode and queue of the session in context there."""

@@ -48,7 +48,8 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   hours (read from cache, new, cache miss), subagents included. With no session in
   context, the running sessions' totals. Under either, the account's session and weekly
   usage with their reset times, as `/usage` shows them, fetched once a minute. The chart's
-  shimmer rests while you type in an answer box.
+  shimmer rests while you type in an answer box. Transcripts are read off the UI thread,
+  so a big one says "reading …" for a moment rather than freezing the app.
 - **Sessions.** Select a session to read its synopsis, which the session keeps up to
   date itself. New session (directory, optional name, optional ticket, opening brief)
   runs Claude in the wheelhouse (below), or in a Windows Terminal tab if you tick the box.

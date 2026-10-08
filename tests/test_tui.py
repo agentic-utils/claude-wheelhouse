@@ -1012,10 +1012,42 @@ async def test_the_stats_pane_follows_the_session_in_context(store, sid, tmp_pat
         assert "no sessions running" in app.stats.render().plain, "nothing in context and none running"
         app.follow(sid)
         app.refresh_data()
+        await app.workers.wait_for_complete()
         await pilot.pause()
         shown = app.stats.render().plain
         assert "demo · Opus 5.5" in shown and "83k/1M" in shown and "1h · warm" in shown
         assert "context assembly" in shown, "half the column is room enough for the chart"
+        store.end(sid)
+        app.refresh_data()
+        await pilot.pause()
+        assert sid not in app.usage, "an ended session's follower goes"
+
+
+@pytest.mark.anyio
+async def test_the_stats_pane_never_reads_on_the_ui_thread(store, sid, monkeypatch):
+    import threading
+    from claude_wheelhouse import stats
+    ui = threading.get_ident()
+    release, threads = threading.Event(), []
+
+    def slow_read(self, now=None):
+        threads.append(threading.get_ident())
+        release.wait(5)
+        self.ready = True
+        return True
+    monkeypatch.setattr(stats.UsageFollower, "read", slow_read)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)
+        app.refresh_data()
+        await pilot.pause()
+        assert "reading demo's transcript…" in app.stats.render().plain, "a first read in flight shows as such"
+        release.set()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert "reading" not in app.stats.render().plain, "and is replaced once it lands"
+    assert threads and ui not in threads, "reads ran on worker threads"
 
 
 @pytest.mark.anyio

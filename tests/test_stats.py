@@ -1,10 +1,16 @@
+import http.server
 import json
+import os
+import re
+import threading
 import time
 
 import pytest
 
 from claude_wheelhouse import stats, transcript
 from claude_wheelhouse.stats import Snapshot, Turn
+
+REAL_FETCH = stats.AccountUsage.fetch   # before conftest stubs it
 
 NOW = float(int(time.time()))   # near the files' real modification times
 
@@ -27,6 +33,12 @@ def compacted(ago=60, pre=200_000, post=11_000):
             "compactMetadata": {"trigger": "manual", "preTokens": pre, "postTokens": post}}
 
 
+def synthetic(mid, ago=30):
+    rec = response(mid, ago=ago, inp=0)
+    rec["message"]["model"] = "<synthetic>"
+    return rec
+
+
 def lines(*recs) -> list[bytes]:
     return [json.dumps(r).encode() for r in recs]
 
@@ -42,6 +54,10 @@ def lines(*recs) -> list[bytes]:
     ([{"type": "user", "timestamp": at(60), "message": {"content": "hi"}}], 0, None, 0, 0, "no usage, nothing counted"),
     ([response("m1", read=50_000, isSidechain=True)], 0, None, 1, 0,
      "a sidechain response is spend, not the main thread's context"),
+    ([response("m1", made=900, read=80_000), synthetic("m2")], 80_902, "1h", 1, 0,
+     "Claude Code's stand-in reply (an error, an interrupt) made no request: not a turn"),
+    ([response("m1", made=900, read=80_000), response("m2", ago=30, inp=0)], 80_902, "1h", 1, 0,
+     "nor does a response with no usage at all"),
 ])
 def test_usage_parse(recs, context, ttl, turns, compactions, desc):
     follower = stats.UsageFollower("s")
@@ -195,3 +211,107 @@ def test_usage_grade(pct, colour, flashing, desc):
 def test_usage_is_fetched_at_most_once_a_minute():
     u = stats.AccountUsage()
     assert [u.due(NOW), u.due(NOW + 30), u.due(NOW + 61)] == [True, False, True]
+
+
+def test_a_synthetic_reply_leaves_the_cache_warm_as_it_was(tmp_path):
+    follower = stats.UsageFollower("s")
+    follower.take(*stats.parse(lines(response("m1", ago=3000, made=900), synthetic("m2", ago=10)), set(), main=True))
+    assert follower.snap.model == "claude-opus-5-5" and follower.snap.last_at == NOW - 3000
+
+
+def write(path, *recs):
+    path.write_bytes(b"".join(r + b"\n" for r in lines(*recs)))
+
+
+@pytest.mark.parametrize("recs, turns, context, compactions, desc", [
+    ([compacted(ago=9000, pre=300_000), response("m1", ago=8000, made=500), response("m2", ago=600, read=40_000)],
+     ["m2"], 40_002, 1, "only the span is parsed; a compaction before it still counts"),
+    ([response("m1", ago=9000, made=700), response("m2", ago=8000, made=900)],
+     ["m2"], 902, 0, "nothing in the span: the latest main response still gives the context"),
+    ([response("m1", ago=8000, made=900), response("s1", ago=600, read=7, isSidechain=True)],
+     ["m1", "s1"], 902, 0, "a sidechain in the span doesn't stop the scan short of the main thread's latest"),
+    ([response("m1", ago=600, read=40_000), synthetic("m2", ago=60)],
+     ["m1"], 40_002, 0, "a synthetic reply isn't the latest response"),
+    ([], [], 0, 0, "an empty transcript"),
+])
+@pytest.mark.parametrize("chunk", [64, 4 << 20])
+def test_a_first_read_starts_at_the_span(tmp_path, monkeypatch, recs, turns, context, compactions, desc, chunk):
+    monkeypatch.setattr(stats, "CHUNK", chunk)   # small chunks cut lines at every boundary
+    folder = tmp_path / "-home-u-repo"
+    folder.mkdir()
+    write(folder / "s.jsonl", *recs)
+    follower = stats.UsageFollower("s", tmp_path)
+    follower.read(NOW)
+    parsed = sorted(follower.seen)
+    assert follower.snap.context == context and len(follower.snap.compactions) == compactions, desc
+    assert parsed == sorted(turns), f"{desc}: parsed {parsed}"
+    assert follower.ready
+
+
+def test_finished_subagents_are_not_looked_at_again(tmp_path):
+    folder = tmp_path / "-home-u-repo"
+    (folder / "s/subagents").mkdir(parents=True)
+    write(folder / "s.jsonl", response("m1", made=1000))
+    old = folder / "s/subagents/agent-old.jsonl"
+    write(old, response("o1", read=5, ago=9000))
+    os.utime(old, (NOW - 9000, NOW - 9000))
+    follower = stats.UsageFollower("s", tmp_path)
+    follower.read(NOW)
+    assert old not in follower.paths(NOW), "finished before the span: not stat-ed every second"
+    new = folder / "s/subagents/agent-new.jsonl"
+    write(new, response("n1", read=40_000))
+    assert new in follower.paths(NOW), "a new subagent is found when the folder changes"
+    assert old in follower.paths(NOW + stats.REGLOB), "and every file is looked at again now and then"
+
+
+class Redirect(http.server.BaseHTTPRequestHandler):
+    seen: list = []
+
+    def do_GET(self):
+        Redirect.seen.append((self.path, self.headers.get("Authorization")))
+        if self.path == "/usage":
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}/elsewhere")
+            self.end_headers()
+        else:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"limits": []}')
+
+    def log_message(self, *a):
+        pass
+
+
+def test_the_usage_token_never_follows_a_redirect(tmp_path, monkeypatch):
+    (tmp_path / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "secret"}}))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    server = http.server.HTTPServer(("127.0.0.1", 0), Redirect)
+    threading.Thread(target=server.handle_request, daemon=True).start()
+    monkeypatch.setattr(stats, "USAGE_URL", f"http://127.0.0.1:{server.server_port}/usage")
+    Redirect.seen = []
+    u = stats.AccountUsage()
+    REAL_FETCH(u)
+    server.server_close()
+    assert u.failed, "a redirect is a failed fetch"
+    assert Redirect.seen == [("/usage", "Bearer secret")], "the token went to the endpoint only"
+
+
+@pytest.mark.parametrize("zone, desc", [
+    ("Europe/London", "a whole-hour zone"),
+    ("Asia/Kolkata", "a half-hour zone: ticks on its own hours, not UTC's"),
+])
+def test_hour_ticks_sit_on_local_hours(monkeypatch, zone, desc):
+    monkeypatch.setenv("TZ", zone)
+    time.tzset()
+    try:
+        c = stats.chart([], NOW, width=stats.MARGIN + 120, height=4)
+        axis = stats.chart_lines(c, 0)[-1].plain[stats.MARGIN:]
+        for m in re.finditer(r"(\d+):00", axis):
+            at = c.start + m.start() / len(c.columns) * c.span
+            local = time.localtime(at)
+            minutes = local.tm_min + local.tm_sec / 60
+            assert min(minutes, 60 - minutes) <= c.span / len(c.columns) / 60 + 0.5, f"{desc}: {m[0]} at {local.tm_hour}:{local.tm_min:02d}"
+            assert int(m[1]) == (local.tm_hour + (1 if local.tm_min >= 30 else 0)) % 24, desc
+    finally:
+        monkeypatch.undo()
+        time.tzset()

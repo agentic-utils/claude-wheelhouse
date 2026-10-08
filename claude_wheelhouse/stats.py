@@ -83,14 +83,16 @@ def parse(lines, seen: set, main: bool) -> tuple[list[Turn], list[Compaction]]:
         usage = msg.get("usage") if rec.get("type") == "assistant" else None
         if not usage:
             continue
+        inp = usage.get("input_tokens", 0) or 0
+        made = usage.get("cache_creation_input_tokens", 0) or 0
+        read = usage.get("cache_read_input_tokens", 0) or 0
+        if msg.get("model") == "<synthetic>" or not inp + made + read:
+            continue   # Claude Code's own stand-in replies (errors, interrupts): no request was made
         key = msg.get("id") or rec.get("requestId")
         if key is not None:
             if key in seen:
                 continue
             seen.add(key)
-        inp = usage.get("input_tokens", 0) or 0
-        made = usage.get("cache_creation_input_tokens", 0) or 0
-        read = usage.get("cache_read_input_tokens", 0) or 0
         cc = usage.get("cache_creation") or {}
         ttl = "1h" if cc.get("ephemeral_1h_input_tokens") else "5m" if cc.get("ephemeral_5m_input_tokens") else None
         fresh = inp + made
@@ -143,9 +145,73 @@ class Snapshot:
         return bool(self.expires and now < self.expires)
 
 
+CHUNK = 4 << 20                    # bytes a first read takes at a time
+REGLOB = 60                        # seconds between re-listing the subagent files, at most
+STAMP = re.compile(rb'"timestamp":\s*"([^"]+)"')
+MAIN_REPLY = re.compile(rb'"type":\s*"assistant"')
+
+
+def is_main_reply(line: bytes) -> bool:
+    """A main-thread response with real usage, judged from its bytes: for scanning."""
+    return (b'"usage"' in line and MAIN_REPLY.search(line) is not None and b"<synthetic>" not in line
+            and re.search(rb'"isSidechain":\s*true', line) is None)
+
+
+def window_start(f, size: int, cutoff: float) -> int:
+    """Where a first read of a main transcript starts: the first line at or after `cutoff`,
+    scanning back from the end, but never past the latest main-thread response, which the
+    pane needs even when it's older than the span."""
+    pos, carry, main = size, b"", False
+    while pos > 0:
+        step = min(CHUNK, pos)
+        pos -= step
+        f.seek(pos)
+        buf = f.read(step) + carry
+        end = len(buf)
+        while end > 0:
+            start = buf.rfind(b"\n", 0, end - 1) + 1
+            if start == 0 and pos > 0:
+                carry = buf[:end]   # cut by the chunk boundary: finished with the next chunk
+                break
+            line = buf[start:end]
+            m = STAMP.search(line)
+            at = epoch(m[1].decode()) if m else None
+            if at is not None and at < cutoff:
+                if main:
+                    return pos + end
+                if is_main_reply(line):
+                    return pos + start
+            main = main or is_main_reply(line)
+            end = start
+        else:
+            carry = b""
+    return 0
+
+
+def compactions_before(f, end: int) -> list[Compaction]:
+    """The compactions in the first `end` bytes, found without parsing the rest."""
+    out, pos, carry = [], 0, b""
+    f.seek(0)
+    while pos < end:
+        n = min(CHUNK, end - pos)
+        buf, pos = carry + f.read(n), pos + n
+        cut = buf.rfind(b"\n") + 1
+        buf, carry = buf[:cut], buf[cut:]
+        i = buf.find(b"compact_boundary")
+        while i >= 0:
+            a, b = buf.rfind(b"\n", 0, i) + 1, buf.find(b"\n", i)
+            out += parse([buf[a:b]], set(), main=True)[1]
+            i = buf.find(b"compact_boundary", b + 1)
+    return out
+
+
 class UsageFollower:
     """One session's usage, read incrementally: each file's new bytes, when its size or
-    modification time has changed. The main transcript, and its subagents' beside it."""
+    modification time has changed. The main transcript, and its subagents' beside it.
+
+    read() runs off the UI thread and swaps in a new snapshot when it's done, so the pane
+    can show `snap` at any time. A first read of a big transcript starts at the span
+    (window_start); only its compactions are taken from before that."""
 
     def __init__(self, sid: str, projects: Path | None = None):
         self.sid, self.projects = sid, projects
@@ -153,48 +219,78 @@ class UsageFollower:
         self.files: dict[Path, tuple[int, tuple]] = {}   # path: (offset read to, (size, mtime))
         self.seen: set = set()
         self.snap = Snapshot()
+        self.ready = False      # a first read has finished
+        self.reading = False    # a read is in flight (set and cleared by the app)
+        self.subagents: list[Path] = []
+        self.listed: tuple | None = None   # (the subagents folder's mtime, when listed)
+        self.dormant: set[Path] = set()    # read to the end and older than the span
 
-    def paths(self) -> list[Path]:
+    def paths(self, now: float) -> list[Path]:
+        """The main transcript, and the subagents' that may still grow. The folder is
+        re-listed when it changes, or after REGLOB; finished files are skipped until then."""
         if self.main is None:
             self.main = transcript.locate(self.sid, self.projects)
             if self.main is None:
                 return []
-        return [self.main, *sorted((self.main.parent / self.sid / "subagents").glob("agent-*.jsonl"))]
+        folder = self.main.parent / self.sid / "subagents"
+        try:
+            mtime = folder.stat().st_mtime_ns
+        except OSError:
+            mtime = None
+        if self.listed is None or self.listed[0] != mtime or now - self.listed[1] >= REGLOB:
+            self.subagents = sorted(folder.glob("agent-*.jsonl")) if mtime is not None else []
+            self.listed, self.dormant = (mtime, now), set()
+        return [self.main, *(p for p in self.subagents if p not in self.dormant)]
 
     def read(self, now: float | None = None) -> bool:
         """Takes in what's been appended since the last read. True if anything was."""
         now = time.time() if now is None else now
+        snap = Snapshot(self.snap.model, self.snap.context, self.snap.peak, self.snap.last_at, self.snap.ttl,
+                        list(self.snap.compactions), list(self.snap.turns))
         changed = False
-        for path in self.paths():
+        for path in self.paths(now):
             try:
                 st = path.stat()
             except OSError:
                 continue
             offset, stamp = self.files.get(path, (0, None))
             if (st.st_size, st.st_mtime_ns) == stamp:
+                if path != self.main and st.st_mtime < now - SPAN:
+                    self.dormant.add(path)
                 continue
             if path != self.main and offset == 0 and st.st_mtime < now - SPAN:
                 self.files[path] = (st.st_size, (st.st_size, st.st_mtime_ns))   # finished before the span
+                self.dormant.add(path)
                 continue
             with open(path, "rb") as f:
+                if path == self.main and offset == 0:
+                    offset = window_start(f, st.st_size, now - SPAN)
+                    early = compactions_before(f, offset)
+                    snap.compactions += early
+                    snap.peak = max([snap.peak, *(c.pre for c in early)])
+                    changed = changed or bool(early)
                 f.seek(offset)
-                data = f.read()
+                data = f.read(st.st_size - offset)
             end = data.rfind(b"\n") + 1   # a half-written last line waits for the next read
             self.files[path] = (offset + end, (st.st_size, st.st_mtime_ns))
             turns, compactions = parse(data[:end].splitlines(), self.seen, path == self.main)
-            self.take(turns, compactions)
+            take(snap, turns, compactions)
             changed = changed or bool(turns or compactions)
-        self.snap.turns = [t for t in self.snap.turns if t.at >= now - SPAN]
+        snap.turns = [t for t in snap.turns if t.at >= now - SPAN]
+        self.snap, self.ready = snap, True
         return changed
 
     def take(self, turns: list[Turn], compactions: list[Compaction]) -> None:
-        s = self.snap
-        s.compactions += compactions
-        for t in turns:
-            s.turns.append(t)
-            if t.main:
-                s.model, s.context, s.peak, s.last_at = t.model or s.model, t.context, max(s.peak, t.context), t.at
-                s.ttl = t.ttl or s.ttl
+        take(self.snap, turns, compactions)
+
+
+def take(s: Snapshot, turns: list[Turn], compactions: list[Compaction]) -> None:
+    s.compactions += compactions
+    for t in turns:
+        s.turns.append(t)
+        if t.main:
+            s.model, s.context, s.peak, s.last_at = t.model or s.model, t.context, max(s.peak, t.context), t.at
+            s.ttl = t.ttl or s.ttl
 
 
 # what the pane says
@@ -298,6 +394,17 @@ def limits(data) -> dict[str, tuple[float, float | None]]:
     return out
 
 
+class NoRedirects(urllib.request.HTTPRedirectHandler):
+    """urllib forwards the Authorization header on a redirect, to any host: the usage
+    fetch carries the person's login token, so a 30x is an error instead."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+OPENER = urllib.request.build_opener(NoRedirects)
+
+
 class AccountUsage:
     """Session and weekly usage for the logged-in account, fetched at most once a minute,
     off the UI thread. The last good numbers stay up while a fetch fails."""
@@ -321,7 +428,7 @@ class AccountUsage:
             req = urllib.request.Request(USAGE_URL, headers={
                 "Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20",
                 "anthropic-version": "2023-06-01", "User-Agent": "claude-wheelhouse"})
-            with urllib.request.urlopen(req, timeout=15) as r:
+            with OPENER.open(req, timeout=15) as r:
                 self.limits, self.failed = limits(json.load(r)), False
         except Exception:
             self.failed = True
@@ -456,9 +563,10 @@ def chart_lines(c: Chart, frame: int) -> list[Text]:
     n = len(c.columns)
     out.append(Text("0".rjust(MARGIN - 1) + " └" + "─" * max(n - 1, 0), style=DIM))
     axis = [" "] * n
-    tick = (int(c.start) // 3600 + 1) * 3600
+    lt = time.localtime(c.start)
+    tick = int(c.start) - lt.tm_min * 60 - lt.tm_sec + 3600   # the next local hour: not UTC's, which is off by half an hour in some zones
     while tick <= c.start + c.span and n:
-        lab = time.strftime("%-H:00", time.localtime(tick))
+        lab = f"{time.localtime(tick).tm_hour}:00"
         pos = min(round((tick - c.start) / c.span * n), n - len(lab))
         for i, ch in enumerate(lab):
             if 0 <= pos + i < n:
