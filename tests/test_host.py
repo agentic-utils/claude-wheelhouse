@@ -92,32 +92,30 @@ TWO = {"questions": [{"question": "Colour?", "options": []}, {"question": "Size?
      "a number past the last question isn't a marker"),
     (TWO, "Q1: red, q2: large", {"Colour?": "red", "Size?": "large"}, "Q-numbered parts"),
     (TWO, "1:30pm works", {"Colour?": "1:30pm works", "Size?": "1:30pm works"}, "a leading time isn't a marker"),
+    (TWO, "1: red, 2: large, 1: and blue", {"Colour?": "red, and blue", "Size?": "large"},
+     "a number given twice keeps both parts"),
 ])
 def test_question_answers(inp, reply, expected, desc):
     assert question_answers(inp, reply) == expected, desc
 
 
+K = '<keep id="ab12">'
+
+
 @pytest.mark.parametrize("text, expected, desc", [
-    ("<keep>a</keep>", "a", "one block"),
-    ("I'll put them in <keep> tags.\n<keep>- Q3\n- PR 17</keep>", "- Q3\n- PR 17", "a quoted tag before the block"),
-    ("<keep>old</keep> then <keep>new</keep>", "new", "the last block"),
-    ("<keep>never closed", None, "no complete block"),
-    ("</keep> stray", None, "a close tag alone"),
+    (f"{K}\n- Q3\n- PR 17\n</keep>", "- Q3\n- PR 17", "the request's block, tags on lines of their own"),
+    ("Saved.\n  <keep id=ab12>\nnotes\n  </keep>  \nDone.", "notes", "unquoted id, indented tags, prose around"),
+    (f"{K}\n</keep>", "", "an empty block: nothing to keep, still an answer"),
+    (f"{K}\nold\n</keep>\n{K}\nnew\n</keep>", "new", "the last block"),
+    (f'I\'ll reply between {K} and </keep>.', None, "the instruction quoted in prose isn't notes"),
+    (f'I\'ll reply between {K} and </keep>.\n{K}\n- Q3\n</keep>', "- Q3", "a quoted tag before the real block"),
+    (f"{K}notes</keep>", None, "tags not on lines of their own"),
+    ("<keep>\nnotes\n</keep>", None, "a block without the id"),
+    ('<keep id="zz99">\nold\n</keep>', None, "another request's block"),
+    (f"{K}\nnever closed", None, "no complete block"),
     (None, None, "an empty reply"),
 ])
 def test_keep_notes(text, expected, desc):
-    assert keep_notes(text) == expected, desc
-
-
-@pytest.mark.parametrize("text, expected, desc", [
-    ('<keep id="ab12">notes</keep>', "notes", "the request's block"),
-    ("<keep id=ab12>notes</keep>", "notes", "unquoted id"),
-    ("<keep>notes</keep>", None, "a block without the id"),
-    ('<keep id="zz99">old</keep>', None, "another request's block"),
-    ('I\'ll put them between <keep id="ab12"> and </keep>.\n<keep id="ab12">- Q3</keep>', "- Q3",
-     "a quoted tag before the real block"),
-])
-def test_keep_notes_by_id(text, expected, desc):
     assert keep_notes(text, "ab12") == expected, desc
 
 
@@ -530,20 +528,27 @@ def streamed(store, sid, monkeypatch):
     return h
 
 
-NOTES = 'Saved.\n<keep id="{nonce}">- Q3 open\n- PR 17</keep>'
+NOTES = 'Saved.\n<keep id="{nonce}">\n- Q3 open\n- PR 17\n</keep>'
+COMPACTED = ["/compact - Q3 open\n- PR 17"]
 
 
-@pytest.mark.parametrize("stream, compacted, activity, desc", [
-    ([text(NOTES), result()], True, "compacting", "the ask's reply carries the notes"),
-    ([result("background task done"), text(NOTES), result()], True, "compacting",
+@pytest.mark.parametrize("stream, sent, activity, desc", [
+    ([text(NOTES), result()], COMPACTED, "compacting", "the ask's reply carries the notes"),
+    ([result("background task done"), text(NOTES), result()], COMPACTED, "compacting",
      "a turn Claude Code started itself ends first"),
-    ([result("overloaded", error=True), text(NOTES), result()], True, "compacting",
+    ([result("overloaded", error=True), text(NOTES), result()], COMPACTED, "compacting",
      "an error in a turn queued ahead doesn't cancel it"),
-    ([result(NOTES)], True, "compacting", "notes only in the turn's result"),
-    ([text("<keep>- Q3</keep>"), result()], False, AWAITING_NOTES, "a block without the id isn't the notes"),
-    ([text("I'll save first."), result()], False, AWAITING_NOTES, "no notes yet: it keeps waiting"),
+    ([result(NOTES)], COMPACTED, "compacting", "notes only in the turn's result"),
+    ([text('Saved.\n<keep id="{nonce}">\n- Q3 open'), text("- PR 17\n</keep>"), result()], COMPACTED, "compacting",
+     "a block split across text blocks"),
+    ([text('<keep id="{nonce}">\n</keep>'), result()], ["/compact"], "compacting",
+     "an empty block: compact with no instructions"),
+    ([text('I\'ll put them between <keep id="{nonce}"> and </keep>.'), result()], [], AWAITING_NOTES,
+     "the instruction quoted in prose isn't the notes"),
+    ([text("<keep>\n- Q3\n</keep>"), result()], [], AWAITING_NOTES, "a block without the id isn't the notes"),
+    ([text("I'll save first."), result()], [], AWAITING_NOTES, "no notes yet: it keeps waiting"),
 ])
-def test_compact_by_id(streamed, store, sid, stream, compacted, activity, desc):
+def test_compact_by_id(streamed, store, sid, stream, sent, activity, desc):
     """Through the real read(): the notes go to /compact whichever turn they arrive in."""
     h = streamed
     store.command(sid, "compact")
@@ -562,26 +567,79 @@ def test_compact_by_id(streamed, store, sid, stream, compacted, activity, desc):
         await h.read()
         return nonce
     nonce = run(go())
-    sent = h.client.queries[1:]
-    assert sent == (["/compact - Q3 open\n- PR 17"] if compacted else []), desc
-    assert (h.compact_nonce is None) == compacted, desc
+    assert h.client.queries[1:] == sent, desc
+    assert (h.compact_nonce is None) == bool(sent), desc
     assert store.session(sid)["activity"] == activity, desc
     assert nonce and h.client.queries[0] == COMPACT_ASK.format(nonce=nonce), desc
 
 
+async def feed(h, *msgs):
+    """Hand the running reader some of Claude Code's messages and let it take them in."""
+    for m in msgs:
+        h.client.feed.put_nowait(m)
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+
+def tool(command):
+    from claude_agent_sdk import AssistantMessage
+    from claude_agent_sdk.types import ToolUseBlock
+    return AssistantMessage(content=[ToolUseBlock(id=command, name="Bash", input={"command": command})], model="m")
+
+
+@pytest.mark.parametrize("running, desc", [
+    (1, "pressed during a long turn: the ask waits behind it"),
+    (0, "pressed while idle, then Claude Code starts a turn of its own"),
+])
+def test_compact_waits_out_a_long_turn(streamed, store, sid, monkeypatch, running, desc):
+    """Only quiet time counts towards Compact's timeout, so a turn of any length never times
+    it out, and never has its activity overwritten; the notes, when they come, compact."""
+    monkeypatch.setattr(host_mod, "COMPACT_TIMEOUT", 0)   # any quiet moment would time it out
+    h = streamed
+    h.pending = running
+
+    async def go():
+        reader = asyncio.create_task(h.read())
+        store.command(sid, "compact")
+        await h.poll()
+        nonce = h.compact_nonce
+        if not running:   # the ask's turn ends without notes, then a turn Claude Code started itself
+            await feed(h, result())
+            await feed(h, tool("sleep 900"))
+        else:
+            await feed(h, tool("sleep 900"))
+        for _ in range(3):   # time passes while that turn runs
+            await h.poll()
+            assert h.compact_nonce == nonce, desc
+            assert store.session(sid)["activity"] == "running Bash: sleep 900", desc
+        await feed(h, result(), text(NOTES.format(nonce=nonce)), result())
+        await feed(h, None)
+        await reader
+    run(go())
+    assert h.client.queries[-1:] == COMPACTED, desc
+
+
 @pytest.mark.parametrize("ending, activity, desc", [
     ("interrupt", "interrupted", "Interrupt cancels Compact"),
-    ("timeout", NO_NOTES, "no notes in time: give up and say so"),
+    ("timeout", NO_NOTES, "quiet for the whole timeout with no notes: give up and say so"),
 ])
-def test_compact_abandoned(host, store, sid, ending, activity, desc):
-    store.command(sid, "compact")
-    run(host.poll())
-    if ending == "interrupt":
-        store.command(sid, "interrupt")
-    else:
-        host.compact_asked = time.monotonic() - host_mod.COMPACT_TIMEOUT - 1
-    run(host.poll())
-    assert host.compact_nonce is None, desc
+def test_compact_abandoned(streamed, store, sid, ending, activity, desc):
+    h = streamed
+
+    async def go():
+        reader = asyncio.create_task(h.read())
+        store.command(sid, "compact")
+        await h.poll()
+        await feed(h, text("Nothing to keep."), result())   # the ask's turn ends without notes
+        if ending == "interrupt":
+            store.command(sid, "interrupt")
+        else:
+            h.compact_idle -= host_mod.COMPACT_TIMEOUT + 1
+        await h.poll()
+        await feed(h, None)
+        await reader
+    run(go())
+    assert h.compact_nonce is None, desc
     assert store.session(sid)["activity"] == activity, desc
 
 
@@ -687,26 +745,37 @@ def test_lock_on_confirm_never_resends(store, sid, monkeypatch):
     assert store.pending(sid) == []
 
 
-@pytest.mark.parametrize("name, inp, desc", [
-    ("Bash", {"command": "ls"}, "a permission"),
-    ("AskUserQuestion", ONE, "a question from Claude's dialog"),
+@pytest.mark.parametrize("name, inp, then, desc", [
+    ("Bash", {"command": "ls"}, "same host", "a permission, withdrawn by an interrupt"),
+    ("AskUserQuestion", ONE, "same host", "a question from Claude's dialog, withdrawn by an interrupt"),
+    ("Bash", {"command": "ls"}, "new host", "a permission, withdrawn as the host stops"),
+    ("AskUserQuestion", ONE, "new host", "a question, withdrawn as the host stops"),
 ])
-def test_answer_to_a_withdrawn_call_is_a_turn(host, store, sid, name, inp, desc):
-    """The person's message reached the call, then Claude Code withdrew it before reading
-    it: the message goes out as the next turn, and the item is closed."""
+def test_answer_to_a_withdrawn_call_is_a_turn(host, store, sid, monkeypatch, name, inp, then, desc):
+    """The person's message reached the call, then Claude Code withdrew it before the call
+    read it (cancelled the moment poll handed it over): the message is undelivered again in
+    the store, so whoever delivers next (this host, a new one, or a shell tab's monitor)
+    sends it, and the item is closed."""
     async def go():
         task = asyncio.create_task(host.can_use_tool(name, inp, ctx()))
         item = await until_open(store, sid)
         store.send(sid, "use the other one", item["ref"])
-        await host.poll()   # routed to the waiting call
-        task.cancel()
+        await host.poll()   # handed to the waiting call
+        task.cancel()   # before the call resumes
         with pytest.raises(asyncio.CancelledError):
             await task
-        await host.poll()
         return item["ref"]
     ref = run(go())
-    assert host.client.queries == [f"[wheelhouse] from doug on {ref}:\nuse the other one"], desc
+    assert [(m["body"], m["claimed_at"]) for m in store.pending(sid)] == [("use the other one", None)], \
+        f"{desc}: undelivered and unclaimed, in the store"
     assert store.item(sid, ref)["status"] != "open", desc
+    deliverer = host
+    if then == "new host":
+        deliverer = Host(store, sid, client_factory=FakeClient, person="doug")
+        run(deliverer.connect())
+    run(deliverer.poll())
+    assert deliverer.client.queries == [f"[wheelhouse] from doug on {ref}:\nuse the other one"], desc
+    assert store.pending(sid) == [], desc
 
 
 class DyingClient(FakeClient):
@@ -727,7 +796,13 @@ def test_send_failure_leaves_a_stop_reason(store, sid, monkeypatch):
     assert [m["body"] for m in store.pending(sid)] == ["hello"], "left for the next host"
 
 
-def test_get_input_ref_hides_what_the_host_will_send(store, tmp_path, monkeypatch):
+@pytest.mark.parametrize("state, shown, desc", [
+    (lambda s, i: None, "(reaches you as a user turn): on its way", "not yet sent: marked, so it isn't acted on twice"),
+    (lambda s, i: s.claim(i), "(reaches you as a user turn): on its way",
+     "sent by the host but not yet marked delivered: still shown"),
+    (lambda s, i: s.take_pending(i), ": on its way", "delivered: shown plainly"),
+])
+def test_get_input_ref_in_a_hosted_session(store, tmp_path, monkeypatch, state, shown, desc):
     from claude_wheelhouse import mcp_server
     sid = store.create_session(str(tmp_path), runner="sdk")
     monkeypatch.setattr(mcp_server, "_store", store)
@@ -735,4 +810,44 @@ def test_get_input_ref_hides_what_the_host_will_send(store, tmp_path, monkeypatc
     get_input = next(t for t in mcp_server.TOOLS if t.__name__ == "get_input")
     ref = store.post_item(sid, "question", "q")
     store.send(sid, "on its way", ref)
-    assert "on its way" not in get_input(ref=ref)
+    store.queue(sid, "a draft", ref)
+    state(store, sid)
+    out = get_input(ref=ref)
+    assert out.splitlines()[-1].endswith(shown), desc
+    assert ("(reaches you" in out) == ("reaches" in shown), desc
+    assert "a draft" not in out, f"{desc}: drafts never show"
+
+
+class NoStartClient(StreamClient):
+    async def connect(self):
+        raise ConnectionError("Command failed with exit code 1\nError output: see stderr")
+
+
+def test_run_says_why_claude_code_didnt_start(store, sid, monkeypatch):
+    monkeypatch.setattr(host_mod, "transcript_exists", lambda sid: True)
+    h = Host(store, sid, client_factory=NoStartClient, person="doug")
+    run(asyncio.wait_for(h.run(), 5))
+    assert store.session(sid)["activity"] == \
+        "stopped: Claude Code didn't start: Command failed with exit code 1 Error output: see stderr"
+
+
+@pytest.mark.parametrize("fails, raises, desc", [
+    (0, False, "a free database: written at once"),
+    (2, False, "locked for a while: retried until it goes"),
+    (9, True, "locked throughout: the error surfaces"),
+])
+def test_steady_writes_through_a_lock(monkeypatch, fails, raises, desc):
+    import sqlite3
+    monkeypatch.setattr(host_mod, "STEADY_TRIES", (0, 0, 0, 0))
+    calls = []
+
+    def write(x):
+        calls.append(x)
+        if len(calls) <= fails:
+            raise sqlite3.OperationalError("database is locked")
+    if raises:
+        with pytest.raises(sqlite3.OperationalError):
+            run(Host.steady(write, "x"))
+    else:
+        run(Host.steady(write, "x"))
+    assert len(calls) == (5 if raises else fails + 1), desc

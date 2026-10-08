@@ -112,11 +112,14 @@ def get_input(ref: str | None = None, message_id: int | None = None) -> str:
         if not hosted:
             s.take_pending(_sid, ref)   # shown in the thread below, so the monitor mustn't repeat them
         lines = [f"{ref} [{item['status']}] {item['title']}", item["body"], ""]
-        # leave out what the monitor has claimed and is printing right now, and in a hosted
-        # session what the host has still to send: that arrives as a user turn
-        lines += [f"{m['author']} @ {m['created_at']}: {m['body']}"
-                  for m in s.thread(_sid, ref, in_flight=False)
-                  if not (hosted and m["author"] == "person" and m["delivered_at"] is None)]
+        # a tab session leaves out what the monitor has claimed and is printing right now. A
+        # hosted one shows the person's every sent message, saying which reach it as a user
+        # turn, so it neither acts on one twice nor misses one the host sent but hasn't marked
+        for m in s.thread(_sid, ref, in_flight=hosted):
+            if m["draft"]:
+                continue
+            via = " (reaches you as a user turn)" if hosted and m["author"] == "person" and m["delivered_at"] is None else ""
+            lines.append(f"{m['author']} @ {m['created_at']}{via}: {m['body']}")
         return "\n".join(lines)
     msgs = s.take_pending(_sid)
     return "\n\n".join(f"[{m['item_ref'] or 'general'}] {m['body']}" for m in msgs) or "nothing new"
