@@ -1260,6 +1260,23 @@ async def test_the_hint_says_what_ctrl_enter_does(store, sid, mode, sends_now, e
 
 
 @pytest.mark.anyio
+async def test_the_hint_follows_a_mode_switched_in_a_thread_at_once(store, sid, monkeypatch):
+    from textual.app import App
+    every = App.set_interval   # no refresh tick: only the return itself can repaint the hint
+    monkeypatch.setattr(App, "set_interval", lambda self, t, cb, **kw: None if t == 1.0 else every(self, t, cb, **kw))
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=0)
+        app.items_table.focus()
+        await pilot.press("enter", "ctrl+t", "escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, ThreadView)
+        assert str(app.screen.query_one(Hint).content).startswith("Ctrl+Enter to send · ")
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("screen, desc", [
     ("inbox", "the inbox's send bar"),
     ("thread", "an item's, full screen"),
