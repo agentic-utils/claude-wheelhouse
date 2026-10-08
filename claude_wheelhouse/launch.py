@@ -169,9 +169,11 @@ def open_host(store: Store, sid: str) -> None:
     logs.mkdir(exist_ok=True)
     with open(logs / f"{sid}.log", "a") as log:
         print(now(), sid, "resume" if resuming else "new", session["cwd"], file=log, flush=True)
-        subprocess.Popen([sys.executable, "-m", "claude_wheelhouse", "host", sid], cwd=session["cwd"],
-                         stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                         start_new_session=True, env=dict(os.environ, WHEELHOUSE_DB=str(store.path)))
+        # setsid --fork: the host is init's child, not ours, so when it exits it is reaped
+        # rather than left a zombie of the TUI that still looks alive
+        subprocess.run(["setsid", "--fork", sys.executable, "-m", "claude_wheelhouse", "host", sid],
+                       cwd=session["cwd"], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                       env=dict(os.environ, WHEELHOUSE_DB=str(store.path)), check=True)
     if resuming:
         store.notice(sid, JOINED_TEXT)
 

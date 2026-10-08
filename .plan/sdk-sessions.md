@@ -226,8 +226,11 @@ experimentation is low".
 | One AskUserQuestion call is one question item; several questions take `n: answer` parts | One item per question | One tool call waits on one answer |
 | Closing an AskUserQuestion item unanswered denies the call | Leave it waiting | The callback would otherwise wait forever |
 | A permission left open by a host that died is denied when the host restarts, with a note that Claude Code will ask again | The PreToolUse `defer` hook from section 2 | Simpler for a prototype; `defer` is the follow-up if lost approvals bite |
+| A permission or dialog question Claude Code withdraws (Interrupt, Shell) closes with a note; a message typed on it afterwards becomes an ordinary turn | Leave it open | Its buttons would do nothing, and the message would be lost |
+| The host starts through `setsid --fork`, so it is init's child, and a zombie (state Z) counts as dead | Reap it from the TUI | An exited host the TUI never waited on stayed a zombie that still read as alive, so Restore and Relaunch refused it |
+| In a hosted session `get_input()` takes nothing and says why | Leave it | The person's messages must arrive as user turns, never as a tool result |
 | Completed messages in the pane, plus a live activity line in the bar; no partial-text streaming | Stream partial text | The pane already renders the transcript; streaming is a later nicety |
-| The host counts pending turns and finds Compact's notes between `<keep>` and `</keep>` | Count sent against finished turns | Live testing showed Claude Code starting turns by itself (a background task finishing), which threw that count |
+| The host counts pending turns and finds Compact's notes in the reply's last `<keep>…</keep>` block; it waits for at most the turns ahead of the ask plus one Claude Code starts itself, and stops (saying so) once nothing is pending or a turn errors | Count sent against finished turns | Live testing showed Claude Code starting turns by itself (a background task finishing), which threw that count |
 | The bar carries Allow, Always, Deny, Interrupt, Compact and Shell, shown only when they apply; Compact and Shell confirm first, Interrupt doesn't | Keys, or a new pane | The bar is on every screen and already context-aware; no new key clashes |
 | The monitor and join notice stay for tab sessions | Remove them | Tabs remain supported, and a shell tab uses them |
 

@@ -17,10 +17,11 @@ def proc(tmp_path):
     """A fake /proc: pid 4242 is a 'claude' started at tick 1000, its child 4243 is python."""
     (tmp_path / "sys/kernel/random").mkdir(parents=True)
     (tmp_path / "sys/kernel/random/boot_id").write_text(BOOT + "\n")
-    for pid, ppid, name in ((4242, 1, "claude"), (4243, 4242, "python3")):
+    for pid, ppid, name, state in ((4242, 1, "claude", "S"), (4243, 4242, "python3", "S"),
+                                   (4244, 1, "python3", "Z")):   # 4244: exited, not reaped
         d = tmp_path / str(pid)
         d.mkdir()
-        fields = ["S", str(ppid)] + ["0"] * 17 + ["1000"]
+        fields = [state, str(ppid)] + ["0"] * 17 + ["1000"]
         d.joinpath("stat").write_text(f"{pid} ({name}) " + " ".join(fields))
         d.joinpath("comm").write_text(name + "\n")
     return tmp_path
@@ -40,6 +41,7 @@ def session(**over):
     ({"claude_start": 999}, False, "dead", "pid reused by another process"),
     ({"boot_id": "boot-old"}, False, "dead", "machine rebooted"),
     ({"claude_pid": 9999}, False, "dead", "process gone"),
+    ({"claude_pid": 4244}, False, "dead", "a zombie: exited, its parent hasn't reaped it"),
     ({"claude_pid": None, "heartbeat_at": None, "launched_at": ago(10)}, False, "starting", "just launched"),
     ({"claude_pid": None, "heartbeat_at": None, "launched_at": ago(300)}, False, "dead", "launch never registered"),
     ({"claude_pid": 9999, "heartbeat_at": ago(900), "launched_at": ago(5)}, False, "starting", "restore in progress"),

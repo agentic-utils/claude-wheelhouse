@@ -12,7 +12,7 @@ import time
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from .store import GONE_TEXT, SessionGone, Store
+from .store import GONE_TEXT, SessionGone, Store, runner
 
 HEARTBEAT_SECONDS = 30
 
@@ -81,12 +81,27 @@ def set_synopsis(text: str) -> str:
     return "synopsis set"
 
 
+HOSTED_TEXT = ("nothing to take: this session runs in the wheelhouse, so the person's messages "
+               "arrive as your user turns")
+
+
+def hosted_here(s) -> bool:
+    """The session runs under its SDK host (not handed to a shell tab, whose monitor delivers)."""
+    session = s.session(_sid)
+    return session is not None and runner(session) == "sdk" and not session["shell"]
+
+
 @wheelhouse_tool
 def get_input(ref: str | None = None, message_id: int | None = None) -> str:
     """Without arguments: the person's undelivered messages (marked delivered).
     With ref: that item's full body and thread (its messages count as delivered).
-    With message_id: the full text of one message a notification cut short."""
+    With message_id: the full text of one message a notification cut short.
+    In a session the wheelhouse runs itself (no tab), the person's messages arrive as your
+    user turns: there this only reads an item's thread, and takes nothing."""
     s = _store
+    hosted = hosted_here(s)
+    if hosted and ref is None and message_id is None:
+        return HOSTED_TEXT
     if message_id is not None:
         m = s.message(_sid, message_id)
         return f"[{m['item_ref'] or 'general'}] {m['body']}" if m else f"no message {message_id}"
@@ -94,7 +109,8 @@ def get_input(ref: str | None = None, message_id: int | None = None) -> str:
         item = s.item(_sid, ref)
         if item is None:
             return f"no item {ref}"
-        s.take_pending(_sid, ref)   # shown in the thread below, so the monitor mustn't repeat them
+        if not hosted:
+            s.take_pending(_sid, ref)   # shown in the thread below, so the monitor mustn't repeat them
         lines = [f"{ref} [{item['status']}] {item['title']}", item["body"], ""]
         # leave out what the monitor has claimed and is printing right now
         lines += [f"{m['author']} @ {m['created_at']}: {m['body']}"

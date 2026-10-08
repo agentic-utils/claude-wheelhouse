@@ -276,6 +276,12 @@ class Store:
                 db.execute("UPDATE sessions SET host_command = NULL WHERE id = ?", (sid,))
         return row[0] if row else None
 
+    def set_answer(self, sid: str, ref: str, answer: str) -> None:
+        """An item's answer column: a permission's decision, or the host marking a question
+        it asked for Claude Code's AskUserQuestion."""
+        with self.tx() as db:
+            db.execute("UPDATE items SET answer = ? WHERE session_id = ? AND ref = ?", (answer, sid, ref))
+
     def set_shell(self, sid: str, state: str | None) -> None:
         """tab: the host has handed the session to an interactive tab and waits for it to exit."""
         with self.tx() as db:
