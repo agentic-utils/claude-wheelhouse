@@ -1443,3 +1443,19 @@ async def test_renaming_a_session_that_has_gone_says_so(store, sid, monkeypatch,
             await pilot.pause()
         assert app.is_running and store.session(sid) is None, desc
         assert [n.message for n in app._notifications] == ["session no longer exists"], desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("element, colour, background, desc", [
+    ("screen--selection", "#000000", "#ffffff", "a selection in the conversation or a thread"),
+    ("text-area--selection", "#000000", "#ffffff", "a selection in an answer box"),
+])
+async def test_selections_read_black_on_white(store, sid, element, colour, background, desc):
+    """Doug (#52): dark teal blocks hid the selected characters."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        owner = app.answer if element.startswith("text-area") else app.screen
+        style = owner.get_component_rich_style(element)
+    assert (style.color.get_truecolor().hex, style.bgcolor.get_truecolor().hex) == (colour, background), desc
+

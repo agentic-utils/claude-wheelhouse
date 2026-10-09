@@ -165,9 +165,9 @@ Terminal keeps `Shift`+click for its own text selection). `X` then closes the ma
 questions and decisions, or reopens them if they're all closed, `Esc` clears the marks, and a plain click
 starts afresh.
 
-Text: drag the mouse over the conversation or a thread to select part of it, `Ctrl+A`
-selects all of the focused pane or answer box, and `Ctrl+C` copies the selection (through
-the terminal, which Windows Terminal supports). Hold `Shift` to drag with the terminal's
+Text: drag the mouse over the conversation or a thread to select part of it (shown black
+on white), `Ctrl+A` selects all of the focused pane or answer box, and `Ctrl+C` copies the
+selection (through the terminal, which Windows Terminal supports). Hold `Shift` to drag with the terminal's
 own selection instead.
 
 ## Test

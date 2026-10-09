@@ -908,6 +908,9 @@ class WheelhouseApp(App):
     #offer {{ width: 100%; height: 1; background: #12122a; color: #e8e8e8; padding: 0 1; }}
     #keys-dialog {{ width: 100; max-width: 100%; height: 90%; background: #000000; color: {MATRIX};
                     border: thick #ff2a6d; padding: 0 1; }}
+    /* selected text black on white: the theme's dark teal hid the characters (#52) */
+    Screen > .screen--selection, TextArea > .text-area--selection, Input > .input--selection {{
+        background: #ffffff; color: #000000; }}
     #checklist {{ height: auto; display: none; background: #000000; color: #e8e8e8;
                   border-bottom: solid #7b61ff; padding: 0 1; }}
     """
