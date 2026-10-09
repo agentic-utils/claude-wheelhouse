@@ -17,7 +17,6 @@ from rich.style import Style
 from rich.cells import cell_len
 from rich.text import Text
 from textual import events, on
-from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.message import Message
@@ -455,7 +454,8 @@ class Compose(TextArea):
         return bool(found)
 
     async def _on_key(self, event) -> None:
-        # Enter here; Tab reaches the app first, and cycle_focus takes the suggestion there
+        # Enter here; Tab is a binding, which acts before the box sees its key (take_key),
+        # so cycle_focus takes the suggestion there
         if event.key == "enter" and self.take_suggestion():
             event.prevent_default()
             event.stop()
@@ -938,11 +938,14 @@ DESCRIBE = {
     "press('always')": "Always: allow it, and keep the rule",
     "press('deny')": "Deny it, with what's typed in its box as what to do instead",
     "press('send-all')": "Send all: every session's queue",
-    **{f"list_key({key!r})": what for key, what in (
-        ("up", "Up a row"), ("down", "Down a row"), ("pageup", "Up a page"), ("pagedown", "Down a page"),
-        ("ctrl+home", "The first row"), ("ctrl+end", "The last row"))},
-    "focus_next": "The next pane (Tab order below)",
-    "focus_previous": "The previous pane",
+    "cursor_up": "Up a row",
+    "cursor_down": "Down a row",
+    "page_up": "Up a page",
+    "page_down": "Down a page",
+    "scroll_top": "The first row",
+    "scroll_bottom": "The last row",
+    "app.focus_next": "The next pane (Tab order below)",
+    "app.focus_previous": "The previous pane",
 }
 # the send bar's buttons and the session area's, by id
 BUTTONS = {
@@ -978,17 +981,12 @@ BUTTON_KEYS = [
 # items, so Ctrl+Enter (which goes back to the items), Down and Tab answer the next one.
 # Any other pane that takes focus (a module's) comes after these
 TAB_ORDER = ("session-list", "items", "answer", "detail")
-# the lists' cursor keys, by their DataTable actions (action_list_key)
-LIST_KEYS = {"up": "cursor_up", "down": "cursor_down", "pageup": "page_up", "pagedown": "page_down",
-             "ctrl+home": "scroll_top", "ctrl+end": "scroll_bottom"}
-# Keys that move focus, and the lists' cursor keys, act as the app takes them from the
-# terminal (priority), in the order typed. A widget's own bindings act only once the key
-# has come back up from the widget it was sent to, which is chosen as the key arrives: in
-# a burst (type-ahead), Ctrl+Enter, Down, Tab, typing sent the Down and the typing to the
-# answer box, focus not having moved yet. Each lets the key through where it isn't theirs
-TAB_KEYS = [Binding("tab", "focus_next", show=False, priority=True),
-            Binding("shift+tab", "focus_previous", show=False, priority=True)]
-ORDERED_KEYS = [*TAB_KEYS, *(Binding(key, f"list_key({key!r})", show=False, priority=True) for key in LIST_KEYS)]
+# for the ? overlay, keys bound elsewhere: Tab and Shift+Tab are every screen's own
+# (app.focus_next, which is cycle_focus), the lists' cursor keys DataTable's
+TAB_KEYS = [Binding("tab", "app.focus_next"), Binding("shift+tab", "app.focus_previous")]
+LIST_KEYS = [Binding(key, action) for key, action in (
+    ("up", "cursor_up"), ("down", "cursor_down"), ("pageup", "page_up"), ("pagedown", "page_down"),
+    ("ctrl+home", "scroll_top"), ("ctrl+end", "scroll_bottom"))]
 TABS = ("Tab goes round the panes: the session list, the items, the answer box, then the "
         "conversation, and Shift+Tab back. Ctrl+Enter in the answer box goes back to the items with "
         "the cursor where it was, so Down then Tab answers the next one. An item opened full screen "
@@ -1014,9 +1012,9 @@ WHOSE = ("The buttons under the session list act on the session highlighted ther
 
 def keys_help() -> str:
     """The ? overlay: every key, from the bindings themselves, and every button."""
-    everywhere = [b for b in WheelhouseApp.BINDINGS if b not in BUTTON_KEYS + ORDERED_KEYS]
+    everywhere = [b for b in WheelhouseApp.BINDINGS if b not in BUTTON_KEYS]
     sections = [("Everywhere", everywhere), ("Outside a text box", BUTTON_KEYS),
-                ("Moving between panes", TAB_KEYS), ("Either list", ORDERED_KEYS[len(TAB_KEYS):]),
+                ("Moving between panes", TAB_KEYS), ("Either list", LIST_KEYS),
                 ("The session list", SessionList.BINDINGS),
                 ("The item list", ItemList.BINDINGS),
                 ("An answer box", Compose.BINDINGS), ("The conversation pane", Transcript.BINDINGS),
@@ -1129,9 +1127,8 @@ class WheelhouseApp(App):
 
     # keys shown in upper case, the usual convention: F is the f key, not Shift+F
     BINDINGS = [
-        # priority, as ORDERED_KEYS: Ctrl+Enter moves focus, so it acts before the keys behind it are routed
-        Binding("ctrl+enter", "submit", "Submit", key_display="Ctrl+Enter", priority=True),
-        Binding("ctrl+j", "submit", "Submit", show=False, priority=True),   # Ctrl+Enter, as most terminals send it
+        Binding("ctrl+enter", "submit", "Submit", key_display="Ctrl+Enter"),
+        Binding("ctrl+j", "submit", "Submit", show=False),   # Ctrl+Enter, as most terminals send it
         Binding("ctrl+s", "send_session", "Send", key_display="Ctrl+S"),
         Binding("ctrl+t", "toggle_mode", "Mode", key_display="Ctrl+T"),
         Binding("ctrl+r", "recall", "Edit queued", show=False, key_display="Ctrl+R"),
@@ -1148,7 +1145,6 @@ class WheelhouseApp(App):
         Binding("question_mark", "help", "Keys", key_display="?"),
         Binding("q", "quit", "Quit", key_display="Q"),
         *BUTTON_KEYS,
-        *ORDERED_KEYS,
     ]
 
     def __init__(self, store: Store | None = None):
@@ -1271,7 +1267,28 @@ class WheelhouseApp(App):
             if isinstance(event, events.MouseDown):
                 self.right_click(event)
             return
+        if isinstance(event, events.Key) and not event.is_forwarded:
+            await self.take_key(event)
+            return
         await super().on_event(event)
+
+    async def take_key(self, event: events.Key) -> None:
+        """Every key, one rule: it acts as it arrives, on what has focus then, so a burst
+        (type-ahead) acts in the order typed. What was sent to the focus before it lands
+        first; then its binding acts at once, from the focus up as Textual resolves them (a
+        key a text box types is no one else's); a key no binding takes goes to the focus.
+        Textual's own way sent each key to a widget as it arrived but acted on its binding
+        only once it came back up, so a later key could move the focus or a cursor first."""
+        self.app_focus = True
+        await self.drain(self.focused)
+        if self.focused is not None:
+            self.screen._clear_tooltip()
+        if not (await self._check_bindings(event.key, priority=True) or await self._check_bindings(event.key)):
+            (self.focused or self.screen)._forward_event(event)
+
+    async def _on_key(self, event: events.Key) -> None:
+        # a key the widgets let through: its bindings were tried as it arrived (take_key)
+        event.prevent_default()
 
     def right_click(self, event: events.MouseDown) -> None:
         """Copies the selection in a pane, else in the box clicked (or focused); with none,
@@ -2123,16 +2140,8 @@ class WheelhouseApp(App):
             return None, None, None
         return box, target, text
 
-    async def action_submit(self) -> None:
-        """Ctrl+Enter, taken by the app first (ORDERED_KEYS): once what was typed before it
-        has landed. A dialog's Ctrl+Enter is its own."""
-        if self.composing()[0] is None:
-            raise SkipAction()
-        await self.drain(self.focused)
-        self.submit()
-
     @session_action
-    def submit(self) -> None:
+    def action_submit(self) -> None:
         """Ctrl+Enter: queued or sent at once, by the session's mode."""
         self.settle()
         box, target, text = self.typed()
@@ -2368,7 +2377,7 @@ class WheelhouseApp(App):
             return False
         return True
 
-    def action_press(self, button_id: str) -> None:
+    async def action_press(self, button_id: str) -> None:
         """A key standing in for a button that never takes focus: as a click on it, on the
         screen in front, the inbox or a full-screen item. Not in a text box, whose keys are
         typing, nor under a dialog, whose keys are its own. One that doesn't apply to what's
@@ -2384,13 +2393,17 @@ class WheelhouseApp(App):
         elif button.disabled:
             self.notify(f"{button.label}: nothing to do", severity="warning")
         else:
-            button.press()
+            # handled now, as the key arrived (take_key): press() posts it to the button, from
+            # where it reaches the app behind the keys typed after it, an arrow moving what it acts on
+            button._start_active_affect()
+            await self._dispatch_message(Button.Pressed(button))
 
     async def drain(self, widget: Widget | None) -> None:
-        """Let the keys already sent to a widget land (typing, say) before a key that the app
-        takes first (ORDERED_KEYS) acts on what they did. Bounded: a widget kept busy never
-        holds the app up for long."""
-        if widget is None:
+        """Let the keys already sent to the focus land (typing, say) before the next key
+        acts on what they did (take_key). Only when something is waiting: the wait lets the
+        refresh tick in mid-burst, and it settles. Bounded: a widget kept busy never holds
+        the app up for long."""
+        if widget is None or not widget.message_queue_size:
             return
         landed = asyncio.get_running_loop().create_future()
         # a callback queued behind them runs once they have
@@ -2400,28 +2413,19 @@ class WheelhouseApp(App):
         except asyncio.TimeoutError:
             pass
 
-    async def action_focus_next(self) -> None:
-        await self.cycle_focus(1)
+    def action_focus_next(self) -> None:
+        self.cycle_focus(1)
 
-    async def action_focus_previous(self) -> None:
-        await self.cycle_focus(-1)
+    def action_focus_previous(self) -> None:
+        self.cycle_focus(-1)
 
-    async def action_list_key(self, key: str) -> None:
-        """A list's cursor key (LIST_KEYS), as the app takes it: in order with Tab."""
-        table = self.focused
-        if not isinstance(table, (SessionList, ItemList)):
-            raise SkipAction()   # an answer box's, a dialog's: theirs
-        await self.drain(table)
-        getattr(table, f"action_{LIST_KEYS[key]}")()
-
-    async def cycle_focus(self, step: int) -> None:
+    def cycle_focus(self, step: int) -> None:
         """Tab and Shift+Tab on the inbox go round TAB_ORDER, then any other pane that takes
         focus; elsewhere (a full-screen item, a dialog) in screen order. In an answer box
         with an emoji code being typed, Tab takes the first suggestion instead. Moving into
         an answer box settles first, so it takes the items' cursor's target before anything
         is typed (a raw Down, Tab, typing): moving to the session list doesn't, so a session
         move after it still supersedes the items move (review 13)."""
-        await self.drain(self.focused)
         if step > 0 and isinstance(self.focused, Compose) and self.focused.take_suggestion():
             return
         screen = self.screen

@@ -17,7 +17,8 @@ from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
 from claude_wheelhouse.store import mode
 from claude_wheelhouse.tui import (MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice, Confirm,
-                                   Folders, Hint, PermissionButtons, SendBar, ThreadView, Transcript, hint, render)
+                                   Folders, Hint, PermissionButtons, RenameSession, SendBar, ThreadView, Transcript, hint,
+                                   render)
 
 
 @pytest.mark.anyio
@@ -957,6 +958,106 @@ async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp
         assert (app.current_session(), app.selected) == (other, (other, None)), desc
         seen = [(s, it["ref"]) for s in (sid, other) for it in store.items(s) if it["status"] != "unseen"]
         assert seen == [], f"{desc}: marked seen {seen}"
+        assert_one_current(app, desc)
+
+
+class Burst:
+    """What a burst left behind, by the names its cases use: sessions alpha and bravo, both
+    running in the wheelhouse (so every button applies) with an answer queued; alpha's
+    question qa and permission pa, bravo's question qb."""
+
+    def __init__(self, app, store, sids: dict, refs: dict):
+        self.app, self.store, self.sids, self.refs = app, store, sids, refs
+        self.keys = {f"{sids['bravo' if name == 'qb' else 'alpha']}|{ref}": name for name, ref in refs.items()}
+        self.at = {name: key.split("|") for key, name in self.keys.items()}   # (session, ref)
+
+    def status(self, name: str) -> str:
+        return self.store.item(*self.at[name])["status"]
+
+    def answer(self, name: str) -> list[str]:
+        """What was queued or sent to the item: these sessions run older code, so Ctrl+Enter sends."""
+        return [m["body"] for m in self.store._all("SELECT body FROM messages WHERE session_id = ? AND item_ref = ?",
+                                                     tuple(self.at[name]))]
+
+    def sent(self, who: str) -> int:
+        return len(self.store.pending(self.sids[who]))
+
+    def command(self, who: str) -> str | None:
+        return self.store.session(self.sids[who])["host_command"]
+
+    def marked(self) -> set[str]:
+        return {self.keys[k] for k in self.app.items_table.marked}
+
+    def cursor(self) -> str:
+        return self.keys[self.app.items_table.cursor_key()]
+
+    def focus(self) -> str | None:
+        return focused_id(self.app)
+
+    def asked(self) -> str | None:
+        """The session the dialog in front asks about, by name: Rename's box holds it, a
+        Confirm's prompt names it."""
+        s = self.app.screen
+        text = s.current if isinstance(s, RenameSession) else s.prompt if isinstance(s, Confirm) else ""
+        return next((who for who in self.sids if who in text), None)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("focus, at, burst, seen, want, desc", [
+    ("answer", "qa", ("a", "b", "backspace", "ctrl+enter"), lambda b: (b.answer("qa"), b.status("qa"), b.focus()),
+     (["a"], "open", "items"), "review 14 (1): Backspace edits the box, then Ctrl+Enter sends it; the question stays open"),
+    ("items", "qa", ("delete", "down"), lambda b: (b.status("qa"), b.status("qb")), ("closed", "open"),
+     "review 14 (2): Delete closes the question it was on, not the next"),
+    ("items", "qa", ("ctrl+s", "down"), lambda b: (b.sent("alpha"), b.sent("bravo")), (1, 0),
+     "review 14 (3): Ctrl+S sends the queue of the session it was on, not the next row's"),
+    ("items", "qa", ("space", "down"), lambda b: b.marked(), {"qa"}, "review 14 (4): Space marks the row it was on"),
+    ("items", "pa", ("1", "tab"), lambda b: (b.status("pa"), b.focus()), ("allowed", "answer"),
+     "review 14 (5): 1 allows the permission, then Tab goes to the box"),
+    ("lines", "qb", ("up", "shift+tab"), lambda b: (b.app.answer.cursor_location, b.cursor(), b.focus()),
+     ((0, 5), "qb", "items"), "review 14 (6): Up moves the box's cursor, not the items', then Shift+Tab goes to them"),
+    ("session-list", "qa", ("r", "down"), lambda b: b.asked(), "alpha", "R renames the session it was on"),
+    ("session-list", "qa", ("p", "down"), lambda b: b.asked(), "alpha", "P parks the session it was on"),
+    ("session-list", "qa", ("e", "down"), lambda b: b.asked(), "alpha", "E ends the session it was on"),
+    ("items", "qa", ("i", "down"), lambda b: (b.command("alpha"), b.command("bravo")), ("interrupt", None),
+     "I interrupts the session of the item it was on"),
+    ("items", "qa", ("c", "down"), lambda b: b.asked(), "alpha", "C compacts the session of the item it was on"),
+    ("items", "qa", ("h", "down"), lambda b: b.asked(), "alpha", "H opens a shell on the session of the item it was on"),
+])
+async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch, focus, at, burst, seen, want, desc):
+    """Review 14: each key acts as it arrives, on what has focus then, so no key overtakes
+    the one typed before it: a later key that moves the focus or a cursor never changes what
+    an earlier one acts on."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sids = {who: store.create_session(str(tmp_path), name=who, runner="sdk") for who in ("alpha", "bravo")}
+    refs = {}
+    for name, who, kind, at_time in (("qa", "alpha", "question", "10:03"), ("qb", "bravo", "question", "10:02"),
+                                     ("pa", "alpha", "permission", "10:01")):
+        refs[name] = store.post_item(sids[who], kind, name)
+        store.db.execute("UPDATE items SET updated_at = ? WHERE session_id = ? AND ref = ?",
+                         (f"2026-10-09T{at_time}:00+00:00", sids[who], refs[name]))
+    for who, s in sids.items():
+        store.queue(s, f"{who}'s queued")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        b = Burst(app, store, sids, refs)
+        table = app.items_table
+        assert [b.keys[k] for k in table.keys()] == ["qa", "qb", "pa"], desc
+        table.move_cursor(row=["qa", "qb", "pa"].index(at))
+        await pilot.pause()
+        app.query_one("#answer" if focus == "lines" else f"#{focus}").focus()
+        await pilot.pause()
+        if focus == "lines":
+            app.answer.text = "line1\nline2"
+            app.answer.move_cursor((1, 5))
+        raw_keys(app, *burst)
+        for _ in range(6):
+            await pilot.pause()
+        assert seen(b) == want, f"{desc}: got {seen(b)}"
+        if isinstance(app.screen, (RenameSession, Confirm)):
+            await pilot.press("escape")
+            await pilot.pause()
         assert_one_current(app, desc)
 
 
@@ -2579,8 +2680,7 @@ async def test_the_session_lists_keys_press_its_buttons(store, sid, monkeypatch,
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        pressed = []
-        app.query_one(f"#{button}", Button).press = lambda: pressed.append(button)
+        pressed = presses(app)
         app.session_list.focus()
         await pilot.press(key)
         await pilot.pause()
@@ -2815,10 +2915,13 @@ def keyed(store, tmp_path, monkeypatch):
 
 
 def presses(app) -> list[str]:
-    """Each keyed button's press, recorded instead of done."""
-    pressed = []
-    for b in app.screen.query(Button):
-        b.press = functools.partial(pressed.append, b.id)
+    """Each button's press, recorded instead of done: a key's is dispatched to the app at
+    once (action_press), as a click's reaches it."""
+    pressed, dispatch = [], app._dispatch_message
+
+    async def record(message):
+        await dispatch(message) if not isinstance(message, Button.Pressed) else pressed.append(message.button.id)
+    app._dispatch_message = record
     return pressed
 
 
