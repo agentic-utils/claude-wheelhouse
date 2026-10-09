@@ -1097,7 +1097,14 @@ class WheelhouseApp(App):
         self.waking = False
         self.frame = 0
         self.filter_sid: str | None = None
-        self.items_cursor: str | None = None   # where the items' cursor was last left, by the app or the person
+        # where each list's cursor was last left by the app, or settled (settle): a cursor
+        # anywhere else is the person's move, not yet acted on
+        self.items_cursor: str | None = None
+        self.sessions_cursor: str | None = None
+        # the selected item's key and its rank as it was shown when selected: it keeps that
+        # place while selected, re-sorting once the selection moves on (ranked)
+        self.pin: tuple[str, tuple] | None = None
+        self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
         self.show_finished = False   # done, dropped, closed and failed items, after the rest
         # the highlighted row: (session id, item ref), or (session id, None) for the
         # session's conversation, the first row while a session is selected
@@ -1349,6 +1356,7 @@ class WheelhouseApp(App):
         reach them (Unpark, Restore, End)."""
         table = self.session_list
         keep, key = table.cursor_row, self.current_session()
+        pending = key != self.sessions_cursor   # the person's move, not yet settled
         rows = []
         for s in sorted(self.sessions, key=lambda s: s["parked"]):   # stable: creation order within each
             st = self.shown_status(s)
@@ -1364,10 +1372,12 @@ class WheelhouseApp(App):
             rows.append((s["id"], (dot, name, self.context_cell(s), q, unseen, queued, busy)))
         if fill(table, rows) and table.row_count:
             # by key: Park and Unpark move the row, and the cursor goes with it. Not the person
-            # moving it, so it changes nothing else (pick_session_row)
+            # moving it, so it changes nothing else (settle)
             with table.prevent(DataTable.RowHighlighted):
                 table.move_cursor(row=table.get_row_index(key) if key in table.rows
                                   else min(keep, table.row_count - 1), animate=False)
+        if not pending:   # where the app put it; the person's move stays theirs to settle
+            self.sessions_cursor = self.current_session()
 
     @staticmethod
     def display_name(s) -> str:
@@ -1421,7 +1431,7 @@ class WheelhouseApp(App):
         pending = pending and arrow in table.rows
         # the cursor goes by key, rebuilt or not: items arriving above must not move it, and a
         # selection made without it (following the session already followed) takes it. Except
-        # to the person's arrow, which pick_item is about to select
+        # to the person's arrow, which settle selects
         key = arrow if pending else self.selected and f"{self.selected[0]}|{self.selected[1] or ''}"
         with table.prevent(DataTable.RowHighlighted):
             if key in table.rows:
@@ -1715,6 +1725,7 @@ class WheelhouseApp(App):
     def pick_session(self, event: DataTable.RowSelected) -> None:
         """Follow the session; a dead one is offered a relaunch, unless it's parked: a parked
         session is dead as often as not, and selecting it is how to reach its buttons."""
+        self.settle()
         sid = event.row_key.value
         if (self.filter_sid, self.selected) != (sid, (sid, None)):   # a click's highlight may have followed it
             self.follow(sid)
@@ -1746,6 +1757,7 @@ class WheelhouseApp(App):
         """Relaunch, in one click: a dead session as Restore brings it back; a running one
         run in the wheelhouse has its host stopped, then started again on the conversation.
         A tab is the person's to /exit: it relaunches once it has."""
+        self.settle()
         sid = self.current_session()
         if not sid:
             return
@@ -1842,17 +1854,33 @@ class WheelhouseApp(App):
         self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 
     @on(DataTable.RowHighlighted, "#items")
-    def pick_item(self, event: DataTable.RowHighlighted) -> None:
-        """The person moving the highlight: the pane and the answer box change target. A
-        refresh never posts one (see fill), so text being typed is never swapped under them."""
-        table = self.items_table
-        if not event.row_key.value or not table.row_count:
+    @on(DataTable.RowHighlighted, "#session-list")
+    def highlighted(self) -> None:
+        """The person moving a list's highlight, handled late: whatever settle hasn't
+        already. A refresh never posts one (see fill), so text being typed is never swapped
+        under them."""
+        self.settle()
+
+    def settle(self) -> None:
+        """One settle step (Q35): the two lists' cursors are the source of truth. An arrow
+        moves a cursor at once, but its highlight is handled later, after any key behind it
+        in a burst, so every action, and the accessors they read (composing, context_session,
+        bar_item), settle first. A cursor where the app didn't leave it is the person's move:
+        in the session list that session is followed (as a click does, though only Enter or a
+        click offers to relaunch a dead one); in the items that row is selected."""
+        if not hasattr(self, "items_table"):   # before the widgets exist
             return
-        if table.coordinate_to_cell_key((table.cursor_row, 0)).row_key != event.row_key:
-            return   # stale: a rebuild put the cursor back before this was handled
-        self.items_cursor = event.row_key.value
-        self.select_row(event.row_key.value)
-        self.saw(*self.selected)
+        sid = self.current_session()
+        if sid is not None and sid != self.sessions_cursor:
+            self.sessions_cursor = sid   # first: following repaints, and may settle again
+            if sid != self.filter_sid:
+                self.follow(sid)
+            self.paint_session_info()
+        key = self.items_table.cursor_key()
+        if key is not None and key != self.items_cursor:
+            self.items_cursor = key
+            self.select_row(key)
+            self.saw(*self.selected)
 
     def select_row(self, key: str) -> None:
         sid, ref = key.split("|")
@@ -1868,24 +1896,13 @@ class WheelhouseApp(App):
 
     @on(DataTable.RowSelected, "#items")
     def open_thread(self, event: DataTable.RowSelected) -> None:
+        self.settle()
         sid, ref = event.row_key.value.split("|")
         self.saw(sid, ref or None)
         if ref:
             self.push_screen(ThreadView(sid, ref))
         else:   # the conversation is already in the pane: Enter goes to its box
             self.answer.focus()
-
-    @on(DataTable.RowHighlighted, "#session-list")
-    def pick_session_row(self, event: DataTable.RowHighlighted) -> None:
-        """The person moving the list's highlight: that session becomes the current one, its
-        conversation followed, as a click does, though only Enter or a click offers to relaunch
-        a dead one. The app's own moves (highlight_session, a rebuild) post none. At once, on
-        every step: no follow waits on a timer for something else to overtake."""
-        if event.row_key.value != self.current_session():
-            return   # stale: the cursor moved on before this was handled
-        if event.row_key.value != self.filter_sid:
-            self.follow(event.row_key.value)
-        self.paint_session_info()
 
     def highlight_session(self, sid: str | None) -> None:
         """Keep the session list's highlight on the session in context: one current session
@@ -1894,6 +1911,7 @@ class WheelhouseApp(App):
         if sid in table.rows and sid != self.current_session():
             with table.prevent(DataTable.RowHighlighted):
                 table.move_cursor(row=table.get_row_index(sid), animate=False)
+            self.sessions_cursor = sid
             self.paint_session_info()
 
     @on(ItemList.MarksChanged)
@@ -1901,6 +1919,7 @@ class WheelhouseApp(App):
         self.paint_items()
 
     def action_clear_filter(self) -> None:
+        self.settle()
         if self.items_table.marked:   # Esc drops a multi-selection first
             self.items_table.set_marks(set())
             return
@@ -1931,6 +1950,7 @@ class WheelhouseApp(App):
         """Closing a question or a decision is the person's call: Delete or Backspace in the item list closes the highlighted
         (or open) one, and on a closed one (shown with f) reopens it, a question as
         answered and a decision as seen."""
+        self.settle()
         if isinstance(self.focused, (TextArea, Input)):
             return
         if self.items_table.marked and self.screen is self.screen_stack[0]:
@@ -2000,6 +2020,7 @@ class WheelhouseApp(App):
 
     def composing(self):
         """The compose box in use and the item it answers: the thread view's, or the inbox's."""
+        self.settle()
         if isinstance(self.screen, ThreadView):
             return self.screen.box, (self.screen.sid, self.screen.ref)
         if self.screen is self.screen_stack[0]:
@@ -2020,6 +2041,7 @@ class WheelhouseApp(App):
     @session_action
     def action_submit(self) -> None:
         """Ctrl+Enter: queued or sent at once, by the session's mode."""
+        self.settle()
         box, target, text = self.typed()
         if not box:
             return
@@ -2046,6 +2068,7 @@ class WheelhouseApp(App):
 
     def action_recall(self) -> None:
         """Take this item's latest queued answer back into the box, to edit it or drop it."""
+        self.settle()
         box, target = self.composing()
         if box is None or not target:
             return
@@ -2072,6 +2095,7 @@ class WheelhouseApp(App):
 
     def bar_item(self, screen) -> tuple[str, str] | None:
         """The item in context on a screen: the thread's, else the inbox's selected item."""
+        self.settle()
         if isinstance(screen, ThreadView):
             return (screen.sid, screen.ref)
         if self.selected and self.selected[1]:
@@ -2092,6 +2116,7 @@ class WheelhouseApp(App):
     def context_session(self) -> str | None:
         """The session a key acts on, or None (said so) with no session in context. A dialog
         in front has its own keys."""
+        self.settle()
         if self.composing()[0] is None:
             return None
         sid = self.bar_session(self.screen)
@@ -2100,6 +2125,7 @@ class WheelhouseApp(App):
         return sid
 
     def action_send_session(self) -> None:
+        self.settle()
         if sid := self.context_session():
             self.send_session(sid)
 
@@ -2117,6 +2143,7 @@ class WheelhouseApp(App):
         self.refresh_data()
 
     def action_toggle_mode(self) -> None:
+        self.settle()
         if sid := self.context_session():
             self.toggle_mode(sid)
 
@@ -2134,11 +2161,13 @@ class WheelhouseApp(App):
 
     @on(Button.Pressed, "#mode")
     def mode_pressed(self, event: Button.Pressed) -> None:
+        self.settle()
         if sid := self.bar_session(event.button.screen):
             self.toggle_mode(sid)
 
     @on(Button.Pressed, "#send")
     def send_pressed(self, event: Button.Pressed) -> None:
+        self.settle()
         if sid := self.bar_session(event.button.screen):
             self.send_session(sid)
 
@@ -2150,6 +2179,7 @@ class WheelhouseApp(App):
     def permission_pressed(self, event: Button.Pressed) -> None:
         """Answer a permission item, at once. Deny takes what's typed in the box below, if
         anything, as what to do instead."""
+        self.settle()
         target = self.bar_item(event.button.screen)
         if not target:
             return
@@ -2166,6 +2196,7 @@ class WheelhouseApp(App):
 
     @on(Button.Pressed, "#interrupt, #compact, #shell")
     def host_pressed(self, event: Button.Pressed) -> None:
+        self.settle()
         sid = self.bar_session(event.button.screen)
         if not sid:
             return
@@ -2260,6 +2291,7 @@ class WheelhouseApp(App):
     @on(Button.Pressed, "#restore")
     @session_action
     def restore_pressed(self) -> None:
+        self.settle()
         sid = self.current_session()
         if not sid:
             return
@@ -2286,6 +2318,7 @@ class WheelhouseApp(App):
     @on(Button.Pressed, "#park")
     @session_action
     def park_pressed(self) -> None:
+        self.settle()
         sid = self.current_session()
         if not sid:
             return
@@ -2301,6 +2334,7 @@ class WheelhouseApp(App):
     @on(Button.Pressed, "#rename")
     @session_action
     def rename_pressed(self) -> None:
+        self.settle()
         sid = self.current_session()
         if sid:
             self.push_screen(RenameSession(self.row(sid)["name"]), lambda name: self.rename(sid, name))
@@ -2316,6 +2350,7 @@ class WheelhouseApp(App):
     @on(Button.Pressed, "#end")
     @session_action
     def end_pressed(self) -> None:
+        self.settle()
         sid = self.current_session()
         if sid:
             n = len(self.store.drafts(sid))
@@ -2338,7 +2373,7 @@ class WheelhouseApp(App):
         else:
             self.push_screen(Choice(f"{self.label(sid)} has been asked to {what} and hasn't yet. "
                                     "Cancel the request, or force it?"),
-                             lambda choice: self.settle(sid, what, choice))
+                             lambda choice: self.resolve_request(sid, what, choice))
 
     @session_action
     def ask(self, sid: str, what: str) -> None:
@@ -2358,7 +2393,7 @@ class WheelhouseApp(App):
         self.force(sid, what)
 
     @session_action
-    def settle(self, sid: str, what: str, choice: str) -> None:
+    def resolve_request(self, sid: str, what: str, choice: str) -> None:
         if choice == "cancel":
             self.store.cancel_request(sid, what)
             self.notify(f"{what} request cancelled")

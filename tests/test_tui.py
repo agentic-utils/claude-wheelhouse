@@ -192,7 +192,7 @@ async def test_enter_on_a_destructive_confirm_declines(store, sid):
     """R6: Confirm opens on No, so a reflex Enter on "Force end" keeps the wheelhouse data."""
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        app.settle(sid, "end", "force")
+        app.resolve_request(sid, "end", "force")
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
@@ -809,6 +809,120 @@ async def test_one_current_session_whatever_happens(store, sid, tmp_path, monkey
                 f"{desc}: {drafts}"
 
 
+def raw_keys(app, *keys) -> None:
+    """Keys as a terminal sends a burst: all posted at once, with no idle wait between them.
+    Pilot.press waits for idle after each key, which hid review 12's bugs: an action key
+    ran before the arrow ahead of it had its highlight handled."""
+    for key in keys:
+        event = events.Key(key, key if len(key) == 1 else None)
+        event.set_sender(app)
+        app._driver.send_message(event)
+
+
+def burst_state(store, sids) -> dict:
+    """What a key or button can change, by (session, what): its mode, its sent and queued
+    messages, and each item's status, by ref."""
+    out = {}
+    for s in sids:
+        out |= {(s, "mode"): mode(store.session(s)), (s, "sent"): len(store.pending(s)),
+                (s, "drafts"): tuple((m["item_ref"], m["body"]) for m in store.drafts(s))}
+        out |= {(s, it["ref"]): it["status"] for it in store.items(s)}
+    return out
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("filtered", [False, True])
+@pytest.mark.parametrize("where", ["items", "sessions"])
+@pytest.mark.parametrize("burst, hits", [
+    (("delete",), True), (("ctrl+s",), True), (("ctrl+t",), True), (("ctrl+j",), False),
+    (("ctrl+r",), True), (("ctrl+j", "ctrl+s"), True), ("allow", False),
+])
+async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, filtered, where, burst, hits):
+    """Q35, review 12: Down then at once an action key (or Allow) acts on where the cursor
+    went, never on the row it left, from either list, following a session or not: every
+    action settles the lists' cursors first. With "typed" in the box for A's permission,
+    Down moves the box off it, so Ctrl+Enter has nothing to send and nothing is denied."""
+    store.set_mode(sid, "queued")
+    other = store.create_session(str(tmp_path), name="other")
+    store.set_mode(other, "queued")
+    perm = store.post_item(sid, "permission", "Bash: rm -rf build")
+    theirs = store.post_item(other, "question", "B's")
+    mine = store.post_item(sid, "question", "A's")
+    for ref, at in ((perm, "10:03"), (theirs, "10:02"), (mine, "10:01")):   # in this order, newest first
+        store.db.execute("UPDATE items SET updated_at = ? WHERE ref = ? AND session_id IN (?, ?)",
+                         (f"2026-10-09T{at}:00+00:00", ref, sid, other))
+    store.queue(sid, "A's answer", mine)
+    store.queue(other, "B's draft")
+    store.queue(other, "B's answer", theirs)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if filtered:
+            app.follow(sid)
+            await pilot.pause()
+        table = app.items_table
+        table.move_cursor(row=table.get_row_index(f"{sid}|{perm}"))
+        await pilot.pause()
+        app.answer.text = "typed"
+        lst = table if where == "items" else app.session_list
+        lst.focus()
+        await pilot.pause()
+        before = burst_state(store, (sid, other))
+        if burst == "allow":   # a button has no key: the arrow moved, its highlight not handled, then Allow
+            lst.action_cursor_down()
+            app.permission_pressed(Button.Pressed(app.query_one("#allow", Button)))
+        else:
+            raw_keys(app, "down", *burst)
+        for _ in range(3):
+            await pilot.pause()
+        desc = f"Down, {burst} from the {where} list, {'following A' if filtered else 'unfiltered'}"
+        current, target = (sid, (sid, mine)) if (where, filtered) == ("items", True) else \
+            (other, (other, theirs) if where == "items" else (other, None))
+        if burst != ("delete",):   # which closes the item, the highlight going to another
+            assert (app.current_session(), app.selected) == (current, target), desc
+        assert_one_current(app, desc)
+        after = burst_state(store, (sid, other))
+        changed = {k for k in after if after[k] != before[k]}
+        assert changed <= {(current, "mode"), (current, "sent"), (current, "drafts"), target}, \
+            f"{desc}: only the cursor's session and item, got {changed}"
+        assert bool(changed) == (hits and (where, burst) != ("sessions", ("delete",))), \
+            f"{desc}: {'acted' if hits else 'nothing to act on'}, got {changed}"
+        assert after[(sid, perm)] == "open" and not store._all("SELECT 1 FROM messages WHERE body = 'typed'"), \
+            f"{desc}: A's permission untouched, the typed text unsent"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("where, burst, desc", [
+    ("sessions", ("down", "e"), "End, pressed by its key: asks about B"),
+    ("items", ("down", "enter"), "Enter: opens B's question full screen"),
+])
+async def test_a_raw_burst_opens_what_the_cursor_is_on(store, sid, tmp_path, where, burst, desc):
+    """Review 12's probes: a burst ending in a key that opens something opens it for the row
+    the cursor went to."""
+    mine = store.post_item(sid, "question", "A's")
+    other = store.create_session(str(tmp_path), name="other")
+    theirs = store.post_item(other, "question", "B's")
+    store.db.execute("UPDATE items SET updated_at = ? WHERE session_id = ?", ("2026-10-09T10:00:00+00:00", other))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{mine}"))
+        await pilot.pause()
+        (app.items_table if where == "items" else app.session_list).focus()
+        await pilot.pause()
+        raw_keys(app, *burst)
+        for _ in range(3):
+            await pilot.pause()
+        if where == "items":
+            assert isinstance(app.screen, ThreadView) and (app.screen.sid, app.screen.ref) == (other, theirs), desc
+        else:
+            assert isinstance(app.screen, Confirm) and f"({other[:6]}," in app.screen.prompt, desc
+            await pilot.press("n")
+            await pilot.pause()
+            assert_one_current(app, desc)
+        assert app.current_session() == other, desc
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("filtered, desc", [
     (True, "the followed session (review 10)"),
@@ -842,7 +956,7 @@ async def test_a_session_ending_elsewhere_with_nothing_left_clears_the_pane(stor
 ])
 async def test_a_refresh_before_the_persons_highlight_lands(store, sid, item_arrives, desc):
     """The items' cursor follows the selection by key on every paint (review 11, bug 1), but
-    not over an arrow whose highlight is still on its way to pick_item: it isn't lost."""
+    not over an arrow whose highlight is still on its way to settle: it isn't lost."""
     qs = [store.post_item(sid, "question", t) for t in ("first", "second")]
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
