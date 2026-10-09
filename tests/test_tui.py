@@ -1738,3 +1738,88 @@ def test_the_keys_overlay_has_relaunch_and_no_tabs():
     text = keys_help()
     assert "Relaunch:" in text and "Sessions tab" not in text and "Inbox tab" not in text
     assert text.count("Show or hide finished items") == 1, "F once, though it has two bindings"
+    assert text.count("Shift+S") == 1, "Shift+S once, though it has two bindings"
+
+
+def session_names(app) -> list[str]:
+    return [app.store.session(r.key.value)["name"] for r in app.session_list.ordered_rows]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("parked, start, keys, order, desc", [
+    ([], "demo", ["y"], ["bee", "sea", "demo"], "Park moves the row to the foot, and the cursor with it (review 7)"),
+    (["bee", "sea"], "sea", [], ["demo", "sea", "bee"], "Unpark moves it up, and the cursor with it"),
+])
+async def test_the_cursor_stays_on_a_session_that_moves(store, sid, tmp_path, monkeypatch, parked, start, keys,
+                                                        order, desc):
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead")
+    ids = {"demo": sid, **{n: store.create_session(str(tmp_path), name=n) for n in ("bee", "sea")}}
+    for name in parked:
+        store.set_parked(ids[name], True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.session_list.move_cursor(row=session_names(app).index(start))
+        await pilot.click("#park")
+        await pilot.pause()
+        for key in keys:
+            await pilot.press(key)
+            await pilot.pause()
+        assert session_names(app) == order, desc
+        assert app.current_session() == ids[start], desc
+
+
+@pytest.mark.anyio
+async def test_tab_goes_from_the_session_list_to_the_items(store, sid):
+    """Review 7: the description and the buttons stay out of the Tab order."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.session_list.focus()
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app.focused is app.items_table
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key, button, desc", [
+    ("r", "rename", "R renames"),
+    ("l", "relaunch", "L relaunches"),
+    ("s", "restore", "S restores"),
+    ("S", "restore-all", "Shift+S restores all, as some terminals send it"),
+    ("shift+s", "restore-all", "and as others do"),
+    ("p", "park", "P parks"),
+    ("e", "end", "E ends"),
+])
+async def test_the_session_lists_keys_press_its_buttons(store, sid, key, button, desc):
+    """The buttons are out of the Tab order, so the list's keys keep them on the keyboard."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        pressed = []
+        app.query_one(f"#{button}", Button).press = lambda: pressed.append(button)
+        app.session_list.focus()
+        await pilot.press(key)
+        await pilot.pause()
+        assert pressed == [button], desc
+        assert not app.query_one(f"#{button}", Button).can_focus, f"{desc}: never focused"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("parked, prompted, desc", [
+    (False, True, "selecting a dead session offers a relaunch"),
+    (True, False, "not a parked one: selecting it is how to reach its buttons (review 7)"),
+])
+async def test_selecting_a_dead_session_offers_a_relaunch_unless_parked(store, sid, monkeypatch, parked, prompted,
+                                                                       desc):
+    monkeypatch.setattr(launch, "open_tab", lambda s, i: None)
+    store.set_parked(sid, parked)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pilot.click("#session-list", offset=(4, 1))
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, Confirm) == prompted, desc
+        assert app.viewing == sid, f"{desc}: it follows the session either way"

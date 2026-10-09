@@ -11,7 +11,7 @@ The person ran `/wheelhouse $ARGUMENTS`. Act on the first word of the arguments.
 
 1. Bring each of this session's wheelhouse items up to date with `update_item`, so the wheelhouse shows where things stand.
 2. Call the `wheelhouse` MCP tool `park_session`.
-3. Reply in one line: the session is parked and the tab can be closed. It comes back from the wheelhouse's Parked shelf.
+3. Reply in one line: the session is parked and the tab can be closed. It stays in the wheelhouse's session list, dimmed, and comes back with Unpark or Relaunch.
 
 **`end`**: the person is ending this session. The work is finished and the wheelhouse's data for it will be deleted.
 

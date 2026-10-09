@@ -303,7 +303,17 @@ class Transcript(Widget, can_focus=True):
 
 class SessionList(DataTable):
     """The inbox's sessions. One click selects a row: a plain table selects only on a second
-    click, the first just moving the cursor there."""
+    click, the first just moving the cursor there. The buttons under it never take focus, so
+    Tab goes straight on to the items; these keys press them instead."""
+
+    # Shift+S twice: some terminals send it as S, others as shift+s
+    BINDINGS = [Binding("r", "app.press('rename')", "Rename", show=False),
+                Binding("l", "app.press('relaunch')", "Relaunch", show=False),
+                Binding("s", "app.press('restore')", "Restore", show=False),
+                Binding("S", "app.press('restore-all')", "Restore all", show=False),
+                Binding("shift+s", "app.press('restore-all')", "Restore all", show=False),
+                Binding("p", "app.press('park')", "Park", show=False),
+                Binding("e", "app.press('end')", "End", show=False)]
 
     async def _on_click(self, event) -> None:
         # Textual runs every class's _on_click in turn, DataTable's after this one, so don't
@@ -840,6 +850,8 @@ class TutorialOffer(ModalScreen):
 def key_name(key: str) -> str:
     """A binding's key as the person reads it: Ctrl+S, Shift+Up, Space, ?."""
     names = {"question_mark": "?", "escape": "Esc", "enter": "Enter", "space": "Space"}
+    if len(key) == 1 and key.isupper():
+        return f"Shift+{key}"
     return "+".join(names.get(part, part.capitalize() if len(part) > 1 else part.upper())
                     for part in key.split("+"))
 
@@ -864,6 +876,12 @@ DESCRIBE = {
     "extend(1)": "Extend the marks down",
     "select_all": "Select all of it, to copy",
     "leave": "Back to the inbox",
+    "app.press('rename')": "Rename the highlighted session",
+    "app.press('relaunch')": "Relaunch it",
+    "app.press('restore')": "Restore it, if it's dead",
+    "app.press('restore-all')": "Restore all: every dead session that isn't parked",
+    "app.press('park')": "Park or unpark it",
+    "app.press('end')": "End it",
 }
 # the send bar's buttons and the session area's, by id
 BUTTONS = {
@@ -897,7 +915,8 @@ MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Wi
 
 def keys_help() -> str:
     """The ? overlay: every key, from the bindings themselves, and every button."""
-    sections = [("Everywhere", WheelhouseApp.BINDINGS), ("The item list", ItemList.BINDINGS),
+    sections = [("Everywhere", WheelhouseApp.BINDINGS), ("The session list", SessionList.BINDINGS),
+                ("The item list", ItemList.BINDINGS),
                 ("An answer box", Compose.BINDINGS), ("The conversation pane", Transcript.BINDINGS),
                 ("An item opened full screen", ThreadView.BINDINGS)]
     out = ["# Keys"]
@@ -905,7 +924,9 @@ def keys_help() -> str:
         out.append(f"## {title}")
         actions: dict[str, list[str]] = {}
         for b in bindings:
-            actions.setdefault(b.action, []).append(key_name(b.key))
+            keys = actions.setdefault(b.action, [])
+            if key_name(b.key) not in keys:   # Shift+S, bound as both S and shift+s
+                keys.append(key_name(b.key))
         # dict.fromkeys: one line for a key bound twice, as F is (its footer label changes)
         out += dict.fromkeys(f"- **{' or '.join(keys)}**: {DESCRIBE[action]}" for action, keys in actions.items())
     out += ["## Mouse", MOUSE, "## Buttons", *[f"- {text}" for text in BUTTONS.values()],
@@ -1078,6 +1099,10 @@ class WheelhouseApp(App):
         self.answer = self.query_one("#answer", Compose)
         self.session_list = self.query_one("#session-list", SessionList)
         self.session_info = self.query_one("#session-info-text", Static)
+        # out of the Tab order, which goes from the session list straight to the items: the
+        # buttons still click, and the list's own keys press them (SessionList)
+        for widget in (self.query_one("#session-info"), *self.query("#session-buttons Button")):
+            widget.can_focus = False
         self.eye_col = self.session_list.add_columns("", "session", "ctx", "?", "D", "✉", "")[-1]
         self.items_table.add_columns("session", "ref", "status", "title")
         self.checklist = self.query_one("#checklist", Static)
@@ -1234,7 +1259,7 @@ class WheelhouseApp(App):
         """Every session: parked ones dimmed, after the rest, so the buttons below still
         reach them (Unpark, Restore, End)."""
         table = self.session_list
-        keep = table.cursor_row
+        keep, key = table.cursor_row, self.current_session()
         rows = []
         for s in sorted(self.sessions, key=lambda s: s["parked"]):   # stable: creation order within each
             st = self.shown_status(s)
@@ -1249,7 +1274,9 @@ class WheelhouseApp(App):
             q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
             rows.append((s["id"], (dot, name, self.context_cell(s), q, unseen, queued, busy)))
         if fill(table, rows) and table.row_count:
-            table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
+            # by key: Park and Unpark move the row, and the cursor goes with it
+            table.move_cursor(row=table.get_row_index(key) if key in table.rows else min(keep, table.row_count - 1),
+                              animate=False)
 
     @staticmethod
     def display_name(s) -> str:
@@ -1533,8 +1560,12 @@ class WheelhouseApp(App):
 
     @on(DataTable.RowSelected, "#session-list")
     def pick_session(self, event: DataTable.RowSelected) -> None:
-        self.follow(event.row_key.value)
-        self.offer_relaunch(event.row_key.value)
+        """Follow the session; a dead one is offered a relaunch, unless it's parked: a parked
+        session is dead as often as not, and selecting it is how to reach its buttons."""
+        sid = event.row_key.value
+        self.follow(sid)
+        if not any(s["id"] == sid and s["parked"] for s in self.sessions):
+            self.offer_relaunch(sid)
 
     @session_action
     def offer_relaunch(self, sid: str) -> None:
@@ -2025,6 +2056,10 @@ class WheelhouseApp(App):
             self.notify(str(e), severity="error")
             return False
         return True
+
+    def action_press(self, button_id: str) -> None:
+        """A key standing in for a button that never takes focus: as a click on it."""
+        self.query_one(f"#{button_id}", Button).press()
 
     @on(Button.Pressed, "#new")
     def new_pressed(self) -> None:

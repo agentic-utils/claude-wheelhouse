@@ -77,7 +77,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   gives Claude Code the wheelhouse's name again.
   Restore brings back sessions that died
   (reboot, crash), one at a time or all at once; selecting a dead (red) session also
-  offers to relaunch it. Relaunch does it in one click for a running session run in the
+  offers to relaunch it, unless it's parked. Relaunch does it in one click for a running session run in the
   wheelhouse too: its host stops (interrupting any turn under way; an open permission or
   question closes, since nothing is left to answer it) and starts again on the same
   conversation once the old process has gone, to pick up new wheelhouse code or settings.
@@ -86,6 +86,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   drops a session's items off the inbox until you unpark or restore it. End deletes its wheelhouse data. On a running
   session, Park and End only ask the session to do it (press again to cancel or force);
   the wheelhouse never deletes anything by itself.
+  The buttons stay out of the Tab order, which goes from the session list straight to the
+  items; with the list focused, `R` renames, `L` relaunches, `S` restores, `Shift+S` restores all,
+  `P` parks or unparks and `E` ends.
 - **Run in the wheelhouse.** New sessions run through the Claude Agent SDK in a small
   host process of their own (`claude-wheelhouse host`), with no tab: you read them in the
   conversation pane and answer from the inbox, where your messages arrive as ordinary
@@ -164,7 +167,8 @@ session list), `F` show or hide finished items (the footer says which it will do
 decision (or reopen a closed one: a question as answered, a decision as seen), `N` new session, `A` adopt, `Esc` all sessions (or back
 from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue, `Ctrl+T` switch the session between Queued and
-Immediate, `Ctrl+R` take a queued answer back, `?` list every key and button, `Q` quit. Send all is a button, in the bar
+Immediate, `Ctrl+R` take a queued answer back, `?` list every key and button, `Q` quit (it asks first
+while a relaunch is waiting for a host to stop). Send all is a button, in the bar
 above the footer.
 
 Closing several questions or decisions at once: in the item list, `Ctrl`+click marks or unmarks a row
