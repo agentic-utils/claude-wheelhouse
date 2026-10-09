@@ -3,7 +3,8 @@ how big its context is, whether its prompt cache is still warm, its compactions,
 small charts of the last two hours: how its context was assembled and the output it made.
 
 The numbers, the charts and their look are claude-dashboard's, ported: its usage parse,
-`build_column`, palette, shimmer, gauges, panel border and context grades. See
+`build_column`, palette, shimmer, gauges and panel border. The context grades are the
+wheelhouse's own, shared with the session list's context bar (#51). See
 .plan/session-stats.md.
 """
 
@@ -113,7 +114,7 @@ def parse(lines, seen: set, main: bool) -> tuple[list[Turn], list[Compaction]]:
     return turns, compactions
 
 
-# the dashboard's context grades
+# context windows and grades
 
 def max_window(model: str | None) -> int:
     """The 1M context is a request header, stripped from the logged model id: Opus and
@@ -126,12 +127,23 @@ def window_for(model: str | None, peak: int) -> int:
     return 1_000_000 if peak > 200_000 else max_window(model)
 
 
-def grade(size: int, window: int) -> tuple[tuple, bool]:
-    """Colour, and whether it flashes: green, yellow, amber, red, flashing red."""
-    g, y, a, r = (150_000, 300_000, 450_000, 600_000) if window >= 1_000_000 else (100_000, 125_000, 150_000, 175_000)
-    if size > r:
-        return HOT, True
-    return (HOT if size > a else AMBER if size > y else WARN if size > g else OK), False
+GRADES = ((150_000, OK), (300_000, WARN), (600_000, AMBER))   # below each: its colour; red above (#51)
+SCALE = (0, 100_000, 200_000, 500_000, 1_000_000)              # the session list's bar: two eighths a step
+
+
+def grade(size: int) -> tuple:
+    """A context size's colour, the same in the stats pane and the session list: green
+    under 150k, yellow under 300k, amber under 600k, red above."""
+    return next((colour for limit, colour in GRADES if size < limit), HOT)
+
+
+def context_bar(size: int) -> Text:
+    """A context size in the session list: one cell in its grade's colour, filled in
+    eighths on the exponential SCALE, two eighths each for 100k, 200k, 500k and 1M (#51).
+    Any context at all shows at least one."""
+    fills = [max(0.0, min(1.0, (size - lo) / (hi - lo))) for lo, hi in zip(SCALE, SCALE[1:])]
+    eighths = round(sum(fills) * 8 / len(fills))
+    return Text(PARTIAL[max(eighths, 1 if size > 0 else 0)], style=hexc(grade(size)))
 
 
 @dataclass
@@ -385,8 +397,7 @@ def gauges(view, usage: "AccountUsage", now: float, width: int) -> list[Text]:
     every running session the context is a sum with no one window: a number, not a gauge."""
     bars = []   # (name, percent, colour, tail)
     if isinstance(view, Snapshot):
-        colour, flashing = grade(view.context, view.window)
-        bars.append(("context", view.context * 100 / view.window, flash(colour, flashing, now),
+        bars.append(("context", view.context * 100 / view.window, grade(view.context),
                      f" {tokens(view.context)}/{tokens(view.window)}"))
     for kind, name in LIMITS:
         if kind in usage.limits:

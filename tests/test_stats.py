@@ -6,6 +6,7 @@ import threading
 import time
 
 import pytest
+from rich.style import Style
 
 from claude_wheelhouse import stats, transcript
 from claude_wheelhouse.stats import Snapshot, Turn
@@ -137,14 +138,38 @@ def test_cold_cost_line(s, expected, desc):
     assert got[0].startswith("1h · warm" if expected is None else s.ttl + " · cold since"), desc
 
 
-@pytest.mark.parametrize("size, window, colour, flashing, desc", [
-    (100_000, 1_000_000, stats.OK, False, "100k of 1M is green"),
-    (400_000, 1_000_000, stats.AMBER, False, "400k of 1M is amber"),
-    (700_000, 1_000_000, stats.HOT, True, "past 600k of 1M flashes"),
-    (130_000, 200_000, stats.AMBER, False, "130k of 200k is amber"),
+@pytest.mark.parametrize("size, colour, desc", [
+    (100_000, stats.OK, "100k is green"),
+    (149_999, stats.OK, "green below 150k"),
+    (150_000, stats.WARN, "yellow from 150k"),
+    (299_999, stats.WARN, "yellow below 300k"),
+    (300_000, stats.AMBER, "amber from 300k"),
+    (599_999, stats.AMBER, "amber below 600k"),
+    (600_000, stats.HOT, "red from 600k"),
+    (1_200_000, stats.HOT, "red above"),
 ])
-def test_context_grades(size, window, colour, flashing, desc):
-    assert stats.grade(size, window) == (colour, flashing), desc
+def test_context_grades(size, colour, desc):
+    """Doug's thresholds (#51), for the stats pane's gauge and the session list's bar."""
+    assert stats.grade(size) == colour, desc
+
+
+@pytest.mark.parametrize("size, char, desc", [
+    (0, " ", "nothing yet"),
+    (10_000, "▁", "any context shows"),
+    (100_000, "▂", "100k: two eighths"),
+    (150_000, "▃", "150k: half way to 200k"),
+    (200_000, "▄", "200k: half way up"),
+    (350_000, "▅", "350k: half way to 500k"),
+    (500_000, "▆", "500k"),
+    (750_000, "▇", "750k: half way to 1M"),
+    (1_000_000, "█", "1M fills the cell"),
+    (1_500_000, "█", "past 1M stays full"),
+])
+def test_the_context_bar(size, char, desc):
+    """Doug (#51): one cell, eight levels, on the 100k/200k/500k/1M scale, in its grade's colour."""
+    bar = stats.context_bar(size)
+    assert bar.plain == char, desc
+    assert Style.parse(bar.style).color.get_truecolor() == stats.grade(size), desc
 
 
 @pytest.mark.parametrize("model, name, desc", [

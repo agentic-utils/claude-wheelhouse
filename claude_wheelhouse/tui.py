@@ -35,7 +35,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import adopt, api, emoji, launch, liveness, transcript, tutorial
+from . import adopt, api, emoji, launch, liveness, stats, transcript, tutorial
 from .store import CLOSED, SessionGone, Store, can_queue, default_runner, mode, needs_relaunch, runner
 
 MATRIX = "#00ff41"
@@ -876,7 +876,7 @@ class WheelhouseApp(App):
     DataTable {{ background: #000000; color: {MATRIX}; }}
     DataTable > .datatable--header {{ background: #12122a; color: #05d9e8; text-style: bold; }}
     DataTable > .datatable--cursor {{ background: #003b0f; color: #ffffff; }}
-    #sessions-pane {{ width: 34; }}
+    #sessions-pane {{ width: 37; }}   /* 34, and the context bar's cell and padding */
     #items-pane {{ width: 1fr; }}
     #items {{ height: 1fr; }}   /* the top half; the stats the bottom */
     #detail-pane {{ width: 2fr; }}
@@ -942,6 +942,8 @@ class WheelhouseApp(App):
         # session's conversation, the first row while a session is selected
         self.selected: tuple[str, str | None] | None = None
         self.followers: dict[str, transcript.Follower] = {}
+        # each session's context size for the session list: the stats pane's reader, on workers
+        self.contexts: dict[str, stats.UsageFollower] = {}
         self.modules = api.load()
         self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
@@ -998,7 +1000,7 @@ class WheelhouseApp(App):
         self.tables = {"#session-list": self.query_one("#session-list", DataTable),
                        "#session-table": self.query_one("#session-table", DataTable)}
         self.eye_cols = {
-            "#session-list": self.tables["#session-list"].add_columns("", "session", "?", "D", "✉", "")[-1],
+            "#session-list": self.tables["#session-list"].add_columns("", "session", "ctx", "?", "D", "✉", "")[-1],
             "#session-table": self.tables["#session-table"].add_columns(
                 "status", "name", "ticket", "dir", "open Q", "running", "unseen D", "queued", "")[-1],
         }
@@ -1027,6 +1029,7 @@ class WheelhouseApp(App):
         self.sessions = self.store.sessions()
         # liveness only: the wheelhouse never deletes or parks anything by itself
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
+        self.read_contexts()
         self.paint_sessions()
         self.paint_items()
         self.each_pane("tick")
@@ -1067,6 +1070,35 @@ class WheelhouseApp(App):
         working = bool(s["running"]) or (runner(s) == "sdk" and not (s["activity"] or "idle").startswith(RESTING))
         return working and self.statuses.get(s["id"]) in ("live", "stalled")
 
+    def read_contexts(self) -> None:
+        """Each listed session's context size, read as the stats pane reads it: on a worker
+        thread, never the UI's. A session that isn't running is read once."""
+        listed = {s["id"]: s for s in self.sessions if not s["parked"]}
+        for sid in [sid for sid in self.contexts if sid not in listed]:
+            del self.contexts[sid]
+        for sid in listed:
+            follower = self.contexts.setdefault(sid, stats.UsageFollower(sid))
+            if follower.reading or (follower.ready and not self.running(sid)):
+                continue
+            follower.reading = True
+            self.run_worker(functools.partial(self.read_context, follower), thread=True, group="contexts",
+                            exit_on_error=False)
+
+    @staticmethod
+    def read_context(follower: stats.UsageFollower) -> None:
+        """On a worker thread. A failed read (a transcript gone between stat and open, say)
+        leaves the last size up; the next tick reads again."""
+        try:
+            follower.read()
+        except Exception:
+            pass
+        finally:
+            follower.reading = False
+
+    def context_cell(self, sid: str) -> Text | str:
+        follower = self.contexts.get(sid)
+        return stats.context_bar(follower.snap.context) if follower and follower.ready and follower.snap.context else ""
+
     def sweep_eyes(self) -> None:
         """Move the Cylon eye on busy rows without rebuilding the tables."""
         for table_id, col in self.eye_cols.items():
@@ -1099,7 +1131,7 @@ class WheelhouseApp(App):
                 unseen = Text(str(s["unseen_decisions"]), style=DECISION) if s["unseen_decisions"] else ""
                 if compact:
                     q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
-                    rows.append((s["id"], (dot, name, q, unseen, queued, busy)))
+                    rows.append((s["id"], (dot, name, self.context_cell(s["id"]), q, unseen, queued, busy)))
                 else:
                     rows.append((s["id"], (label, name, s["ticket"], s["cwd"], str(s["open_questions"]),
                                            str(s["running"]), unseen, queued, busy)))

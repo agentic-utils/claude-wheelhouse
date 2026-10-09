@@ -14,9 +14,9 @@ highlighted item.
 
 - **Header.** Session name, model and context window.
 - **Context.** After a blank line, current context size as a gauge and a number against the window, coloured
-  green, yellow, amber, red or flashing red. The bands are claude-dashboard's
-  `ctx_grade`: on a 1M window ≤150k, ≤300k, ≤450k, ≤600k, above; on 200k ≤100k, ≤125k,
-  ≤150k, ≤175k, above.
+  green under 150k, yellow under 300k, amber under 600k, red above, whatever the window
+  (#51: Doug's thresholds, shared with the session list's context bar; they replaced
+  claude-dashboard's window-relative `ctx_grade` and its flashing red).
 - **Cache.** The time-to-live (TTL) in use (5m or 1h), warm or cold, and when it goes
   cold, as a clock time and a countdown. Once cold: "cold since 10:12 BST".
 - **Compactions.** Count, time of the last one, and its before and after sizes.
@@ -173,7 +173,7 @@ adapted, into a new `claude_wheelhouse/stats.py` (about 150 lines):
 - The `CO` palette, `shade`, and the shimmer wave
   `1 + 0.18 * sin(0.20*i + 0.45*row - 0.11*anim)` with the vertical gradient
   `0.5 + 0.5*row/(height-1)`, emitted as Rich styles instead of escape codes.
-- `ctx_grade`, `model_max_window` and `window_for`.
+- `model_max_window` and `window_for` (`ctx_grade` too, until #51 replaced it).
 - The usage parsing from `collect`, cut down to the fields above.
 
 Copying about 150 lines between two of Doug's repos is acceptable for now. A shared
