@@ -320,7 +320,15 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   dragged. Percentages keep the proportions on a resized terminal. Each size is kept in
   the settings table (`layout.<key>`), and a double-click deletes it, putting the
   stylesheet's default back. The session column's minimum, 39 cells, is what its
-  buttons' captions need.
+  buttons' captions need; the items' 12 and the right pane's 24 leave the three columns
+  on an 80-column terminal. The session list keeps 5 rows, the description giving way on a
+  short terminal. `splitter.fit` runs on the first layout and every resize: where the
+  sizes (a kept share, or the stylesheet's) don't fit, each sized pane shrinks towards its
+  minimum by its share of the overflow, in cells, leaving the kept share for a terminal
+  with room. A kept size that isn't a finite number is ignored, and one outside 0 to 1
+  clamped. A splitter with a neighbour missing does nothing, and a pane swapped for an
+  error card keeps its place under one (`-split`). A mouse move with no button held ends
+  a drag whose release was lost.
 - **Relaunch** (#56). Dead: as Restore. Running in the wheelhouse: SIGTERM to the host's
   registered pid, checked against its start time first (the host's own clean stop:
   Claude Code disconnected, waiting permissions and questions withdrawn, anything left

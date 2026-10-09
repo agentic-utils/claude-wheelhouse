@@ -4,6 +4,7 @@ import time
 import pytest
 from rich.color import Color
 from rich.text import Text
+from textual import events
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, TextArea
 
 from claude_wheelhouse import launch, stats, transcript
@@ -1733,11 +1734,15 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("size, desc", [((100, 30), "100 columns"), ((160, 40), "160 columns")])
-async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, desc):
+@pytest.mark.parametrize("size, half, desc", [
+    ((100, 30), True, "100 columns"),
+    ((160, 40), True, "160 columns"),
+    ((80, 24), False, "80 by 24: the description gives way to the list's five rows (review 8)"),
+])
+async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, half, desc):
     """#58: every button under the session list shows its whole caption, and the list and
-    description keep their room; the description half the column. With the longest
-    captions: Unpark, and Mode on a running hosted session too old to queue."""
+    description keep their room; the description half the column where there's room. With
+    the longest captions: Unpark, and Mode on a running hosted session too old to queue."""
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
@@ -1756,7 +1761,8 @@ async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, desc)
             assert app.screen.get_widget_at(*b.region.offset)[0] is b, f"{desc}: {b.label} is on screen, not covered"
         assert app.query_one("#session-list").region.height >= 5, desc
         column = app.query_one("#sessions-pane").content_region.height
-        assert app.query_one("#session-info").region.height == column // 2, f"{desc}: half the column"
+        info = app.query_one("#session-info").region.height
+        assert info == column // 2 if half else 3 <= info < column // 2, f"{desc}: half the column, or less"
         assert str(app.query_one("#park", Button).label) == "Unpark", "Park's caption follows the session"
         assert str(app.query_one("#mode", Button).label) == "Can't queue: relaunch", desc
         assert not {"New session", "Adopt"} & set(footer_labels(app)), f"{desc}: off the footer, on the buttons"
@@ -1775,7 +1781,8 @@ async def drag(pilot, key: str, dx: int, dy: int) -> None:
     sp = splitter(pilot.app, key)
     x, y = sp.region.offset
     await pilot.mouse_down(sp)
-    await pilot.hover(None, (x + dx, y + dy))
+    # a move with the button held: one with none is a release that never arrived
+    await pilot._post_mouse_events([events.MouseMove], None, (x + dx, y + dy), button=1)
     assert sp.has_class("-dragging"), "lit while it's dragged"
     await pilot.mouse_up(None, (x + dx, y + dy))
     await pilot.pause()
@@ -1825,6 +1832,99 @@ async def test_dragged_sizes_follow_a_resized_terminal(store, sid, width, desc):
         await pilot.pause()
         assert abs(sized(app, "sessions-pane") - share * app.query_one("#main").size.width) <= 1, desc
         assert app.query_one("#items-pane").region.width >= 20, f"{desc}: the inbox keeps its room"
+
+
+def on_screen(app, *selectors) -> bool:
+    """Every pane at least partly on screen, and none past its right edge."""
+    width = app.screen.size.width
+    return all(0 < (r := app.query_one(sel).region).width and r.right <= width for sel in selectors)
+
+
+COLUMNS = ("#sessions-pane", "#items-pane", "#detail-pane")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("width, stored, desc", [
+    (80, None, "80 columns: the three columns, as before #60 (review 8)"),
+    (91, None, "91: under the old minimums' 92"),
+    (120, {"detail-pane": "0.69"}, "a share dragged on a wide terminal, shrunk on a narrower one"),
+    (120, {"sessions-pane": "0.6", "detail-pane": "0.6"}, "two of them"),
+    (160, {"sessions-pane": "abc"}, "an unreadable size is ignored"),
+    (160, {"sessions-pane": "nan"}, "so is one not finite"),
+    (160, {"detail-pane": "inf"}, "nor infinite"),
+    (160, {"sessions-pane": "5.0"}, "one over the whole is clamped"),
+    (160, {"sessions-pane": "-1"}, "as is a negative one"),
+])
+async def test_the_columns_stay_on_screen(store, sid, width, stored, desc):
+    for key, value in (stored or {}).items():
+        store.set_setting("layout." + key, value)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(width, 30)) as pilot:
+        await pilot.pause()
+        assert on_screen(app, *COLUMNS, "#answer"), desc
+        assert app.query_one("#items-pane").region.width >= 12, f"{desc}: the inbox keeps its minimum"
+    assert {k: store.setting("layout." + k) for k in stored or {}} == (stored or {}), f"{desc}: the setting stands"
+
+
+@pytest.mark.anyio
+async def test_a_shrunk_share_comes_back_with_room(store, sid):
+    """Review 8: a share that didn't fit is shrunk, not forgotten: a wide terminal has it back."""
+    store.set_setting("layout.detail-pane", "0.69")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        assert on_screen(app, *COLUMNS)
+        await pilot.resize_terminal(200, 30)
+        await pilot.pause()
+        await pilot.pause()
+        assert abs(sized(app, "detail-pane") - 0.69 * app.query_one("#main").size.width) <= 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("missing, desc", [
+    (False, "a module pane swapped for a card: the card keeps its place under the splitter"),
+    (True, "a neighbour gone altogether: the splitter does nothing"),
+])
+async def test_the_items_splitter_survives_a_pane_that_raised(store, sid, monkeypatch, missing, desc):
+    """Review 8: a pane that raised was swapped for a card without the -split class, and a
+    press on the splitter above it then raised NoMatches and closed the app."""
+    from claude_wheelhouse import stats_pane
+
+    def boom(self):
+        raise RuntimeError("pane bug")
+    monkeypatch.setattr(stats_pane.SessionStats, "tick", boom)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        card = app.query_one(".module-error")
+        assert card.has_class("-split"), desc
+        if missing:
+            card.remove_class("-split")
+        before = sized(app, "items") if not missing else None
+        if missing:
+            await pilot.mouse_down(splitter(app, "items"))
+            await pilot.pause()
+        else:
+            await drag(pilot, "items", 0, -3)
+            assert sized(app, "items") == before - 3, f"{desc}: and still drags"
+        assert app.is_running and app.return_code is None, desc
+
+
+@pytest.mark.anyio
+async def test_a_lost_release_ends_the_drag(store, sid):
+    """Review 8: with the release lost (let go outside the terminal), a move with no button
+    held ends the drag, rather than the pane following the pointer about."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        sp = splitter(app, "sessions-pane")
+        x, y = sp.region.offset
+        before = sized(app, "sessions-pane")
+        await pilot.mouse_down(sp)
+        await pilot.hover(None, (x + 15, y + 2))
+        await pilot.pause()
+        assert (sized(app, "sessions-pane"), sp.has_class("-dragging"), app.mouse_captured) == (before, False, None)
+    assert store.setting("layout.sessions-pane") is None
 
 
 @pytest.mark.anyio

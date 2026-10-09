@@ -39,7 +39,7 @@ from textual.widgets import (
 
 from . import adopt, api, emoji, launch, liveness, stats, transcript, tutorial
 from .knurl import KnurlRender
-from .splitter import Splitter
+from .splitter import Splitter, fit
 from .store import CLOSED, SessionGone, Store, can_queue, default_runner, mode, needs_relaunch, runner
 
 MATRIX = "#00ff41"
@@ -128,6 +128,16 @@ def item_rows(items, names) -> list[tuple]:
         last = it["session_id"]
         grouped.append((it, n))
     return inbox + grouped
+
+
+def share(stored: str | None) -> float | None:
+    """A kept splitter size, a share of its parent: None if it's missing, unreadable or not
+    finite, else within 0 to 1 (splitter.fit takes it from there)."""
+    try:
+        value = float(stored)
+    except (TypeError, ValueError):
+        return None
+    return min(max(value, 0.0), 1.0) if math.isfinite(value) else None
 
 
 def short(sid: str) -> str:
@@ -457,6 +467,14 @@ def show_button(root: Widget, button_id: str, label: str, disabled: bool, shown:
         button.label = label
     button.disabled = disabled
     button.display = shown
+
+
+class Columns(Horizontal):
+    """The three columns. Every pane sits in them, so their resize, the terminal's (or the
+    first layout), is when the splitters' sizes are fitted to the room again."""
+
+    def on_resize(self) -> None:
+        self.app.call_after_refresh(self.app.fit_layout)
 
 
 class SendBar(Horizontal):
@@ -981,10 +999,10 @@ class WheelhouseApp(App):
     DataTable > .datatable--cursor {{ background: #003b0f; color: #ffffff; }}
     /* the splitters' defaults, and the least each pane keeps when one is dragged (Splitter) */
     #sessions-pane {{ width: 39; min-width: 39; }}   /* names keep their 16 cells beside the context bar (#51); every button its caption */
-    #items-pane {{ width: 1fr; min-width: 20; }}
+    #items-pane {{ width: 1fr; min-width: 12; }}   /* 39 + 12 + 24 + the splitters: three columns on 80 */
     #items {{ height: 1fr; min-height: 3; }}   /* the top half; the stats the bottom */
     .-split {{ border-top: none; min-height: 3; }}   /* the first module pane under the items: the splitter is its line */
-    #detail-pane {{ width: 2fr; min-width: 30; }}
+    #detail-pane {{ width: 2fr; min-width: 24; }}
     #detail-scroll {{ height: 1fr; min-height: 3; }}
     #answer {{ min-height: 3; }}
     #detail, #thread {{ background: #000000; color: {MATRIX}; }}
@@ -994,7 +1012,7 @@ class WheelhouseApp(App):
     Compose > .text-area--cursor {{ background: #ff2a6d; color: #000000; text-style: bold; }}
     .answer-hint {{ color: #777777; height: 1; }}
     #thread-scroll {{ height: 1fr; }}
-    #session-list {{ height: 1fr; min-height: 3; }}
+    #session-list {{ height: 1fr; min-height: 5; }}   /* on a short terminal the description gives way first */
     #session-info {{ height: 50%; min-height: 3; background: #000000; padding: 0 1; }}
     #session-info-text {{ color: #e8e8e8; }}
     /* three to a row, one row each. A caption takes its length and a cell either side:
@@ -1092,7 +1110,7 @@ class WheelhouseApp(App):
 
     def compose(self) -> ComposeResult:
         yield Static(id="title")
-        with Horizontal(id="main"):
+        with Columns(id="main"):
             # the sessions, the highlighted one's description, and what can be done to it
             with Vertical(id="sessions-pane", classes="panel"):
                 yield SessionList(id="session-list", cursor_type="row")
@@ -1141,8 +1159,8 @@ class WheelhouseApp(App):
         for widget in (self.query_one("#session-info"), *self.query("#sessions-pane Grid Button")):
             widget.can_focus = False
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
-            if (stored := self.store.setting(LAYOUT + splitter.key)) is not None:
-                splitter.apply(float(stored))
+            if (stored := share(self.store.setting(LAYOUT + splitter.key))) is not None:
+                splitter.apply(stored)
         self.eye_col = self.session_list.add_columns("", "session", "ctx", "?", "D", "✉", "")[-1]
         self.items_table.add_columns("session", "ref", "status", "title")
         self.checklist = self.query_one("#checklist", Static)
@@ -1151,6 +1169,11 @@ class WheelhouseApp(App):
         self.refresh_data()
         if tutorial.should_offer(self.store):
             self.push_screen(TutorialOffer(), self.offer_answered)
+
+    def fit_layout(self) -> None:
+        """The panes' sizes kept within the terminal: one kept from a wider one shrinks."""
+        if self.screen_stack:
+            fit(self.screen_stack[0].query(Splitter))
 
     # right-click, as in a terminal
 
@@ -1480,7 +1503,9 @@ class WheelhouseApp(App):
                     getattr(widget, hook)(*args)
             except Exception as e:
                 self.panes.remove(widget)
-                card = Static(Text(f"{widget.id}: {type(e).__name__}: {e}", style="dim"), classes="module-error")
+                # it keeps -split, so the splitter above still finds the pane under it
+                card = Static(Text(f"{widget.id}: {type(e).__name__}: {e}", style="dim"),
+                              classes=" ".join(["module-error", *widget.classes & {"-split"}]))
                 widget.parent.mount(card, after=widget)
                 widget.remove()
 
@@ -2086,6 +2111,7 @@ class WheelhouseApp(App):
             self.store.clear_setting(key)
         else:
             self.store.set_setting(key, f"{event.fraction:.6f}")
+        self.fit_layout()   # the default put back may not fit
 
     # the session area: the list's highlighted session, and its buttons
 

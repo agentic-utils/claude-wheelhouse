@@ -199,7 +199,9 @@ the session list and its description, between the items and the stats, and above
 answer box. A line turns teal under the pointer and while you drag it, and no pane goes
 below its minimum (the session column never gets too narrow for its buttons' captions).
 The sizes are kept in the wheelhouse's database, as shares of the space, so they follow a
-resized terminal; double-click a line to put its default back.
+resized terminal; double-click a line to put its default back. A size that doesn't fit a
+smaller terminal shrinks there, and comes back when there's room again. The three columns
+fit an 80-column terminal.
 
 Scrollbars are one cell wide: a teal thumb with solid ends and a knurled Braille grip,
 on a thin teal track. Drag the thumb, or click the track to page. The thumb brightens
