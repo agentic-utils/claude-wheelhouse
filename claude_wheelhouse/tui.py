@@ -950,8 +950,8 @@ MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Wi
          "kept for next time, and a double-click on a line puts its default back.")
 WHOSE = ("The buttons under the session list act on the session highlighted there, and only those that "
          "apply show: Rename, Relaunch and Park on a running one, Restore on a dead one, End on either, "
-         "Unpark on a parked one; then Mode and Send, and on one run in the wheelhouse Interrupt, Compact "
-         "and Shell. Hover over one for what it does. New, Adopt and Restore all are keys in the footer. An item "
+         "Unpark on a parked one; then Mode, Send on one that isn't dead, and on one run in the wheelhouse "
+         "Interrupt, Compact and Shell. Hover over one for what it does. New, Adopt and Restore all are keys in the footer. An item "
          "opened full screen has Mode, Send and the rest in its bar, for its own session. Ctrl+S and Ctrl+T "
          "act on the same session: highlighting an item highlights its session there.")
 
@@ -1587,8 +1587,9 @@ class WheelhouseApp(App):
     def controls(self, s) -> list[tuple[str, str, bool, bool]]:
         """A session's conversation buttons (CONVERSATION), as show_button takes them: (id,
         caption, disabled, shown). s: the session's row, or None with no session: then none
-        shows. Mode and Send apply to any session, its queue kept for it while it's dead;
-        Interrupt, Compact and Shell only to one running in a wheelhouse host (#62)."""
+        shows. Mode applies to any session, its queue kept for it while it's dead; Send only
+        to one that isn't dead, which can't receive (D30); Interrupt, Compact and Shell only
+        to one running in a wheelhouse host (#62)."""
         if s is None:
             return [(id_, label, True, False) for label, id_, _ in CONVERSATION]
         if self.sends_now(s):   # its old monitor would deliver a draft at once anyway
@@ -1597,7 +1598,8 @@ class WheelhouseApp(App):
             mode_ = (f"Mode: {mode(s).capitalize()}", False)
         n = s["drafts"]
         hosted = runner(s) == "sdk" and self.running(s["id"]) and not s["shell"]
-        return [("mode", *mode_, True), ("send", f"Send ({n})", not n, True),
+        dead = self.statuses.get(s["id"]) == "dead"
+        return [("mode", *mode_, True), ("send", f"Send ({n})", not n, not dead),
                 *[(b, b.capitalize(), False, hosted) for b in ("interrupt", "compact", "shell")]]
 
     def paint_sendbar(self) -> None:

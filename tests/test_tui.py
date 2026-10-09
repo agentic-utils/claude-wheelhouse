@@ -359,8 +359,9 @@ def session_buttons(app) -> dict[str, tuple[str, bool]]:
 
 
 @pytest.mark.anyio
-async def test_send_bar_and_session_buttons_follow_the_queues(store, sid, tmp_path):
+async def test_send_bar_and_session_buttons_follow_the_queues(store, sid, tmp_path, live):
     other = store.create_session(str(tmp_path), name="other")
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -399,7 +400,8 @@ async def test_send_bar_and_session_buttons_follow_the_queues(store, sid, tmp_pa
     ("#mode", "mode"),
     ("ctrl+t", "mode"),
 ])
-async def test_one_current_session_for_the_buttons_and_keys(store, sid, tmp_path, monkeypatch, nav, desc, how, acts):
+async def test_one_current_session_for_the_buttons_and_keys(store, sid, tmp_path, monkeypatch, live, nav, desc, how,
+                                                            acts):
     """D20, as revised in review 8: the session list's highlight is the current session, so
     the buttons under it, Ctrl+S and Ctrl+T, the hint and the activity line all act on or
     describe the same one, however the person got there."""
@@ -410,6 +412,7 @@ async def test_one_current_session_for_the_buttons_and_keys(store, sid, tmp_path
     target = tutorial.prepare(store) if nav == "tutorial" else store.create_session(str(tmp_path), name="other")
     q = store.post_item(target, "question", "Q1?")
     store.queue(target, "b", q)
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -2187,8 +2190,11 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
      "a running hosted session, parked and too old to queue: the longest captions"),
     ("live", False, ["rename", "relaunch", "park", "end", "mode", "send", "interrupt", "compact", "shell"],
      "a running one: no Restore"),
-    ("dead", False, ["restore", "end", "mode", "send"], "a dead one: Restore and End, nothing to interrupt"),
-    ("dead", True, ["restore", "park", "end", "mode", "send"], "a parked dead one: Unpark too"),
+    ("dead", False, ["restore", "end", "mode"],
+     "a dead one: Restore and End, nothing to interrupt, and no Send: it can't receive (D30)"),
+    ("dead", True, ["restore", "park", "end", "mode"], "a parked dead one: Unpark too"),
+    ("stalled", False, ["rename", "relaunch", "park", "end", "mode", "send", "interrupt", "compact", "shell"],
+     "a stalled one still takes what's sent"),
 ])
 async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, half, status, parked, shown, desc):
     """#58, #62: only the buttons that apply show, each its whole caption, in grey with a
