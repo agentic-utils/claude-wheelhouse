@@ -185,6 +185,7 @@ LATER = "2026-10-07T22:00:00.000Z"
     (rename("a") + rename("a", LATER), ("2026-10-07T22:00:00.000000+00:00", "a"), "one back to the same name is newer"),
     ([renamed("login-successful")], ("2026-10-07T21:30:00.000000+00:00", "login-successful"),
      "its custom-title record cut off the tail: the printed name"),
+    ([title("x"), {**renamed("x"), "subtype": "informational"}], None, "only a command's output counts, not a notice quoting it"),
 ])
 def test_title_watch_finds_the_latest_rename(tmp_path, recs, expected, desc):
     folder = tmp_path / "-home-u-repo"

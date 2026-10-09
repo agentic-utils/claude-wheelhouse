@@ -282,7 +282,8 @@ class TitleWatch:
             self.title = rec["customTitle"]
             return
         content = rec.get("content")
-        if rec.get("type") != "system" or not isinstance(content, str) or RENAMED not in content:
+        if (rec.get("type"), rec.get("subtype")) != ("system", "local_command") or not isinstance(content, str) \
+                or RENAMED not in content:
             return
         try:
             at = datetime.fromisoformat(rec.get("timestamp") or "").astimezone(timezone.utc)
