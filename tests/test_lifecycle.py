@@ -43,7 +43,6 @@ async def press(app, pilot, button, *keys):
     ("#end", "live", 1, True, 1, True, False, "a parked flag doesn't make a running session deletable (round-3 #1)"),
     ("#end", "dead", 1, False, None, None, None, "a dead parked session is deleted"),
     ("#park", "live", 0, True, 0, False, True, "Park on a running session only asks it to park"),
-    ("#park", "dead", 0, True, 1, False, False, "Park on a dead session parks it"),
 ])
 async def test_buttons_ask_running_sessions_and_act_on_dead_ones(
         store, sid, monkeypatch, button, state, parked, kept, want_parked, end_flag, park_flag, desc):
@@ -122,7 +121,7 @@ async def test_a_pending_request_can_be_cancelled_or_forced(
 @pytest.mark.parametrize("state, parked, launched, desc", [
     ("dead", 0, True, "a dead session is restored"),
     ("dead", 1, True, "a dead parked session is restored (and unparked)"),
-    ("live", 1, False, "a running parked session is not restored"),
+    ("live", 1, False, "a running parked session is not restored: no Restore shows (#62), and S does nothing"),
 ])
 async def test_restore_goes_by_liveness_not_the_parked_flag(store, sid, monkeypatch, state, parked, launched, desc):
     store.set_parked(sid, bool(parked))
@@ -131,7 +130,14 @@ async def test_restore_goes_by_liveness_not_the_parked_flag(store, sid, monkeypa
     monkeypatch.setattr(launch, "open_tab", lambda s, i: calls.append(i))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await press(app, pilot, "#restore")
+        await pilot.pause()
+        assert app.query_one("#restore").display == launched, desc
+        if launched:
+            await press(app, pilot, "#restore")
+        else:
+            app.session_list.focus()
+            await pilot.press("s")
+            await pilot.pause()
     assert bool(calls) == launched, desc
     if launched:
         assert store.session(sid)["parked"] == 0, desc
@@ -146,7 +152,10 @@ async def test_restore_all_skips_parked_sessions(store, sid, tmp_path, monkeypat
     monkeypatch.setattr(launch, "open_tab", lambda s, i: calls.append(i))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await press(app, pilot, "#restore-all", "y")
+        await pilot.pause()
+        for key in ("S", "y"):   # Restore all is in the footer (#62)
+            await pilot.press(key)
+            await pilot.pause()
     assert calls == [sid]
 
 
@@ -392,7 +401,6 @@ def test_the_monitor_says_so_once_and_stops(store, sid):
      "a host that doesn't stop isn't started twice: it says so"),
     ("tab", "live", None, True, [], False, [], "/exit it there", "a running tab is the person's to /exit"),
     ("sdk", "live", "tab", True, [], False, [], "/exit it there", "so is a host's session open in a shell tab"),
-    ("sdk", "dead", None, True, ["y"], False, ["restore"], "relaunching", "a dead one comes back as Restore brings it"),
 ])
 async def test_relaunch(store, sid, monkeypatch, run, state, shell, stops, keys, killed, launched, said, desc):
     from claude_wheelhouse import tui

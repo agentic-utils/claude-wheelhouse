@@ -97,7 +97,8 @@ async def test_restore_all_only_launches_dead_sessions(store, sid, tmp_path, mon
     monkeypatch.setattr(launch, "open_tab", lambda s, i: launched.append(i))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.click("#restore-all")
+        app.session_list.focus()
+        await pilot.press("S")   # in the footer now, not a button (#62)
         await pilot.press("y")
         await pilot.pause()
     assert launched == [sid]
@@ -344,6 +345,13 @@ async def refresh(pilot, sid: str) -> None:
     pilot.app.refresh_data()
     await pilot.pause()
     assert str(pilot.app.session_list.get_row(sid)[1]) == name, "the refresh ran"
+
+
+@pytest.fixture
+def live(monkeypatch):
+    """Every session running: Rename, Relaunch and Park show only on a live one (#62)."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
 
 
 def session_buttons(app) -> dict[str, tuple[str, bool]]:
@@ -652,11 +660,40 @@ def assert_one_current(app, desc):
         buttons = [(b.id, str(b.label), b.disabled, b.display) for b in app.conversation_buttons.query(Button)]
         expect = app.controls(next((x for x in app.sessions if x["id"] == current), None))
         assert buttons == expect, f"{desc}: the conversation buttons"
+        buttons = [(b.id, str(b.label), b.disabled, b.display) for b in app.session_buttons.query(Button)]
+        expect = app.lifecycle_buttons(next((x for x in app.sessions if x["id"] == current), None))
+        assert buttons == expect, f"{desc}: the lifecycle buttons, only those that apply (#62)"
+
+
+LIVE: set[str] = set()   # the sessions the tests below say are running; the rest are dead
+
+
+def some_live(monkeypatch):
+    from claude_wheelhouse import liveness
+    LIVE.clear()
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live" if s["id"] in LIVE else "dead")
+
+
+async def park_live(app, pilot, sid):
+    """Park shows on a running session (#62): it's asked, then parks itself, as its
+    park_session tool does."""
+    LIVE.add(sid)
+    app.refresh_data()
+    await pilot.pause()
+    await pilot.click("#park")
+    await pilot.pause()
+    await pilot.press("y")
+    await pilot.pause()
+    app.store.set_parked(sid, True)
+    LIVE.discard(sid)   # and its host goes: Unpark still shows, on a parked dead session
+    app.refresh_data()
 
 
 async def step(app, pilot, how, sid, other):
     """One thing the person (or, for ended elsewhere and refresh, the world) does."""
-    if how in ("park", "unpark", "end"):
+    if how == "park":
+        await park_live(app, pilot, sid)
+    elif how in ("unpark", "end"):
         await pilot.click("#park" if how != "end" else "#end")
         await pilot.pause()
         if how != "unpark":
@@ -739,8 +776,7 @@ async def test_one_current_session_whatever_happens(store, sid, tmp_path, monkey
                                                     filtered_current, desc, filtered):
     """D22, after review 10: the session list's highlight is the current session, and the
     selection, the box, the hint, the modules and the info box never describe another."""
-    from claude_wheelhouse import liveness
-    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead")   # parks and ends at once, on a yes
+    some_live(monkeypatch)   # all dead: End deletes at once, on a yes
     store.set_mode(sid, "immediate")
     mine = store.post_item(sid, "question", "A's")
     if "permission" in steps:
@@ -929,16 +965,9 @@ async def select_in_inbox(pilot):
     await pilot.press("enter", "y")
 
 
-async def relaunch_button(pilot):
-    await pilot.click("#relaunch")
-    await pilot.pause()
-    await pilot.press("y")
-
-
 @pytest.mark.parametrize("how, desc", [
     (restore_button, "the Restore button"),
     (select_in_inbox, "selecting the dead session in the inbox, then y"),
-    (relaunch_button, "the Relaunch button, then y (#56)"),
 ])
 @pytest.mark.anyio
 async def test_bringing_back_a_dead_session_resumes_it_with_the_join_notice(store, sid, monkeypatch, how, desc):
@@ -1756,7 +1785,7 @@ async def test_browse_fills_in_the_working_directory(store, tmp_path):
     ("", ["enter"], "", "empty clears it: the session shows its directory"),
     ("Columbo check", ["escape"], "demo", "Esc leaves it"),
 ])
-async def test_rename_a_session(store, sid, typed, keys, expected, desc):
+async def test_rename_a_session(store, sid, live, typed, keys, expected, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -1775,7 +1804,7 @@ async def test_rename_a_session(store, sid, typed, keys, expected, desc):
     (None, [], "Enter on its name unchanged does nothing"),
     ("Columbo check", ["renamed to Columbo check"], "a new name renames"),
 ])
-async def test_enter_in_rename_renames_only_to_a_new_name(store, sid, typed, said, desc):
+async def test_enter_in_rename_renames_only_to_a_new_name(store, sid, live, typed, said, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -1794,7 +1823,7 @@ async def test_enter_in_rename_renames_only_to_a_new_name(store, sid, typed, sai
     ("while the dialog is open", "renaming a session that ended while its dialog was open"),
     ("before the button", "pressing Rename on a session that has just ended"),
 ])
-async def test_renaming_a_session_that_has_gone_says_so(store, sid, monkeypatch, ends, desc):
+async def test_renaming_a_session_that_has_gone_says_so(store, sid, live, monkeypatch, ends, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -2026,38 +2055,60 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("size, half, desc", [
-    ((100, 30), True, "100 columns"),
-    ((160, 40), True, "160 columns"),
-    ((80, 24), False, "80 by 24: the description gives way to the list's five rows (review 8)"),
+@pytest.mark.parametrize("size, half", [((80, 24), False), ((100, 30), True), ((160, 40), True)])
+@pytest.mark.parametrize("status, parked, shown, desc", [
+    ("live", True, ["rename", "relaunch", "park", "end", "mode", "send", "interrupt", "compact", "shell"],
+     "a running hosted session, parked and too old to queue: the longest captions"),
+    ("live", False, ["rename", "relaunch", "park", "end", "mode", "send", "interrupt", "compact", "shell"],
+     "a running one: no Restore"),
+    ("dead", False, ["restore", "end", "mode", "send"], "a dead one: Restore and End, nothing to interrupt"),
+    ("dead", True, ["restore", "park", "end", "mode", "send"], "a parked dead one: Unpark too"),
 ])
-async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, half, desc):
-    """#58: every button under the session list shows its whole caption, and the list and
-    description keep their room; the description half the column where there's room. With
-    the longest captions: Unpark, and Mode on a running hosted session too old to queue."""
+async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, half, status, parked, shown, desc):
+    """#58, #62: only the buttons that apply show, each its whole caption, in grey with a
+    tooltip, filling the grid from the left with no hole where one is hidden and a blank
+    row between rows; and the list and description keep their room, the description half
+    the column where there's room."""
     from claude_wheelhouse import liveness
-    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    from claude_wheelhouse.tui import BUTTONS
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: status)
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
     store.db.execute("UPDATE sessions SET code_version = 1")
-    store.set_parked(sid, True)
+    store.set_parked(sid, parked)
     app = WheelhouseApp(store)
+    desc = f"{desc}, at {size[0]} columns"
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
-        buttons = list(app.query("#sessions-pane Grid Button"))
-        assert [b.id for b in buttons] == ["new", "adopt-open", "rename", "relaunch", "restore", "restore-all",
-                                           "park", "end", "mode", "send", "interrupt", "compact", "shell"], desc
+        buttons = [b for b in app.query("#sessions-pane Grid Button") if b.display]
+        assert [b.id for b in buttons] == shown, desc
         strips = app.screen._compositor.render_strips()
         for b in buttons:
             drawn = "".join(seg.text for seg in strips[b.region.y])[b.region.x:b.region.right]
             assert str(b.label) in drawn and b.region.height == 1, f"{desc}: {b.label!s} drawn whole, got {drawn!r}"
             assert app.screen.get_widget_at(*b.region.offset)[0] is b, f"{desc}: {b.label} is on screen, not covered"
+            assert b.tooltip == BUTTONS[b.id], f"{desc}: {b.id}'s tooltip"
+            grey = ("#333333", "#8C8C8C") if b.disabled else ("#4D4D4D", "#FFFFFF")   # dimmed when disabled
+            assert (b.styles.background.hex, b.styles.color.hex) == grey, f"{desc}: {b.id} grey"
+        for grid in app.query("#sessions-pane Grid"):
+            mine = [b for b in buttons if b.parent is grid]
+            rows = sorted({b.region.y for b in mine})
+            assert all(y2 - y1 == 2 for y1, y2 in zip(rows, rows[1:])), f"{desc}: a blank row between rows"
+            cells = [(rows.index(b.region.y), b.region.x) for b in mine]
+            assert cells == sorted(cells), f"{desc}: in order, row by row"
+            lefts = sorted({b.region.x for b in mine if b.id != "send"})   # Send follows Mode's two columns
+            assert lefts == sorted({b.region.x for b in grid.query(Button) if b.display and b.id != "send"}) \
+                and lefts[0] == grid.content_region.x, f"{desc}: no hole at the left of a row"
         assert app.query_one("#session-list").region.height >= 5, desc
         column = app.query_one("#sessions-pane").content_region.height
         info = app.query_one("#session-info").region.height
-        assert info == column // 2 if half else 3 <= info < column // 2, f"{desc}: half the column, or less"
-        assert str(app.query_one("#park", Button).label) == "Unpark", "Park's caption follows the session"
-        assert str(app.query_one("#mode", Button).label) == "Can't queue: relaunch", desc
-        assert not {"New session", "Adopt"} & set(footer_labels(app)), f"{desc}: off the footer, on the buttons"
+        assert info == column // 2 if half else 3 <= info <= column // 2, f"{desc}: half the column, or less"
+        if "park" in shown:
+            assert str(app.query_one("#park", Button).label) == ("Unpark" if parked else "Park"), desc
+        if status == "live":
+            assert str(app.query_one("#mode", Button).label) == "Can't queue: relaunch", desc
+        drawn = "".join(seg.text for seg in strips[app.screen.query_one(Footer).region.y])
+        assert size[0] < 100 or all(f"{key} {label}" in drawn for key, label in (("N", "New"), ("A", "Adopt"), ("Shift+S", "Restore all"))), \
+            f"{desc}: New, Adopt and Restore all in the footer (at 80 it scrolls), got {drawn!r}"
 
 
 def splitter(app, key: str) -> Splitter:
@@ -2278,14 +2329,12 @@ def session_names(app) -> list[str]:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("parked, start, keys, order, desc", [
-    ([], "demo", ["y"], ["bee", "sea", "demo"], "Park moves the row to the foot, and the cursor with it (review 7)"),
-    (["bee", "sea"], "sea", [], ["demo", "sea", "bee"], "Unpark moves it up, and the cursor with it"),
+@pytest.mark.parametrize("parked, start, order, desc", [
+    ([], "demo", ["bee", "sea", "demo"], "Park moves the row to the foot, and the cursor with it (review 7)"),
+    (["bee", "sea"], "sea", ["demo", "sea", "bee"], "Unpark moves it up, and the cursor with it"),
 ])
-async def test_the_cursor_stays_on_a_session_that_moves(store, sid, tmp_path, monkeypatch, parked, start, keys,
-                                                        order, desc):
-    from claude_wheelhouse import liveness
-    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead")
+async def test_the_cursor_stays_on_a_session_that_moves(store, sid, tmp_path, monkeypatch, parked, start, order, desc):
+    some_live(monkeypatch)
     ids = {"demo": sid, **{n: store.create_session(str(tmp_path), name=n) for n in ("bee", "sea")}}
     for name in parked:
         store.set_parked(ids[name], True)
@@ -2293,11 +2342,12 @@ async def test_the_cursor_stays_on_a_session_that_moves(store, sid, tmp_path, mo
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         app.session_list.move_cursor(row=session_names(app).index(start))
-        await pilot.click("#park")
         await pilot.pause()
-        for key in keys:
-            await pilot.press(key)
-            await pilot.pause()
+        if parked:
+            await pilot.click("#park")
+        else:
+            await park_live(app, pilot, ids[start])
+        await pilot.pause()
         assert session_names(app) == order, desc
         assert app.current_session() == ids[start], desc
 
@@ -2319,8 +2369,6 @@ async def test_tab_goes_from_the_session_list_to_the_items(store, sid):
     ("r", "rename", "R renames"),
     ("l", "relaunch", "L relaunches"),
     ("s", "restore", "S restores"),
-    ("S", "restore-all", "Shift+S restores all, as some terminals send it"),
-    ("shift+s", "restore-all", "and as others do"),
     ("p", "park", "P parks"),
     ("e", "end", "E ends"),
 ])

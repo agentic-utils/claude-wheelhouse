@@ -31,7 +31,7 @@ In the order they will meet it:
    `P` items (Allow, Always, Deny) and Claude's own question dialog as a question item;
    Shell opens the real Claude Code in a tab for anything else.
 6. **Lifecycle.** The session list and its description: synopsis, Restore after a reboot, relaunch of a dead
-   (red) session, "needs relaunch" after an upgrade, Park, End, Adopt.
+   (red) session, "needs relaunch" after an upgrade, Park, End, Adopt (`A` in the footer).
 
 ## Options
 

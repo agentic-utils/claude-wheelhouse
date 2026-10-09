@@ -75,9 +75,12 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   up to date itself (its brief until it sets one), in a box that takes half the column.
   The highlighted session is the current one: highlighting an item moves the list's
   highlight to the item's session, and moving the list's highlight follows that session.
-  The buttons under the description act on it, in two groups: its lifecycle (New, Adopt,
-  Rename, Relaunch, Restore, Restore all, Park, End), then its conversation (Mode, Send,
-  and Interrupt, Compact and Shell while it runs in the wheelhouse). Ctrl+S and Ctrl+T, the
+  The buttons under the description act on it, and only those that apply show, each with
+  a tooltip saying what it does: its lifecycle (Rename, Relaunch and Park on a running
+  session, Restore on a dead one, Unpark on a parked one, End on either), then its
+  conversation (Mode, Send, and Interrupt, Compact and Shell while it runs in the
+  wheelhouse). New (`N`), Adopt (`A`, a list of the sessions on disk you can adopt) and
+  Restore all (`Shift+S`) act on no one session, so they're keys in the footer. Ctrl+S and Ctrl+T, the
   hint under the answer box and the activity line act on or describe the same session.
   An item opened full screen has Mode, Send and the rest in its bar, for its own session. New session (directory, optional name, optional ticket, opening brief)
   runs Claude in the wheelhouse (below), or in a Windows Terminal tab if you tick the box.
@@ -174,7 +177,7 @@ offers the tutorial in one line: `Enter` takes it, `Esc` dismisses it for good.
 
 Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision (or reopen a closed one: a question as answered, a decision as seen), `N` new session, `A` adopt, `Esc` all sessions (or back
+highlighted question or decision (or reopen a closed one: a question as answered, a decision as seen), `N` new session, `A` adopt, `Shift+S` restore all, `Esc` all sessions (or back
 from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue, `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back, `?` list every key and button, `Q` quit (it asks first
