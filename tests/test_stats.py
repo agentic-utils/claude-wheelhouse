@@ -135,7 +135,9 @@ def test_totals_across_sessions():
 def test_cold_cost_line(s, expected, desc):
     got = stats.cache_lines(s, NOW)
     assert (got[1] if len(got) > 1 else None) == expected, desc
-    assert got[0].startswith("1h · warm" if expected is None else s.ttl + " · cold since"), desc
+    first = f"1h · warm until {stats.clock(NOW + 600)} (10m)" if expected is None else \
+        f"{s.ttl} · cold since {stats.clock(NOW - 60)}"
+    assert got[0] == first, desc
 
 
 @pytest.mark.parametrize("size, colour, desc", [

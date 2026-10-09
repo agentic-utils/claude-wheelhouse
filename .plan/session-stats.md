@@ -45,7 +45,7 @@ for all three so they line up. Below the panel, two charts share one hour axis. 
 │                                                   │
 │weekly  █████████████░░░░  74% resets Tue 15:01 BST│
 │                                                   │
-│cache   1h · warm · cold at 00:45 BST (in 50m)     │
+│cache   1h · warm until 00:45 BST (50m)            │
 │compact 1× · last 23:05 BST · 201k → 52k           │
 ╰───────────────────────────────────────────────────╯
 ▸ context assembly  ▆ cache  ▆ new  ▆ miss

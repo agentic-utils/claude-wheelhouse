@@ -394,7 +394,7 @@ def cache_lines(snap: Snapshot, now: float) -> list[str]:
     if not snap.expires:
         return ["no cache written yet"]
     if snap.warm(now):
-        return [f"{snap.ttl} · warm · cold at {clock(snap.expires)} (in {until(snap.expires - now)})"]
+        return [f"{snap.ttl} · warm until {clock(snap.expires)} ({until(snap.expires - now)})"]
     return [f"{snap.ttl} · cold since {clock(snap.expires)}", cold_cost(snap)]
 
 
@@ -485,7 +485,7 @@ def stat_rows(view, now: float) -> list[Text]:
         cache = f"{view.warm} of {view.sessions} warm"
         if view.next_cold:
             at, who = view.next_cold
-            cache += f" · next cold {who} at {clock(at)} (in {until(at - now)})"
+            cache += f" · next cold {who} at {clock(at)} ({until(at - now)})"
         return [label("cache") + Text(cache, style=hexc(TEXT))]
     out = [label("cache" if i == 0 else "") + Text(line, style=hexc(TEXT if view.warm(now) or i else HOT))
            for i, line in enumerate(cache_lines(view, now))]
