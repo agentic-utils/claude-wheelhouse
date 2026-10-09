@@ -106,8 +106,8 @@ def permission_body(name: str, inp: dict, ctx) -> str:
         lines.append(inp["plan"])
     else:
         lines.append(f"```json\n{json.dumps(inp, indent=2, ensure_ascii=False)}\n```")
-    lines.append("Allow, Allow always (keep the rule Claude Code suggests) or Deny. "
-                 "A message on this item denies the call and tells Claude what to do instead.")
+    lines.append("Allow, Always (keep the rule Claude Code suggests) or Deny, with the buttons over the "
+                 "answer box. Anything typed in the box goes with a denial, as what to do instead.")
     return "\n\n".join(lines)
 
 

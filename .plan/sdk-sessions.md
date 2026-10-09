@@ -222,7 +222,7 @@ experimentation is low".
 | The host always renders the system prompt fresh (`--system-prompt-snapshot off`), and a hosted session opened in a shell tab does too | Only for adopted sessions | Its recorded prompt would be the other runner's protocol |
 | No wheelhouse plugin in a host (no monitor, no `/wheelhouse` skill) | Load it | The monitor would deliver the person's messages a second time; End and Park come as turns, which `end_session` and `park_session` answer |
 | Permission items are their own kind (`P`, open / allowed / denied); sessions can't post them | Reuse questions | They have their own answers (Allow, Always, Deny) and must never be posted by a session |
-| A message typed on a permission item denies the call with that text | Ignore it | It's the natural "do this instead" |
+| A message typed on a permission item denies the call with that text, at once in either send mode (#53) | Ignore it; queue it like any answer | It's the natural "do this instead", and the session is blocked until it lands |
 | One AskUserQuestion call is one question item; several questions take `n: answer` parts | One item per question | One tool call waits on one answer |
 | Closing an AskUserQuestion item unanswered denies the call | Leave it waiting | The callback would otherwise wait forever |
 | A permission left open by a host that died is denied when the host restarts, with a note that Claude Code will ask again | The PreToolUse `defer` hook from section 2 | Simpler for a prototype; `defer` is the follow-up if lost approvals bite |
@@ -237,7 +237,7 @@ experimentation is low".
 | A host that can't start Claude Code (or resume it) records `stopped: Claude Code didn't start: …` as the session's activity | Leave the reason in the host's log | The session would otherwise just read dead, with nothing on screen saying why |
 | In a hosted session, `get_input(ref)` shows every sent message, marking those not yet delivered "(reaches you as a user turn)", or "(passed to you)" once the host has claimed them | Hide undelivered ones | Hiding also hid a message the host had sent but not yet marked; a claimed one has already gone to a turn or a waiting call |
 | A message handed to a waiting call stays handed until its delivery is recorded; withdrawn meanwhile, it is released to go out as a turn | Forget it once the call resumes | A locked database could otherwise leave it marked delivered without Claude Code ever reading it |
-| The bar carries Allow, Always, Deny, Interrupt, Compact and Shell, shown only when they apply; Compact and Shell confirm first, Interrupt doesn't | Keys, or a new pane | The bar is on every screen and already context-aware; no new key clashes |
+| Allow, Always and Deny sit over the permission item's answer box (#53: from the bar they read as a free-text answer); the bar carries Interrupt, Compact and Shell, shown only when they apply; Compact and Shell confirm first, Interrupt doesn't | Keys, or a new pane | The bar is on every screen and already context-aware; no new key clashes |
 | The monitor and join notice stay for tab sessions | Remove them | Tabs remain supported, and a shell tab uses them |
 
 **Not done or not verified:**

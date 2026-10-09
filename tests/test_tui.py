@@ -1193,7 +1193,7 @@ async def test_the_session_list_shows_context_size(store, sid, tmp_path, monkeyp
 
 
 def shown_buttons(app) -> set[str]:
-    return {b.id for b in app.screen.query("SendBar Button") if b.display}
+    return {b.id for b in app.screen.query("SendBar Button, PermissionButtons Button") if b.display and b.parent.display}
 
 
 @pytest.mark.anyio
@@ -1214,6 +1214,34 @@ async def test_permission_buttons(store, tmp_path, press, status, decision, desc
         assert not {"allow", "always", "deny"} & shown_buttons(app), f"{desc}: answered, the buttons go"
     item = store.item(sid, ref)
     assert item["status"] == status and json.loads(item["answer"])["decision"] == decision, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode_, how, desc", [
+    ("queued", "ctrl+enter", "Ctrl+Enter in Queued mode: denied at once, never queued"),
+    ("immediate", "ctrl+enter", "Ctrl+Enter in Immediate mode: denied the same way"),
+    ("queued", "#deny", "Deny takes what's typed as the reason"),
+])
+async def test_a_message_on_a_permission_denies_it_at_once(store, tmp_path, mode_, how, desc):
+    """Doug (#53): permissions are answered with buttons and don't need to be queued; a
+    typed message stays as an optional reason to deny."""
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.set_mode(sid, mode_)
+    ref = store.post_item(sid, "permission", "Bash: rm -rf build")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        assert app.selected == (sid, ref)
+        assert "Ctrl+Enter denies" in str(app.query_one(Hint).render()), f"{desc}: the hint says so"
+        app.answer.text = "use make clean instead"
+        await (pilot.press(how) if how.startswith("ctrl") else pilot.click(how))
+        await pilot.pause()
+        left = app.answer.text
+    item = store.item(sid, ref)
+    assert item["status"] == "denied", desc
+    assert json.loads(item["answer"])["message"] == "use make clean instead", desc
+    assert store.drafts(sid) == [] and store.pending(sid) == [], f"{desc}: nothing queued or sent as a turn"
+    assert left == "", f"{desc}: the box is cleared"
 
 
 @pytest.mark.anyio

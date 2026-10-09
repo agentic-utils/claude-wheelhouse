@@ -417,8 +417,8 @@ class SendBar(Horizontal):
     answer box (and what's typed in it) where it was.
 
     A session run by a wheelhouse host also gets what its terminal would have given:
-    Allow, Always and Deny on an open permission item, Interrupt, Compact and Shell (the
-    real Claude Code, in a tab), and a line saying what it's doing now."""
+    Interrupt, Compact and Shell (the real Claude Code, in a tab), and a line saying what
+    it's doing now. Allow, Always and Deny sit with the permission item (PermissionButtons)."""
     DEFAULT_CSS = """
     SendBar { height: 1; background: #12122a; }
     SendBar Button { min-width: 12; margin: 0 1 0 0; padding: 0 1; }
@@ -430,9 +430,8 @@ class SendBar(Horizontal):
         # "border: none", and made each button two rows high in a one-row bar, its caption
         # on the row the footer covers
         for label, id_, variant in (("Mode", "mode", "default"), ("Send", "send", "primary"),
-                                    ("Send all", "send-all", "warning"), ("Allow", "allow", "success"),
-                                    ("Always", "always", "primary"), ("Deny", "deny", "error"),
-                                    ("Interrupt", "interrupt", "error"), ("Compact", "compact", "default"),
+                                    ("Send all", "send-all", "warning"), ("Interrupt", "interrupt", "error"),
+                                    ("Compact", "compact", "default"),
                                     ("Shell", "shell", "default")):
             yield Button(label, variant, id=id_, compact=True)
         yield Label("", id="activity")
@@ -456,6 +455,25 @@ class SendBar(Horizontal):
             label.update(text)
 
 
+class PermissionButtons(Horizontal):
+    """Over the answer box while the item in context is an open permission (P) item: the
+    answer is a button, applied at once whatever the session's send mode (#53). Text
+    typed in the box below is optional: Ctrl+Enter denies with it, also at once."""
+    DEFAULT_CSS = """
+    PermissionButtons { height: 1; display: none; background: #12122a; }
+    PermissionButtons Button { min-width: 12; margin: 0 1 0 0; padding: 0 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        for label, id_, variant in (("Allow", "allow", "success"), ("Always", "always", "primary"),
+                                    ("Deny", "deny", "error")):
+            yield Button(label, variant, id=id_, compact=True)   # compact: one row, as in the send bar
+
+    def on_mount(self) -> None:
+        for button in self.query(Button):
+            button.can_focus = False   # a click leaves the answer box, and what's typed, where it was
+
+
 class ThreadView(Screen):
     """One item full screen: its detail, the whole conversation and a compose box. The app's
     refresh tick repaints it, so a reply shows up while it's open; typed text is untouched."""
@@ -469,6 +487,7 @@ class ThreadView(Screen):
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="thread-scroll", classes="panel"):
             yield Transcript(id="thread")
+        yield PermissionButtons()
         yield Compose(id="thread-answer")
         yield Hint(classes="answer-hint")
         yield SendBar()
@@ -497,6 +516,9 @@ class ThreadView(Screen):
             self.text = text
             self.query_one("#thread", Transcript).update(render(blocks))
             self.query_one("#thread-scroll").scroll_end(animate=False)
+
+
+PERMISSION_HINT = "Allow, Always or Deny above, at once · or type what to do instead: Ctrl+Enter denies with it"
 
 
 def hint(sends: str) -> str:
@@ -830,9 +852,9 @@ BUTTONS = {
     "mode": "Mode: the session's send mode, Queued or Immediate (Ctrl+T)",
     "send": "Send (n): send this session's queued answers as one message (Ctrl+S)",
     "send-all": "Send all (n): send every session's queue",
-    "allow": "Allow: let the tool call a permission item asks about run",
+    "allow": "Allow (over the answer box, on a permission item): let the tool call run, at once",
     "always": "Always: allow it, and keep the rule Claude Code suggests",
-    "deny": "Deny: refuse it (or type a message on the item: denied, with what to do instead)",
+    "deny": "Deny: refuse it (or type what to do instead and press Ctrl+Enter: denied with that, at once)",
     "interrupt": "Interrupt: stop the session's current turn, like Esc in Claude Code",
     "compact": "Compact: the session says what to keep, then is compacted with that",
     "shell": "Shell: open the session in a real Claude Code tab; it comes back when you /exit",
@@ -992,6 +1014,7 @@ class WheelhouseApp(App):
                         with VerticalScroll(id="detail-scroll"):
                             yield Transcript("Select an item, or a session to follow its conversation.",
                                          id="detail")
+                        yield PermissionButtons()
                         yield Compose(id="answer")
                         yield Hint(classes="answer-hint")
             with TabPane("Sessions", id="sessions"):
@@ -1371,19 +1394,17 @@ class WheelhouseApp(App):
         else:
             bar.show("mode", f"Mode: {mode(s).capitalize()}", False)
         sends = "send" if s is not None and (mode(s) == "immediate" or self.sends_now(s)) else "queue"
+        asking = self.asking(self.bar_item(self.screen)) is not None
         for h in self.screen.query(Hint):
-            h.set_base(hint(sends))
+            h.set_base(PERMISSION_HINT if asking else hint(sends))
+        for row in self.screen.query(PermissionButtons):
+            row.display = asking
         n = s["drafts"] if s else 0
         bar.show("send", f"Send ({n})", not n)
         bar.show("send-all", f"Send all ({total})", not total)
         hosted = s is not None and runner(s) == "sdk" and self.running(s["id"]) and not s["shell"]
         for button in ("interrupt", "compact", "shell"):
             bar.show(button, button.capitalize(), False, hosted)
-        item = self.bar_item(self.screen)
-        item = item and self.store.item(*item)
-        asking = bool(item) and item["kind"] == "permission" and item["status"] == "open"
-        for button in ("allow", "always", "deny"):
-            bar.show(button, button.capitalize(), False, asking)
         if s is not None and runner(s) == "sdk":
             bar.activity("in a shell tab" if s["shell"] else (s["activity"] or "") if self.running(s["id"]) else "")
         else:
@@ -1640,7 +1661,14 @@ class WheelhouseApp(App):
         if not box:
             return
         s = self.row(target[0])
-        if mode(s) == "immediate":
+        if self.asking(target):   # never queued: the session is waiting on it (#53)
+            try:
+                self.store.answer_permission(*target, "deny", text)
+                self.notify(f"denied {target[1]}, with your message")
+            except KeyError as e:   # answered meanwhile
+                self.notify(str(e.args[0]), severity="warning")
+                return
+        elif mode(s) == "immediate":
             self.store.send(target[0], text, target[1])
             self.notify(f"sent to {aimed(target)}")
         elif self.sends_now(s):   # its old monitor would deliver a draft at once anyway
@@ -1687,6 +1715,11 @@ class WheelhouseApp(App):
         if self.tabs.active == "inbox" and self.selected and self.selected[1]:
             return self.selected
         return None
+
+    def asking(self, target):
+        """The open permission item a target is, if it is one."""
+        item = target and target[1] and self.store.item(*target)
+        return item if item and item["kind"] == "permission" and item["status"] == "open" else None
 
     def sent_note(self, sid: str, n: int) -> str:
         s = self.store.session(sid)
@@ -1753,14 +1786,20 @@ class WheelhouseApp(App):
 
     @on(Button.Pressed, "#allow, #always, #deny")
     def permission_pressed(self, event: Button.Pressed) -> None:
-        """Answer a permission item. A message typed on it instead denies with that text."""
+        """Answer a permission item, at once. Deny takes what's typed in the box below, if
+        anything, as what to do instead."""
         target = self.bar_item(event.button.screen)
         if not target:
             return
+        box, aimed_at = self.composing()
+        reason = emoji.convert(box.text.strip()) if box is not None and aimed_at == target and event.button.id == "deny" else ""
         try:
-            self.store.answer_permission(*target, event.button.id)
+            self.store.answer_permission(*target, event.button.id, reason)
         except (KeyError, SessionGone) as e:   # answered meanwhile, or the session went
             self.notify(str(e.args[0] if e.args else e), severity="warning")
+        else:
+            if reason:
+                box.text = ""
         self.refresh_data()
 
     @on(Button.Pressed, "#interrupt, #compact, #shell")

@@ -82,10 +82,11 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   conversation pane and answer from the inbox, where your messages arrive as ordinary
   turns. Claude Code still loads your CLAUDE.md, settings, permission mode, hooks,
   plugins, skills and MCP servers. A tool call your permission settings would have asked
-  about becomes a permission item (`P1`): Allow, Always (keeps the rule Claude Code
-  suggests) or Deny, from the bar; a message typed on it denies the call with your text as
-  what to do instead. A question Claude asks with its question dialog becomes a question
-  item. The bar also has Interrupt, Compact (the session is asked what to keep, then
+  about becomes a permission item (`P1`), answered with the Allow, Always (keeps the rule
+  Claude Code suggests) and Deny buttons over its answer box, at once in either send mode.
+  Text typed in the box is optional: Deny or Ctrl+Enter denies the call with it as what to
+  do instead, also at once. A question Claude asks with its question dialog becomes a
+  question item. The bar has Interrupt, Compact (the session is asked what to keep, then
   compacted with that, and the bar reports the token drop) and Shell, which hands the
   session to the real Claude Code in a tab and takes it back when you `/exit` there, plus
   a line saying what the session is doing. Closing the wheelhouse leaves the hosts
