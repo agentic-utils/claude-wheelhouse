@@ -299,6 +299,31 @@ def test_the_most_recent_rename_wins(store, tmp_path, monkeypatch, steps, expect
     assert (store.session(sid)["name"], took) == expected, desc
 
 
+@pytest.mark.parametrize("transcript_title, name, expected, desc", [
+    ("A", "B", ("B", False), "renamed in the wheelhouse under the first rename code: stamped, an older /rename stays out"),
+    ("A", "", ("", False), "its name cleared there: the same"),
+    ("A", "A", ("Columbo check", True), "its name the /rename taken: a /rename that code missed is taken"),
+    (None, "demo", ("Columbo check", True), "never renamed: the same"),
+    ("no column", "demo", ("Columbo check", True), "a store from before renaming: the same"),
+])
+def test_upgrading_keeps_renames_made_before_they_were_stamped(db_file, transcript_title, name, expected, desc):
+    from claude_wheelhouse import store as store_module
+    old = Store(db_file)
+    sid = old.create_session("/tmp/x", name="demo")
+    old.db.execute("UPDATE sessions SET name = ?, created_at = ? WHERE id = ?", (name, minute(10), sid))
+    old.db.execute("ALTER TABLE sessions DROP COLUMN renamed_at")   # as before the change
+    if transcript_title != "no column":
+        old.db.execute("ALTER TABLE sessions ADD COLUMN transcript_title TEXT")
+        old.db.execute("UPDATE sessions SET transcript_title = ?", (transcript_title,))
+    old.db.close()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(store_module, "stamp", lambda: minute(40))   # the upgrade
+        upgraded = Store(db_file)
+    took = upgraded.take_title(sid, minute(20), "Columbo check")   # a /rename made before the upgrade
+    assert (upgraded.session(sid)["name"], took) == expected, desc
+    assert Store(db_file).session(sid)["renamed_at"] == upgraded.session(sid)["renamed_at"], "the backfill runs once"
+
+
 def test_renaming_a_session_that_has_gone_says_so(store):
     with pytest.raises(SessionGone):
         store.rename("gone", "x")

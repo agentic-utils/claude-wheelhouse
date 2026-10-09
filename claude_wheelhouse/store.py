@@ -183,6 +183,10 @@ def renamed_since(session, at: str) -> bool:
     return datetime.fromisoformat(at) > datetime.fromisoformat(last)
 
 
+def columns(db, table: str) -> set[str]:
+    return {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
+
+
 def db_path() -> Path:
     path = Path(os.environ.get("WHEELHOUSE_DB") or DEFAULT_DB).expanduser()
     if str(path.resolve()).startswith("/mnt/"):
@@ -206,9 +210,18 @@ class Store:
             for statement in SCHEMA.split(";"):
                 if statement.strip():
                     db.execute(statement)
+            added = set()
             for table, column, kind in ADDED_COLUMNS:
-                if column not in {r[1] for r in db.execute(f"PRAGMA table_info({table})")}:
+                if column not in columns(db, table):
                     db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+                    added.add(column)
+            # the first rename code kept the last /rename taken in transcript_title and didn't
+            # stamp a rename in the wheelhouse: a name that differs from it was set there, so it
+            # is stamped now, or an older /rename would undo it. Every other row keeps NULL, its
+            # creation standing in, so a /rename that code never took is still taken.
+            if "renamed_at" in added and "transcript_title" in columns(db, "sessions"):
+                db.execute("UPDATE sessions SET renamed_at = ? WHERE transcript_title IS NOT NULL "
+                           "AND transcript_title IS NOT name", (stamp(),))
             for statement in INDEXES.split(";"):
                 if statement.strip():
                     db.execute(statement)
