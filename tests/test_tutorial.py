@@ -349,9 +349,9 @@ async def test_closing_the_decision_ticks_it(store, sid, tut):
             await pilot.pause()
         assert step not in app._checklist_text, "nor does reading it"
         items.focus()
-        await pilot.press("x")
+        await pilot.press("delete")
         await pilot.pause()
-        assert store.item(tut, "D1")["status"] == "closed" and step in app._checklist_text, "closing it with X does"
+        assert store.item(tut, "D1")["status"] == "closed" and step in app._checklist_text, "closing it with Delete does"
     async with WheelhouseApp(store).run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         assert step in pilot.app._checklist_text, "kept across a restart of the app"

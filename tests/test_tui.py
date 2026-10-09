@@ -661,9 +661,9 @@ async def step(app, pilot, how, sid, other):
         await pilot.pause()
         if how != "unpark":
             await pilot.press("y")
-    elif how == "x":
+    elif how == "delete":
         app.items_table.focus()
-        await pilot.press("x")
+        await pilot.press("delete")
     elif how in ("up", "down"):
         app.session_list.focus()
         await pilot.press(how)
@@ -694,12 +694,12 @@ async def step(app, pilot, how, sid, other):
         await pilot.pause()
         if isinstance(app.screen, Confirm):   # the offer to relaunch a dead session
             await pilot.press("n")
-    elif how == "mark x":   # A's and B's questions marked, closed together
+    elif how == "mark delete":   # A's and B's questions marked, closed together
         app.items_table.set_marks({r.key.value for r in app.items_table.ordered_rows
                                    if r.key.value.split("|")[1].startswith("Q")})
         await pilot.pause()
         app.items_table.focus()
-        await pilot.press("x")
+        await pilot.press("delete")
     elif how == "thread":   # the highlighted item's thread, full screen
         app.items_table.focus()
         await pilot.press("enter")
@@ -719,7 +719,7 @@ async def step(app, pilot, how, sid, other):
 @pytest.mark.parametrize("steps, unfiltered_current, filtered_current, desc", [
     (["park", "unpark"], "A", "A", "Park follows the session (review 10): it stays current, Unpark one press away"),
     (["park", "up"], "B", "B", "then arrowing onto the other session follows it (review 10, bug 2)"),
-    (["x"], "B", "A", "closing A's only item: unfiltered, the next item's session is current, list and all"),
+    (["delete"], "B", "A", "closing A's only item: unfiltered, the next item's session is current, list and all"),
     (["end"], "B", "B", "End"),
     (["ended elsewhere"], "B", "B", "the current session ending elsewhere"),
     (["down"], "B", "B", "an arrow in the session list"),
@@ -730,7 +730,7 @@ async def step(app, pilot, how, sid, other):
     (["park", "permission", "unpark"], "A", "A", "Unpark with A's permission item highlighted"),
     (["permission", "enter"], "A", "A", "Enter on A's row with its permission item highlighted"),
     (["question", "enter"], "A", "A", "Enter on A's row with its question highlighted"),
-    (["mark x"], "A", "A", "closing A's and B's questions together"),
+    (["mark delete"], "A", "A", "closing A's and B's questions together"),
     (["thread", "back"], "A", "A", "a thread open, then Esc"),
     (["permission", "thread", "back"], "A", "A", "a permission item's thread open, then Esc"),
     (["burst"], "B", "B", "Down, Ctrl+Enter and Ctrl+S at once: all on B (review 11, P1)"),
@@ -1231,14 +1231,18 @@ async def test_a_refresh_racing_a_move_keeps_pane_and_highlight_together(store, 
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("kind, status, finished, focus_box, expected, desc", [
-    ("question", "open", False, False, "closed", "x closes a question"),
-    ("question", "answered", False, False, "closed", "an answered one too"),
-    ("question", "closed", True, False, "answered", "x on a closed question (shown with f) reopens it"),
-    ("task", "running", False, False, "running", "a task's status is the session's: x leaves it"),
-    ("question", "open", False, True, "open", "in the answer box x is just a letter"),
+@pytest.mark.parametrize("key, kind, status, finished, focus_box, expected, desc", [
+    ("delete", "question", "open", False, False, "closed", "Delete closes a question"),
+    ("backspace", "question", "open", False, False, "closed", "and so does Backspace"),
+    ("delete", "question", "answered", False, False, "closed", "an answered one too"),
+    ("delete", "question", "closed", True, False, "answered", "Delete on a closed question (shown with f) reopens it"),
+    ("backspace", "question", "closed", True, False, "answered", "as does Backspace"),
+    ("delete", "task", "running", False, False, "running", "a task's status is the session's: Delete leaves it"),
+    ("x", "question", "open", False, False, "open", "x no longer closes (#64)"),
+    ("backspace", "question", "open", False, True, "open", "in the answer box Backspace edits the text"),
+    ("delete", "question", "open", False, True, "open", "and so does Delete"),
 ])
-async def test_x_closes_and_reopens_questions(store, sid, kind, status, finished, focus_box, expected, desc):
+async def test_delete_closes_and_reopens_questions(store, sid, key, kind, status, finished, focus_box, expected, desc):
     ref = store.post_item(sid, kind, "which db?", status=status)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -1250,7 +1254,7 @@ async def test_x_closes_and_reopens_questions(store, sid, kind, status, finished
         await pilot.pause()
         if focus_box:
             app.answer.focus()
-        await pilot.press("x")
+        await pilot.press(key)
         await pilot.pause()
     assert store.item(sid, ref)["status"] == expected, desc
 
@@ -1295,19 +1299,19 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
         await refresh(pilot, sid)
         assert [items.get_row_at(i)[1] for i in range(items.row_count)] == [q, d], "moving on leaves it there"
         items.move_cursor(row=1)
-        await pilot.press("x")
+        await pilot.press("delete")
         await pilot.pause()
-        assert store.item(sid, d)["status"] == "closed", "x closes it"
+        assert store.item(sid, d)["status"] == "closed", "Delete closes it"
         assert [items.get_row_at(i)[1] for i in range(items.row_count)] == [q], "then it's finished"
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("start, finished, expected, desc", [
-    ("unseen", False, "closed", "x closes an unseen decision"),
+    ("unseen", False, "closed", "Delete closes an unseen decision"),
     ("seen", False, "closed", "and a seen one"),
-    ("closed", True, "seen", "x on a closed decision (shown with f) reopens it as seen"),
+    ("closed", True, "seen", "Delete on a closed decision (shown with f) reopens it as seen"),
 ])
-async def test_x_closes_and_reopens_decisions(store, sid, start, finished, expected, desc):
+async def test_delete_closes_and_reopens_decisions(store, sid, start, finished, expected, desc):
     d = store.post_item(sid, "decision", "cache in SQLite", alternative="Postgres", why="local", reverse="swap")
     if start == "closed":
         store.close_decision(sid, d)
@@ -1319,7 +1323,7 @@ async def test_x_closes_and_reopens_decisions(store, sid, start, finished, expec
         app.items_table.focus()
         app.items_table.move_cursor(row=0)
         await pilot.pause()
-        await pilot.press("x")
+        await pilot.press("delete")
         await pilot.pause()
     assert store.item(sid, d)["status"] == expected, desc
 
@@ -1374,7 +1378,7 @@ async def test_x_closes_the_marked_questions_and_reopens_them(store, sid):
         await refresh(pilot, sid)
         assert f"{sid}|{d}" in items.rows, "rebuilt"
         assert sorted(k.split("|")[1] for k in items.marked) == [q1, q3, t], "marks survive a refresh"
-        await pilot.press("x")
+        await pilot.press("backspace")
         await pilot.pause()
         assert [store.item(sid, r)["status"] for r in (q1, q2, q3, t)] == ["closed", "open", "closed", "running"]
         assert items.marked == set()
@@ -1382,9 +1386,9 @@ async def test_x_closes_the_marked_questions_and_reopens_them(store, sid):
         await pilot.pause()
         items.set_marks({f"{sid}|{q1}", f"{sid}|{q3}"})
         await pilot.pause()
-        await pilot.press("x")
+        await pilot.press("delete")
         await pilot.pause()
-    assert [store.item(sid, r)["status"] for r in (q1, q3)] == ["answered", "answered"], "all closed: X reopens"
+    assert [store.item(sid, r)["status"] for r in (q1, q3)] == ["answered", "answered"], "all closed: Delete reopens"
 
 
 @pytest.mark.anyio

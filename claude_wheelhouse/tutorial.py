@@ -57,7 +57,7 @@ STEPS = (
     ("queue", "Answer both questions", "type in the box, Ctrl+Enter queues each answer"),
     ("send", "Send them together", "Ctrl+S, or the Send button under the session list"),
     ("reply", "See the session's reply", "⏳ turns to answered as it replies"),
-    ("decision", "Read and close the decision", "highlight D1 to read it, then X closes it, as it does a question"),
+    ("decision", "Read and close the decision", "highlight D1 to read it, then Delete (or Backspace) in the item list closes it, as it does a question"),
     ("permission", "Allow the permission prompt", "highlight P1, then the Allow button"),
     ("follow", "Follow the conversation", "the 💬 Conversation row, or the session on the left"),
     ("end", "End the session", "highlight it in the session list, then End below: its items go with it"),

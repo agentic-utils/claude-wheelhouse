@@ -21,7 +21,7 @@ In the order they will meet it:
    all in the inbox (`1`), open questions first. `F` shows finished items.
 3. **Answering.** Enter opens a thread; Ctrl+Enter submits. The session's reply declares
    the question's state: `⏳` while it's the session's move, `open` when it needs them
-   again, `answered` once it can proceed. `X` closes a question.
+   again, `answered` once it can proceed. Delete or Backspace in the item list closes a question (#64).
 4. **Send mode.** Queued (the default) holds answers until Ctrl+S sends the session's
    queue as one message, or Send all sends every session's. Immediate sends on submit.
    Ctrl+T switches; Ctrl+R takes a queued answer back. This is the least familiar
@@ -71,7 +71,7 @@ Shape of B:
 - `make tutorial` (and a hint on first run when the database is empty) launches the demo
   session in `~/.local/state/claude-wheelhouse/claude-wheelhouse-tutorial/`, a scratch directory it owns.
 - A short checklist in the side pane advances as the user does each step: open a question,
-  queue two answers, send with Ctrl+S, see the reply, read the decision and close it with X, follow the
+  queue two answers, send with Ctrl+S, see the reply, read the decision and close it with Delete, follow the
   conversation, end the session. Steps are detected from store state, not timers.
 - The brief tells the session to explain nothing in chat that the checklist covers, so
   the lesson happens in the wheelhouse.

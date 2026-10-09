@@ -22,8 +22,8 @@ seems to conflict with them, follow yours.
   running tasks, as items straight away. Check `list_items` first so you don't post twice.
 - Keep statuses current with `update_item`: tasks `todo running blocked waiting done
   dropped`; questions `open answered closed`; agents `running done failed`. Add a `note` for progress worth keeping.
-- Don't close a question yourself. Closing is the person's call (they press X in the
-  wheelhouse), unless the work it unblocked is done.
+- Don't close a question yourself. Closing is the person's call (they press Delete in the
+  wheelhouse's item list), unless the work it unblocked is done.
 - When a message arrives on a ref, answer it with `reply(ref, text, status)` as well as in
   chat, every time. Sending doesn't change a question's status: your reply declares it. On
   a question, `status` is required: `open` while you are still waiting on the person (you

@@ -60,7 +60,7 @@ TAB_RELAUNCH = "a session in a tab relaunches once it has exited: /exit it there
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777"}
 PENDING = {"end": "ending", "park": "parking"}
-CLOSABLE = {"question": "answered", "decision": "seen"}   # what X closes, and what reopening makes it
+CLOSABLE = {"question": "answered", "decision": "seen"}   # what Delete closes, and what reopening makes it
 # where each module slot (api.SLOTS) is mounted: at the end of this container
 SLOT_PARENTS = {"inbox.side": "#items-pane"}
 LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of its parent
@@ -345,7 +345,10 @@ class ItemList(DataTable):
     last one toggled; Space and Shift+Up/Down do the same from the keyboard, for terminals
     that keep Shift+click for their own text selection."""
 
-    BINDINGS = [Binding("space", "toggle_mark", "Mark", show=False),
+    # here only, not the app's: in an answer box Backspace and Delete edit the text (#64)
+    BINDINGS = [Binding("delete", "app.close_question", "Close", key_display="Del"),
+                Binding("backspace", "app.close_question", "Close", show=False),
+                Binding("space", "toggle_mark", "Mark", show=False),
                 Binding("shift+up", "extend(-1)", "Extend up", show=False),
                 Binding("shift+down", "extend(1)", "Extend down", show=False)]
 
@@ -902,7 +905,7 @@ DESCRIBE = {
     "clear_filter": "Clear the marks, else show every session's items again",
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
-    "close_question": "Close the question or decision (or every marked one); on a closed one, reopen it",
+    "app.close_question": "Close the highlighted question or decision (or every marked one); on a closed one, reopen it",
     "help": "This list",
     "quit": "Quit the wheelhouse (sessions carry on without it)",
     "toggle_mark": "Mark or unmark the highlighted row",
@@ -943,7 +946,7 @@ SEND_RULES = (
     "**Immediate**: Ctrl+Enter sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
 MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
-         "keep Shift+click for itself: Space and Shift+Up/Down do the same), then X closes them together. "
+         "keep Shift+click for itself: Space and Shift+Up/Down do the same), then Delete or Backspace closes them together. "
          "Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back.")
@@ -1061,7 +1064,7 @@ class WheelhouseApp(App):
     Footer {{ scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }}
     """
 
-    # keys shown in upper case, the usual convention: X is the x key, not Shift+X
+    # keys shown in upper case, the usual convention: F is the f key, not Shift+F
     BINDINGS = [
         Binding("ctrl+enter", "submit", "Submit", key_display="Ctrl+Enter"),
         Binding("ctrl+j", "submit", "Submit", show=False),   # Ctrl+Enter, as most terminals send it
@@ -1075,7 +1078,6 @@ class WheelhouseApp(App):
         # one key, two bindings: the footer shows the one that applies (check_action)
         Binding("f", "show_finished(True)", "Show finished", key_display="F"),
         Binding("f", "show_finished(False)", "Hide finished", key_display="F"),
-        Binding("x", "close_question", "Close", key_display="X"),
         Binding("question_mark", "help", "Keys", key_display="?"),
         Binding("q", "quit", "Quit", key_display="Q"),
     ]
@@ -1900,7 +1902,7 @@ class WheelhouseApp(App):
 
     @session_action
     def action_close_question(self) -> None:
-        """Closing a question or a decision is the person's call: x closes the highlighted
+        """Closing a question or a decision is the person's call: Delete or Backspace in the item list closes the highlighted
         (or open) one, and on a closed one (shown with f) reopens it, a question as
         answered and a decision as seen."""
         if isinstance(self.focused, (TextArea, Input)):
@@ -1930,7 +1932,7 @@ class WheelhouseApp(App):
             self.store.update_item(item["session_id"], item["ref"], status="closed" if closed else "answered")
 
     def close_marked(self) -> None:
-        """X on a multi-selection: closes its questions and decisions, or reopens them if
+        """Delete on a multi-selection: closes its questions and decisions, or reopens them if
         they're all closed. Tasks and subagents in it are left alone."""
         closable = [it for key in self.items_table.keys() if key in self.items_table.marked
                      if (it := self.store.item(*key.split("|"))) and it["kind"] in CLOSABLE]
