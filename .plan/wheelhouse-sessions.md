@@ -310,8 +310,13 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   on or describe it. The list's highlight follows the session in context: highlighting an
   item, or following a session, moves it to that session, as the app's own move, which
   filters nothing. The person moving it follows the session they move to, as a click
-  always did (filter and 💬 Conversation row); only a click or Enter offers to relaunch a
-  dead one. (Review 8 replaced the first D20, where the buttons acted on the highlighted
+  always did (filter and 💬 Conversation row), at once on every arrow: no follow waits on a
+  timer for a refresh or a key to overtake (review 11 dropped the 0.1 s debounce, and the
+  class of bugs in its window). The first visit to a session with a 1.2 MB transcript
+  costs about 15 ms to follow and 250 to 350 ms to lay out its conversation; later visits
+  a few milliseconds. Only a click or Enter offers to relaunch a dead one. The item list's
+  cursor goes to the selection by key whenever they differ, except over an arrow of the
+  person's whose highlight hasn't been handled yet. (Review 8 replaced the first D20, where the buttons acted on the highlighted
   session and the keys on the session in context: the two could differ on screen, and the
   tutorial's "Ctrl+S, or the Send button" sent another session's queue.) A full-screen
   item has no session list, so its bar keeps Mode, Send, Interrupt, Compact and Shell, for

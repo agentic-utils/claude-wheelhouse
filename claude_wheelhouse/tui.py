@@ -1079,19 +1079,15 @@ class WheelhouseApp(App):
         Binding("q", "quit", "Quit", key_display="Q"),
     ]
 
-    # seconds the session list's highlight rests before its session is followed: following
-    # reads the transcript, tens of milliseconds on a big one. 0 follows at once (tests)
-    FOLLOW_DELAY = 0.1
-
     def __init__(self, store: Store | None = None):
         super().__init__()
-        self.follow_timer = None
         ScrollBar.renderer = KnurlRender   # Textual's hook for every scrollbar: a class variable
         self.store = store or Store()
         self.wake = liveness.WakeDetector()
         self.waking = False
         self.frame = 0
         self.filter_sid: str | None = None
+        self.items_cursor: str | None = None   # where the items' cursor was last left, by the app or the person
         self.show_finished = False   # done, dropped, closed and failed items, after the rest
         # the highlighted row: (session id, item ref), or (session id, None) for the
         # session's conversation, the first row while a session is selected
@@ -1405,18 +1401,25 @@ class WheelhouseApp(App):
             rows_out.append((f"{it['session_id']}|{it['ref']}", cells))
         table.marked &= {k for k, _ in rows_out}   # a marked item that went is unmarked
         rows_out = [(k, marked(cells) if k in table.marked else cells) for k, cells in rows_out]
-        if fill(table, rows_out):
-            key = self.selected and f"{self.selected[0]}|{self.selected[1] or ''}"
-            with table.prevent(DataTable.RowHighlighted):
-                if key in table.rows:   # by key: items arriving above must not move the highlight
+        arrow = table.cursor_key()
+        pending = arrow != self.items_cursor   # the person's move, its highlight not yet handled
+        rebuilt = fill(table, rows_out)
+        pending = pending and arrow in table.rows
+        # the cursor goes by key, rebuilt or not: items arriving above must not move it, and a
+        # selection made without it (following the session already followed) takes it. Except
+        # to the person's arrow, which pick_item is about to select
+        key = arrow if pending else self.selected and f"{self.selected[0]}|{self.selected[1] or ''}"
+        with table.prevent(DataTable.RowHighlighted):
+            if key in table.rows:
+                if key != table.cursor_key():
                     table.move_cursor(row=table.get_row_index(key), animate=False)
-                elif table.row_count:
-                    table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
-            if key not in table.rows and table.row_count:   # its item went: take the one now under the cursor
-                # the list goes with it: one current session (D22). Unless the person's arrow is
-                # resting on another session, waiting to follow it: their highlight wins
-                self.select_row(table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value,
-                                move_list=self.follow_timer is None)
+            elif rebuilt and table.row_count:
+                table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
+        if not pending:   # where the app put it; an arrow pending stays pending
+            self.items_cursor = table.cursor_key()
+        if rebuilt and key not in table.rows and table.row_count:   # its item went: take the one now
+            # under the cursor, the list going with it: one current session (D22)
+            self.select_row(table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value)
         if not table.row_count:   # its item (or followed session) went and none is left: nothing selected
             self.selected = None
         if self.selected is None and self.box_target is not None:   # nor the box aimed at what went
@@ -1802,7 +1805,6 @@ class WheelhouseApp(App):
     def follow(self, sid: str) -> None:
         """Filter the items to the session and highlight its conversation row, so the right
         pane follows the conversation rather than whichever question comes first."""
-        self.stop_follow_timer()
         self.filter_sid = sid
         self.selected = (sid, None)
         self.saw(sid, None)
@@ -1819,16 +1821,17 @@ class WheelhouseApp(App):
             return
         if table.coordinate_to_cell_key((table.cursor_row, 0)).row_key != event.row_key:
             return   # stale: a rebuild put the cursor back before this was handled
+        self.items_cursor = event.row_key.value
         self.select_row(event.row_key.value)
         self.saw(*self.selected)
 
-    def select_row(self, key: str, move_list: bool = True) -> None:
+    def select_row(self, key: str) -> None:
         sid, ref = key.split("|")
         if self.selected != (sid, ref or None):
             self.selected = (sid, ref or None)
             if ref:
                 self.store.mark_seen(sid, ref)   # a no-op unless it's an unseen decision
-            self.retarget(move_list)
+            self.retarget()
             self.paint_detail()
             self.each_pane("tick")
             if self.viewing:
@@ -1847,26 +1850,13 @@ class WheelhouseApp(App):
     def pick_session_row(self, event: DataTable.RowHighlighted) -> None:
         """The person moving the list's highlight: that session becomes the current one, its
         conversation followed, as a click does, though only Enter or a click offers to relaunch
-        a dead one. The app's own moves (highlight_session, a rebuild) post none."""
+        a dead one. The app's own moves (highlight_session, a rebuild) post none. At once, on
+        every step: no follow waits on a timer for something else to overtake."""
         if event.row_key.value != self.current_session():
             return   # stale: the cursor moved on before this was handled
-        self.stop_follow_timer()
         if event.row_key.value != self.filter_sid:
-            if self.FOLLOW_DELAY:   # held arrows stay quick: only where the highlight rests is followed
-                self.follow_timer = self.set_timer(self.FOLLOW_DELAY, self.follow_current)
-            else:
-                self.follow(event.row_key.value)
+            self.follow(event.row_key.value)
         self.paint_session_info()
-
-    def follow_current(self) -> None:
-        self.follow_timer = None
-        if (sid := self.current_session()) and sid != self.filter_sid:
-            self.follow(sid)
-
-    def stop_follow_timer(self) -> None:
-        if self.follow_timer is not None:
-            self.follow_timer.stop()
-            self.follow_timer = None
 
     def highlight_session(self, sid: str | None) -> None:
         """Keep the session list's highlight on the session in context: one current session
@@ -1885,7 +1875,6 @@ class WheelhouseApp(App):
         if self.items_table.marked:   # Esc drops a multi-selection first
             self.items_table.set_marks(set())
             return
-        self.stop_follow_timer()   # a follow still waiting on the highlight would undo it
         self.clear_filter()
         self.paint_items()
         self.retarget()

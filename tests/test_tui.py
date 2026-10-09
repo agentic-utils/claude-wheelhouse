@@ -12,10 +12,9 @@ from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, T
 from claude_wheelhouse import launch, stats, transcript
 from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
-from claude_wheelhouse.tui import (MATRIX, NOTHING_SELECTED, VOICE, WheelhouseApp, Choice, Confirm, Folders, Hint,
-                                   SendBar, ThreadView, Transcript, render)
-
-REAL_FOLLOW_DELAY = WheelhouseApp.FOLLOW_DELAY   # read at import, before conftest sets it to 0 for each test
+from claude_wheelhouse.store import mode
+from claude_wheelhouse.tui import (MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice, Confirm,
+                                   Folders, Hint, PermissionButtons, SendBar, ThreadView, Transcript, hint, render)
 
 
 @pytest.mark.anyio
@@ -602,10 +601,8 @@ async def test_enter_on_a_session_follows_its_conversation(store, sid, tmp_path,
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("delay, desc", [(0, "followed at once"), (5, "with the debounce: the click doesn't wait")])
-async def test_one_click_on_a_session_follows_it(store, sid, tmp_path, monkeypatch, delay, desc):
+async def test_one_click_on_a_session_follows_it(store, sid, tmp_path, monkeypatch):
     """Once (review 9): the click's highlight and its selection don't each follow it."""
-    monkeypatch.setattr(WheelhouseApp, "FOLLOW_DELAY", delay)
     other = store.create_session(str(tmp_path), name="other")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -617,29 +614,8 @@ async def test_one_click_on_a_session_follows_it(store, sid, tmp_path, monkeypat
         row = [table.coordinate_to_cell_key((i, 0)).row_key.value for i in range(table.row_count)].index(other)
         await pilot.click("#session-list", offset=(4, row + 1))   # below the header row
         await pilot.pause()
-        assert app.viewing == other and "other · conversation" in app._detail_text, desc
-        assert (follows, app.follow_timer) == ([other], None), desc
-
-
-@pytest.mark.anyio
-async def test_held_arrows_follow_where_the_highlight_rests(store, sid, tmp_path, monkeypatch):
-    """Review 9: following reads the transcript, so the list's arrows follow after a short
-    rest, not on every step. The rest is long here, and its timer is run by hand."""
-    monkeypatch.setattr(WheelhouseApp, "FOLLOW_DELAY", 5)
-    others = [store.create_session(str(tmp_path), name=n) for n in ("bee", "sea")]
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        follows = []
-        follow = app.follow
-        monkeypatch.setattr(app, "follow", lambda s: (follows.append(s), follow(s)))
-        app.session_list.focus()
-        await pilot.press("down", "down")
-        await pilot.pause()
-        assert follows == [] and app.current_session() == others[1], "the highlight moves; nothing followed yet"
-        app.follow_timer.stop()
-        app.follow_current()
-        assert follows == [others[1]] and app.filter_sid == others[1], "then the one it rests on, once"
+        assert app.viewing == other and "other · conversation" in app._detail_text
+        assert follows == [other]
 
 
 def assert_one_current(app, desc):
@@ -647,15 +623,33 @@ def assert_one_current(app, desc):
     or describes a session agrees on it: the buttons, Ctrl+S, Ctrl+T and the hint
     (bar_session), the modules (focus_sid), the selection and the answer box's target, whose
     session's mode Ctrl+Enter answers by, and the session info. Each may be None, where
-    nothing is in context (an empty inbox selects nothing), but never another session."""
-    assert app.follow_timer is None, f"{desc}: settled, no follow waiting"
+    nothing is in context (an empty inbox selects nothing), but never another session. And
+    what shows agrees: the items' cursor is on the selection, the hint and the permission
+    buttons are for the item in context, the conversation buttons for the current session."""
     current = app.current_session()
+    thread = isinstance(app.screen, ThreadView)
+    box_target = (app.screen.sid, app.screen.ref) if thread else app.box_target   # a thread's box answers it
     said = {"bar": app.bar_session(app.screen), "focus_sid": app.focus_sid(),
-            "selected": app.selected and app.selected[0], "box_target": app.box_target and app.box_target[0]}
+            "selected": app.selected and app.selected[0], "box_target": box_target and box_target[0]}
     assert {k: v for k, v in said.items() if v not in (None, current)} == {}, f"{desc}: current {current}, {said}"
-    assert app.box_target == app.selected, f"{desc}: the box answers what the pane shows"
+    assert box_target == app.selected, f"{desc}: the box answers what the pane shows"
     info = app.display_name(app.row(current)) if current else "Select a session to see its description."
     assert app._info_text.split("\n")[0] == info, f"{desc}: the session info"
+    table = app.items_table
+    if app.selected:
+        under = table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value
+        assert under == f"{app.selected[0]}|{app.selected[1] or ''}", f"{desc}: the items' cursor on {under}"
+    in_context = box_target
+    item = in_context and in_context[1] and app.store.item(*in_context)
+    asking = bool(item) and item["kind"] == "permission" and item["status"] == "open"
+    s = app.row(app.bar_session(app.screen)) if app.bar_session(app.screen) else None
+    sends = "send" if s and (mode(s) == "immediate" or app.sends_now(s)) else "queue"
+    assert [h.base for h in app.screen.query(Hint)] == [PERMISSION_HINT if asking else hint(sends)], f"{desc}: the hint"
+    assert [p.display for p in app.screen.query(PermissionButtons)] == [asking], f"{desc}: the permission buttons"
+    if not thread:
+        buttons = [(b.id, str(b.label), b.disabled, b.display) for b in app.conversation_buttons.query(Button)]
+        expect = app.controls(next((x for x in app.sessions if x["id"] == current), None))
+        assert buttons == expect, f"{desc}: the conversation buttons"
 
 
 async def step(app, pilot, how, sid, other):
@@ -686,6 +680,35 @@ async def step(app, pilot, how, sid, other):
     elif how == "refresh":   # a new item, above the selected one
         app.store.post_item(other, "question", "B's second")
         app.refresh_data()
+    elif how in ("question", "permission"):   # the person highlights one of A's items
+        key = next(r.key.value for r in app.items_table.ordered_rows
+                   if r.key.value.startswith(f"{sid}|") and not r.key.value.endswith("|") and app.store.item(*r.key.value.split("|"))["kind"] == how)
+        app.items_table.move_cursor(row=app.items_table.get_row_index(key))
+    elif how == "enter":   # on A's row in the session list
+        app.session_list.move_cursor(row=app.session_list.get_row_index(sid))
+        await pilot.pause()
+        app.session_list.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        if isinstance(app.screen, Confirm):   # the offer to relaunch a dead session
+            await pilot.press("n")
+    elif how == "mark x":   # A's and B's questions marked, closed together
+        app.items_table.set_marks({r.key.value for r in app.items_table.ordered_rows
+                                   if r.key.value.split("|")[1].startswith("Q")})
+        await pilot.pause()
+        app.items_table.focus()
+        await pilot.press("x")
+    elif how == "thread":   # the highlighted item's thread, full screen
+        app.items_table.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        app.screen.focus_next()   # off its box, so Esc closes it
+    elif how == "back":
+        await pilot.press("escape")
+    elif how == "burst":   # typed for A's item, then at once: Down, Ctrl+Enter, Ctrl+S
+        app.answer.text = "burst"
+        app.session_list.focus()
+        await pilot.press("down", "ctrl+j", "ctrl+s")
     await pilot.pause()
 
 
@@ -701,6 +724,14 @@ async def step(app, pilot, how, sid, other):
     (["click"], "B", "B", "a click in the session list"),
     (["esc"], None, None, "Esc: whichever item is then highlighted"),
     (["refresh"], "A", "A", "a refresh bringing a new item"),
+    (["permission", "park"], "A", "A", "Park with A's permission item highlighted (review 11, bug 1)"),
+    (["park", "permission", "unpark"], "A", "A", "Unpark with A's permission item highlighted"),
+    (["permission", "enter"], "A", "A", "Enter on A's row with its permission item highlighted"),
+    (["question", "enter"], "A", "A", "Enter on A's row with its question highlighted"),
+    (["mark x"], "A", "A", "closing A's and B's questions together"),
+    (["thread", "back"], "A", "A", "a thread open, then Esc"),
+    (["permission", "thread", "back"], "A", "A", "a permission item's thread open, then Esc"),
+    (["burst"], "B", "B", "Down, Ctrl+Enter and Ctrl+S at once: all on B (review 11, P1)"),
 ])
 async def test_one_current_session_whatever_happens(store, sid, tmp_path, monkeypatch, steps, unfiltered_current,
                                                     filtered_current, desc, filtered):
@@ -710,9 +741,13 @@ async def test_one_current_session_whatever_happens(store, sid, tmp_path, monkey
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead")   # parks and ends at once, on a yes
     store.set_mode(sid, "immediate")
     mine = store.post_item(sid, "question", "A's")
+    if "permission" in steps:
+        store.post_item(sid, "permission", "Bash: rm -rf build")
     other = store.create_session(str(tmp_path), name="other")
     store.set_mode(other, "queued")
     store.post_item(other, "question", "B's")
+    store.queue(sid, "A's draft")
+    store.queue(other, "B's draft")
     expect = {"A": sid, "B": other, None: None}[filtered_current if filtered else unfiltered_current]
     desc = f"{desc}, {'following A' if filtered else 'the inbox unfiltered'}"
     app = WheelhouseApp(store)
@@ -728,8 +763,12 @@ async def test_one_current_session_whatever_happens(store, sid, tmp_path, monkey
             await step(app, pilot, how, sid, other)
             assert_one_current(app, f"{desc}: after {how}")
         assert expect is None or app.current_session() == expect, desc
-        if steps == ["park", "unpark"]:
+        if steps[-1] == "unpark":
             assert not store.session(sid)["parked"] and app.filter_sid == sid, desc
+        if steps == ["burst"]:   # the text stays with A's item, unsent; B's queue went, not A's
+            drafts = [(m["session_id"], m["body"]) for m in store.drafts()]
+            assert drafts == [(sid, "A's draft")] and not store._all("SELECT 1 FROM messages WHERE body = 'burst'"), \
+                f"{desc}: {drafts}"
 
 
 @pytest.mark.anyio
@@ -759,46 +798,31 @@ async def test_a_session_ending_elsewhere_with_nothing_left_clears_the_pane(stor
 
 
 @pytest.mark.anyio
-async def test_a_refresh_while_a_follow_waits_keeps_the_persons_highlight(store, sid, tmp_path, monkeypatch):
-    """Review 10: the selected item going in the debounce moved the list back, and the arrow was lost."""
-    monkeypatch.setattr(WheelhouseApp, "FOLLOW_DELAY", 5)
-    q = store.post_item(sid, "question", "A's")
-    store.post_item(sid, "question", "A's second")
-    other = store.create_session(str(tmp_path), name="other")
+@pytest.mark.parametrize("item_arrives, desc", [
+    (False, "a refresh that changes no rows"),
+    (True, "a refresh that rebuilds the list"),
+])
+async def test_a_refresh_before_the_persons_highlight_lands(store, sid, item_arrives, desc):
+    """The items' cursor follows the selection by key on every paint (review 11, bug 1), but
+    not over an arrow whose highlight is still on its way to pick_item: it isn't lost."""
+    qs = [store.post_item(sid, "question", t) for t in ("first", "second")]
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{q}"))
+        table = app.items_table
+        table.move_cursor(row=table.get_row_index(f"{sid}|{qs[0]}"))
         await pilot.pause()
-        app.session_list.focus()
-        await pilot.press("down")
-        await pilot.pause()
-        store.update_item(sid, q, status="closed")
+        with table.prevent(DataTable.RowHighlighted):   # the person's arrow, its highlight not yet handled
+            table.move_cursor(row=table.get_row_index(f"{sid}|{qs[1]}"))
+        if item_arrives:
+            store.post_item(sid, "task", "new", status="running")
         app.refresh_data()
+        assert table.cursor_key() == f"{sid}|{qs[1]}", f"{desc}: the arrow stands"
+        table.post_message(DataTable.RowHighlighted(table, table.cursor_row,
+                                                    table.coordinate_to_cell_key((table.cursor_row, 0)).row_key))
         await pilot.pause()
-        assert app.current_session() == other and app.follow_timer is not None, "the arrow stands"
-        app.follow_timer.stop()
-        app.follow_current()
-        await pilot.pause()
-        assert app.filter_sid == other
-        assert_one_current(app, "followed once it rests")
-
-
-@pytest.mark.anyio
-async def test_the_follow_timer_fires(store, sid, tmp_path, monkeypatch):
-    """Review 10: the real rest, waited out. Polled, so a loaded machine is slower, not red."""
-    monkeypatch.setattr(WheelhouseApp, "FOLLOW_DELAY", REAL_FOLLOW_DELAY)
-    other = store.create_session(str(tmp_path), name="other")
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        app.session_list.focus()
-        await pilot.press("down")
-        deadline = time.monotonic() + 10
-        while app.filter_sid != other and time.monotonic() < deadline:
-            await pilot.pause(0.05)
-        assert app.filter_sid == other and app.viewing == other
-        assert_one_current(app, "followed once the highlight rested")
+        assert app.selected == (sid, qs[1]), f"{desc}: and is followed when its highlight lands"
+        assert_one_current(app, desc)
 
 
 @pytest.mark.anyio
