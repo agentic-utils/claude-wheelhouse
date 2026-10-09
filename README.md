@@ -14,7 +14,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   and go out together, Ctrl+S sending the session's as one message; in Immediate mode each
   goes as you submit it. The line under the answer box says which: "Ctrl+Enter to queue"
   or "Ctrl+Enter to send". Ctrl+T switches the session's mode. Under the session list, Mode
-  and Send (n) do the same for the session highlighted there, and a bar above the footer
+  and Send (n) do the same, for the same session, and a bar above the footer
   always shows Send all (n), every session's queue; each Send is greyed out while its
   queue is empty. Send all has no key: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S
   as plain Ctrl+S. Ctrl+R takes a queued answer
@@ -34,7 +34,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   how to reverse it. Decisions block nothing. Each session counts its unseen ones (the `D`
   column); viewing one marks it seen, and it stays in the inbox until you close it with
   `X`, as with a question. To push back, answer in its thread ("reverse that").
-- **Follow a session.** Click a session in the inbox's list (or Enter on it): its items
+- **Follow a session.** Click a session in the inbox's list (or move to it, or Enter on it): its items
   list gains a pinned first row, 💬 Conversation, highlighted, and the right-hand pane
   follows its conversation, read live from its transcript: your prompts and general
   messages (in green, line breaks kept, without the `[wheelhouse] from …` prefix, and in
@@ -71,12 +71,13 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   foot). Under it, a description of the highlighted one: its status, where it runs, its
   ticket, directory and counts, what it's doing, and its synopsis, which the session keeps
   up to date itself (its brief until it sets one), in a box that takes half the column.
-  The buttons under that act on the highlighted session, in two groups: its lifecycle
-  (New, Adopt, Rename, Relaunch, Restore, Restore all, Park, End), then its conversation
-  (Mode, Send, and Interrupt, Compact and Shell while it runs in the wheelhouse). The
-  keys Ctrl+S and Ctrl+T act on the session in context instead: the selected item's, or
-  the followed session. An item opened full screen has Mode, Send and the rest in its
-  bar, for its own session. New session (directory, optional name, optional ticket, opening brief)
+  The highlighted session is the current one: highlighting an item moves the list's
+  highlight to the item's session, and moving the list's highlight follows that session.
+  The buttons under the description act on it, in two groups: its lifecycle (New, Adopt,
+  Rename, Relaunch, Restore, Restore all, Park, End), then its conversation (Mode, Send,
+  and Interrupt, Compact and Shell while it runs in the wheelhouse). Ctrl+S and Ctrl+T, the
+  hint under the answer box and the activity line act on or describe the same session.
+  An item opened full screen has Mode, Send and the rest in its bar, for its own session. New session (directory, optional name, optional ticket, opening brief)
   runs Claude in the wheelhouse (below), or in a Windows Terminal tab if you tick the box.
   Browse… picks the directory from a tree (Enter opens a folder, Backspace goes up,
   Ctrl+Enter or Choose takes the highlighted one). Rename changes a session's name, and

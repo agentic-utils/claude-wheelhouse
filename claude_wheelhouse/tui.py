@@ -453,7 +453,7 @@ class Compose(TextArea):
 
 
 # a session's conversation buttons, (caption, id, variant): under the session list, for
-# the session highlighted there (D20); in a full-screen item's bar, for its session
+# the current session, highlighted there (D20); in a full-screen item's bar, for its session
 CONVERSATION = (("Mode", "mode", "default"), ("Send", "send", "primary"), ("Interrupt", "interrupt", "error"),
                 ("Compact", "compact", "default"), ("Shell", "shell", "default"))
 
@@ -949,7 +949,7 @@ MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Wi
 WHOSE = ("The buttons under the session list act on the session highlighted there: New and Adopt aside, "
          "Rename to End look after it, and Mode, Send, Interrupt, Compact and Shell talk to it. An item "
          "opened full screen has Mode, Send and the rest in its bar, for its own session. Ctrl+S and Ctrl+T "
-         "act on the session in context instead: the item's, or the followed session.")
+         "act on the same session: highlighting an item highlights its session there.")
 
 
 def keys_help() -> str:
@@ -1346,9 +1346,11 @@ class WheelhouseApp(App):
             q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
             rows.append((s["id"], (dot, name, self.context_cell(s), q, unseen, queued, busy)))
         if fill(table, rows) and table.row_count:
-            # by key: Park and Unpark move the row, and the cursor goes with it
-            table.move_cursor(row=table.get_row_index(key) if key in table.rows else min(keep, table.row_count - 1),
-                              animate=False)
+            # by key: Park and Unpark move the row, and the cursor goes with it. Not the person
+            # moving it, so it changes nothing else (pick_session_row)
+            with table.prevent(DataTable.RowHighlighted):
+                table.move_cursor(row=table.get_row_index(key) if key in table.rows
+                                  else min(keep, table.row_count - 1), animate=False)
 
     @staticmethod
     def display_name(s) -> str:
@@ -1415,8 +1417,10 @@ class WheelhouseApp(App):
             box.move_cursor(box.document.end)
 
     def retarget(self) -> None:
-        """The answer box follows what the pane shows. Called on the person's selections
-        only, never from the refresh tick, so text being typed is never swapped under them."""
+        """The answer box follows what the pane shows, and the session list's highlight its
+        session. Called on the person's selections only, never from the refresh tick, so text
+        being typed is never swapped under them."""
+        self.highlight_session(self.focus_sid())
         self.paint_sendbar()
         if isinstance(self.screen, ThreadView):   # which holds its item's text itself
             return
@@ -1510,7 +1514,9 @@ class WheelhouseApp(App):
                 widget.remove()
 
     def focus_sid(self) -> str | None:
-        """The session in context, for the modules: followed, else the highlighted item's."""
+        """The session in context, for the modules: followed, else the highlighted item's
+        (the current session then, D20). With neither, None: the stats pane shows every
+        running session."""
         sid = self.filter_sid or (self.selected[0] if self.selected else None)
         return sid if any(s["id"] == sid for s in self.sessions) else None
 
@@ -1598,8 +1604,8 @@ class WheelhouseApp(App):
             self.paint_checklist()
 
     def paint_session_info(self) -> None:
-        """The highlighted session's description, under the list, and its buttons' captions
-        and states: Park's, and the conversation buttons' (D20)."""
+        """The current session's description, under the list, and its buttons' captions and
+        states: Park's, and the conversation buttons' (D20)."""
         sid = self.current_session()
         s = next((x for x in self.sessions if x["id"] == sid), None)
         text = self.describe(s) if s else Text("Select a session to see its description.", style="#777777")
@@ -1807,8 +1813,24 @@ class WheelhouseApp(App):
             self.answer.focus()
 
     @on(DataTable.RowHighlighted, "#session-list")
-    def pick_session_row(self) -> None:
+    def pick_session_row(self, event: DataTable.RowHighlighted) -> None:
+        """The person moving the list's highlight: that session becomes the current one, its
+        conversation followed, as a click does, though only Enter or a click offers to relaunch
+        a dead one. The app's own moves (highlight_session, a rebuild) post none."""
+        if event.row_key.value != self.current_session():
+            return   # stale: the cursor moved on before this was handled
+        if event.row_key.value != self.focus_sid():
+            self.follow(event.row_key.value)
         self.paint_session_info()
+
+    def highlight_session(self, sid: str | None) -> None:
+        """Keep the session list's highlight on the session in context: one current session
+        (D20). The app's move, not the person's: it filters nothing."""
+        table = self.session_list
+        if sid in table.rows and sid != self.current_session():
+            with table.prevent(DataTable.RowHighlighted):
+                table.move_cursor(row=table.get_row_index(sid), animate=False)
+            self.paint_session_info()
 
     @on(ItemList.MarksChanged)
     def marks_changed(self) -> None:
@@ -1974,11 +1996,12 @@ class WheelhouseApp(App):
         self.refresh_data()
 
     def bar_session(self, screen) -> str | None:
-        """The session in context on a screen: the thread's, else the inbox's filter or the
-        selected item's session."""
+        """The session in context on a screen, which its keys, buttons, hint and activity line
+        all act on or describe: the thread's, else the current session, highlighted in the
+        session list (D20), which follows the filter or the selected item's session."""
         if isinstance(screen, ThreadView):
             return screen.sid
-        return self.filter_sid or (self.selected[0] if self.selected else None)
+        return self.current_session()
 
     def bar_item(self, screen) -> tuple[str, str] | None:
         """The item in context on a screen: the thread's, else the inbox's selected item."""
@@ -2037,26 +2060,19 @@ class WheelhouseApp(App):
         self.store.set_mode(sid, new)
         name = s["name"] or short(sid)
         self.notify(f"{name}: answers now send as you submit them" if new == "immediate" else
-                    f"{name}: answers now queue until you send them (Ctrl+S)")
+                    f"{name}: answers now queue until you send them (Ctrl+S or Send)")
         if new == "immediate" and (n := len(self.store.drafts(sid))):
-            self.notify(f"{n} answer(s) still queued for {name}: Ctrl+S sends them")
+            self.notify(f"{n} answer(s) still queued for {name}: Ctrl+S or Send sends them")
         self.refresh_data()
-
-    def button_session(self, button: Button) -> str | None:
-        """The session a conversation button acts on (D20): a full-screen item's, else the
-        one highlighted in the session list, whose buttons they are. The keys, Ctrl+S and
-        Ctrl+T, act on the session in context instead (bar_session)."""
-        screen = button.screen
-        return screen.sid if isinstance(screen, ThreadView) else self.current_session()
 
     @on(Button.Pressed, "#mode")
     def mode_pressed(self, event: Button.Pressed) -> None:
-        if sid := self.button_session(event.button):
+        if sid := self.bar_session(event.button.screen):
             self.toggle_mode(sid)
 
     @on(Button.Pressed, "#send")
     def send_pressed(self, event: Button.Pressed) -> None:
-        if sid := self.button_session(event.button):
+        if sid := self.bar_session(event.button.screen):
             self.send_session(sid)
 
     @on(Button.Pressed, "#send-all")
@@ -2083,7 +2099,7 @@ class WheelhouseApp(App):
 
     @on(Button.Pressed, "#interrupt, #compact, #shell")
     def host_pressed(self, event: Button.Pressed) -> None:
-        sid = self.button_session(event.button)
+        sid = self.bar_session(event.button.screen)
         if not sid:
             return
         what = event.button.id
@@ -2116,6 +2132,7 @@ class WheelhouseApp(App):
     # the session area: the list's highlighted session, and its buttons
 
     def current_session(self) -> str | None:
+        """The current session: the one highlighted in the session list (D20)."""
         table = self.session_list
         if not table.row_count:
             return None

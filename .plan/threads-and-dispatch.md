@@ -125,9 +125,10 @@ Where the build differs from the design above:
   plain Ctrl+S. A bar above the footer, on the inbox and in the thread view, always
   shows Send all (n), disabled while every queue is empty; its buttons take no focus. The
   mode button and Send (n) were in it too, until #59 moved them under the session list,
-  for the highlighted session (D20 in `wheelhouse-sessions.md`); the thread view's bar
-  keeps them, for its session. The session in context is the thread's, or the inbox's filter
-  or selected item's session. The `s`, `S` and `i`
+  for the current session, the one highlighted there, which is also the one the keys act
+  on (D20 in `wheelhouse-sessions.md`); the thread view's bar keeps them, for its session.
+  The session in context is the thread's, or the inbox's current session, which follows
+  the filter or the selected item's session. The `s`, `S` and `i`
   keys are gone, and keys are shown in upper case, the usual convention.
 - **Store calls.** `send()` still sends at once (Immediate mode and the End/Park
   cancellations use it). Queuing is a separate `queue()`, and `dispatch(sid)` sends a session's drafts in one

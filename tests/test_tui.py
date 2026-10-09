@@ -361,30 +361,41 @@ async def test_send_bar_and_session_buttons_follow_the_queues(store, sid, tmp_pa
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("how, sent, mode_changed, desc", [
-    ("#send", "other", None, "Send acts on the session highlighted in the list (D20)"),
-    ("ctrl+s", "demo", None, "Ctrl+S on the session in context, the selected item's"),
-    ("#mode", None, "other", "Mode on the highlighted session"),
-    ("ctrl+t", None, "demo", "Ctrl+T on the session in context"),
+@pytest.mark.parametrize("nav, desc", [
+    ("item", "the person highlights another session's item: the list's highlight goes with it"),
+    ("list", "the person highlights another session in the list: it becomes the context"),
+    ("tutorial", "make tutorial's session, created last, its Q1 highlighted (review 8: Send sent another's)"),
 ])
-async def test_session_buttons_act_on_the_highlighted_session(store, sid, tmp_path, how, sent, mode_changed, desc):
-    other = store.create_session(str(tmp_path), name="other")
-    ids = {"demo": sid, "other": other}
-    q = store.post_item(sid, "question", "which db?")
-    store.queue(sid, "a", q)
-    store.queue(other, "b")
+@pytest.mark.parametrize("how, acts", [
+    ("#send", "send"),
+    ("ctrl+s", "send"),
+    ("#mode", "mode"),
+    ("ctrl+t", "mode"),
+])
+async def test_one_current_session_for_the_buttons_and_keys(store, sid, tmp_path, monkeypatch, nav, desc, how, acts):
+    """D20, as revised in review 8: the session list's highlight is the current session, so
+    the buttons under it, Ctrl+S and Ctrl+T, the hint and the activity line all act on or
+    describe the same one, however the person got there."""
+    from claude_wheelhouse import tutorial
+    monkeypatch.setattr(tutorial, "tutorial_dir", lambda store: tmp_path / "tut")
+    store.queue(sid, "a", store.post_item(sid, "question", "which db?"))
+    target = tutorial.prepare(store) if nav == "tutorial" else store.create_session(str(tmp_path), name="other")
+    q = store.post_item(target, "question", "Q1?")
+    store.queue(target, "b", q)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        app.items_table.move_cursor(row=0)
-        app.session_list.move_cursor(row=1)
+        assert app.current_session() == sid, f"{desc}: demo's item first, so demo is current"
+        if nav == "list":
+            app.session_list.move_cursor(row=app.session_list.get_row_index(target))
+        else:
+            app.items_table.move_cursor(row=app.items_table.get_row_index(f"{target}|{q}"))
         await pilot.pause()
-        assert app.selected == (sid, q), f"{desc}: the item in context is demo's"
+        assert app.current_session() == app.bar_session(app.screen) == target, desc
         await (pilot.click(how) if how.startswith("#") else pilot.press(how))
         await pilot.pause()
-    got_sent = {n for n, i in ids.items() if store.pending(i)}
-    changed = {n for n, i in ids.items() if store.session(i)["send_mode"] is not None}
-    assert (got_sent, changed) == ({sent} - {None}, {mode_changed} - {None}), desc
+    got = {i for i in (sid, target) if (store.pending(i) if acts == "send" else store.session(i)["send_mode"])}
+    assert got == {target}, f"{desc}: {how} acts on the current session"
 
 
 @pytest.mark.anyio

@@ -295,7 +295,7 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   of a second, so typing lagged and opening a session took over 3 seconds.
 - **Session area** (#58, which replaced the Sessions tab and the Inbox/Sessions tabs).
   The session list, every session with parked ones dimmed at the foot; under it a
-  description of the highlighted session (status, runner, mode, ticket, directory,
+  description of the current session (status, runner, mode, ticket, directory,
   open-question, running, unseen-decision and queued counts, activity, synopsis or brief);
   under that its buttons: New, Adopt (`a`), Rename, Relaunch, Restore on a dead row,
   parked or not (unparks only once the launch goes through), Restore all (dead and not
@@ -305,12 +305,18 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   and Shell while the session runs in the wheelhouse. The send bar keeps Send all and the
   activity line; New and Adopt are off the footer, their buttons showing them, though
   `n` and `a` still work.
-- **D20: the session area's buttons act on the session highlighted in the list**, not the
-  session in context (the one owning the item being answered). They sit under the list
-  and its description, so that is the session they read as belonging to. Ctrl+S and
-  Ctrl+T keep acting on the session in context, as the hint under the answer box says. A
-  full-screen item has no session list, so its bar keeps Mode, Send, Interrupt, Compact
-  and Shell, for its own session.
+- **D20: one current session, highlighted in the session list.** The session area's
+  buttons, Ctrl+S and Ctrl+T, the hint under the answer box and the activity line all act
+  on or describe it. The list's highlight follows the session in context: highlighting an
+  item, or following a session, moves it to that session, as the app's own move, which
+  filters nothing. The person moving it follows the session they move to, as a click
+  always did (filter and 💬 Conversation row); only a click or Enter offers to relaunch a
+  dead one. (Review 8 replaced the first D20, where the buttons acted on the highlighted
+  session and the keys on the session in context: the two could differ on screen, and the
+  tutorial's "Ctrl+S, or the Send button" sent another session's queue.) A full-screen
+  item has no session list, so its bar keeps Mode, Send, Interrupt, Compact and Shell, for
+  its own session. The stats pane still shows every running session while no session is
+  followed and no item selected.
 - **Resizable layout** (#60). Every boundary is a `Splitter` (`splitter.py`; Textual has
   none): the two between the columns, the session list and its description (the
   description 50% of the column by default), the items and the module panes under them,
