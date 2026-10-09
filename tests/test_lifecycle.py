@@ -419,3 +419,96 @@ async def test_relaunch(store, sid, monkeypatch, run, state, shell, stops, keys,
     assert kills == ([(4242, tui.signal.SIGTERM)] if killed else []), desc
     assert calls == launched, desc
     assert (said is None and not seen) or any(said in m for m in seen), f"{desc}: {seen}"
+
+
+def handed_to_a_tab(store, sid, alive):
+    store.set_shell(sid, "tab")
+    store.db.execute("UPDATE sessions SET claude_pid = 5555")
+    alive.add(5555)
+
+
+def a_newer_host(store, sid, alive):
+    store.db.execute("UPDATE sessions SET claude_pid = 5555")
+    alive.add(5555)
+
+
+def parked(store, sid, alive):
+    store.set_parked(sid, True)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("before, during_confirm, after_stop, killed, launched, said, desc", [
+    (None, handed_to_a_tab, None, [], [], "/exit it there",
+     "handed to a shell tab while the confirm was open: the person's tab is left alone (review 7)"),
+    (None, a_newer_host, None, [], [], "started again meanwhile",
+     "a newer host while the confirm was open: not stopped unasked"),
+    (None, None, a_newer_host, [4242], [], "relaunched demo",
+     "another wheelhouse started it after the stop: done, not 'didn't stop within' (review 7)"),
+    (parked, None, None, [4242], ["open"], "relaunched demo", "a parked one is unparked, as a dead one's relaunch is"),
+])
+async def test_relaunch_races(store, sid, monkeypatch, before, during_confirm, after_stop, killed, launched, said,
+                              desc):
+    from claude_wheelhouse import tui
+    store.set_runner(sid, "sdk")
+    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
+    fake_status(monkeypatch, "live")
+    alive, kills, calls = {4242}, [], []
+
+    def kill(pid, sig):
+        kills.append(pid)
+        alive.discard(pid)
+        if after_stop:
+            after_stop(store, sid, alive)
+    monkeypatch.setattr(tui.os, "kill", kill)
+    monkeypatch.setattr(tui.liveness, "is_alive", lambda pid, *a: pid in alive)
+    monkeypatch.setattr(tui, "RELAUNCH_WAIT", 0)
+    monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
+    if before:
+        before(store, sid, alive)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        seen = notices(app, monkeypatch)
+        await press(app, pilot, "#relaunch")
+        if during_confirm:
+            during_confirm(store, sid, alive)
+        await pilot.press("y")
+        await pilot.pause()
+        app.refresh_data()
+        await pilot.pause()
+    assert kills == killed, desc
+    assert calls == launched, desc
+    assert any(said in m for m in seen) and not any("didn't stop" in m for m in seen), f"{desc}: {seen}"
+    assert not store.session(sid)["parked"] or not killed, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("stopped, keys, launched, exited, desc", [
+    (True, [], ["open"], True, "its host has gone: started before quitting, not left dead (review 7)"),
+    (False, [], [], False, "still stopping: quitting asks first"),
+    (False, ["y"], [], True, "and quits if told to"),
+    (False, ["n"], [], False, "or stays"),
+])
+async def test_quitting_mid_relaunch(store, sid, monkeypatch, stopped, keys, launched, exited, desc):
+    from claude_wheelhouse import tui
+    store.set_runner(sid, "sdk")
+    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
+    fake_status(monkeypatch, "live")
+    alive, calls, exits = {4242}, [], []
+    monkeypatch.setattr(tui.os, "kill", lambda pid, sig: None)   # SIGTERMed, still stopping
+    monkeypatch.setattr(tui.liveness, "is_alive", lambda pid, *a: pid in alive)
+    monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await press(app, pilot, "#relaunch", "y")
+        monkeypatch.setattr(app, "exit", lambda *a, **kw: exits.append(True))
+        if stopped:
+            alive.clear()
+        await pilot.press("q")
+        await pilot.pause()
+        prompt = getattr(app.screen, "prompt", "")
+        for key in keys:
+            await pilot.press(key)
+            await pilot.pause()
+    assert calls == launched, desc
+    assert bool(exits) == exited, desc
+    assert stopped or "Still relaunching demo" in prompt, f"{desc}: {prompt}"

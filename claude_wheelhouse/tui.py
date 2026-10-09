@@ -53,6 +53,7 @@ STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
 RUNNING = ("live", "stalled", "starting")
 RELAUNCH_WAIT = 30   # seconds a host has to stop for Relaunch before it gives up and says so
+TAB_RELAUNCH = "a session in a tab relaunches once it has exited: /exit it there, then Relaunch"
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777"}
@@ -1033,8 +1034,9 @@ class WheelhouseApp(App):
         self.box_target: tuple | None = None
         self.statuses: dict[str, str] = {}
         self.sessions = []
-        # sessions whose host Relaunch has stopped: started again once it has gone (monotonic deadline)
-        self.relaunching: dict[str, float] = {}
+        # sessions whose host Relaunch has stopped: started again once it has gone. Each has
+        # a monotonic deadline and the stopped host, (pid, start time)
+        self.relaunching: dict[str, tuple[float, tuple]] = {}
         # the tutorial steps only the screen sees (a question opened, the conversation
         # followed), by tutorial session
 
@@ -1566,24 +1568,33 @@ class WheelhouseApp(App):
         elif self.statuses.get(sid) == "dead":
             self.offer_relaunch(sid)
         elif runner(s) != "sdk" or s["shell"]:
-            self.notify("a session in a tab relaunches once it has exited: /exit it there, then Relaunch",
-                        severity="warning")
+            self.notify(TAB_RELAUNCH, severity="warning")
         elif self.statuses.get(sid) == "starting":
             self.notify("it's still starting: Relaunch once it's running", severity="warning")
         else:
+            host = (s["claude_pid"], s["claude_start"])
             self.push_screen(Confirm(f"Relaunch {self.label(sid)}? Its host stops, interrupting any turn "
                                      "under way, and starts again on the same conversation."),
-                             lambda yes: yes and self.stop_host(sid))
+                             lambda yes: yes and self.stop_host(sid, host))
 
     @session_action
-    def stop_host(self, sid: str) -> None:
+    def stop_host(self, sid: str, host: tuple) -> None:
         """Stop a session's host, as SIGTERM does (its own clean stop: Claude Code is
         disconnected, and an open permission or question closes as withdrawn, or as lost
-        when the new host starts), checking first that the pid is still that host. The
-        refresh tick starts it again once the process has gone (finish_relaunches)."""
+        when the new host starts). The confirm may have sat open meanwhile, so only the
+        host it was asked about, (pid, start time), is stopped: one handed to a shell tab
+        registers the tab's Claude Code instead, the person's to /exit. The refresh tick
+        starts it again once the process has gone (finish_relaunches)."""
         s = self.row(sid)
+        if runner(s) != "sdk" or s["shell"]:
+            self.notify(TAB_RELAUNCH, severity="warning")
+            return
         if not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
             self.relaunch(sid)   # gone meanwhile: nothing to stop
+            return
+        if (s["claude_pid"], s["claude_start"]) != host:
+            self.notify(f"{self.display_name(s)} started again meanwhile: Relaunch again to stop this host",
+                        severity="warning")
             return
         try:
             os.kill(s["claude_pid"], signal.SIGTERM)
@@ -1592,25 +1603,46 @@ class WheelhouseApp(App):
         except OSError as e:
             self.notify(f"couldn't stop its host: {e}", severity="error")
             return
-        self.relaunching[sid] = time.monotonic() + RELAUNCH_WAIT
+        self.relaunching[sid] = (time.monotonic() + RELAUNCH_WAIT, host)
         self.notify(f"relaunching {self.display_name(s)}: stopping its host")
         self.refresh_data()
 
     def finish_relaunches(self) -> None:
         """Start each stopped host again once its process has really gone: launch refuses a
-        session whose registered process is alive, and a new host registers only if free."""
-        for sid, deadline in list(self.relaunching.items()):
+        session whose registered process is alive, and a new host registers only if free.
+        One that another wheelhouse has started meanwhile (a newer pid, alive) is relaunched
+        already. A relaunch unparks, as one of a dead session does."""
+        for sid, (deadline, host) in list(self.relaunching.items()):
             s = next((x for x in self.sessions if x["id"] == sid), None)
             if s is None:   # ended meanwhile
                 del self.relaunching[sid]
             elif not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
                 del self.relaunching[sid]
                 if self.open_session(sid):   # as it ran: a host again, not WHEELHOUSE_RUNNER's way
+                    self.store.set_parked(sid, False)
+                    self.statuses[sid] = liveness.status(self.row(sid), waking=self.waking)   # not dead for a tick
                     self.notify(f"relaunched {self.display_name(s)}")
+            elif (s["claude_pid"], s["claude_start"]) != host:
+                del self.relaunching[sid]
+                self.store.set_parked(sid, False)
+                self.notify(f"relaunched {self.display_name(s)}")
             elif time.monotonic() > deadline:
                 del self.relaunching[sid]
                 self.notify(f"{self.display_name(s)}'s host didn't stop within {RELAUNCH_WAIT}s, so it wasn't "
                             f"relaunched: see hosts/{sid}.log", severity="error")
+
+    async def action_quit(self) -> None:
+        """Quit, but not silently out from under a relaunch: a host stopped and not yet
+        started again would stay dead. Any whose host has gone is started now; for one still
+        stopping, the person chooses."""
+        self.refresh_data()
+        if not self.relaunching:
+            self.exit()
+            return
+        names = ", ".join(self.display_name(self.row(sid)) for sid in self.relaunching)
+        self.push_screen(Confirm(f"Still relaunching {names}: its host hasn't stopped yet. Quit anyway, "
+                                 "and leave it stopped? (Restore brings it back.)"),
+                         lambda yes: yes and self.exit())
 
     def follow(self, sid: str) -> None:
         """Filter the items to the session and highlight its conversation row, so the right
