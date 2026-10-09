@@ -247,6 +247,23 @@ async def test_escape_closes_adopt(store, monkeypatch):
         assert [type(s).__name__ for s in app.screen_stack] == ["Screen"]
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("name, named, title, prefill, desc", [
+    ("Rare caper", "x" * 100, "x" * 69 + "…", "Rare caper", "a tracked session: its name in the wheelhouse"),
+    ("", "x" * 100, "x" * 69 + "…", "x" * 100, "else its own name, whole"),
+    ("", "", "y" * 69 + "…", "y" * 40, "else the start of its first prompt"),
+])
+async def test_adopt_prefills_the_name(store, monkeypatch, name, named, title, prefill, desc):
+    from claude_wheelhouse import adopt
+    from claude_wheelhouse.adopt import Candidate
+    monkeypatch.setattr(adopt, "candidates", lambda store: [Candidate("adopt-me", "/r", title, 0.0, None, name, named)])
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.press("a")
+        await pilot.pause()
+        assert app.screen.query_one("#adopt-name", Input).value == prefill, desc
+
+
 @pytest.mark.parametrize("mode, key, queued, sent, desc", [
     (None, "ctrl+enter", ["now"], [], "a new session starts in queued mode: Ctrl+Enter queues"),
     ("immediate", "ctrl+enter", [], ["now"], "in immediate mode Ctrl+Enter sends at once"),
@@ -1388,6 +1405,25 @@ async def test_a_rename_in_claude_code_is_picked_up(store, sid, tmp_path, monkey
         await pilot.pause()
         assert store.session(sid)["name"] == expected, desc
         assert str(app.query_one("#session-list", DataTable).get_row_at(0)[1]) == expected, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("typed, renamed, desc", [
+    (None, False, "Enter on its name unchanged isn't a rename: nothing stamped"),
+    ("Columbo check", True, "a new name is"),
+])
+async def test_enter_in_rename_stamps_only_a_new_name(store, sid, typed, renamed, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.click("#rename")
+        await pilot.pause()
+        if typed:
+            app.screen.query_one("#new-name", Input).value = typed
+        await pilot.press("enter")
+        await pilot.pause()
+        assert (store.session(sid)["name"], store.session(sid)["renamed_at"] is not None) == (typed or "demo", renamed), desc
 
 
 @pytest.mark.anyio

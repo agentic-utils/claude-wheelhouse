@@ -288,6 +288,8 @@ def minute(m: int) -> str:
     ([(20, "take", "a"), (30, "rename", "mine"), (40, "take", "a")], ("a", True),
      "so does a newer /rename back to the name it had"),
     ([(20, "take", "a"), (20, "take", "a")], ("a", False), "the same /rename read again changes nothing"),
+    ([(20, "rename", "demo"), (15, "take", "a")], ("a", True),
+     "renaming to its current name (an unchanged pre-fill, or Enter) isn't a rename: a /rename not taken yet wins"),
 ])
 def test_the_most_recent_rename_wins(store, tmp_path, monkeypatch, steps, expected, desc):
     monkeypatch.setattr("claude_wheelhouse.store.now", lambda: minute(10))

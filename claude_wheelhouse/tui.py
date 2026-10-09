@@ -689,7 +689,7 @@ class AdoptSession(ModalScreen):
     @on(DataTable.RowHighlighted, "#adopt-list")
     def highlighted(self, event: DataTable.RowHighlighted) -> None:
         c = self.candidates[event.row_key.value]
-        self.query_one("#adopt-name", Input).value = c.name or c.title[:40]
+        self.query_one("#adopt-name", Input).value = c.name or c.named or c.title[:40]
         self.query_one("#adopt-hint", Label).update(
             "Still running: type /exit in its tab, then press Adopt." if c.running_pid else "")
 

@@ -348,10 +348,12 @@ class Store:
 
     def rename(self, sid: str, name: str) -> None:
         """A rename in the wheelhouse. Stamped, so a /rename made in Claude Code before it
-        doesn't undo it, and one made after it wins (take_title)."""
+        doesn't undo it, and one made after it wins (take_title). Its current name again (an
+        unchanged pre-fill, or Enter) isn't a rename: no stamp, so a /rename not yet taken still wins."""
         with self.tx() as db:
             self._require(db, sid)
-            db.execute("UPDATE sessions SET name = ?, renamed_at = ? WHERE id = ?", (name, stamp(), sid))
+            db.execute("UPDATE sessions SET name = ?, renamed_at = ? WHERE id = ? AND name IS NOT ?",
+                       (name, stamp(), sid, name))
 
     def take_title(self, sid: str, at: str, title: str) -> bool:
         """A /rename made in Claude Code at `at` (transcript.TitleWatch): taken as the
