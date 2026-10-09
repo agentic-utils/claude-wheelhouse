@@ -179,8 +179,8 @@ offers the tutorial in one line: `Enter` takes it, `Esc` dismisses it for good.
 
 Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision (or reopen a closed one: a question as answered, a decision as seen), `N` new session, `A` adopt, `Shift+S` restore all, `Esc` all sessions (or back
-from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
+highlighted question or decision (or reopen a closed one: a question as answered, a decision as seen), `N` new session, `A` adopt, `Shift+S` restore all, `Esc` all sessions (or clears a text
+selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue, `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back, `?` list every key and button, `Q` quit (it asks first
 while a relaunch is waiting for a host to stop). Outside a text box, the buttons that have no other key:
@@ -191,7 +191,8 @@ as in Claude Code's own prompt), and `Shift+A` Send all. A key whose button does
 stop, where the arrows, `PgUp`, `PgDn`, `Home` and `End` scroll it), and `Shift+Tab` goes back.
 `Ctrl+Enter` in the answer box goes back to the items with the cursor where it was, so answering a run
 of items is: type, `Ctrl+Enter`, `Down`, `Tab`, type, `Ctrl+Enter`. An item opened full screen has two
-stops, its answer box and its thread. Keys typed ahead of the screen act in the order typed.
+stops, its answer box and its thread. Keys typed ahead of the screen act in the order typed, the ones behind a key that
+opens a thread or a dialog going to it.
 
 Closing several questions or decisions at once: in the item list, `Ctrl`+click marks or unmarks a row
 and `Shift`+click marks the range from the last one marked; from the keyboard, `Space`

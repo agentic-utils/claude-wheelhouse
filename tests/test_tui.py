@@ -1062,6 +1062,93 @@ async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch,
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("focus, at, burst, want, desc", [
+    ("items", "qa", ("enter", "h", "i"), ("ThreadView", "hi", [], False, "park"),
+     "review 15 (1): Enter opens the item, and the letters behind it are typed in its box, not H's Shell or I's Interrupt"),
+    ("items", "qa", ("enter", "x", "y", "q"), ("ThreadView", "xyq", [], False, "park"),
+     "review 15 (1): Q behind Enter is typed in the item's box, it doesn't quit"),
+    ("items", "qa", ("enter", "q"), ("ThreadView", "q", [], False, "park"), "review 15 (1): raw Enter Q doesn't quit"),
+    ("items", "conversation", ("enter", "h", "i"), ("Screen", "hi", [], False, "park"),
+     "Enter on the conversation row goes to its box, and the letters behind it land there"),
+    ("session-list", "gone", ("enter", "n", "q"), ("Screen", "", [], True, "park"),
+     "Enter on a dead session offers a relaunch: N declines it, then Q quits"),
+    ("items", "qa", ("h", "n", "q"), ("Screen", "", [], True, "park"), "review 15 (2): H's Confirm takes N, then Q quits"),
+    ("items", "qa", ("h", "y", "y"), ("Screen", "", ["shell"], False, "park"),
+     "review 15 (2): a second Y once the dialog has closed doesn't dismiss it again"),
+    ("items", "qa", ("h", "n", "n"), ("NewSession", "", [], False, "park"),
+     "review 15 (2): a second N once the dialog has closed is the inbox's: New session"),
+    ("session-list", "alpha", ("p", "c", "q"), ("Screen", "", [], True, None),
+     "review 15 (2): P on a session asked to park offers the Choice, C cancels the request, then Q quits"),
+    ("session-list", "alpha", ("p", "c", "c"), ("Confirm", "", [], False, None),
+     "review 15 (2): a second C once the Choice has closed is the inbox's: Compact"),
+    ("items", "qa", ("question_mark", "q"), ("Screen", "", [], False, "park"),
+     "? opens the keys, and Q behind it closes them rather than quitting"),
+])
+async def test_a_key_that_opens_something_takes_the_keys_behind_it(store, tmp_path, monkeypatch, focus, at, burst,
+                                                                    want, desc):
+    """Review 15: a key that opens a screen or moves the focus does so before the next key
+    acts, so the keys typed behind it go to what it opened, in order, and a dialog's key
+    typed twice closes it once."""
+    from claude_wheelhouse import liveness
+    alpha = store.create_session(str(tmp_path), name="alpha", runner="sdk")
+    gone = store.create_session(str(tmp_path), name="gone", runner="sdk")
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead" if s["id"] == gone else "live")
+    qa = store.post_item(alpha, "question", "which db?")
+    store.request(alpha, "park")
+    hosts, exits, launched = [], [], []
+    monkeypatch.setattr(WheelhouseApp, "host_command", lambda self, sid, what: hosts.append(what))
+    monkeypatch.setattr(WheelhouseApp, "exit", lambda self, *a, **k: exits.append(True))
+    monkeypatch.setattr(WheelhouseApp, "open_session", lambda self, sid, restore=False: launched.append(sid))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if focus == "items":
+            app.session_list.move_cursor(row=app.session_list.get_row_index(alpha))
+            await pilot.pause()
+            app.follow(alpha)
+            app.items_table.move_cursor(row=app.items_table.keys().index(f"{alpha}|{qa if at == 'qa' else ''}"))
+        else:
+            app.session_list.move_cursor(row=app.session_list.get_row_index(alpha if at == "alpha" else gone))
+        await pilot.pause()
+        app.query_one(f"#{focus}").focus()
+        await pilot.pause()
+        raw_keys(app, *burst)
+        for _ in range(10):
+            await pilot.pause()
+        box = app.screen.box.text if isinstance(app.screen, ThreadView) else app.answer.text
+        seen = (type(app.screen).__name__, box, hosts, bool(exits), app.pending(store.session(alpha)))
+        assert seen == want, f"{desc}: got {seen}"
+        assert launched == [], desc
+        if type(app.screen).__name__ in ("Screen", "ThreadView"):
+            assert_one_current(app, desc)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("focus, desc", [
+    ("items", "on the items"),
+    ("session-list", "on the session list"),
+])
+async def test_escape_clears_a_text_selection_before_the_filter(store, sid, tmp_path, focus, desc):
+    """Review 15 (3): Esc on the inbox clears a mouse selection when there is one, and
+    only then, pressed again, shows all sessions."""
+    from textual.selection import Selection
+    store.create_session(str(tmp_path), name="other")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)
+        app.query_one(f"#{focus}").focus()
+        await pilot.pause()
+        app.screen.selections = {app.detail: Selection(None, None)}
+        raw_keys(app, "escape")
+        await pilot.pause()
+        assert (bool(app.screen.selections), app.filter_sid) == (False, sid), f"{desc}: the first Esc clears the selection"
+        raw_keys(app, "escape")
+        await pilot.pause()
+        assert app.filter_sid is None, f"{desc}: the second clears the filter"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("filtered, desc", [
     (True, "the followed session (review 10)"),
     (False, "the session whose item was selected"),

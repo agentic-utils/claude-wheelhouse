@@ -316,6 +316,14 @@ class Transcript(Widget, can_focus=True):
         self.text_select_all()
 
 
+async def select_now(table: DataTable) -> None:
+    """Enter on a list: its row is selected as the key arrives (take_key), not posted, where
+    the keys typed behind Enter would act before what it opens."""
+    if table.row_count:
+        row = table.cursor_row
+        await table.app._dispatch_message(DataTable.RowSelected(table, row, table.coordinate_to_cell_key((row, 0)).row_key))
+
+
 class SessionList(DataTable):
     """The inbox's sessions. One click selects a row: a plain table selects only on a second
     click, the first just moving the cursor there. The buttons under it act on the
@@ -327,6 +335,9 @@ class SessionList(DataTable):
                 Binding("s", "app.press('restore')", "Restore", show=False),
                 Binding("p", "app.press('park')", "Park", show=False),
                 Binding("e", "app.press('end')", "End", show=False)]
+
+    async def action_select_cursor(self) -> None:
+        await select_now(self)
 
     async def _on_click(self, event) -> None:
         # Textual runs every class's _on_click in turn, DataTable's after this one, so don't
@@ -392,6 +403,9 @@ class ItemList(DataTable):
             self.move_cursor(row=meta["row"], animate=False)
         elif self.marked or self.anchor:   # a plain click starts afresh
             self.set_marks(set(), key)
+
+    async def action_select_cursor(self) -> None:
+        await select_now(self)
 
     def action_toggle_mark(self) -> None:
         if self.cursor_key():
@@ -578,7 +592,7 @@ class ThreadView(Screen):
         app.paint_sendbar()   # its hint and bar now, not at the next refresh
         # one Tab stop for the thread, the transcript: its scroll keys reach the scroll as an ancestor's
         self.query_one("#thread-scroll").can_focus = False
-        self.box.focus()
+        self.set_focus(self.box)   # at once, not after a refresh as focus() does: keys behind Enter go there
 
     def action_leave(self) -> None:
         self.app.keep_unsent(self.box, (self.sid, self.ref), None)
@@ -623,8 +637,19 @@ class Hint(Label):
         self.update(self.base if text is None else text)
 
 
-class NewSession(ModalScreen):
+class Dialog(ModalScreen):
+    """A dialog. Its keys are bindings, so each acts as it arrives (take_key): a key typed
+    behind the one that closes it goes to the screen it uncovers, in order. Answered once:
+    a second click, or a click behind a key, finds it closed already."""
+
+    def action_answer(self, result=None) -> None:
+        if self.is_active:
+            self.dismiss(result)
+
+
+class NewSession(Dialog):
     """Name and ticket are optional; the brief becomes the first prompt."""
+    BINDINGS = [Binding("escape", "answer", show=False)]
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
@@ -660,10 +685,6 @@ class NewSession(ModalScreen):
         box = self.query_one("#cwd", Input)
         self.app.push_screen(PickDirectory(box.value.strip()), lambda path: path and setattr(box, "value", path))
 
-    def on_key(self, event) -> None:
-        if event.key == "escape":
-            event.stop()
-            self.dismiss(None)
 
 
 class Folders(DirectoryTree):
@@ -674,12 +695,13 @@ class Folders(DirectoryTree):
         return [p for p in paths if self._safe_is_dir(p) and (not p.name.startswith(".") or p.name == ".worktrees")]
 
 
-class PickDirectory(ModalScreen):
+class PickDirectory(Dialog):
     """The new session's working directory, picked from a tree: Enter opens a folder,
     Backspace (or Up) goes to the parent, Ctrl+Enter (or Choose) takes the highlighted one."""
     BINDINGS = [Binding("ctrl+enter", "choose", "Choose", show=False),
                 Binding("ctrl+j", "choose", "Choose", show=False),
-                Binding("backspace", "up", "Up", show=False)]
+                Binding("backspace", "up", "Up", show=False),
+                Binding("escape", "answer", show=False)]
 
     def __init__(self, start: str = ""):
         super().__init__()
@@ -699,7 +721,7 @@ class PickDirectory(ModalScreen):
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
-        self.query_one(Folders).focus()
+        self.set_focus(self.query_one(Folders))
 
     @property
     def picked(self) -> str:
@@ -725,15 +747,12 @@ class PickDirectory(ModalScreen):
     def cancel(self) -> None:
         self.dismiss(None)
 
-    def on_key(self, event) -> None:
-        if event.key == "escape":
-            event.stop()
-            self.dismiss(None)
 
 
-class RenameSession(ModalScreen):
+class RenameSession(Dialog):
     """A session's name: Enter keeps it, Esc leaves it as it was. Empty clears it, and the
     session shows its directory's name."""
+    BINDINGS = [Binding("escape", "answer", show=False)]
 
     def __init__(self, name: str):
         super().__init__()
@@ -756,10 +775,6 @@ class RenameSession(ModalScreen):
     def cancel(self) -> None:
         self.dismiss(None)
 
-    def on_key(self, event) -> None:
-        if event.key == "escape":
-            event.stop()
-            self.dismiss(None)
 
 
 def ago(epoch: float, now: float | None = None) -> str:
@@ -767,9 +782,10 @@ def ago(epoch: float, now: float | None = None) -> str:
     return f"{mins}m ago" if mins < 60 else f"{mins // 60}h ago" if mins < 48 * 60 else f"{mins // 1440}d ago"
 
 
-class AdoptSession(ModalScreen):
+class AdoptSession(Dialog):
     """Pick a session to bring into the wheelhouse. A running one must be /exit-ed first:
     the wheelhouse never kills it, and only launches once it has gone."""
+    BINDINGS = [Binding("escape", "answer", show=False)]
 
     def __init__(self, candidates: list):
         super().__init__()
@@ -793,7 +809,7 @@ class AdoptSession(ModalScreen):
                           ago(c.active), c.cwd, c.title or short(c.id), key=c.id)
         if not self.candidates:
             self.query_one("#adopt-hint", Label).update("No recent sessions to adopt.")
-        table.focus()
+        self.set_focus(table)
 
     def chosen(self):
         table = self.query_one("#adopt-list", DataTable)
@@ -825,13 +841,12 @@ class AdoptSession(ModalScreen):
     def cancel(self) -> None:
         self.dismiss(None)
 
-    def on_key(self, event) -> None:
-        if event.key == "escape":
-            event.stop()
-            self.dismiss(None)
 
 
-class Confirm(ModalScreen):
+class Confirm(Dialog):
+    BINDINGS = [Binding("y", "answer(True)", show=False), Binding("n", "answer(False)", show=False),
+                Binding("escape", "answer(False)", show=False)]
+
     def __init__(self, prompt: str):
         super().__init__()
         self.prompt = prompt
@@ -844,20 +859,17 @@ class Confirm(ModalScreen):
                 yield Button(Text("[N]o"), id="no")
 
     def on_mount(self) -> None:
-        self.query_one("#no", Button).focus()   # a reflex Enter must not confirm
-
-    def on_key(self, event) -> None:
-        if event.key in ("y", "n", "escape"):
-            event.stop()
-            self.dismiss(event.key == "y")
+        self.set_focus(self.query_one("#no", Button))   # a reflex Enter must not confirm
 
     @on(Button.Pressed)
     def pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "yes")
+        self.action_answer(event.button.id == "yes")
 
 
-class Choice(ModalScreen):
+class Choice(Dialog):
     """A pending request: cancel it, force it, or leave it be."""
+    BINDINGS = [Binding("c", "answer('cancel')", show=False), Binding("f", "answer('force')", show=False),
+                Binding("escape", "answer('leave')", show=False)]
 
     def __init__(self, prompt: str):
         super().__init__()
@@ -871,28 +883,19 @@ class Choice(ModalScreen):
                 yield Button(Text("[F]orce"), variant="error", id="force")
                 yield Button(Text("Leave it [Esc]"), id="leave")
 
-    def on_key(self, event) -> None:
-        keys = {"c": "cancel", "f": "force", "escape": "leave"}
-        if event.key in keys:
-            event.stop()
-            self.dismiss(keys[event.key])
-
     @on(Button.Pressed)
     def pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id)
+        self.action_answer(event.button.id)
 
 
-class TutorialOffer(ModalScreen):
+class TutorialOffer(Dialog):
     """The first-run offer, one line: Enter takes the tutorial, Esc dismisses it for good."""
+    BINDINGS = [Binding("enter", "answer(True)", show=False), Binding("escape", "answer(False)", show=False)]
 
     def compose(self) -> ComposeResult:
         yield Label(Text.assemble(("New here? ", "bold #ffd300"), ("Enter", "bold"), ": take the tutorial · ",
                                   ("Esc", "bold"), ": dismiss  (make tutorial runs it any time)"), id="offer")
 
-    def on_key(self, event) -> None:
-        if event.key in ("enter", "escape"):
-            event.stop()
-            self.dismiss(event.key == "enter")
 
 
 def key_name(key: str) -> str:
@@ -1035,17 +1038,14 @@ def keys_help() -> str:
     return "\n\n".join(out)
 
 
-class KeysHelp(ModalScreen):
+class KeysHelp(Dialog):
     """? : every key and button, and how sending works."""
+    BINDINGS = [Binding("escape,question_mark,q", "answer", show=False)]
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="keys-dialog"):
             yield Static(RichMarkdown(keys_help()), id="keys")
 
-    def on_key(self, event) -> None:
-        if event.key in ("escape", "question_mark", "q"):
-            event.stop()
-            self.dismiss(None)
 
 
 class WheelhouseApp(App):
@@ -1280,6 +1280,8 @@ class WheelhouseApp(App):
         Textual's own way sent each key to a widget as it arrived but acted on its binding
         only once it came back up, so a later key could move the focus or a cursor first."""
         self.app_focus = True
+        if not self.screen.is_mounted:   # a key ahead of this one opened it: it takes its focus as it mounts
+            await self.screen._mounted_event.wait()
         await self.drain(self.focused)
         if self.focused is not None:
             self.screen._clear_tooltip()
@@ -1305,7 +1307,7 @@ class WheelhouseApp(App):
             self.screen.clear_selection()
             self.notify("copied")
         elif box is not None and not getattr(box, "read_only", False):
-            box.focus()
+            self.screen.set_focus(box)
             # exclusive: a second right-click before the clipboard answers supersedes the first
             self.run_worker(functools.partial(self.paste_into, box), thread=True, group="paste", exclusive=True,
                             exit_on_error=False)
@@ -2003,8 +2005,8 @@ class WheelhouseApp(App):
         self.saw(sid, ref or None)
         if ref:
             self.push_screen(ThreadView(sid, ref))
-        else:   # the conversation is already in the pane: Enter goes to its box
-            self.answer.focus()
+        else:   # the conversation is already in the pane: Enter goes to its box, at once
+            self.screen.set_focus(self.answer)
 
     def highlight_session(self, sid: str | None) -> None:
         """Keep the session list's highlight on the session in context: one current session
@@ -2021,6 +2023,9 @@ class WheelhouseApp(App):
         self.paint_items()
 
     def action_clear_filter(self) -> None:
+        if self.screen.selections:   # a text selection first, as the screen's own Esc does
+            self.screen.clear_selection()
+            return
         self.settle()
         if self.items_table.marked:   # Esc drops a multi-selection first
             self.items_table.set_marks(set())
