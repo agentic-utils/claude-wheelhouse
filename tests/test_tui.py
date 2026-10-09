@@ -1889,8 +1889,10 @@ async def drag(pilot, key: str, dx: int, dy: int) -> None:
     sp = splitter(pilot.app, key)
     x, y = sp.region.offset
     await pilot.mouse_down(sp)
-    # a move with the button held: one with none is a release that never arrived
-    await pilot._post_mouse_events([events.MouseMove], None, (x + dx, y + dy), button=1)
+    # a move with the button held, as a terminal sends one: one with none is a release that never arrived
+    pilot.app.post_message(events.MouseMove(None, x + dx, y + dy, dx, dy, button=1, shift=False, meta=False,
+                                            ctrl=False, screen_x=x + dx, screen_y=y + dy))
+    await pilot.pause()
     assert sp.has_class("-dragging"), "lit while it's dragged"
     await pilot.mouse_up(None, (x + dx, y + dy))
     await pilot.pause()
