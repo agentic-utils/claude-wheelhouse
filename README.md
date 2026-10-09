@@ -102,9 +102,8 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   drops a session's items off the inbox until you unpark or restore it. End deletes its wheelhouse data. On a running
   session, Park and End only ask the session to do it (press again to cancel or force);
   the wheelhouse never deletes anything by itself.
-  The buttons stay out of the Tab order, which goes from the session list straight to the
-  items; with the list focused, `R` renames, `L` relaunches, `S` restores, `Shift+S` restores all,
-  `P` parks or unparks and `E` ends.
+  The buttons stay out of the Tab order, and each has a key: with the list focused, `R` renames, `L` relaunches,
+  `S` restores, `Shift+S` restores all, `P` parks or unparks and `E` ends; the rest are under Keys below.
 - **Run in the wheelhouse.** New sessions run through the Claude Agent SDK in a small
   host process of their own (`claude-wheelhouse host`), with no tab: you read them in the
   conversation pane and answer from the inbox, where your messages arrive as ordinary
@@ -184,8 +183,15 @@ highlighted question or decision (or reopen a closed one: a question as answered
 from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue, `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back, `?` list every key and button, `Q` quit (it asks first
-while a relaunch is waiting for a host to stop). Send all is a button, in the bar
-above the footer.
+while a relaunch is waiting for a host to stop). Outside a text box, the buttons that have no other key:
+`I` Interrupt, `C` Compact, `H` Shell, `1` Allow, `2` Always and `3` Deny on a permission item (numbered
+as in Claude Code's own prompt), and `Shift+A` Send all. A key whose button doesn't apply says so.
+
+`Tab` goes round the panes: the session list, the items, the answer box, then the conversation (one
+stop, where the arrows, `PgUp`, `PgDn`, `Home` and `End` scroll it), and `Shift+Tab` goes back.
+`Ctrl+Enter` in the answer box goes back to the items with the cursor where it was, so answering a run
+of items is: type, `Ctrl+Enter`, `Down`, `Tab`, type, `Ctrl+Enter`. An item opened full screen has two
+stops, its answer box and its thread. These keys keep their order when typed ahead of the screen.
 
 Closing several questions or decisions at once: in the item list, `Ctrl`+click marks or unmarks a row
 and `Shift`+click marks the range from the last one marked; from the keyboard, `Space`

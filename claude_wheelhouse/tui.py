@@ -1,5 +1,6 @@
 """The wheelhouse app: a Textual app. It only reads and writes the database."""
 
+import asyncio
 import functools
 import math
 import os
@@ -16,6 +17,7 @@ from rich.style import Style
 from rich.cells import cell_len
 from rich.text import Text
 from textual import events, on
+from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.message import Message
@@ -444,14 +446,19 @@ class Compose(TextArea):
             hint.suggest(Text("  ".join(f"{g} :{c}:" for c, g in found) + "   ⇥ Tab takes the first")
                          if found else None)
 
+    def take_suggestion(self) -> bool:
+        """The first suggestion for a code being typed, if there is one, in its place."""
+        code, found = self.suggestions()
+        if found:
+            row, col, _ = self._before_cursor()
+            self.replace(found[0][1], (row, col - len(code) - 1), (row, col))
+        return bool(found)
+
     async def _on_key(self, event) -> None:
-        if event.key in ("tab", "enter"):
-            code, found = self.suggestions()
-            if found:
-                event.prevent_default()
-                event.stop()
-                row, col, _ = self._before_cursor()
-                self.replace(found[0][1], (row, col - len(code) - 1), (row, col))
+        # Enter here; Tab reaches the app first, and cycle_focus takes the suggestion there
+        if event.key == "enter" and self.take_suggestion():
+            event.prevent_default()
+            event.stop()
 
 
 # the current session's lifecycle buttons, (caption, id), under the session list: each
@@ -484,9 +491,9 @@ class Columns(Horizontal):
 
 class SendBar(Horizontal):
     """Always on screen above the footer: Send all, every session's queue, and a line
-    saying what the session in context is doing. Send all has no key: Windows Terminal
-    sends Ctrl+Shift+S and Ctrl+Alt+S as plain Ctrl+S. The buttons never take focus, so
-    clicking one leaves the answer box (and what's typed in it) where it was.
+    saying what the session in context is doing. Send all's key is Shift+A (BUTTON_KEYS):
+    Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S as plain Ctrl+S. The buttons never
+    take focus, so clicking one leaves the answer box (and what's typed in it) where it was.
 
     On the inbox the session's own buttons (CONVERSATION) sit under the session list. A
     full-screen item has no session list, so its bar carries them too (conversation=True),
@@ -569,6 +576,8 @@ class ThreadView(Screen):
         app.keep_unsent(self.box, None, me)
         self.paint()
         app.paint_sendbar()   # its hint and bar now, not at the next refresh
+        # one Tab stop for the thread, the transcript: its scroll keys reach the scroll as an ancestor's
+        self.query_one("#thread-scroll").can_focus = False
         self.box.focus()
 
     def action_leave(self) -> None:
@@ -888,7 +897,8 @@ class TutorialOffer(ModalScreen):
 
 def key_name(key: str) -> str:
     """A binding's key as the person reads it: Ctrl+S, Shift+Up, Space, ?."""
-    names = {"question_mark": "?", "escape": "Esc", "enter": "Enter", "space": "Space"}
+    names = {"question_mark": "?", "escape": "Esc", "enter": "Enter", "space": "Space", "pageup": "PgUp",
+             "pagedown": "PgDn"}
     if len(key) == 1 and key.isupper():
         return f"Shift+{key}"
     return "+".join(names.get(part, part.capitalize() if len(part) > 1 else part.upper())
@@ -921,24 +931,69 @@ DESCRIBE = {
     "app.press('restore')": "Restore it, if it's dead",
     "app.press('park')": "Park or unpark it",
     "app.press('end')": "End it",
+    "press('interrupt')": "Interrupt the session's current turn",
+    "press('compact')": "Compact the session",
+    "press('shell')": "Shell: open the session in a Claude Code tab",
+    "press('allow')": "Allow the permission item in context",
+    "press('always')": "Always: allow it, and keep the rule",
+    "press('deny')": "Deny it, with what's typed in its box as what to do instead",
+    "press('send-all')": "Send all: every session's queue",
+    **{f"list_key({key!r})": what for key, what in (
+        ("up", "Up a row"), ("down", "Down a row"), ("pageup", "Up a page"), ("pagedown", "Down a page"),
+        ("ctrl+home", "The first row"), ("ctrl+end", "The last row"))},
+    "focus_next": "The next pane (Tab order below)",
+    "focus_previous": "The previous pane",
 }
 # the send bar's buttons and the session area's, by id
 BUTTONS = {
-    "mode": "Mode: the session's send mode, Queued or Immediate",
-    "send": "Send (n): send the session's queued answers as one message",
-    "send-all": "Send all (n), above the footer: send every session's queue",
-    "allow": "Allow (over the answer box, on a permission item): let the tool call run, at once",
-    "always": "Always: allow it, and keep the rule Claude Code suggests",
-    "deny": "Deny: refuse it (or type what to do instead and press Ctrl+Enter: denied with that, at once)",
-    "interrupt": "Interrupt: stop the session's current turn, like Esc in Claude Code",
-    "compact": "Compact: the session says what to keep, then is compacted with that",
-    "shell": "Shell: open the session in a real Claude Code tab; it comes back when you /exit",
-    "relaunch": "Relaunch: stop the session and start it again where it left off (a tab session once it has exited)",
-    "restore": "Restore: bring back a dead session where it left off",
-    "rename": "Rename: the session's name in the wheelhouse",
-    "park": "Park / Unpark: drop a session's items off the inbox (it stays, dimmed, at the foot of the list), or bring them back",
-    "end": "End: the session does its own end steps, then its wheelhouse data is deleted",
+    "mode": "Mode (Ctrl+T): the session's send mode, Queued or Immediate",
+    "send": "Send (Ctrl+S): send the session's queued answers as one message; its caption counts them",
+    "send-all": "Send all (Shift+A), above the footer: send every session's queue",
+    "allow": "Allow (1; over the answer box, on a permission item): let the tool call run, at once",
+    "always": "Always (2): allow it, and keep the rule Claude Code suggests",
+    "deny": "Deny (3): refuse it (or type what to do instead and press Ctrl+Enter: denied with that, at once)",
+    "interrupt": "Interrupt (I): stop the session's current turn, like Esc in Claude Code",
+    "compact": "Compact (C): the session says what to keep, then is compacted with that",
+    "shell": "Shell (H): open the session in a real Claude Code tab; it comes back when you /exit",
+    "relaunch": "Relaunch (L in the session list): stop the session and start it again where it left off (a tab session once it has exited)",
+    "restore": "Restore (S in the session list): bring back a dead session where it left off",
+    "rename": "Rename (R in the session list): the session's name in the wheelhouse",
+    "park": "Park / Unpark (P in the session list): drop a session's items off the inbox (it stays, dimmed, at the foot of the list), or bring them back",
+    "end": "End (E in the session list): the session does its own end steps, then its wheelhouse data is deleted",
 }
+# keys for the buttons that have no other: each presses its button on the screen in front,
+# outside a text box (whose letters and digits are typing). 1, 2 and 3 number the
+# permission answers as Claude Code's own prompt does. Shift+A twice, as Shift+S
+BUTTON_KEYS = [
+    Binding("i", "press('interrupt')", "Interrupt", show=False),
+    Binding("c", "press('compact')", "Compact", show=False),
+    Binding("h", "press('shell')", "Shell", show=False),
+    Binding("1", "press('allow')", "Allow", show=False),
+    Binding("2", "press('always')", "Always", show=False),
+    Binding("3", "press('deny')", "Deny", show=False),
+    Binding("A", "press('send-all')", "Send all", show=False),
+    Binding("shift+a", "press('send-all')", "Send all", show=False),
+]
+# the inbox's Tab order (WheelhouseApp.cycle_focus): the answer box straight after the
+# items, so Ctrl+Enter (which goes back to the items), Down and Tab answer the next one.
+# Any other pane that takes focus (a module's) comes after these
+TAB_ORDER = ("session-list", "items", "answer", "detail")
+# the lists' cursor keys, by their DataTable actions (action_list_key)
+LIST_KEYS = {"up": "cursor_up", "down": "cursor_down", "pageup": "page_up", "pagedown": "page_down",
+             "ctrl+home": "scroll_top", "ctrl+end": "scroll_bottom"}
+# Keys that move focus, and the lists' cursor keys, act as the app takes them from the
+# terminal (priority), in the order typed. A widget's own bindings act only once the key
+# has come back up from the widget it was sent to, which is chosen as the key arrives: in
+# a burst (type-ahead), Ctrl+Enter, Down, Tab, typing sent the Down and the typing to the
+# answer box, focus not having moved yet. Each lets the key through where it isn't theirs
+TAB_KEYS = [Binding("tab", "focus_next", show=False, priority=True),
+            Binding("shift+tab", "focus_previous", show=False, priority=True)]
+ORDERED_KEYS = [*TAB_KEYS, *(Binding(key, f"list_key({key!r})", show=False, priority=True) for key in LIST_KEYS)]
+TABS = ("Tab goes round the panes: the session list, the items, the answer box, then the "
+        "conversation, and Shift+Tab back. Ctrl+Enter in the answer box goes back to the items with "
+        "the cursor where it was, so Down then Tab answers the next one. An item opened full screen "
+        "has two stops, its answer box and its thread. In the conversation or a thread, Up, Down, PgUp, "
+        "PgDn, Home and End scroll it. The buttons never take focus: each has a key.")
 SEND_RULES = (
     "**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the "
     "session's queue as one message, so related answers arrive together; ✉ counts what's queued. "
@@ -952,14 +1007,17 @@ MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Wi
 WHOSE = ("The buttons under the session list act on the session highlighted there, and only those that "
          "apply show: Rename, Relaunch and Park on a running one, Restore on a dead one, End on either, "
          "Unpark on a parked one; then Mode, Send on one that isn't dead, and on one run in the wheelhouse "
-         "Interrupt, Compact and Shell. Hover over one for what it does. New, Adopt and Restore all are keys in the footer. An item "
+         "Interrupt, Compact and Shell. Hover over one for what it does, and its key is in brackets below. New, Adopt and Restore all are keys in the footer. An item "
          "opened full screen has Mode, Send and the rest in its bar, for its own session. Ctrl+S and Ctrl+T "
          "act on the same session: highlighting an item highlights its session there.")
 
 
 def keys_help() -> str:
     """The ? overlay: every key, from the bindings themselves, and every button."""
-    sections = [("Everywhere", WheelhouseApp.BINDINGS), ("The session list", SessionList.BINDINGS),
+    everywhere = [b for b in WheelhouseApp.BINDINGS if b not in BUTTON_KEYS + ORDERED_KEYS]
+    sections = [("Everywhere", everywhere), ("Outside a text box", BUTTON_KEYS),
+                ("Moving between panes", TAB_KEYS), ("Either list", ORDERED_KEYS[len(TAB_KEYS):]),
+                ("The session list", SessionList.BINDINGS),
                 ("The item list", ItemList.BINDINGS),
                 ("An answer box", Compose.BINDINGS), ("The conversation pane", Transcript.BINDINGS),
                 ("An item opened full screen", ThreadView.BINDINGS)]
@@ -973,7 +1031,7 @@ def keys_help() -> str:
                 keys.append(key_name(b.key))
         # dict.fromkeys: one line for a key bound twice, as F is (its footer label changes)
         out += dict.fromkeys(f"- **{' or '.join(keys)}**: {DESCRIBE[action]}" for action, keys in actions.items())
-    out += ["## Mouse", MOUSE, "## Buttons", WHOSE, *[f"- {text}" for text in BUTTONS.values()],
+    out += ["## Tab order", TABS, "## Mouse", MOUSE, "## Buttons", WHOSE, *[f"- {text}" for text in BUTTONS.values()],
             "## Sending", SEND_RULES,
             "## The tutorial", "`make tutorial` starts it afresh any time. Esc or ? closes this list."]
     return "\n\n".join(out)
@@ -1071,8 +1129,9 @@ class WheelhouseApp(App):
 
     # keys shown in upper case, the usual convention: F is the f key, not Shift+F
     BINDINGS = [
-        Binding("ctrl+enter", "submit", "Submit", key_display="Ctrl+Enter"),
-        Binding("ctrl+j", "submit", "Submit", show=False),   # Ctrl+Enter, as most terminals send it
+        # priority, as ORDERED_KEYS: Ctrl+Enter moves focus, so it acts before the keys behind it are routed
+        Binding("ctrl+enter", "submit", "Submit", key_display="Ctrl+Enter", priority=True),
+        Binding("ctrl+j", "submit", "Submit", show=False, priority=True),   # Ctrl+Enter, as most terminals send it
         Binding("ctrl+s", "send_session", "Send", key_display="Ctrl+S"),
         Binding("ctrl+t", "toggle_mode", "Mode", key_display="Ctrl+T"),
         Binding("ctrl+r", "recall", "Edit queued", show=False, key_display="Ctrl+R"),
@@ -1088,6 +1147,8 @@ class WheelhouseApp(App):
         Binding("f", "show_finished(False)", "Hide finished", key_display="F"),
         Binding("question_mark", "help", "Keys", key_display="?"),
         Binding("q", "quit", "Quit", key_display="Q"),
+        *BUTTON_KEYS,
+        *ORDERED_KEYS,
     ]
 
     def __init__(self, store: Store | None = None):
@@ -1174,7 +1235,9 @@ class WheelhouseApp(App):
         # buttons still click, and the list's own keys press them (SessionList)
         self.conversation_buttons = self.query_one("#conversation-buttons", Grid)
         self.session_buttons = self.query_one("#session-buttons", Grid)
-        for widget in (self.query_one("#session-info"), self.query_one("#checklist-scroll"),
+        # the conversation's one stop is its transcript, not this scroll too: its keys
+        # still scroll it, an ancestor's bindings (TAB_ORDER)
+        for widget in (self.query_one("#session-info"), self.query_one("#checklist-scroll"), self.detail_scroll,
                        *self.query("#sessions-pane Grid Button")):
             widget.can_focus = False
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
@@ -2060,8 +2123,16 @@ class WheelhouseApp(App):
             return None, None, None
         return box, target, text
 
+    async def action_submit(self) -> None:
+        """Ctrl+Enter, taken by the app first (ORDERED_KEYS): once what was typed before it
+        has landed. A dialog's Ctrl+Enter is its own."""
+        if self.composing()[0] is None:
+            raise SkipAction()
+        await self.drain(self.focused)
+        self.submit()
+
     @session_action
-    def action_submit(self) -> None:
+    def submit(self) -> None:
         """Ctrl+Enter: queued or sent at once, by the session's mode."""
         self.settle()
         box, target, text = self.typed()
@@ -2087,6 +2158,8 @@ class WheelhouseApp(App):
             self.notify(f"queued for {aimed(target)}: Ctrl+S or Send sends the session's queue")
         box.text = ""
         self.refresh_data()
+        if box is self.answer:   # back to the items, cursor where it was: Down, Tab answers the next
+            self.screen.set_focus(self.items_table)
 
     def action_recall(self) -> None:
         """Take this item's latest queued answer back into the box, to edit it or drop it."""
@@ -2296,8 +2369,73 @@ class WheelhouseApp(App):
         return True
 
     def action_press(self, button_id: str) -> None:
-        """A key standing in for a button that never takes focus: as a click on it."""
-        self.query_one(f"#{button_id}", Button).press()
+        """A key standing in for a button that never takes focus: as a click on it, on the
+        screen in front, the inbox or a full-screen item. Not in a text box, whose keys are
+        typing, nor under a dialog, whose keys are its own. One that doesn't apply to what's
+        in context says so rather than doing nothing."""
+        if isinstance(self.focused, (TextArea, Input)) or self.composing()[0] is None:
+            return
+        button = next(iter(self.screen.query(f"#{button_id}")), None)
+        if button is None:
+            return
+        if not (button.display and button.parent.display):
+            whose = "the item in context" if button_id in ("allow", "always", "deny") else "this session"
+            self.notify(f"{button.label} doesn't apply to {whose}", severity="warning")
+        elif button.disabled:
+            self.notify(f"{button.label}: nothing to do", severity="warning")
+        else:
+            button.press()
+
+    async def drain(self, widget: Widget | None) -> None:
+        """Let the keys already sent to a widget land (typing, say) before a key that the app
+        takes first (ORDERED_KEYS) acts on what they did. Bounded: a widget kept busy never
+        holds the app up for long."""
+        if widget is None:
+            return
+        landed = asyncio.get_running_loop().create_future()
+        # a callback queued behind them runs once they have
+        widget.call_later(lambda: landed.done() or landed.set_result(None))
+        try:
+            await asyncio.wait_for(landed, 0.5)
+        except asyncio.TimeoutError:
+            pass
+
+    async def action_focus_next(self) -> None:
+        await self.cycle_focus(1)
+
+    async def action_focus_previous(self) -> None:
+        await self.cycle_focus(-1)
+
+    async def action_list_key(self, key: str) -> None:
+        """A list's cursor key (LIST_KEYS), as the app takes it: in order with Tab."""
+        table = self.focused
+        if not isinstance(table, (SessionList, ItemList)):
+            raise SkipAction()   # an answer box's, a dialog's: theirs
+        await self.drain(table)
+        getattr(table, f"action_{LIST_KEYS[key]}")()
+
+    async def cycle_focus(self, step: int) -> None:
+        """Tab and Shift+Tab on the inbox go round TAB_ORDER, then any other pane that takes
+        focus; elsewhere (a full-screen item, a dialog) in screen order. In an answer box
+        with an emoji code being typed, Tab takes the first suggestion instead. Moving into
+        an answer box settles first, so it takes the items' cursor's target before anything
+        is typed (a raw Down, Tab, typing): moving to the session list doesn't, so a session
+        move after it still supersedes the items move (review 13)."""
+        await self.drain(self.focused)
+        if step > 0 and isinstance(self.focused, Compose) and self.focused.take_suggestion():
+            return
+        screen = self.screen
+        chain = screen.focus_chain
+        if screen is self.screen_stack[0]:
+            order = [w for id_ in TAB_ORDER for w in chain if w.id == id_]
+            chain = order + [w for w in chain if w not in order]
+        if not chain:
+            return
+        here = chain.index(self.focused) if self.focused in chain else (-1 if step > 0 else 0)
+        nxt = chain[(here + step) % len(chain)]
+        if isinstance(nxt, Compose):
+            self.settle()
+        screen.set_focus(nxt)   # at once, not after a refresh as focus() does: keys behind it go there
 
     def row(self, sid: str):
         """The session's row, or SessionGone: it can end at any moment (in-session /wheelhouse end)."""

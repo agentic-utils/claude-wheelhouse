@@ -1,3 +1,4 @@
+import functools
 import html
 import itertools
 import json
@@ -2514,7 +2515,10 @@ async def test_parked_sessions_stay_in_the_list_after_the_rest(store, sid, tmp_p
 def test_the_keys_overlay_has_relaunch_and_no_tabs():
     from claude_wheelhouse.tui import keys_help
     text = keys_help()
-    assert "Relaunch:" in text and "Sessions tab" not in text and "Inbox tab" not in text
+    assert "Relaunch (L in the session list):" in text and "Sessions tab" not in text and "Inbox tab" not in text
+    for key in ("**I**", "**C**", "**H**", "**1**", "**2**", "**3**", "**Shift+A**", "**Tab**", "**Shift+Tab**",
+                "## Tab order"):
+        assert text.count(key) == 1, f"{key} listed once (#73)"
     assert text.count("Show or hide finished items") == 1, "F once, though it has two bindings"
     assert text.count("Shift+S") == 1, "Shift+S once, though it has two bindings"
 
@@ -2560,15 +2564,18 @@ async def test_tab_goes_from_the_session_list_to_the_items(store, sid):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("key, button, desc", [
-    ("r", "rename", "R renames"),
-    ("l", "relaunch", "L relaunches"),
-    ("s", "restore", "S restores"),
-    ("p", "park", "P parks"),
-    ("e", "end", "E ends"),
+@pytest.mark.parametrize("key, button, live, desc", [
+    ("r", "rename", True, "R renames"),
+    ("l", "relaunch", True, "L relaunches"),
+    ("s", "restore", False, "S restores"),
+    ("p", "park", True, "P parks"),
+    ("e", "end", True, "E ends"),
 ])
-async def test_the_session_lists_keys_press_its_buttons(store, sid, key, button, desc):
-    """The buttons are out of the Tab order, so the list's keys keep them on the keyboard."""
+async def test_the_session_lists_keys_press_its_buttons(store, sid, monkeypatch, key, button, live, desc):
+    """The buttons are out of the Tab order, so the list's keys keep them on the keyboard.
+    Each on a session it applies to: on another it says so (#73)."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live" if live else "dead")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -2689,3 +2696,184 @@ async def test_a_long_prompt_wraps_in_its_dialog(store, sid, dialog, height, des
         rows = html.unescape(re.sub(r"<[^>]+>", "", app.export_screenshot())).replace("\xa0", " ").splitlines()
         inside = " ".join(r.strip("█") for r in rows if len(r) > 2 and r[0] == r[-1] == "█")   # the dialog's border
         assert LONG_PROMPT in " ".join(inside.split()), desc
+
+
+def focused_id(app) -> str | None:
+    return app.focused.id if app.focused is not None else None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("keys, desc", [
+    ("pilot", "Ctrl+Enter, Down, Tab, type, Ctrl+Enter answers the next item (#73)"),
+    ("raw", "the same as a burst, no idle wait between keys (#73)"),
+])
+async def test_answer_one_then_the_next_from_the_keyboard(store, sid, keys, desc):
+    for title in ("one?", "two?", "three?"):
+        store.post_item(sid, "question", title)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        first, second = app.items_table.keys()[:2]
+        app.items_table.move_cursor(row=0)
+        await pilot.pause()
+        app.answer.focus()
+        await pilot.pause()
+        flow = [*"aa", "ctrl+enter", "down", "tab", *"bb", "ctrl+enter"]
+        if keys == "raw":
+            raw_keys(app, *flow)
+            for _ in range(6):
+                await pilot.pause()
+        else:
+            await pilot.press(*flow[:3])
+            assert focused_id(app) == "items", f"{desc}: Ctrl+Enter goes back to the items"
+            assert app.items_table.cursor_key() == first, f"{desc}: the cursor where it was"
+            await pilot.press(*flow[3:])
+        await pilot.pause()
+        drafts = {(m["session_id"], m["item_ref"]): m["body"] for m in store.drafts(sid)}
+        assert drafts == {tuple(first.split("|")): "aa", tuple(second.split("|")): "bb"}, f"{desc}: {drafts}"
+        assert focused_id(app) == "items" and app.items_table.cursor_key() == second, desc
+        assert app.answer.text == "", desc
+        assert_one_current(app, desc)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("text, focus, desc", [
+    ("", "answer", "nothing typed: nothing submitted, the box keeps focus"),
+    ("hi", "thread-answer", "a full-screen item has no items to go back to: its box keeps focus"),
+])
+async def test_ctrl_enter_leaves_focus_where_there_is_nothing_to_go_back_to(store, sid, text, focus, desc):
+    q = store.post_item(sid, "question", "one?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if focus == "thread-answer":
+            app.push_screen(ThreadView(sid, q))
+        else:
+            app.answer.focus()
+        await pilot.pause()
+        await pilot.press(*text, "ctrl+enter")
+        await pilot.pause()
+        assert focused_id(app) == focus, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("screen, key, order, desc", [
+    ("inbox", "tab", ["session-list", "items", "answer", "detail", "session-list"],
+     "Tab: the session list, the items, the answer box, the conversation, round again (#73)"),
+    ("inbox", "shift+tab", ["session-list", "detail", "answer", "items", "session-list"], "Shift+Tab: the reverse"),
+    ("thread", "tab", ["thread-answer", "thread", "thread-answer"], "a full-screen item: its box and its thread"),
+    ("thread", "shift+tab", ["thread-answer", "thread", "thread-answer"], "and back"),
+])
+async def test_the_tab_order(store, sid, screen, key, order, desc):
+    q = store.post_item(sid, "question", "one?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if screen == "thread":
+            app.push_screen(ThreadView(sid, q))
+        else:
+            app.session_list.focus()
+        await pilot.pause()
+        seen = [focused_id(app)]
+        for _ in order[1:]:
+            await pilot.press(key)
+            seen.append(focused_id(app))
+        assert seen == order, desc
+        assert_one_current(app, desc)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key, desc", [
+    ("pagedown", "PgDn scrolls the conversation pane it has focus"),
+    ("end", "End goes to its foot"),
+    ("down", "Down scrolls a line"),
+])
+async def test_the_focused_conversation_scrolls_from_the_keyboard(store, sid, key, desc):
+    store.post_item(sid, "question", "long?", "\n\n".join(f"line {i}" for i in range(200)))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        await pilot.press("tab", "tab")
+        assert focused_id(app) == "detail", desc
+        await pilot.press(key)
+        await pilot.pause()
+        assert app.detail_scroll.scroll_y > 0, desc
+
+
+@pytest.fixture
+def keyed(store, tmp_path, monkeypatch):
+    """A session running in the wheelhouse with an open permission (selected, so Allow,
+    Always and Deny show) and an answer queued (so Send all is enabled): every button with
+    a key in BUTTON_KEYS applies."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    ref = store.post_item(sid, "permission", "Bash: make")
+    store.queue(sid, "queued", None)
+    return sid, ref
+
+
+def presses(app) -> list[str]:
+    """Each keyed button's press, recorded instead of done."""
+    pressed = []
+    for b in app.screen.query(Button):
+        b.press = functools.partial(pressed.append, b.id)
+    return pressed
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key, button", [("i", "interrupt"), ("c", "compact"), ("h", "shell"), ("1", "allow"),
+                                         ("2", "always"), ("3", "deny"), ("A", "send-all"), ("shift+a", "send-all")])
+@pytest.mark.parametrize("where, pressed", [
+    ("items", True), ("session-list", True), ("detail", True), ("thread", True), ("answer", False), ("dialog", False),
+])
+async def test_the_button_keys(store, keyed, key, button, where, pressed):
+    """#73: every button that was mouse-only has a key, pressing it on the screen in front,
+    except in a text box (where the key types) or under a dialog."""
+    desc = f"{key} for {button} from {where}"
+    sid, ref = keyed
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        assert app.selected == (sid, ref), desc
+        if where == "thread":
+            app.push_screen(ThreadView(sid, ref))
+            await pilot.pause()
+            app.screen.query_one("#thread", Transcript).focus()
+        elif where == "dialog":
+            app.push_screen(Confirm("sure?"))
+        else:
+            app.query_one(f"#{where}").focus()
+        await pilot.pause()
+        got = presses(app)
+        await pilot.press(key)
+        await pilot.pause()
+        assert got == ([button] if pressed else []), desc
+        if where == "answer" and len(key) == 1:
+            assert app.answer.text == key, f"{desc}: typed instead"
+        assert_one_current(app, desc) if where != "dialog" else None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key, setup, said, desc", [
+    ("i", "tab", "Interrupt doesn't apply to this session", "Interrupt on a tab session"),
+    ("1", "question", "Allow doesn't apply to the item in context", "Allow on a question"),
+    ("A", "nothing queued", "Send all (0): nothing to do", "Send all with nothing queued"),
+    ("r", "dead", "Rename doesn't apply to this session", "the session list's R on a dead session"),
+])
+async def test_a_button_key_that_does_not_apply_says_so(store, tmp_path, monkeypatch, key, setup, said, desc):
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead" if setup == "dead" else "live")
+    sid = store.create_session(str(tmp_path), name="s", runner="tab" if setup == "tab" else "sdk")
+    store.post_item(sid, "question", "q?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        (app.session_list if key == "r" else app.items_table).focus()
+        await pilot.pause()
+        got, notes = presses(app), []
+        monkeypatch.setattr(app, "notify", lambda text, **kw: notes.append(text))
+        await pilot.press(key)
+        await pilot.pause()
+        assert (got, notes) == ([], [said]), desc
