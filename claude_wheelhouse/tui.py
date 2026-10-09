@@ -1146,11 +1146,18 @@ class WheelhouseApp(App):
 
     def paste_into(self, box) -> None:
         """On a worker thread: the system clipboard, else the wheelhouse's own last copy,
-        pasted as the terminal's own paste arrives, into the box (focused by now)."""
+        pasted as the terminal's own paste arrives, into the box (focused by now). Checked
+        again on the UI thread: a later right-click can cancel this one, or focus move, while
+        the paste waits there."""
+        worker = get_current_worker()
         text = system_clipboard()
         text = self.clipboard if text is None else text
-        if text and self.focused is box and not get_current_worker().is_cancelled:
-            self.call_from_thread(self.post_message, events.Paste(text))
+
+        def land() -> None:
+            if self.focused is box and not worker.is_cancelled:
+                self.post_message(events.Paste(text))
+        if text and not worker.is_cancelled:
+            self.call_from_thread(land)
 
     # periodic work
 

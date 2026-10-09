@@ -1860,3 +1860,31 @@ async def test_a_landed_context_read_repaints_the_pane_without_a_tick(store, sid
         pane.repaint = lambda *a: calls.append("repaint")
         app.read_landed(sid)
         assert calls == ["repaint"] * repaints, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("cancel, pasted, desc", [
+    (False, "pasted", "a paste lands in the box"),
+    (True, "", "not once its worker is cancelled while the paste waits on the UI thread (review 7)"),
+])
+async def test_a_paste_is_checked_again_on_the_ui_thread(store, sid, monkeypatch, cancel, pasted, desc):
+    from claude_wheelhouse import tui
+
+    class Worker:
+        is_cancelled = False
+    worker = Worker()
+    monkeypatch.setattr(tui, "system_clipboard", lambda: "pasted")
+    monkeypatch.setattr(tui, "get_current_worker", lambda: worker)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.answer.focus()
+        await pilot.pause()
+
+        def ui_thread(callback):
+            worker.is_cancelled = cancel   # superseded between the worker's check and this
+            callback()
+        monkeypatch.setattr(app, "call_from_thread", ui_thread)
+        app.paste_into(app.answer)
+        await pilot.pause()
+        assert app.answer.text == pasted, desc
