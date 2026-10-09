@@ -5,6 +5,7 @@ import math
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import time
@@ -18,7 +19,7 @@ from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.message import Message
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.scrollbar import ScrollBar
 from textual.strip import Strip
@@ -32,10 +33,7 @@ from textual.widgets import (
     Footer,
     Input,
     Label,
-    Markdown,
     Static,
-    TabbedContent,
-    TabPane,
     TextArea,
 )
 
@@ -50,9 +48,11 @@ RESTING = ("idle", "interrupted", "stopped", "in a shell tab", "error")
 MARKED = Style(bgcolor="#3a1060")   # rows picked to close together
 DECISION = "bold #b967ff"   # an unseen decision: noticeable, not urgent
 STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "#05d9e8",
-                "dead": "bold #ff2a6d", "ending": "bold #d300c5", "parking": "bold #d300c5"}
+                "dead": "bold #ff2a6d", "ending": "bold #d300c5", "parking": "bold #d300c5",
+                "relaunching": "bold #05d9e8"}
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
 RUNNING = ("live", "stalled", "starting")
+RELAUNCH_WAIT = 30   # seconds a host has to stop for Relaunch before it gives up and says so
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777"}
@@ -853,9 +853,8 @@ DESCRIBE = {
     "new_session": "New session",
     "adopt": "Adopt a Claude Code session that isn't in the wheelhouse yet",
     "clear_filter": "Clear the marks, else show every session's items again",
-    "show_tab('inbox')": "Inbox tab",
-    "show_tab('sessions')": "Sessions tab",
-    "toggle_finished": "Show or hide finished items",
+    "show_finished(True)": "Show or hide finished items",
+    "show_finished(False)": "Show or hide finished items",
     "close_question": "Close the question or decision (or every marked one); on a closed one, reopen it",
     "help": "This list",
     "quit": "Quit the wheelhouse (sessions carry on without it)",
@@ -865,7 +864,7 @@ DESCRIBE = {
     "select_all": "Select all of it, to copy",
     "leave": "Back to the inbox",
 }
-# the send bar's buttons and the Sessions tab's, by id
+# the send bar's buttons and the session area's, by id
 BUTTONS = {
     "mode": "Mode: the session's send mode, Queued or Immediate (Ctrl+T)",
     "send": "Send (n): send this session's queued answers as one message (Ctrl+S)",
@@ -878,10 +877,11 @@ BUTTONS = {
     "shell": "Shell: open the session in a real Claude Code tab; it comes back when you /exit",
     "new": "New session",
     "adopt-open": "Adopt: take on a Claude Code session started outside the wheelhouse",
+    "relaunch": "Relaunch: stop the session and start it again where it left off (a tab session once it has exited)",
     "restore": "Restore: bring back a dead session where it left off",
     "restore-all": "Restore all: every dead session that isn't parked",
     "rename": "Rename: the session's name in the wheelhouse",
-    "park": "Park / unpark: drop a session off the inbox, or bring it back",
+    "park": "Park / Unpark: drop a session's items off the inbox (it stays, dimmed, at the foot of the list), or bring them back",
     "end": "End: the session does its own end steps, then its wheelhouse data is deleted",
 }
 SEND_RULES = (
@@ -905,7 +905,8 @@ def keys_help() -> str:
         actions: dict[str, list[str]] = {}
         for b in bindings:
             actions.setdefault(b.action, []).append(key_name(b.key))
-        out += [f"- **{' or '.join(keys)}**: {DESCRIBE[action]}" for action, keys in actions.items()]
+        # dict.fromkeys: one line for a key bound twice, as F is (its footer label changes)
+        out += dict.fromkeys(f"- **{' or '.join(keys)}**: {DESCRIBE[action]}" for action, keys in actions.items())
     out += ["## Mouse", MOUSE, "## Buttons", *[f"- {text}" for text in BUTTONS.values()],
             "## Sending", SEND_RULES,
             "## The tutorial", "`make tutorial` starts it afresh any time. Esc or ? closes this list."]
@@ -929,7 +930,7 @@ class WheelhouseApp(App):
     CSS = f"""
     Screen {{ background: #0a0a12; }}
     #title {{ height: 1; background: #12122a; content-align: center middle; }}
-    TabbedContent {{ height: 1fr; }}   /* leaves room for the send bar and footer: no screen scroll */
+    #main {{ height: 1fr; }}   /* leaves room for the send bar and footer: no screen scroll */
     .panel {{ background: #000000; color: {MATRIX}; border: round #7b61ff; }}
     .panel:focus-within {{ border: round #ff2a6d; }}
     DataTable {{ background: #000000; color: {MATRIX}; }}
@@ -947,9 +948,14 @@ class WheelhouseApp(App):
     Compose > .text-area--cursor {{ background: #ff2a6d; color: #000000; text-style: bold; }}
     .answer-hint {{ color: #777777; height: 1; }}
     #thread-scroll {{ height: 1fr; }}
-    #synopsis {{ height: 7; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
-    Markdown {{ background: #000000; color: {MATRIX}; }}
-    #session-buttons {{ height: 3; }}
+    #session-list {{ height: 1fr; }}
+    #session-info {{ height: 10; background: #000000; border-top: solid #7b61ff; padding: 0 1; }}
+    #session-info-text {{ color: #e8e8e8; }}
+    /* three to a row, one row each. A caption takes its length and a cell either side:
+       the third column fits "Restore all", the others "Relaunch" and "Unpark" */
+    #session-buttons {{ height: 3; grid-size: 3; grid-columns: 1fr 1fr 13; grid-gutter: 0 1;
+                        background: #000000; }}
+    #session-buttons Button {{ width: 1fr; min-width: 0; padding: 0; }}
     #dialog {{ width: 80; height: auto; padding: 1 2; background: #000000; color: {MATRIX};
                border: thick #ff2a6d; }}
     .dialog-title {{ color: #ffd300; text-style: bold; }}
@@ -994,9 +1000,9 @@ class WheelhouseApp(App):
         Binding("n", "new_session", "New session", key_display="N"),
         Binding("a", "adopt", "Adopt", key_display="A"),
         Binding("escape", "clear_filter", "All sessions", key_display="Esc"),
-        Binding("1", "show_tab('inbox')", "Inbox"),
-        Binding("2", "show_tab('sessions')", "Sessions"),
-        Binding("f", "toggle_finished", "Finished", key_display="F"),
+        # one key, two bindings: the footer shows the one that applies (check_action)
+        Binding("f", "show_finished(True)", "Show finished", key_display="F"),
+        Binding("f", "show_finished(False)", "Hide finished", key_display="F"),
         Binding("x", "close_question", "Close", key_display="X"),
         Binding("question_mark", "help", "Keys", key_display="?"),
         Binding("q", "quit", "Quit", key_display="Q"),
@@ -1027,38 +1033,36 @@ class WheelhouseApp(App):
         self.box_target: tuple | None = None
         self.statuses: dict[str, str] = {}
         self.sessions = []
+        # sessions whose host Relaunch has stopped: started again once it has gone (monotonic deadline)
+        self.relaunching: dict[str, float] = {}
         # the tutorial steps only the screen sees (a question opened, the conversation
         # followed), by tutorial session
 
     def compose(self) -> ComposeResult:
         yield Static(id="title")
-        with TabbedContent(initial="inbox"):
-            with TabPane("Inbox", id="inbox"):
-                with Horizontal():
-                    with Vertical(id="sessions-pane", classes="panel"):
-                        yield SessionList(id="session-list", cursor_type="row")
-                    with Vertical(id="items-pane", classes="panel"):
-                        yield ItemList(id="items", cursor_type="row")   # then the inbox.side panes
-                    with Vertical(id="detail-pane", classes="panel"):
-                        yield Static(id="checklist")
-                        with VerticalScroll(id="detail-scroll"):
-                            yield Transcript("Select an item, or a session to follow its conversation.",
-                                         id="detail")
-                        yield PermissionButtons()
-                        yield Compose(id="answer")
-                        yield Hint(classes="answer-hint")
-            with TabPane("Sessions", id="sessions"):
-                with Vertical(classes="panel"):
-                    yield DataTable(id="session-table", cursor_type="row")
-                    yield Markdown(id="synopsis")
-                    with Horizontal(id="session-buttons"):
-                        yield Button("New session", id="new", variant="success")
-                        yield Button("Adopt", id="adopt-open")
-                        yield Button("Restore", id="restore")
-                        yield Button("Restore all", id="restore-all", variant="warning")
-                        yield Button("Rename", id="rename")
-                        yield Button("Park / unpark", id="park")
-                        yield Button("End", id="end", variant="error")
+        with Horizontal(id="main"):
+            # the sessions, the highlighted one's description, and what can be done to it
+            with Vertical(id="sessions-pane", classes="panel"):
+                yield SessionList(id="session-list", cursor_type="row")
+                with VerticalScroll(id="session-info"):
+                    yield Static(id="session-info-text")
+                with Grid(id="session-buttons"):
+                    for label, id_, variant in (("New", "new", "success"), ("Adopt", "adopt-open", "default"),
+                                                ("Rename", "rename", "default"), ("Relaunch", "relaunch", "primary"),
+                                                ("Restore", "restore", "default"),
+                                                ("Restore all", "restore-all", "warning"),
+                                                ("Park", "park", "default"), ("End", "end", "error")):
+                        yield Button(label, variant, id=id_, compact=True)   # compact: one row each
+            with Vertical(id="items-pane", classes="panel"):
+                yield ItemList(id="items", cursor_type="row")   # then the inbox.side panes
+            with Vertical(id="detail-pane", classes="panel"):
+                yield Static(id="checklist")
+                with VerticalScroll(id="detail-scroll"):
+                    yield Transcript("Select an item, or a session to follow its conversation.",
+                                     id="detail")
+                yield PermissionButtons()
+                yield Compose(id="answer")
+                yield Hint(classes="answer-hint")
         yield SendBar()
         yield Footer()
 
@@ -1070,15 +1074,9 @@ class WheelhouseApp(App):
         self.detail = self.query_one("#detail", Transcript)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
         self.answer = self.query_one("#answer", Compose)
-        self.tabs = self.query_one(TabbedContent)
-        self.synopsis = self.query_one("#synopsis", Markdown)
-        self.tables = {"#session-list": self.query_one("#session-list", DataTable),
-                       "#session-table": self.query_one("#session-table", DataTable)}
-        self.eye_cols = {
-            "#session-list": self.tables["#session-list"].add_columns("", "session", "ctx", "?", "D", "✉", "")[-1],
-            "#session-table": self.tables["#session-table"].add_columns(
-                "status", "name", "ticket", "dir", "open Q", "running", "unseen D", "queued", "")[-1],
-        }
+        self.session_list = self.query_one("#session-list", SessionList)
+        self.session_info = self.query_one("#session-info-text", Static)
+        self.eye_col = self.session_list.add_columns("", "session", "ctx", "?", "D", "✉", "")[-1]
         self.items_table.add_columns("session", "ref", "status", "title")
         self.checklist = self.query_one("#checklist", Static)
         self.set_interval(0.1, self.animate)
@@ -1148,7 +1146,8 @@ class WheelhouseApp(App):
         self.paint_sessions()
         self.paint_items()
         self.each_pane("tick")
-        self.paint_synopsis()
+        self.finish_relaunches()
+        self.paint_session_info()
         self.paint_sendbar()
         self.paint_checklist()
         if isinstance(self.screen, ThreadView) and self.screen.is_mounted:   # not before its widgets exist
@@ -1178,6 +1177,8 @@ class WheelhouseApp(App):
 
     def shown_status(self, s) -> str:
         st = self.statuses.get(s["id"], "dead")
+        if s["id"] in self.relaunching:
+            return "relaunching"
         what = self.pending(s)
         return PENDING[what] if what and st in RUNNING else st
 
@@ -1222,43 +1223,35 @@ class WheelhouseApp(App):
         return stats.context_bar(size) if size else ""
 
     def sweep_eyes(self) -> None:
-        """Move the Cylon eye on busy rows without rebuilding the tables."""
-        for table_id, col in self.eye_cols.items():
-            table = self.tables[table_id]
-            for s in self.sessions:
-                if self.busy(s) and s["id"] in table.rows:
-                    table.update_cell(s["id"], col, cylon(self.frame))
+        """Move the Cylon eye on busy rows without rebuilding the table."""
+        for s in self.sessions:
+            if self.busy(s) and s["id"] in self.session_list.rows:
+                self.session_list.update_cell(s["id"], self.eye_col, cylon(self.frame))
 
     def paint_sessions(self) -> None:
-        for table_id, compact in (("#session-list", True), ("#session-table", False)):
-            table = self.tables[table_id]
-            keep = table.cursor_row
-            rows = []
-            for s in self.sessions:
-                st = self.shown_status(s)
-                if compact and s["parked"]:
-                    continue
-                busy = cylon(self.frame) if self.busy(s) else Text("")
-                dot = Text("●", style=STATUS_STYLE[st])
-                label = Text(st, style=STATUS_STYLE[st])
-                if s["parked"]:
-                    label.append(" · parked", style="#777777")
-                if self.stale(s):
-                    label.append(" · needs relaunch", style="bold #ff2a6d")
-                name = s["name"] or os.path.basename(s["cwd"]) or short(s["id"])
-                if compact and self.stale(s):
-                    name = Text.assemble(name, (" ⟳", "bold #ff2a6d"))
-                queued = Text(f"✉ {s['drafts']}", style="bold #05d9e8") if s["drafts"] else ""
-                # decisions inform, they don't block: counted, but not blinking like questions
-                unseen = Text(str(s["unseen_decisions"]), style=DECISION) if s["unseen_decisions"] else ""
-                if compact:
-                    q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
-                    rows.append((s["id"], (dot, name, self.context_cell(s), q, unseen, queued, busy)))
-                else:
-                    rows.append((s["id"], (label, name, s["ticket"], s["cwd"], str(s["open_questions"]),
-                                           str(s["running"]), unseen, queued, busy)))
-            if fill(table, rows) and table.row_count:
-                table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
+        """Every session: parked ones dimmed, after the rest, so the buttons below still
+        reach them (Unpark, Restore, End)."""
+        table = self.session_list
+        keep = table.cursor_row
+        rows = []
+        for s in sorted(self.sessions, key=lambda s: s["parked"]):   # stable: creation order within each
+            st = self.shown_status(s)
+            busy = cylon(self.frame) if self.busy(s) else Text("")
+            dot = Text("●", style="#777777" if s["parked"] else STATUS_STYLE[st])
+            name = Text(self.display_name(s), style="dim" if s["parked"] else "")
+            if self.stale(s):
+                name.append(" ⟳", style="bold #ff2a6d")
+            queued = Text(f"✉ {s['drafts']}", style="bold #05d9e8") if s["drafts"] else ""
+            # decisions inform, they don't block: counted, but not blinking like questions
+            unseen = Text(str(s["unseen_decisions"]), style=DECISION) if s["unseen_decisions"] else ""
+            q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
+            rows.append((s["id"], (dot, name, self.context_cell(s), q, unseen, queued, busy)))
+        if fill(table, rows) and table.row_count:
+            table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
+
+    @staticmethod
+    def display_name(s) -> str:
+        return s["name"] or os.path.basename(s["cwd"]) or short(s["id"])
 
     def paint_items(self) -> None:
         table = self.items_table
@@ -1489,24 +1482,56 @@ class WheelhouseApp(App):
             tutorial.see(self.store, sid, step)
             self.paint_checklist()
 
-    def paint_synopsis(self) -> None:
+    def paint_session_info(self) -> None:
+        """The highlighted session's description, under the list, and the Park button's
+        caption for it."""
         sid = self.current_session()
-        s = sid and self.store.session(sid)
-        text = (f"**{s['name'] or os.path.basename(s['cwd']) or short(sid)}**\n\n{s['synopsis'] or '_No synopsis yet._'}"
-                if s else "_Select a session to see its synopsis._")
-        if text != getattr(self, "_synopsis_text", None):
-            self._synopsis_text = text
-            self.synopsis.update(text)
+        s = next((x for x in self.sessions if x["id"] == sid), None)
+        text = self.describe(s) if s else Text("Select a session to see its description.", style="#777777")
+        if text.plain != getattr(self, "_info_text", None):
+            self._info_text = text.plain
+            self.session_info.update(text)
+        park = next(iter(self.query("#park")), None)
+        caption = "Unpark" if s and s["parked"] else "Park"
+        if park is not None and str(park.label) != caption:
+            park.label = caption
+
+    def describe(self, s) -> Text:
+        """A session's description: what the old Sessions tab's row and synopsis showed."""
+        st = self.shown_status(s)
+        t = Text(self.display_name(s), style="bold #ffd300")
+        t.append("\n")
+        t.append(st, style=STATUS_STYLE[st])
+        if s["parked"]:
+            t.append(" · parked", style="#777777")
+        if self.stale(s):
+            t.append(" · needs relaunch", style="bold #ff2a6d")
+        where = ("shell tab" if s["shell"] else "in the wheelhouse") if runner(s) == "sdk" else "tab"
+        t.append(f" · {where} · {mode(s)}", style="#777777")
+        if s["ticket"]:
+            t.append(f"\n{s['ticket']}", style="#05d9e8")
+        t.append(f"\n{s['cwd']}", style="#777777")
+        counts = [f"{n} {what}" for n, what in ((s["open_questions"], "open Q"), (s["running"], "running"),
+                                                 (s["unseen_decisions"], "unseen D"), (s["drafts"], "queued")) if n]
+        if counts:
+            t.append("\n" + " · ".join(counts))
+        if runner(s) == "sdk" and s["activity"] and self.running(s["id"]):
+            t.append(f"\n{s['activity']}", style="italic #05d9e8")
+        t.append("\n\n")
+        if s["synopsis"]:
+            t.append(s["synopsis"])
+        elif s["brief"]:
+            t.append("Brief: ", style="#777777")
+            t.append(s["brief"])
+        else:
+            t.append("No synopsis yet.", style="#777777")
+        return t
 
     # selection
 
     @on(DataTable.RowSelected, "#session-list")
     def pick_session(self, event: DataTable.RowSelected) -> None:
         self.follow(event.row_key.value)
-        self.offer_relaunch(event.row_key.value)
-
-    @on(DataTable.RowSelected, "#session-table")
-    def pick_session_in_table(self, event: DataTable.RowSelected) -> None:
         self.offer_relaunch(event.row_key.value)
 
     @session_action
@@ -1525,6 +1550,67 @@ class WheelhouseApp(App):
             self.store.set_parked(sid, False)
             self.notify("relaunching")
             self.refresh_data()
+
+    @on(Button.Pressed, "#relaunch")
+    @session_action
+    def relaunch_pressed(self) -> None:
+        """Relaunch, in one click: a dead session as Restore brings it back; a running one
+        run in the wheelhouse has its host stopped, then started again on the conversation.
+        A tab is the person's to /exit: it relaunches once it has."""
+        sid = self.current_session()
+        if not sid:
+            return
+        s = self.row(sid)
+        if sid in self.relaunching:
+            self.notify("already relaunching: waiting for its host to stop", severity="warning")
+        elif self.statuses.get(sid) == "dead":
+            self.offer_relaunch(sid)
+        elif runner(s) != "sdk" or s["shell"]:
+            self.notify("a session in a tab relaunches once it has exited: /exit it there, then Relaunch",
+                        severity="warning")
+        elif self.statuses.get(sid) == "starting":
+            self.notify("it's still starting: Relaunch once it's running", severity="warning")
+        else:
+            self.push_screen(Confirm(f"Relaunch {self.label(sid)}? Its host stops, interrupting any turn "
+                                     "under way, and starts again on the same conversation."),
+                             lambda yes: yes and self.stop_host(sid))
+
+    @session_action
+    def stop_host(self, sid: str) -> None:
+        """Stop a session's host, as SIGTERM does (its own clean stop: Claude Code is
+        disconnected, and an open permission or question closes as withdrawn, or as lost
+        when the new host starts), checking first that the pid is still that host. The
+        refresh tick starts it again once the process has gone (finish_relaunches)."""
+        s = self.row(sid)
+        if not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
+            self.relaunch(sid)   # gone meanwhile: nothing to stop
+            return
+        try:
+            os.kill(s["claude_pid"], signal.SIGTERM)
+        except ProcessLookupError:
+            pass   # exited between the check and the signal: the tick starts it again
+        except OSError as e:
+            self.notify(f"couldn't stop its host: {e}", severity="error")
+            return
+        self.relaunching[sid] = time.monotonic() + RELAUNCH_WAIT
+        self.notify(f"relaunching {self.display_name(s)}: stopping its host")
+        self.refresh_data()
+
+    def finish_relaunches(self) -> None:
+        """Start each stopped host again once its process has really gone: launch refuses a
+        session whose registered process is alive, and a new host registers only if free."""
+        for sid, deadline in list(self.relaunching.items()):
+            s = next((x for x in self.sessions if x["id"] == sid), None)
+            if s is None:   # ended meanwhile
+                del self.relaunching[sid]
+            elif not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
+                del self.relaunching[sid]
+                if self.open_session(sid):   # as it ran: a host again, not WHEELHOUSE_RUNNER's way
+                    self.notify(f"relaunched {self.display_name(s)}")
+            elif time.monotonic() > deadline:
+                del self.relaunching[sid]
+                self.notify(f"{self.display_name(s)}'s host didn't stop within {RELAUNCH_WAIT}s, so it wasn't "
+                            f"relaunched: see hosts/{sid}.log", severity="error")
 
     def follow(self, sid: str) -> None:
         """Filter the items to the session and highlight its conversation row, so the right
@@ -1569,14 +1655,9 @@ class WheelhouseApp(App):
         else:   # the conversation is already in the pane: Enter goes to its box
             self.answer.focus()
 
-    @on(DataTable.RowHighlighted, "#session-table")
+    @on(DataTable.RowHighlighted, "#session-list")
     def pick_session_row(self) -> None:
-        self.paint_synopsis()
-        self.paint_sendbar()
-
-    @on(TabbedContent.TabActivated)
-    def tab_changed(self) -> None:
-        self.paint_sendbar()
+        self.paint_session_info()
 
     @on(ItemList.MarksChanged)
     def marks_changed(self) -> None:
@@ -1592,10 +1673,17 @@ class WheelhouseApp(App):
         self.paint_items()
         self.retarget()
 
-    def action_toggle_finished(self) -> None:
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        """F's two bindings: only the one that applies shows in the footer, and runs."""
+        if action == "show_finished":
+            return parameters[0] != self.show_finished
+        return True
+
+    def action_show_finished(self, show: bool) -> None:
         if not isinstance(self.focused, (TextArea, Input)):
-            self.show_finished = not self.show_finished
-            self.notify("showing finished items" if self.show_finished else "hiding finished items")
+            self.show_finished = show
+            self.notify("showing finished items" if show else "hiding finished items")
+            self.refresh_bindings()
             self.paint_items()
 
     @session_action
@@ -1650,10 +1738,6 @@ class WheelhouseApp(App):
         self.notify(("reopened " if reopen else "closed ") + ", ".join(done)
                     + ("" if reopen or self.show_finished else ": F shows finished items"))
         self.refresh_data()
-
-    def action_show_tab(self, tab: str) -> None:
-        if not isinstance(self.focused, (TextArea, Input)):
-            self.tabs.active = tab
 
     def action_help(self) -> None:
         if not isinstance(self.focused, (TextArea, Input)):
@@ -1739,19 +1823,17 @@ class WheelhouseApp(App):
         self.refresh_data()
 
     def bar_session(self, screen) -> str | None:
-        """The session in context on a screen: the thread's; the Sessions tab's highlighted
-        row; else the inbox's filter or the selected item's session."""
+        """The session in context on a screen: the thread's, else the inbox's filter or the
+        selected item's session."""
         if isinstance(screen, ThreadView):
             return screen.sid
-        if self.tabs.active == "sessions":
-            return self.current_session()
         return self.filter_sid or (self.selected[0] if self.selected else None)
 
     def bar_item(self, screen) -> tuple[str, str] | None:
         """The item in context on a screen: the thread's, else the inbox's selected item."""
         if isinstance(screen, ThreadView):
             return (screen.sid, screen.ref)
-        if self.tabs.active == "inbox" and self.selected and self.selected[1]:
+        if self.selected and self.selected[1]:
             return self.selected
         return None
 
@@ -1863,10 +1945,10 @@ class WheelhouseApp(App):
         self.notify({"interrupt": "interrupting", "compact": "compacting: asking what to keep",
                      "shell": "opening a terminal tab"}[what])
 
-    # sessions page
+    # the session area: the list's highlighted session, and its buttons
 
     def current_session(self) -> str | None:
-        table = self.tables["#session-table"]
+        table = self.session_list
         if not table.row_count:
             return None
         return table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value

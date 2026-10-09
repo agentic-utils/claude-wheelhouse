@@ -124,8 +124,8 @@ Where the build differs from the design above:
   queue. Send all is a button only: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S as
   plain Ctrl+S. A bar above the footer, on the inbox and in the thread view, always
   shows the mode button, Send (n) and Send all (n), each disabled while its queue is empty;
-  its buttons take no focus. The session in context is the thread's, the Sessions tab's
-  highlighted row, or the inbox's filter or selected item's session. The `s`, `S` and `i`
+  its buttons take no focus. The session in context is the thread's, or the inbox's filter
+  or selected item's session. The `s`, `S` and `i`
   keys are gone, and keys are shown in upper case, the usual convention.
 - **Store calls.** `send()` still sends at once (Immediate mode and the End/Park
   cancellations use it). Queuing is a separate `queue()`, and `dispatch(sid)` sends a session's drafts in one

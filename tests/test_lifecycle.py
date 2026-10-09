@@ -24,7 +24,6 @@ def fake_status(monkeypatch, state):
 
 
 async def press(app, pilot, button, *keys):
-    await pilot.press("2")
     await pilot.pause()
     await pilot.click(button)
     await pilot.pause()
@@ -105,10 +104,9 @@ async def test_a_pending_request_can_be_cancelled_or_forced(
     fake_status(monkeypatch, "live")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("2")
         await pilot.pause()
         label = "ending" if flag == "end" else "parking"
-        assert label in str(app.tables["#session-table"].get_row_at(0)[0]), "pending state shows"
+        assert app._info_text.splitlines()[1].startswith(label), "pending state shows"
         prompts = await press(app, pilot, button, *keys)
     assert all("demo" in p for p in prompts), "every prompt names the session"
     s = store.session(sid)
@@ -304,7 +302,6 @@ async def test_a_button_on_a_vanished_row_does_not_crash(store, sid, monkeypatch
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         seen = notices(app, monkeypatch)
-        await pilot.press("2")
         await pilot.pause()
         stale = store.sessions()
         store.end(sid)
@@ -383,3 +380,42 @@ def test_the_monitor_says_so_once_and_stops(store, sid):
     store.end(sid)
     assert monitor.poll_once(store, sid, out) is None
     assert out.getvalue().count("force-ended in the wheelhouse") == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("run, state, shell, stops, keys, killed, launched, said, desc", [
+    ("sdk", "live", None, True, ["y"], True, ["open"], "relaunched demo",
+     "a running host is stopped, then started again once its process has gone (#56)"),
+    ("sdk", "stalled", None, True, ["y"], True, ["open"], "relaunched demo", "so is a quiet one"),
+    ("sdk", "live", None, True, ["n"], False, [], None, "backed out of at the confirm"),
+    ("sdk", "live", None, False, ["y"], True, [], "didn't stop within",
+     "a host that doesn't stop isn't started twice: it says so"),
+    ("tab", "live", None, True, [], False, [], "/exit it there", "a running tab is the person's to /exit"),
+    ("sdk", "live", "tab", True, [], False, [], "/exit it there", "so is a host's session open in a shell tab"),
+    ("sdk", "dead", None, True, ["y"], False, ["restore"], "relaunching", "a dead one comes back as Restore brings it"),
+])
+async def test_relaunch(store, sid, monkeypatch, run, state, shell, stops, keys, killed, launched, said, desc):
+    from claude_wheelhouse import tui
+    store.set_runner(sid, run)
+    store.set_shell(sid, shell)
+    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
+    fake_status(monkeypatch, state)
+    alive, kills, calls = {"now": state != "dead"}, [], []
+
+    def kill(pid, sig):
+        kills.append((pid, sig))
+        alive["now"] = not stops
+    monkeypatch.setattr(tui.os, "kill", kill)
+    monkeypatch.setattr(tui.liveness, "is_alive", lambda *a: alive["now"])
+    monkeypatch.setattr(tui, "RELAUNCH_WAIT", 0)
+    monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
+    monkeypatch.setattr(launch, "restore_session", lambda s, i: calls.append("restore"))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        seen = notices(app, monkeypatch)
+        await press(app, pilot, "#relaunch", *keys)
+        app.refresh_data()
+        await pilot.pause()
+    assert kills == ([(4242, tui.signal.SIGTERM)] if killed else []), desc
+    assert calls == launched, desc
+    assert (said is None and not seen) or any(said in m for m in seen), f"{desc}: {seen}"

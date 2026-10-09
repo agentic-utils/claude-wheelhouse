@@ -60,7 +60,7 @@ STEPS = (
     ("decision", "Read and close the decision", "highlight D1 to read it, then X closes it, as it does a question"),
     ("permission", "Allow the permission prompt", "highlight P1, then the Allow button"),
     ("follow", "Follow the conversation", "the 💬 Conversation row, or the session on the left"),
-    ("end", "End the session", "Sessions tab (2), then End: its items go with it"),
+    ("end", "End the session", "highlight it in the session list, then End below: its items go with it"),
 )
 
 

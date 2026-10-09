@@ -90,7 +90,6 @@ async def test_restore_all_only_launches_dead_sessions(store, sid, tmp_path, mon
     monkeypatch.setattr(launch, "open_tab", lambda s, i: launched.append(i))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("2")
         await pilot.click("#restore-all")
         await pilot.press("y")
         await pilot.pause()
@@ -139,7 +138,6 @@ async def test_a_refused_restore_leaves_the_session_parked(store, sid, monkeypat
     monkeypatch.setattr(launch, "open_tab", refuse)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("2")
         await pilot.pause()
         await pilot.click("#restore")
         await pilot.pause()
@@ -408,19 +406,24 @@ async def test_thread_view_holds_the_conversation(store, sid):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("synopsis, shown, desc", [
-    ("Building the thread view for issue 11.", "Building the thread view for issue 11.", "the session's own words"),
-    ("", "No synopsis yet", "a placeholder until the session sets one"),
+@pytest.mark.parametrize("synopsis, brief, shown, desc", [
+    ("Building the thread view for issue 11.", "do the thing", "Building the thread view for issue 11.",
+     "the session's own words"),
+    ("", "do the thing", "Brief: do the thing", "its brief until the session sets a synopsis"),
+    ("", "", "No synopsis yet", "a placeholder with neither"),
 ])
-async def test_sessions_tab_shows_the_synopsis(store, sid, synopsis, shown, desc):
+async def test_the_session_description_box(store, sid, tmp_path, synopsis, brief, shown, desc):
+    """#58: the old Sessions tab's row and synopsis, under the session list."""
     store.set_synopsis(sid, synopsis)
+    store.db.execute("UPDATE sessions SET brief = ?", (brief,))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("2")
         await pilot.pause()
-        app.query_one("#session-table", DataTable).move_cursor(row=0)
+        app.query_one("#session-list", DataTable).move_cursor(row=0)
         await pilot.pause()
-        assert shown in app._synopsis_text, desc
+        lines = app._info_text.splitlines()
+        assert lines[:4] == ["demo", "dead · tab · queued", "#7", str(tmp_path)], f"{desc}: name, status, ticket, cwd"
+        assert shown in app._info_text, desc
 
 
 @pytest.mark.anyio
@@ -428,7 +431,6 @@ async def test_end_names_the_queued_answers_it_discards(store, sid):
     store.queue(sid, "a", "Q1")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("2")
         await pilot.pause()
         await pilot.click("#end")
         await pilot.pause()
@@ -452,7 +454,7 @@ async def test_a_session_on_older_code_cannot_queue(store, sid, monkeypatch, ver
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert str(app.query_one("#session-table", DataTable).get_row_at(0)[0]) == label, desc
+        assert app._info_text.splitlines()[1].split(" · tab")[0] == label, desc
         app.query_one("#items", DataTable).move_cursor(row=0)
         await pilot.pause()
         assert str(app.query_one("#mode", Button).label) == bar, desc
@@ -596,7 +598,6 @@ async def test_a_long_conversation_is_one_widget(store, sid, tmp_path, monkeypat
 
 
 async def restore_button(pilot):
-    await pilot.press("2")
     await pilot.click("#restore")
 
 
@@ -605,16 +606,16 @@ async def select_in_inbox(pilot):
     await pilot.press("enter", "y")
 
 
-async def select_in_sessions_tab(pilot):
-    await pilot.press("2")
-    pilot.app.query_one("#session-table", DataTable).focus()
-    await pilot.press("enter", "y")
+async def relaunch_button(pilot):
+    await pilot.click("#relaunch")
+    await pilot.pause()
+    await pilot.press("y")
 
 
 @pytest.mark.parametrize("how, desc", [
     (restore_button, "the Restore button"),
     (select_in_inbox, "selecting the dead session in the inbox, then y"),
-    (select_in_sessions_tab, "selecting it in the Sessions tab, then y"),
+    (relaunch_button, "the Relaunch button, then y (#56)"),
 ])
 @pytest.mark.anyio
 async def test_bringing_back_a_dead_session_resumes_it_with_the_join_notice(store, sid, monkeypatch, how, desc):
@@ -1429,7 +1430,6 @@ async def test_browse_fills_in_the_working_directory(store, tmp_path):
 async def test_rename_a_session(store, sid, typed, keys, expected, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("2")
         await pilot.pause()
         await pilot.click("#rename")
         await pilot.pause()
@@ -1449,7 +1449,6 @@ async def test_rename_a_session(store, sid, typed, keys, expected, desc):
 async def test_enter_in_rename_renames_only_to_a_new_name(store, sid, typed, said, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("2")
         await pilot.pause()
         await pilot.click("#rename")
         await pilot.pause()
@@ -1469,7 +1468,6 @@ async def test_enter_in_rename_renames_only_to_a_new_name(store, sid, typed, sai
 async def test_renaming_a_session_that_has_gone_says_so(store, sid, monkeypatch, ends, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("2")
         await pilot.pause()
         if ends == "before the button":
             store.end(sid)
@@ -1670,3 +1668,73 @@ async def test_session_names_keep_sixteen_cells(store, tmp_path, size, desc):
         await pilot.pause()
         t = app.query_one("#session-list", DataTable)
         assert t.virtual_size.width <= t.scrollable_content_region.width, desc
+
+
+def footer_labels(app) -> list[str]:
+    from textual.widgets._footer import FooterKey
+    return [k.description for k in app.screen.query(FooterKey)]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("presses, label, shown, desc", [
+    (0, "Show finished", False, "finished items hidden: F offers to show them (#57)"),
+    (1, "Hide finished", True, "shown: F offers to hide them"),
+    (2, "Show finished", False, "and back"),
+])
+async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        for _ in range(presses):
+            await pilot.press("f")
+            await pilot.pause()
+        labels = footer_labels(app)
+        assert app.show_finished == shown, desc
+        assert label in labels and labels.count(label) == 1, f"{desc}: {labels}"
+        assert {"Show finished", "Hide finished"} - {label} - set(labels), f"{desc}: only the one that applies"
+        assert not {"Inbox", "Sessions"} & set(labels), "no tab keys: the tabs are gone (#58)"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size, desc", [((100, 30), "100 columns"), ((160, 40), "160 columns")])
+async def test_the_session_buttons_fit(store, sid, size, desc):
+    """#58: every button under the session list shows its whole caption, and the list and
+    description keep their room."""
+    store.set_parked(sid, True)   # the longer Park caption, Unpark
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        buttons = list(app.query_one("#session-buttons").query(Button))
+        assert [b.id for b in buttons] == ["new", "adopt-open", "rename", "relaunch", "restore", "restore-all",
+                                           "park", "end"], desc
+        strips = app.screen._compositor.render_strips()
+        for b in buttons:
+            drawn = "".join(seg.text for seg in strips[b.region.y])[b.region.x:b.region.right]
+            assert str(b.label) in drawn and b.region.height == 1, f"{desc}: {b.label!s} drawn whole, got {drawn!r}"
+            assert app.screen.get_widget_at(*b.region.offset)[0] is b, f"{desc}: {b.label} is on screen, not covered"
+        assert app.query_one("#session-list").region.height >= 5, desc
+        assert app.query_one("#session-info").region.height == 10, desc
+        assert str(app.query_one("#park", Button).label) == "Unpark", "Park's caption follows the session"
+
+
+@pytest.mark.anyio
+async def test_parked_sessions_stay_in_the_list_after_the_rest(store, sid, tmp_path):
+    """#58: with the Sessions tab gone, the list is the only way to a parked session (Unpark,
+    Restore, End): it stays, dimmed, at the foot."""
+    first = store.create_session(str(tmp_path), name="first")
+    other = store.create_session(str(tmp_path), name="other")
+    store.set_parked(sid, True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        t = app.query_one("#session-list", DataTable)
+        assert [r.key.value for r in t.ordered_rows] == [first, other, sid]
+        assert "dim" in str(t.get_row(sid)[1].style)
+
+
+def test_the_keys_overlay_has_relaunch_and_no_tabs():
+    from claude_wheelhouse.tui import keys_help
+    text = keys_help()
+    assert "Relaunch:" in text and "Sessions tab" not in text and "Inbox tab" not in text
+    assert text.count("Show or hide finished items") == 1, "F once, though it has two bindings"

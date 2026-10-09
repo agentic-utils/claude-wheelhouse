@@ -24,8 +24,8 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   reply declares it, `open` while it still needs you or `answered`. Until it replies the
   question shows as `⏳` (dimmed), awaiting the session. Answers reach the session
   as a notification, even when it's idle. A running session started from an older
-  wheelhouse shows "needs relaunch" (`⟳` in the inbox list): `/exit` it and restore or
-  adopt it again to give it the new wheelhouse code. It still queues answers as usual,
+  wheelhouse shows "needs relaunch" (`⟳` in the session list): Relaunch gives it the new wheelhouse
+  code (a tab session once you've `/exit`ed it). It still queues answers as usual,
   unless it is old enough to predate queued answers: then it can't hold them, so
   Ctrl+Enter sends to it straight away, whatever its mode, until it's relaunched.
 - **Decisions.** If your own instructions let a session decide some things without asking
@@ -66,8 +66,10 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   rather than freezing the app. The inbox's session list shows each session's context
   size the same way, as a one-cell bar in the same colours, filled in eighths on an
   exponential scale: two eighths each for 100k, 200k, 500k and 1M.
-- **Sessions.** Select a session to read its synopsis, which the session keeps up to
-  date itself. New session (directory, optional name, optional ticket, opening brief)
+- **Sessions.** The left-hand column lists every session (parked ones dimmed, at the
+  foot). Under it, a description of the highlighted one: its status, where it runs, its
+  ticket, directory and counts, what it's doing, and its synopsis, which the session keeps
+  up to date itself (its brief until it sets one). The buttons under that act on it. New session (directory, optional name, optional ticket, opening brief)
   runs Claude in the wheelhouse (below), or in a Windows Terminal tab if you tick the box.
   Browse… picks the directory from a tree (Enter opens a folder, Backspace goes up,
   Ctrl+Enter or Choose takes the highlighted one). Rename changes a session's name, and
@@ -75,9 +77,13 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   gives Claude Code the wheelhouse's name again.
   Restore brings back sessions that died
   (reboot, crash), one at a time or all at once; selecting a dead (red) session also
-  offers to relaunch it. Nothing restarts on its own, and a resumed session is asked to
+  offers to relaunch it. Relaunch does it in one click for a running session run in the
+  wheelhouse too: its host stops (interrupting any turn under way; an open permission or
+  question closes, since nothing is left to answer it) and starts again on the same
+  conversation once the old process has gone, to pick up new wheelhouse code or settings.
+  A tab session relaunches once you've `/exit`ed it. Nothing restarts on its own, and a resumed session is asked to
   post the questions and tasks it already had open. Park
-  hides a session until you restore it. End deletes its wheelhouse data. On a running
+  drops a session's items off the inbox until you unpark or restore it. End deletes its wheelhouse data. On a running
   session, Park and End only ask the session to do it (press again to cancel or force);
   the wheelhouse never deletes anything by itself.
 - **Run in the wheelhouse.** New sessions run through the Claude Agent SDK in a small
@@ -153,9 +159,8 @@ is ended), in its own scratch directory, `claude-wheelhouse-tutorial/` next to t
 database, and costs a few cents of your usual model's tokens. The first time the wheelhouse opens with no sessions it
 offers the tutorial in one line: `Enter` takes it, `Esc` dismisses it for good.
 
-Keys, shown in upper case as usual (X means the x key, not Shift+X): `1` inbox, `2`
-sessions, `Enter` open an item's thread (or follow a session's conversation, in the
-session list), `F` show or hide finished items, `X` close the highlighted question or
+Keys, shown in upper case as usual (X means the x key, not Shift+X): `Enter` open an item's thread (or follow a session's conversation, in the
+session list), `F` show or hide finished items (the footer says which it will do), `X` close the highlighted question or
 decision (or reopen a closed one: a question as answered, a decision as seen), `N` new session, `A` adopt, `Esc` all sessions (or back
 from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue, `Ctrl+T` switch the session between Queued and

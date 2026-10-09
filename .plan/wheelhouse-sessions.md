@@ -293,10 +293,21 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   block's lines cached per width: as a Textual Markdown widget it made a child per
   paragraph, and with a long conversation's ~900 children every layout pass took a quarter
   of a second, so typing lagged and opening a session took over 3 seconds.
-- **Sessions tab.** Every session with status, name, ticket, directory, open-question
-  and running counts. Restore on a dead row, parked or not (unparks only once the launch
-  goes through), Restore All (dead and not parked), Park / unpark, End, New session,
-  Adopt (`a`). Park and End follow the lifecycle rules above.
+- **Session area** (#58, which replaced the Sessions tab and the Inbox/Sessions tabs).
+  The session list, every session with parked ones dimmed at the foot; under it a
+  description of the highlighted session (status, runner, mode, ticket, directory,
+  open-question, running, unseen-decision and queued counts, activity, synopsis or brief);
+  under that its buttons: New, Adopt (`a`), Rename, Relaunch, Restore on a dead row,
+  parked or not (unparks only once the launch goes through), Restore all (dead and not
+  parked), Park / Unpark, End. Park and End follow the lifecycle rules above.
+- **Relaunch** (#56). Dead: as Restore. Running in the wheelhouse: SIGTERM to the host's
+  registered pid, checked against its start time first (the host's own clean stop:
+  Claude Code disconnected, waiting permissions and questions withdrawn, anything left
+  closed by the next host's `deny_stale`). The refresh tick starts it again with
+  `launch.open_session` (so it stays a host) once the process has gone, and gives up,
+  saying so, after 30 s. A tab, or a host's session in a shell tab, relaunches only once
+  it has exited. A signal rather than a new host command: every host since the first
+  handles SIGTERM, including the stale ones a relaunch is for.
 - **Look.** Matrix green inside panels; colour and a shimmering title bar on the chrome.
 
 ## Relationship to the cache dashboard
