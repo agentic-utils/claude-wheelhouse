@@ -123,8 +123,10 @@ Where the build differs from the design above:
   Immediate mode. Ctrl+T switches the session in context. Ctrl+S sends that session's
   queue. Send all is a button only: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S as
   plain Ctrl+S. A bar above the footer, on the inbox and in the thread view, always
-  shows the mode button, Send (n) and Send all (n), each disabled while its queue is empty;
-  its buttons take no focus. The session in context is the thread's, or the inbox's filter
+  shows Send all (n), disabled while every queue is empty; its buttons take no focus. The
+  mode button and Send (n) were in it too, until #59 moved them under the session list,
+  for the highlighted session (D20 in `wheelhouse-sessions.md`); the thread view's bar
+  keeps them, for its session. The session in context is the thread's, or the inbox's filter
   or selected item's session. The `s`, `S` and `i`
   keys are gone, and keys are shown in upper case, the usual convention.
 - **Store calls.** `send()` still sends at once (Immediate mode and the End/Park

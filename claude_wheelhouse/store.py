@@ -576,6 +576,10 @@ class Store:
             db.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
                        "ON CONFLICT (key) DO UPDATE SET value = excluded.value", (key, value))
 
+    def clear_setting(self, key: str) -> None:
+        with self.tx() as db:
+            db.execute("DELETE FROM settings WHERE key = ?", (key,))
+
     # messages
 
     def messages(self, sid: str) -> list[sqlite3.Row]:

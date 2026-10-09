@@ -13,10 +13,11 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   each session has a send mode: in Queued mode (where every session starts) answers wait
   and go out together, Ctrl+S sending the session's as one message; in Immediate mode each
   goes as you submit it. The line under the answer box says which: "Ctrl+Enter to queue"
-  or "Ctrl+Enter to send". Ctrl+T switches the session's mode. A bar above the footer always
-  shows the mode and two buttons: Send (this session's queue) and Send all (every
-  session's), each greyed out while its queue is empty. Send all has no key: Windows
-  Terminal sends Ctrl+Shift+S and Ctrl+Alt+S as plain Ctrl+S. Ctrl+R takes a queued answer
+  or "Ctrl+Enter to send". Ctrl+T switches the session's mode. Under the session list, Mode
+  and Send (n) do the same for the session highlighted there, and a bar above the footer
+  always shows Send all (n), every session's queue; each Send is greyed out while its
+  queue is empty. Send all has no key: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S
+  as plain Ctrl+S. Ctrl+R takes a queued answer
   back to edit or drop. Emoji codes work as in chat apps: `:tada:` turns into 🎉, and while
   you type `:gri` the hint line suggests matches (Tab or Enter takes the first). Text you haven't sent stays with the item (or session) you typed it
   for: moving to another clears the box, and coming back restores it. Each session shows
@@ -69,7 +70,13 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
 - **Sessions.** The left-hand column lists every session (parked ones dimmed, at the
   foot). Under it, a description of the highlighted one: its status, where it runs, its
   ticket, directory and counts, what it's doing, and its synopsis, which the session keeps
-  up to date itself (its brief until it sets one). The buttons under that act on it. New session (directory, optional name, optional ticket, opening brief)
+  up to date itself (its brief until it sets one), in a box that takes half the column.
+  The buttons under that act on the highlighted session, in two groups: its lifecycle
+  (New, Adopt, Rename, Relaunch, Restore, Restore all, Park, End), then its conversation
+  (Mode, Send, and Interrupt, Compact and Shell while it runs in the wheelhouse). The
+  keys Ctrl+S and Ctrl+T act on the session in context instead: the selected item's, or
+  the followed session. An item opened full screen has Mode, Send and the rest in its
+  bar, for its own session. New session (directory, optional name, optional ticket, opening brief)
   runs Claude in the wheelhouse (below), or in a Windows Terminal tab if you tick the box.
   Browse… picks the directory from a tree (Enter opens a folder, Backspace goes up,
   Ctrl+Enter or Choose takes the highlighted one). Rename changes a session's name, and
@@ -98,10 +105,10 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   Claude Code suggests) and Deny buttons over its answer box, at once in either send mode.
   Text typed in the box is optional: Deny or Ctrl+Enter denies the call with it as what to
   do instead, also at once. A question Claude asks with its question dialog becomes a
-  question item. The bar has Interrupt, Compact (the session is asked what to keep, then
-  compacted with that, and the bar reports the token drop) and Shell, which hands the
-  session to the real Claude Code in a tab and takes it back when you `/exit` there, plus
-  a line saying what the session is doing. Closing the wheelhouse leaves the hosts
+  question item. Its buttons include Interrupt, Compact (the session is asked what to keep,
+  then compacted with that, and the bar reports the token drop) and Shell, which hands the
+  session to the real Claude Code in a tab and takes it back when you `/exit` there; the
+  bar above the footer has a line saying what the session in context is doing. Closing the wheelhouse leaves the hosts
   running. `WHEELHOUSE_RUNNER=tab` makes tabs the default again. Restore and Adopt bring a
   session back the way new sessions run, so a tab from before hosts existed comes back as
   a host once you `/exit` it; Shell is the way back to a tab. Host logs are under `~/.local/state/claude-wheelhouse/hosts/`.
@@ -186,6 +193,13 @@ into the answer box under the pointer (or the focused one). Under WSL the paste 
 Windows clipboard through PowerShell, so it takes most of a second; elsewhere it pastes the
 wheelhouse's own last copy. Hold `Shift` to drag with the terminal's own selection
 instead.
+
+Every boundary between areas can be dragged: the lines between the three columns, between
+the session list and its description, between the items and the stats, and above the
+answer box. A line turns teal under the pointer and while you drag it, and no pane goes
+below its minimum (the session column never gets too narrow for its buttons' captions).
+The sizes are kept in the wheelhouse's database, as shares of the space, so they follow a
+resized terminal; double-click a line to put its default back.
 
 Scrollbars are one cell wide: a teal thumb with solid ends and a knurled Braille grip,
 on a thin teal track. Drag the thumb, or click the track to page. The thumb brightens

@@ -299,7 +299,28 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   open-question, running, unseen-decision and queued counts, activity, synopsis or brief);
   under that its buttons: New, Adopt (`a`), Rename, Relaunch, Restore on a dead row,
   parked or not (unparks only once the launch goes through), Restore all (dead and not
-  parked), Park / Unpark, End. Park and End follow the lifecycle rules above.
+  parked), Park / Unpark, End. Park and End follow the lifecycle rules above. Under those,
+  on the send bar's colour, the conversation buttons moved from the send bar (#59): Mode
+  (across two columns, for "Can't queue: relaunch"), Send (n), and Interrupt, Compact
+  and Shell while the session runs in the wheelhouse. The send bar keeps Send all and the
+  activity line; New and Adopt are off the footer, their buttons showing them, though
+  `n` and `a` still work.
+- **D20: the session area's buttons act on the session highlighted in the list**, not the
+  session in context (the one owning the item being answered). They sit under the list
+  and its description, so that is the session they read as belonging to. Ctrl+S and
+  Ctrl+T keep acting on the session in context, as the hint under the answer box says. A
+  full-screen item has no session list, so its bar keeps Mode, Send, Interrupt, Compact
+  and Shell, for its own session.
+- **Resizable layout** (#60). Every boundary is a `Splitter` (`splitter.py`; Textual has
+  none): the two between the columns, the session list and its description (the
+  description 50% of the column by default), the items and the module panes under them,
+  and the conversation and the answer box. A one-cell line that captures the mouse on a
+  press, sizes one neighbour as a percentage of the parent while the other (1fr) takes
+  the rest, never past either's CSS minimum, and turns teal under the pointer and while
+  dragged. Percentages keep the proportions on a resized terminal. Each size is kept in
+  the settings table (`layout.<key>`), and a double-click deletes it, putting the
+  stylesheet's default back. The session column's minimum, 39 cells, is what its
+  buttons' captions need.
 - **Relaunch** (#56). Dead: as Restore. Running in the wheelhouse: SIGTERM to the host's
   registered pid, checked against its start time first (the host's own clean stop:
   Claude Code disconnected, waiting permissions and questions withdrawn, anything left

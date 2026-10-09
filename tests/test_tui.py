@@ -8,6 +8,7 @@ from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, T
 
 from claude_wheelhouse import launch, stats, transcript
 from claude_wheelhouse.store import PROTOCOL_VERSION
+from claude_wheelhouse.splitter import Splitter
 from claude_wheelhouse.tui import (MATRIX, VOICE, WheelhouseApp, Choice, Confirm, Folders, Hint, SendBar, ThreadView,
                                    Transcript, render)
 
@@ -325,30 +326,64 @@ async def test_ctrl_s_sends_only_the_current_sessions_queue(store, sid, tmp_path
     assert [m["body"] for m in store.drafts(other)] == ["b"], "another session's queue waits"
 
 
+def session_buttons(app) -> dict[str, tuple[str, bool]]:
+    return {b.id: (str(b.label), b.disabled) for b in app.query("#conversation-buttons Button") if b.display}
+
+
 @pytest.mark.anyio
-async def test_send_bar_buttons_follow_the_queues(store, sid, tmp_path):
+async def test_send_bar_and_session_buttons_follow_the_queues(store, sid, tmp_path):
     other = store.create_session(str(tmp_path), name="other")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         bar = lambda: {b.id: (str(b.label), b.disabled) for b in app.screen.query("SendBar Button") if b.display}
-        assert bar() == {"mode": ("Mode", True), "send": ("Send (0)", True), "send-all": ("Send all (0)", True)}, \
-            "no session in context, nothing queued"
-        store.post_item(sid, "question", "which db?")   # highlighted as it arrives: its session is in context
-        store.queue(sid, "a", "Q1")
+        assert bar() == {"send-all": ("Send all (0)", True)}, "the inbox's bar: only Send all (D20)"
+        assert session_buttons(app) == {"mode": ("Mode: Queued", False), "send": ("Send (0)", True)}, \
+            "the highlighted session's, nothing queued"
+        store.queue(sid, "a")
         store.queue(other, "b")
         store.queue(other, "c")
         app.refresh_data()
         await pilot.pause()
-        assert bar() == {"mode": ("Mode: Queued", False), "send": ("Send (1)", False),
-                         "send-all": ("Send all (3)", False)}
-        assert all(not b.can_focus for b in app.screen.query("SendBar Button")), "clicks leave focus alone"
+        assert (bar(), session_buttons(app)["send"]) == ({"send-all": ("Send all (3)", False)}, ("Send (1)", False))
+        app.session_list.move_cursor(row=1)
+        await pilot.pause()
+        assert session_buttons(app)["send"] == ("Send (2)", False), "the highlight moved: the other's queue"
+        assert all(not b.can_focus for b in app.screen.query("SendBar Button, #sessions-pane Button")), \
+            "clicks leave focus alone"
         await pilot.click("#send-all")
         await pilot.pause()
         assert bar()["send-all"] == ("Send all (0)", True)
     assert store.drafts() == []
     assert [m["body"] for m in store.pending(sid)] == ["a"]
     assert [m["body"] for m in store.pending(other)] == ["b", "c"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("how, sent, mode_changed, desc", [
+    ("#send", "other", None, "Send acts on the session highlighted in the list (D20)"),
+    ("ctrl+s", "demo", None, "Ctrl+S on the session in context, the selected item's"),
+    ("#mode", None, "other", "Mode on the highlighted session"),
+    ("ctrl+t", None, "demo", "Ctrl+T on the session in context"),
+])
+async def test_session_buttons_act_on_the_highlighted_session(store, sid, tmp_path, how, sent, mode_changed, desc):
+    other = store.create_session(str(tmp_path), name="other")
+    ids = {"demo": sid, "other": other}
+    q = store.post_item(sid, "question", "which db?")
+    store.queue(sid, "a", q)
+    store.queue(other, "b")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=0)
+        app.session_list.move_cursor(row=1)
+        await pilot.pause()
+        assert app.selected == (sid, q), f"{desc}: the item in context is demo's"
+        await (pilot.click(how) if how.startswith("#") else pilot.press(how))
+        await pilot.pause()
+    got_sent = {n for n, i in ids.items() if store.pending(i)}
+    changed = {n for n, i in ids.items() if store.session(i)["send_mode"] is not None}
+    assert (got_sent, changed) == ({sent} - {None}, {mode_changed} - {None}), desc
 
 
 @pytest.mark.anyio
@@ -442,9 +477,9 @@ async def test_end_names_the_queued_answers_it_discards(store, sid):
     (PROTOCOL_VERSION, "live", "Mode: Queued", 1, "a session on current code queues the answer"),
     (PROTOCOL_VERSION - 1, "live · needs relaunch", "Mode: Queued", 1,
      "one on older code that holds queued answers still queues: a relaunch only brings the new code"),
-    (1, "live · needs relaunch", "Sends now: needs relaunch", 0,
+    (1, "live · needs relaunch", "Can't queue: relaunch", 0,
      "one from before queued answers would deliver one at once, so it's sent now"),
-    (None, "live · needs relaunch", "Sends now: needs relaunch", 0, "as is one that never stamped its version"),
+    (None, "live · needs relaunch", "Can't queue: relaunch", 0, "as is one that never stamped its version"),
 ])
 async def test_a_session_on_older_code_cannot_queue(store, sid, monkeypatch, version, label, bar, queued, desc):
     from claude_wheelhouse import liveness
@@ -1206,7 +1241,8 @@ async def test_the_session_list_shows_context_size(store, sid, tmp_path, monkeyp
 
 
 def shown_buttons(app) -> set[str]:
-    return {b.id for b in app.screen.query("SendBar Button, PermissionButtons Button") if b.display and b.parent.display}
+    return {b.id for b in app.screen.query("SendBar Button, PermissionButtons Button, #conversation-buttons Button")
+            if b.display and b.parent.display}
 
 
 @pytest.mark.anyio
@@ -1698,24 +1734,97 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("size, desc", [((100, 30), "100 columns"), ((160, 40), "160 columns")])
-async def test_the_session_buttons_fit(store, sid, size, desc):
+async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, desc):
     """#58: every button under the session list shows its whole caption, and the list and
-    description keep their room."""
-    store.set_parked(sid, True)   # the longer Park caption, Unpark
+    description keep their room; the description half the column. With the longest
+    captions: Unpark, and Mode on a running hosted session too old to queue."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.db.execute("UPDATE sessions SET code_version = 1")
+    store.set_parked(sid, True)
     app = WheelhouseApp(store)
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
-        buttons = list(app.query_one("#session-buttons").query(Button))
+        buttons = list(app.query("#sessions-pane Grid Button"))
         assert [b.id for b in buttons] == ["new", "adopt-open", "rename", "relaunch", "restore", "restore-all",
-                                           "park", "end"], desc
+                                           "park", "end", "mode", "send", "interrupt", "compact", "shell"], desc
         strips = app.screen._compositor.render_strips()
         for b in buttons:
             drawn = "".join(seg.text for seg in strips[b.region.y])[b.region.x:b.region.right]
             assert str(b.label) in drawn and b.region.height == 1, f"{desc}: {b.label!s} drawn whole, got {drawn!r}"
             assert app.screen.get_widget_at(*b.region.offset)[0] is b, f"{desc}: {b.label} is on screen, not covered"
         assert app.query_one("#session-list").region.height >= 5, desc
-        assert app.query_one("#session-info").region.height == 10, desc
+        column = app.query_one("#sessions-pane").content_region.height
+        assert app.query_one("#session-info").region.height == column // 2, f"{desc}: half the column"
         assert str(app.query_one("#park", Button).label) == "Unpark", "Park's caption follows the session"
+        assert str(app.query_one("#mode", Button).label) == "Can't queue: relaunch", desc
+        assert not {"New session", "Adopt"} & set(footer_labels(app)), f"{desc}: off the footer, on the buttons"
+
+
+def splitter(app, key: str) -> Splitter:
+    return next(s for s in app.query(Splitter) if s.key == key)
+
+
+def sized(app, key: str) -> int:
+    sp = splitter(app, key)
+    return sp.extent(sp.panes()[0])
+
+
+async def drag(pilot, key: str, dx: int, dy: int) -> None:
+    sp = splitter(pilot.app, key)
+    x, y = sp.region.offset
+    await pilot.mouse_down(sp)
+    await pilot.hover(None, (x + dx, y + dy))
+    assert sp.has_class("-dragging"), "lit while it's dragged"
+    await pilot.mouse_up(None, (x + dx, y + dy))
+    await pilot.pause()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key, dx, dy, change, desc", [
+    ("sessions-pane", 10, 0, 10, "the sessions column, wider"),
+    ("sessions-pane", -20, 0, 0, "never narrower than its buttons' captions need"),
+    ("detail-pane", 10, 0, -10, "the right pane, narrower as its left edge moves right"),
+    ("session-info", 0, -4, 4, "the description, taller as its top edge moves up"),
+    ("items", 0, 3, 3, "the item list, taller over the stats"),
+    ("answer", 0, -3, 3, "the answer box, taller"),
+])
+async def test_dragging_a_splitter_resizes_and_is_kept(store, sid, key, dx, dy, change, desc):
+    """Doug: the boundaries between all areas draggable. A drag is kept across runs, and a
+    double-click puts the default back."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        before = sized(app, key)
+        await drag(pilot, key, dx, dy)
+        after = sized(app, key)
+        assert after - before == change, desc
+        assert not splitter(app, key).has_class("-dragging"), desc
+    assert store.setting("layout." + key) is not None, f"{desc}: kept"
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert sized(app, key) == after, f"{desc}: as it was left, next run"
+        await pilot.double_click(splitter(app, key))
+        await pilot.pause()
+        assert sized(app, key) == before, f"{desc}: a double-click puts the default back"
+    assert store.setting("layout." + key) is None, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("width, desc", [(200, "a wider terminal"), (120, "a narrower one")])
+async def test_dragged_sizes_follow_a_resized_terminal(store, sid, width, desc):
+    """Sizes are kept as shares, so a resized terminal keeps the proportions."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await drag(pilot, "sessions-pane", 21, 0)   # 60 of the 158 cells inside the two splitters
+        share = sized(app, "sessions-pane") / app.query_one("#main").size.width
+        await pilot.resize_terminal(width, 40)
+        await pilot.pause()
+        assert abs(sized(app, "sessions-pane") - share * app.query_one("#main").size.width) <= 1, desc
+        assert app.query_one("#items-pane").region.width >= 20, f"{desc}: the inbox keeps its room"
 
 
 @pytest.mark.anyio

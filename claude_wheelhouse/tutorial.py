@@ -55,7 +55,7 @@ line that you're finished and the session can be ended. If they ask for changes,
 STEPS = (
     ("open", "Open a question", "highlight Q1 in the item list, or press Enter on it"),
     ("queue", "Answer both questions", "type in the box, Ctrl+Enter queues each answer"),
-    ("send", "Send them together", "Ctrl+S, or the Send button below"),
+    ("send", "Send them together", "Ctrl+S, or the Send button under the session list"),
     ("reply", "See the session's reply", "⏳ turns to answered as it replies"),
     ("decision", "Read and close the decision", "highlight D1 to read it, then X closes it, as it does a question"),
     ("permission", "Allow the permission prompt", "highlight P1, then the Allow button"),

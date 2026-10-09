@@ -39,6 +39,7 @@ from textual.widgets import (
 
 from . import adopt, api, emoji, launch, liveness, stats, transcript, tutorial
 from .knurl import KnurlRender
+from .splitter import Splitter
 from .store import CLOSED, SessionGone, Store, can_queue, default_runner, mode, needs_relaunch, runner
 
 MATRIX = "#00ff41"
@@ -61,6 +62,7 @@ PENDING = {"end": "ending", "park": "parking"}
 CLOSABLE = {"question": "answered", "decision": "seen"}   # what X closes, and what reopening makes it
 # where each module slot (api.SLOTS) is mounted: at the end of this container
 SLOT_PARENTS = {"inbox.side": "#items-pane"}
+LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of its parent
 
 
 def cylon(frame: int, width: int = 8) -> Text:
@@ -303,8 +305,9 @@ class Transcript(Widget, can_focus=True):
 
 class SessionList(DataTable):
     """The inbox's sessions. One click selects a row: a plain table selects only on a second
-    click, the first just moving the cursor there. The buttons under it never take focus, so
-    Tab goes straight on to the items; these keys press them instead."""
+    click, the first just moving the cursor there. The buttons under it act on the
+    highlighted row and never take focus, so Tab goes straight on to the items; these keys
+    press them instead."""
 
     # Shift+S twice: some terminals send it as S, others as shift+s
     BINDINGS = [Binding("r", "app.press('rename')", "Rename", show=False),
@@ -439,44 +442,56 @@ class Compose(TextArea):
                 self.replace(found[0][1], (row, col - len(code) - 1), (row, col))
 
 
-class SendBar(Horizontal):
-    """Always on screen above the footer: the current session's send mode, its queue, and
-    every session's. Send all has no key: Windows Terminal sends Ctrl+Shift+S and
-    Ctrl+Alt+S as plain Ctrl+S. The buttons never take focus, so clicking one leaves the
-    answer box (and what's typed in it) where it was.
+# a session's conversation buttons, (caption, id, variant): under the session list, for
+# the session highlighted there (D20); in a full-screen item's bar, for its session
+CONVERSATION = (("Mode", "mode", "default"), ("Send", "send", "primary"), ("Interrupt", "interrupt", "error"),
+                ("Compact", "compact", "default"), ("Shell", "shell", "default"))
 
-    A session run by a wheelhouse host also gets what its terminal would have given:
-    Interrupt, Compact and Shell (the real Claude Code, in a tab), and a line saying what
-    it's doing now. Allow, Always and Deny sit with the permission item (PermissionButtons)."""
+
+def show_button(root: Widget, button_id: str, label: str, disabled: bool, shown: bool = True) -> None:
+    """A button's caption and state, wherever it lives under root."""
+    button = next(iter(root.query(f"#{button_id}")), None)
+    if button is None:   # the app's first refresh can come before the buttons mount
+        return
+    if str(button.label) != label:
+        button.label = label
+    button.disabled = disabled
+    button.display = shown
+
+
+class SendBar(Horizontal):
+    """Always on screen above the footer: Send all, every session's queue, and a line
+    saying what the session in context is doing. Send all has no key: Windows Terminal
+    sends Ctrl+Shift+S and Ctrl+Alt+S as plain Ctrl+S. The buttons never take focus, so
+    clicking one leaves the answer box (and what's typed in it) where it was.
+
+    On the inbox the session's own buttons (CONVERSATION) sit under the session list. A
+    full-screen item has no session list, so its bar carries them too (conversation=True),
+    for the item's session: Mode, Send, and for a session run by a wheelhouse host what its
+    terminal would have given, Interrupt, Compact and Shell (the real Claude Code, in a
+    tab). Allow, Always and Deny sit with the permission item (PermissionButtons)."""
     DEFAULT_CSS = """
     SendBar { height: 1; background: #12122a; }
     SendBar Button { min-width: 12; margin: 0 1 0 0; padding: 0 1; }
     SendBar #activity { width: 1fr; height: 1; color: #05d9e8; text-style: italic; padding: 0 1; }
     """
 
+    def __init__(self, conversation: bool = False, **kwargs):
+        super().__init__(**kwargs)
+        self.conversation = conversation
+
     def compose(self) -> ComposeResult:
         # compact: a variant's own border (tall, top and bottom) outranks the bar's
         # "border: none", and made each button two rows high in a one-row bar, its caption
         # on the row the footer covers
-        for label, id_, variant in (("Mode", "mode", "default"), ("Send", "send", "primary"),
-                                    ("Send all", "send-all", "warning"), ("Interrupt", "interrupt", "error"),
-                                    ("Compact", "compact", "default"),
-                                    ("Shell", "shell", "default")):
+        buttons = CONVERSATION if self.conversation else ()
+        for label, id_, variant in (*buttons[:2], ("Send all", "send-all", "warning"), *buttons[2:]):
             yield Button(label, variant, id=id_, compact=True)
         yield Label("", id="activity")
 
     def on_mount(self) -> None:
         for button in self.query(Button):
             button.can_focus = False
-
-    def show(self, button_id: str, label: str, disabled: bool, shown: bool = True) -> None:
-        button = next(iter(self.query(f"#{button_id}")), None)
-        if button is None:   # the app's first refresh can come before the bar's buttons mount
-            return
-        if str(button.label) != label:
-            button.label = label
-        button.disabled = disabled
-        button.display = shown
 
     def activity(self, text: str) -> None:
         label = next(iter(self.query("#activity")), None)
@@ -519,7 +534,7 @@ class ThreadView(Screen):
         yield PermissionButtons()
         yield Compose(id="thread-answer")
         yield Hint(classes="answer-hint")
-        yield SendBar()
+        yield SendBar(conversation=True)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -885,9 +900,9 @@ DESCRIBE = {
 }
 # the send bar's buttons and the session area's, by id
 BUTTONS = {
-    "mode": "Mode: the session's send mode, Queued or Immediate (Ctrl+T)",
-    "send": "Send (n): send this session's queued answers as one message (Ctrl+S)",
-    "send-all": "Send all (n): send every session's queue",
+    "mode": "Mode: the session's send mode, Queued or Immediate",
+    "send": "Send (n): send the session's queued answers as one message",
+    "send-all": "Send all (n), above the footer: send every session's queue",
     "allow": "Allow (over the answer box, on a permission item): let the tool call run, at once",
     "always": "Always: allow it, and keep the rule Claude Code suggests",
     "deny": "Deny: refuse it (or type what to do instead and press Ctrl+Enter: denied with that, at once)",
@@ -910,7 +925,13 @@ SEND_RULES = (
     "queued answer back to edit.")
 MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
          "keep Shift+click for itself: Space and Shift+Up/Down do the same), then X closes them together. "
-         "Right-click copies the selection, or with none pastes into the answer box, as a terminal does.")
+         "Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
+         "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
+         "kept for next time, and a double-click on a line puts its default back.")
+WHOSE = ("The buttons under the session list act on the session highlighted there: New and Adopt aside, "
+         "Rename to End look after it, and Mode, Send, Interrupt, Compact and Shell talk to it. An item "
+         "opened full screen has Mode, Send and the rest in its bar, for its own session. Ctrl+S and Ctrl+T "
+         "act on the session in context instead: the item's, or the followed session.")
 
 
 def keys_help() -> str:
@@ -929,7 +950,7 @@ def keys_help() -> str:
                 keys.append(key_name(b.key))
         # dict.fromkeys: one line for a key bound twice, as F is (its footer label changes)
         out += dict.fromkeys(f"- **{' or '.join(keys)}**: {DESCRIBE[action]}" for action, keys in actions.items())
-    out += ["## Mouse", MOUSE, "## Buttons", *[f"- {text}" for text in BUTTONS.values()],
+    out += ["## Mouse", MOUSE, "## Buttons", WHOSE, *[f"- {text}" for text in BUTTONS.values()],
             "## Sending", SEND_RULES,
             "## The tutorial", "`make tutorial` starts it afresh any time. Esc or ? closes this list."]
     return "\n\n".join(out)
@@ -958,11 +979,14 @@ class WheelhouseApp(App):
     DataTable {{ background: #000000; color: {MATRIX}; }}
     DataTable > .datatable--header {{ background: #12122a; color: #05d9e8; text-style: bold; }}
     DataTable > .datatable--cursor {{ background: #003b0f; color: #ffffff; }}
-    #sessions-pane {{ width: 39; }}   /* names keep their 16 cells beside the context bar (#51) */
-    #items-pane {{ width: 1fr; }}
-    #items {{ height: 1fr; }}   /* the top half; the stats the bottom */
-    #detail-pane {{ width: 2fr; }}
-    #detail-scroll {{ height: 1fr; }}
+    /* the splitters' defaults, and the least each pane keeps when one is dragged (Splitter) */
+    #sessions-pane {{ width: 39; min-width: 39; }}   /* names keep their 16 cells beside the context bar (#51); every button its caption */
+    #items-pane {{ width: 1fr; min-width: 20; }}
+    #items {{ height: 1fr; min-height: 3; }}   /* the top half; the stats the bottom */
+    .-split {{ border-top: none; min-height: 3; }}   /* the first module pane under the items: the splitter is its line */
+    #detail-pane {{ width: 2fr; min-width: 30; }}
+    #detail-scroll {{ height: 1fr; min-height: 3; }}
+    #answer {{ min-height: 3; }}
     #detail, #thread {{ background: #000000; color: {MATRIX}; }}
     #answer, #thread-answer {{ height: 8; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
     #answer:focus, #thread-answer:focus {{ border: round #ff2a6d; }}
@@ -970,14 +994,18 @@ class WheelhouseApp(App):
     Compose > .text-area--cursor {{ background: #ff2a6d; color: #000000; text-style: bold; }}
     .answer-hint {{ color: #777777; height: 1; }}
     #thread-scroll {{ height: 1fr; }}
-    #session-list {{ height: 1fr; }}
-    #session-info {{ height: 10; background: #000000; border-top: solid #7b61ff; padding: 0 1; }}
+    #session-list {{ height: 1fr; min-height: 3; }}
+    #session-info {{ height: 50%; min-height: 3; background: #000000; padding: 0 1; }}
     #session-info-text {{ color: #e8e8e8; }}
     /* three to a row, one row each. A caption takes its length and a cell either side:
-       the third column fits "Restore all", the others "Relaunch" and "Unpark" */
-    #session-buttons {{ height: 3; grid-size: 3; grid-columns: 1fr 1fr 13; grid-gutter: 0 1;
-                        background: #000000; }}
-    #session-buttons Button {{ width: 1fr; min-width: 0; padding: 0; }}
+       the third column fits "Restore all", the others "Relaunch" and "Unpark". The
+       lifecycle buttons, then the conversation's on the send bar's colour: Mode across
+       two columns, for its longest caption, then Send; Interrupt, Compact and Shell under */
+    #session-buttons, #conversation-buttons {{ grid-size: 3; grid-columns: 1fr 1fr 13; grid-gutter: 0 1; }}
+    #session-buttons {{ height: 3; background: #000000; }}
+    #conversation-buttons {{ height: 2; background: #12122a; }}
+    #session-buttons Button, #conversation-buttons Button {{ width: 1fr; min-width: 0; padding: 0; }}
+    #conversation-buttons #mode {{ column-span: 2; }}
     #dialog {{ width: 80; height: auto; padding: 1 2; background: #000000; color: {MATRIX};
                border: thick #ff2a6d; }}
     .dialog-title {{ color: #ffd300; text-style: bold; }}
@@ -1019,8 +1047,9 @@ class WheelhouseApp(App):
         Binding("ctrl+s", "send_session", "Send", key_display="Ctrl+S"),
         Binding("ctrl+t", "toggle_mode", "Mode", key_display="Ctrl+T"),
         Binding("ctrl+r", "recall", "Edit queued", show=False, key_display="Ctrl+R"),
-        Binding("n", "new_session", "New session", key_display="N"),
-        Binding("a", "adopt", "Adopt", key_display="A"),
+        # off the footer: the New and Adopt buttons show them, and the footer is short of room
+        Binding("n", "new_session", "New session", show=False, key_display="N"),
+        Binding("a", "adopt", "Adopt", show=False, key_display="A"),
         Binding("escape", "clear_filter", "All sessions", key_display="Esc"),
         # one key, two bindings: the footer shows the one that applies (check_action)
         Binding("f", "show_finished(True)", "Show finished", key_display="F"),
@@ -1067,6 +1096,7 @@ class WheelhouseApp(App):
             # the sessions, the highlighted one's description, and what can be done to it
             with Vertical(id="sessions-pane", classes="panel"):
                 yield SessionList(id="session-list", cursor_type="row")
+                yield Splitter("session-info", "#session-info", "#session-list", "y")
                 with VerticalScroll(id="session-info"):
                     yield Static(id="session-info-text")
                 with Grid(id="session-buttons"):
@@ -1076,13 +1106,19 @@ class WheelhouseApp(App):
                                                 ("Restore all", "restore-all", "warning"),
                                                 ("Park", "park", "default"), ("End", "end", "error")):
                         yield Button(label, variant, id=id_, compact=True)   # compact: one row each
+                with Grid(id="conversation-buttons"):
+                    for label, id_, variant in CONVERSATION:
+                        yield Button(label, variant, id=id_, compact=True)
+            yield Splitter("sessions-pane", "#sessions-pane", "#items-pane", "x")
             with Vertical(id="items-pane", classes="panel"):
-                yield ItemList(id="items", cursor_type="row")   # then the inbox.side panes
+                yield ItemList(id="items", cursor_type="row")   # then a splitter and the inbox.side panes
+            yield Splitter("detail-pane", "#detail-pane", "#items-pane", "x")
             with Vertical(id="detail-pane", classes="panel"):
                 yield Static(id="checklist")
                 with VerticalScroll(id="detail-scroll"):
                     yield Transcript("Select an item, or a session to follow its conversation.",
                                      id="detail")
+                yield Splitter("answer", "#answer", "#detail-scroll", "y")
                 yield PermissionButtons()
                 yield Compose(id="answer")
                 yield Hint(classes="answer-hint")
@@ -1101,8 +1137,12 @@ class WheelhouseApp(App):
         self.session_info = self.query_one("#session-info-text", Static)
         # out of the Tab order, which goes from the session list straight to the items: the
         # buttons still click, and the list's own keys press them (SessionList)
-        for widget in (self.query_one("#session-info"), *self.query("#session-buttons Button")):
+        self.conversation_buttons = self.query_one("#conversation-buttons", Grid)
+        for widget in (self.query_one("#session-info"), *self.query("#sessions-pane Grid Button")):
             widget.can_focus = False
+        for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
+            if (stored := self.store.setting(LAYOUT + splitter.key)) is not None:
+                splitter.apply(float(stored))
         self.eye_col = self.session_list.add_columns("", "session", "ctx", "?", "D", "✉", "")[-1]
         self.items_table.add_columns("session", "ref", "status", "title")
         self.checklist = self.query_one("#checklist", Static)
@@ -1402,7 +1442,11 @@ class WheelhouseApp(App):
         one of them has gets a card rather than shadowing it."""
         taken = {w.id for w in self.screen.query("*") if w.id}
         for slot, parent in SLOT_PARENTS.items():
-            await self.query_one(parent).mount_all(list(self.hosted(slot, taken)))
+            widgets = list(self.hosted(slot, taken))
+            if widgets:   # the first, under the items, below a splitter that sizes the items
+                widgets[0].add_class("-split")
+                widgets.insert(0, Splitter("items", "#items", ".-split", "y"))
+            await self.query_one(parent).mount_all(widgets)
 
     def hosted(self, slot: str, taken: set[str]):
         """The widgets for a slot: each module's pane, or a card saying why it isn't running
@@ -1449,32 +1493,40 @@ class WheelhouseApp(App):
         return [{"id": s["id"], "name": s["name"] or short(s["id"]), "running": self.running(s["id"]),
                  "context": host_context(s)} for s in self.sessions]
 
+    def controls(self, s) -> list[tuple[str, str, bool, bool]]:
+        """A session's conversation buttons (CONVERSATION), as show_button takes them: (id,
+        caption, disabled, shown). s: the session's row, or None with no session."""
+        if s is None:
+            mode_ = ("Mode", True)
+        elif self.sends_now(s):   # its old monitor would deliver a draft at once anyway
+            mode_ = ("Can't queue: relaunch", True)
+        else:
+            mode_ = (f"Mode: {mode(s).capitalize()}", False)
+        n = s["drafts"] if s else 0
+        hosted = s is not None and runner(s) == "sdk" and self.running(s["id"]) and not s["shell"]
+        return [("mode", *mode_, True), ("send", f"Send ({n})", not n, True),
+                *[(b, b.capitalize(), False, hosted) for b in ("interrupt", "compact", "shell")]]
+
     def paint_sendbar(self) -> None:
-        """The bar on the screen in front: the mode and queue of the session in context there."""
+        """The bar on the screen in front: Send all, and the hint, permission buttons and
+        activity of the session in context there; a full-screen item's bar also has its
+        session's conversation buttons."""
         bar = next(iter(self.screen.query(SendBar)), None)
         if bar is None:
             return
         sessions = {s["id"]: s for s in self.sessions}
         s = sessions.get(self.bar_session(self.screen))
+        if bar.conversation:
+            for args in self.controls(s):
+                show_button(bar, *args)
         total = sum(x["drafts"] for x in self.sessions)
-        if s is None:
-            bar.show("mode", "Mode", True)
-        elif self.sends_now(s):   # its old monitor would deliver a draft at once anyway
-            bar.show("mode", "Sends now: needs relaunch", True)
-        else:
-            bar.show("mode", f"Mode: {mode(s).capitalize()}", False)
         sends = "send" if s is not None and (mode(s) == "immediate" or self.sends_now(s)) else "queue"
         asking = self.asking(self.bar_item(self.screen)) is not None
         for h in self.screen.query(Hint):
             h.set_base(PERMISSION_HINT if asking else hint(sends))
         for row in self.screen.query(PermissionButtons):
             row.display = asking
-        n = s["drafts"] if s else 0
-        bar.show("send", f"Send ({n})", not n)
-        bar.show("send-all", f"Send all ({total})", not total)
-        hosted = s is not None and runner(s) == "sdk" and self.running(s["id"]) and not s["shell"]
-        for button in ("interrupt", "compact", "shell"):
-            bar.show(button, button.capitalize(), False, hosted)
+        show_button(bar, "send-all", f"Send all ({total})", not total)
         if s is not None and runner(s) == "sdk":
             bar.activity("in a shell tab" if s["shell"] else (s["activity"] or "") if self.running(s["id"]) else "")
         else:
@@ -1521,8 +1573,8 @@ class WheelhouseApp(App):
             self.paint_checklist()
 
     def paint_session_info(self) -> None:
-        """The highlighted session's description, under the list, and the Park button's
-        caption for it."""
+        """The highlighted session's description, under the list, and its buttons' captions
+        and states: Park's, and the conversation buttons' (D20)."""
         sid = self.current_session()
         s = next((x for x in self.sessions if x["id"] == sid), None)
         text = self.describe(s) if s else Text("Select a session to see its description.", style="#777777")
@@ -1533,6 +1585,8 @@ class WheelhouseApp(App):
         caption = "Unpark" if s and s["parked"] else "Park"
         if park is not None and str(park.label) != caption:
             park.label = caption
+        for args in self.controls(s):
+            show_button(self.conversation_buttons, *args)
 
     def describe(self, s) -> Text:
         """A session's description: what the old Sessions tab's row and synopsis showed."""
@@ -1963,14 +2017,21 @@ class WheelhouseApp(App):
             self.notify(f"{n} answer(s) still queued for {name}: Ctrl+S sends them")
         self.refresh_data()
 
+    def button_session(self, button: Button) -> str | None:
+        """The session a conversation button acts on (D20): a full-screen item's, else the
+        one highlighted in the session list, whose buttons they are. The keys, Ctrl+S and
+        Ctrl+T, act on the session in context instead (bar_session)."""
+        screen = button.screen
+        return screen.sid if isinstance(screen, ThreadView) else self.current_session()
+
     @on(Button.Pressed, "#mode")
     def mode_pressed(self, event: Button.Pressed) -> None:
-        if sid := self.bar_session(event.button.screen):
+        if sid := self.button_session(event.button):
             self.toggle_mode(sid)
 
     @on(Button.Pressed, "#send")
     def send_pressed(self, event: Button.Pressed) -> None:
-        if sid := self.bar_session(event.button.screen):
+        if sid := self.button_session(event.button):
             self.send_session(sid)
 
     @on(Button.Pressed, "#send-all")
@@ -1997,7 +2058,7 @@ class WheelhouseApp(App):
 
     @on(Button.Pressed, "#interrupt, #compact, #shell")
     def host_pressed(self, event: Button.Pressed) -> None:
-        sid = self.bar_session(event.button.screen)
+        sid = self.button_session(event.button)
         if not sid:
             return
         what = event.button.id
@@ -2016,6 +2077,15 @@ class WheelhouseApp(App):
             return
         self.notify({"interrupt": "interrupting", "compact": "compacting: asking what to keep",
                      "shell": "opening a terminal tab"}[what])
+
+    @on(Splitter.Resized)
+    def keep_layout(self, event: Splitter.Resized) -> None:
+        """A splitter dragged: its size is kept for next time. Reset: the default again."""
+        key = LAYOUT + event.splitter.key
+        if event.fraction is None:
+            self.store.clear_setting(key)
+        else:
+            self.store.set_setting(key, f"{event.fraction:.6f}")
 
     # the session area: the list's highlighted session, and its buttons
 
