@@ -223,9 +223,6 @@ def markdown(name: str, tab: str, recs: list[dict] | None, queued=()) -> str:
 class Rename:
     at: str      # when it was made, ISO, UTC
     title: str
-    # no /rename in the tail, only its name: made before the tail begins, so `at` is the
-    # tail's first time, and it is taken only by a session never renamed since (take_title)
-    inferred: bool = False
 
 
 RENAMED = "Session renamed to: "   # what Claude Code's /rename prints, recorded with its time
@@ -237,10 +234,8 @@ class TitleWatch:
     "Session renamed to: …", and the time. A launch's -n writes a custom-title record too,
     and Claude Code writes the name again as the conversation goes on, but neither prints
     that output: so only a /rename counts, and one back to the same name counts again. The
-    tail is read once, then only what has been appended since. A /rename older than the tail
-    shows only as the custom-title record's name: on a transcript longer than the tail, the
-    latest is returned as an inferred rename. Thread-safe: the app's worker and a launch
-    share one watch."""
+    tail is read once, then only what has been appended since. Thread-safe: the app's worker
+    and a launch share one watch."""
 
     def __init__(self, sid: str, projects: Path | None = None, cwd: str | None = None):
         self.sid, self.projects, self.cwd = sid, projects, cwd
@@ -264,8 +259,7 @@ class TitleWatch:
                 size = f.seek(0, 2)
                 if size == self.offset:
                     return self.renamed
-                tail = self.offset is None or size < self.offset
-                start = max(0, size - TAIL_BYTES) if tail else self.offset
+                start = max(0, size - TAIL_BYTES) if self.offset is None or size < self.offset else self.offset
                 f.seek(start)
                 data = f.read(size - start)
         except OSError:
@@ -281,8 +275,6 @@ class TitleWatch:
                     continue
                 if isinstance(rec, dict):
                     self._take(rec)
-        if tail and start and self.renamed is None and self.title and (at := first_time(data)):
-            self.renamed = Rename(at, self.title, inferred=True)
         return self.renamed
 
     def _take(self, rec: dict) -> None:
@@ -293,32 +285,13 @@ class TitleWatch:
         if (rec.get("type"), rec.get("subtype")) != ("system", "local_command") or not isinstance(content, str) \
                 or RENAMED not in content:
             return
-        if (at := utc(rec)) is None:
+        try:
+            at = datetime.fromisoformat(rec.get("timestamp") or "").astimezone(timezone.utc)
+        except ValueError:
             return
         said = content.split(RENAMED, 1)[1].split("</local-command-stdout>", 1)[0].strip()
         if title := self.title or said:   # the custom-title record written just before
-            self.renamed = Rename(at, title)
-
-
-def utc(rec: dict) -> str | None:
-    """A record's time, ISO, UTC."""
-    try:
-        at = datetime.fromisoformat(rec.get("timestamp") or "").astimezone(timezone.utc)
-    except ValueError:
-        return None
-    return at.isoformat(timespec="microseconds")
-
-
-def first_time(data: bytes) -> str | None:
-    """The time of the first record that has one."""
-    for line in data.splitlines():
-        try:
-            rec = json.loads(line)
-        except ValueError:   # cut mid-record
-            continue
-        if isinstance(rec, dict) and (at := utc(rec)):
-            return at
-    return None
+            self.renamed = Rename(at.isoformat(timespec="microseconds"), title)
 
 
 class Follower:

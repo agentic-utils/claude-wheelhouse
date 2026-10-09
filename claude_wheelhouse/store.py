@@ -352,18 +352,14 @@ class Store:
             self._require(db, sid)
             db.execute("UPDATE sessions SET name = ?, renamed_at = ? WHERE id = ?", (name, stamp(), sid))
 
-    def take_title(self, sid: str, at: str, title: str, inferred: bool = False) -> bool:
+    def take_title(self, sid: str, at: str, title: str) -> bool:
         """A /rename made in Claude Code at `at` (transcript.TitleWatch): taken as the
         session's name if it is newer than the session's last rename, wherever that was
         made, or than its creation (an adoption under a new name). The most recent rename
-        wins. True if the name changed. inferred: one older than the transcript's tail, made
-        at some time before `at`, so it can't be ordered against a rename since; it is taken
-        only if the session has had none and its name differs."""
+        wins. True if the name changed."""
         with self.tx() as db:
             row = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
             if row is None or not renamed_since(row, at):
-                return False
-            if inferred and (row["renamed_at"] or row["name"] == title):
                 return False
             db.execute("UPDATE sessions SET name = ?, renamed_at = ? WHERE id = ?", (title, at, sid))
         return row["name"] != title

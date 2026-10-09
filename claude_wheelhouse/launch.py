@@ -151,7 +151,7 @@ def open_session(store: Store, sid: str, watch: TitleWatch | None = None) -> Non
         raise KeyError(sid)
     renamed = (watch or TitleWatch(sid, cwd=session["cwd"])).read()
     if renamed and renamed_since(session, renamed.at):
-        store.take_title(sid, renamed.at, renamed.title, renamed.inferred)
+        store.take_title(sid, renamed.at, renamed.title)
     (open_host if runner(session) == "sdk" else open_tab)(store, sid)
 
 

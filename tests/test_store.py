@@ -324,24 +324,6 @@ def test_upgrading_keeps_renames_made_before_they_were_stamped(db_file, transcri
     assert Store(db_file).session(sid)["renamed_at"] == upgraded.session(sid)["renamed_at"], "the backfill runs once"
 
 
-@pytest.mark.parametrize("renamed_at, at, title, expected, desc", [
-    (None, 20, "Columbo check", ("Columbo check", True), "a /rename older than the tail, never renamed since: taken"),
-    (None, 20, "demo", ("demo", False), "its name already: nothing to take, and no rename stamped"),
-    (15, 20, "Columbo check", ("demo", False), "renamed since it was created: can't tell which came last, so kept"),
-    (None, 5, "Columbo check", ("demo", False), "the tail older than its creation: kept"),
-])
-def test_an_inferred_rename_is_taken_only_by_a_session_never_renamed(store, tmp_path, monkeypatch, renamed_at, at,
-                                                                    title, expected, desc):
-    monkeypatch.setattr("claude_wheelhouse.store.now", lambda: minute(10))
-    sid = store.create_session(str(tmp_path), name="demo")
-    if renamed_at:
-        monkeypatch.setattr("claude_wheelhouse.store.stamp", lambda: minute(renamed_at))
-        store.rename(sid, "demo")
-    took = store.take_title(sid, minute(at), title, inferred=True)
-    assert (store.session(sid)["name"], took) == expected, desc
-    assert store.session(sid)["renamed_at"] == (minute(at) if took else renamed_at and minute(renamed_at)), desc
-
-
 def test_renaming_a_session_that_has_gone_says_so(store):
     with pytest.raises(SessionGone):
         store.rename("gone", "x")

@@ -1851,7 +1851,7 @@ class WheelhouseApp(App):
         changed = False
         for sid, renamed in found:
             if sid in rows and renamed_since(rows[sid], renamed.at):
-                changed |= self.store.take_title(sid, renamed.at, renamed.title, renamed.inferred)
+                changed |= self.store.take_title(sid, renamed.at, renamed.title)
         if changed:
             self.sessions = self.store.sessions()
             self.paint_sessions()
