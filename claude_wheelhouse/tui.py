@@ -597,7 +597,9 @@ class ThreadView(Screen):
     def action_leave(self) -> None:
         self.app.keep_unsent(self.box, (self.sid, self.ref), None)
         self.app.pop_screen()
-        self.app.call_after_refresh(self.app.retarget)   # the inbox box takes back its target's text, the bar its session
+        # the inbox box takes back its target's text, the bar its session: now, not after a
+        # refresh, where text typed into the box behind Esc would be swapped out (take_key)
+        self.app.retarget()
 
     def paint(self) -> None:
         s = self.app.store.session(self.sid)
@@ -638,9 +640,10 @@ class Hint(Label):
 
 
 class Dialog(ModalScreen):
-    """A dialog. Its keys are bindings, so each acts as it arrives (take_key): a key typed
-    behind the one that closes it goes to the screen it uncovers, in order. Answered once:
-    a second click, or a click behind a key, finds it closed already."""
+    """A dialog. Every answer, by key, button or Enter in a box, is action_answer. A key acts
+    once the one before it has landed (take_key), so a key typed behind the one that answers
+    goes to the screen that answer uncovers, in order. Answered once: a second click finds it
+    closed already."""
 
     def action_answer(self, result=None) -> None:
         if self.is_active:
@@ -671,14 +674,14 @@ class NewSession(Dialog):
         if not os.path.isdir(cwd):
             self.notify(f"no such directory: {cwd}", severity="error")
             return
-        self.dismiss({"cwd": cwd, "name": self.query_one("#name", Input).value.strip(),
-                      "ticket": self.query_one("#ticket", Input).value.strip(),
-                      "brief": self.query_one("#brief", TextArea).text.strip(),
-                      "runner": "tab" if self.query_one("#tab", Checkbox).value else "sdk"})
+        self.action_answer({"cwd": cwd, "name": self.query_one("#name", Input).value.strip(),
+                            "ticket": self.query_one("#ticket", Input).value.strip(),
+                            "brief": self.query_one("#brief", TextArea).text.strip(),
+                            "runner": "tab" if self.query_one("#tab", Checkbox).value else "sdk"})
 
     @on(Button.Pressed, "#cancel")
     def cancel(self) -> None:
-        self.dismiss(None)
+        self.action_answer(None)
 
     @on(Button.Pressed, "#browse")
     def browse(self) -> None:
@@ -734,7 +737,7 @@ class PickDirectory(Dialog):
 
     @on(Button.Pressed, "#choose")
     def action_choose(self) -> None:
-        self.dismiss(self.picked)
+        self.action_answer(self.picked)
 
     @on(Button.Pressed, "#up")
     def action_up(self) -> None:
@@ -745,7 +748,7 @@ class PickDirectory(Dialog):
 
     @on(Button.Pressed, "#cancel")
     def cancel(self) -> None:
-        self.dismiss(None)
+        self.action_answer(None)
 
 
 
@@ -769,11 +772,11 @@ class RenameSession(Dialog):
     @on(Input.Submitted)
     @on(Button.Pressed, "#ok")
     def ok(self) -> None:
-        self.dismiss(self.query_one("#new-name", Input).value.strip())
+        self.action_answer(self.query_one("#new-name", Input).value.strip())
 
     @on(Button.Pressed, "#cancel")
     def cancel(self) -> None:
-        self.dismiss(None)
+        self.action_answer(None)
 
 
 
@@ -835,11 +838,11 @@ class AdoptSession(Dialog):
             self.query_one("#adopt-hint", Label).update(
                 f"Still running (pid {pid}): type /exit in its tab, then press Adopt.")
             return
-        self.dismiss({"candidate": c, "name": self.query_one("#adopt-name", Input).value.strip()})
+        self.action_answer({"candidate": c, "name": self.query_one("#adopt-name", Input).value.strip()})
 
     @on(Button.Pressed, "#cancel")
     def cancel(self) -> None:
-        self.dismiss(None)
+        self.action_answer(None)
 
 
 
@@ -918,7 +921,7 @@ DESCRIBE = {
     "new_session": "New session",
     "adopt": "Adopt: pick a Claude Code session that isn't in the wheelhouse yet, from those on disk",
     "restore_all": "Restore all: every dead session that isn't parked",
-    "clear_filter": "Clear the marks, else show every session's items again",
+    "clear_filter": "Clear a text selection first, then the marks, else show every session's items again",
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
     "app.close_question": "Close the highlighted question or decision (or every marked one); on a closed one, reopen it",
@@ -1178,6 +1181,7 @@ class WheelhouseApp(App):
         # unsent text typed for each target, (session id, ref or None), kept in memory only
         self.unsent: dict[tuple, str] = {}
         self.box_target: tuple | None = None
+        self.landing = False   # a key's land under way, which the refresh tick waits out (tick)
         self.statuses: dict[str, str] = {}
         self.sessions = []
         # sessions whose host Relaunch has stopped: started again once it has gone. Each has
@@ -1243,7 +1247,7 @@ class WheelhouseApp(App):
         self.items_table.add_columns("session", "ref", "status", "title")
         self.checklist = self.query_one("#checklist", Static)
         self.set_interval(0.1, self.animate)
-        self.set_interval(1.0, self.refresh_data)
+        self.set_interval(1.0, self.tick)
         self.refresh_data()
         if tutorial.should_offer(self.store):
             self.push_screen(TutorialOffer(), self.offer_answered)
@@ -1273,16 +1277,14 @@ class WheelhouseApp(App):
         await super().on_event(event)
 
     async def take_key(self, event: events.Key) -> None:
-        """Every key, one rule: it acts as it arrives, on what has focus then, so a burst
-        (type-ahead) acts in the order typed. What was sent to the focus before it lands
-        first; then its binding acts at once, from the focus up as Textual resolves them (a
-        key a text box types is no one else's); a key no binding takes goes to the focus.
+        """Every key, one rule: it acts once what the keys before it set in motion has landed
+        (land), on what has focus then, so a burst (type-ahead) ends as the same keys typed
+        slowly do. Its binding acts at once, from the focus up as Textual resolves them (a key
+        a text box types is no one else's); a key no binding takes goes to the focus.
         Textual's own way sent each key to a widget as it arrived but acted on its binding
         only once it came back up, so a later key could move the focus or a cursor first."""
         self.app_focus = True
-        if not self.screen.is_mounted:   # a key ahead of this one opened it: it takes its focus as it mounts
-            await self.screen._mounted_event.wait()
-        await self.drain(self.focused)
+        await self.land()
         if self.focused is not None:
             self.screen._clear_tooltip()
         if not (await self._check_bindings(event.key, priority=True) or await self._check_bindings(event.key)):
@@ -1338,6 +1340,13 @@ class WheelhouseApp(App):
             # asking what has focus would raise
             if self.screen_stack and not isinstance(self.focused, Compose):
                 self.each_pane("animate", self.frame // 2)   # 5 frames a second, as in the dashboard
+
+    def tick(self) -> None:
+        """The refresh, each second, skipped while a key lands (land): a refresh settles, and a
+        burst's arrows are settled by the keys behind them that act on the cursor, or once the
+        burst is done (settle), not wherever a tick falls."""
+        if not self.landing:
+            self.refresh_data()
 
     def refresh_data(self) -> None:
         self.waking = self.wake.tick()
@@ -2403,20 +2412,43 @@ class WheelhouseApp(App):
             button._start_active_affect()
             await self._dispatch_message(Button.Pressed(button))
 
-    async def drain(self, widget: Widget | None) -> None:
-        """Let the keys already sent to the focus land (typing, say) before the next key
-        acts on what they did (take_key). Only when something is waiting: the wait lets the
-        refresh tick in mid-burst, and it settles. Bounded: a widget kept busy never holds
-        the app up for long."""
-        if widget is None or not widget.message_queue_size:
-            return
-        landed = asyncio.get_running_loop().create_future()
-        # a callback queued behind them runs once they have
-        widget.call_later(lambda: landed.done() or landed.set_result(None))
+    async def land(self) -> None:
+        """What the keys before this one set in motion, landed before it acts (take_key), as if
+        they had been typed slowly: a screen one opened has mounted and taken its focus; what
+        was sent to the focus has been handled, and so has each message that bubbles from there
+        to its screen, as a button's Pressed, an input's Submitted or a row's Selected; and a
+        dialog that closed has given its answer to whatever opened it, which Textual runs once
+        the app's current message (this key) is done. A message that reaches the app itself
+        waits behind the burst, so a key whose effect is the app's acts at once instead
+        (action_press, select_now, settle). It waits only when something is waiting, and the
+        refresh tick waits for it (tick), so a burst ends the same wherever a tick falls.
+        Bounded: a widget kept busy never holds the app up for long, though long enough for the
+        inbox to restyle as the screen over it closes (a fifth of a second, under load)."""
+        deadline = time.monotonic() + 2
+        self.landing = True
         try:
-            await asyncio.wait_for(landed, 0.5)
+            while time.monotonic() < deadline:
+                if self._next_callbacks:
+                    await self._flush_next_callbacks()
+                    continue
+                if not self.screen.is_mounted:   # it takes its focus as it mounts
+                    await self.screen._mounted_event.wait()
+                    continue
+                chain = [w for w in (self.focused or self.screen).ancestors_with_self if w is not self]
+                # the focus first, as messages bubble. A message its pump has taken from the queue
+                # to look at while it handles the one before isn't in the queue's size
+                waiting = next((w for w in chain if w.message_queue_size or w._pending_message is not None), None)
+                if waiting is None:
+                    return
+                landed = asyncio.get_running_loop().create_future()
+                # a callback queued behind them runs once they have
+                if not waiting.call_later(lambda: landed.done() or landed.set_result(None)):
+                    return   # closing: nothing more of it lands
+                await asyncio.wait_for(landed, deadline - time.monotonic())
         except asyncio.TimeoutError:
             pass
+        finally:
+            self.landing = False
 
     def action_focus_next(self) -> None:
         self.cycle_focus(1)

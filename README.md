@@ -191,8 +191,9 @@ as in Claude Code's own prompt), and `Shift+A` Send all. A key whose button does
 stop, where the arrows, `PgUp`, `PgDn`, `Home` and `End` scroll it), and `Shift+Tab` goes back.
 `Ctrl+Enter` in the answer box goes back to the items with the cursor where it was, so answering a run
 of items is: type, `Ctrl+Enter`, `Down`, `Tab`, type, `Ctrl+Enter`. An item opened full screen has two
-stops, its answer box and its thread. Keys typed ahead of the screen act in the order typed, the ones behind a key that
-opens a thread or a dialog going to it.
+stops, its answer box and its thread. Keys typed ahead of the screen end as if typed slowly: each acts once the one
+before it has done all it does, so the ones behind a key that opens a thread or a dialog go to it, and the ones behind a
+dialog's answer go to the screen it uncovers.
 
 Closing several questions or decisions at once: in the item list, `Ctrl`+click marks or unmarks a row
 and `Shift`+click marks the range from the last one marked; from the keyboard, `Space`

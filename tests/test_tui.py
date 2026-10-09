@@ -1089,6 +1089,17 @@ async def test_a_key_that_opens_something_takes_the_keys_behind_it(store, tmp_pa
     """Review 15: a key that opens a screen or moves the focus does so before the next key
     acts, so the keys typed behind it go to what it opened, in order, and a dialog's key
     typed twice closes it once."""
+    out = await burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc)
+    seen = (out["stack"][-1], out["box"], out["hosts"], out["quit"], out["pending"])
+    assert seen == want, f"{desc}: got {seen}"
+    assert out["launched"] == [], desc
+
+
+async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, slow=False) -> dict:
+    """A burst typed on an inbox of alpha, run in the wheelhouse and asked to park, with
+    question qa, and gone, a dead session: raw, as a terminal sends it, or slow, each key
+    landing before the next is pressed (Pilot.press). What it left behind, by name: the
+    screens, the focus, the box in front's text, what was asked of the sessions and the app."""
     from claude_wheelhouse import liveness
     alpha = store.create_session(str(tmp_path), name="alpha", runner="sdk")
     gone = store.create_session(str(tmp_path), name="gone", runner="sdk")
@@ -1098,7 +1109,8 @@ async def test_a_key_that_opens_something_takes_the_keys_behind_it(store, tmp_pa
     hosts, exits, launched = [], [], []
     monkeypatch.setattr(WheelhouseApp, "host_command", lambda self, sid, what: hosts.append(what))
     monkeypatch.setattr(WheelhouseApp, "exit", lambda self, *a, **k: exits.append(True))
-    monkeypatch.setattr(WheelhouseApp, "open_session", lambda self, sid, restore=False: launched.append(sid))
+    monkeypatch.setattr(WheelhouseApp, "open_session",
+                        lambda self, sid, restore=False: launched.append(store.session(sid)["name"]) or True)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -1112,15 +1124,85 @@ async def test_a_key_that_opens_something_takes_the_keys_behind_it(store, tmp_pa
         await pilot.pause()
         app.query_one(f"#{focus}").focus()
         await pilot.pause()
-        raw_keys(app, *burst)
+        if slow:
+            for key in burst:
+                await pilot.press(key)
+                await pilot.pause()
+        else:
+            raw_keys(app, *burst)
         for _ in range(10):
             await pilot.pause()
-        box = app.screen.box.text if isinstance(app.screen, ThreadView) else app.answer.text
-        seen = (type(app.screen).__name__, box, hosts, bool(exits), app.pending(store.session(alpha)))
-        assert seen == want, f"{desc}: got {seen}"
-        assert launched == [], desc
-        if type(app.screen).__name__ in ("Screen", "ThreadView"):
+        s = store.session(alpha)
+        current = app.current_session()
+        out = {"stack": tuple(type(screen).__name__ for screen in app.screen_stack), "focus": focused_id(app),
+               "box": app.screen.box.text if isinstance(app.screen, ThreadView) else app.answer.text,
+               "unsent": sorted(app.unsent.values()), "hosts": hosts, "quit": bool(exits), "launched": launched,
+               "names": sorted(row["name"] for row in store.sessions()),
+               "pending": s and app.pending(s), "parked": bool(s and s["parked"]),
+               "queued": [m["body"] for m in store.drafts(alpha)] + [m["body"] for m in store.pending(alpha)],
+               "current": current and store.session(current)["name"], "finished": app.show_finished}
+        if isinstance(app.screen, ThreadView) or len(app.screen_stack) == 1:
             assert_one_current(app, desc)
+    return out
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("focus, at, burst, want, desc", [
+    ("items", "qa", ("h", "enter", "y"), {"stack": ("Screen",), "hosts": []},
+     "review 16 (1): H's Confirm opens on No, so Enter answers No, and the Y behind it isn't a Yes"),
+    ("items", "qa", ("h", "enter", "q"), {"stack": ("Screen",), "hosts": [], "quit": True},
+     "review 16 (1): Enter on No answers No, then Q quits"),
+    ("session-list", "gone", ("enter", "enter", "y"), {"stack": ("Screen",), "launched": []},
+     "review 16 (1): Relaunch's Confirm opens on No, so Enter declines, and the Y behind it doesn't relaunch"),
+    ("session-list", "alpha", ("p", "enter", "f"), {"stack": ("Screen",), "pending": None, "parked": False},
+     "review 16 (1): the Choice opens on Cancel request: Enter cancels the request, and the F behind it isn't Force"),
+    ("session-list", "alpha", ("p", "enter", "escape"), {"stack": ("Screen",), "pending": None},
+     "review 16 (1): Enter cancels the request, and the Esc behind it isn't Leave it"),
+    ("session-list", "alpha", ("r", "x", "enter", "q"), {"stack": ("Screen",), "names": ["gone", "x"], "quit": True},
+     "review 16 (1): Rename takes X, Enter renames to it, then Q quits"),
+    ("session-list", "alpha", ("r", "enter", "enter"), {"stack": ("Screen",), "names": ["alpha", "gone"]},
+     "review 16 (2): Enter closes Rename once, and the second Enter is the session list's"),
+    ("session-list", "alpha", ("r", "x", "enter", "enter"), {"stack": ("Screen",), "names": ["gone", "x"]},
+     "review 16 (2): X Enter renames, and the second Enter is the session list's"),
+    ("session-list", "alpha", ("n", "tab", "enter", "escape"), {"stack": ("Screen", "NewSession"), "focus": "browse"},
+     "review 16 (3): Enter on Browse opens the picker, and the Esc behind it closes the picker, not New session"),
+    ("session-list", "alpha", ("p", "f", "y"), {"stack": ("Screen",), "parked": True},
+     "F on the Choice asks to confirm Force, and the Y behind it confirms"),
+    ("session-list", "alpha", ("p", "c", "p"), {"stack": ("Screen", "Confirm"), "pending": None},
+     "C cancels the request before the P behind it, which asks afresh"),
+])
+async def test_a_key_lands_before_the_next_acts(store, tmp_path, monkeypatch, focus, at, burst, want, desc):
+    """Review 16: what a key sets in motion lands before the key behind it acts: the press
+    a focused button's Enter posts, the Submitted an input's, the screen it opens or closes,
+    and the dialog's answer, so a key typed behind it never answers in its place."""
+    out = await burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc)
+    assert {k: out[k] for k in want} == want, f"{desc}: got {out}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("focus, at, burst, desc", [
+    ("items", "qa", ("h", "enter", "y"), "a focused button's Enter, then a dialog key"),
+    ("session-list", "alpha", ("p", "enter", "escape"), "the Choice's Enter, then Esc"),
+    ("session-list", "alpha", ("p", "f", "y"), "a dialog's answer that opens another"),
+    ("session-list", "alpha", ("p", "c", "p"), "a dialog's answer, then a key that reads what it did"),
+    ("session-list", "alpha", ("r", "x", "enter", "q"), "an input's Enter, then a key on the screen behind"),
+    ("session-list", "alpha", ("r", "x", "enter", "enter"), "an input's Enter twice"),
+    ("session-list", "alpha", ("n", "tab", "enter", "escape", "tab", "a"), "the picker opened and closed by keys"),
+    ("session-list", "alpha", ("n", "a", "b", "escape", "q"), "typing in a dialog, then closing it"),
+    ("session-list", "gone", ("enter", "enter", "y"), "Enter on a dead session's relaunch offer declines it"),
+    ("items", "qa", ("enter", "x", "escape", "tab", "y"), "a thread left with Esc, then the inbox's box"),
+    ("items", "qa", ("tab", "a", "b", "backspace", "ctrl+enter", "down"), "typing, editing and sending"),
+    ("items", "qa", ("question_mark", "q", "q"), "? and Q close the keys, then Q quits"),
+])
+async def test_a_raw_burst_ends_as_the_same_keys_typed_slowly(store, tmp_path, monkeypatch, focus, at, burst, desc):
+    """Type-ahead: a burst sent as a terminal sends it ends where the same keys, each landing
+    before the next is pressed, do."""
+    from claude_wheelhouse.store import Store
+    raw = await burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc)
+    (tmp_path / "slow").mkdir()
+    slow = await burst_outcome(Store(tmp_path / "slow" / "wheelhouse.db"), tmp_path, monkeypatch, focus, at, burst,
+                               desc, slow=True)
+    assert raw == slow, f"{desc}: raw {raw}, slow {slow}"
 
 
 @pytest.mark.anyio
