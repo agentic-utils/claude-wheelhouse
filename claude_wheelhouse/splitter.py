@@ -157,7 +157,9 @@ def fit(splitters) -> None:
     for group in groups.values():
         first = group[0]
         parent, room = first.parent, first.room()
-        wants = [(s, sized, want) for s in group if (want := s.wanted(sized := s.panes()[0], room)) is not None]
+        # never under the pane's minimum: CSS holds it there, so that's what it takes
+        wants = [(s, sized, max(want, first.minimum(sized))) for s in group
+                 if (want := s.wanted(sized := s.panes()[0], room)) is not None]
         if not room or not wants:
             continue
         mine = {sized for _, sized, _ in wants}

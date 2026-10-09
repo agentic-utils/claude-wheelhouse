@@ -1,5 +1,6 @@
 import json
 import time
+import random
 
 import pytest
 from rich.color import Color
@@ -1865,6 +1866,10 @@ COLUMNS = ("#sessions-pane", "#items-pane", "#detail-pane")
     (160, {"detail-pane": "inf"}, "nor infinite"),
     (160, {"sessions-pane": "5.0"}, "one over the whole is clamped"),
     (160, {"sessions-pane": "-1"}, "as is a negative one"),
+    # review 9: a share under its pane's minimum, held up by CSS, counted at the minimum
+    (90, {"sessions-pane": "0.6025", "detail-pane": "0.1225"}, "120 and 24 of 200, on 90"),
+    (80, {"sessions-pane": "0.6025", "detail-pane": "0.1225"}, "120 and 24 of 200, on 80"),
+    (113, {"sessions-pane": "0.218016", "detail-pane": "0.933439"}, "the sweep's 127 on 113"),
 ])
 async def test_the_columns_stay_on_screen(store, sid, width, stored, desc):
     for key, value in (stored or {}).items():
@@ -1874,7 +1879,32 @@ async def test_the_columns_stay_on_screen(store, sid, width, stored, desc):
         await pilot.pause()
         assert on_screen(app, *COLUMNS, "#answer"), desc
         assert app.query_one("#items-pane").region.width >= 12, f"{desc}: the inbox keeps its minimum"
+        assert columns_fill(app), f"{desc}: the columns and splitters fill #main exactly"
     assert {k: store.setting("layout." + k) for k in stored or {}} == (stored or {}), f"{desc}: the setting stands"
+
+
+def columns_fill(app) -> bool:
+    return sum(app.query_one(sel).outer_size.width for sel in COLUMNS) + 2 == app.query_one("#main").size.width
+
+
+@pytest.mark.anyio
+async def test_any_shares_fit_any_width(store, sid):
+    """Review 9, property-style: random shares for the two columns on random widths, the
+    columns always fill #main, none past it."""
+    rng = random.Random(9)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        for _ in range(15):   # a quarter of these overflowed before review 9's fix
+            shares = {key: rng.uniform(0.02, 0.98) for key in ("sessions-pane", "detail-pane")}
+            width = rng.randint(80, 220)
+            for key, fraction in shares.items():
+                splitter(app, key).apply(fraction)
+            await pilot.resize_terminal(width, 30)
+            await pilot.pause()
+            app.fit_layout()   # the same size twice is no resize: fit it here
+            await pilot.pause()
+            assert columns_fill(app) and on_screen(app, *COLUMNS), f"{width} columns, shares {shares}"
 
 
 @pytest.mark.anyio
