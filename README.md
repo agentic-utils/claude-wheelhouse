@@ -81,7 +81,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   The buttons under the description act on it, and only those that apply show, each with
   a tooltip saying what it does: its lifecycle (Rename, Relaunch and Park on a running
   session, Restore on a dead one, Unpark on a parked one, End on either), then its
-  conversation (Mode, Send, and Interrupt, Compact and Shell while it runs in the
+  conversation (Mode, Send on one that isn't dead, and Interrupt, Compact and Shell while it runs in the
   wheelhouse). New (`N`), Adopt (`A`, a list of the sessions on disk you can adopt) and
   Restore all (`Shift+S`) act on no one session, so they're keys in the footer. Ctrl+S and Ctrl+T, the
   hint under the answer box and the activity line act on or describe the same session.
