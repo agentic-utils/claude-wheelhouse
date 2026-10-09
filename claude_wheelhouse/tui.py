@@ -1384,27 +1384,34 @@ class WheelhouseApp(App):
         if self.show_finished:
             rows += item_rows([it for it in items if it not in shown], names)
         queued = {(m["session_id"], m["item_ref"]) for m in self.store.drafts()}
-        awaiting = self.store.awaiting()
+        awaiting, processing = self.store.awaiting(), self.store.processing()
         if self.filter_sid:   # the session's own conversation, pinned first
             general = (self.filter_sid, None) in queued
             rows_out.append((f"{self.filter_sid}|", (names.get(self.filter_sid, "")[:14], Text("💬"),
                              Text("queued", style="bold #05d9e8") if general else "",
                              Text("Conversation", style="bold"))))
         for it, nested in rows:
-            # an open question with an answer waiting to be sent shows as queued; it's stored as open
-            status = "queued" if it["status"] == "open" and (it["session_id"], it["ref"]) in queued else it["status"]
+            # an unfinished item of any kind with an answer waiting to be sent shows as queued, and one
+            # whose answer went with no reply since as processing (D28); neither is stored
+            key = (it["session_id"], it["ref"])
+            status = it["status"] if it["status"] in CLOSED else "queued" if key in queued \
+                else "processing" if key in processing else it["status"]
             style = "dim" if status in CLOSED else "bold #05d9e8" if status == "queued" \
                 else "bold #ffd300" if status == "open" else DECISION if status == "unseen" \
                 else "bold #ff2a6d" if status in ("blocked", "waiting") else MATRIX
             name = names.get(it["session_id"], "")[:14]
-            if (it["session_id"], it["ref"]) in awaiting and status != "queued":
-                # the person spoke last: the ball is in the session's court until it replies
-                cells = (name, it["ref"], Text(f"⏳ {status}", style="dim"), Text(it["title"], style="dim"))
-            elif nested is None:
-                cells = (name, it["ref"], Text(status, style=style), it["title"])
+            if status == "processing" or key in awaiting and status != "queued":
+                # the person spoke last: the ball is in the session's court until it replies. A
+                # finished item keeps its status, with the hourglass
+                shown = Text(status if status == "processing" else f"⏳ {status}", style="dim")
+                title = Text(it["title"], style="dim")
+            else:
+                shown, title = Text(status, style=style), it["title"]
+            if nested is None:
+                cells = (name, it["ref"], shown, title)
             else:   # a subagent, tucked under its session's name
                 cells = (name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
-                         Text(status, style=style), Text(it["title"], style="dim"))
+                         shown, Text(it["title"], style="dim"))
             rows_out.append((f"{it['session_id']}|{it['ref']}", cells))
         table.marked &= {k for k, _ in rows_out}   # a marked item that went is unmarked
         rows_out = [(k, marked(cells) if k in table.marked else cells) for k, cells in rows_out]

@@ -20,7 +20,7 @@ In the order they will meet it:
 2. **Items.** Tasks (`T`), questions (`Q`), decisions (`D`) and subagent statuses (`A`),
    all in the inbox (`1`), open questions first. `F` shows finished items.
 3. **Answering.** Enter opens a thread; Ctrl+Enter submits. The session's reply declares
-   the question's state: `⏳` while it's the session's move, `open` when it needs them
+   the question's state: `processing` while it's the session's move (D28), `open` when it needs them
    again, `answered` once it can proceed. Delete or Backspace in the item list closes a question (#64).
 4. **Send mode.** Queued (the default) holds answers until Ctrl+S sends the session's
    queue as one message, or Send all sends every session's. Immediate sends on submit.
@@ -40,7 +40,7 @@ In the order they will meet it:
 
 - Cheap, no tokens, deterministic, works offline.
 - Fake sessions have no process, so liveness shows them dead (red) and offers relaunch;
-  answers queue but nothing ever replies, so `⏳` never resolves. It teaches the screens,
+  answers queue but nothing ever replies, so `processing` never resolves. It teaches the screens,
   not the loop, and the loop is the product.
 
 **B. Live demo session.** `make tutorial` launches a real session in a scratch directory
@@ -58,7 +58,7 @@ finish.
 send-mode rules.
 
 - Smallest to build and always available, but nobody reads it until they're stuck, and
-  it can't show `⏳` turning into `answered`.
+  it can't show `processing` turning into `answered`.
 
 ## Recommendation
 

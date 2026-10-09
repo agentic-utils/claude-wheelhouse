@@ -159,15 +159,17 @@ def test_a_queued_answer_can_be_taken_back(store, sid):
     assert store.drafts() == [] and store.unqueue(draft["id"]) is None
 
 
-@pytest.mark.parametrize("steps, status, awaiting, desc", [
-    (["send"], "open", True, "the person asked: the ball is in the session's court"),
-    (["send", "reply open"], "open", False, "a clarification answered: still waiting on the person"),
-    (["send", "reply answered"], "answered", False, "the session has what it needs"),
-    (["send", "reply answered", "send"], "answered", True, "a further word is awaiting a reply again"),
-    (["queue"], "open", False, "a queued answer isn't with the session yet"),
-    (["queue", "dispatch"], "open", True, "until it's sent"),
+@pytest.mark.parametrize("steps, status, awaiting, processing, desc", [
+    ([], "open", False, False, "nothing said yet: awaiting the person"),
+    (["send"], "open", True, True, "the person asked: the ball is in the session's court"),
+    (["send", "reply open"], "open", False, False, "a clarification answered: still waiting on the person"),
+    (["send", "reply answered"], "answered", False, False, "the session has what it needs"),
+    (["send", "reply answered", "send"], "answered", True, True, "a further word is awaiting a reply again"),
+    (["queue"], "open", False, False, "a queued answer isn't with the session yet"),
+    (["queue", "dispatch"], "open", True, True, "until it's sent"),
+    (["send", "queue"], "open", True, False, "more queued: back with the person until it's sent"),
 ])
-def test_the_session_declares_where_a_question_stands(store, sid, steps, status, awaiting, desc):
+def test_the_session_declares_where_a_question_stands(store, sid, steps, status, awaiting, processing, desc):
     q = store.post_item(sid, "question", "db?")
     act = {"send": lambda: store.send(sid, "postgres?", q), "queue": lambda: store.queue(sid, "postgres?", q),
            "dispatch": lambda: store.dispatch(sid),
@@ -177,6 +179,37 @@ def test_the_session_declares_where_a_question_stands(store, sid, steps, status,
         act[step]()
     assert store.item(sid, q)["status"] == status, desc
     assert ((sid, q) in store.awaiting()) == awaiting, desc
+    assert ((sid, q) in store.processing()) == processing, desc
+    counted = status == "open" and not processing
+    assert store.sessions()[0]["open_questions"] == counted, f"{desc}: the session list counts it"
+
+
+@pytest.mark.parametrize("kind, status, steps, processing, desc", [
+    ("task", "running", ["send"], True, "a task the person spoke on last"),
+    ("task", "running", ["send", "reply"], False, "a task the session replied on"),
+    ("task", "running", ["send", "queue"], False, "a task with more queued"),
+    ("task", "done", ["send"], False, "a finished task keeps its status"),
+    ("decision", None, ["send"], True, "a decision the person spoke on last"),
+    ("decision", None, ["send", "reply"], False, "a decision the session replied on"),
+    ("agent", "running", ["send"], True, "a subagent the person spoke on last"),
+])
+def test_any_unfinished_item_can_be_processing(store, sid, kind, status, steps, processing, desc):
+    extra = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"} if kind == "decision" else {}
+    ref = store.post_item(sid, kind, "x", status=status, **extra)
+    act = {"send": lambda: store.send(sid, "and?", ref), "queue": lambda: store.queue(sid, "more", ref),
+           "reply": lambda: store.reply(sid, ref, "done that")}
+    for step in steps:
+        act[step]()
+    assert ((sid, ref) in store.processing()) == processing, desc
+    assert store.sessions()[0]["open_questions"] == 0, f"{desc}: only questions are counted"
+
+
+def test_a_processing_question_ranks_below_one_awaiting_the_person(store, sid):
+    sent = store.post_item(sid, "question", "sent")
+    store.post_item(sid, "task", "blocked", status="blocked")
+    store.post_item(sid, "question", "unanswered")
+    store.send(sid, "postgres", sent)
+    assert [i["title"] for i in store.items()] == ["unanswered", "blocked", "sent"]
 
 
 def test_synopsis_is_stored_on_the_session(store, sid):

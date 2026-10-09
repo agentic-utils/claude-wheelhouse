@@ -318,9 +318,9 @@ class Store:
 
     def sessions(self) -> list[sqlite3.Row]:
         return self._all(
-            """SELECT s.*,
+            f"""SELECT s.*,
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id
-                    AND i.kind = 'question' AND i.status = 'open') AS open_questions,
+                    AND i.kind = 'question' AND i.status = 'open' AND NOT {PROCESSING}) AS open_questions,
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id
                     AND i.status = 'running') AS running,
                  (SELECT count(*) FROM messages m WHERE m.session_id = s.id AND m.draft = 1) AS drafts,
@@ -521,7 +521,8 @@ class Store:
         rows = self._all(sql, (sid, sid))
         if not include_closed:
             rows = [r for r in rows if r["status"] not in CLOSED]
-        return sorted(rows, key=inbox_rank)
+        processing = self.processing()
+        return sorted(rows, key=lambda r: inbox_rank(r, processing))
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's answer to a permission item: allow, always (allow, and keep the rule
@@ -631,11 +632,13 @@ class Store:
     def awaiting(self) -> set[tuple[str, str]]:
         """Items whose latest word is the person's: sent to the session, with no reply since.
         The ball is in the session's court; the session's reply says where the item stands."""
-        return {(r["session_id"], r["item_ref"]) for r in self._all(
-            """SELECT session_id, item_ref FROM messages WHERE item_ref IS NOT NULL AND draft = 0
-               GROUP BY session_id, item_ref
-               HAVING max(CASE WHEN author = 'person' THEN id END) >
-                      coalesce(max(CASE WHEN author = 'claude' AND kind = 'reply' THEN id END), 0)""", ())}
+        return {(r["session_id"], r["item_ref"]) for r in self._all(AWAITING)}
+
+    def processing(self) -> set[tuple[str, str]]:
+        """Unfinished items of any kind the session is working on (D28): the person's word sent,
+        awaiting its reply, nothing more queued."""
+        return {(r["session_id"], r["ref"]) for r in self._all(f"SELECT session_id, ref, status FROM items i WHERE {PROCESSING}")
+                if r["status"] not in CLOSED}
 
     def pending(self, sid: str) -> list[sqlite3.Row]:
         return self._all(
@@ -692,7 +695,18 @@ class Store:
         )
 
 
-RANK = {"open": 0, "blocked": 1, "waiting": 1, "answered": 2, "unseen": 2, "seen": 2, "running": 3, "todo": 4}
+RANK = {"open": 0, "blocked": 1, "waiting": 1, "answered": 2, "processing": 2, "unseen": 2, "seen": 2,
+        "running": 3, "todo": 4}
+
+# (session_id, item_ref) of items whose latest word is the person's, sent, with no reply since
+AWAITING = """SELECT session_id, item_ref FROM messages WHERE item_ref IS NOT NULL AND draft = 0
+              GROUP BY session_id, item_ref
+              HAVING max(CASE WHEN author = 'person' THEN id END) >
+                     coalesce(max(CASE WHEN author = 'claude' AND kind = 'reply' THEN id END), 0)"""
+# D28, on items aliased i: answered and sent, not yet replied to, nothing more queued. Shown as
+# processing and not counted as awaiting the person; stored as open, so the protocol is unchanged
+PROCESSING = f"""((i.session_id, i.ref) IN ({AWAITING}) AND (i.session_id, i.ref) NOT IN
+                  (SELECT session_id, item_ref FROM messages WHERE draft = 1 AND item_ref IS NOT NULL))"""
 
 
 def decision_body(body: str, status, fields: dict) -> str:
@@ -711,9 +725,12 @@ def decision_body(body: str, status, fields: dict) -> str:
     return "\n\n".join(parts)
 
 
-def inbox_rank(item) -> tuple:
-    """Questions waiting on the person first, then blocked, running, the rest; newest first within a rank."""
-    return (RANK.get(item["status"], 9), _neg_time(item["updated_at"]))
+def inbox_rank(item, processing=frozenset()) -> tuple:
+    """Questions waiting on the person first, then blocked, running, the rest; newest first within a rank.
+    An open question in `processing` (D28) waits on the session, so it ranks as answered does."""
+    status = "processing" if item["status"] == "open" and (item["session_id"], item["ref"]) in processing \
+        else item["status"]
+    return (RANK.get(status, 9), _neg_time(item["updated_at"]))
 
 
 def _neg_time(iso: str) -> float:

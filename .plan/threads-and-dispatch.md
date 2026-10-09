@@ -152,7 +152,17 @@ Where the build differs from the design above:
   `reply(ref, text, status)` requires `status` on a question, `open` (still waiting on
   the person) or `answered` (their input lets the session proceed); on a task or agent it
   is optional. While the person's message is the latest on an item, with no reply since,
-  the item list shows it dimmed as `⏳ <status>` (derived, `Store.awaiting()`). The old
+  the item list shows it dimmed as `⏳ <status>` (derived, `Store.awaiting()`).
+- **D28: processing (#65).** An unfinished item of any kind whose answer has been sent
+  (not a draft), with no reply since and nothing more queued, shows dimmed as
+  `processing` rather than `⏳ <status>` (derived, `Store.processing()`). An open question
+  that is processing ranks with answered questions and drops out of the session list's
+  question count and the session detail's "open Q" (the `PROCESSING` SQL is shared with
+  `Store.sessions()`). The stored status is unchanged, so the protocol and what a session
+  sees in `list_items` are too. A reply with status `open` puts a question back to
+  awaiting the person. `queued` (a draft on the ref) likewise shows on any unfinished
+  item, not only open questions: a decision answered showed nothing before. A finished
+  item keeps its status, with `⏳` while the session owes a reply. The old
   `items.reopened_after` column is no longer used; it stays because MCP servers still
   running older code write it. `PROTOCOL_VERSION` is 3, so those sessions show "needs
   relaunch".

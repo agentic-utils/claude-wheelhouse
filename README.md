@@ -23,7 +23,10 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   for: moving to another clears the box, and coming back restores it. Each session shows
   its queued count (`✉ 3`). Sending doesn't change a question's status: the session's
   reply declares it, `open` while it still needs you or `answered`. Until it replies the
-  question shows as `⏳` (dimmed), awaiting the session. Answers reach the session
+  question shows as `processing` (dimmed), awaiting the session, and the session list's
+  question count leaves it out: it counts only questions awaiting you, a queued answer
+  not yet sent included. Tasks, decisions and subagents you answer show `queued` and
+  `processing` the same way. Answers reach the session
   as a notification, even when it's idle. A running session started from an older
   wheelhouse shows "needs relaunch" (`⟳` in the session list): Relaunch gives it the new wheelhouse
   code (a tab session once you've `/exit`ed it). It still queues answers as usual,

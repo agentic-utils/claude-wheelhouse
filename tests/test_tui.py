@@ -1289,21 +1289,33 @@ async def test_delete_closes_and_reopens_questions(store, sid, key, kind, status
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("steps, shown, desc", [
-    ([], "open", "nothing said yet"),
-    (["send"], "⏳ open", "the person spoke last: awaiting the session's reply"),
-    (["send", "reply"], "open", "the session replied, still waiting on the person"),
+@pytest.mark.parametrize("kind, steps, shown, count, desc", [
+    ("question", [], "open", "1", "nothing said yet"),
+    ("question", ["send"], "processing", "", "the person spoke last: awaiting the session's reply"),
+    ("question", ["send", "reply"], "open", "1", "the session replied, still waiting on the person"),
+    ("question", ["queue"], "queued", "1", "a queued answer still awaits the person until it's sent"),
+    ("question", ["queue", "dispatch"], "processing", "", "sent with Ctrl+S: the session's move"),
+    ("question", ["send", "queue"], "queued", "1", "more queued: with the person until it's sent"),
+    ("task", ["send"], "processing", "", "a task: the session's move"),
+    ("task", ["queue"], "queued", "", "a task with a queued answer"),
+    ("task", ["send", "reply"], "todo", "", "a task the session replied on"),
+    ("decision", ["send"], "processing", "", "a decision: the session's move, never counted as a question"),
+    ("decision", ["queue"], "queued", "", "a decision with a queued answer"),
+    ("decision", ["queue", "dispatch"], "processing", "", "a decision's answer sent with Ctrl+S"),
 ])
-async def test_the_item_list_shows_a_question_awaiting_the_session(store, sid, steps, shown, desc):
-    q = store.post_item(sid, "question", "which db?")
-    act = {"send": lambda: store.send(sid, "what's it for?", q),
-           "reply": lambda: store.reply(sid, q, "the cache", "open")}
+async def test_the_item_list_shows_a_question_awaiting_the_session(store, sid, kind, steps, shown, count, desc):
+    extra = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"} if kind == "decision" else {}
+    q = store.post_item(sid, kind, "which db?", **extra)
+    act = {"send": lambda: store.send(sid, "what's it for?", q), "queue": lambda: store.queue(sid, "the cache", q),
+           "dispatch": lambda: store.dispatch(sid),
+           "reply": lambda: store.reply(sid, q, "the cache", "open" if kind == "question" else None)}
     for step in steps:
         act[step]()
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         assert str(app.items_table.get_row_at(0)[2]) == shown, desc
+        assert str(app.query_one("#session-list", DataTable).get_row_at(0)[3]) == count, f"{desc}: the Q count"
 
 
 @pytest.mark.anyio
