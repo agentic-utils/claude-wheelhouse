@@ -212,21 +212,21 @@ def test_flashing(now, shown, desc):
 
 
 def test_the_panel_holds_the_gauges_then_the_stats():
-    """Doug's layout (#43): the three gauges at the top with a blank line under each, then
-    the cache and compaction rows, all inside one border the width of the pane."""
+    """Doug's layout (#43, #50): a blank line, the three gauges with a blank line under
+    each, then the cache and compaction rows, all inside one border the width of the pane."""
     s = snap(83_000, 600)
     s.compactions = [stats.Compaction(NOW - 600, "manual", 201_000, 11_000)]
     rows, _ = stats.layout(s, "holly", None, usage(session=23, weekly_all=5), NOW, 56, 40)
     assert {r.cell_len for r in rows} == {56}, "every row is the pane's width"
     assert rows[0].plain.startswith("╭─ holly · Opus 5.5 · 1M window ") and rows[-1].plain.startswith("╰")
     inside = [r.plain[1:-1].split(" ")[0] or "-" for r in rows[1:-1]]
-    assert inside == ["context", "-", "session", "-", "weekly", "-", "cache", "compact"]
+    assert inside == ["-", "context", "-", "session", "-", "weekly", "-", "cache", "compact"]
 
 
 @pytest.mark.parametrize("height, kinds, bars, desc", [
     (60, ["assembly", "output"], 20, "a tall pane: each chart 40% of the one before"),
     (30, ["assembly", "output"], 7, "a middling pane: as tall as fits, under 40%"),
-    (21, ["assembly", "output"], 3, "a short pane: both, short"),
+    (22, ["assembly", "output"], 3, "a short pane: both, short"),
     (17, ["assembly"], 3, "too short for two: context assembly alone"),
     (14, [], None, "too short for either"),
 ])
@@ -391,3 +391,17 @@ def test_a_note_wraps_inside_the_panel(view, note, desc):
     assert {r.cell_len for r in rows} == {40}, f"{desc}: the border holds"
     inside = " ".join(r.plain[1:-1].strip() for r in rows[1:-1])
     assert note in inside, desc
+
+
+@pytest.mark.parametrize("env, expected, desc", [
+    ({"WT_SESSION": "x", "TERM": "xterm-256color"}, "truecolor", "Windows Terminal says nothing of 24-bit colour: assume it"),
+    ({"WT_SESSION": "x", "COLORTERM": "truecolor"}, None, "a terminal that says so needs nothing"),
+    ({"WT_SESSION": "x", "TEXTUAL_COLOR_SYSTEM": "256"}, "256", "the person's own setting stands"),
+    ({"TERM": "xterm-256color"}, None, "another terminal is left to Rich's detection"),
+])
+def test_windows_terminal_gets_truecolour(env, expected, desc):
+    """The shimmer's colours step by 3 to 5 levels a frame in 24-bit colour; at 256 colours
+    each cell jumps 40 to 95 levels between two to four colours (#50)."""
+    from claude_wheelhouse import cli
+    cli.truecolour(env)
+    assert env.get("TEXTUAL_COLOR_SYSTEM") == expected, desc

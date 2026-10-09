@@ -454,12 +454,12 @@ def spaced(rows: list[Text]) -> list[Text]:
 
 def layout(view, name: str, note: str | None, usage: "AccountUsage", now: float, width: int,
            height: int) -> tuple[list[Text], list["Chart"]]:
-    """The pane at a size: a bordered panel of the gauges (a blank line under each) and the
-    cache and compaction rows, then as many of the charts as fit under it."""
+    """The pane at a size: a bordered panel of the gauges (a blank line above them and
+    under each) and the cache and compaction rows, then as many of the charts as fit under it."""
     if view is None:
         body = said(note or "no sessions running", width - 2) + [Text()] + spaced(gauges(None, usage, now, width - 2))
         return panel("stats", body, width), []
-    body = spaced(gauges(view, usage, now, width - 2)) + stat_rows(view, now)
+    body = [Text()] + spaced(gauges(view, usage, now, width - 2)) + stat_rows(view, now)
     if note:   # beside a view: something went wrong reading it
         body += said(note, width - 2)
     rows = panel(title(view, name), body, width)
