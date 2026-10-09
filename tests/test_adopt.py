@@ -69,7 +69,7 @@ def test_title(projects, records, title, desc):
 
 
 @pytest.mark.parametrize("records, named, desc", [
-    ([record(), {"type": "custom-title", "customTitle": "x" * 100}], "x" * 100, "a long /rename: whole, not cut"),
+    ([record(), {"type": "custom-title", "customTitle": "x" * 100}], "x" * 100, "a long custom title: whole, not cut"),
     ([record(), {"type": "ai-title", "aiTitle": "VAT   rounding"}], "VAT rounding", "else Claude Code's title"),
     ([record(message={"content": "x" * 200})], "", "a prompt isn't a name"),
 ])
@@ -169,26 +169,14 @@ def test_adopt_registers_and_opens_the_same_session(store, sessions, proc):
     assert (s["cwd"], s["name"], s["adopted"]) == (REPO, "LG", 1)
 
 
-PARKED, RENAMED, ADOPTED = (f"2026-10-09T10:{m}:00.000000+00:00" for m in (10, 20, 30))
-
-
-@pytest.mark.parametrize("name, renamed, expected, desc", [
-    ("", None, "Rare caper", "keeps its name"),
-    ("LG", None, "LG", "renamed when asked"),
-    ("Rare caper", "Person's", "Person's", "its name pre-filled unchanged: a /rename made since it was parked wins"),
-    ("LG", "Person's", "LG", "a new name given at adoption beats that /rename"),
+@pytest.mark.parametrize("name, expected, desc", [
+    ("", "Rare caper", "keeps its name"),
+    ("LG", "LG", "renamed when asked"),
 ])
-def test_adopting_a_tracked_session_reuses_its_row(store, sessions, proc, monkeypatch, name, renamed, expected, desc):
-    monkeypatch.setattr("claude_wheelhouse.store.stamp", lambda: PARKED)
+def test_adopting_a_tracked_session_reuses_its_row(store, sessions, proc, name, expected, desc):
     store.create_session(REPO, name="Rare caper", sid=SID)
-    monkeypatch.setattr("claude_wheelhouse.store.stamp", lambda: ADOPTED)
     opened = []
-
-    def open_tab(s, sid):   # opening takes a /rename newer than its last rename, as launch does
-        opened.append(sid)
-        if renamed:
-            s.take_title(sid, RENAMED, renamed)
-    adopt.adopt(store, candidate(), name, sessions, proc, open_tab=open_tab)
+    adopt.adopt(store, candidate(), name, sessions, proc, open_tab=lambda s, sid: opened.append(sid))
     assert opened == [SID] and len(store.sessions()) == 1, desc
     assert store.session(SID)["name"] == expected, desc
 

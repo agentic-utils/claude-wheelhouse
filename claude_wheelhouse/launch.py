@@ -24,8 +24,8 @@ import sys
 from pathlib import Path
 
 from . import liveness
-from .transcript import NO_BRIEF, TitleWatch
-from .store import Store, db_path, default_runner, now, renamed_since, runner
+from .transcript import NO_BRIEF
+from .store import Store, db_path, default_runner, now, runner
 
 PLUGIN_DIR = Path(__file__).parent / "plugin"
 # The decisions section is separable so its effect on how sessions behave (priming) can be
@@ -141,21 +141,15 @@ def injected() -> str:
     ])
 
 
-def open_session(store: Store, sid: str, watch: TitleWatch | None = None) -> None:
-    """Launch (or restore) a session the way it runs: a host for sdk, a tab for tab. A
-    /rename made in Claude Code since the session's last rename is taken first, so the
-    launch's -n carries it rather than the old name. watch: the app's own for the session,
-    which has read the transcript already and only reads what is new."""
+def open_session(store: Store, sid: str) -> None:
+    """Launch (or restore) a session the way it runs: a host for sdk, a tab for tab."""
     session = store.session(sid)
     if session is None:
         raise KeyError(sid)
-    renamed = (watch or TitleWatch(sid, cwd=session["cwd"])).read()
-    if renamed and renamed_since(session, renamed.at):
-        store.take_title(sid, renamed.at, renamed.title)
     (open_host if runner(session) == "sdk" else open_tab)(store, sid)
 
 
-def restore_session(store: Store, sid: str, watch: TitleWatch | None = None) -> None:
+def restore_session(store: Store, sid: str) -> None:
     """Restore (or adopt) a session that isn't running, the way new sessions run now: a tab
     from before hosts existed comes back as a host unless WHEELHOUSE_RUNNER=tab. The check
     comes first, so a running tab is never recorded as hosted."""
@@ -164,7 +158,7 @@ def restore_session(store: Store, sid: str, watch: TitleWatch | None = None) -> 
         raise KeyError(sid)
     check_free(session)
     store.set_runner(sid, default_runner())
-    open_session(store, sid, watch)
+    open_session(store, sid)
 
 
 def check_free(session) -> None:

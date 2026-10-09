@@ -42,7 +42,7 @@ class Candidate:
     active: float         # last prompt or reply, epoch seconds
     running_pid: int | None
     name: str = ""        # its name in the wheelhouse, if it is already tracked there
-    named: str = ""       # its own name in the transcript (a /rename, else Claude Code's title), uncut
+    named: str = ""       # its own name in the transcript (its custom title, else Claude Code's), uncut
 
 
 def _records(data: bytes):
@@ -150,8 +150,7 @@ def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSI
           proc: Path = liveness.PROC, open_tab=launch.restore_session) -> str:
     """Register the session and open it (a host, or a tab: see store.default_runner, which a
     tracked session is switched to as well). Refuses while it is still running.
-    A session the wheelhouse already tracks keeps its row (and its items), renamed if asked.
-    Its unchanged name isn't a rename (store.rename), so a /rename made since it was parked wins."""
+    A session the wheelhouse already tracks keeps its row (and its items), renamed if asked."""
     pid = liveness.running_pid(c.id, sessions, proc)
     if pid:
         raise StillRunning(pid)

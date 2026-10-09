@@ -191,22 +191,3 @@ def test_decisions_section_is_separable(monkeypatch, env, has_decisions, desc):
     assert text.startswith("# Wheelhouse protocol"), desc
     assert ("## Decisions" in text) == has_decisions, desc
     assert "This section is about reporting, not deciding" in launch.DECISIONS
-
-
-@pytest.mark.parametrize("at, expected, desc", [
-    ("2999-01-01T00:00:00.000Z", "Columbo check", "a /rename since its last rename: the launch's -n carries it"),
-    ("2000-01-01T00:00:00.000Z", "demo", "an older one (adopted under a new name, say): the name it was given"),
-])
-def test_a_launch_takes_a_newer_rename_made_in_claude_code_first(store, sid, tmp_path, monkeypatch, at, expected, desc):
-    from claude_wheelhouse import transcript
-    folder = tmp_path / "projects/-home-u-repo"
-    folder.mkdir(parents=True)
-    recs = [{"type": "custom-title", "customTitle": "Columbo check"},
-            {"type": "system", "subtype": "local_command", "timestamp": at,
-             "content": "<local-command-stdout>Session renamed to: Columbo check</local-command-stdout>"}]
-    (folder / f"{sid}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
-    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
-    launched = []
-    monkeypatch.setattr(launch, "open_tab", lambda s, i: launched.append(s.session(i)["name"]))
-    launch.open_session(store, sid)
-    assert launched == [expected], desc

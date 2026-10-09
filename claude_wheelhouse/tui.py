@@ -36,8 +36,7 @@ from textual.widgets import (
 )
 
 from . import adopt, api, emoji, launch, liveness, transcript, tutorial
-from .store import (CLOSED, SessionGone, Store, can_queue, default_runner, mode, needs_relaunch, renamed_since,
-                    runner)
+from .store import CLOSED, SessionGone, Store, can_queue, default_runner, mode, needs_relaunch, runner
 
 MATRIX = "#00ff41"
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
@@ -56,7 +55,6 @@ PENDING = {"end": "ending", "park": "parking"}
 CLOSABLE = {"question": "answered", "decision": "seen"}   # what X closes, and what reopening makes it
 # where each module slot (api.SLOTS) is mounted: at the end of this container
 SLOT_PARENTS = {"inbox.side": "#items-pane"}
-TITLE_TICKS = 5   # refreshes (seconds) between looks for a /rename in the transcripts
 
 
 def cylon(frame: int, width: int = 8) -> Text:
@@ -824,7 +822,7 @@ BUTTONS = {
     "adopt-open": "Adopt: take on a Claude Code session started outside the wheelhouse",
     "restore": "Restore: bring back a dead session where it left off",
     "restore-all": "Restore all: every dead session that isn't parked",
-    "rename": "Rename: the session's name in the wheelhouse (a /rename in Claude Code is picked up too)",
+    "rename": "Rename: the session's name in the wheelhouse",
     "park": "Park / unpark: drop a session off the inbox, or bring it back",
     "end": "End: the session does its own end steps, then its wheelhouse data is deleted",
 }
@@ -944,9 +942,6 @@ class WheelhouseApp(App):
         # session's conversation, the first row while a session is selected
         self.selected: tuple[str, str | None] | None = None
         self.followers: dict[str, transcript.Follower] = {}
-        self.titles: dict[str, transcript.TitleWatch] = {}
-        self.reading_titles = False   # a worker is reading them
-        self.ticks = 0
         self.modules = api.load()
         self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
@@ -1030,11 +1025,8 @@ class WheelhouseApp(App):
     def refresh_data(self) -> None:
         self.waking = self.wake.tick()
         self.sessions = self.store.sessions()
-        self.ticks += 1
         # liveness only: the wheelhouse never deletes or parks anything by itself
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
-        if self.ticks % TITLE_TICKS == 1:
-            self.watch_titles()
         self.paint_sessions()
         self.paint_items()
         self.each_pane("tick")
@@ -1744,7 +1736,7 @@ class WheelhouseApp(App):
         """Launch a session the way it runs, a host or a tab; a restore runs it the way new
         sessions run now (launch.restore_session)."""
         try:
-            (launch.restore_session if restore else launch.open_session)(self.store, sid, self.titles.get(sid))
+            (launch.restore_session if restore else launch.open_session)(self.store, sid)
         except Exception as e:   # already running, wt.exe missing...
             self.notify(str(e), severity="error")
             return False
@@ -1813,48 +1805,11 @@ class WheelhouseApp(App):
 
     @session_action
     def rename(self, sid: str, name: str | None) -> None:
-        if name is None:
+        if name is None or name == self.row(sid)["name"]:   # cancelled, or unchanged
             return
         self.store.rename(sid, name)
         self.notify(f"renamed to {name}" if name else "name cleared: it shows its directory")
         self.refresh_data()
-
-    def watch_titles(self) -> None:
-        """Pick up a rename made in Claude Code (/rename) from the transcripts of the
-        sessions not parked, read on a worker thread: a first read takes the tail of each.
-        A parked session's is read when it is restored (launch.open_session)."""
-        present = {s["id"] for s in self.sessions}
-        for sid in [sid for sid in self.titles if sid not in present]:   # ended: its watch goes
-            del self.titles[sid]
-        if self.reading_titles:
-            return
-        watches = [self.titles.setdefault(s["id"], transcript.TitleWatch(s["id"], cwd=s["cwd"]))
-                   for s in self.sessions if not s["parked"]]
-        if watches:
-            self.reading_titles = True
-            self.run_worker(functools.partial(self.read_titles, watches), thread=True, group="titles",
-                            exit_on_error=False)
-
-    def read_titles(self, watches: list[transcript.TitleWatch]) -> None:
-        """On a worker thread: each watch's latest /rename, handed to take_titles."""
-        try:
-            found = [(w.sid, renamed) for w in watches if (renamed := w.read())]
-        finally:
-            self.reading_titles = False
-        try:
-            self.call_from_thread(self.take_titles, found)
-        except RuntimeError:   # the app is closing
-            pass
-
-    def take_titles(self, found: list[tuple[str, transcript.Rename]]) -> None:
-        rows = {s["id"]: s for s in self.sessions}
-        changed = False
-        for sid, renamed in found:
-            if sid in rows and renamed_since(rows[sid], renamed.at):
-                changed |= self.store.take_title(sid, renamed.at, renamed.title)
-        if changed:
-            self.sessions = self.store.sessions()
-            self.paint_sessions()
 
     @on(Button.Pressed, "#end")
     @session_action

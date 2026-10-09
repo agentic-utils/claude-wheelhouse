@@ -1374,45 +1374,12 @@ async def test_rename_a_session(store, sid, typed, keys, expected, desc):
     assert store.session(sid)["name"] == expected, desc
 
 
-def renamed_in_claude_code(name, at):
-    return "".join(json.dumps(r) + "\n" for r in [
-        {"type": "custom-title", "customTitle": name},
-        {"type": "system", "subtype": "local_command", "timestamp": at,
-         "content": f"<local-command-stdout>Session renamed to: {name}</local-command-stdout>"}])
-
-
 @pytest.mark.anyio
-@pytest.mark.parametrize("renamed_first, at, expected, desc", [
-    (False, "2999-01-01T00:00:00.000Z", "Columbo check", "a /rename made in Claude Code is picked up"),
-    (True, "2000-01-01T00:00:00.000Z", "mine", "a rename in the wheelhouse before the first look keeps its name"),
+@pytest.mark.parametrize("typed, said, desc", [
+    (None, [], "Enter on its name unchanged does nothing"),
+    ("Columbo check", ["renamed to Columbo check"], "a new name renames"),
 ])
-async def test_a_rename_in_claude_code_is_picked_up(store, sid, tmp_path, monkeypatch, renamed_first, at,
-                                                    expected, desc):
-    folder = tmp_path / "projects/-home-u-repo"
-    folder.mkdir(parents=True)
-    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
-    path = folder / f"{sid}.jsonl"
-    path.write_text("")
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        if renamed_first:
-            app.rename(sid, "mine")
-        path.write_text(renamed_in_claude_code("Columbo check", at))
-        for _ in range(5):   # a look every TITLE_TICKS refreshes
-            app.refresh_data()
-        await app.workers.wait_for_complete()
-        await pilot.pause()
-        assert store.session(sid)["name"] == expected, desc
-        assert str(app.query_one("#session-list", DataTable).get_row_at(0)[1]) == expected, desc
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("typed, renamed, desc", [
-    (None, False, "Enter on its name unchanged isn't a rename: nothing stamped"),
-    ("Columbo check", True, "a new name is"),
-])
-async def test_enter_in_rename_stamps_only_a_new_name(store, sid, typed, renamed, desc):
+async def test_enter_in_rename_renames_only_to_a_new_name(store, sid, typed, said, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.press("2")
@@ -1423,7 +1390,8 @@ async def test_enter_in_rename_stamps_only_a_new_name(store, sid, typed, renamed
             app.screen.query_one("#new-name", Input).value = typed
         await pilot.press("enter")
         await pilot.pause()
-        assert (store.session(sid)["name"], store.session(sid)["renamed_at"] is not None) == (typed or "demo", renamed), desc
+        assert store.session(sid)["name"] == (typed or "demo"), desc
+        assert [n.message for n in app._notifications] == said, desc
 
 
 @pytest.mark.anyio

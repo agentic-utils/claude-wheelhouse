@@ -121,7 +121,9 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "runner", "TEXT"), ("sessions", "activity", "TEXT NOT NULL DEFAULT ''"),
                  ("sessions", "host_command", "TEXT"), ("sessions", "shell", "TEXT"),
                  ("sessions", "context_tokens", "INTEGER"), ("sessions", "context_max", "INTEGER"),
-                 ("items", "answer", "TEXT"), ("sessions", "renamed_at", "TEXT")]
+                 ("items", "answer", "TEXT")]
+# older databases may also carry sessions.transcript_title and sessions.renamed_at,
+# from a /rename pickup since dropped: unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
 REQUESTS = ("end", "park")   # what the wheelhouse can ask a running session to do
 CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print is retaken
@@ -176,17 +178,6 @@ def can_queue(session) -> bool:
     return (session["code_version"] or 0) >= DRAFTS_VERSION
 
 
-def renamed_since(session, at: str) -> bool:
-    """Whether a rename at `at` (an ISO time) is newer than the session's last one: its
-    last rename in the wheelhouse or /rename taken, else its creation."""
-    last = session["renamed_at"] or session["created_at"]
-    return datetime.fromisoformat(at) > datetime.fromisoformat(last)
-
-
-def columns(db, table: str) -> set[str]:
-    return {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
-
-
 def db_path() -> Path:
     path = Path(os.environ.get("WHEELHOUSE_DB") or DEFAULT_DB).expanduser()
     if str(path.resolve()).startswith("/mnt/"):
@@ -210,18 +201,9 @@ class Store:
             for statement in SCHEMA.split(";"):
                 if statement.strip():
                     db.execute(statement)
-            added = set()
             for table, column, kind in ADDED_COLUMNS:
-                if column not in columns(db, table):
+                if column not in {r[1] for r in db.execute(f"PRAGMA table_info({table})")}:
                     db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
-                    added.add(column)
-            # the first rename code kept the last /rename taken in transcript_title and didn't
-            # stamp a rename in the wheelhouse: a name that differs from it was set there, so it
-            # is stamped now, or an older /rename would undo it. Every other row keeps NULL, its
-            # creation standing in, so a /rename that code never took is still taken.
-            if "renamed_at" in added and "transcript_title" in columns(db, "sessions"):
-                db.execute("UPDATE sessions SET renamed_at = ? WHERE transcript_title IS NOT NULL "
-                           "AND transcript_title IS NOT name", (stamp(),))
             for statement in INDEXES.split(";"):
                 if statement.strip():
                     db.execute(statement)
@@ -261,8 +243,7 @@ class Store:
 
     def create_session(self, cwd: str, name: str = "", ticket: str = "", brief: str = "",
                        sid: str | None = None, runner: str | None = None) -> str:
-        """A new session, or (with sid) an adopted one keeping its Claude session id. An
-        adoption under a name is a rename, stamped as one: an older /rename doesn't undo it."""
+        """A new session, or (with sid) an adopted one keeping its Claude session id."""
         adopted = sid is not None
         sid = sid or str(uuid.uuid4())
         runner = runner or default_runner()
@@ -270,9 +251,9 @@ class Store:
             raise ValueError(f"runner must be one of {', '.join(RUNNERS)}, not {runner!r}")
         with self.tx() as db:
             db.execute(
-                "INSERT INTO sessions (id, name, ticket, brief, cwd, created_at, adopted, runner, renamed_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (sid, name, ticket, brief, cwd, now(), int(adopted), runner, stamp() if adopted and name else None),
+                "INSERT INTO sessions (id, name, ticket, brief, cwd, created_at, adopted, runner) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (sid, name, ticket, brief, cwd, now(), int(adopted), runner),
             )
         return sid
 
@@ -347,25 +328,10 @@ class Store:
         )
 
     def rename(self, sid: str, name: str) -> None:
-        """A rename in the wheelhouse. Stamped, so a /rename made in Claude Code before it
-        doesn't undo it, and one made after it wins (take_title). Its current name again (an
-        unchanged pre-fill, or Enter) isn't a rename: no stamp, so a /rename not yet taken still wins."""
+        """A rename in the wheelhouse, the only place a session's name changes."""
         with self.tx() as db:
             self._require(db, sid)
-            db.execute("UPDATE sessions SET name = ?, renamed_at = ? WHERE id = ? AND name IS NOT ?",
-                       (name, stamp(), sid, name))
-
-    def take_title(self, sid: str, at: str, title: str) -> bool:
-        """A /rename made in Claude Code at `at` (transcript.TitleWatch): taken as the
-        session's name if it is newer than the session's last rename, wherever that was
-        made, or than its creation (an adoption under a new name). The most recent rename
-        wins. True if the name changed."""
-        with self.tx() as db:
-            row = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
-            if row is None or not renamed_since(row, at):
-                return False
-            db.execute("UPDATE sessions SET name = ?, renamed_at = ? WHERE id = ?", (title, at, sid))
-        return row["name"] != title
+            db.execute("UPDATE sessions SET name = ? WHERE id = ?", (name, sid))
 
     def set_synopsis(self, sid: str, text: str) -> None:
         with self.tx() as db:
