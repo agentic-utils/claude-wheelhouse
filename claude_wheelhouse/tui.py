@@ -1893,6 +1893,9 @@ class WheelhouseApp(App):
         if sid is not None and sid != self.sessions_cursor:
             self.sessions_cursor = sid   # first: following repaints, and may settle again
             if sid != self.filter_sid:
+                # an items move pending is in the list following replaces: it's superseded, never
+                # selected (which would mark a decision seen), here or by a settle within follow
+                self.items_cursor = self.items_table.cursor_key()
                 self.follow(sid)
             self.paint_session_info()
         key = self.items_table.cursor_key()

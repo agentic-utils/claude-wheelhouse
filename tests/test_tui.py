@@ -927,6 +927,39 @@ async def test_a_raw_burst_opens_what_the_cursor_is_on(store, sid, tmp_path, whe
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("where, burst, desc", [
+    ("items", ("down", "shift+tab", "down"), "from the items: Down, Shift+Tab, Down (review 13)"),
+    ("sessions", ("down", "tab", "down"), "from the session list: Down, Tab, Down (review 13)"),
+    ("items", ("shift+tab", "down"), "from the items: Shift+Tab, Down"),
+])
+async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp_path, where, burst, desc):
+    """Following A, a burst that moves both lists' cursors and ends on session B follows B:
+    its conversation selected, and no decision marked seen, A's the items cursor passed over
+    nor B's the rebuilt list put it on. The session move supersedes an items move in the list
+    it replaces (D22)."""
+    extra = {"alternative": "x", "why": "y", "reverse": "z"}
+    other = store.create_session(str(tmp_path), name="other")
+    for s in (sid, other):
+        for title in ("one", "two"):
+            store.post_item(s, "decision", title, **extra)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)
+        await pilot.pause()
+        store.db.execute("UPDATE items SET status = 'unseen'")
+        (app.items_table if where == "items" else app.session_list).focus()
+        await pilot.pause()
+        raw_keys(app, *burst)
+        for _ in range(4):
+            await pilot.pause()
+        assert (app.current_session(), app.selected) == (other, (other, None)), desc
+        seen = [(s, it["ref"]) for s in (sid, other) for it in store.items(s) if it["status"] != "unseen"]
+        assert seen == [], f"{desc}: marked seen {seen}"
+        assert_one_current(app, desc)
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("filtered, desc", [
     (True, "the followed session (review 10)"),
     (False, "the session whose item was selected"),
