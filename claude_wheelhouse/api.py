@@ -6,8 +6,9 @@ pyproject.toml the same way. See .plan/suite-architecture.md ("Module protocol")
 .plan/stats-plugin.md.
 
 A pane's `tui` surface is a factory taking the `Context` and returning a Textual widget.
-The hub mounts it in the pane's slot, with the module's id as its id, and calls two
-optional methods on it:
+The hub mounts it in the pane's slot, with the module's id as its id (an id one of the
+hub's own widgets or another module has gets a card instead), and calls two optional
+methods on it:
 
 - `tick()`: once a second, and as soon as the session in context changes.
 - `animate(frame)`: five times a second, except while the person types in an answer box,

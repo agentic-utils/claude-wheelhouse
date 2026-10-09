@@ -69,6 +69,9 @@ class Breaks(Widget):
      "a factory that makes something other than a widget"),
     ([api.Loaded("a", module("demo")), api.Loaded("b", module("demo"))], ["b: its id 'demo' is taken by a"],
      "a second module with the same id: the first runs"),
+    ([api.Loaded("detail", module("detail"))], ["detail: its id 'detail' is taken by the wheelhouse"],
+     "a module with the id of one of the app's widgets, after its slot"),
+    ([api.Loaded("title", module("title"))], ["title: its id 'title' is taken by the wheelhouse"], "or before it"),
     ([api.Loaded("stats", None, api.STALE)], [f"stats: {api.STALE}"], "the stats module not installed"),
     ([api.Loaded("demo", module())], [], "a pane with no hooks runs: Textual's own Widget.animate isn't one"),
 ])

@@ -42,13 +42,14 @@ keeps its one animation clock, and a module never needs to know what has focus.
   its worker reads (`run_worker` on the widget, `exit_on_error=False`, results applied
   with `call_from_thread`) and the account usage fetch. `stats.py` stays the pure part:
   parsing, following, layout and drawing.
-- **What `tui.py` hosts.** `hosted(slot)` composes each pane's `tui` surface into its
-  slot, with the module's id as the widget's id. `each_pane(hook)` calls the hooks.
+- **What `tui.py` hosts.** `mount_panes()` mounts each pane's `tui` surface at the end
+  of its slot's container once the app's own widgets are up, with the module's id as the
+  widget's id. `each_pane(hook)` calls the hooks.
   `focus_sid()` and `module_sessions()` back the `Context`. Nothing in `tui.py` imports
   `stats`.
 - **Isolation.** A module that didn't start shows a card with its reason in its slot, as
-  does one whose factory raises or makes something other than a widget, and a second
-  module with an id already taken. The hub's own stats module missing from the installed
+  does one whose factory raises or makes something other than a widget, and a module
+  whose id another module or one of the app's own widgets already has. The hub's own stats module missing from the installed
   entry points (a copy installed before they were declared) shows a card saying to
   reinstall with `make install`. A pane whose hook raises is swapped for a card naming
   the exception; the app and the other panes carry on. Only hooks the pane defines are

@@ -54,6 +54,8 @@ VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777"}
 PENDING = {"end": "ending", "park": "parking"}
 CLOSABLE = {"question": "answered", "decision": "seen"}   # what X closes, and what reopening makes it
+# where each module slot (api.SLOTS) is mounted: at the end of this container
+SLOT_PARENTS = {"inbox.side": "#items-pane"}
 TITLE_TICKS = 5   # refreshes (seconds) between looks for a /rename in the transcripts
 
 
@@ -965,8 +967,7 @@ class WheelhouseApp(App):
                     with Vertical(id="sessions-pane", classes="panel"):
                         yield SessionList(id="session-list", cursor_type="row")
                     with Vertical(id="items-pane", classes="panel"):
-                        yield ItemList(id="items", cursor_type="row")
-                        yield from self.hosted("inbox.side")
+                        yield ItemList(id="items", cursor_type="row")   # then the inbox.side panes
                     with Vertical(id="detail-pane", classes="panel"):
                         yield Static(id="checklist")
                         with VerticalScroll(id="detail-scroll"):
@@ -989,7 +990,8 @@ class WheelhouseApp(App):
         yield SendBar()
         yield Footer()
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
+        await self.mount_panes()
         # held, not queried: timers fire while a dialog is on top and during shutdown
         self.title_bar = self.query_one("#title", Static)
         self.items_table = self.query_one("#items", ItemList)
@@ -1218,15 +1220,25 @@ class WheelhouseApp(App):
 
     # the modules' panes (api.py)
 
-    def hosted(self, slot: str):
+    async def mount_panes(self) -> None:
+        """The modules' panes, mounted once the app's own widgets are, so a module whose id
+        one of them has gets a card rather than shadowing it."""
+        taken = {w.id for w in self.screen.query("*") if w.id}
+        for slot, parent in SLOT_PARENTS.items():
+            await self.query_one(parent).mount_all(list(self.hosted(slot, taken)))
+
+    def hosted(self, slot: str, taken: set[str]):
         """The widgets for a slot: each module's pane, or a card saying why it isn't running
-        (it didn't load, its factory raised or made no widget, or its id is taken)."""
+        (it didn't load, its factory raised or made no widget, or its id is taken by another
+        module or by the app's own widgets, `taken`)."""
         for item, pane in api.panes(self.modules, slot):
             try:
                 if pane is None:
                     raise RuntimeError(item.error)
                 if (other := self.module_ids.get(item.module.id)) is not None:
                     raise RuntimeError(f"its id {item.module.id!r} is taken by {other}")
+                if item.module.id in taken:
+                    raise RuntimeError(f"its id {item.module.id!r} is taken by the wheelhouse")
                 widget = pane.surfaces["tui"](self.ctx)
                 if not isinstance(widget, Widget):
                     raise TypeError(f"its tui surface made a {type(widget).__name__}, not a widget")
