@@ -1044,6 +1044,7 @@ class WheelhouseApp(App):
     /* selected text black on white: the theme's dark teal hid the characters (#52) */
     Screen > .screen--selection, TextArea > .text-area--selection, Input > .input--selection {{
         background: #ffffff; color: #000000; }}
+    #checklist-scroll {{ height: auto; max-height: 50%; }}   /* the answer box stays on screen at 80 by 24 */
     #checklist {{ height: auto; display: none; background: #000000; color: #e8e8e8;
                   border-bottom: solid #7b61ff; padding: 0 1; }}
     /* one-cell knurled scrollbars (KnurlRender, #55): teal, brighter on hover, white in the hand */
@@ -1137,7 +1138,8 @@ class WheelhouseApp(App):
                 yield ItemList(id="items", cursor_type="row")   # then a splitter and the inbox.side panes
             yield Splitter("detail-pane", "#detail-pane", "#items-pane", "x")
             with Vertical(id="detail-pane", classes="panel"):
-                yield Static(id="checklist")
+                with VerticalScroll(id="checklist-scroll"):   # scrolls on a short terminal (review 9)
+                    yield Static(id="checklist")
                 with VerticalScroll(id="detail-scroll"):
                     yield Transcript("Select an item, or a session to follow its conversation.",
                                      id="detail")
@@ -1161,7 +1163,8 @@ class WheelhouseApp(App):
         # out of the Tab order, which goes from the session list straight to the items: the
         # buttons still click, and the list's own keys press them (SessionList)
         self.conversation_buttons = self.query_one("#conversation-buttons", Grid)
-        for widget in (self.query_one("#session-info"), *self.query("#sessions-pane Grid Button")):
+        for widget in (self.query_one("#session-info"), self.query_one("#checklist-scroll"),
+                       *self.query("#sessions-pane Grid Button")):
             widget.can_focus = False
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
             if (stored := share(self.store.setting(LAYOUT + splitter.key))) is not None:
@@ -1179,6 +1182,10 @@ class WheelhouseApp(App):
         """The panes' sizes kept within the terminal: one kept from a wider one shrinks."""
         if self.screen_stack:
             fit(self.screen_stack[0].query(Splitter))
+
+    def refit(self) -> None:
+        """Fit again once laid out: a pane's content changed height, not the terminal."""
+        self.call_after_refresh(self.fit_layout)
 
     # right-click, as in a terminal
 
@@ -1568,7 +1575,9 @@ class WheelhouseApp(App):
         for h in self.screen.query(Hint):
             h.set_base(PERMISSION_HINT if asking else hint(sends))
         for row in self.screen.query(PermissionButtons):
-            row.display = asking
+            if row.display != asking:
+                row.display = asking
+                self.refit()   # a row more or less over the answer box
         show_button(bar, "send-all", f"Send all ({total})", not total)
         if s is not None and runner(s) == "sdk":
             bar.activity("in a shell tab" if s["shell"] else (s["activity"] or "") if self.running(s["id"]) else "")
@@ -1579,7 +1588,9 @@ class WheelhouseApp(App):
         """While the tutorial's session exists: its steps, at the top of the right pane."""
         sid = next((s["id"] for s in self.sessions if tutorial.is_tutorial(self.store, s)), None)
         if sid is None:
-            self.checklist.display = False
+            if self.checklist.display:
+                self.checklist.display = False
+                self.refit()
             return
         steps = tutorial.steps(self.store, sid, tutorial.seen(self.store, sid))
         nxt = next((key for key, *_, done in steps if not done), None)
@@ -1597,10 +1608,11 @@ class WheelhouseApp(App):
                 text.append(f": {how}", style="#e8e8e8")
             else:
                 text.append(f"\n☐ {what}", style="#777777")
-        if getattr(self, "_checklist_text", None) != text.plain:
+        if getattr(self, "_checklist_text", None) != text.plain or not self.checklist.display:
             self._checklist_text = text.plain
             self.checklist.update(text)
-        self.checklist.display = True
+            self.checklist.display = True
+            self.refit()   # its height may have changed: the answer box below gives or takes
 
     def saw(self, sid: str, ref: str | None, step: str | None = None) -> None:
         """The person opened something of the tutorial's: a question or its conversation.

@@ -174,6 +174,35 @@ async def test_the_first_run_offer_takes_one_key(store, monkeypatch, fake_claude
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("permission, desc", [
+    (False, "80 by 24: the checklist scrolls, the answer box below it gives way"),
+    (True, "and with the permission buttons over the box too"),
+])
+async def test_the_answer_box_stays_on_screen_under_the_checklist(store, tut, permission, desc):
+    """Review 9: the checklist's 19 rows pushed the answer box off an 80 by 24 screen, and
+    neither it nor the permission buttons appearing fitted the right pane again."""
+    ref = store.post_item(tut, "permission", "Bash: make test")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        pane = app.query_one("#detail-pane").content_region
+        if permission:
+            app.items_table.move_cursor(row=app.items_table.get_row_index(f"{tut}|{ref}"))
+        else:
+            app.follow(tut)
+        await pilot.pause()
+        await pilot.pause()
+        assert app.query_one("PermissionButtons").display is permission, desc
+        box, hint = app.query_one("#answer").region, app.query_one(".answer-hint").region
+        assert box.height >= 3 and box.bottom <= hint.y and hint.bottom <= pane.bottom, f"{desc}: {box}, {hint}"
+        store.end(tut)
+        app.refresh_data()
+        await pilot.pause()
+        await pilot.pause()
+        assert app.query_one("#answer").region.height == 8, f"{desc}: the box's own size back with the checklist gone"
+
+
+@pytest.mark.anyio
 async def test_the_checklist_follows_the_tutorial(store, sid, tut):
     q1, _ = setup_items(store, tut)
     app = WheelhouseApp(store)
