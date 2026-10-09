@@ -1,3 +1,4 @@
+import asyncio
 import functools
 import html
 import itertools
@@ -1215,6 +1216,29 @@ async def test_keys_after_quit_are_dropped(store, sid, keys, desc):
         for _ in range(6):
             await pilot.pause()
     assert app.return_code == 0 and opened == [], f"{desc}: opened {opened}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("closing, desc", [
+    (0, "a shutdown that is over before the next tick"),
+    (1.2, "a shutdown that takes over a second: the tick fires once the screens are gone, and does nothing"),
+])
+async def test_the_refresh_tick_lets_the_app_shut_down(store, sid, monkeypatch, closing, desc):
+    """Review 18: Textual stops the timers only after it has closed the screens, so under load
+    the refresh tick can fire with none left, and painting raised ScreenStackError."""
+    from textual.app import App
+    close_all = App._close_all
+
+    async def slow_close(self):
+        await close_all(self)
+        await asyncio.sleep(closing)   # the rest of the app closing
+    monkeypatch.setattr(App, "_close_all", slow_close)
+    app = WheelhouseApp(store)
+    try:
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.pause()
+    except Exception as e:
+        pytest.fail(f"{desc}: {e!r}")
 
 
 class Burst:

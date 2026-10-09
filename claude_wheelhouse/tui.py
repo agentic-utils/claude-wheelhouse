@@ -1360,8 +1360,9 @@ class WheelhouseApp(App):
     def tick(self) -> None:
         """The refresh, each second, skipped while a key lands (land): a refresh settles, and a
         burst's arrows are settled by the keys behind them that act on the cursor, or once the
-        burst is done (settle), not wherever a tick falls."""
-        if not self.landing:
+        burst is done (settle), not wherever a tick falls. Nor once the screens are gone: the
+        timer can still fire while the app shuts down, and there is nothing left to paint."""
+        if not self.landing and self.screen_stack:
             self.refresh_data()
 
     def refresh_data(self) -> None:
