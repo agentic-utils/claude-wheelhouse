@@ -1077,8 +1077,13 @@ class WheelhouseApp(App):
         Binding("q", "quit", "Quit", key_display="Q"),
     ]
 
+    # seconds the session list's highlight rests before its session is followed: following
+    # reads the transcript, tens of milliseconds on a big one. 0 follows at once (tests)
+    FOLLOW_DELAY = 0.1
+
     def __init__(self, store: Store | None = None):
         super().__init__()
+        self.follow_timer = None
         ScrollBar.renderer = KnurlRender   # Textual's hook for every scrollbar: a class variable
         self.store = store or Store()
         self.wake = liveness.WakeDetector()
@@ -1239,6 +1244,8 @@ class WheelhouseApp(App):
         self.sessions = self.store.sessions()
         # liveness only: the wheelhouse never deletes or parks anything by itself
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
+        if self.filter_sid and not any(s["id"] == self.filter_sid for s in self.sessions):
+            self.clear_filter()   # the followed session went (ended elsewhere): as Esc, no ghost row
         self.read_contexts()
         self.paint_sessions()
         self.paint_items()
@@ -1399,7 +1406,11 @@ class WheelhouseApp(App):
                 elif table.row_count:
                     table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
             if key not in table.rows and table.row_count:   # its item went: take the one now under the cursor
-                self.select_row(table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value)
+                gone = self.selected and self.selected[0]
+                # every row of the current session went (parked, say): the list keeps it current,
+                # so Unpark is one press away; the cursor landing elsewhere doesn't move it
+                held = gone == self.current_session() and not any(k.value.startswith(f"{gone}|") for k in table.rows)
+                self.select_row(table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value, move_list=not held)
         self.paint_detail()
 
     def keep_unsent(self, box, old, new) -> None:
@@ -1416,11 +1427,12 @@ class WheelhouseApp(App):
             box.text = text   # which puts the cursor at the start: carry on typing at the end
             box.move_cursor(box.document.end)
 
-    def retarget(self) -> None:
+    def retarget(self, move_list: bool = True) -> None:
         """The answer box follows what the pane shows, and the session list's highlight its
-        session. Called on the person's selections only, never from the refresh tick, so text
-        being typed is never swapped under them."""
-        self.highlight_session(self.focus_sid())
+        session (unless move_list is False). Called on the person's selections only, never
+        from the refresh tick, so text being typed is never swapped under them."""
+        if move_list:
+            self.highlight_session(self.focus_sid())
         self.paint_sendbar()
         if isinstance(self.screen, ThreadView):   # which holds its item's text itself
             return
@@ -1657,7 +1669,8 @@ class WheelhouseApp(App):
         """Follow the session; a dead one is offered a relaunch, unless it's parked: a parked
         session is dead as often as not, and selecting it is how to reach its buttons."""
         sid = event.row_key.value
-        self.follow(sid)
+        if (self.filter_sid, self.selected) != (sid, (sid, None)):   # a click's highlight may have followed it
+            self.follow(sid)
         if not any(s["id"] == sid and s["parked"] for s in self.sessions):
             self.offer_relaunch(sid)
 
@@ -1772,6 +1785,7 @@ class WheelhouseApp(App):
     def follow(self, sid: str) -> None:
         """Filter the items to the session and highlight its conversation row, so the right
         pane follows the conversation rather than whichever question comes first."""
+        self.stop_follow_timer()
         self.filter_sid = sid
         self.selected = (sid, None)
         self.saw(sid, None)
@@ -1791,13 +1805,13 @@ class WheelhouseApp(App):
         self.select_row(event.row_key.value)
         self.saw(*self.selected)
 
-    def select_row(self, key: str) -> None:
+    def select_row(self, key: str, move_list: bool = True) -> None:
         sid, ref = key.split("|")
         if self.selected != (sid, ref or None):
             self.selected = (sid, ref or None)
             if ref:
                 self.store.mark_seen(sid, ref)   # a no-op unless it's an unseen decision
-            self.retarget()
+            self.retarget(move_list)
             self.paint_detail()
             self.each_pane("tick")
             if self.viewing:
@@ -1819,9 +1833,23 @@ class WheelhouseApp(App):
         a dead one. The app's own moves (highlight_session, a rebuild) post none."""
         if event.row_key.value != self.current_session():
             return   # stale: the cursor moved on before this was handled
+        self.stop_follow_timer()
         if event.row_key.value != self.focus_sid():
-            self.follow(event.row_key.value)
+            if self.FOLLOW_DELAY:   # held arrows stay quick: only where the highlight rests is followed
+                self.follow_timer = self.set_timer(self.FOLLOW_DELAY, self.follow_current)
+            else:
+                self.follow(event.row_key.value)
         self.paint_session_info()
+
+    def follow_current(self) -> None:
+        self.follow_timer = None
+        if (sid := self.current_session()) and sid != self.focus_sid():
+            self.follow(sid)
+
+    def stop_follow_timer(self) -> None:
+        if self.follow_timer is not None:
+            self.follow_timer.stop()
+            self.follow_timer = None
 
     def highlight_session(self, sid: str | None) -> None:
         """Keep the session list's highlight on the session in context: one current session
@@ -1840,11 +1868,15 @@ class WheelhouseApp(App):
         if self.items_table.marked:   # Esc drops a multi-selection first
             self.items_table.set_marks(set())
             return
+        self.clear_filter()
+        self.paint_items()
+        self.retarget()
+
+    def clear_filter(self) -> None:
+        self.stop_follow_timer()   # a follow still waiting on the highlight would undo it
         self.filter_sid = None
         if self.viewing:   # its row goes with the filter; the highlight lands on an item
             self.selected = None
-        self.paint_items()
-        self.retarget()
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         """F's two bindings: only the one that applies shows in the footer, and runs."""

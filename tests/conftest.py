@@ -23,6 +23,13 @@ def no_tutorial_offer(monkeypatch):
     monkeypatch.setattr("claude_wheelhouse.tutorial.should_offer", lambda store: False)
 
 
+@pytest.fixture(autouse=True)
+def follow_at_once(monkeypatch):
+    """The session list's highlight follows its session at once, not after the debounce:
+    the test of the debounce itself puts a delay back."""
+    monkeypatch.setattr("claude_wheelhouse.tui.WheelhouseApp.FOLLOW_DELAY", 0)
+
+
 @pytest.fixture
 def db_file(tmp_path, monkeypatch):
     path = tmp_path / "wheelhouse.db"

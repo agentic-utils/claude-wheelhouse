@@ -585,16 +585,92 @@ async def test_enter_on_a_session_follows_its_conversation(store, sid, tmp_path,
 
 
 @pytest.mark.anyio
-async def test_one_click_on_a_session_follows_it(store, sid, tmp_path):
+@pytest.mark.parametrize("delay, desc", [(0, "followed at once"), (5, "with the debounce: the click doesn't wait")])
+async def test_one_click_on_a_session_follows_it(store, sid, tmp_path, monkeypatch, delay, desc):
+    """Once (review 9): the click's highlight and its selection don't each follow it."""
+    monkeypatch.setattr(WheelhouseApp, "FOLLOW_DELAY", delay)
     other = store.create_session(str(tmp_path), name="other")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
+        follows = []
+        follow = app.follow
+        monkeypatch.setattr(app, "follow", lambda s: (follows.append(s), follow(s)))
         table = app.query_one("#session-list", DataTable)
         row = [table.coordinate_to_cell_key((i, 0)).row_key.value for i in range(table.row_count)].index(other)
         await pilot.click("#session-list", offset=(4, row + 1))   # below the header row
         await pilot.pause()
-        assert app.viewing == other and "other · conversation" in app._detail_text
+        assert app.viewing == other and "other · conversation" in app._detail_text, desc
+        assert (follows, app.follow_timer) == ([other], None), desc
+
+
+@pytest.mark.anyio
+async def test_held_arrows_follow_where_the_highlight_rests(store, sid, tmp_path, monkeypatch):
+    """Review 9: following reads the transcript, so the list's arrows follow after a short
+    rest, not on every step. The rest is long here, and its timer is run by hand."""
+    monkeypatch.setattr(WheelhouseApp, "FOLLOW_DELAY", 5)
+    others = [store.create_session(str(tmp_path), name=n) for n in ("bee", "sea")]
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        follows = []
+        follow = app.follow
+        monkeypatch.setattr(app, "follow", lambda s: (follows.append(s), follow(s)))
+        app.session_list.focus()
+        await pilot.press("down", "down")
+        await pilot.pause()
+        assert follows == [] and app.current_session() == others[1], "the highlight moves; nothing followed yet"
+        app.follow_timer.stop()
+        app.follow_current()
+        assert follows == [others[1]] and app.filter_sid == others[1], "then the one it rests on, once"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("filtered, desc", [(False, "the inbox unfiltered"), (True, "following the session")])
+async def test_park_and_unpark_keep_the_current_session(store, sid, tmp_path, monkeypatch, filtered, desc):
+    """Review 9: Park takes the session's items off the inbox, and the highlight landing on
+    another's item didn't make that one current: Unpark stays one press away."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead")   # parks at once, on a yes
+    mine = store.post_item(sid, "question", "A's")
+    other = store.create_session(str(tmp_path), name="other")
+    store.post_item(other, "question", "B's")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{mine}"))
+        await pilot.pause()
+        if filtered:
+            app.follow(sid)
+            await pilot.pause()
+        assert app.current_session() == sid and (app.filter_sid == sid) == filtered, desc
+        await pilot.click("#park")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        assert store.session(sid)["parked"], desc
+        assert app.current_session() == sid, f"{desc}: still current, at the foot"
+        assert str(app.query_one("#park", Button).label) == "Unpark", desc
+        await pilot.click("#park")
+        await pilot.pause()
+        assert not store.session(sid)["parked"] and app.current_session() == sid, f"{desc}: and back"
+
+
+@pytest.mark.anyio
+async def test_a_followed_session_that_ends_elsewhere_clears_the_filter(store, sid, tmp_path):
+    """Review 9: as Esc, rather than a ghost Conversation row for a session that's gone."""
+    other = store.create_session(str(tmp_path), name="other")
+    store.post_item(other, "question", "B's")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)
+        await pilot.pause()
+        store.end(sid)
+        app.refresh_data()
+        await pilot.pause()
+        assert app.filter_sid is None
+        assert [r.key.value.split("|")[0] for r in app.items_table.ordered_rows] == [other], "the inbox, all of it"
 
 
 @pytest.mark.parametrize("size, desc", [
