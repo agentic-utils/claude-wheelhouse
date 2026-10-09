@@ -348,6 +348,11 @@ class SessionList(DataTable):
         if self.cursor_coordinate.row != before.row:   # the table selects it itself if unmoved
             self._post_selected_message()
 
+    def _post_selected_message(self) -> None:
+        # a click's selection, as Enter's (select_now): handled as the app's next callback,
+        # which land runs before the next key acts, not posted to reach the app behind them
+        self.app.call_next(select_now, self)
+
 
 class ItemList(DataTable):
     """The inbox's items, with a multi-selection to close questions in one go, by row key
@@ -1288,6 +1293,8 @@ class WheelhouseApp(App):
         only once it came back up, so a later key could move the focus or a cursor first."""
         self.app_focus = True
         await self.land()
+        if self._exit or not self.screen_stack:   # quitting (Q), or quit as it landed: nothing to act on
+            return
         if self.focused is not None:
             self.screen._clear_tooltip()
         if not (await self._check_bindings(event.key, priority=True) or await self._check_bindings(event.key)):
@@ -2437,10 +2444,13 @@ class WheelhouseApp(App):
         to its screen, as a button's Pressed, an input's Submitted or a row's Selected; and a
         dialog that closed has given its answer to whatever opened it, which Textual runs once
         the app's current message (this key) is done. A message that reaches the app itself
-        waits behind the burst, so a key whose effect is the app's acts at once instead
-        (action_press, select_now, settle). It waits only when something is waiting, and the
-        refresh tick waits for it (tick), so a burst ends the same wherever a tick falls.
-        Bounded: a widget kept busy never holds the app up for long, though long enough for the
+        waits behind the burst, so what it would do is done here or at once instead: a key that
+        presses a button or selects a row acts as it arrives (action_press, select_now), a
+        click's selection runs here, as the app's next callback (SessionList), and last, the
+        lists' cursors the keys moved are settled (settle), their highlights being such
+        messages. It waits only when something is waiting, and the refresh tick waits for it
+        (tick), so a burst ends the same wherever a tick falls. Bounded: a widget kept busy, or
+        a screen slow to mount, never holds the app up for long, though long enough for the
         inbox to restyle as the screen over it closes (a fifth of a second, under load)."""
         deadline = time.monotonic() + 2
         self.landing = True
@@ -2449,24 +2459,27 @@ class WheelhouseApp(App):
                 if self._next_callbacks:
                     await self._flush_next_callbacks()
                     continue
+                if not self.screen_stack:   # shutting down: nothing to act on
+                    return
                 if not self.screen.is_mounted:   # it takes its focus as it mounts
-                    await self.screen._mounted_event.wait()
+                    await asyncio.wait_for(self.screen._mounted_event.wait(), deadline - time.monotonic())
                     continue
                 chain = [w for w in (self.focused or self.screen).ancestors_with_self if w is not self]
                 # the focus first, as messages bubble. A message its pump has taken from the queue
                 # to look at while it handles the one before isn't in the queue's size
                 waiting = next((w for w in chain if w.message_queue_size or w._pending_message is not None), None)
                 if waiting is None:
-                    return
+                    break
                 landed = asyncio.get_running_loop().create_future()
                 # a callback queued behind them runs once they have
                 if not waiting.call_later(lambda: landed.done() or landed.set_result(None)):
-                    return   # closing: nothing more of it lands
+                    break   # closing: nothing more of it lands
                 await asyncio.wait_for(landed, deadline - time.monotonic())
         except asyncio.TimeoutError:
             pass
         finally:
             self.landing = False
+        self.settle()   # the cursors those keys moved, followed and selected as if typed slowly
 
     def action_focus_next(self) -> None:
         self.cycle_focus(1)
@@ -2477,10 +2490,8 @@ class WheelhouseApp(App):
     def cycle_focus(self, step: int) -> None:
         """Tab and Shift+Tab on the inbox go round TAB_ORDER, then any other pane that takes
         focus; elsewhere (a full-screen item, a dialog) in screen order. In an answer box
-        with an emoji code being typed, Tab takes the first suggestion instead. Moving into
-        an answer box settles first, so it takes the items' cursor's target before anything
-        is typed (a raw Down, Tab, typing): moving to the session list doesn't, so a session
-        move after it still supersedes the items move (review 13)."""
+        with an emoji code being typed, Tab takes the first suggestion instead. Tab is a key,
+        so the cursors have settled (land) before it moves on."""
         if step > 0 and isinstance(self.focused, Compose) and self.focused.take_suggestion():
             return
         screen = self.screen
@@ -2492,8 +2503,6 @@ class WheelhouseApp(App):
             return
         here = chain.index(self.focused) if self.focused in chain else (-1 if step > 0 else 0)
         nxt = chain[(here + step) % len(chain)]
-        if isinstance(nxt, Compose):
-            self.settle()
         screen.set_focus(nxt)   # at once, not after a refresh as focus() does: keys behind it go there
 
     def row(self, sid: str):

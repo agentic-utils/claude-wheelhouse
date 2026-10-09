@@ -10,12 +10,13 @@ import pytest
 from rich.color import Color
 from rich.text import Text
 from textual import events
+from textual.pilot import _get_mouse_message_arguments
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, TextArea
 
 from claude_wheelhouse import launch, stats, transcript
 from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
-from claude_wheelhouse.store import mode
+from claude_wheelhouse.store import Store, mode
 from claude_wheelhouse.tui import (MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice, Confirm,
                                    Folders, Hint, PermissionButtons, RenameSession, SendBar, ThreadView, Transcript, hint,
                                    render)
@@ -1024,16 +1025,18 @@ async def test_a_raw_burst_opens_what_the_cursor_is_on(store, sid, tmp_path, whe
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("where, burst, desc", [
-    ("items", ("down", "shift+tab", "down"), "from the items: Down, Shift+Tab, Down (review 13)"),
-    ("sessions", ("down", "tab", "down"), "from the session list: Down, Tab, Down (review 13)"),
-    ("items", ("shift+tab", "down"), "from the items: Shift+Tab, Down"),
+@pytest.mark.parametrize("where, burst, selected, seen, desc", [
+    ("items", ("down", "shift+tab", "down"), None, ["A:one"], "from the items: Down, Shift+Tab, Down (review 13)"),
+    ("sessions", ("down", "tab", "down"), "one", ["B:one"], "from the session list: Down, Tab, Down (review 13)"),
+    ("items", ("shift+tab", "down"), None, [], "from the items: Shift+Tab, Down"),
 ])
-async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp_path, where, burst, desc):
-    """Following A, a burst that moves both lists' cursors and ends on session B follows B:
-    its conversation selected, and no decision marked seen, A's the items cursor passed over
-    nor B's the rebuilt list put it on. The session move supersedes an items move in the list
-    it replaces (D22)."""
+async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp_path, where, burst, selected, seen,
+                                                                   desc):
+    """Following A, a burst that moves both lists' cursors and ends on session B follows B
+    (D22), and ends as the same keys typed slowly do: each key settles the one before it
+    (land), so the decision a Down landed on before a Tab moved on is selected and marked
+    seen, A's in the items or B's in the list following B rebuilt, as it would be typed
+    slowly. Nothing the cursor didn't stop on is marked."""
     extra = {"alternative": "x", "why": "y", "reverse": "z"}
     other = store.create_session(str(tmp_path), name="other")
     for s in (sid, other):
@@ -1050,10 +1053,122 @@ async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp
         raw_keys(app, *burst)
         for _ in range(4):
             await pilot.pause()
-        assert (app.current_session(), app.selected) == (other, (other, None)), desc
-        seen = [(s, it["ref"]) for s in (sid, other) for it in store.items(s) if it["status"] != "unseen"]
-        assert seen == [], f"{desc}: marked seen {seen}"
+        names = {sid: "A", other: "B"}
+        title = {(s, it["ref"]): it["title"] for s in (sid, other) for it in store.items(s)}
+        assert app.current_session() == other, desc
+        assert app.selected[0] == other and title.get(app.selected) == selected, f"{desc}: selected {app.selected}"
+        marked = sorted(f"{names[s]}:{it['title']}" for s in (sid, other) for it in store.items(s)
+                        if it["status"] != "unseen")
+        assert marked == seen, f"{desc}: marked seen {marked}"
         assert_one_current(app, desc)
+
+
+async def two_lists(tmp_path, where, keys, slow, click=False) -> dict:
+    """Sessions A, followed, and B, each with decisions one and two, all unseen; then the
+    keys from the items or the session list, after a click on B if asked, typed slowly or
+    sent as one raw burst. What they left, by name: the thread open, the current session,
+    the selection, what was marked seen and the focus. D22 holds either way."""
+    store = Store(tmp_path / f"{'slow' if slow else 'raw'}.db")
+    a, b = (store.create_session(str(tmp_path), name=n) for n in ("alpha", "bravo"))
+    for s in (a, b):
+        for title in ("one", "two"):
+            store.post_item(s, "decision", title, alternative="x", why="y", reverse="z")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(a)
+        await pilot.pause()
+        store.db.execute("UPDATE items SET status = 'unseen'")
+        (app.items_table if where == "items" else app.session_list).focus()
+        await pilot.pause()
+        if click:
+            offset = (3, 1 + app.session_list.get_row_index(b))   # below the header
+            if slow:
+                await pilot.click("#session-list", offset=offset)
+                await pilot.pause()
+            else:   # as the terminal delivers it, through the app's queue ahead of the keys
+                args = _get_mouse_message_arguments(app.session_list, offset, button=1) | {"widget": None}
+                for cls in (events.MouseDown, events.MouseUp, events.Click):
+                    event = cls(**args)
+                    event.set_sender(app)
+                    app._driver.send_message(event)
+        if slow:
+            for key in keys:
+                await pilot.press(key)
+                await pilot.pause()
+        else:
+            raw_keys(app, *keys)
+        for _ in range(4):
+            await pilot.pause()
+        names = {a: "A", b: "B"}
+        title = {(s, it["ref"]): it["title"] for s in (a, b) for it in store.items(s)}
+
+        def label(at):
+            return at and f"{names[at[0]]}:{title.get(at, 'conversation')}"
+        thread = app.screen if isinstance(app.screen, ThreadView) else None
+        assert_one_current(app, f"{'slow' if slow else 'raw'} {keys}")
+        return {"thread": thread and label((thread.sid, thread.ref)), "current": names.get(app.current_session()),
+                "selected": label(app.selected), "focus": app.focused and app.focused.id,
+                "seen": sorted(label((s, it["ref"])) for s in (a, b) for it in store.items(s)
+                               if it["status"] != "unseen")}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("where, keys, desc", [
+    ("sessions", ("down", "tab", "down"), "from the session list: Down, Tab, Down"),
+    ("sessions", ("down", "tab", "down", "down"), "from the session list: Down, Tab, Down, Down"),
+    ("sessions", ("down", "tab", "down", "enter"), "from the session list: Down, Tab, Down, Enter opens B's"),
+    ("items", ("down", "shift+tab", "down"), "from the items: Down, Shift+Tab, Down"),
+    ("items", ("down", "down", "down"), "from the items: Down, Down, Down"),
+    ("items", ("down", "down", "shift+tab", "down", "tab", "down"), "from the items: across and back"),
+    ("items", ("down", "shift+tab", "down", "tab", "enter"), "from the items: across, back, Enter opens B's"),
+])
+async def test_a_raw_burst_across_both_lists_ends_as_typed_slowly(tmp_path, where, keys, desc):
+    """Review 17: every key settles what the ones before it moved before it acts (land), so a
+    burst ends where the same keys typed slowly do, and never opens A's decision while B is
+    current."""
+    raw = await two_lists(tmp_path / "raw", where, keys, slow=False)
+    slow = await two_lists(tmp_path / "slow", where, keys, slow=True)
+    assert raw == slow, f"{desc}: raw {raw}, slow {slow}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("keys, desc", [
+    (("tab", "down"), "a click on B, Tab, Down: B's first decision selected"),
+    (("tab", "down", "enter"), "a click on B, Tab, Down, Enter: opens B's, not A's"),
+    (("tab", "enter"), "a click on B, Tab, Enter: B's conversation, its box"),
+])
+async def test_a_click_then_a_raw_burst_ends_as_typed_slowly(tmp_path, monkeypatch, keys, desc):
+    """Review 17: a click's selection is handled before the keys typed after it (land runs it),
+    not behind them, where it followed B again and undid what they did. Running sessions: a
+    click on a dead one offers a relaunch, which the keys would answer."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    raw = await two_lists(tmp_path / "raw", "items", keys, slow=False, click=True)
+    slow = await two_lists(tmp_path / "slow", "items", keys, slow=True, click=True)
+    assert raw == slow, f"{desc}: raw {raw}, slow {slow}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("keys, desc", [
+    (("q", "a"), "Q then A: no Adopt dialog opening as the app shuts down"),
+    (("q", "down", "tab", "enter"), "Q then a burst that opens a thread"),
+])
+async def test_keys_after_quit_are_dropped(store, sid, keys, desc):
+    """Review 17: once Q has the app exiting, the keys typed after it don't act."""
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    opened = []
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        await pilot.pause()
+        original = app.push_screen
+        app.push_screen = lambda screen, *a, **kw: opened.append(type(screen).__name__) or original(screen, *a, **kw)
+        raw_keys(app, *keys)
+        for _ in range(6):
+            await pilot.pause()
+    assert app.return_code == 0 and opened == [], f"{desc}: opened {opened}"
 
 
 class Burst:
