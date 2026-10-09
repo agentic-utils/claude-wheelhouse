@@ -49,12 +49,12 @@ keeps its one animation clock, and a module never needs to know what has focus.
   `stats`.
 - **Isolation.** A module that didn't start shows a card with its reason in its slot, as
   does one whose factory raises or makes something other than a widget, and a module
-  whose id another module or one of the app's own widgets already has. The hub's own stats module missing from the installed
-  entry points (a copy installed before they were declared) shows a card saying to
-  reinstall with `make install`. A pane whose hook raises is swapped for a card naming
-  the exception; the app and the other panes carry on. Only hooks the pane defines are
-  called: Textual's own `Widget.animate` isn't one. With no module in a slot, the slot collapses: the items table
-  takes the whole column.
+  whose id another module or one of the app's own widgets already has. The hub's own
+  stats module missing from the installed entry points (a copy installed before they
+  were declared) shows a card saying to reinstall with `make install`. A pane whose hook
+  raises is swapped for a card naming the exception; the app and the other panes carry
+  on. Only hooks the pane defines are called: Textual's own `Widget.animate` isn't one.
+  With no module in a slot, the slot collapses: the items table takes the whole column.
 
 ## Not built yet
 
