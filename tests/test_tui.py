@@ -5,6 +5,7 @@ import json
 import re
 import time
 import random
+from unittest import mock
 
 import pytest
 from rich.color import Color
@@ -1063,16 +1064,36 @@ async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp
         assert_one_current(app, desc)
 
 
-async def two_lists(tmp_path, where, keys, slow, click=False) -> dict:
-    """Sessions A, followed, and B, each with decisions one and two, all unseen; then the
-    keys from the items or the session list, after a click on B if asked, typed slowly or
-    sent as one raw burst. What they left, by name: the thread open, the current session,
-    the selection, what was marked seen and the focus. D22 holds either way."""
+def one_second():
+    """Items posted inside it share one timestamp, so they keep their order in the inbox: now()
+    stamps whole seconds, and posts that straddle one would put the later ones above the earlier
+    in the newest-first list, under a click or cursor row a test picks by position."""
+    return mock.patch("claude_wheelhouse.store.now", lambda: "2026-10-08T10:00:00+00:00")
+
+
+def raw_click(app, widget, offset, times=1) -> None:
+    """A click, or two as a double-click, as the terminal delivers it: MouseDown and MouseUp
+    through the app's queue, behind anything sent before them. The app makes the Click."""
+    args = _get_mouse_message_arguments(widget, offset, button=1) | {"widget": None}
+    for cls in (events.MouseDown, events.MouseUp) * times:
+        event = cls(**args)
+        event.set_sender(app)
+        app._driver.send_message(event)
+
+
+async def two_lists(tmp_path, where, steps, slow) -> dict:
+    """Sessions A, followed, and B, each with decisions one and two, all unseen; then the steps
+    from the items or the session list, typed slowly or sent as one raw burst. A step is a key,
+    or a click as the terminal delivers it: "click A" or "click B" on that session in the list,
+    "click 1" or "double 1" on the items' row 1 (row 0 is the conversation). What they left, by
+    name: the thread open, the current session, the selection, the text in the box, what was
+    marked seen and the focus. D22 holds either way."""
     store = Store(tmp_path / f"{'slow' if slow else 'raw'}.db")
     a, b = (store.create_session(str(tmp_path), name=n) for n in ("alpha", "bravo"))
-    for s in (a, b):
-        for title in ("one", "two"):
-            store.post_item(s, "decision", title, alternative="x", why="y", reverse="z")
+    with one_second():
+        for s in (a, b):
+            for title in ("one", "two"):
+                store.post_item(s, "decision", title, alternative="x", why="y", reverse="z")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -1081,23 +1102,19 @@ async def two_lists(tmp_path, where, keys, slow, click=False) -> dict:
         store.db.execute("UPDATE items SET status = 'unseen'")
         (app.items_table if where == "items" else app.session_list).focus()
         await pilot.pause()
-        if click:
-            offset = (3, 1 + app.session_list.get_row_index(b))   # below the header
-            if slow:
-                await pilot.click("#session-list", offset=offset)
-                await pilot.pause()
-            else:   # as the terminal delivers it, through the app's queue ahead of the keys
-                args = _get_mouse_message_arguments(app.session_list, offset, button=1) | {"widget": None}
-                for cls in (events.MouseDown, events.MouseUp, events.Click):
-                    event = cls(**args)
-                    event.set_sender(app)
-                    app._driver.send_message(event)
-        if slow:
-            for key in keys:
-                await pilot.press(key)
-                await pilot.pause()
-        else:
-            raw_keys(app, *keys)
+        for step in steps:
+            how, _, at = step.partition(" ")
+            if how in ("click", "double"):   # below the header row
+                widget, offset = ((app.session_list, (3, 1 + app.session_list.get_row_index({"A": a, "B": b}[at])))
+                                  if at in "AB" else (app.items_table, (20, 1 + int(at))))
+                raw_click(app, widget, offset, 2 if how == "double" else 1)
+            elif slow:
+                await pilot.press(step)
+            else:
+                raw_keys(app, step)
+            if slow:   # one double-click is one gesture: both its clicks go at once either way
+                for _ in range(3):
+                    await pilot.pause()
         for _ in range(4):
             await pilot.pause()
         names = {a: "A", b: "B"}
@@ -1106,9 +1123,10 @@ async def two_lists(tmp_path, where, keys, slow, click=False) -> dict:
         def label(at):
             return at and f"{names[at[0]]}:{title.get(at, 'conversation')}"
         thread = app.screen if isinstance(app.screen, ThreadView) else None
-        assert_one_current(app, f"{'slow' if slow else 'raw'} {keys}")
+        assert_one_current(app, f"{'slow' if slow else 'raw'} {steps}")
         return {"thread": thread and label((thread.sid, thread.ref)), "current": names.get(app.current_session()),
-                "selected": label(app.selected), "focus": app.focused and app.focused.id,
+                "selected": label(app.selected), "box": (thread.box if thread else app.answer).text,
+                "focus": app.focused and app.focused.id,
                 "seen": sorted(label((s, it["ref"])) for s in (a, b) for it in store.items(s)
                                if it["status"] != "unseen")}
 
@@ -1133,19 +1151,19 @@ async def test_a_raw_burst_across_both_lists_ends_as_typed_slowly(tmp_path, wher
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("keys, desc", [
-    (("tab", "down"), "a click on B, Tab, Down: B's first decision selected"),
-    (("tab", "down", "enter"), "a click on B, Tab, Down, Enter: opens B's, not A's"),
-    (("tab", "enter"), "a click on B, Tab, Enter: B's conversation, its box"),
+@pytest.mark.parametrize("steps, desc", [
+    (("click B", "tab", "down"), "a click on B, Tab, Down: B's first decision selected"),
+    (("click B", "tab", "down", "enter"), "a click on B, Tab, Down, Enter: opens B's, not A's"),
+    (("click B", "tab", "enter"), "a click on B, Tab, Enter: B's conversation, its box"),
 ])
-async def test_a_click_then_a_raw_burst_ends_as_typed_slowly(tmp_path, monkeypatch, keys, desc):
+async def test_a_click_then_a_raw_burst_ends_as_typed_slowly(tmp_path, monkeypatch, steps, desc):
     """Review 17: a click's selection is handled before the keys typed after it (land runs it),
     not behind them, where it followed B again and undid what they did. Running sessions: a
     click on a dead one offers a relaunch, which the keys would answer."""
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
-    raw = await two_lists(tmp_path / "raw", "items", keys, slow=False, click=True)
-    slow = await two_lists(tmp_path / "slow", "items", keys, slow=True, click=True)
+    raw = await two_lists(tmp_path / "raw", "items", steps, slow=False)
+    slow = await two_lists(tmp_path / "slow", "items", steps, slow=True)
     assert raw == slow, f"{desc}: raw {raw}, slow {slow}"
 
 
@@ -2041,11 +2059,8 @@ async def test_delete_closes_and_reopens_decisions(store, sid, start, finished, 
     ([("ctrl", 2), ("click", 3)], [], "a plain click starts afresh"),
 ])
 @pytest.mark.anyio
-async def test_marking_rows(store, sid, steps, marked, desc, monkeypatch):
-    # one timestamp, so Q1-Q4 keep their order: under load they could straddle a second,
-    # and the newest-first inbox would put the later ones above Q1
-    with monkeypatch.context() as m:
-        m.setattr("claude_wheelhouse.store.now", lambda: "2026-10-08T10:00:00+00:00")
+async def test_marking_rows(store, sid, steps, marked, desc):
+    with one_second():   # Q1-Q4 in order, under the rows clicked
         for title in "abcd":
             store.post_item(sid, "question", title)
     app = WheelhouseApp(store)
@@ -2067,8 +2082,9 @@ async def test_marking_rows(store, sid, steps, marked, desc, monkeypatch):
 
 @pytest.mark.anyio
 async def test_x_closes_the_marked_questions_and_reopens_them(store, sid):
-    q1, q2, q3 = (store.post_item(sid, "question", t) for t in "abc")
-    t = store.post_item(sid, "task", "build", status="running")
+    with one_second():   # Q1-Q3 in order, under the rows clicked
+        q1, q2, q3 = (store.post_item(sid, "question", t) for t in "abc")
+        t = store.post_item(sid, "task", "build", status="running")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
