@@ -1,5 +1,7 @@
+import html
 import itertools
 import json
+import re
 import time
 import random
 
@@ -2414,3 +2416,29 @@ async def test_a_paste_is_checked_again_on_the_ui_thread(store, sid, monkeypatch
         app.paste_into(app.answer)
         await pilot.pause()
         assert app.answer.text == pasted, desc
+
+
+LONG_PROMPT = ("Compact demo? It's asked for what to keep, then compacted with that: the conversation carries "
+               "on from the summary, which frees room in the window but drops detail it may want later")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("dialog, height, desc", [
+    (Confirm, 24, "a confirmation wraps, every word on screen"),
+    (Choice, 24, "and the request's choice"),
+    (Confirm, 8, "on a tiny terminal the dialog stays on screen, scrolling"),
+])
+async def test_a_long_prompt_wraps_in_its_dialog(store, sid, dialog, height, desc):
+    """Dialogs showed one line of their prompt, cut off at the border."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, height)) as pilot:
+        await pilot.pause()
+        app.push_screen(dialog(LONG_PROMPT))
+        await pilot.pause()
+        box = app.screen.query_one("#dialog")
+        assert box.region.bottom <= height, desc
+        if height < 24:
+            return
+        rows = html.unescape(re.sub(r"<[^>]+>", "", app.export_screenshot())).replace("\xa0", " ").splitlines()
+        inside = " ".join(r.strip("█") for r in rows if len(r) > 2 and r[0] == r[-1] == "█")   # the dialog's border
+        assert LONG_PROMPT in " ".join(inside.split()), desc

@@ -824,7 +824,7 @@ class Confirm(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(self.prompt)
+            yield Label(self.prompt, classes="dialog-prompt")
             with Horizontal(classes="buttons"):
                 yield Button(Text("[Y]es"), variant="error", id="yes")
                 yield Button(Text("[N]o"), id="no")
@@ -851,7 +851,7 @@ class Choice(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(self.prompt)
+            yield Label(self.prompt, classes="dialog-prompt")
             with Horizontal(classes="buttons"):
                 yield Button(Text("[C]ancel request"), variant="success", id="cancel")
                 yield Button(Text("[F]orce"), variant="error", id="force")
@@ -1025,9 +1025,10 @@ class WheelhouseApp(App):
     #conversation-buttons {{ height: 2; background: #12122a; }}
     #session-buttons Button, #conversation-buttons Button {{ width: 1fr; min-width: 0; padding: 0; }}
     #conversation-buttons #mode {{ column-span: 2; }}
-    #dialog {{ width: 80; height: auto; padding: 1 2; background: #000000; color: {MATRIX};
-               border: thick #ff2a6d; }}
+    #dialog {{ width: 80; max-width: 100%; height: auto; max-height: 100%; overflow-y: auto; padding: 1 2;
+               background: #000000; color: {MATRIX}; border: thick #ff2a6d; }}
     .dialog-title {{ color: #ffd300; text-style: bold; }}
+    .dialog-prompt {{ width: 1fr; }}   /* wraps, the dialog growing with it */
     #dialog TextArea {{ height: 8; }}
     .buttons {{ height: 3; }}
     RenameSession {{ align: center middle; }}
