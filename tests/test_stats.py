@@ -157,6 +157,7 @@ def test_context_grades(size, colour, desc):
     (0, " ", "nothing yet"),
     (10_000, "▁", "any context shows"),
     (100_000, "▂", "100k: two eighths"),
+    (125_000, "▃", "125k: two and a half eighths round half up, not to even (#51)"),
     (150_000, "▃", "150k: half way to 200k"),
     (200_000, "▄", "200k: half way up"),
     (350_000, "▅", "350k: half way to 500k"),
@@ -480,3 +481,17 @@ def test_a_compaction_is_sized_by_the_next_response(tmp_path):
     follower.read(NOW)
     assert [c.after for c in follower.snap.compactions] == [0, 50_002], \
         "the first response after it, never a later one; one before the span is left unsized"
+
+
+@pytest.mark.parametrize("held, shared, desc", [
+    (True, True, "while one user holds it, the other gets the same follower (#51)"),
+    (False, False, "once every user has dropped it, a fresh one"),
+])
+def test_followers_are_shared(held, shared, desc):
+    import gc
+    first = stats.follower("shared-sid")
+    first.marker = True
+    if not held:
+        del first
+        gc.collect()
+    assert getattr(stats.follower("shared-sid"), "marker", False) == shared, desc

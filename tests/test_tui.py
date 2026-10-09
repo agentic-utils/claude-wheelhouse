@@ -6,7 +6,7 @@ from rich.color import Color
 from rich.text import Text
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, TextArea
 
-from claude_wheelhouse import launch, transcript
+from claude_wheelhouse import launch, stats, transcript
 from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.tui import (MATRIX, VOICE, WheelhouseApp, Choice, Confirm, Folders, Hint, SendBar, ThreadView,
                                    Transcript, render)
@@ -1589,3 +1589,84 @@ async def test_every_scrollbar_is_knurled_and_one_cell(store, sid):
         assert type(table.vertical_scrollbar).renderer.__name__ == "KnurlRender"
         assert (table.styles.scrollbar_size_vertical, table.styles.scrollbar_size_horizontal) == (1, 1)
         assert table.styles.scrollbar_color.hex == "#05D9E8"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("before, after, desc", [
+    (lambda: stats.context_bar(140_000), lambda: stats.context_bar(160_000), "a context bar changing grade in the same glyph (#51)"),
+    (lambda: Text("open", style="bold"), lambda: Text("open", style="bold on #3a1060"), "a cell marked, its text unchanged"),
+])
+async def test_fill_repaints_a_cell_that_only_changed_colour(before, after, desc):
+    """Rich's Text equality ignores the base style: fill must not."""
+    from textual.app import App
+    from claude_wheelhouse.tui import fill
+    app = App()
+    async with app.run_test() as pilot:
+        table = DataTable()
+        await app.screen.mount(table)
+        table.add_columns("name", "cell")
+        fill(table, [("s1", ("demo", before()))])
+        fill(table, [("s1", ("demo", after()))])
+        await pilot.pause()
+        assert table.get_row("s1")[1].style == after().style, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("widget, sizes, desc", [
+    (Input, (0,), "an Input's one row: a bar covered its text (#55)"),
+    (Footer, (0, 0), "the footer's one row"),
+])
+async def test_widgets_that_have_no_scrollbar_keep_none(store, sid, widget, sizes, desc):
+    """The app-wide one-cell bars outrank Textual's own zero sizes: those are put back."""
+    from claude_wheelhouse.tui import NewSession
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(NewSession())
+        await pilot.pause()
+        w = next(iter(app.screen.query(widget)), None) or app.screen_stack[0].query_one(widget)
+        got = (w.styles.scrollbar_size_horizontal, w.styles.scrollbar_size_vertical)[:len(sizes)]
+        assert got == sizes, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("clicks, box, desc", [
+    (1, "pasted", "one right-click pastes once"),
+    (2, "pasted", "a second before the clipboard answers supersedes the first: still once (#52)"),
+])
+async def test_right_click_paste_is_exclusive(store, sid, monkeypatch, clicks, box, desc):
+    from claude_wheelhouse import tui
+    store.post_item(sid, "question", "which db?")
+    monkeypatch.setattr(tui, "system_clipboard", lambda: time.sleep(0.3) or "pasted")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.answer.focus()
+        for _ in range(clicks):
+            await right_click(app, "#answer")
+        await pilot.pause(0.8)   # not wait_for_complete: it raises for the superseded worker
+        assert app.answer.text == box, desc
+
+
+@pytest.mark.anyio
+async def test_the_session_list_and_stats_pane_share_a_reader(store, sid):
+    """OBS 2 (#51): each transcript read once, not once for the context bar and again for the pane."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)
+        app.refresh_data()
+        await pilot.pause()
+        assert app.contexts[sid] is app.query_one("#stats").followers[sid]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size, desc", [((100, 40), "100 columns"), ((160, 40), "160 columns")])
+async def test_session_names_keep_sixteen_cells(store, tmp_path, size, desc):
+    """BUG 3 (#51): the context bar's column took 2 cells from the names; they have 16 again."""
+    store.create_session(str(tmp_path), name="n" * 16)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        t = app.query_one("#session-list", DataTable)
+        assert t.virtual_size.width <= t.scrollable_content_region.width, desc

@@ -142,7 +142,9 @@ names against a live transcript (`~/.claude/projects/-home-doug/<id>.jsonl`, 8 O
 - **Data is event-driven.** Each session gets a `UsageFollower` beside the existing
   `transcript.Follower`. It keeps a byte offset per file and reads only bytes appended
   since the last read, when `(size, mtime)` changes. That's checked on the existing
-  1-second `refresh_data`. No new timer, and no rescan of a 6 MB transcript.
+  1-second `refresh_data`. No new timer, and no rescan of a 6 MB transcript. One follower
+  per session is shared by the pane and the session list's context bar (`stats.follower`,
+  held weakly), so a transcript is read once for both.
   - **No full tail:** the 1 MB tail `Follower` holds can cover less than four hours of a
     busy session, so the histogram can't reuse it.
   - **First read:** the first time a session is shown, the follower reads from the start

@@ -180,7 +180,8 @@ instead.
 
 Scrollbars are one cell wide: a teal thumb with solid ends and a knurled Braille grip,
 on a thin teal track. Drag the thumb, or click the track to page. The thumb brightens
-under the pointer and turns white while you drag it.
+under the pointer and turns white while you drag it. Text boxes and the footer, one row
+high, have none.
 
 ## Test
 

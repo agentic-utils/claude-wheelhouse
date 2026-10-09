@@ -17,6 +17,7 @@ import re
 import textwrap
 import time
 import urllib.request
+import weakref
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -144,7 +145,7 @@ def context_bar(size: int) -> Text:
     eighths on the exponential SCALE, two eighths each for 100k, 200k, 500k and 1M (#51).
     Any context at all shows at least one."""
     fills = [max(0.0, min(1.0, (size - lo) / (hi - lo))) for lo, hi in zip(SCALE, SCALE[1:])]
-    eighths = round(sum(fills) * 8 / len(fills))
+    eighths = math.floor(sum(fills) * 8 / len(fills) + 0.5)   # half up, not round()'s half to even
     return Text(PARTIAL[max(eighths, 1 if size > 0 else 0)], style=hexc(grade(size)))
 
 
@@ -311,6 +312,33 @@ class UsageFollower:
 
     def take(self, turns: list[Turn], compactions: list[Compaction]) -> None:
         take(self.snap, turns, compactions)
+
+
+_FOLLOWERS: "weakref.WeakValueDictionary[str, UsageFollower]" = weakref.WeakValueDictionary()
+
+
+def follower(sid: str) -> UsageFollower:
+    """The session's follower, shared: the session list's context bars and the stats pane
+    read each transcript once between them, not once each (#51). Each keeps the ones it
+    shows; a follower neither holds any more is dropped. Called on the UI thread only."""
+    f = _FOLLOWERS.get(sid)
+    if f is None:
+        f = _FOLLOWERS[sid] = UsageFollower(sid)
+    return f
+
+
+def read_safely(f: UsageFollower, now: float | None = None) -> bool:
+    """On a worker thread: one read, by whichever of the follower's users started it. A
+    failed read (a transcript gone between stat and open, say) keeps the last snapshot and
+    says why, for the pane to show dimly. True if it brought anything, or failed."""
+    try:
+        changed = f.read(now)
+        f.error = None
+    except Exception as e:
+        changed, f.error = True, f"couldn't read the transcript: {e}"[:120]
+    finally:
+        f.reading = False
+    return changed
 
 
 def take(s: Snapshot, turns: list[Turn], compactions: list[Compaction]) -> None:

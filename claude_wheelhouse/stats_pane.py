@@ -17,7 +17,8 @@ class SessionStats(Widget):
     compaction rows, then charts of the last two hours' context assembly and output; with
     no session in context, the running sessions' totals. Transcripts are read on worker
     threads, never on the UI thread: a first read of a big one takes a while, and even a
-    steady one stats every subagent file. The panel and the charts' columns are rebuilt on
+    steady one stats every subagent file. Each session's follower is shared with the
+    session list's context bars (stats.follower), so a transcript is read once for both. The panel and the charts' columns are rebuilt on
     each tick; animate only recolours the columns."""
 
     DEFAULT_CSS = "SessionStats { height: 1fr; background: #000000; border-top: solid #7b61ff; }"
@@ -44,7 +45,7 @@ class SessionStats(Widget):
         for sid in [sid for sid in self.followers if sid not in present]:   # ended: its follower goes
             del self.followers[sid]
         for sid in self.shown(sessions):
-            follower = self.followers.setdefault(sid, stats.UsageFollower(sid))
+            follower = self.followers.setdefault(sid, stats.follower(sid))
             if not follower.reading:
                 follower.reading = True
                 self.run_worker(functools.partial(self.read, follower, now), thread=True, group="stats",
@@ -69,14 +70,7 @@ class SessionStats(Widget):
         """On a worker thread: one read of a session's transcripts, then a repaint if it
         brought anything (or was the first)."""
         first = not follower.ready
-        try:
-            changed = follower.read(now)
-            follower.error = None
-        except Exception as e:   # a transcript gone between stat and open, say: the pane says so, the app carries on
-            changed, follower.error = True, f"couldn't read the transcript: {e}"[:120]
-        finally:
-            follower.reading = False
-        if changed or first:
+        if stats.read_safely(follower, now) or first:
             try:
                 self.app.call_from_thread(self.repaint)
             except RuntimeError:   # the app is closing

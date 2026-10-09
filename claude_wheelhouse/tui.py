@@ -23,6 +23,7 @@ from textual.screen import ModalScreen, Screen
 from textual.scrollbar import ScrollBar
 from textual.strip import Strip
 from textual.widget import Widget
+from textual.worker import get_current_worker
 from textual.widgets import (
     Button,
     Checkbox,
@@ -199,6 +200,12 @@ def render(blocks: list[tuple[str, str]]) -> Blocks:
     return Blocks(blocks)
 
 
+def same(a, b) -> bool:
+    """Whether a cell is unchanged. Rich's Text equality ignores the base style, so a cell
+    that only changed colour (a context bar crossing a grade, a row marked) counts too."""
+    return a == b and getattr(a, "style", None) == getattr(b, "style", None)
+
+
 def fill(table: DataTable, rows: list[tuple[str, tuple]]) -> bool:
     """Show rows, (key, cells), in a table. With the same keys in the same order only the
     changed cells are updated, so the cursor stays put. Otherwise the table is rebuilt
@@ -209,7 +216,7 @@ def fill(table: DataTable, rows: list[tuple[str, tuple]]) -> bool:
         columns = list(table.columns)
         for key, cells in rows:
             for col, new, old in zip(columns, cells, table.get_row(key)):
-                if new != old:
+                if not same(new, old):
                     table.update_cell(key, col, new)
         return False
     with table.prevent(DataTable.RowHighlighted):
@@ -928,7 +935,7 @@ class WheelhouseApp(App):
     DataTable {{ background: #000000; color: {MATRIX}; }}
     DataTable > .datatable--header {{ background: #12122a; color: #05d9e8; text-style: bold; }}
     DataTable > .datatable--cursor {{ background: #003b0f; color: #ffffff; }}
-    #sessions-pane {{ width: 37; }}   /* 34, and the context bar's cell and padding */
+    #sessions-pane {{ width: 39; }}   /* names keep their 16 cells beside the context bar (#51) */
     #items-pane {{ width: 1fr; }}
     #items {{ height: 1fr; }}   /* the top half; the stats the bottom */
     #detail-pane {{ width: 2fr; }}
@@ -970,7 +977,11 @@ class WheelhouseApp(App):
          scrollbar-color-hover: #5ff0fa; scrollbar-color-active: #ffffff; scrollbar-background: #000000;
          scrollbar-background-hover: #000000; scrollbar-background-active: #000000;
          scrollbar-corner-color: #000000; }}
-    MarkdownFence {{ scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }}   /* Textual's: no bars on code */
+    /* the rule above outranks Textual's own zero sizes, so put them back (NO_BARS): no bars
+       on code; none in an Input, whose one row a bar would cover; none on the footer */
+    MarkdownFence {{ scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }}
+    Input {{ scrollbar-size-horizontal: 0; }}
+    Footer {{ scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }}
     """
 
     # keys shown in upper case, the usual convention: X is the x key, not Shift+X
@@ -1004,7 +1015,8 @@ class WheelhouseApp(App):
         # session's conversation, the first row while a session is selected
         self.selected: tuple[str, str | None] | None = None
         self.followers: dict[str, transcript.Follower] = {}
-        # each session's context size for the session list: the stats pane's reader, on workers
+        # each session's context size for the session list: read on workers, by a follower
+        # shared with the stats pane (stats.follower), so each transcript is read once
         self.contexts: dict[str, stats.UsageFollower] = {}
         self.modules = api.load()
         self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid)
@@ -1103,14 +1115,16 @@ class WheelhouseApp(App):
             self.notify("copied")
         elif box is not None and not getattr(box, "read_only", False):
             box.focus()
-            self.run_worker(functools.partial(self.paste_into, box), thread=True, group="paste", exit_on_error=False)
+            # exclusive: a second right-click before the clipboard answers supersedes the first
+            self.run_worker(functools.partial(self.paste_into, box), thread=True, group="paste", exclusive=True,
+                            exit_on_error=False)
 
     def paste_into(self, box) -> None:
         """On a worker thread: the system clipboard, else the wheelhouse's own last copy,
         pasted as the terminal's own paste arrives, into the box (focused by now)."""
         text = system_clipboard()
         text = self.clipboard if text is None else text
-        if text and self.focused is box:
+        if text and self.focused is box and not get_current_worker().is_cancelled:
             self.call_from_thread(self.post_message, events.Paste(text))
 
     # periodic work
@@ -1172,29 +1186,33 @@ class WheelhouseApp(App):
         return working and self.statuses.get(s["id"]) in ("live", "stalled")
 
     def read_contexts(self) -> None:
-        """Each listed session's context size, read as the stats pane reads it: on a worker
-        thread, never the UI's. A session that isn't running is read once."""
+        """Each listed session's context size, read on a worker thread, never the UI's. A
+        session that isn't running is read once. A read the stats pane has under way counts."""
         listed = {s["id"]: s for s in self.sessions if not s["parked"]}
         for sid in [sid for sid in self.contexts if sid not in listed]:
             del self.contexts[sid]
         for sid in listed:
-            follower = self.contexts.setdefault(sid, stats.UsageFollower(sid))
+            follower = self.contexts.setdefault(sid, stats.follower(sid))
             if follower.reading or (follower.ready and not self.running(sid)):
                 continue
             follower.reading = True
             self.run_worker(functools.partial(self.read_context, follower), thread=True, group="contexts",
                             exit_on_error=False)
 
-    @staticmethod
-    def read_context(follower: stats.UsageFollower) -> None:
-        """On a worker thread. A failed read (a transcript gone between stat and open, say)
-        leaves the last size up; the next tick reads again."""
-        try:
-            follower.read()
-        except Exception:
-            pass
-        finally:
-            follower.reading = False
+    def read_context(self, follower: stats.UsageFollower) -> None:
+        """On a worker thread. A failed read leaves the last size up; the next tick reads
+        again. One that brought anything shows at once, in the stats pane too: the follower
+        is its as well, and it started no read of its own while this one was under way."""
+        first = not follower.ready
+        if stats.read_safely(follower) or first:
+            try:
+                self.call_from_thread(self.read_landed)
+            except RuntimeError:   # the app is closing
+                pass
+
+    def read_landed(self) -> None:
+        self.paint_sessions()
+        self.each_pane("tick")
 
     def context_cell(self, s) -> Text | str:
         follower = self.contexts.get(s["id"])
