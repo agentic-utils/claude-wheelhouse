@@ -1626,6 +1626,7 @@ class WheelhouseApp(App):
         bar = next(iter(self.screen.query(SendBar)), None)
         if bar is None:
             return
+        asking = self.asking(self.bar_item(self.screen)) is not None   # first: it settles
         sessions = {s["id"]: s for s in self.sessions}
         s = sessions.get(self.bar_session(self.screen))
         if bar.conversation:
@@ -1633,7 +1634,6 @@ class WheelhouseApp(App):
                 show_button(bar, *args)
         total = sum(x["drafts"] for x in self.sessions)
         sends = "send" if s is not None and (mode(s) == "immediate" or self.sends_now(s)) else "queue"
-        asking = self.asking(self.bar_item(self.screen)) is not None
         for h in self.screen.query(Hint):
             h.set_base(PERMISSION_HINT if asking else hint(sends))
         for row in self.screen.query(PermissionButtons):
