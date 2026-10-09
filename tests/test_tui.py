@@ -2,6 +2,7 @@ import json
 import time
 
 import pytest
+from rich.color import Color
 from rich.text import Text
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, TextArea
 
@@ -1554,3 +1555,37 @@ async def test_right_click_copies_or_pastes(store, sid, monkeypatch, select, sys
     assert (got[0][:len(copied)] if got else None) == copied, desc
     if box is not None:
         assert text == box, desc
+
+
+@pytest.mark.parametrize("size, virtual, window, position, vertical, glyphs, desc", [
+    (10, 100, 30, 0, True, "█⣿█│││││││", "at the top: a three-cell thumb, caps and a knurl, then the track"),
+    (10, 100, 50, 50, True, "│││││█⣿⣿⣿█", "at the bottom: a longer thumb knurls its middle"),
+    (8, 80, 20, 30, False, "──█⣿█───", "horizontal: the track is a rule"),
+    (6, 20, 20, 0, True, "││││││", "nothing to scroll: a bare track"),
+])
+def test_the_knurled_scrollbar(size, virtual, window, position, vertical, glyphs, desc):
+    """Doug's pick (#55): design E inverted, dark Braille grooves on a solid teal thumb."""
+    from claude_wheelhouse.knurl import KnurlRender
+    segs = [s for s in KnurlRender.render_bar(size, virtual, window, position, vertical=vertical,
+                                              back_color=Color.parse("#000000"), bar_color=Color.parse("#05d9e8")).segments
+            if s.text.strip("\n")]
+    assert "".join(s.text for s in segs) == glyphs, desc
+    first = glyphs.find("█")
+    for i, s in enumerate(segs):
+        thumb = s.text in "█⣿"
+        assert s.style.meta["@mouse.down"] == ("grab" if thumb else "scroll_up" if first < 0 or i < first
+                                               else "scroll_down"), f"{desc}: cell {i} grabs or pages"
+        inverted = s.text == "⣿"
+        assert (s.style.bgcolor.name if inverted else s.style.color.name) == ("#05d9e8" if thumb else "#014b51"), desc
+        assert (s.style.color if inverted else s.style.bgcolor).name == "#000000", f"{desc}: on black, never a white selection"
+
+
+@pytest.mark.anyio
+async def test_every_scrollbar_is_knurled_and_one_cell(store, sid):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.query_one("#session-list", DataTable)
+        assert type(table.vertical_scrollbar).renderer.__name__ == "KnurlRender"
+        assert (table.styles.scrollbar_size_vertical, table.styles.scrollbar_size_horizontal) == (1, 1)
+        assert table.styles.scrollbar_color.hex == "#05D9E8"

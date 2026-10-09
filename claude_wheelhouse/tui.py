@@ -20,6 +20,7 @@ from textual.binding import Binding
 from textual.message import Message
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
+from textual.scrollbar import ScrollBar
 from textual.strip import Strip
 from textual.widget import Widget
 from textual.widgets import (
@@ -38,6 +39,7 @@ from textual.widgets import (
 )
 
 from . import adopt, api, emoji, launch, liveness, stats, transcript, tutorial
+from .knurl import KnurlRender
 from .store import CLOSED, SessionGone, Store, can_queue, default_runner, mode, needs_relaunch, runner
 
 MATRIX = "#00ff41"
@@ -963,6 +965,12 @@ class WheelhouseApp(App):
         background: #ffffff; color: #000000; }}
     #checklist {{ height: auto; display: none; background: #000000; color: #e8e8e8;
                   border-bottom: solid #7b61ff; padding: 0 1; }}
+    /* one-cell knurled scrollbars (KnurlRender, #55): teal, brighter on hover, white in the hand */
+    Widget {{ scrollbar-size-vertical: 1; scrollbar-size-horizontal: 1; scrollbar-color: #05d9e8;
+         scrollbar-color-hover: #5ff0fa; scrollbar-color-active: #ffffff; scrollbar-background: #000000;
+         scrollbar-background-hover: #000000; scrollbar-background-active: #000000;
+         scrollbar-corner-color: #000000; }}
+    MarkdownFence {{ scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }}   /* Textual's: no bars on code */
     """
 
     # keys shown in upper case, the usual convention: X is the x key, not Shift+X
@@ -985,6 +993,7 @@ class WheelhouseApp(App):
 
     def __init__(self, store: Store | None = None):
         super().__init__()
+        ScrollBar.renderer = KnurlRender   # Textual's hook for every scrollbar: a class variable
         self.store = store or Store()
         self.wake = liveness.WakeDetector()
         self.waking = False
