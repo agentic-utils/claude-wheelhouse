@@ -959,13 +959,13 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
         items, sessions = app.items_table, app.query_one("#session-list", DataTable)
         assert [items.get_row_at(i)[1] for i in range(items.row_count)] == [q, d], "the question ranks first"
         assert str(items.get_row_at(1)[2]) == "unseen"
-        assert str(sessions.get_row_at(0)[3]) == "1", "the session list counts unseen decisions"
+        assert str(sessions.get_row_at(0)[4]) == "1", "the session list counts unseen decisions"
         assert store.item(sid, d)["status"] == "unseen", "not seen until the person looks"
         items.focus()
         items.move_cursor(row=1)
         await pilot.pause(1.2)   # past a refresh tick
         assert store.item(sid, d)["status"] == "seen", "viewing it marks it seen"
-        assert str(sessions.get_row_at(0)[3]) == ""
+        assert str(sessions.get_row_at(0)[4]) == ""
         items.move_cursor(row=0)
         await pilot.pause(1.2)
         assert [items.get_row_at(i)[1] for i in range(items.row_count)] == [q, d], "moving on leaves it there"
