@@ -22,7 +22,11 @@ highlighted item.
 - **Compactions.** Count, time of the last one, and its before and after sizes.
 - **Histograms.** Small versions of claude-dashboard's "context assembly" and "output
   tokens" charts for this session, with the shimmer. They span the last 2 hours, split
-  into as many buckets as the charts have columns. Context assembly stacks tokens read
+  into as many buckets as the charts have columns. The buckets sit on epoch multiples of
+  their width, so each bar covers a fixed stretch of clock and the rightmost is the
+  current one, partly filled; anchored to now, their edges slid on every repaint and the
+  bars seemed to breathe (#63, D27). The Y axis tops out at the tallest bar rounded up to
+  1, 2 or 5 times a power of ten, so it rescales only when a bar crosses one of those. Context assembly stacks tokens read
   from cache (green), new input (blue) and cache misses (red); output is yellow.
 
 With no session in context, the panel shows totals across the running sessions.
@@ -163,7 +167,8 @@ names against a live transcript (`~/.claude/projects/-home-doug/<id>.jsonl`, 8 O
   - **Skipped:** Claude Code's `<synthetic>` stand-in replies (errors, interrupts) and
     any response with no usage: no request was made, so they say nothing about the
     context or the cache.
-- **Hour ticks** sit on local hours. A label that wouldn't fit at its hour at the
+- **Hour ticks** sit on local hours, which in a whole-hour zone fall on bucket edges
+  wherever the bucket width divides an hour. A label that wouldn't fit at its hour at the
   right-hand end is left out, never moved off its hour.
 - **The countdown is genuinely clock-driven.** Time passes without any event, so the
   cache row is repainted on the existing 1-second tick. It's one line of text.

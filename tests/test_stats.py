@@ -94,18 +94,63 @@ def test_the_follower_reads_only_whats_appended_and_finds_subagents(tmp_path):
     assert follower.files[main][0] < main.stat().st_size, "a half-written line waits for the next read"
 
 
+EVEN = 1791460800 + 7200 - 1791460800 % 7200   # on a multiple of every bucket width below
+
+
 @pytest.mark.parametrize("columns, ago, index, desc", [
-    (60, 7199, 0, "the oldest moment in the span is the first bucket"),
-    (60, 0, 59, "now is the last"),
-    (60, 3600, 30, "an hour ago is halfway, at 60 columns of 2 minutes"),
-    (80, 3600, 40, "and halfway at 80 columns of 90 seconds"),
-    (60, 7300, None, "older than two hours is left out"),
+    (60, -119, 59, "the current bucket runs on past now, to its edge"),
+    (60, 0, 59, "now is in the last, which starts on an edge here"),
+    (60, 1, 58, "a second before that edge is the one before"),
+    (60, 59 * 120, 0, "the oldest bucket starts 59 widths back"),
+    (60, 59 * 120 + 1, None, "and anything older is left out"),
+    (60, 3600, 29, "an hour ago, at 60 columns of 2 minutes"),
+    (80, 3600, 39, "and at 80 columns of 90 seconds"),
 ])
-def test_buckets_fill_the_width_with_two_hours(columns, ago, index, desc):
-    turn = Turn(NOW - ago, 5, 1, 0, 6, None, None, True)
-    bs = stats.buckets([turn], NOW, columns)
+def test_buckets_cover_fixed_clock_intervals(columns, ago, index, desc):
+    turn = Turn(EVEN - ago, 5, 1, 0, 6, None, None, True)
+    now = max(EVEN, turn.at)
+    bs = stats.buckets([turn], now, columns)
     assert len(bs) == columns, desc
     assert [i for i, b in enumerate(bs) if b["read"]] == ([] if index is None else [index]), desc
+
+
+@pytest.mark.parametrize("columns, ago, desc", [
+    (60, 0, "a turn at the start of the current bucket"),
+    (60, 50, "one partway through an older bucket"),
+    (80, 89, "one at the end of a bucket, at 90-second buckets"),
+    (113, 7000, "one near the far end, at a width that isn't a whole second"),
+])
+def test_a_turns_bucket_holds_still_as_now_advances(columns, ago, desc):
+    """The bars cover fixed stretches of clock: until now crosses into the next bucket,
+    a turn stays in the same one, which is what stops the chart breathing (#63)."""
+    start, width = stats.window(EVEN, columns)
+    edge = start + (columns - 1) * width   # where the current bucket starts
+    turn = Turn(edge - ago, 5, 1, 0, 6, None, None, True)
+    seen = set()
+    for f in (0, 0.25, 0.5, 0.99):
+        bs = stats.buckets([turn], edge + f * width, columns)
+        seen.add(tuple(i for i, b in enumerate(bs) if b["read"]))
+        assert stats.window(edge + f * width, columns)[0] == start, desc
+    assert len(seen) == 1 and len(next(iter(seen))) == 1, f"{desc}: {seen}"
+    bs = stats.buckets([turn], edge + width, columns)
+    assert [i for i, b in enumerate(bs) if b["read"]] == [next(iter(seen))[0] - 1], f"{desc}: one step left after"
+
+
+@pytest.mark.parametrize("tallest, maxt, desc", [
+    (0, 0, "an empty chart has no scale"),
+    (1, 1, "one is a step"),
+    (7, 10, "seven rounds to ten"),
+    (10, 10, "ten is a step"),
+    (11, 20, "past ten, twenty"),
+    (20, 20, "twenty is a step"),
+    (21, 50, "past twenty, fifty"),
+    (51, 100, "past fifty, a hundred"),
+    (49_000, 50_000, "a large chart, likewise"),
+    (180_001, 200_000, "and past a hundred thousand"),
+])
+def test_the_y_axis_steps_rather_than_tracks_the_tallest_bar(tallest, maxt, desc):
+    turn = Turn(EVEN - 60, tallest, 0, 0, 0, None, None, True)
+    assert stats.chart([turn], EVEN, width=56, height=4).maxt == maxt, desc
 
 
 def test_the_chart_is_as_wide_as_the_pane():

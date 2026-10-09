@@ -618,18 +618,35 @@ def resets(at: float | None, now: float) -> str:
 
 # the charts
 
+def window(now: float, columns: int, span: int = SPAN) -> tuple[float, float]:
+    """The charts' (start, bucket width): `columns` buckets of span / columns seconds, on
+    epoch multiples of that width so each covers a fixed stretch of clock, the last the
+    current one, partly filled. Anchored to now, the edges slid on every repaint (#63)."""
+    width = span / max(columns, 1)
+    return (math.floor(now / width) - max(columns, 1) + 1) * width, width
+
+
 def buckets(turns: list[Turn], now: float, columns: int, span: int = SPAN) -> list[dict]:
-    """The span cut into `columns` equal buckets, oldest first, each summing its turns."""
+    """The window's buckets, oldest first, each summing its turns."""
     out = [dict.fromkeys(SERIES, 0) for _ in range(max(columns, 0))]
     if not out:
         return out
-    start, width = now - span, span / columns
+    start, width = window(now, columns, span)
     for t in turns:
-        if start <= t.at <= now:
-            b = out[min(int((t.at - start) / width), columns - 1)]
+        i = math.floor((t.at - start) / width)
+        if 0 <= i < columns and t.at <= now:
             for k in SERIES:
-                b[k] += getattr(t, k)
+                out[i][k] += getattr(t, k)
     return out
+
+
+def nice(n: float) -> float:
+    """`n` rounded up to 1, 2 or 5 times a power of ten, so the Y axis only rescales when
+    the tallest bar crosses one of them, not on every bar that grows."""
+    if n <= 0:
+        return 0
+    step = 10 ** math.floor(math.log10(n))
+    return next(m * step for m in (1, 2, 5, 10) if m * step >= n)
 
 
 def build_column(vc: list[tuple], total: float, maxt: float, height: int) -> list[tuple]:
@@ -678,7 +695,7 @@ class Chart:
     maxt: float
     height: int
     start: float
-    span: int
+    span: float
     kind: str = "assembly"
     gap: bool = False   # a blank line above it
 
@@ -688,9 +705,10 @@ def chart(turns: list[Turn], now: float, width: int, height: int, kind: str = "a
     keys = [k for k, _ in CHARTS[kind][1]]
     bs = buckets(turns, now, width - MARGIN, span)
     totals = [sum(b[k] for k in keys) for b in bs]
-    maxt = max(totals, default=0)
+    maxt = nice(max(totals, default=0))
+    start, step = window(now, len(bs), span)
     return Chart([build_column([(CO[k], b[k]) for k in keys], t, maxt, height) for b, t in zip(bs, totals)],
-                 maxt, height, now - span, span, kind, gap)
+                 maxt, height, start, step * len(bs), kind, gap)
 
 
 def charts(turns: list[Turn], now: float, width: int, room: int, height: int) -> list[Chart]:

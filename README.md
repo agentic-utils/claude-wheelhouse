@@ -59,6 +59,8 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   session keeps its pre-compaction size until then.
   Below the panel, two charts of the last two hours, subagents included: how each turn's
   context was assembled (read from cache, new, cache miss) and the output tokens it made.
+  Each bar covers a fixed stretch of clock (about 2 minutes at 60 columns), the rightmost
+  the current one, and the scale steps 1, 2, 5, 10 so the bars hold still between turns.
   A short pane drops the output chart first, then both. With no session in context, the
   running sessions' totals. The charts' shimmer rests while you type in an answer box. The
   colours need 24-bit colour: Windows Terminal draws it but doesn't tell WSL, so the
