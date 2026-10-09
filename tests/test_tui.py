@@ -1,3 +1,4 @@
+import itertools
 import json
 import time
 import random
@@ -326,6 +327,20 @@ async def test_ctrl_s_sends_only_the_current_sessions_queue(store, sid, tmp_path
         await pilot.pause()
     assert [m["body"] for m in store.pending(sid)] == ["a"]
     assert [m["body"] for m in store.drafts(other)] == ["b"], "another session's queue waits"
+
+
+TICKS = itertools.count()
+
+
+async def refresh(pilot, sid: str) -> None:
+    """A refresh tick, run rather than waited for (review 9), once what's pending has landed.
+    The session's new name shows in the list only once it has run."""
+    await pilot.pause()
+    name = f"tick {next(TICKS)}"
+    pilot.app.store.rename(sid, name)
+    pilot.app.refresh_data()
+    await pilot.pause()
+    assert str(pilot.app.session_list.get_row(sid)[1]) == name, "the refresh ran"
 
 
 def session_buttons(app) -> dict[str, tuple[str, bool]]:
@@ -872,7 +887,7 @@ async def test_restored_text_is_typed_onto_at_the_end(store, sid):
         await pilot.press("enter")   # open the question full screen: its text comes along
         await pilot.pause()
         await pilot.press(*"ite")
-        await pilot.pause(1.2)   # across a refresh tick
+        await refresh(pilot, sid)   # a refresh tick between keys
         await pilot.press(*"!")
         assert app.screen.box.text == "SQLite!", "typing carries on at the end, not the start"
 
@@ -1093,11 +1108,11 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
         assert store.item(sid, d)["status"] == "unseen", "not seen until the person looks"
         items.focus()
         items.move_cursor(row=1)
-        await pilot.pause(1.2)   # past a refresh tick
+        await refresh(pilot, sid)
         assert store.item(sid, d)["status"] == "seen", "viewing it marks it seen"
         assert str(sessions.get_row_at(0)[4]) == ""
         items.move_cursor(row=0)
-        await pilot.pause(1.2)
+        await refresh(pilot, sid)
         assert [items.get_row_at(i)[1] for i in range(items.row_count)] == [q, d], "moving on leaves it there"
         items.move_cursor(row=1)
         await pilot.press("x")
@@ -1175,8 +1190,9 @@ async def test_x_closes_the_marked_questions_and_reopens_them(store, sid):
         items.focus()
         await pilot.click("#items", offset=(20, 3), control=True)   # Q1 and Q3
         await pilot.click("#items", offset=(20, 4), control=True)   # and the task
-        store.post_item(sid, "question", "d")   # a rebuild: the marks are by key
-        await pilot.pause(1.2)
+        d = store.post_item(sid, "question", "d")   # a rebuild: the marks are by key
+        await refresh(pilot, sid)
+        assert f"{sid}|{d}" in items.rows, "rebuilt"
         assert sorted(k.split("|")[1] for k in items.marked) == [q1, q3, t], "marks survive a refresh"
         await pilot.press("x")
         await pilot.pause()
@@ -1464,7 +1480,7 @@ async def test_the_hint_says_what_ctrl_enter_does(store, sid, mode, sends_now, e
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         app.items_table.move_cursor(row=0)
-        await pilot.pause(1.2)
+        await refresh(pilot, sid)
         assert str(app.screen.query_one(Hint).content).startswith(expected + " · "), desc
         app.items_table.focus()
         await pilot.press("enter")   # the item full screen has its own box and hint
