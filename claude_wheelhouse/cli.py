@@ -1,7 +1,16 @@
 """claude-wheelhouse: the TUI by default, plus the per-session processes it launches."""
 
 import argparse
+import os
 import sys
+
+
+def truecolour(environ=os.environ) -> None:
+    """Windows Terminal draws 24-bit colour but doesn't tell WSL so: no COLORTERM, and TERM
+    is xterm-256color. Rich then picks 256 colours, which turns the stats shimmer's gentle
+    fades into a few hard jumps (#50). Textual reads this once, on import: call it first."""
+    if environ.get("WT_SESSION") and not environ.get("COLORTERM") and "TEXTUAL_COLOR_SYSTEM" not in environ:
+        environ["TEXTUAL_COLOR_SYSTEM"] = "truecolor"
 
 
 def main() -> None:
@@ -31,6 +40,7 @@ def main() -> None:
         from .launch import injected
         print(injected())
     elif args.cmd == "tutorial":
+        truecolour()
         from .store import Store
         from .tui import WheelhouseApp
         from .tutorial import start
@@ -44,5 +54,6 @@ def main() -> None:
         from .monitor import main as monitor_main
         monitor_main()
     else:
+        truecolour()
         from .tui import WheelhouseApp
         WheelhouseApp().run()

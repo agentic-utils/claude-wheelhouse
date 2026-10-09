@@ -13,7 +13,7 @@ For the session in context: the highlighted session row, or the session of the
 highlighted item.
 
 - **Header.** Session name, model and context window.
-- **Context.** Current context size as a gauge and a number against the window, coloured
+- **Context.** After a blank line, current context size as a gauge and a number against the window, coloured
   green, yellow, amber, red or flashing red. The bands are claude-dashboard's
   `ctx_grade`: on a 1M window ≤150k, ≤300k, ≤450k, ≤600k, above; on 200k ≤100k, ≤125k,
   ≤150k, ≤175k, above.
@@ -155,6 +155,12 @@ names against a live transcript (`~/.claude/projects/-home-doug/<id>.jsonl`, 8 O
   recomputing the columns. If typing in the answer box lags while it runs, the shimmer
   pauses while the box has focus. Measure first, since the title bar already shimmers on
   the same tick.
+- **The shimmer needs 24-bit colour.** Its cells fade by 3 to 5 levels a frame. At 256
+  colours each cell instead jumps 40 to 95 levels between two to four colours, which reads
+  as obvious and jerky (#50). Windows Terminal draws 24-bit colour but leaves COLORTERM
+  unset in WSL, so Rich picks 256; the CLI sets `TEXTUAL_COLOR_SYSTEM=truecolor` when
+  `WT_SESSION` is set and nothing else says. The dashboard never hit this: it writes
+  24-bit escapes whatever the terminal claims.
 
 ## Reuse or port
 

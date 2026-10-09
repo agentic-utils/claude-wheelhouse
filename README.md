@@ -56,7 +56,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   Below the panel, two charts of the last two hours, subagents included: how each turn's
   context was assembled (read from cache, new, cache miss) and the output tokens it made.
   A short pane drops the output chart first, then both. With no session in context, the
-  running sessions' totals. The charts' shimmer rests while you type in an answer box.
+  running sessions' totals. The charts' shimmer rests while you type in an answer box. The
+  colours need 24-bit colour: Windows Terminal draws it but doesn't tell WSL, so the
+  wheelhouse assumes it there (`TEXTUAL_COLOR_SYSTEM` overrides that).
   Transcripts are read off the UI thread, so a big one says "reading …" for a moment
   rather than freezing the app.
 - **Sessions.** Select a session to read its synopsis, which the session keeps up to
