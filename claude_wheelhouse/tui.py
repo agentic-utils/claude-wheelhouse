@@ -412,6 +412,10 @@ class ItemList(DataTable):
     async def action_select_cursor(self) -> None:
         await select_now(self)
 
+    def _post_selected_message(self) -> None:
+        # a double-click's selection, which opens the item, as the session list's click
+        self.app.call_next(select_now, self)
+
     def action_toggle_mark(self) -> None:
         if self.cursor_key():
             self.toggle(self.cursor_key())

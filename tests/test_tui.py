@@ -1151,19 +1151,27 @@ async def test_a_raw_burst_across_both_lists_ends_as_typed_slowly(tmp_path, wher
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("steps, desc", [
-    (("click B", "tab", "down"), "a click on B, Tab, Down: B's first decision selected"),
-    (("click B", "tab", "down", "enter"), "a click on B, Tab, Down, Enter: opens B's, not A's"),
-    (("click B", "tab", "enter"), "a click on B, Tab, Enter: B's conversation, its box"),
+@pytest.mark.parametrize("where, steps, desc", [
+    ("items", ("click B", "tab", "down"), "a click on B, Tab, Down: B's first decision selected"),
+    ("items", ("click B", "tab", "down", "enter"), "a click on B, Tab, Down, Enter: opens B's, not A's"),
+    ("items", ("click B", "tab", "enter"), "a click on B, Tab, Enter: B's conversation, its box"),
+    ("items", ("double 2", "o", "k"), "a double-click on A's two opens it: o k is typed in its thread"),
+    ("sessions", ("double 2", "o", "k"), "a double-click on A's two from the session list: o k in its thread"),
+    ("items", ("double 1", "escape", "down"), "a double-click on A's one, Esc, Down: the thread shut, two selected"),
+    ("sessions", ("double 1", "escape", "down"), "the same from the session list"),
+    ("items", ("double 2", "tab", "x"), "a double-click on A's two, Tab, x: in its thread"),
+    ("items", ("click 1", "enter", "o", "k"), "a click on A's one, Enter opens it, o k in its thread"),
+    ("items", ("click 1", "down", "enter"), "a click on A's one, Down, Enter opens two"),
 ])
-async def test_a_click_then_a_raw_burst_ends_as_typed_slowly(tmp_path, monkeypatch, steps, desc):
+async def test_a_click_then_a_raw_burst_ends_as_typed_slowly(tmp_path, monkeypatch, where, steps, desc):
     """Review 17: a click's selection is handled before the keys typed after it (land runs it),
-    not behind them, where it followed B again and undid what they did. Running sessions: a
-    click on a dead one offers a relaunch, which the keys would answer."""
+    not behind them, where it followed B again and undid what they did. Review 18: so is a
+    double-click's on an item, which opens it. Running sessions: a click on a dead one offers
+    a relaunch, which the keys would answer."""
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
-    raw = await two_lists(tmp_path / "raw", "items", steps, slow=False)
-    slow = await two_lists(tmp_path / "slow", "items", steps, slow=True)
+    raw = await two_lists(tmp_path / "raw", where, steps, slow=False)
+    slow = await two_lists(tmp_path / "slow", where, steps, slow=True)
     assert raw == slow, f"{desc}: raw {raw}, slow {slow}"
 
 
