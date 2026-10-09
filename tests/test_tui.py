@@ -12,8 +12,10 @@ from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, T
 from claude_wheelhouse import launch, stats, transcript
 from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
-from claude_wheelhouse.tui import (MATRIX, VOICE, WheelhouseApp, Choice, Confirm, Folders, Hint, SendBar, ThreadView,
-                                   Transcript, render)
+from claude_wheelhouse.tui import (MATRIX, NOTHING_SELECTED, VOICE, WheelhouseApp, Choice, Confirm, Folders, Hint,
+                                   SendBar, ThreadView, Transcript, render)
+
+REAL_FOLLOW_DELAY = WheelhouseApp.FOLLOW_DELAY   # read at import, before conftest sets it to 0 for each test
 
 
 @pytest.mark.anyio
@@ -640,35 +642,187 @@ async def test_held_arrows_follow_where_the_highlight_rests(store, sid, tmp_path
         assert follows == [others[1]] and app.filter_sid == others[1], "then the one it rests on, once"
 
 
+def assert_one_current(app, desc):
+    """D22: one current session, the session list's highlight, and everything that acts on
+    or describes a session agrees on it: the buttons, Ctrl+S, Ctrl+T and the hint
+    (bar_session), the modules (focus_sid), the selection and the answer box's target, whose
+    session's mode Ctrl+Enter answers by, and the session info. Each may be None, where
+    nothing is in context (an empty inbox selects nothing), but never another session."""
+    assert app.follow_timer is None, f"{desc}: settled, no follow waiting"
+    current = app.current_session()
+    said = {"bar": app.bar_session(app.screen), "focus_sid": app.focus_sid(),
+            "selected": app.selected and app.selected[0], "box_target": app.box_target and app.box_target[0]}
+    assert {k: v for k, v in said.items() if v not in (None, current)} == {}, f"{desc}: current {current}, {said}"
+    assert app.box_target == app.selected, f"{desc}: the box answers what the pane shows"
+    info = app.display_name(app.row(current)) if current else "Select a session to see its description."
+    assert app._info_text.split("\n")[0] == info, f"{desc}: the session info"
+
+
+async def step(app, pilot, how, sid, other):
+    """One thing the person (or, for ended elsewhere and refresh, the world) does."""
+    if how in ("park", "unpark", "end"):
+        await pilot.click("#park" if how != "end" else "#end")
+        await pilot.pause()
+        if how != "unpark":
+            await pilot.press("y")
+    elif how == "x":
+        app.items_table.focus()
+        await pilot.press("x")
+    elif how in ("up", "down"):
+        app.session_list.focus()
+        await pilot.press(how)
+    elif how == "click":
+        row = [r.key.value for r in app.session_list.ordered_rows].index(other)
+        await pilot.click("#session-list", offset=(4, row + 1))   # below the header row
+        await pilot.pause()
+        if isinstance(app.screen, Confirm):   # the offer to relaunch a dead session
+            await pilot.press("n")
+    elif how == "esc":
+        app.items_table.focus()
+        await pilot.press("escape")
+    elif how == "ended elsewhere":
+        app.store.end(sid)
+        app.refresh_data()
+    elif how == "refresh":   # a new item, above the selected one
+        app.store.post_item(other, "question", "B's second")
+        app.refresh_data()
+    await pilot.pause()
+
+
 @pytest.mark.anyio
-@pytest.mark.parametrize("filtered, desc", [(False, "the inbox unfiltered"), (True, "following the session")])
-async def test_park_and_unpark_keep_the_current_session(store, sid, tmp_path, monkeypatch, filtered, desc):
-    """Review 9: Park takes the session's items off the inbox, and the highlight landing on
-    another's item didn't make that one current: Unpark stays one press away."""
+@pytest.mark.parametrize("filtered", [False, True])
+@pytest.mark.parametrize("steps, unfiltered_current, filtered_current, desc", [
+    (["park", "unpark"], "A", "A", "Park follows the session (review 10): it stays current, Unpark one press away"),
+    (["park", "up"], "B", "B", "then arrowing onto the other session follows it (review 10, bug 2)"),
+    (["x"], "B", "A", "closing A's only item: unfiltered, the next item's session is current, list and all"),
+    (["end"], "B", "B", "End"),
+    (["ended elsewhere"], "B", "B", "the current session ending elsewhere"),
+    (["down"], "B", "B", "an arrow in the session list"),
+    (["click"], "B", "B", "a click in the session list"),
+    (["esc"], None, None, "Esc: whichever item is then highlighted"),
+    (["refresh"], "A", "A", "a refresh bringing a new item"),
+])
+async def test_one_current_session_whatever_happens(store, sid, tmp_path, monkeypatch, steps, unfiltered_current,
+                                                    filtered_current, desc, filtered):
+    """D22, after review 10: the session list's highlight is the current session, and the
+    selection, the box, the hint, the modules and the info box never describe another."""
     from claude_wheelhouse import liveness
-    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead")   # parks at once, on a yes
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead")   # parks and ends at once, on a yes
+    store.set_mode(sid, "immediate")
     mine = store.post_item(sid, "question", "A's")
     other = store.create_session(str(tmp_path), name="other")
+    store.set_mode(other, "queued")
     store.post_item(other, "question", "B's")
+    expect = {"A": sid, "B": other, None: None}[filtered_current if filtered else unfiltered_current]
+    desc = f"{desc}, {'following A' if filtered else 'the inbox unfiltered'}"
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{mine}"))
         await pilot.pause()
         if filtered:
             app.follow(sid)
             await pilot.pause()
-        assert app.current_session() == sid and (app.filter_sid == sid) == filtered, desc
-        await pilot.click("#park")
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{mine}"))
         await pilot.pause()
-        await pilot.press("y")
+        assert_one_current(app, f"{desc}: at the start")
+        for how in steps:
+            await step(app, pilot, how, sid, other)
+            assert_one_current(app, f"{desc}: after {how}")
+        assert expect is None or app.current_session() == expect, desc
+        if steps == ["park", "unpark"]:
+            assert not store.session(sid)["parked"] and app.filter_sid == sid, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("filtered, desc", [
+    (True, "the followed session (review 10)"),
+    (False, "the session whose item was selected"),
+])
+async def test_a_session_ending_elsewhere_with_nothing_left_clears_the_pane(store, sid, tmp_path, filtered, desc):
+    """Its conversation or item isn't left in the pane, nor the answer box aimed at it."""
+    store.create_session(str(tmp_path), name="other")
+    q = store.post_item(sid, "question", "A's")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert store.session(sid)["parked"], desc
-        assert app.current_session() == sid, f"{desc}: still current, at the foot"
-        assert str(app.query_one("#park", Button).label) == "Unpark", desc
-        await pilot.click("#park")
+        if filtered:
+            app.follow(sid)
+        else:
+            app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{q}"))
         await pilot.pause()
-        assert not store.session(sid)["parked"] and app.current_session() == sid, f"{desc}: and back"
+        app.answer.text = "half typed"
+        store.end(sid)
+        app.refresh_data()
+        await pilot.pause()
+        assert (app.selected, app.box_target, app._detail_text) == (None, None, NOTHING_SELECTED), desc
+        assert app.answer.text == "", desc
+        assert_one_current(app, desc)
+
+
+@pytest.mark.anyio
+async def test_a_refresh_while_a_follow_waits_keeps_the_persons_highlight(store, sid, tmp_path, monkeypatch):
+    """Review 10: the selected item going in the debounce moved the list back, and the arrow was lost."""
+    monkeypatch.setattr(WheelhouseApp, "FOLLOW_DELAY", 5)
+    q = store.post_item(sid, "question", "A's")
+    store.post_item(sid, "question", "A's second")
+    other = store.create_session(str(tmp_path), name="other")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{q}"))
+        await pilot.pause()
+        app.session_list.focus()
+        await pilot.press("down")
+        await pilot.pause()
+        store.update_item(sid, q, status="closed")
+        app.refresh_data()
+        await pilot.pause()
+        assert app.current_session() == other and app.follow_timer is not None, "the arrow stands"
+        app.follow_timer.stop()
+        app.follow_current()
+        await pilot.pause()
+        assert app.filter_sid == other
+        assert_one_current(app, "followed once it rests")
+
+
+@pytest.mark.anyio
+async def test_the_follow_timer_fires(store, sid, tmp_path, monkeypatch):
+    """Review 10: the real rest, waited out. Polled, so a loaded machine is slower, not red."""
+    monkeypatch.setattr(WheelhouseApp, "FOLLOW_DELAY", REAL_FOLLOW_DELAY)
+    other = store.create_session(str(tmp_path), name="other")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.session_list.focus()
+        await pilot.press("down")
+        deadline = time.monotonic() + 10
+        while app.filter_sid != other and time.monotonic() < deadline:
+            await pilot.pause(0.05)
+        assert app.filter_sid == other and app.viewing == other
+        assert_one_current(app, "followed once the highlight rested")
+
+
+@pytest.mark.anyio
+async def test_enter_on_the_followed_session_goes_to_the_newest_turn(store, sid, tmp_path, monkeypatch):
+    """Review 10: Enter or a click on the session already followed scrolls as following it does."""
+    folder = tmp_path / "projects/-home-u-repo"
+    folder.mkdir(parents=True)
+    recs = [{"type": "user", "timestamp": "2026-10-07T21:30:00Z", "message": {"content": f"turn {i}"}}
+            for i in range(60)]
+    folder.joinpath(f"{sid}.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)
+        await pilot.pause()
+        scroll = app.detail_scroll
+        scroll.scroll_home(animate=False)
+        await pilot.pause()
+        assert scroll.scroll_y == 0 < scroll.max_scroll_y, "scrolled up to read"
+        app.session_list.focus()
+        await pilot.press("enter", "n")   # it isn't running: decline the offer to relaunch it
+        await pilot.pause()
+        assert scroll.scroll_y == scroll.max_scroll_y
 
 
 @pytest.mark.anyio

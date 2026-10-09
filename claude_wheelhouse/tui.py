@@ -54,6 +54,7 @@ STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
 RUNNING = ("live", "stalled", "starting")
 RELAUNCH_WAIT = 30   # seconds a host has to stop for Relaunch before it gives up and says so
+NOTHING_SELECTED = "Select an item, or a session to follow its conversation."
 TAB_RELAUNCH = "a session in a tab relaunches once it has exited: /exit it there, then Relaunch"
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
@@ -1141,8 +1142,7 @@ class WheelhouseApp(App):
                 with VerticalScroll(id="checklist-scroll"):   # scrolls on a short terminal (review 9)
                     yield Static(id="checklist")
                 with VerticalScroll(id="detail-scroll"):
-                    yield Transcript("Select an item, or a session to follow its conversation.",
-                                     id="detail")
+                    yield Transcript(NOTHING_SELECTED, id="detail")
                 yield Splitter("answer", "#answer", "#detail-scroll", "y")
                 yield PermissionButtons()
                 yield Compose(id="answer")
@@ -1413,11 +1413,14 @@ class WheelhouseApp(App):
                 elif table.row_count:
                     table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
             if key not in table.rows and table.row_count:   # its item went: take the one now under the cursor
-                gone = self.selected and self.selected[0]
-                # every row of the current session went (parked, say): the list keeps it current,
-                # so Unpark is one press away; the cursor landing elsewhere doesn't move it
-                held = gone == self.current_session() and not any(k.value.startswith(f"{gone}|") for k in table.rows)
-                self.select_row(table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value, move_list=not held)
+                # the list goes with it: one current session (D22). Unless the person's arrow is
+                # resting on another session, waiting to follow it: their highlight wins
+                self.select_row(table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value,
+                                move_list=self.follow_timer is None)
+        if not table.row_count:   # its item (or followed session) went and none is left: nothing selected
+            self.selected = None
+        if self.selected is None and self.box_target is not None:   # nor the box aimed at what went
+            self.retarget(move_list=False)
         self.paint_detail()
 
     def keep_unsent(self, box, old, new) -> None:
@@ -1452,8 +1455,8 @@ class WheelhouseApp(App):
             blocks = self.conversation(self.viewing)
         elif self.selected:
             blocks = thread_blocks(self.store, *self.selected)
-        else:
-            return
+        else:   # what was shown has gone (a followed session ended, say): not left standing
+            blocks = [("note", NOTHING_SELECTED)]
         text = "\n\n".join(md for _, md in blocks)
         if text != getattr(self, "_detail_text", None):
             following = self.viewing and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1
@@ -1683,6 +1686,8 @@ class WheelhouseApp(App):
         sid = event.row_key.value
         if (self.filter_sid, self.selected) != (sid, (sid, None)):   # a click's highlight may have followed it
             self.follow(sid)
+        else:   # followed already: as following it, the pane goes to the newest turn
+            self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
         if not any(s["id"] == sid and s["parked"] for s in self.sessions):
             self.offer_relaunch(sid)
 
@@ -1846,7 +1851,7 @@ class WheelhouseApp(App):
         if event.row_key.value != self.current_session():
             return   # stale: the cursor moved on before this was handled
         self.stop_follow_timer()
-        if event.row_key.value != self.focus_sid():
+        if event.row_key.value != self.filter_sid:
             if self.FOLLOW_DELAY:   # held arrows stay quick: only where the highlight rests is followed
                 self.follow_timer = self.set_timer(self.FOLLOW_DELAY, self.follow_current)
             else:
@@ -1855,7 +1860,7 @@ class WheelhouseApp(App):
 
     def follow_current(self) -> None:
         self.follow_timer = None
-        if (sid := self.current_session()) and sid != self.focus_sid():
+        if (sid := self.current_session()) and sid != self.filter_sid:
             self.follow(sid)
 
     def stop_follow_timer(self) -> None:
@@ -1880,12 +1885,12 @@ class WheelhouseApp(App):
         if self.items_table.marked:   # Esc drops a multi-selection first
             self.items_table.set_marks(set())
             return
+        self.stop_follow_timer()   # a follow still waiting on the highlight would undo it
         self.clear_filter()
         self.paint_items()
         self.retarget()
 
     def clear_filter(self) -> None:
-        self.stop_follow_timer()   # a follow still waiting on the highlight would undo it
         self.filter_sid = None
         if self.viewing:   # its row goes with the filter; the highlight lands on an item
             self.selected = None
@@ -2275,6 +2280,7 @@ class WheelhouseApp(App):
             return
         if self.row(sid)["parked"]:
             self.store.set_parked(sid, False)
+            self.follow(sid)   # as Park: it stays current
             self.refresh_data()
             return
         self.lifecycle(sid, "park",
@@ -2326,6 +2332,7 @@ class WheelhouseApp(App):
     @session_action
     def ask(self, sid: str, what: str) -> None:
         self.store.request(sid, what)
+        self.keep_current(sid, what)
         self.notify(f"asked the session to {what}")
         self.refresh_data()
 
@@ -2357,4 +2364,11 @@ class WheelhouseApp(App):
             self.store.end(sid)
         else:
             self.store.set_parked(sid, True)
+        self.keep_current(sid, what)
         self.refresh_data()
+
+    def keep_current(self, sid: str, what: str) -> None:
+        """Parking takes a session's items off the unfiltered inbox: following it keeps it
+        current, its pinned conversation row selected, so Unpark is one press away."""
+        if what == "park":
+            self.follow(sid)
