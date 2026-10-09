@@ -40,7 +40,8 @@ from textual.widgets import (
 from . import adopt, api, emoji, launch, liveness, stats, transcript, tutorial
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
-from .store import CLOSED, SessionGone, Store, can_queue, default_runner, mode, needs_relaunch, runner
+from .store import (CLOSED, SessionGone, Store, can_queue, default_runner, inbox_rank, mode, needs_relaunch,
+                    runner)
 
 MATRIX = "#00ff41"
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
@@ -1388,13 +1389,14 @@ class WheelhouseApp(App):
         keep = table.cursor_row
         rows_out = []
         names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
-        items = self.store.items(self.filter_sid)
+        processing = self.store.processing()
+        items = self.ranked(self.store.items(self.filter_sid), processing)
         shown = [it for it in items if it["status"] not in CLOSED]
         rows = item_rows(shown, names)
         if self.show_finished:
             rows += item_rows([it for it in items if it not in shown], names)
         queued = {(m["session_id"], m["item_ref"]) for m in self.store.drafts()}
-        awaiting, processing = self.store.awaiting(), self.store.processing()
+        awaiting = self.store.awaiting()
         if self.filter_sid:   # the session's own conversation, pinned first
             general = (self.filter_sid, None) in queued
             rows_out.append((f"{self.filter_sid}|", (names.get(self.filter_sid, "")[:14], Text("💬"),
@@ -1449,6 +1451,21 @@ class WheelhouseApp(App):
         if self.selected is None and self.box_target is not None:   # nor the box aimed at what went
             self.retarget(move_list=False)
         self.paint_detail()
+
+    def ranked(self, items, processing) -> list:
+        """Items in inbox order (inbox_rank), but for the selected item, pinned: it keeps the
+        rank it was shown with when it was selected, so its own change (a decision seen, a
+        question answered) never moves it under the person. It re-sorts once the selection
+        moves on. self.ranks keeps each item's rank as shown: the next pin's, and where a row
+        that has somewhere to go can be told from the rest."""
+        key = self.selected and self.selected[1] and f"{self.selected[0]}|{self.selected[1]}"
+        if self.pin is None or self.pin[0] != key:
+            self.pin = (key, self.ranks[key]) if key in self.ranks else None
+        ranks = {f"{it['session_id']}|{it['ref']}": inbox_rank(it, processing) for it in items}
+        if self.pin and self.pin[0] in ranks:
+            ranks[self.pin[0]] = self.pin[1]
+        self.ranks = ranks
+        return sorted(items, key=lambda it: ranks[f"{it['session_id']}|{it['ref']}"])
 
     def keep_unsent(self, box, old, new) -> None:
         """Park what's typed for the old target and bring back what was typed for the new one."""

@@ -1436,6 +1436,36 @@ async def test_the_item_list_shows_a_question_awaiting_the_session(store, sid, k
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("kind, pick, answer, desc", [
+    ("decision", "old", False, "a decision seen as it's selected would jump to the top of its rank"),
+    ("question", "new", True, "a question answered while selected would fall below the open one"),
+])
+async def test_the_selected_item_keeps_its_place(store, sid, kind, pick, answer, desc):
+    """Doug: "only move items when not selected". The selected row keeps its place while
+    it's selected, however its status changes; it re-sorts once the selection moves on."""
+    extra = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"} if kind == "decision" else {}
+    refs = {age: store.post_item(sid, kind, f"{age} one", **extra) for age in ("old", "new")}
+    for age, at in (("old", "10:00"), ("new", "10:01")):
+        store.db.execute("UPDATE items SET updated_at = ? WHERE ref = ?", (f"2026-10-09T{at}:00+00:00", refs[age]))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        order = lambda: [{v: k for k, v in refs.items()}[key.split("|")[1]] for key in table.keys()]
+        assert order() == ["new", "old"], f"{desc}: newest first"
+        for age in (pick, "new" if pick == "old" else "old"):   # the one, then away from it
+            table.move_cursor(row=table.get_row_index(f"{sid}|{refs[age]}"))
+            await pilot.pause()
+            if age == pick and answer:
+                store.send(sid, "the cache", refs[age])
+            app.refresh_data()
+            await pilot.pause()
+            assert order() == (["new", "old"] if age == pick else ["old", "new"]), \
+                f"{desc}: {'held while selected' if age == pick else 're-sorted once the selection moved on'}"
+            assert app.selected == (sid, refs[age]) and table.cursor_key() == f"{sid}|{refs[age]}", desc
+
+
+@pytest.mark.anyio
 async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid):
     q = store.post_item(sid, "question", "which db?")
     d = store.post_item(sid, "decision", "cache in SQLite", alternative="Postgres",
