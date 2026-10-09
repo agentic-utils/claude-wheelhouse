@@ -250,6 +250,7 @@ experimentation is low".
 - Interrupt reached Claude Code (the turn stopped), but the test's tool call had been moved
   to the background by Doug's own hooks, so the interrupt of a running foreground tool is
   unseen.
-- `get_context_usage()` is stored on the session (`context_tokens`, `context_max`) but the
-  stats pane still reads the transcript.
+- `get_context_usage()` is stored on the session (`context_tokens`, `context_max`,
+  `context_at`). The stats read it only between a compaction and the next response (#54);
+  otherwise the transcript's size is exact and they read that.
 - Live partial-text streaming, a key for Interrupt, and a model picker are left for later.

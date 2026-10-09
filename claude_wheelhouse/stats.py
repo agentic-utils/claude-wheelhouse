@@ -8,6 +8,7 @@ wheelhouse's own, shared with the session list's context bar (#51). See
 .plan/session-stats.md.
 """
 
+import dataclasses
 import functools
 import json
 import math
@@ -71,7 +72,8 @@ class Compaction:
     at: float
     trigger: str
     pre: int
-    post: int
+    post: int     # Claude Code's postTokens: the messages kept, without the system prompt and tools
+    after: int | None = None   # the next main-thread response's context: the size it left. 0 if unread
 
 
 def parse(lines, seen: set, main: bool) -> tuple[list[Turn], list[Compaction]]:
@@ -156,10 +158,12 @@ class Snapshot:
     ttl: str | None = None         # the cache its latest writing response used
     compactions: list[Compaction] = field(default_factory=list)
     turns: list[Turn] = field(default_factory=list)   # the span's, main thread and subagents
+    estimate: bool = False         # the context is the host's count since a compaction (current)
+    max: int | None = None         # the host's window, with it
 
     @property
     def window(self) -> int:
-        return window_for(self.model, self.peak)
+        return self.max or window_for(self.model, self.peak)
 
     @property
     def expires(self) -> float | None:
@@ -290,7 +294,7 @@ class UsageFollower:
             with open(path, "rb") as f:
                 if path == self.main and offset == 0:
                     offset = window_start(f, st.st_size, now - SPAN)
-                    early = compactions_before(f, offset)
+                    early = [dataclasses.replace(c, after=0) for c in compactions_before(f, offset)]
                     snap.compactions += early
                     snap.peak = max([snap.peak, *(c.pre for c in early)])
                     changed = changed or bool(early)
@@ -316,6 +320,20 @@ def take(s: Snapshot, turns: list[Turn], compactions: list[Compaction]) -> None:
         if t.main:
             s.model, s.context, s.peak, s.last_at = t.model or s.model, t.context, max(s.peak, t.context), t.at
             s.ttl = t.ttl or s.ttl
+            c = s.compactions[-1] if s.compactions else None
+            if c and c.after is None and c.at <= t.at:
+                s.compactions[-1] = dataclasses.replace(c, after=t.context)
+
+
+def current(snap: Snapshot, host) -> Snapshot:
+    """The snapshot with the SDK host's context size in it (an api.HostContext, None for a
+    tab session) when the transcript can't size it: a compaction since the main thread's
+    last response, and the host's count taken after it. Marked as an estimate: Claude
+    Code's count runs about 6% under the next response's, which makes it exact again."""
+    c = snap.compactions[-1] if snap.compactions else None
+    if host is None or c is None or c.at < (snap.last_at or 0) or host.at < c.at:
+        return snap
+    return dataclasses.replace(snap, context=host.tokens, max=host.window, estimate=True)
 
 
 # what the pane says
@@ -360,6 +378,7 @@ class Totals:
     warm: int
     next_cold: tuple[float, str] | None   # when, and whose
     turns: list[Turn]
+    estimate: bool = False                # some session's context is the host's estimate
 
 
 def combine(snaps: dict[str, Snapshot], names: dict[str, str], now: float) -> Totals:
@@ -367,7 +386,8 @@ def combine(snaps: dict[str, Snapshot], names: dict[str, str], now: float) -> To
     soonest = min(warm, key=lambda sid: warm[sid].expires, default=None)
     return Totals(len(snaps), sum(s.context for s in snaps.values()), len(warm),
                   (warm[soonest].expires, names.get(soonest, soonest)) if soonest else None,
-                  sorted((t for s in snaps.values() for t in s.turns), key=lambda t: t.at))
+                  sorted((t for s in snaps.values() for t in s.turns), key=lambda t: t.at),
+                  any(s.estimate for s in snaps.values()))
 
 
 def hexc(c: tuple) -> str:
@@ -398,7 +418,7 @@ def gauges(view, usage: "AccountUsage", now: float, width: int) -> list[Text]:
     bars = []   # (name, percent, colour, tail)
     if isinstance(view, Snapshot):
         bars.append(("context", view.context * 100 / view.window, grade(view.context),
-                     f" {tokens(view.context)}/{tokens(view.window)}"))
+                     f" {approx(view)}{tokens(view.context)}/{tokens(view.window)}"))
     for kind, name in LIMITS:
         if kind in usage.limits:
             pct, at = usage.limits[kind]
@@ -407,10 +427,28 @@ def gauges(view, usage: "AccountUsage", now: float, width: int) -> list[Text]:
     width = max(4, width - LABEL - 5 - max((len(b[3]) for b in bars), default=0))
     out = [meter(name, pct, colour, width, tail) for name, pct, colour, tail in bars]
     if isinstance(view, Totals):
-        out.insert(0, label("context") + Text(f"{tokens(view.context)} across {view.sessions}", style=hexc(TEXT)))
+        out.insert(0, label("context") + Text(f"{approx(view)}{tokens(view.context)} across {view.sessions}",
+                                              style=hexc(TEXT)))
     if not any(kind in usage.limits for kind, _ in LIMITS):
         out.append(Text("usage unavailable" if usage.failed else "usage loading…", style=hexc(DIM)))
     return out
+
+
+def approx(view) -> str:
+    return "~" if view.estimate else ""
+
+
+def compact_row(view: Snapshot) -> str:
+    """How many compactions, and the last's size before and after: after as the next response
+    sized it, else the host's estimate, else only the messages it kept."""
+    c = view.compactions[-1]
+    if c.after:
+        sizes = f"{tokens(c.pre)} → {tokens(c.after)}"
+    elif view.estimate:
+        sizes = f"{tokens(c.pre)} → ~{tokens(view.context)}"
+    else:
+        sizes = f"{tokens(c.pre)} · {tokens(c.post)} msgs kept"
+    return f"{len(view.compactions)}× · last {clock(c.at)} · {sizes}"
 
 
 def stat_rows(view, now: float) -> list[Text]:
@@ -423,11 +461,7 @@ def stat_rows(view, now: float) -> list[Text]:
         return [label("cache") + Text(cache, style=hexc(TEXT))]
     out = [label("cache" if i == 0 else "") + Text(line, style=hexc(TEXT if view.warm(now) or i else HOT))
            for i, line in enumerate(cache_lines(view, now))]
-    if view.compactions:
-        c = view.compactions[-1]
-        compact = f"{len(view.compactions)}× · last {clock(c.at)} · {tokens(c.pre)} → {tokens(c.post)}"
-    else:
-        compact = "none yet"
+    compact = compact_row(view) if view.compactions else "none yet"
     return out + [label("compact") + Text(compact, style=hexc(TEXT if view.compactions else DIM))]
 
 

@@ -1167,20 +1167,31 @@ async def test_the_stats_pane_shows_account_usage(store, sid):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("context, chars, desc", [
-    (None, "", "no transcript yet: no bar"),
-    (350_000, "▅", "350k: half way from 200k to 500k"),
-    (90_000, "▂", "90k: most of the first step"),
+@pytest.mark.parametrize("context, compact, runner, chars, desc", [
+    (None, False, "tab", "", "no transcript yet: no bar"),
+    (350_000, False, "tab", "▅", "350k: half way from 200k to 500k"),
+    (90_000, False, "tab", "▂", "90k: most of the first step"),
+    (350_000, True, "sdk", "▂", "compacted since the last response: the host's 90k count stands in (#54)"),
+    (350_000, True, "tab", "▅", "a tab session has no host count: the transcript's size until the next response"),
+    (350_000, False, "sdk", "▅", "no compaction since the last response: the transcript's size is exact"),
 ])
-async def test_the_session_list_shows_context_size(store, sid, tmp_path, monkeypatch, context, chars, desc):
+async def test_the_session_list_shows_context_size(store, sid, tmp_path, monkeypatch, context, compact, runner,
+                                                   chars, desc):
     """Doug (#51): the context size in the session list, read as the stats pane reads it."""
     if context is not None:
         folder = tmp_path / "projects/-home-u-repo"
         folder.mkdir(parents=True)
-        when = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 60))
-        folder.joinpath(f"{sid}.jsonl").write_text(json.dumps(
-            {"type": "assistant", "timestamp": when, "message": {"id": "m1", "model": "claude-opus-5-5", "content": [],
-             "usage": {"input_tokens": 10, "cache_read_input_tokens": context - 10, "output_tokens": 5}}}) + "\n")
+        def when(ago):
+            return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - ago))
+        recs = [{"type": "assistant", "timestamp": when(60), "message": {"id": "m1", "model": "claude-opus-5-5",
+                 "content": [], "usage": {"input_tokens": 10, "cache_read_input_tokens": context - 10,
+                                          "output_tokens": 5}}}]
+        if compact:
+            recs.append({"type": "system", "subtype": "compact_boundary", "timestamp": when(30),
+                         "compactMetadata": {"trigger": "manual", "preTokens": context, "postTokens": 40_000}})
+        folder.joinpath(f"{sid}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
+    store.set_runner(sid, runner)
+    store.set_context(sid, 90_000, 1_000_000)
     monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:

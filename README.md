@@ -53,6 +53,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   150k, yellow under 300k, amber under 600k, then red), and the account's session and weekly usage with their reset times, as
   `/usage` shows them, fetched once a minute. Under them, whether the prompt cache is warm
   and when it goes cold (once cold, what the next turn re-pays), and its compactions.
+  Straight after a compaction a wheelhouse-hosted session shows the size its Claude Code
+  reports, marked `~` as an estimate until the next response sizes it exactly; a tab
+  session keeps its pre-compaction size until then.
   Below the panel, two charts of the last two hours, subagents included: how each turn's
   context was assembled (read from cache, new, cache miss) and the output tokens it made.
   A short pane drops the output chart first, then both. With no session in context, the

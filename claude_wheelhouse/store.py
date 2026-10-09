@@ -121,7 +121,7 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "runner", "TEXT"), ("sessions", "activity", "TEXT NOT NULL DEFAULT ''"),
                  ("sessions", "host_command", "TEXT"), ("sessions", "shell", "TEXT"),
                  ("sessions", "context_tokens", "INTEGER"), ("sessions", "context_max", "INTEGER"),
-                 ("items", "answer", "TEXT")]
+                 ("items", "answer", "TEXT"), ("sessions", "context_at", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped: unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -272,9 +272,11 @@ class Store:
             db.execute("UPDATE sessions SET activity = ? WHERE id = ?", (text, sid))
 
     def set_context(self, sid: str, tokens: int, max_tokens: int) -> None:
+        """The context size the host's Claude Code reports, and when: the stats read it after
+        a compaction, before the transcript has a response to size it by."""
         with self.tx() as db:
-            db.execute("UPDATE sessions SET context_tokens = ?, context_max = ? WHERE id = ?",
-                       (tokens, max_tokens, sid))
+            db.execute("UPDATE sessions SET context_tokens = ?, context_max = ?, context_at = ? WHERE id = ?",
+                       (tokens, max_tokens, stamp(), sid))
 
     def command(self, sid: str, what: str) -> None:
         """Ask the session's host to interrupt, hand over to a shell tab, or compact. A newer

@@ -4,6 +4,7 @@ import os
 import sqlite3
 import subprocess
 import time
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -219,6 +220,7 @@ def test_finished_records_context(host, store, sid):
     run(host.finished(SimpleNamespace(result="", is_error=False, subtype="success")))
     s = store.session(sid)
     assert (s["activity"], s["context_tokens"], s["context_max"]) == ("idle", 1234, 200000)
+    assert abs(datetime.fromisoformat(s["context_at"]).timestamp() - time.time()) < 60, "and when (#54)"
 
 
 def test_stale_permission_denied_on_start(host, store, sid):

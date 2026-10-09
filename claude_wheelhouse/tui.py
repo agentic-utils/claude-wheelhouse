@@ -128,6 +128,15 @@ def short(sid: str) -> str:
     return sid[:6]
 
 
+def host_context(s) -> api.HostContext | None:
+    """The context size an SDK session's host last recorded, for the stats to show after a
+    compaction. A tab session's sizes come from its transcript alone."""
+    at = stats.epoch(s["context_at"] or "")
+    if runner(s) != "sdk" or at is None or not s["context_tokens"] or not s["context_max"]:
+        return None
+    return api.HostContext(s["context_tokens"], s["context_max"], at)
+
+
 def aimed(target) -> str:
     """What a message goes to: an item's ref, or the session itself (a general message)."""
     return target[1] or "the session"
@@ -1178,9 +1187,12 @@ class WheelhouseApp(App):
         finally:
             follower.reading = False
 
-    def context_cell(self, sid: str) -> Text | str:
-        follower = self.contexts.get(sid)
-        return stats.context_bar(follower.snap.context) if follower and follower.ready and follower.snap.context else ""
+    def context_cell(self, s) -> Text | str:
+        follower = self.contexts.get(s["id"])
+        if not (follower and follower.ready):
+            return ""
+        size = stats.current(follower.snap, host_context(s)).context
+        return stats.context_bar(size) if size else ""
 
     def sweep_eyes(self) -> None:
         """Move the Cylon eye on busy rows without rebuilding the tables."""
@@ -1214,7 +1226,7 @@ class WheelhouseApp(App):
                 unseen = Text(str(s["unseen_decisions"]), style=DECISION) if s["unseen_decisions"] else ""
                 if compact:
                     q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
-                    rows.append((s["id"], (dot, name, self.context_cell(s["id"]), q, unseen, queued, busy)))
+                    rows.append((s["id"], (dot, name, self.context_cell(s), q, unseen, queued, busy)))
                 else:
                     rows.append((s["id"], (label, name, s["ticket"], s["cwd"], str(s["open_questions"]),
                                            str(s["running"]), unseen, queued, busy)))
@@ -1376,8 +1388,8 @@ class WheelhouseApp(App):
         return sid if any(s["id"] == sid for s in self.sessions) else None
 
     def module_sessions(self) -> list[dict]:
-        return [{"id": s["id"], "name": s["name"] or short(s["id"]), "running": self.running(s["id"])}
-                for s in self.sessions]
+        return [{"id": s["id"], "name": s["name"] or short(s["id"]), "running": self.running(s["id"]),
+                 "context": host_context(s)} for s in self.sessions]
 
     def paint_sendbar(self) -> None:
         """The bar on the screen in front: the mode and queue of the session in context there."""

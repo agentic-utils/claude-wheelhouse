@@ -8,7 +8,7 @@ import time
 import pytest
 from rich.style import Style
 
-from claude_wheelhouse import stats, transcript
+from claude_wheelhouse import api, stats, transcript
 from claude_wheelhouse.stats import Snapshot, Turn
 
 REAL_FETCH = stats.AccountUsage.fetch   # before conftest stubs it
@@ -430,3 +430,53 @@ def test_windows_terminal_gets_truecolour(env, expected, desc):
     from claude_wheelhouse import cli
     cli.truecolour(env)
     assert env.get("TEXTUAL_COLOR_SYSTEM") == expected, desc
+
+
+def host(tokens=90_000, window=1_000_000, ago=10):
+    return api.HostContext(tokens, window, NOW - ago)
+
+
+def compacted_snap(compacted_ago=30, after=None):
+    s = snap(350_000, 600)
+    s.last_at = NOW - 60
+    s.compactions = [stats.Compaction(NOW - compacted_ago, "manual", 350_000, 40_000, after)]
+    return s
+
+
+@pytest.mark.parametrize("s, h, context, estimate, desc", [
+    (compacted_snap(), host(), 90_000, True, "compacted since the last response: the host's count, as an estimate"),
+    (compacted_snap(), None, 350_000, False, "a tab session has no host count: the transcript's size"),
+    (compacted_snap(), host(ago=45), 350_000, False, "the host's count is from before the compaction"),
+    (compacted_snap(compacted_ago=90), host(), 350_000, False,
+     "a response since the compaction sized it exactly: the host's count isn't needed"),
+    (snap(350_000, 600), host(), 350_000, False, "never compacted: the transcript's size"),
+])
+def test_the_hosts_count_stands_in_after_a_compaction(s, h, context, estimate, desc):
+    """Doug (#54): the context size straight after a compact, not at the next response."""
+    shown = stats.current(s, h)
+    assert (shown.context, shown.estimate) == (context, estimate), desc
+    assert s.context == 350_000 and not s.estimate, f"{desc}: the follower's snapshot is left as it was"
+
+
+@pytest.mark.parametrize("s, h, expect, desc", [
+    (compacted_snap(), host(), ["~90k/1M", "350k → ~90k"], "the host's estimate, in the gauge and as the post size"),
+    (compacted_snap(compacted_ago=90, after=52_000), host(), ["350k/1M", "350k → 52k"],
+     "the next response's size, once there is one"),
+    (compacted_snap(), None, ["350k/1M", "350k · 40k msgs kept"], "no host count: postTokens, as the messages kept"),
+])
+def test_the_compact_row_and_the_gauge(s, h, expect, desc):
+    rows, _ = stats.layout(stats.current(s, h), "holly", None, usage(session=23), NOW, 70, 40)
+    text = "\n".join(r.plain for r in rows)
+    assert all(e in text for e in expect), f"{desc}: {text}"
+
+
+def test_a_compaction_is_sized_by_the_next_response(tmp_path):
+    folder = tmp_path / "-home-u-repo"
+    folder.mkdir()
+    write(folder / "s.jsonl", compacted(ago=9000, pre=300_000), response("m0", ago=8500, made=500),
+          response("m1", ago=700, read=200_000), compacted(ago=600, pre=200_002),
+          response("m2", ago=500, read=50_000), response("m3", ago=400, read=60_000))
+    follower = stats.UsageFollower("s", tmp_path)
+    follower.read(NOW)
+    assert [c.after for c in follower.snap.compactions] == [0, 50_002], \
+        "the first response after it, never a later one; one before the span is left unsized"

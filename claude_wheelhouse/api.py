@@ -45,10 +45,21 @@ class Module:
 
 
 @dataclass
+class HostContext:
+    """The context size a session's SDK host last had from Claude Code (`get_context_usage`,
+    as /context reports it), its window, and when, in epoch seconds."""
+    tokens: int
+    window: int
+    at: float
+
+
+@dataclass
 class Context:
     """All a module gets from the hub. Read-only: a module never writes the hub's data."""
     state_dir: Path
-    sessions: Callable[[], list[dict]]   # the hub's sessions: id, name and whether it's running
+    # the hub's sessions: id, name, whether it's running, and "context", a HostContext for an
+    # SDK-hosted session whose host has recorded one, else None
+    sessions: Callable[[], list[dict]]
     focus: Callable[[], str | None]      # the session in context (highlighted or followed), if any
     config: dict = field(default_factory=dict)
 

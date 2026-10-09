@@ -46,7 +46,7 @@ for all three so they line up. Below the panel, two charts share one hour axis. 
 │weekly  █████████████░░░░  74% resets Tue 15:01 BST│
 │                                                   │
 │cache   1h · warm · cold at 00:45 BST (in 50m)     │
-│compact 1× · last 23:05 BST · 201k → 11k           │
+│compact 1× · last 23:05 BST · 201k → 52k           │
 ╰───────────────────────────────────────────────────╯
 ▸ context assembly  ▆ cache  ▆ new  ▆ miss
           ▇                █▆▂    █   █ █▅       ▇
@@ -116,7 +116,22 @@ names against a live transcript (`~/.claude/projects/-home-doug/<id>.jsonl`, 8 O
     thread's own clock, which errs on the cold side.
 - **Compactions.** `type: "system"` records with `subtype: "compact_boundary"`.
   `compactMetadata` has `trigger` (manual or auto), `preTokens` and `postTokens`, and the
-  record's `timestamp` gives the time.
+  record's `timestamp` gives the time. `postTokens` counts only the messages kept: it
+  leaves out the system prompt and tools, 40 to 60k under the real size across 25 of
+  Doug's compactions. So the row's size after is the next main-thread response's context;
+  before that response, the SDK host's estimate (below); with neither, `postTokens`
+  labelled "msgs kept". A compaction before the span is never sized: the response after
+  it went unread.
+- **Context straight after a compaction (#54).** The transcript has nothing to size the
+  context by until the next response. An SDK-hosted session's host records Claude Code's
+  `get_context_usage()` (as /context reports it) after every turn, with the time
+  (`sessions.context_tokens`, `context_max`, `context_at`), and the hub passes it to the
+  module as each session's `context`. While a compaction is newer than the main thread's
+  last response and the host's count is newer than the compaction, the gauge, the
+  compaction row and the session list's bar show that count against `context_max`,
+  marked `~`: it ran about 6% under the next response's (20,465 against 21,752). The
+  next response makes it exact again. Tab sessions have no host and keep the transcript's
+  size.
 - **Histogram.** Every usage record in the span, from the main file plus the subagent
   files modified within it (checked by file `mtime`). Subagent tokens count, because they
   are this session's spend. They are left out of the context, cache and compaction rows,

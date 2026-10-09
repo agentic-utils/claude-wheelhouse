@@ -33,7 +33,9 @@ keeps its one animation clock, and a module never needs to know what has focus.
 
 - **`claude_wheelhouse/api.py`**, the one module a plugin imports: `WHEELHOUSE_API`
   (1), `Module`, `Pane` (title, slot, surfaces), `Context` (state dir, `sessions()`,
-  `focus()`, config), `load()` and `panes(slot)`.
+  `focus()`, config), `HostContext`, `load()` and `panes(slot)`. Each session from
+  `sessions()` carries `context`, the SDK host's last recorded `HostContext` (#54): an
+  added key, so the API stays at 1.
 - **Discovery.** `load()` reads the entry-point group. The hub's own `pyproject.toml`
   declares `stats = "claude_wheelhouse.stats_pane:module"`, the same way a third party
   would. A module that fails to import, isn't a `Module`, or was written against another

@@ -86,17 +86,18 @@ class SessionStats(Widget):
         now = time.time() if now is None else now
         sessions = self.ctx.sessions()
         names = {s["id"]: s["name"] for s in sessions}
+        host = {s["id"]: s.get("context") for s in sessions}
         sid = self.ctx.focus()
         if sid in names:
             follower = self.followers.get(sid)
             if follower and follower.ready:
-                self.show(follower.snap, names[sid], now, follower.error)
+                self.show(stats.current(follower.snap, host[sid]), names[sid], now, follower.error)
             else:
                 self.show(None, names[sid], now, (follower and follower.error)
                           or f"reading {names[sid]}'s transcript…")
             return
         sids = [sid for sid in self.shown(sessions) if sid in self.followers]
-        snaps = {sid: self.followers[sid].snap for sid in sids if self.followers[sid].ready}
+        snaps = {sid: stats.current(self.followers[sid].snap, host[sid]) for sid in sids if self.followers[sid].ready}
         self.show(stats.combine(snaps, names, now) if snaps else None, "", now,
                   "reading transcripts…" if len(snaps) < len(sids) else None)
 
