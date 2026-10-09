@@ -299,6 +299,17 @@ def test_the_most_recent_rename_wins(store, tmp_path, monkeypatch, steps, expect
     assert (store.session(sid)["name"], took) == expected, desc
 
 
+@pytest.mark.parametrize("sid, name, renamed, desc", [
+    ("adopted", "Columbo check", True, "adopted under a name: stamped as a rename"),
+    ("adopted", "", False, "adopted without one: not"),
+    (None, "demo", False, "a new session: its name isn't a rename"),
+])
+def test_adopting_under_a_name_is_a_rename(store, tmp_path, monkeypatch, sid, name, renamed, desc):
+    monkeypatch.setattr("claude_wheelhouse.store.stamp", lambda: minute(10))
+    sid = store.create_session(str(tmp_path), name=name, sid=sid)
+    assert store.session(sid)["renamed_at"] == (minute(10) if renamed else None), desc
+
+
 @pytest.mark.parametrize("transcript_title, name, expected, desc", [
     ("A", "B", ("B", False), "renamed in the wheelhouse under the first rename code: stamped, an older /rename stays out"),
     ("A", "", ("", False), "its name cleared there: the same"),

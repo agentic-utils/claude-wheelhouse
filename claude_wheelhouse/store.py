@@ -261,7 +261,8 @@ class Store:
 
     def create_session(self, cwd: str, name: str = "", ticket: str = "", brief: str = "",
                        sid: str | None = None, runner: str | None = None) -> str:
-        """A new session, or (with sid) an adopted one keeping its Claude session id."""
+        """A new session, or (with sid) an adopted one keeping its Claude session id. An
+        adoption under a name is a rename, stamped as one: an older /rename doesn't undo it."""
         adopted = sid is not None
         sid = sid or str(uuid.uuid4())
         runner = runner or default_runner()
@@ -269,9 +270,9 @@ class Store:
             raise ValueError(f"runner must be one of {', '.join(RUNNERS)}, not {runner!r}")
         with self.tx() as db:
             db.execute(
-                "INSERT INTO sessions (id, name, ticket, brief, cwd, created_at, adopted, runner) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (sid, name, ticket, brief, cwd, now(), int(adopted), runner),
+                "INSERT INTO sessions (id, name, ticket, brief, cwd, created_at, adopted, runner, renamed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (sid, name, ticket, brief, cwd, now(), int(adopted), runner, stamp() if adopted and name else None),
             )
         return sid
 
