@@ -614,10 +614,12 @@ class ThreadView(Screen):
 PERMISSION_HINT = "Allow, Always or Deny above, at once · or type what to do instead: Ctrl+Enter denies with it"
 
 
-def hint(sends: str) -> str:
+def hint(sends: str, dead: bool = False) -> str:
     """The line under an answer box. sends: what Ctrl+Enter does for the session in context
-    by its mode, queue or send."""
-    return (f"Ctrl+Enter to {sends} · Ctrl+S sends its queue · Ctrl+T switches mode"
+    by its mode, queue or send. dead: it isn't running, so Ctrl+S refuses (#62) and goes
+    unmentioned."""
+    ctrl_s = "" if dead else " · Ctrl+S sends its queue"
+    return (f"Ctrl+Enter to {sends}{ctrl_s} · Ctrl+T switches mode"
             " · Ctrl+R takes a queued answer back")
 
 
@@ -915,7 +917,7 @@ def key_name(key: str) -> str:
 DESCRIBE = {
     "submit": "Submit what's typed: queued, or sent at once, by the session's mode",
     "app.submit": "Submit what's typed: queued, or sent at once, by the session's mode",
-    "send_session": "Send the current session's queue",
+    "send_session": "Send the current session's queue (a dead one's waits: Restore it first)",
     "toggle_mode": "Switch the session between Queued and Immediate",
     "recall": "Take this item's latest queued answer back into the box",
     "new_session": "New session",
@@ -943,7 +945,7 @@ DESCRIBE = {
     "press('allow')": "Allow the permission item in context",
     "press('always')": "Always: allow it, and keep the rule",
     "press('deny')": "Deny it, with what's typed in its box as what to do instead",
-    "press('send-all')": "Send all: every session's queue",
+    "press('send-all')": "Send all: every running session's queue (a dead one's waits until it's restored)",
     "cursor_up": "Up a row",
     "cursor_down": "Down a row",
     "page_up": "Up a page",
@@ -957,7 +959,7 @@ DESCRIBE = {
 BUTTONS = {
     "mode": "Mode (Ctrl+T): the session's send mode, Queued or Immediate",
     "send": "Send (Ctrl+S): send the session's queued answers as one message; its caption counts them",
-    "send-all": "Send all (Shift+A), above the footer: send every session's queue",
+    "send-all": "Send all (Shift+A), above the footer: send every running session's queue; a dead one's waits until it's restored",
     "allow": "Allow (1; over the answer box, on a permission item): let the tool call run, at once",
     "always": "Always (2): allow it, and keep the rule Claude Code suggests",
     "deny": "Deny (3): refuse it (or type what to do instead and press Ctrl+Enter: denied with that, at once)",
@@ -1001,6 +1003,7 @@ TABS = ("Tab goes round the panes: the session list, the items, the answer box, 
 SEND_RULES = (
     "**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the "
     "session's queue as one message, so related answers arrive together; ✉ counts what's queued. "
+    "A dead session's queue waits: Ctrl+S and Send all leave it until the session is restored. "
     "**Immediate**: Ctrl+Enter sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
 MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
@@ -1374,6 +1377,10 @@ class WheelhouseApp(App):
     def running(self, sid: str) -> bool:
         return self.statuses.get(sid) in RUNNING
 
+    def dead(self, sid: str) -> bool:
+        """It can't receive (D30): Send, Ctrl+S and Send all leave its queue alone (#62)."""
+        return self.statuses.get(sid) == "dead"
+
     def stale(self, s) -> bool:
         """Running older wheelhouse code: a relaunch picks up the new code."""
         return self.running(s["id"]) and needs_relaunch(s)
@@ -1723,10 +1730,10 @@ class WheelhouseApp(App):
         if bar.conversation:
             for args in self.controls(s):
                 show_button(bar, *args)
-        total = sum(x["drafts"] for x in self.sessions)
+        total = sum(x["drafts"] for x in self.sessions if not self.dead(x["id"]))   # Send all skips the dead
         sends = "send" if s is not None and (mode(s) == "immediate" or self.sends_now(s)) else "queue"
         for h in self.screen.query(Hint):
-            h.set_base(PERMISSION_HINT if asking else hint(sends))
+            h.set_base(PERMISSION_HINT if asking else hint(sends, s is not None and self.dead(s["id"])))
         for row in self.screen.query(PermissionButtons):
             if row.display != asking:
                 row.display = asking
@@ -2178,7 +2185,8 @@ class WheelhouseApp(App):
                         "so it can't queue until it's relaunched", severity="warning")
         else:
             self.store.queue(target[0], text, target[1])
-            self.notify(f"queued for {aimed(target)}: Ctrl+S or Send sends the session's queue")
+            then = "it isn't running: Restore it, then " if self.dead(target[0]) else ""
+            self.notify(f"queued for {aimed(target)}: {then}Ctrl+S or Send sends the session's queue")
         box.text = ""
         self.refresh_data()
         if box is self.answer:   # back to the items, cursor where it was: Down, Tab answers the next
@@ -2249,15 +2257,25 @@ class WheelhouseApp(App):
 
     @session_action
     def send_session(self, sid: str) -> None:
+        if self.dead(sid):   # as its hidden Send button: its drafts stay drafts (#62)
+            self.notify(f"{self.display_name(self.row(sid))} isn't running: Restore it first", severity="warning")
+            return
         n = self.store.dispatch(sid)
         self.notify(f"sent {self.sent_note(sid, n)}" if n else "nothing queued for that session")
         self.refresh_data()
 
     @session_action
     def send_all(self) -> None:
-        sent = [(sid, n) for sid in dict.fromkeys(m["session_id"] for m in self.store.drafts())
-                if (n := self.store.dispatch(sid))]
-        self.notify("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent) if sent else "nothing queued")
+        """Every queue but a dead session's, which stays queued until it's restored (#62)."""
+        queued = dict.fromkeys(m["session_id"] for m in self.store.drafts())
+        sent = [(sid, n) for sid in queued if not self.dead(sid) and (n := self.store.dispatch(sid))]
+        if sent:
+            self.notify("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent))
+        elif any(self.dead(sid) for sid in queued):
+            self.notify("nothing queued for a running session: a dead one's queue waits until it's restored",
+                        severity="warning")
+        else:
+            self.notify("nothing queued")
         self.refresh_data()
 
     def action_toggle_mode(self) -> None:

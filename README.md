@@ -15,9 +15,10 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   goes as you submit it. The line under the answer box says which: "Ctrl+Enter to queue"
   or "Ctrl+Enter to send". Ctrl+T switches the session's mode. Under the session list, Mode
   and Send (n) do the same, for the same session, and a bar above the footer
-  always shows Send all (n), every session's queue; each Send is greyed out while its
-  queue is empty. Send all has no key: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S
-  as plain Ctrl+S. Ctrl+R takes a queued answer
+  always shows Send all (n), every running session's queue; each Send is greyed out while its
+  queue is empty. Send all's key is `Shift+A`: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S
+  as plain Ctrl+S. A dead session's queue waits for it: Ctrl+S on one says to Restore it first,
+  its hint leaves Ctrl+S out, and Send all skips it and doesn't count it. Ctrl+R takes a queued answer
   back to edit or drop. Emoji codes work as in chat apps: `:tada:` turns into 🎉, and while
   you type `:gri` the hint line suggests matches (Tab or Enter takes the first). Text you haven't sent stays with the item (or session) you typed it
   for: moving to another clears the box, and coming back restores it. Each session shows
@@ -181,11 +182,11 @@ Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` ope
 session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
 highlighted question or decision (or reopen a closed one: a question as answered, a decision as seen), `N` new session, `A` adopt, `Shift+S` restore all, `Esc` all sessions (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
-`Ctrl+S` send the session's queue, `Ctrl+T` switch the session between Queued and
+`Ctrl+S` send the session's queue (not a dead one's: Restore it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back, `?` list every key and button, `Q` quit (it asks first
 while a relaunch is waiting for a host to stop). Outside a text box, the buttons that have no other key:
 `I` Interrupt, `C` Compact, `H` Shell, `1` Allow, `2` Always and `3` Deny on a permission item (numbered
-as in Claude Code's own prompt), and `Shift+A` Send all. A key whose button doesn't apply says so.
+as in Claude Code's own prompt), and `Shift+A` Send all (every running session's queue). A key whose button doesn't apply says so.
 
 `Tab` goes round the panes: the session list, the items, the answer box, then the conversation (one
 stop, where the arrows, `PgUp`, `PgDn`, `Home` and `End` scroll it), and `Shift+Tab` goes back.

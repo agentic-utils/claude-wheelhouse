@@ -22,7 +22,8 @@ from claude_wheelhouse.tui import (MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VO
 
 
 @pytest.mark.anyio
-async def test_answer_reaches_the_session(store, sid):
+async def test_answer_reaches_the_session(store, sid, live):
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
     q = store.post_item(sid, "question", "which db?", "Postgres or SQLite for the cache?")
     store.post_item(sid, "task", "build", status="running")
     app = WheelhouseApp(store)
@@ -319,8 +320,9 @@ async def test_ctrl_t_switches_the_sessions_mode(store, sid, tmp_path):
 
 
 @pytest.mark.anyio
-async def test_ctrl_s_sends_only_the_current_sessions_queue(store, sid, tmp_path):
+async def test_ctrl_s_sends_only_the_current_sessions_queue(store, sid, tmp_path, live):
     other = store.create_session(str(tmp_path), name="other")
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
     store.post_item(sid, "question", "which db?")
     store.queue(sid, "a", "Q1")
     store.queue(other, "b")
@@ -435,8 +437,9 @@ async def test_one_current_session_for_the_buttons_and_keys(store, sid, tmp_path
 
 
 @pytest.mark.anyio
-async def test_the_thread_views_bar_is_its_sessions(store, sid, tmp_path):
+async def test_the_thread_views_bar_is_its_sessions(store, sid, tmp_path, live):
     other = store.create_session(str(tmp_path), name="other")
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
     q = store.post_item(other, "question", "which db?")
     store.queue(sid, "a")
     store.queue(other, "b", q)
@@ -549,7 +552,8 @@ async def test_a_session_on_older_code_cannot_queue(store, sid, monkeypatch, ver
 
 
 @pytest.mark.anyio
-async def test_send_all_with_nothing_left_to_send_says_so(store, sid, monkeypatch):
+async def test_send_all_with_nothing_left_to_send_says_so(store, sid, monkeypatch, live):
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
     store.queue(sid, "a", "Q1")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -560,6 +564,92 @@ async def test_send_all_with_nothing_left_to_send_says_so(store, sid, monkeypatc
         await pilot.click("#send-all")
         await pilot.pause()
     assert notes == ["nothing queued"]
+
+
+def by_name(monkeypatch, statuses: dict[str, str]) -> None:
+    """Each session's liveness, by its name; on code that queues, so none sends at once."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: statuses[s["name"]])
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status, left, note, desc", [
+    ("dead", ["a"], "demo isn't running: Restore it first", "a dead session refuses, as its hidden Send, its drafts kept"),
+    ("live", [], "sent 1 to demo", "a live session sends its queue"),
+    ("stalled", [], "sent 1 to demo", "a stalled session is still running, so it sends too"),
+])
+async def test_ctrl_s_on_a_dead_session_says_restore_it_first(store, sid, monkeypatch, status, left, note, desc):
+    by_name(monkeypatch, {"demo": status})
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))
+    store.queue(sid, "a")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert app.current_session() == sid, f"{desc}: demo is current"
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda text, **kw: notes.append(text))
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    assert notes == [note], f"{desc}: the notice"
+    assert [m["body"] for m in store.drafts(sid)] == left, f"{desc}: the drafts"
+
+
+ALL_DEAD = {"demo": "dead", "gone": "dead", "slow": "dead"}
+ALL_KEPT = {"demo": ["a"], "gone": ["b", "c"], "slow": ["d"]}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("statuses, by_key, label, left, note, desc", [
+    ({"demo": "live", "gone": "dead", "slow": "stalled"}, True, "Send all (2)", {"gone": ["b", "c"]},
+     "sent 1 to demo; 1 to slow", "the dead session's drafts are neither counted nor sent"),
+    ({"demo": "live", "gone": "live", "slow": "starting"}, True, "Send all (4)", {},
+     "sent 1 to demo; 2 to gone; 1 to slow", "with none dead, every queue goes"),
+    (ALL_DEAD, True, "Send all (0)", ALL_KEPT, "Send all (0): nothing to do",
+     "only dead sessions have drafts: Shift+A finds nothing to do"),
+    (ALL_DEAD, False, "Send all (0)", ALL_KEPT,
+     "nothing queued for a running session: a dead one's queue waits until it's restored",
+     "only dead sessions have drafts, pressed before the bar repainted: nothing sent, and it says why"),
+])
+async def test_send_all_skips_dead_sessions(store, sid, tmp_path, monkeypatch, statuses, by_key, label, left, note,
+                                            desc):
+    by_name(monkeypatch, statuses)
+    ids = {"demo": sid, "gone": store.create_session(str(tmp_path), name="gone"),
+           "slow": store.create_session(str(tmp_path), name="slow")}
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))
+    for name, body in (("demo", "a"), ("gone", "b"), ("gone", "c"), ("slow", "d")):
+        store.queue(ids[name], body)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert str(app.query_one("#send-all", Button).label) == label, f"{desc}: the label"
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda text, **kw: notes.append(text))
+        app.session_list.focus()   # out of the answer box, where Shift+A is typing
+        if by_key:
+            await app.action_press("send-all")
+        else:
+            app.send_all()
+        await pilot.pause()
+    assert notes == [note], f"{desc}: the notice"
+    assert {n: [m["body"] for m in store.drafts(i)] for n, i in ids.items() if store.drafts(i)} == left, \
+        f"{desc}: what stays queued"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status, ctrl_s, desc", [
+    ("dead", False, "a dead session's hint leaves Ctrl+S out: it would refuse"),
+    ("live", True, "a live session's hint has it"),
+    ("stalled", True, "as does a stalled one's: it's still running"),
+])
+async def test_the_hint_mentions_ctrl_s_only_where_it_sends(store, sid, monkeypatch, status, ctrl_s, desc):
+    by_name(monkeypatch, {"demo": status})
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        base = app.screen.query_one(Hint).base
+    assert base == hint("queue", status == "dead"), f"{desc}: {base}"
+    assert ("Ctrl+S" in base) is ctrl_s, f"{desc}: {base}"
 
 
 def test_a_general_message_cut_short_shows_whole_in_the_conversation(store, sid, tmp_path, monkeypatch):
@@ -659,7 +749,8 @@ def assert_one_current(app, desc):
     asking = bool(item) and item["kind"] == "permission" and item["status"] == "open"
     s = app.row(app.bar_session(app.screen)) if app.bar_session(app.screen) else None
     sends = "send" if s and (mode(s) == "immediate" or app.sends_now(s)) else "queue"
-    assert [h.base for h in app.screen.query(Hint)] == [PERMISSION_HINT if asking else hint(sends)], f"{desc}: the hint"
+    dead = bool(s) and app.dead(s["id"])
+    assert [h.base for h in app.screen.query(Hint)] == [PERMISSION_HINT if asking else hint(sends, dead)], f"{desc}: the hint"
     assert [p.display for p in app.screen.query(PermissionButtons)] == [asking], f"{desc}: the permission buttons"
     if not thread:
         buttons = [(b.id, str(b.label), b.disabled, b.display) for b in app.conversation_buttons.query(Button)]
@@ -791,6 +882,9 @@ async def test_one_current_session_whatever_happens(store, sid, tmp_path, monkey
     store.post_item(other, "question", "B's")
     store.queue(sid, "A's draft")
     store.queue(other, "B's draft")
+    if steps == ["burst"]:   # B running: Ctrl+S refuses a dead session (#62)
+        LIVE.add(other)
+        store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
     expect = {"A": sid, "B": other, None: None}[filtered_current if filtered else unfiltered_current]
     desc = f"{desc}, {'following A' if filtered else 'the inbox unfiltered'}"
     app = WheelhouseApp(store)
@@ -842,7 +936,7 @@ def burst_state(store, sids) -> dict:
     (("delete",), True), (("ctrl+s",), True), (("ctrl+t",), True), (("ctrl+j",), False),
     (("ctrl+r",), True), (("ctrl+j", "ctrl+s"), True), ("allow", False),
 ])
-async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, filtered, where, burst, hits):
+async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, filtered, where, burst, hits, live):
     """Q35, review 12: Down then at once an action key (or Allow) acts on where the cursor
     went, never on the row it left, from either list, following a session or not: every
     action settles the lists' cursors first. With "typed" in the box for A's permission,
@@ -859,6 +953,7 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
     store.queue(sid, "A's answer", mine)
     store.queue(other, "B's draft")
     store.queue(other, "B's answer", theirs)
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
