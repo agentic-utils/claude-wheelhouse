@@ -379,14 +379,18 @@ async def test_one_current_session_for_the_buttons_and_keys(store, sid, tmp_path
     describe the same one, however the person got there."""
     from claude_wheelhouse import tutorial
     monkeypatch.setattr(tutorial, "tutorial_dir", lambda store: tmp_path / "tut")
-    store.queue(sid, "a", store.post_item(sid, "question", "which db?"))
+    mine = store.post_item(sid, "question", "which db?")
+    store.queue(sid, "a", mine)
     target = tutorial.prepare(store) if nav == "tutorial" else store.create_session(str(tmp_path), name="other")
     q = store.post_item(target, "question", "Q1?")
     store.queue(target, "b", q)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert app.current_session() == sid, f"{desc}: demo's item first, so demo is current"
+        # by key: the inbox sorts newest first to the second, so either question may lead (review 9)
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{mine}"))
+        await pilot.pause()
+        assert app.current_session() == sid, f"{desc}: demo's item highlighted, so demo is current"
         if nav == "list":
             app.session_list.move_cursor(row=app.session_list.get_row_index(target))
         else:
