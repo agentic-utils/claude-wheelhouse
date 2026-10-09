@@ -1823,3 +1823,40 @@ async def test_selecting_a_dead_session_offers_a_relaunch_unless_parked(store, s
         await pilot.pause()
         assert isinstance(app.screen, Confirm) == prompted, desc
         assert app.viewing == sid, f"{desc}: it follows the session either way"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("parked, status, read, desc", [
+    (False, "live", True, "a running session has a context bar"),
+    (False, "dead", True, "so does a dead one, read once"),
+    (True, "live", True, "so does a parked one that is running (review 7)"),
+    (True, "dead", False, "not a parked dead one"),
+])
+async def test_which_sessions_get_a_context_bar(store, sid, monkeypatch, parked, status, read, desc):
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: status)
+    store.set_parked(sid, parked)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert (sid in app.contexts) == read, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("followed, repaints, desc", [
+    ("demo", 1, "a read for the session the pane shows repaints it"),
+    ("other", 0, "one for another session doesn't (review 7)"),
+])
+async def test_a_landed_context_read_repaints_the_pane_without_a_tick(store, sid, tmp_path, followed, repaints,
+                                                                     desc):
+    other = store.create_session(str(tmp_path), name="other")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow({"demo": sid, "other": other}[followed])
+        await pilot.pause()
+        pane, calls = app.query_one("#stats"), []
+        pane.tick = lambda: calls.append("tick")
+        pane.repaint = lambda *a: calls.append("repaint")
+        app.read_landed(sid)
+        assert calls == ["repaint"] * repaints, desc

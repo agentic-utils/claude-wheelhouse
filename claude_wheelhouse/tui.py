@@ -1214,9 +1214,10 @@ class WheelhouseApp(App):
         return working and self.statuses.get(s["id"]) in ("live", "stalled")
 
     def read_contexts(self) -> None:
-        """Each listed session's context size, read on a worker thread, never the UI's. A
-        session that isn't running is read once. A read the stats pane has under way counts."""
-        listed = {s["id"]: s for s in self.sessions if not s["parked"]}
+        """The context size of each session with a bar, read on a worker thread, never the
+        UI's: every one not parked, read once if it isn't running, and every one running,
+        parked or not. A read the stats pane has under way counts."""
+        listed = {s["id"]: s for s in self.sessions if not s["parked"] or self.running(s["id"])}
         for sid in [sid for sid in self.contexts if sid not in listed]:
             del self.contexts[sid]
         for sid in listed:
@@ -1229,18 +1230,19 @@ class WheelhouseApp(App):
 
     def read_context(self, follower: stats.UsageFollower) -> None:
         """On a worker thread. A failed read leaves the last size up; the next tick reads
-        again. One that brought anything shows at once, in the stats pane too: the follower
-        is its as well, and it started no read of its own while this one was under way."""
+        again. One that brought anything shows at once, in the stats pane too if it shows
+        that session: the follower is its as well, and it started no read of its own while
+        this one was under way."""
         first = not follower.ready
         if stats.read_safely(follower) or first:
             try:
-                self.call_from_thread(self.read_landed)
+                self.call_from_thread(self.read_landed, follower.sid)
             except RuntimeError:   # the app is closing
                 pass
 
-    def read_landed(self) -> None:
+    def read_landed(self, sid: str) -> None:
         self.paint_sessions()
-        self.each_pane("tick")
+        self.each_pane("landed", sid)   # a repaint, not a tick: a tick would start another read
 
     def context_cell(self, s) -> Text | str:
         follower = self.contexts.get(s["id"])

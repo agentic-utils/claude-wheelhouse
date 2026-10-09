@@ -24,10 +24,13 @@ Stats is the first pane that isn't a tab, so it tested the protocol in four plac
 3. **Ticks.** Stats repaints on a clock (the cache countdown) and animates (the shimmer).
 4. **Typing.** The shimmer rests while the person types.
 
-Ticks and typing are solved together: the hub calls two optional methods on a pane's
+Ticks and typing are solved together: the hub calls optional methods on a pane's
 widget, `tick()` each second and when the session in context changes, and
 `animate(frame)` five times a second except while an answer box has focus. The hub
-keeps its one animation clock, and a module never needs to know what has focus.
+keeps its one animation clock, and a module never needs to know what has focus. A third,
+`landed(sid)`, says the hub's own read of a session's transcript (for the session list's
+context bars, through the shared follower) brought something, so a pane showing it can
+repaint without a read of its own.
 
 ## As built
 

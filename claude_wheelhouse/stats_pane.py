@@ -52,6 +52,12 @@ class SessionStats(Widget):
                                 exit_on_error=False)
         self.repaint(now)
 
+    def landed(self, sid: str) -> None:
+        """The hub's read of a session's transcript brought something: shown at once if
+        this pane shows that session, from the shared follower, with no read of its own."""
+        if sid in self.shown(self.ctx.sessions()):
+            self.repaint()
+
     def animate(self, frame: int) -> None:
         self.frame = frame
         if self.charts and self.display:
