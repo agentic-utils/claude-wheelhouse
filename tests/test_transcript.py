@@ -214,10 +214,24 @@ def test_title_watch_reads_only_what_is_new(tmp_path):
     assert watch.read().title == "Second", "then counts once complete"
 
 
-def test_title_watch_reads_the_tail_of_a_long_transcript(tmp_path, monkeypatch):
+def prompts(n):
+    return [user(f"prompt {i}", timestamp=f"2026-10-07T21:{i + 31:02d}:00.000Z") for i in range(n)]
+
+
+@pytest.mark.parametrize("recs, expected, desc", [
+    (rename("old") + prompts(20) + rename("new") + [user("last")],
+     ("2026-10-07T21:30:00.000000+00:00", "new", False), "the latest /rename in the tail"),
+    (rename("old") + prompts(20) + [title("old"), user("last", timestamp=LATER)],
+     ("2026-10-07T21:48:00.000000+00:00", "old", True),
+     "one older than the tail: its name, at the tail's first time, inferred"),
+    (prompts(20) + [title("demo")], ("2026-10-07T21:47:00.000000+00:00", "demo", True),
+     "a launch's -n is inferred too: the store takes it only if the name differs"),
+    ([title("old")] + prompts(2), None, "a short transcript read whole: a name without a /rename isn't one"),
+])
+def test_title_watch_reads_the_tail_of_a_long_transcript(tmp_path, monkeypatch, recs, expected, desc):
     monkeypatch.setattr(transcript, "TAIL_BYTES", 600)
     folder = tmp_path / "-home-u-repo"
     folder.mkdir()
-    recs = rename("old") + [user(f"prompt {i}") for i in range(20)] + rename("new") + [user("last")]
     (folder / "abc.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
-    assert transcript.TitleWatch("abc", projects=tmp_path).read().title == "new"
+    got = transcript.TitleWatch("abc", projects=tmp_path).read()
+    assert (got and (got.at, got.title, got.inferred)) == expected, desc
