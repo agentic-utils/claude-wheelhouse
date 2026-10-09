@@ -342,6 +342,7 @@ class SessionList(DataTable):
     async def _on_click(self, event) -> None:
         # Textual runs every class's _on_click in turn, DataTable's after this one, so don't
         # call it here too: that made one click select twice and open two relaunch prompts
+        self.app.settle()   # first what the keys before it moved, as a key's land does
         self.call_next(self._after_click, self.cursor_coordinate)
 
     def _after_click(self, before) -> None:
@@ -398,6 +399,7 @@ class ItemList(DataTable):
         self.set_marks(set(keys[lo:hi + 1]), anchor)
 
     async def _on_click(self, event) -> None:
+        self.app.settle()   # first what the keys before it moved: the rows they leave are the ones clicked
         meta = event.style.meta
         if "row" not in meta or meta["row"] < 0:
             return

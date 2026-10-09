@@ -1176,6 +1176,26 @@ async def test_a_click_then_a_raw_burst_ends_as_typed_slowly(tmp_path, monkeypat
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("where, steps, desc", [
+    ("items", ("down", "click B"), "Down on A's items, a click on B: A's one was seen"),
+    ("items", ("down", "down", "click B"), "Down, Down on A's items, a click on B: both were seen"),
+    ("items", ("down", "click A"), "Down on A's items, a click on A: its one stays selected"),
+    ("items", ("enter", "click B"), "Enter on A's conversation, a click on B"),
+    ("sessions", ("down", "click 1"), "Down in the session list, a click on an item: of the session Down reached"),
+    ("sessions", ("down", "click 2"), "Down in the session list, a click on its second item"),
+])
+async def test_a_raw_burst_then_a_click_ends_as_typed_slowly(tmp_path, monkeypatch, where, steps, desc):
+    """Review 18: a click settles what the keys before it moved, as a key does (land), with no
+    key behind it to: else the Down's decision was never marked seen, or the items' click was
+    on the session the list left."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    raw = await two_lists(tmp_path / "raw", where, steps, slow=False)
+    slow = await two_lists(tmp_path / "slow", where, steps, slow=True)
+    assert raw == slow, f"{desc}: raw {raw}, slow {slow}"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("keys, desc", [
     (("q", "a"), "Q then A: no Adopt dialog opening as the app shuts down"),
     (("q", "down", "tab", "enter"), "Q then a burst that opens a thread"),
