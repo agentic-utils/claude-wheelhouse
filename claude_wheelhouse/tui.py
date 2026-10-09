@@ -4,7 +4,9 @@ import functools
 import math
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import time
 
 from rich.markdown import Markdown as RichMarkdown
@@ -12,7 +14,7 @@ from rich.segment import Segment
 from rich.style import Style
 from rich.cells import cell_len
 from rich.text import Text
-from textual import on
+from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.message import Message
@@ -73,6 +75,22 @@ def shimmer(frame: int) -> Text:
     for i, ch in enumerate(TITLE):
         t.append(ch, style=f"bold {SHIMMER[(i + frame) // 2 % len(SHIMMER)]}")
     return t
+
+
+def system_clipboard() -> str | None:
+    """The system clipboard's text, for a right-click paste. No terminal lets an app read
+    it, so under WSL it's Windows', through PowerShell (most of a second: call it off the
+    UI thread). None where there's no way to read it."""
+    exe = shutil.which("powershell.exe")
+    if exe is None:
+        return None
+    try:
+        out = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-Command",
+                              "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw"],
+                             capture_output=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.decode("utf-8", "replace").replace("\r\n", "\n").removesuffix("\n")   # PowerShell's own newline
 
 
 def session_action(method):
@@ -832,7 +850,8 @@ SEND_RULES = (
     "**Immediate**: Ctrl+Enter sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
 MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
-         "keep Shift+click for itself: Space and Shift+Up/Down do the same), then X closes them together.")
+         "keep Shift+click for itself: Space and Shift+Up/Down do the same), then X closes them together. "
+         "Right-click copies the selection, or with none pastes into the answer box, as a terminal does.")
 
 
 def keys_help() -> str:
@@ -1014,6 +1033,44 @@ class WheelhouseApp(App):
         self.refresh_data()
         if tutorial.should_offer(self.store):
             self.push_screen(TutorialOffer(), self.offer_answered)
+
+    # right-click, as in a terminal
+
+    async def on_event(self, event: events.Event) -> None:
+        """Right-click copies the selection, or with none pastes. The press never reaches
+        the widgets: an answer box would move its cursor and drop its selection, and the
+        screen would take it for a click and clear its own."""
+        if isinstance(event, (events.MouseDown, events.MouseUp)) and event.button == 3 and not event.is_forwarded:
+            if isinstance(event, events.MouseDown):
+                self.right_click(event)
+            return
+        await super().on_event(event)
+
+    def right_click(self, event: events.MouseDown) -> None:
+        """Copies the selection in a pane, else in the box clicked (or focused); with none,
+        pastes into that box."""
+        try:
+            under, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
+        except Exception:
+            under = None
+        box = under if isinstance(under, (TextArea, Input)) else self.focused
+        box = box if isinstance(box, (TextArea, Input)) else None
+        text = self.screen.get_selected_text() or (box and box.selected_text)
+        if text:
+            self.copy_to_clipboard(text)
+            self.screen.clear_selection()
+            self.notify("copied")
+        elif box is not None and not getattr(box, "read_only", False):
+            box.focus()
+            self.run_worker(functools.partial(self.paste_into, box), thread=True, group="paste", exit_on_error=False)
+
+    def paste_into(self, box) -> None:
+        """On a worker thread: the system clipboard, else the wheelhouse's own last copy,
+        pasted as the terminal's own paste arrives, into the box (focused by now)."""
+        text = system_clipboard()
+        text = self.clipboard if text is None else text
+        if text and self.focused is box:
+            self.call_from_thread(self.post_message, events.Paste(text))
 
     # periodic work
 

@@ -1459,3 +1459,59 @@ async def test_selections_read_black_on_white(store, sid, element, colour, backg
         style = owner.get_component_rich_style(element)
     assert (style.color.get_truecolor().hex, style.bgcolor.get_truecolor().hex) == (colour, background), desc
 
+
+async def select_in_the_pane(app, pilot):
+    app.query_one("#detail", Transcript).focus()
+    await pilot.press("ctrl+a")
+
+
+async def select_in_the_box(app, pilot):
+    app.answer.focus()
+    app.answer.text = "typed words"
+    await pilot.press("ctrl+a")
+
+
+async def nothing_selected(app, pilot):
+    app.answer.text = "typed "
+    app.answer.move_cursor(app.answer.document.end)
+
+
+async def right_click(app, selector: str) -> None:
+    """A right-click as the terminal driver delivers it, through the app's own event
+    handling: Pilot's clicks skip that, going to the screen."""
+    from textual import events
+    from textual.pilot import _get_mouse_message_arguments
+    args = _get_mouse_message_arguments(app.screen.query_one(selector), (3, 2), button=3)
+    for cls in (events.MouseDown, events.MouseUp):
+        await app.on_event(cls(**args))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("select, system, copied, box, desc", [
+    (select_in_the_pane, "from windows", "Q1 · which db?", None, "a selection in the pane: copied"),
+    (select_in_the_box, "from windows", "typed words", "typed words", "a selection in the box: copied, and kept"),
+    (nothing_selected, "from windows", None, "typed from windows", "nothing selected: the clipboard pasted in the box"),
+    (nothing_selected, None, None, "typed earlier copy", "no system clipboard: the wheelhouse's own last copy"),
+])
+async def test_right_click_copies_or_pastes(store, sid, monkeypatch, select, system, copied, box, desc):
+    """Doug (#52): right-click as in a terminal, copying a selection, else pasting."""
+    from claude_wheelhouse import tui
+    store.post_item(sid, "question", "which db?", "Postgres or SQLite for the cache?")
+    monkeypatch.setattr(tui, "system_clipboard", lambda: system)
+    app = WheelhouseApp(store)
+    got = []
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#items", DataTable).move_cursor(row=0)
+        await pilot.pause()
+        app._clipboard = "earlier copy"
+        app.copy_to_clipboard = got.append
+        await select(app, pilot)
+        await pilot.pause()
+        await right_click(app, "#answer")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        text = app.answer.text
+    assert (got[0][:len(copied)] if got else None) == copied, desc
+    if box is not None:
+        assert text == box, desc

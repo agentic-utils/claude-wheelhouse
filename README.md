@@ -167,8 +167,12 @@ starts afresh.
 
 Text: drag the mouse over the conversation or a thread to select part of it (shown black
 on white), `Ctrl+A` selects all of the focused pane or answer box, and `Ctrl+C` copies the
-selection (through the terminal, which Windows Terminal supports). Hold `Shift` to drag with the terminal's
-own selection instead.
+selection (through the terminal, which Windows Terminal supports). Right-click does as a
+terminal's does: it copies the selection, or with nothing selected pastes the clipboard
+into the answer box under the pointer (or the focused one). Under WSL the paste reads the
+Windows clipboard through PowerShell, so it takes most of a second; elsewhere it pastes the
+wheelhouse's own last copy. Hold `Shift` to drag with the terminal's own selection
+instead.
 
 ## Test
 
