@@ -41,6 +41,7 @@ from textual.widgets import (
 )
 
 from . import adopt, api, emoji, launch, liveness, stats, subagents, transcript, tutorial
+from .hub import Hub
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .store import (DISMISSABLE, FINISHED_RANK, SETTLED, SETTLED_RANK, SessionGone, Store, can_queue,
@@ -1348,7 +1349,8 @@ class WheelhouseApp(App):
     def __init__(self, store: Store | None = None):
         super().__init__()
         ScrollBar.renderer = KnurlRender   # Textual's hook for every scrollbar: a class variable
-        self.store = store or Store()
+        self.hub = Hub(store)
+        self.store = self.hub.store
         self.wake = liveness.WakeDetector()
         self.waking = False
         self.frame = 0
@@ -1390,8 +1392,6 @@ class WheelhouseApp(App):
         self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
         self.module_ids: dict[str, str] = {}   # each pane's widget id: the module that has it
-        # unsent text typed for each target, (session id, ref or None), kept in memory only
-        self.unsent: dict[tuple, str] = {}
         self.box_target: tuple | None = None
         self.landing = False   # a key's land under way, which the refresh tick waits out (tick)
         self.statuses: dict[str, str] = {}
@@ -1915,14 +1915,15 @@ class WheelhouseApp(App):
         if old == new:
             return
         if old is not None:
-            if box.text.strip():
-                self.unsent[old] = box.text
-            else:
-                self.unsent.pop(old, None)
-        text = self.unsent.pop(new, "") if new is not None else ""
+            self.hub.keep(old, box.text)
+        text = self.hub.take(new) if new is not None else ""
         if box.text != text:
             box.text = text   # which puts the cursor at the start: carry on typing at the end
             box.move_cursor(box.document.end)
+
+    @property
+    def unsent(self) -> dict[tuple, str]:
+        return self.hub.unsent
 
     def retarget(self, move_list: bool = True) -> None:
         """The answer box follows what the pane shows, and the session list's highlight its
