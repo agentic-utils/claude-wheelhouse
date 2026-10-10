@@ -8,6 +8,7 @@ import re
 import time
 import random
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -2524,20 +2525,45 @@ async def test_a_selected_item_moves_only_on_delete(store, sid, live, start, act
 
 
 DECIDED = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"}
-TIMED_DWELL = 1.0   # the dwell these tests time for real: a rest is 1.5 of it, a short look half of it
 
 
-async def dwell_steps(pilot, app, keys, steps) -> None:
+class DwellClock:
+    """The dwell's timer (WheelhouseApp.dwell_after) on a clock of the test's own: it lapses
+    only as a step moves the clock on, never by real time, so a slow run's startup and
+    pauses can't eat its margin. A rest is 1.5 of the dwell, a short look half of it."""
+
+    def __init__(self):
+        self.now, self.timers = 0.0, []
+
+    def after(self, delay, callback):
+        timer = SimpleNamespace(due=self.now + delay, callback=callback, stopped=False)
+        timer.stop = lambda: setattr(timer, "stopped", True)
+        self.timers.append(timer)
+        return timer
+
+    def advance(self, by):
+        self.now += by
+        for timer in [t for t in self.timers if t.due <= self.now and not t.stopped]:
+            timer.stop()
+            timer.callback()
+
+
+@pytest.fixture
+def dwell_clock(monkeypatch):
+    clock = DwellClock()
+    monkeypatch.setattr(WheelhouseApp, "dwell_after", clock.after)
+    return clock
+
+
+async def dwell_steps(pilot, app, keys, steps, clock) -> None:
     """The steps of test_an_unseen_decision_is_seen_only_after_the_dwell, on the items by key."""
     for step in steps:
         how, _, what = step.partition(" ")
         if how == "on":
             app.items_table.move_cursor(row=app.items_table.get_row_index(keys[what]))
             await pilot.pause()
-        elif how == "rest":
-            await pilot.pause(TIMED_DWELL * 1.5)
-        elif how == "short":
-            await pilot.pause(TIMED_DWELL / 2)
+        elif how in ("rest", "short"):
+            clock.advance(tui.DWELL * (1.5 if how == "rest" else 0.5))
         elif how == "follow":
             app.follow(keys[what])
             await pilot.pause()
@@ -2588,13 +2614,12 @@ async def dwell_steps(pilot, app, keys, steps) -> None:
     (("on D", "short", "blur", "rest"), "unseen", "the window losing focus mid-dwell: a break in looking"),
     (("on D", "short", "blur", "short", "focus", "rest"), "seen", "focus again, then a rest of the dwell: seen"),
 ])
-async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_path, monkeypatch, steps, want, desc):
+async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_path, dwell_clock, steps, want, desc):
     """Doug: "I need to look at an item for at least 1 second before the state changes". An
     unseen decision becomes seen only once it has stayed selected, on the inbox or in its
     thread, for the dwell without a break, but not while the window is out of focus. Doug: "state
     should change after 1 second visible whether or not I selected it myself", so the app's
     own selection counts too. The person's explicit acts, Delete and answering, act at once."""
-    monkeypatch.setattr("claude_wheelhouse.tui.DWELL", TIMED_DWELL)
     other = store.create_session(str(tmp_path), name="other")
     with one_second():
         d = store.post_item(sid, "decision", "D", **DECIDED)
@@ -2606,7 +2631,7 @@ async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_p
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await dwell_steps(pilot, app, keys, steps)
+        await dwell_steps(pilot, app, keys, steps, dwell_clock)
         assert store.item(sid, d)["status"] == want, f"{desc}: {store.item(sid, d)['status']}"
         if "session B" in steps:
             assert app.selected == (other, None), f"{desc}: B's conversation followed"
@@ -2619,11 +2644,10 @@ async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_p
     (False, "seen by the dwell while selected: held in place, not sinking"),
     (True, "and once the selection moves on, it sinks to the foot"),
 ])
-async def test_a_decision_seen_by_the_dwell_sinks_only_once_left(store, sid, monkeypatch, leave, desc):
+async def test_a_decision_seen_by_the_dwell_sinks_only_once_left(store, sid, dwell_clock, leave, desc):
     """The owner's rule for settled items: a decision that becomes seen while selected stays
     where it is until the selection moves on, then sinks (ranked, Sink), with seen arriving
     by the dwell's own timer."""
-    monkeypatch.setattr("claude_wheelhouse.tui.DWELL", TIMED_DWELL)
     with one_second():
         old = store.post_item(sid, "task", "old", status="done")
         d = store.post_item(sid, "decision", "D", **DECIDED)
@@ -2637,13 +2661,13 @@ async def test_a_decision_seen_by_the_dwell_sinks_only_once_left(store, sid, mon
         order = lambda: [k.split("|")[1] for k in table.keys()]
         before = order()
         assert before[-1] == old, f"{desc}: the settled task at the foot, {before}"
-        await dwell_steps(pilot, app, {"D": f"{sid}|{d}", "Q": f"{sid}|{q}"}, ("on D", "rest"))
+        await dwell_steps(pilot, app, {"D": f"{sid}|{d}", "Q": f"{sid}|{q}"}, ("on D", "rest"), dwell_clock)
         app.refresh_data()
         await pilot.pause()
         assert store.item(sid, d)["status"] == "seen", f"{desc}: seen by the timer"
         assert order() == before and app.item_sink.move is None, f"{desc}: held while selected"
         if leave:
-            await dwell_steps(pilot, app, {"Q": f"{sid}|{q}"}, ("on Q",))
+            await dwell_steps(pilot, app, {"Q": f"{sid}|{q}"}, ("on Q",), dwell_clock)
             while app.item_sink.move is not None:
                 assert_one_current(app, f"{desc}: mid-move")
                 await pilot.pause(0.03)

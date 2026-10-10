@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import subprocess
 import time
+from typing import Callable
 
 from rich.markdown import Markdown as RichMarkdown
 from rich.segment import Segment
@@ -1616,7 +1617,11 @@ class WheelhouseApp(App):
             gen = self.dwell_gen
             # fired on the timer's own task: it waits its turn in the app's queue, behind any key
             # being handled, as a key does
-            self.dwell_timer = self.set_timer(DWELL, lambda: self.call_later(self.dwelt, gen))
+            self.dwell_timer = self.dwell_after(DWELL, lambda: self.call_later(self.dwelt, gen))
+
+    def dwell_after(self, delay: float, callback: Callable[[], None]):
+        """The dwell's one-shot timer (look), with stop(): a test runs it on a clock of its own."""
+        return self.set_timer(delay, callback)
 
     def watch_app_focus(self) -> None:
         """The terminal window lost focus or got it back (AppBlur, AppFocus): a break in

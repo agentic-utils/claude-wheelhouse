@@ -1,8 +1,12 @@
 """Settled items and parked sessions sink to the foot of their list, and rise again (T66, T71):
 one status table for every kind (store.standing), and one animation for both lists (Sink)."""
 
+import time
+from types import SimpleNamespace
+
 import pytest
 
+from claude_wheelhouse import tui
 from claude_wheelhouse.store import Store, standing
 from claude_wheelhouse.tui import BLANK, Sink, WheelhouseApp
 from test_tui import assert_one_current, dwell, one_second, raw_keys
@@ -292,8 +296,27 @@ def slots(app) -> dict[str, int]:
     return {r.key.value: i for i, r in enumerate(app.session_list.ordered_rows) if not r.key.value.startswith(BLANK)}
 
 
+class SteppedClock:
+    """tui's time.monotonic, stepped by the test while it holds the clock (stepping), so a
+    Sink's move is sampled at set points of it however slowly a loaded run lays its frames;
+    the real clock otherwise, for what else in the app times itself by it."""
+
+    def __init__(self):
+        self.now, self.stepping = 0.0, False
+
+    def monotonic(self):
+        return self.now if self.stepping else time.monotonic()
+
+
+@pytest.fixture
+def stepped(monkeypatch):
+    clock = SteppedClock()
+    monkeypatch.setattr(tui, "time", SimpleNamespace(**{**vars(time), "monotonic": clock.monotonic}))
+    return clock
+
+
 @pytest.mark.anyio
-async def test_a_parked_session_falls_to_the_foot_and_rises_back(store, sid, tmp_path, monkeypatch):
+async def test_a_parked_session_falls_to_the_foot_and_rises_back(store, sid, tmp_path, monkeypatch, stepped):
     """T66: parked sessions sit at the foot of the list's room, falling there as they park,
     rising back into the list as they're unparked; the cursor stays on its session."""
     from claude_wheelhouse import liveness
@@ -309,13 +332,17 @@ async def test_a_parked_session_falls_to_the_foot_and_rises_back(store, sid, tmp
         assert slots(app) == {sid: 0, other: 1}, "no gap with nothing parked"
         for parked, end, desc in ((True, room - 1, "falls to the foot"), (False, 0, "rises back to the top")):
             store.set_parked(sid, parked)
+            stepped.stepping = True   # the move starts at the stepped clock's now
             app.refresh_data()
             seen = []
             while app.session_sink.move is not None:
                 seen.append(slots(app)[sid])
                 assert app.current_session() == sid, f"{desc}: the cursor rides its row"
                 assert_one_current(app, f"{desc}: mid-move")
-                await pilot.pause(0.02)
+                stepped.now += Sink.SECONDS / 8
+                app.session_sink.repaint()   # a frame at that point of the move
+                await pilot.pause()
+            stepped.stepping = False
             seen.append(slots(app)[sid])
             assert len(seen) > 3 and seen == sorted(seen, reverse=not parked), f"{desc}: step by step, {seen}"
             assert seen[-1] == end and table.row_count == (room if parked else 2), desc

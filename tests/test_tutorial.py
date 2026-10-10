@@ -341,8 +341,7 @@ async def test_closing_the_decision_ticks_it(store, sid, tut):
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         items = app.query_one("#items", DataTable)
-        keys = [items.coordinate_to_cell_key((i, 0)).row_key.value for i in range(items.row_count)]
-        items.move_cursor(row=keys.index(f"{tut}|P1"))
+        items.move_cursor(row=items.get_row_index(f"{tut}|P1"))
         await pilot.pause()
         app.answer_permission(tut, "P1", "allow")   # the person allows it: it goes at once
         app.refresh_data()
@@ -352,9 +351,8 @@ async def test_closing_the_decision_ticks_it(store, sid, tut):
         assert app.selected == (tut, "D1") and store.item(tut, "D1")["status"] == "seen", \
             "P1 went, so D1 under the cursor was selected automatically, and seen once rested on"
         assert step not in app._checklist_text, "automatic selection doesn't tick it"
-        keys = [items.coordinate_to_cell_key((i, 0)).row_key.value for i in range(items.row_count)]
-        for ref in ("T1", "D1"):
-            items.move_cursor(row=keys.index(f"{tut}|{ref}"))
+        for ref in ("T1", "D1"):   # each row looked up as it's moved to: a sinking D1 moves under a stale index
+            items.move_cursor(row=items.get_row_index(f"{tut}|{ref}"))
             await pilot.pause()
         assert step not in app._checklist_text, "nor does reading it"
         items.focus()
