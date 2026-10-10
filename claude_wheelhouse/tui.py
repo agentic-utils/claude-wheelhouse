@@ -39,7 +39,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import adopt, api, emoji, launch, liveness, stats, subagents, transcript, tutorial
+from . import adopt, api, emoji, liveness, stats, subagents, transcript, tutorial
 from .hub import RUNNING, TAB_RELAUNCH, Event, Hub, display_name, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
@@ -1338,7 +1338,7 @@ class WheelhouseApp(App):
     def __init__(self, store: Store | None = None):
         super().__init__()
         ScrollBar.renderer = KnurlRender   # Textual's hook for every scrollbar: a class variable
-        self.hub = Hub(store)
+        self.hub = Hub(store, spawn=self.spawn, post=self.post)
         self.store = self.hub.store
         self.frame = 0
         self.eye_frame = 0   # the frame the busy sessions' eyes last moved on (animate)
@@ -1368,13 +1368,6 @@ class WheelhouseApp(App):
         # the highlighted row: (session id, item ref), or (session id, None) for the
         # session's conversation, the first row while a session is selected
         self.selected: tuple[str, str | None] | None = None   # its setter restarts the dwell (look)
-        self.followers: dict[str, transcript.Follower] = {}
-        # each session's context size for the session list: read on workers, by a follower
-        # shared with the stats pane (stats.follower), so each transcript is read once
-        self.contexts: dict[str, stats.UsageFollower] = {}
-        # each session's subagents, tracked as A items (#69): read on workers, as contexts are
-        self.agent_watchers: dict[str, subagents.AgentWatcher] = {}
-        self.agent_errors: dict[str, str] = {}   # each session's watcher error last shown
         self.modules = api.load()
         self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
@@ -1554,8 +1547,8 @@ class WheelhouseApp(App):
         self.hub.refresh()
         if self.filter_sid and not any(s["id"] == self.filter_sid for s in self.sessions):
             self.clear_filter()   # the followed session went (ended elsewhere): as Esc, no ghost row
-        self.read_contexts()
-        self.watch_agents()
+        self.hub.read_contexts()
+        self.hub.watch_agents()
         self.paint_sessions()
         self.paint_items()
         self.each_pane("tick")
@@ -1648,6 +1641,14 @@ class WheelhouseApp(App):
     def relaunching(self) -> dict[str, tuple[float, tuple]]:
         return self.hub.relaunching
 
+    @property
+    def contexts(self) -> dict[str, stats.UsageFollower]:
+        return self.hub.contexts
+
+    @property
+    def agent_watchers(self) -> dict[str, subagents.AgentWatcher]:
+        return self.hub.agent_watchers
+
     def running(self, sid: str) -> bool:
         return self.hub.running(sid)
 
@@ -1669,72 +1670,22 @@ class WheelhouseApp(App):
         return self.hub.busy(s)
 
     def heard(self, event: Event) -> None:
-        """What the hub says: a notice is a toast."""
+        """What the hub says: a notice is a toast; a transcript read that landed repaints."""
         if event.kind == "notice":
             self.notify(event.text, severity=event.severity)
+        elif event.kind == "landed":
+            self.read_landed(event.sid)
 
-    def read_contexts(self) -> None:
-        """The context size of each session with a bar, read on a worker thread, never the
-        UI's: every one not parked, read once if it isn't running, and every one running,
-        parked or not. A read the stats pane has under way counts."""
-        listed = {s["id"]: s for s in self.sessions if not s["parked"] or self.running(s["id"])}
-        for sid in [sid for sid in self.contexts if sid not in listed]:
-            del self.contexts[sid]
-        for sid in listed:
-            follower = self.contexts.setdefault(sid, stats.follower(sid))
-            if follower.reading or (follower.ready and not self.running(sid)):
-                continue
-            follower.reading = True
-            self.run_worker(functools.partial(self.read_context, follower), thread=True, group="contexts",
-                            exit_on_error=False)
+    def spawn(self, work, group: str) -> None:
+        """The hub's work, on a worker thread, never the UI's."""
+        self.run_worker(work, thread=True, group=group, exit_on_error=False)
 
-    def watch_agents(self) -> None:
-        """Each session's subagents brought up to date as A items, on a worker thread: every
-        one not parked once, every one running each tick, and once more when one dies with
-        a subagent item still running, which then fails (parked or not): one parked and dead
-        already when the wheelhouse starts too, by the items it tracks (running_agents). The
-        items show at the next refresh. A sync's failure shows once, as a warning, until it changes."""
-        watchers = self.agent_watchers
-        listed = {s["id"]: s for s in self.sessions if not s["parked"] or self.running(s["id"])
-                  or (watchers[s["id"]].unfinished() if s["id"] in watchers else s["running_agents"])}
-        for sid in [sid for sid in watchers if sid not in listed]:
-            del watchers[sid]
-            self.agent_errors.pop(sid, None)
-        for sid, s in listed.items():
-            watcher = watchers.setdefault(sid, subagents.AgentWatcher(sid))
-            if watcher.error and watcher.error != self.agent_errors.get(sid):
-                self.agent_errors[sid] = watcher.error
-                self.notify(f"{self.display_name(s)}: {watcher.error}", severity="warning")
-            alive = self.running(sid)
-            if watcher.syncing or (watcher.ready and not alive and not watcher.unfinished()):
-                continue
-            watcher.syncing = True
-            self.run_worker(functools.partial(self.sync_agents, watcher, alive), thread=True, group="agents",
-                            exit_on_error=False)
-
-    def sync_agents(self, watcher: subagents.AgentWatcher, alive: bool = True) -> None:
-        """On a worker thread. A failed sync (the session ended under it, a transcript gone
-        between stat and open) is tried again next tick, from where it got to, and says why
-        in the watcher's error."""
+    def post(self, callback) -> None:
+        """From a worker thread: the hub's callback, on the UI thread."""
         try:
-            watcher.sync(self.store, alive=alive)
-            watcher.error = None
-        except Exception as e:
-            watcher.error = f"couldn't track subagents: {e}"[:120]
-        finally:
-            watcher.syncing = False
-
-    def read_context(self, follower: stats.UsageFollower) -> None:
-        """On a worker thread. A failed read leaves the last size up; the next tick reads
-        again. One that brought anything shows at once, in the stats pane too if it shows
-        that session: the follower is its as well, and it started no read of its own while
-        this one was under way."""
-        first = not follower.ready
-        if stats.read_safely(follower) or first:
-            try:
-                self.call_from_thread(self.read_landed, follower.sid)
-            except RuntimeError:   # the app is closing
-                pass
+            self.call_from_thread(callback)
+        except RuntimeError:   # the app is closing
+            pass
 
     def read_landed(self, sid: str) -> None:
         self.paint_sessions()
@@ -1938,24 +1889,12 @@ class WheelhouseApp(App):
             if following:   # stay at the newest turn, unless the person has scrolled up to read
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 
-    def sent(self, sid: str, msg_id: int) -> str | None:
-        """The full text of a message the person sent, for one a notification cut short."""
-        m = self.store.message(sid, msg_id)
-        return m["body"] if m else None
-
     def conversation(self, sid: str) -> list[tuple[str, str]]:
-        s = self.store.session(sid)
-        if s is None:
+        blocks = self.hub.conversation(sid)
+        if blocks is None:   # the session went
             self.selected = None
             return [("note", "_gone_")]
-        follower = self.followers.setdefault(sid, transcript.Follower(sid))
-        recs = follower.read()
-        queued = tuple(m["body"] for m in self.store.drafts(sid) if m["item_ref"] is None)
-        tab = None if runner(s) == "sdk" and not s["shell"] else launch.tab_title(s)
-        key = (s["name"] or short(sid), tab, follower.seen, queued)
-        if follower.blocks_key != key:   # parsed once per change, not on every refresh tick
-            follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued, functools.partial(self.sent, sid))
-        return follower.blocks
+        return blocks
 
     # the modules' panes (api.py)
 

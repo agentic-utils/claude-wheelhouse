@@ -5,15 +5,18 @@ behind HTTP. It never imports Textual: what a surface should know, it says as ev
 
 It owns the sessions' liveness, and Relaunch, from the stop to the start again. Like the
 app before it, it never acts on a session by itself: a host that dies stays dead until
-the person restores it."""
+the person restores it. And it reads the sessions' transcripts: each conversation, each
+context size and each session's subagents, the reading on the owner's worker threads
+(spawn), never on the thread that calls it."""
 
+import functools
 import os
 import signal
 import time
 from dataclasses import dataclass
 from typing import Callable
 
-from . import launch, liveness
+from . import launch, liveness, stats, subagents, transcript
 from .store import SessionGone, Store, can_queue, needs_relaunch, runner
 
 RUNNING = ("live", "stalled", "starting")
@@ -35,18 +38,24 @@ def display_name(s) -> str:
 @dataclass(frozen=True)
 class Event:
     """What a surface should know. "notice": text to show the person, with its severity
-    (information, warning or error)."""
+    (information, warning or error). "landed": a read of a session's transcript (sid)
+    brought something, so what shows its context size can repaint."""
     kind: str
     text: str = ""
     severity: str = "information"
+    sid: str | None = None
 
 
 class Hub:
     """The wheelhouse's service over the store. Its state lives as long as it does."""
 
-    def __init__(self, store: Store | None = None):
+    def __init__(self, store: Store | None = None, spawn=None, post=None):
         self.store = store or Store()
         self.listeners: list[Callable[[Event], None]] = []
+        # how its owner runs work on a worker thread, by group, and a callback back on its
+        # own thread (a no-op once it's closing): both at once by default, as in a test
+        self.spawn: Callable[[Callable[[], None], str], None] = spawn or (lambda work, group: work())
+        self.post: Callable[[Callable[[], None]], None] = post or (lambda callback: callback())
         self.wake = liveness.WakeDetector()
         self.waking = False
         self.sessions = []
@@ -54,6 +63,13 @@ class Hub:
         # sessions whose host Relaunch has stopped: started again once it has gone. Each has
         # a monotonic deadline and the stopped host, (pid, start time)
         self.relaunching: dict[str, tuple[float, tuple]] = {}
+        self.followers: dict[str, transcript.Follower] = {}
+        # each session's context size for the session list: read on workers, by a follower
+        # shared with the stats pane (stats.follower), so each transcript is read once
+        self.contexts: dict[str, stats.UsageFollower] = {}
+        # each session's subagents, tracked as A items (#69): read on workers, as contexts are
+        self.agent_watchers: dict[str, subagents.AgentWatcher] = {}
+        self.agent_errors: dict[str, str] = {}   # each session's watcher error last said
         # unsent text typed for each target, (session id, ref or None), kept in memory only
         self.unsent: dict[tuple, str] = {}
 
@@ -62,9 +78,12 @@ class Hub:
     def listen(self, listener: Callable[[Event], None]) -> None:
         self.listeners.append(listener)
 
-    def say(self, text: str, severity: str = "information") -> None:
+    def emit(self, event: Event) -> None:
         for listener in self.listeners:
-            listener(Event("notice", text, severity))
+            listener(event)
+
+    def say(self, text: str, severity: str = "information") -> None:
+        self.emit(Event("notice", text, severity))
 
     # sessions and their liveness
 
@@ -184,6 +203,86 @@ class Hub:
                 del self.relaunching[sid]
                 self.say(f"{display_name(s)}'s host didn't stop within {RELAUNCH_WAIT}s, so it wasn't "
                          f"relaunched: see hosts/{sid}.log", "error")
+
+    # the transcripts
+
+    def read_contexts(self) -> None:
+        """The context size of each session with a bar, read on a worker thread: every one
+        not parked, read once if it isn't running, and every one running, parked or not. A
+        read the stats pane has under way counts."""
+        listed = {s["id"]: s for s in self.sessions if not s["parked"] or self.running(s["id"])}
+        for sid in [sid for sid in self.contexts if sid not in listed]:
+            del self.contexts[sid]
+        for sid in listed:
+            follower = self.contexts.setdefault(sid, stats.follower(sid))
+            if follower.reading or (follower.ready and not self.running(sid)):
+                continue
+            follower.reading = True
+            self.spawn(functools.partial(self.read_context, follower), "contexts")
+
+    def read_context(self, follower: stats.UsageFollower) -> None:
+        """On a worker thread. A failed read leaves the last size up; the next tick reads
+        again. One that brought anything is said at once ("landed"), for the stats pane too
+        if it shows that session: the follower is its as well, and it started no read of its
+        own while this one was under way."""
+        first = not follower.ready
+        if stats.read_safely(follower) or first:
+            self.post(functools.partial(self.emit, Event("landed", sid=follower.sid)))
+
+    def watch_agents(self) -> None:
+        """Each session's subagents brought up to date as A items, on a worker thread: every
+        one not parked once, every one running each tick, and once more when one dies with
+        a subagent item still running, which then fails (parked or not): one parked and dead
+        already when the wheelhouse starts too, by the items it tracks (running_agents). The
+        items show at the next refresh. A sync's failure is said once, as a warning, until it changes."""
+        watchers = self.agent_watchers
+        listed = {s["id"]: s for s in self.sessions if not s["parked"] or self.running(s["id"])
+                  or (watchers[s["id"]].unfinished() if s["id"] in watchers else s["running_agents"])}
+        for sid in [sid for sid in watchers if sid not in listed]:
+            del watchers[sid]
+            self.agent_errors.pop(sid, None)
+        for sid, s in listed.items():
+            watcher = watchers.setdefault(sid, subagents.AgentWatcher(sid))
+            if watcher.error and watcher.error != self.agent_errors.get(sid):
+                self.agent_errors[sid] = watcher.error
+                self.say(f"{display_name(s)}: {watcher.error}", "warning")
+            alive = self.running(sid)
+            if watcher.syncing or (watcher.ready and not alive and not watcher.unfinished()):
+                continue
+            watcher.syncing = True
+            self.spawn(functools.partial(self.sync_agents, watcher, alive), "agents")
+
+    def sync_agents(self, watcher: subagents.AgentWatcher, alive: bool = True) -> None:
+        """On a worker thread. A failed sync (the session ended under it, a transcript gone
+        between stat and open) is tried again next tick, from where it got to, and says why
+        in the watcher's error."""
+        try:
+            watcher.sync(self.store, alive=alive)
+            watcher.error = None
+        except Exception as e:
+            watcher.error = f"couldn't track subagents: {e}"[:120]
+        finally:
+            watcher.syncing = False
+
+    def sent(self, sid: str, msg_id: int) -> str | None:
+        """The full text of a message the person sent, for one a notification cut short."""
+        m = self.store.message(sid, msg_id)
+        return m["body"] if m else None
+
+    def conversation(self, sid: str) -> list[tuple[str, str]] | None:
+        """A session's conversation as (who, markdown) blocks, from its transcript, with
+        what's queued for it as a general message; None once the session has gone."""
+        s = self.store.session(sid)
+        if s is None:
+            return None
+        follower = self.followers.setdefault(sid, transcript.Follower(sid))
+        recs = follower.read()
+        queued = tuple(m["body"] for m in self.store.drafts(sid) if m["item_ref"] is None)
+        tab = None if runner(s) == "sdk" and not s["shell"] else launch.tab_title(s)
+        key = (s["name"] or short(sid), tab, follower.seen, queued)
+        if follower.blocks_key != key:   # parsed once per change, not on every refresh tick
+            follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued, functools.partial(self.sent, sid))
+        return follower.blocks
 
     # text typed but not submitted
 

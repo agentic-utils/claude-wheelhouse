@@ -2,7 +2,7 @@
 
 import pytest
 
-from claude_wheelhouse import hub as hub_mod, launch, liveness
+from claude_wheelhouse import hub as hub_mod, launch, liveness, subagents
 from claude_wheelhouse.hub import Hub
 
 
@@ -96,3 +96,39 @@ def test_a_launch_that_fails_is_said_as_an_error(hub, sid, heard, monkeypatch):
     monkeypatch.setattr(launch, "open_session", refuse)
     assert not hub.open_session(sid)
     assert heard == [("already running", "error")]
+
+
+@pytest.mark.parametrize("parked, status, read, desc", [
+    (False, "live", True, "a running session's context is read"),
+    (False, "dead", True, "so is a dead one's, once"),
+    (True, "live", True, "and a parked one that is running"),
+    (True, "dead", False, "not a parked dead one"),
+])
+def test_which_contexts_are_read_and_said(hub, store, sid, monkeypatch, parked, status, read, desc):
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
+    store.set_parked(sid, parked)
+    groups, landed = [], []
+    hub.spawn = lambda work, group: (groups.append(group), work())
+    hub.listen(lambda e: e.kind == "landed" and landed.append(e.sid))
+    hub.refresh()
+    hub.read_contexts()
+    assert (sid in hub.contexts, groups, landed) == (read, ["contexts"] * read, [sid] * read), desc
+
+
+def test_a_failing_subagent_sync_is_said_once_per_error(hub, store, sid, heard, monkeypatch):
+    errors = iter(["disk gone", "disk gone", "locked"])
+
+    def failing(self, *a, **k):
+        raise OSError(next(errors))
+    monkeypatch.setattr(subagents.AgentWatcher, "sync", failing)
+    for _ in range(4):
+        hub.refresh()
+        hub.watch_agents()
+    assert heard == [("demo: couldn't track subagents: disk gone", "warning"),
+                     ("demo: couldn't track subagents: locked", "warning")]
+
+
+def test_a_conversation_is_none_once_its_session_has_gone(hub, store, sid):
+    assert hub.conversation(sid) is not None
+    store.end(sid)
+    assert hub.conversation(sid) is None
