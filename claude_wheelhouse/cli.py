@@ -25,6 +25,12 @@ def main() -> None:
     sub.add_parser("mcp", help="the per-session MCP server (stdio)")
     sub.add_parser("monitor", help="the per-session plugin monitor")
     sub.add_parser("protocol", help="print everything wheelhouse puts into a launched session")
+    daemon = sub.add_parser("daemon", help="serve the wheelhouse over HTTP for remote clients (no client uses it yet)")
+    daemon.add_argument("--address", default=None, help="the IP address to listen on (default 127.0.0.1; "
+                        "never 0.0.0.0): the VPN interface's, to reach it from another machine")
+    daemon.add_argument("--port", type=int, default=None, help="the port to listen on (default 7428)")
+    daemon.add_argument("--name", action="append", default=[], help="another name clients reach this machine by "
+                        "(a VPN's name for it), so their requests are accepted: repeat for more")
     args = p.parse_args()
 
     if args.cmd == "run":
@@ -36,6 +42,12 @@ def main() -> None:
     elif args.cmd == "mcp":
         from .mcp_server import main as mcp_main
         mcp_main()
+    elif args.cmd == "daemon":
+        from .daemon import ADDRESS, PORT, AlreadyRunning, main as daemon_main
+        try:
+            daemon_main(args.address or ADDRESS, args.port or PORT, args.name)
+        except (AlreadyRunning, ValueError) as e:
+            sys.exit(str(e))
     elif args.cmd == "protocol":
         from .launch import injected
         print(injected())

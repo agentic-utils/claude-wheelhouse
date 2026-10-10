@@ -148,11 +148,15 @@ source = { editable = "." }
 dependencies = [
     { name = "claude-agent-sdk" },
     { name = "mcp" },
+    { name = "sse-starlette" },
+    { name = "starlette" },
     { name = "textual" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx2" },
     { name = "pytest" },
 ]
 
@@ -160,11 +164,17 @@ dev = [
 requires-dist = [
     { name = "claude-agent-sdk", specifier = ">=0.2.164" },
     { name = "mcp", specifier = ">=2.2" },
+    { name = "sse-starlette", specifier = ">=3.5" },
+    { name = "starlette", specifier = ">=1.7" },
     { name = "textual", specifier = ">=8.2" },
+    { name = "uvicorn", specifier = ">=0.54" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
+dev = [
+    { name = "httpx2", specifier = ">=2.13" },
+    { name = "pytest", specifier = ">=8" },
+]
 
 [[package]]
 name = "click"

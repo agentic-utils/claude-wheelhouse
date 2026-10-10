@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import adopt, launch, liveness, stats, subagents, transcript, tutorial
+from . import adopt, api, launch, liveness, stats, subagents, transcript, tutorial
 from .store import DISMISSABLE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
 
 RUNNING = ("live", "stalled", "starting")
@@ -55,6 +55,15 @@ def aimed(target) -> str:
     return target[1] or "the session"
 
 
+def host_context(s) -> api.HostContext | None:
+    """The context size an SDK session's host last recorded, for the stats to show after a
+    compaction. A tab session's sizes come from its transcript alone."""
+    at = stats.epoch(s["context_at"] or "")
+    if runner(s) != "sdk" or at is None or not s["context_tokens"] or not s["context_max"]:
+        return None
+    return api.HostContext(s["context_tokens"], s["context_max"], at)
+
+
 @dataclass(frozen=True)
 class Event:
     """What a surface should know. "notice": text to show the person, with its severity
@@ -71,10 +80,12 @@ class Event:
 @dataclass
 class Done:
     """What a command did, for the surface that gave it: whether it acted (ok), what to say
-    to the person (notices), and for submit, whether it denied an open permission."""
+    to the person (notices), for submit, whether it denied an open permission, and for
+    new_session, the session it made."""
     ok: bool = True
     notices: list[Event] = field(default_factory=list)
     denied: bool = False
+    sid: str | None = None
 
     def say(self, text: str, severity: str = "information") -> "Done":
         self.notices.append(Event("notice", text, severity))
@@ -287,7 +298,9 @@ class Hub:
 
     def new_session(self, cwd: str, name: str, ticket: str, brief: str, runner: str) -> Done:
         sid = self.store.create_session(cwd, name=name, ticket=ticket, brief=brief, runner=runner)
-        return self.open_session(sid)
+        done = self.open_session(sid)
+        done.sid = sid
+        return done
 
     def adoptable(self) -> list[adopt.Candidate]:
         """The Claude Code sessions on disk that aren't in the wheelhouse yet (adopt.candidates)."""

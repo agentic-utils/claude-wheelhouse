@@ -121,6 +121,15 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+-- the daemon's answer to each request a client sent with an Idempotency-Key, for a day
+-- (KEYS_KEPT): the same request sent again is answered the same and done once
+CREATE TABLE IF NOT EXISTS idempotency (
+    key         TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    status      INTEGER NOT NULL,
+    body        TEXT NOT NULL,
+    at          TEXT NOT NULL
+);
 """
 # run after ADDED_COLUMNS, which may have just added the columns they use
 INDEXES = """
@@ -152,6 +161,7 @@ AGENT_MATCH_BEFORE = 600
 AGENT_MATCH_AFTER = 15   # subagents.GRACE: by then the wheelhouse makes its own
 REQUESTS = ("end", "park")   # what the wheelhouse can ask a running session to do
 CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print is retaken
+KEYS_KEPT = timedelta(days=1)   # how long the daemon answers a request sent again the same
 
 
 class SessionGone(LookupError):
@@ -687,6 +697,21 @@ class Store:
     def clear_setting(self, key: str) -> None:
         with self.tx() as db:
             db.execute("DELETE FROM settings WHERE key = ?", (key,))
+
+    # the daemon's requests, by Idempotency-Key
+
+    def answered(self, key: str) -> sqlite3.Row | None:
+        """The answer given to a request with this key, if within KEYS_KEPT."""
+        return self._one("SELECT * FROM idempotency WHERE key = ? AND at > ?",
+                         (key, (datetime.now(timezone.utc) - KEYS_KEPT).isoformat(timespec="seconds")))
+
+    def answer(self, key: str, fingerprint: str, status: int, body: str) -> None:
+        """The answer given to a request with this key; those older than KEYS_KEPT go."""
+        with self.tx() as db:
+            db.execute("DELETE FROM idempotency WHERE at <= ?",
+                       ((datetime.now(timezone.utc) - KEYS_KEPT).isoformat(timespec="seconds"),))
+            db.execute("INSERT OR REPLACE INTO idempotency (key, fingerprint, status, body, at) VALUES (?, ?, ?, ?, ?)",
+                       (key, fingerprint, status, body, now()))
 
     # messages
 

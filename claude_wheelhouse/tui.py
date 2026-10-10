@@ -41,7 +41,7 @@ from textual.widgets import (
 )
 
 from . import api, emoji, stats, subagents, transcript, tutorial
-from .hub import TAB_RELAUNCH, Done, Event, Hub, aimed, display_name, short
+from .hub import TAB_RELAUNCH, Done, Event, Hub, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .store import (DISMISSABLE, FINISHED_RANK, SETTLED, SETTLED_RANK, SessionGone, Store, default_runner,
@@ -158,15 +158,6 @@ def share(stored: str | None) -> float | None:
     except (TypeError, ValueError):
         return None
     return min(max(value, 0.0), 1.0) if math.isfinite(value) else None
-
-
-def host_context(s) -> api.HostContext | None:
-    """The context size an SDK session's host last recorded, for the stats to show after a
-    compaction. A tab session's sizes come from its transcript alone."""
-    at = stats.epoch(s["context_at"] or "")
-    if runner(s) != "sdk" or at is None or not s["context_tokens"] or not s["context_max"]:
-        return None
-    return api.HostContext(s["context_tokens"], s["context_max"], at)
 
 
 def thread_blocks(store: Store, sid: str, ref: str, session_name: str = "") -> list[tuple[str, str]]:

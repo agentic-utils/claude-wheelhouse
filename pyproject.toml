@@ -9,7 +9,10 @@ requires-python = ">=3.12"
 dependencies = [
     "claude-agent-sdk>=0.2.164",
     "mcp>=2.2",
+    "sse-starlette>=3.5",
+    "starlette>=1.7",
     "textual>=8.2",
+    "uvicorn>=0.54",
 ]
 
 [project.scripts]
@@ -19,7 +22,7 @@ claude-wheelhouse = "claude_wheelhouse.cli:main"
 stats = "claude_wheelhouse.stats_pane:module"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["httpx2>=2.13", "pytest>=8"]
 
 [build-system]
 requires = ["hatchling>=1.27"]
