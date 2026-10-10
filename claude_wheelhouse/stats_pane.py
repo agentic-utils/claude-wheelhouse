@@ -27,7 +27,7 @@ class SessionStats(Widget):
         super().__init__(**kwargs)
         self.ctx = ctx
         self.followers: dict[str, stats.UsageFollower] = {}
-        self.usage = stats.AccountUsage()
+        self.usage = ctx.usage   # the hub's, fetched once for the whole wheelhouse
         self.view, self.name_, self.now = None, "", 0.0
         self.note: str | None = None   # what shows with nothing to show
         self.rows: list[Text] = []
@@ -38,8 +38,6 @@ class SessionStats(Widget):
 
     def tick(self) -> None:
         now = time.time()
-        if self.usage.due(now):
-            self.run_worker(self.usage.fetch, thread=True, group="usage", exit_on_error=False)
         sessions = self.ctx.sessions()
         present = {s["id"] for s in sessions}
         for sid in [sid for sid in self.followers if sid not in present]:   # ended: its follower goes

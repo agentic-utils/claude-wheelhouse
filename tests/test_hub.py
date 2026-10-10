@@ -132,3 +132,13 @@ def test_a_conversation_is_none_once_its_session_has_gone(hub, store, sid):
     assert hub.conversation(sid) is not None
     store.end(sid)
     assert hub.conversation(sid) is None
+
+
+def test_the_usage_is_fetched_at_most_once_a_minute(hub, monkeypatch):
+    now, groups = [1000.0], []
+    monkeypatch.setattr(hub_mod.time, "time", lambda: now[0])
+    hub.spawn = lambda work, group: groups.append(group)
+    for at in (1000.0, 1030.0, 1061.0):
+        now[0] = at
+        hub.fetch_usage()
+    assert groups == ["usage", "usage"]

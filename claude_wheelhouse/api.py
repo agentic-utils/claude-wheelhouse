@@ -64,6 +64,8 @@ class Context:
     sessions: Callable[[], list[dict]]
     focus: Callable[[], str | None]      # the session in context (highlighted or followed), if any
     config: dict = field(default_factory=dict)
+    # the account's session and weekly usage (a stats.AccountUsage), which the hub fetches
+    usage: object = None
 
 
 @dataclass

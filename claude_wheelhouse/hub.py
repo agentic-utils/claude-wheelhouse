@@ -6,8 +6,8 @@ behind HTTP. It never imports Textual: what a surface should know, it says as ev
 It owns the sessions' liveness, and Relaunch, from the stop to the start again. Like the
 app before it, it never acts on a session by itself: a host that dies stays dead until
 the person restores it. And it reads the sessions' transcripts: each conversation, each
-context size and each session's subagents, the reading on the owner's worker threads
-(spawn), never on the thread that calls it."""
+context size and each session's subagents, and fetches the account's usage, the reading
+and fetching on the owner's worker threads (spawn), never on the thread that calls it."""
 
 import functools
 import os
@@ -70,6 +70,7 @@ class Hub:
         # each session's subagents, tracked as A items (#69): read on workers, as contexts are
         self.agent_watchers: dict[str, subagents.AgentWatcher] = {}
         self.agent_errors: dict[str, str] = {}   # each session's watcher error last said
+        self.usage = stats.AccountUsage()   # the account's, for every surface: fetched once
         # unsent text typed for each target, (session id, ref or None), kept in memory only
         self.unsent: dict[tuple, str] = {}
 
@@ -263,6 +264,12 @@ class Hub:
             watcher.error = f"couldn't track subagents: {e}"[:120]
         finally:
             watcher.syncing = False
+
+    def fetch_usage(self) -> None:
+        """The account's session and weekly usage, fetched on a worker thread when it's due
+        (at most once a minute, stats.AccountUsage)."""
+        if self.usage.due(time.time()):
+            self.spawn(self.usage.fetch, "usage")
 
     def sent(self, sid: str, msg_id: int) -> str | None:
         """The full text of a message the person sent, for one a notification cut short."""

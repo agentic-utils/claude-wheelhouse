@@ -1369,7 +1369,7 @@ class WheelhouseApp(App):
         # session's conversation, the first row while a session is selected
         self.selected: tuple[str, str | None] | None = None   # its setter restarts the dwell (look)
         self.modules = api.load()
-        self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid)
+        self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid, usage=self.hub.usage)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
         self.module_ids: dict[str, str] = {}   # each pane's widget id: the module that has it
         self.box_target: tuple | None = None
@@ -1549,6 +1549,7 @@ class WheelhouseApp(App):
             self.clear_filter()   # the followed session went (ended elsewhere): as Esc, no ghost row
         self.hub.read_contexts()
         self.hub.watch_agents()
+        self.hub.fetch_usage()
         self.paint_sessions()
         self.paint_items()
         self.each_pane("tick")
