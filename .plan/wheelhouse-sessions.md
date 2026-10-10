@@ -435,9 +435,12 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   another race.) A reader scrolled up keeps their place across a change above the view
   (the oldest entry dropping off, the tab line, a warning under the head): the block at
   the view's top is found again and kept where it was on screen, or, if it changed itself
-  (a reply streaming in), the first unchanged block below it in the view. Found more than
-  once, the one followed by most of what followed it wins, then the nearest. An item open
-  full screen keeps a scrolled-up reader's place across a new reply too. The
+  (a reply streaming in), the nearest unchanged block above it, so the reader's line stays
+  put and what grew shows below it (D46); with none above, the first unchanged block below
+  it in the view. Found more than once, the one followed by most of what followed it wins,
+  then the nearest. An item open full screen keeps a scrolled-up reader's place across a
+  new reply too; the person's own answer, given there, takes them to the end, where it
+  shows. The
   rendered blocks' cache (2048) holds about 25 conversations' worth at
   one width: each shows its last 80 entries. Only a click or Enter offers to relaunch a
   dead one. The item list's cursor goes to the selection by key whenever they differ,

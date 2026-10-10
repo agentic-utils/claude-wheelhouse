@@ -14,6 +14,8 @@ import pytest
 from rich.color import Color
 from rich.text import Text
 from textual import events
+from textual.app import App, ComposeResult
+from textual.containers import VerticalScroll
 from textual.pilot import _get_mouse_message_arguments
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, TextArea
 
@@ -1860,8 +1862,10 @@ UP, NEAR_END = ("pageup",) * 3, ("up",) * 3
     ("waiting", UP, {"turns": 60}, "a warning put in under its head, scrolled up to read: what shows stays put"),
     ("waiting", UP, {"turns": 60, "twice": True}, "a warning put in, each block said twice: what shows stays put"),
     ("turn", ("pageup",), {"tools": 60}, "a new turn, the view's top among the same tool line 60 times: kept on its own"),
-    ("streamed below", UP, {}, "the block under the view's top grows as it streams: what shows down to it stays put"),
-    ("streamed", UP, {}, "the block at the view's top grows as it streams: from the next one down stays put"),
+    ("streamed below", UP, {}, "the block under the view's top grows as it streams: the reader's lines stay put, "
+     "what grew shows below them"),
+    ("streamed", UP, {}, "the block at the view's top grows as it streams: the reader's lines stay put, what grew "
+     "shows below them"),
 ])
 @pytest.mark.parametrize("width", [160, 100])   # the lines each block takes, and so the shift, differ
 async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch, change, keys, shape, desc, width):
@@ -1879,7 +1883,8 @@ async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch
         before = (await scroll_by(pilot, keys))[-1]
         starts, y = app.detail._layout(app.detail.size.width)[2], int(app.detail_scroll.scroll_y)
         rows = [at - y for at in starts[bisect.bisect_right(starts, y):][:2]]   # the next two blocks' on screen
-        kept = {"streamed": slice(rows[0], None), "streamed below": slice(rows[1])}.get(change, slice(None))
+        grown = {"streamed": rows[0], "streamed below": rows[1]}.get(change)   # where the grown block ended
+        kept = slice(grown) if grown else slice(None)
         head = app.detail.blocks[:2]
         {"turn": lambda: append_turn(sid, tmp_path, "the newest turn"),
          "rename": lambda: store.rename(sid, "renamed"),
@@ -1895,14 +1900,17 @@ async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch
         full = laid_in_full(app)
         assert painted(app)[kept] == (full[-app.detail_scroll.size.height:] if not keys else before)[kept], desc
         assert ("the newest turn" in "\n".join(painted(app))) == (not keys), desc
+        assert grown is None or painted(app)[grown:grown + 1] == ["streamed 0"], f"{desc}: what grew, below"
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("up, desc", [
-    (False, "at the newest reply: a new one shows at the end"),
-    (True, "scrolled up to read: what shows stays put, not sent to the end"),
+@pytest.mark.parametrize("up, own, desc", [
+    (False, False, "at the newest reply: a new one shows at the end"),
+    (True, False, "scrolled up to read: what shows stays put, not sent to the end"),
+    (False, True, "your own answer, at the newest reply: it shows at the end"),
+    (True, True, "your own answer, scrolled up to read: back to the end, where it shows"),
 ])
-async def test_a_new_reply_in_a_long_thread(store, sid, up, desc):
+async def test_a_new_reply_in_a_long_thread(store, sid, up, own, desc):
     ref = store.post_item(sid, "question", "q", body="\n\n".join(f"para {i}" for i in range(80)), status="open")
     app = WheelhouseApp(store)
     async with app.run_test(size=(120, 40)) as pilot:
@@ -1914,12 +1922,72 @@ async def test_a_new_reply_in_a_long_thread(store, sid, up, desc):
             scroll.scroll_to(y=20, animate=False, immediate=True)
             await pilot.pause()
         y = scroll.scroll_y
-        store.reply(sid, ref, "a new reply", status="open")
-        app.screen.paint()
+        if own:
+            app.screen.box.text = "my answer"
+            await pilot.press("ctrl+enter")
+        else:
+            store.reply(sid, ref, "a new reply", status="open")
+            app.screen.paint()
         await pilot.wait_for_scheduled_animations()
         await pilot.pause()
+        assert ("my answer" in app.screen.text) == own, f"{desc}: the answer shows in the thread"
         assert scroll.max_scroll_y > y, f"{desc}: the reply made it longer"
-        assert scroll.scroll_y == (y if up else scroll.max_scroll_y), desc
+        assert scroll.scroll_y == (y if up and not own else scroll.max_scroll_y), desc
+
+
+class OneTranscript(App):
+    """A Transcript alone in its scroll: blocks laid out and changed, nothing else."""
+    def compose(self) -> ComposeResult:
+        with VerticalScroll():
+            yield Transcript()
+
+
+def blk(i: int, lines: int = 3, tag: str = "", who: str = "you") -> tuple[str, str]:
+    """A block headed with its number, then that many lines, each a line of its own."""
+    return who, f"**{who} {i}{tag}**\n\n" + "\\\n".join(f"line {i}.{k}" for k in range(lines))
+
+
+BASE = [blk(i, 3 + i % 4) for i in range(50)]
+TOOL = ("tool", "`⚙ Bash gh pr checks`")
+LONG = BASE[:30] + [blk(30, 60)] + BASE[31:]
+QUEUED = [("you", f"**you · queued**\n\nyes {n}\n\nmore") for n in range(4)]
+TIED = BASE[:10] + [TOOL, blk(10, 4, who="claude")] + BASE[11:40] + [TOOL, blk(40, 30, who="claude")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("blocks, top, new, grown, desc", [
+    (BASE, (30, 0), BASE[1:30] + [blk(k, 3 + k % 4, " x") for k in (30, 31, 32)] + BASE[33:] + [blk(50)], None,
+     "the three blocks from the view's top change, the oldest drops: the one above keeps its place"),
+    (LONG, (30, 10), LONG[1:30] + [blk(30, 61, " x")] + LONG[31:] + [blk(77)], None,
+     "every block in view changes (the view is inside one), the oldest drops: the one above keeps its place"),
+    (BASE[:40] + [blk(40, 12, who="claude")] + QUEUED, (40, 2), BASE[:40] + [blk(40, 18, who="claude")] + QUEUED,
+     "line 40.12", "the reply at the view's top grows at its end, answers queued under it: the reader's line "
+     "stays put and what grew shows below it"),
+    (TIED, (41, 0), TIED[:-1] + [blk(40, 36, who="claude")], None,
+     "the view's top a tool line said earlier too, each followed by one block: the nearest, not the earlier one"),
+])
+async def test_a_changed_transcript_keeps_a_scrolled_up_place(blocks, top, new, grown, desc):
+    """top: the block the view starts in and the line into it."""
+    async with OneTranscript().run_test(size=(100, 20)) as pilot:
+        t, scroll = pilot.app.query_one(Transcript), pilot.app.query_one(VerticalScroll)
+        t.update(blocks)
+        await pilot.pause()
+        starts = t._layout(t.size.width)[2]
+        y = starts[top[0]] + top[1]
+        scroll.scroll_to(y=y, animate=False, immediate=True)
+        await pilot.pause()
+
+        def shown() -> list[str]:
+            return t._layout(t.size.width)[1][int(scroll.scroll_y):][:scroll.size.height]
+
+        before = shown()
+        t.update(new)
+        await pilot.wait_for_scheduled_animations()
+        await pilot.pause()
+        after = [line.replace(" x", "") for line in shown()]   # the headers changed alone
+        keep = starts[top[0] + 1] - y - 1 if grown else len(before)   # down to the end of what grew
+        assert after[:keep] == before[:keep], desc
+        assert grown is None or after[keep] == grown, f"{desc}: what grew, below"
 
 
 @pytest.mark.anyio

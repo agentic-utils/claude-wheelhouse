@@ -275,9 +275,11 @@ class Transcript(Widget, can_focus=True):
     def update(self, content: "Blocks | list[tuple[str, str]]") -> None:
         """New blocks. Scrolled up to read (not at the end, which follows), the block at the top
         of the view keeps its place on screen, whatever changed above it; if it changed itself
-        (a reply growing as it streams, a queued answer sent), the first unchanged block below
-        it in the view does. Found more than once (a block said twice, a run of the same tool
-        line), the one followed by most of what followed it, then the nearest."""
+        (a reply growing as it streams, a queued answer sent), the nearest unchanged block above
+        it does, so the reader's line stays put and what grew shows below it; with none above,
+        the first unchanged block below it in the view. Found more than once (a block said
+        twice, a run of the same tool line), the one followed by most of what followed it,
+        then the nearest."""
         old, laid, scroll = self.blocks, self._laid, self.parent
         self.blocks = content.blocks if isinstance(content, Blocks) else list(content)
         self._laid = None
@@ -287,7 +289,7 @@ class Transcript(Widget, can_focus=True):
         width, starts, new = laid[0], laid[3], self.blocks
         top = bisect.bisect_right(starts, scroll.scroll_y) - 1
         bottom = bisect.bisect_left(starts, scroll.scroll_y + scroll.scrollable_content_region.height)
-        for k in range(top, bottom):
+        for k in [top, *range(top - 1, -1, -1), *range(top + 1, bottom)]:
             found = [i for i, b in enumerate(new) if b == old[k]]
             if found:
                 at = max(found, key=lambda i: (agreed(old[k:], new[i:]), -abs(i - k)))
@@ -802,7 +804,7 @@ class ThreadView(Screen):
         text = "\n\n".join(md for _, md in blocks)
         if text != self.text:
             scroll = self.query_one("#thread-scroll")
-            following = self.text is None or scroll.scroll_y >= scroll.max_scroll_y - 1
+            following = scroll.scroll_y >= scroll.max_scroll_y - 1
             self.text = text
             self.query_one("#thread", Transcript).update(render(blocks))
             if following:   # at the newest reply, or opening: scrolled up to read, it keeps its place
@@ -2440,6 +2442,8 @@ class WheelhouseApp(App):
         self.refresh_data()
         if box is self.answer:   # back to the items, cursor where it was: Down, Tab answers the next
             self.screen.set_focus(self.items_table)
+        elif isinstance(self.screen, ThreadView) and box is self.screen.box:   # to the end, where the answer just given shows
+            self.screen.query_one("#thread-scroll").scroll_end(animate=False)
 
     @session_action
     def action_recall(self) -> None:
