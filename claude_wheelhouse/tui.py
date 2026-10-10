@@ -297,10 +297,15 @@ class Transcript(Widget, can_focus=True):
             self.start = None   # another conversation
         elif self.start:   # the same one keeps what's laid above, wherever its oldest laid block
             # has moved to (its oldest turns drop off, a warning goes in under its head), or all
-            # of it, that block gone
-            top = self.blocks[self.start]
-            self.start = min((i for i, block in enumerate(blocks) if block == top),
-                             key=lambda i: abs(i - self.start), default=0)
+            # of it, that block gone: where the most of the blocks laid out from it still follow
+            # it, so a block said twice over is told from its double, and the nearest of those
+            old, at = self.blocks, self.start
+
+            def kept(i: int) -> int:
+                return next((n for n, (a, b) in enumerate(zip(blocks[i:], old[at:])) if a != b),
+                            min(len(blocks) - i, len(old) - at))
+            self.start = max((i for i, block in enumerate(blocks) if block == old[at]),
+                             key=lambda i: (kept(i), -abs(i - at)), default=0)
         self.tail = tail
         self.blocks = blocks
         self._laid = None
@@ -1577,20 +1582,22 @@ class WheelhouseApp(App):
         if isinstance(event, events.Key) and not event.is_forwarded:
             await self.take_key(event)
             return
-        if isinstance(event, events.MouseDown) and not event.is_forwarded and self.detail.start:
+        if isinstance(event, events.MouseDown) and not event.is_forwarded and self.detail.start != 0:
             await self.lay_out_pressed(event)
         await super().on_event(event)
 
     async def lay_out_pressed(self, event: events.MouseDown) -> None:
         """A press in the conversation pane, on its text or its scrollbar, lays out all of it
         first, on screen, before the press starts a selection or grabs the bar: older blocks
-        laid out as either went on would move what they hold on to (T68). The mouse's next
-        events wait behind it."""
+        laid out as either went on would move what they hold on to (T68): a change not laid
+        out yet (a tick's, a follow's) first, then the rest. The mouse's next events wait
+        behind it."""
         try:
             under, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
         except Exception:
             return
         if self.detail_scroll in under.ancestors_with_self:
+            await self.detail.wait_for_refresh()
             self.detail.keep_above(math.inf)
             await self.detail.wait_for_refresh()
 

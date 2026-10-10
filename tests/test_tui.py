@@ -1741,12 +1741,15 @@ def test_each_voice_has_its_colour(who, colour, desc):
     assert styles == {colour}, desc
 
 
-def long_conversation(sid, tmp_path, monkeypatch, turns: int = 200) -> None:
-    """A conversation many pages long, with markdown in every block."""
+def long_conversation(sid, tmp_path, monkeypatch, turns: int = 200, twice: bool = False) -> None:
+    """A conversation many pages long, with markdown in every block (twice: the person's
+    turns alone, each but the first said twice over, so the oldest block laid out has its
+    double right above it)."""
     folder = tmp_path / "projects/-home-u-repo"
     folder.mkdir(parents=True)
-    recs = [{"type": "user" if i % 2 else "assistant", "timestamp": "2026-10-07T21:30:00Z",
-             "message": {"content": f"para one {i}\n\npara two\n\n- a\n- b"} if i % 2 else
+    recs = [{"type": "user" if i % 2 or twice else "assistant", "timestamp": "2026-10-07T21:30:00Z",
+             "message": {"content": f"para one {(i + 1) // 2 if twice else i}\n\npara two\n\n- a\n- b"}
+             if i % 2 or twice else
              {"content": [{"type": "text", "text": f"reply {i}\n\n```\ncode\n```\n\nmore"}]}} for i in range(turns)]
     folder.joinpath(f"{sid}.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
     monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
@@ -1913,20 +1916,21 @@ def start_waiting(sid, tmp_path) -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("change, up, desc", [
-    ("turn", 0, "a new turn, followed at its end: it shows at the true end"),
-    ("turn", 3, "a new turn, scrolled up to read: what shows stays put"),
-    ("rename", 3, "renamed, scrolled up to read: what shows stays put, not sent to the end"),
-    ("shell", 3, "handed to a shell, its tab line changed, scrolled up to read: what shows stays put"),
-    ("waiting", 3, "a warning put in under its head, scrolled up to read: what shows stays put"),
+@pytest.mark.parametrize("change, up, twice, desc", [
+    ("turn", 0, False, "a new turn, followed at its end: it shows at the true end"),
+    ("turn", 3, False, "a new turn, scrolled up to read: what shows stays put"),
+    ("rename", 3, False, "renamed, scrolled up to read: what shows stays put, not sent to the end"),
+    ("shell", 3, False, "handed to a shell, its tab line changed, scrolled up to read: what shows stays put"),
+    ("waiting", 3, False, "a warning put in under its head, scrolled up to read: what shows stays put"),
+    ("waiting", 3, True, "a warning put in, the oldest block laid out the double of the one above: what shows stays put"),
 ])
-async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch, change, up, desc):
+async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch, change, up, twice, desc):
     """T68: the same conversation again (the same session) keeps the older blocks laid out
     above, wherever they've moved to in it, so nothing moves."""
     if change == "shell":   # a host's session, whose tab line shows only once handed to a shell
         sid = store.create_session(str(tmp_path), name="demo", runner="sdk")
     # waiting: under the 80 entries shown, so no oldest turn drops off to undo the warning's shift
-    long_conversation(sid, tmp_path, monkeypatch, turns=60 if change == "waiting" else 200)
+    long_conversation(sid, tmp_path, monkeypatch, turns=60 if change == "waiting" else 200, twice=twice)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -2002,29 +2006,58 @@ async def select_up_past_the_top(pilot) -> list:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("gesture, desc", [
-    (drag_the_scrollbar, "the scrollbar dragged up moves with the mouse, not twice as fast"),
-    (select_up_past_the_top, "a selection dragged up keeps its anchor on the line first pressed"),
+@pytest.mark.parametrize("gesture, tick, desc", [
+    (drag_the_scrollbar, False, "the scrollbar dragged up moves with the mouse, not twice as fast"),
+    (select_up_past_the_top, False, "a selection dragged up keeps its anchor on the line first pressed"),
+    (drag_the_scrollbar, True, "the scrollbar grabbed right behind a tick's new turn: moves with the mouse too"),
 ])
 async def test_a_press_in_a_long_conversation_lays_it_all_out_first(
-        store, sid, tmp_path, monkeypatch, gesture, desc):
+        store, sid, tmp_path, monkeypatch, gesture, tick, desc):
     """T68: older blocks laid out under a gesture under way would move what it holds on to
     (Textual keeps where the thumb or the selection started), so a press lays out the rest
     first, and the gesture goes as it does on a conversation laid out in full."""
     long_conversation(sid, tmp_path, monkeypatch)
-    seen = {}
+    convo = tmp_path / f"projects/-home-u-repo/{sid}.jsonl"
+    original, seen = convo.read_text(), {}
     for lazy in (True, False):
         if not lazy:
             lay_out_in_full(monkeypatch)
+        convo.write_text(original)
         app = WheelhouseApp(store)
         async with app.run_test(size=(160, 40)) as pilot:
             await pilot.pause()
             app.follow(sid)
             await scroll_by(pilot, [])
             assert (app.detail.start > 0) == lazy, desc
+            if tick:   # in the app's queue ahead of the press, as the timer puts it
+                append_turn(sid, tmp_path, "the newest turn")
+                app.call_later(app.refresh_data)
             seen[lazy] = await gesture(pilot)
             assert app.detail.start == 0, desc
     assert seen[True] and seen[True] == seen[False], desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("change, desc", [
+    ("turn", "a tick's new turn, not laid out yet"),
+    ("rename", "a tick's rename, not laid out yet"),
+])
+async def test_a_press_right_behind_a_change_to_a_long_conversation_lays_it_all_out(
+        store, sid, tmp_path, monkeypatch, change, desc):
+    """T68: a press lands on a pane laid out in full, a change still to lay out ahead of it too."""
+    long_conversation(sid, tmp_path, monkeypatch)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)
+        await scroll_by(pilot, [])
+        {"turn": lambda: append_turn(sid, tmp_path, "the newest turn"),
+         "rename": lambda: store.rename(sid, "renamed")}[change]()
+        app.call_later(app.refresh_data)   # in the app's queue ahead of the press, as the timer puts it
+        at = (5, int(app.detail_scroll.scroll_y) + 5)
+        await mouse(pilot, events.MouseDown, app.detail, at)
+        assert app.detail.start == 0, desc
+        await mouse(pilot, events.MouseUp, app.detail, at)
 
 
 async def restore_button(pilot):
