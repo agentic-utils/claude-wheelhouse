@@ -38,7 +38,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import adopt, api, emoji, launch, liveness, stats, transcript, tutorial
+from . import adopt, api, emoji, launch, liveness, stats, subagents, transcript, tutorial
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .store import (CLOSED, SessionGone, Store, can_queue, default_runner, inbox_rank, mode, needs_relaunch,
@@ -1191,6 +1191,8 @@ class WheelhouseApp(App):
         # each session's context size for the session list: read on workers, by a follower
         # shared with the stats pane (stats.follower), so each transcript is read once
         self.contexts: dict[str, stats.UsageFollower] = {}
+        # each session's subagents, tracked as A items (#69): read on workers, as contexts are
+        self.agent_watchers: dict[str, subagents.AgentWatcher] = {}
         self.modules = api.load()
         self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
@@ -1376,6 +1378,7 @@ class WheelhouseApp(App):
         if self.filter_sid and not any(s["id"] == self.filter_sid for s in self.sessions):
             self.clear_filter()   # the followed session went (ended elsewhere): as Esc, no ghost row
         self.read_contexts()
+        self.watch_agents()
         self.paint_sessions()
         self.paint_items()
         self.each_pane("tick")
@@ -1437,6 +1440,33 @@ class WheelhouseApp(App):
             follower.reading = True
             self.run_worker(functools.partial(self.read_context, follower), thread=True, group="contexts",
                             exit_on_error=False)
+
+    def watch_agents(self) -> None:
+        """Each session's subagents brought up to date as A items, on a worker thread: every
+        one not parked once, and every one running each tick. The items show at the next
+        refresh."""
+        listed = {s["id"] for s in self.sessions if not s["parked"] or self.running(s["id"])}
+        for sid in [sid for sid in self.agent_watchers if sid not in listed]:
+            del self.agent_watchers[sid]
+        for sid in listed:
+            watcher = self.agent_watchers.setdefault(sid, subagents.AgentWatcher(sid))
+            if watcher.syncing or (watcher.ready and not self.running(sid)):
+                continue
+            watcher.syncing = True
+            self.run_worker(functools.partial(self.sync_agents, watcher), thread=True, group="agents",
+                            exit_on_error=False)
+
+    def sync_agents(self, watcher: subagents.AgentWatcher) -> None:
+        """On a worker thread. A failed sync (the session ended under it, a transcript gone
+        between stat and open) is tried again next tick, from where it got to, and says why
+        in the watcher's error."""
+        try:
+            watcher.sync(self.store)
+            watcher.error = None
+        except Exception as e:
+            watcher.error = f"couldn't track subagents: {e}"[:120]
+        finally:
+            watcher.syncing = False
 
     def read_context(self, follower: stats.UsageFollower) -> None:
         """On a worker thread. A failed read leaves the last size up; the next tick reads

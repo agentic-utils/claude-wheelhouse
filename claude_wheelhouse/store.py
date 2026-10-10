@@ -7,6 +7,7 @@ never loses a change the caller was told about.
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -36,8 +37,9 @@ DECISION_FIELDS = (("alternative", "Alternative"), ("why", "Why"), ("reverse", "
 # they started with) would mishandle the store or miss new behaviour: the wheelhouse then
 # shows it as needing a relaunch. 2: queued answers (draft messages) that older code would deliver.
 # 3: reply declares a question's status. 4: decisions. 5: SDK-hosted sessions and permission items.
-# 6: decisions listed in a report are posted as items.
-PROTOCOL_VERSION = 6
+# 6: decisions listed in a report are posted as items. 7: the wheelhouse tracks subagents
+# itself (subagents.py), so the protocol no longer asks a session to post them.
+PROTOCOL_VERSION = 7
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.
@@ -99,6 +101,14 @@ CREATE TABLE IF NOT EXISTS messages (
     draft        INTEGER NOT NULL DEFAULT 0,
     kind         TEXT
 );
+-- the A items the wheelhouse made for (or matched to) a session's subagents, one per
+-- agent id: so it never posts twice, across restarts and between two wheelhouses
+CREATE TABLE IF NOT EXISTS agent_items (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    agent_id   TEXT NOT NULL,
+    item_ref   TEXT NOT NULL,
+    PRIMARY KEY (session_id, agent_id)
+);
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -125,6 +135,11 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped: unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
+# settings: when this database was first opened by code that tracks subagents. Subagents
+# that had finished by then (or by when their session joined) get no item (#69)
+AGENTS_SINCE = "agents_since"
+# seconds: how long before a subagent starts the session's own A item for it may be made
+AGENT_MATCH_BEFORE = 600
 REQUESTS = ("end", "park")   # what the wheelhouse can ask a running session to do
 CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print is retaken
 
@@ -212,6 +227,7 @@ class Store:
             if db.execute("SELECT 1 FROM settings WHERE key = ?", (DECISIONS_CLOSE,)).fetchone() is None:
                 db.execute("UPDATE items SET status = 'closed' WHERE kind = 'decision' AND status = 'seen'")
                 db.execute("INSERT INTO settings (key, value) VALUES (?, '1')", (DECISIONS_CLOSE,))
+            db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (AGENTS_SINCE, now()))
 
     @contextmanager
     def tx(self):
@@ -455,16 +471,59 @@ class Store:
         self._check_status(kind, status)
         with self.tx() as db:
             self._require(db, sid)
-            n = db.execute(
-                "SELECT count(*) FROM items WHERE session_id = ? AND kind = ?", (sid, kind)
-            ).fetchone()[0]
-            ref = f"{KINDS[kind]}{n + 1}"
-            db.execute(
-                """INSERT INTO items (session_id, ref, kind, title, body, status, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (sid, ref, kind, title, body, status, now(), now()),
-            )
+            return self._insert_item(db, sid, kind, title, body, status)
+
+    @staticmethod
+    def _insert_item(db, sid, kind, title, body, status) -> str:
+        n = db.execute("SELECT count(*) FROM items WHERE session_id = ? AND kind = ?", (sid, kind)).fetchone()[0]
+        ref = f"{KINDS[kind]}{n + 1}"
+        db.execute(
+            """INSERT INTO items (session_id, ref, kind, title, body, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (sid, ref, kind, title, body, status, now(), now()),
+        )
         return ref
+
+    # subagents the wheelhouse tracks itself (subagents.py)
+
+    def agent_links(self, sid: str) -> dict[str, tuple[str, str]]:
+        """The session's tracked subagents: agent id to (item ref, item status)."""
+        rows = self._all("""SELECT a.agent_id, a.item_ref, i.status FROM agent_items a JOIN items i
+                            ON i.session_id = a.session_id AND i.ref = a.item_ref WHERE a.session_id = ?""", (sid,))
+        return {r["agent_id"]: (r["item_ref"], r["status"]) for r in rows}
+
+    def track_agent(self, sid: str, agent_id: str, title: str, body: str, started: datetime,
+                    status: str = "running", note: str = "") -> str:
+        """The subagent's A item, made once per agent id. The session's own A item for it is
+        taken instead when there is one (agent_match), so it isn't listed twice."""
+        with self.tx() as db:
+            self._require(db, sid)
+            row = db.execute("SELECT item_ref FROM agent_items WHERE session_id = ? AND agent_id = ?",
+                             (sid, agent_id)).fetchone()
+            if row:
+                return row["item_ref"]
+            ref = agent_match(db, sid, title, started)
+            if ref is None:
+                ref = self._insert_item(db, sid, "agent", title, body, "running")   # then finished, with its note
+            db.execute("INSERT INTO agent_items (session_id, agent_id, item_ref) VALUES (?, ?, ?)",
+                       (sid, agent_id, ref))
+            self._agent_status(db, sid, ref, status, note)
+        return ref
+
+    def agent_status(self, sid: str, agent_id: str, status: str, note: str = "") -> None:
+        """A tracked subagent finished (done or failed), or was resumed (running)."""
+        with self.tx() as db:
+            row = db.execute("SELECT item_ref FROM agent_items WHERE session_id = ? AND agent_id = ?",
+                             (sid, agent_id)).fetchone()
+            if row:
+                self._agent_status(db, sid, row["item_ref"], status, note)
+
+    def _agent_status(self, db, sid, ref, status, note) -> None:
+        """Only a change is written, so a transcript read again moves nothing."""
+        self._check_status("agent", status)
+        if db.execute("UPDATE items SET status = ?, updated_at = ? WHERE session_id = ? AND ref = ? AND status != ?",
+                      (status, now(), sid, ref, status)).rowcount and note:
+            self._said(db, sid, ref, note, "note")
 
     def update_item(self, sid: str, ref: str, *, status=None, title=None, body=None, note=None) -> None:
         if self.session(sid) is None:
@@ -707,6 +766,31 @@ AWAITING = """SELECT session_id, item_ref FROM messages WHERE item_ref IS NOT NU
 # processing and not counted as awaiting the person; stored as open, so the protocol is unchanged
 PROCESSING = f"""((i.session_id, i.ref) IN ({AWAITING}) AND (i.session_id, i.ref) NOT IN
                   (SELECT session_id, item_ref FROM messages WHERE draft = 1 AND item_ref IS NOT NULL))"""
+
+
+def agent_words(text: str) -> str:
+    return " ".join(re.findall(r"\w+", text.casefold()))
+
+
+def agent_match(db, sid: str, title: str, started: datetime) -> str | None:
+    """The session's own A item for a subagent, if it posted one: not yet tied to another
+    subagent, made no more than AGENT_MATCH_BEFORE before the subagent started, and titled
+    with its description, or with words that hold it or that it holds (case and punctuation
+    aside). An exact title wins, then the item made nearest the start."""
+    want = agent_words(title)
+    since = started - timedelta(seconds=AGENT_MATCH_BEFORE)
+    rows = db.execute("""SELECT ref, title, created_at FROM items i WHERE session_id = ? AND kind = 'agent'
+                         AND NOT EXISTS (SELECT 1 FROM agent_items a WHERE a.session_id = i.session_id
+                                         AND a.item_ref = i.ref)""", (sid,)).fetchall()
+    best = None
+    for r in rows:
+        made, have = datetime.fromisoformat(r["created_at"]), agent_words(r["title"])
+        if made < since or not want or not have or not (f" {want} " in f" {have} " or f" {have} " in f" {want} "):
+            continue
+        key = (have != want, abs((made - started).total_seconds()))
+        if best is None or key < best[0]:
+            best = (key, r["ref"])
+    return best and best[1]
 
 
 def decision_body(body: str, status, fields: dict) -> str:

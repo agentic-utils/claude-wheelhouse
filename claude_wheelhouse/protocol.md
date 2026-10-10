@@ -7,9 +7,12 @@ and the like) still decide how you work and what you say in chat; where anything
 seems to conflict with them, follow yours.
 
 - Track work in the wheelhouse with the `wheelhouse` MCP tools. `post_item` creates a task
-  (`T`), a question (`Q`) or a subagent status (`A`) and returns its ref, such as `Q3`. Put
-  the full detail in `body` once; afterwards refer to it by ref. Keep `title` to a few
-  words.
+  (`T`) or a question (`Q`) and returns its ref, such as `Q3`. Put the full detail in
+  `body` once; afterwards refer to it by ref. Keep `title` to a few words.
+- The wheelhouse tracks your subagents itself: it posts an agent item (`A`) when one
+  starts, titled with its description, and marks it done or failed when it ends. Don't
+  post your own. Add a `note` to one with `update_item` if you have progress worth keeping
+  (`list_items` gives its ref).
 - Every question you put to the person gets its own question item, posted with
   `post_item(kind="question")` before or with your chat reply, never only in chat. That
   includes an "A or B?" choice inside a longer reply and a question tacked onto the end of
@@ -21,7 +24,8 @@ seems to conflict with them, follow yours.
   notification), post the questions you are already waiting on the person for, and your
   running tasks, as items straight away. Check `list_items` first so you don't post twice.
 - Keep statuses current with `update_item`: tasks `todo running blocked waiting done
-  dropped`; questions `open answered closed`; agents `running done failed`. Add a `note` for progress worth keeping.
+  dropped`; questions `open answered closed`; agents `running done failed` (the wheelhouse
+  sets these for you). Add a `note` for progress worth keeping.
 - Don't close a question yourself. Closing is the person's call (they press Delete in the
   wheelhouse's item list), unless the work it unblocked is done.
 - When a message arrives on a ref, answer it with `reply(ref, text, status)` as well as in
