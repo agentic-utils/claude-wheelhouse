@@ -98,7 +98,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   Transcripts are read off the UI thread, so a big one says "reading …" for a moment
   rather than freezing the app. The inbox's session list shows each session's context
   size the same way, as a one-cell bar in the same colours, filled in eighths on a
-  linear scale: an eighth for each 125k begun, so a full cell is 1M or more.
+  linear scale: an eighth for each 125k begun, so the cell is full past 875k.
 - **Sessions.** The left-hand column lists every session (parked ones dimmed, at the
   foot of the list's room: they fall there as you park them, and rise back as you unpark
   them). Under it, a description of the highlighted one: its status, where it runs, its

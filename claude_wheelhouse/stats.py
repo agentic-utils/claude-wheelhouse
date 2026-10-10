@@ -142,9 +142,9 @@ def grade(size: int) -> tuple:
 
 def context_bar(size: int) -> Text:
     """A context size in the session list: one cell in its grade's colour, filled in
-    eighths on a linear scale, 125k each, so a full cell is 1M (#51). An eighth shows as
-    soon as any of its 125k is used, so any context at all shows one, and past 1M the cell
-    stays full."""
+    eighths on a linear scale, 125k each (#51). An eighth shows as soon as any of its 125k
+    is used, so any context at all shows one, and the last eighth begins past 875k: the cell
+    is full from there, however far past 1M it goes."""
     return Text(PARTIAL[min(math.ceil(size / STEP), 8)], style=hexc(grade(size)))
 
 
