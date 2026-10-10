@@ -65,11 +65,17 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
   one connecting afresh, or whose id the ring no longer holds (or never held), gets
   `refetch` at the latest seq. A client reading slower than events come falls behind the
   ring the same way.
-- **Change detection.** Each second the daemon refreshes the hub as the TUI's tick does,
-  then reads `PRAGMA data_version` on a connection of its own, which moves with every
-  commit by any other connection, the hub's own included: a change publishes `sessions`,
-  `items`, `thread` and `conversation` for all. A command publishes at once, without
-  waiting for the tick. A session whose shown status changes with no write (a host dying,
+- **Change detection.** Each second the daemon reads `PRAGMA data_version` on a
+  connection of its own, which moves with every commit by any other connection, the hub's
+  own included, and only if it has moved, a cheap mark of the `items` and `messages`
+  tables (counts, the last id, the latest timestamps); then it refreshes the hub as the
+  TUI's tick does. The sessions' mark is the rows that refresh read but for `heartbeat_at`,
+  so the heartbeat every host writes each second publishes nothing. Each kind whose mark
+  moved is published for all: the sessions' rows `sessions` (and `conversation` if a name
+  or runner changed), items `items` and `thread`, messages those and `conversation`. The
+  marks are read before the refresh, so the rows `/sessions` serves always hold what an
+  event said, and a write after them is published at the next tick. A command refreshes
+  the hub and publishes at once, without waiting for the tick. A session whose shown status changes with no write (a host dying,
   a Relaunch) publishes `sessions` for it, and a transcript read that brought something
   `conversation` and `stats` for it.
 - **Relaunch in progress** is kept in a `sessions.relaunch` column (the stopped host and

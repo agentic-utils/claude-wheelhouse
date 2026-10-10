@@ -38,7 +38,7 @@ from starlette.routing import Route
 
 from . import stats
 from .hub import Done, Event, Hub, host_context
-from .store import SessionGone, Store, default_runner, inbox_rank, mode, standing
+from .store import SessionGone, Store, default_runner, inbox_rank, mode, runner, standing
 
 ADDRESS, PORT = "127.0.0.1", 7428
 TICK = 1.0           # seconds between the hub's refreshes, as the TUI's tick
@@ -48,6 +48,18 @@ LOCK = "daemon.lock"
 # what a change in the database may have moved: every session's row, the inbox, the threads,
 # and the conversations, which show what's queued
 STORE_KINDS = ("sessions", "items", "thread", "conversation")
+# a cheap mark of each table the queries read besides the sessions, which moves with any
+# change a client would see (both under 0.3 ms on a wheelhouse of 400 items and 700 messages): read only
+# when data_version says something was written, which a host's heartbeat does every second
+MARKS = {
+    "items": "SELECT count(*), max(id), max(updated_at), count(dismissed), count(answer) FROM items",
+    "messages": "SELECT count(*), max(id), total(draft), count(claimed_at), max(claimed_at), count(delivered_at), "
+                "max(delivered_at) FROM messages",
+}
+# what each mark moving moves: "sessions" is the rows but for heartbeat_at, "named" what a
+# conversation shows of its session (its name and whether it runs in a tab)
+MOVES = {"sessions": {"sessions"}, "named": {"conversation"}, "items": {"items", "thread"},
+         "messages": {"items", "thread", "conversation"}}
 HOW = {"ask": Hub.ask, "now": Hub.act_on_dead, "cancel": Hub.cancel_request, "force": Hub.force}
 
 
@@ -177,7 +189,8 @@ class Daemon:
         # a connection of its own, only to read data_version: it moves with every commit made
         # by any other connection, the hosts', the MCP servers' and the hub's own alike
         self.watch = sqlite3.connect(store.path, isolation_level=None, check_same_thread=False)
-        self.version = self.data_version()
+        self.read: tuple[int, dict] | None = None   # the marks last read, at that data_version
+        self.marked: dict = {}                      # as last published
         self.shown: dict[str, str] = {}   # each session's status as last published
         self.hub.listen(self.heard)
         self.app = Starlette(routes=[
@@ -218,7 +231,7 @@ class Daemon:
 
     def tick(self) -> None:
         """The hub's refresh, as the TUI's tick has it, then what moved."""
-        hub, seen = self.hub, self.data_version()   # before the refresh: see publish_moved
+        hub, seen = self.hub, self.marks()   # before the refresh: see publish_moved
         hub.refresh()
         hub.read_contexts()
         hub.watch_agents()
@@ -229,15 +242,27 @@ class Daemon:
     def data_version(self) -> int:
         return self.watch.execute("PRAGMA data_version").fetchone()[0]
 
-    def publish_moved(self, version: int) -> None:
-        """What has moved since last looked: the database, by data_version, and the status
-        each session shows, which liveness and Relaunch change with no write. The version is
-        read before the hub's refresh, so what it marks is in the rows /sessions serves: a
-        write after it moves it again, for the next tick, and a client refetching on an
+    def marks(self) -> dict:
+        """Each table's mark (MARKS), read again only if anything has been written since."""
+        version = self.data_version()
+        if self.read is None or self.read[0] != version:
+            self.read = (version, {kind: tuple(self.watch.execute(sql).fetchone()) for kind, sql in MARKS.items()})
+        return self.read[1]
+
+    def publish_moved(self, marks: dict) -> None:
+        """What has moved since last published: each kind whose mark has, and the status each
+        session shows, which liveness and Relaunch change with no write. The sessions' mark
+        is the rows the hub's refresh read, as /sessions serves them, but for heartbeat_at, so
+        a host's heartbeat moves nothing. The tables' marks are read before that refresh: a
+        write after them moves them again, for the next tick, and a client refetching on an
         event never gets the rows from before it."""
-        if version != self.version:
-            self.version = version
-            for kind in STORE_KINDS:
+        rows = {s["id"]: s for s in self.hub.sessions}
+        now = {**marks, "sessions": {sid: {**dict(s), "heartbeat_at": None} for sid, s in rows.items()},
+               "named": {sid: (s["name"], runner(s), s["shell"]) for sid, s in rows.items()}}
+        moved = set().union(*(MOVES[kind] for kind in now if now[kind] != self.marked.get(kind)))
+        self.marked = now
+        for kind in STORE_KINDS:
+            if kind in moved:
                 self.feed.publish(kind)
         shown = {sid: self.hub.shown_status(sid) for sid in self.hub.by_id}
         for sid in shown.keys() & self.shown.keys():
@@ -319,7 +344,7 @@ class Daemon:
             except Exception as e:
                 response = refusal(e)
             self.store.answer(key, fingerprint, response.status_code, response.body.decode())
-            seen = self.data_version()
+            seen = self.marks()
             self.hub.refresh()   # what /sessions serves has the command's change before it's published
             self.publish_moved(seen)
             return response

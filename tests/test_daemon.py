@@ -10,7 +10,7 @@ import httpx2
 import pytest
 
 from claude_wheelhouse import daemon as daemon_mod, launch, liveness
-from claude_wheelhouse.daemon import STORE_KINDS, AlreadyRunning, Daemon, Feed, checked_address, hosts, take_lock
+from claude_wheelhouse.daemon import AlreadyRunning, Daemon, Feed, checked_address, hosts, take_lock
 from claude_wheelhouse.hub import Event
 from claude_wheelhouse.store import SessionGone, Store
 
@@ -268,21 +268,48 @@ def kinds(daemon):
     return [(e["kind"], e.get("sid")) for e in daemon.feed.ring]
 
 
-async def test_a_write_by_another_connection_is_published_at_the_next_tick(daemon, store, sid, db_file):
+@pytest.mark.parametrize("write, published, desc", [
+    (lambda s, sid: None, [], "nothing written, nothing said"),
+    (lambda s, sid: s.heartbeat(sid), [], "a host's heartbeat moves nothing a client sees"),
+    (lambda s, sid: s.set_activity(sid, "thinking"), ["sessions"], "a session's row"),
+    (lambda s, sid: s.rename(sid, "x"), ["sessions", "conversation"], "its name, which its conversation shows"),
+    (lambda s, sid: s.post_item(sid, "task", "from an MCP server"), ["items", "thread"], "an item posted"),
+    (lambda s, sid: s.set_answer(sid, "T1", "yes"), ["items", "thread"], "an item's answer, updated_at as it was"),
+    (lambda s, sid: s.dismiss(sid, "T1"), ["items", "thread"], "an item dismissed, updated_at as it was"),
+    (lambda s, sid: s.queue(sid, "later"), ["sessions", "items", "thread", "conversation"],
+     "a message queued, which its session's row counts"),
+    (lambda s, sid: s.confirm(s.claim(sid)), ["items", "thread", "conversation"], "a message delivered"),
+])
+async def test_a_write_by_another_connection_is_published_at_the_next_tick(daemon, store, sid, db_file, monkeypatch,
+                                                                           write, published, desc):
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    store.post_item(sid, "task", "do it")
+    store.send(sid, "hello")
+    store.heartbeat(sid)
     daemon.tick()
     daemon.feed.ring.clear()
+    write(Store(db_file), sid)
     daemon.tick()
-    assert kinds(daemon) == [], "nothing moved, nothing said"
-    Store(db_file).post_item(sid, "task", "from an MCP server")
+    assert kinds(daemon) == [(kind, None) for kind in published], desc
+
+
+async def test_a_heartbeat_every_second_publishes_nothing(daemon, store, sid, db_file, monkeypatch):
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    host = Store(db_file)
+    host.heartbeat(sid)
     daemon.tick()
-    assert kinds(daemon) == [(kind, None) for kind in STORE_KINDS]
+    daemon.feed.ring.clear()
+    for _ in range(3):
+        host.heartbeat(sid)
+        daemon.tick()
+    assert kinds(daemon) == []
 
 
 async def test_a_command_publishes_what_it_moved_at_once(daemon, sid):
     daemon.tick()
     daemon.feed.ring.clear()
     await call(daemon, "POST", f"/sessions/{sid}/rename", {"name": "x"})
-    assert kinds(daemon) == [(kind, None) for kind in STORE_KINDS]
+    assert kinds(daemon) == [("sessions", None), ("conversation", None)]
 
 
 @pytest.mark.parametrize("method, path, body, seen, desc", [
