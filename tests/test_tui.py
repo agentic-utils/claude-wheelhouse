@@ -1969,6 +1969,10 @@ TOOLS = BASE[:20] + [TOOL] * 6 + [blk(26, 12, who="claude")]
     (TOOLS + BASE[27:], (26, 4), [("note", "warning")] + TOOLS[:-1] + [blk(26, 18, who="claude")] + BASE[27:],
      "line 26.12", "the reply at the view's top grows under a run of the same tool line, a warning put in at the "
      "head: the tool line right above it keeps its place, not its neighbour in the run"),
+    (BASE[:29] + [blk(29, 3, " queued"), blk(30, 12, who="claude")] + BASE[31:], (30, 4),
+     BASE[:29] + [blk(29, 3, " sent"), blk(30, 18, who="claude")] + BASE[31:],
+     "line 30.12", "the reply at the view's top grows and the block right above it changes too: the one above "
+     "that keeps its place"),
 ])
 async def test_a_changed_transcript_keeps_a_scrolled_up_place(blocks, top, new, grown, desc):
     """top: the block the view starts in and the line into it."""
