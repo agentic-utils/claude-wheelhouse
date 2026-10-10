@@ -46,6 +46,7 @@ from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .store import (DISMISSABLE, FINISHED_RANK, SETTLED, SETTLED_RANK, SessionGone, Store, default_runner,
                     inbox_rank, mode, runner, standing)
+from .unsent import Unsent
 
 MATRIX = "#00ff41"
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
@@ -1354,6 +1355,7 @@ class WheelhouseApp(App):
         ScrollBar.renderer = KnurlRender   # Textual's hook for every scrollbar: a class variable
         self.hub = Hub(store, spawn=self.spawn, post=self.post)
         self.store = self.hub.store
+        self.kept = Unsent()   # text typed but not submitted: this client's, not the hub's
         self.frame = 0
         self.eye_frame = 0   # the frame the busy sessions' eyes last moved on (animate)
         self.filter_sid: str | None = None
@@ -1873,15 +1875,15 @@ class WheelhouseApp(App):
         if old == new:
             return
         if old is not None:
-            self.hub.keep(old, box.text)
-        text = self.hub.take(new) if new is not None else ""
+            self.kept.keep(old, box.text)
+        text = self.kept.take(new) if new is not None else ""
         if box.text != text:
             box.text = text   # which puts the cursor at the start: carry on typing at the end
             box.move_cursor(box.document.end)
 
     @property
     def unsent(self) -> dict[tuple, str]:
-        return self.hub.unsent
+        return self.kept.texts
 
     def retarget(self, move_list: bool = True) -> None:
         """The answer box follows what the pane shows, and the session list's highlight its

@@ -107,8 +107,6 @@ class Hub:
         self.agent_watchers: dict[str, subagents.AgentWatcher] = {}
         self.agent_errors: dict[str, str] = {}   # each session's watcher error last said
         self.usage = stats.AccountUsage()   # the account's, for every surface: fetched once
-        # unsent text typed for each target, (session id, ref or None), kept in memory only
-        self.unsent: dict[tuple, str] = {}
 
     # events
 
@@ -542,16 +540,3 @@ class Hub:
         if follower.blocks_key != key:   # parsed once per change, not on every refresh tick
             follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued, functools.partial(self.sent, sid))
         return follower.blocks
-
-    # text typed but not submitted
-
-    def keep(self, target: tuple, text: str) -> None:
-        """What's typed for a target, kept until the box shows it again; blank, forgotten."""
-        if text.strip():
-            self.unsent[target] = text
-        else:
-            self.unsent.pop(target, None)
-
-    def take(self, target: tuple) -> str:
-        """What was typed for a target, handed back to show: no longer kept here."""
-        return self.unsent.pop(target, "")

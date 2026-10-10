@@ -1,26 +1,31 @@
 # Remote wheelhouse (design)
 
 Status: design agreed. Phase 1 built: `hub.py` is the service, owned by the TUI in
-process; phase 2 next.
+process. Phase 2 under way: the hub is ready for remote clients, still in process.
 
 **Phase 1 as built.** `hub.Hub` holds the hub logic `tui.py` had: liveness and wake
 detection, Relaunch from the stop to the start again, launch, restore and adopt, the
 transcript followers (conversations, context sizes, subagents), the account usage fetch
-(the stats pane draws the hub's, through `Context.usage`), the unsent text per target,
-and the person's commands on sessions and items (send, queue, dispatch, mode, Park and
-End, rename, close and reopen, permissions, host commands). It never imports Textual. Its
-owner gives it `spawn` (work on a worker thread) and `post` (a callback back on the
-owner's thread), and listens for its `Event`s: `notice`, a toast for what the hub did by
-itself (a relaunch's outcome, a subagent sync failing), and `landed`, a transcript read
-that brought something. A command returns what it did (`Done`): whether it acted, its own
-notices, for the surface that gave it alone, and for submit whether it denied a
-permission. Those are the seams phase 2 puts behind HTTP (a command's response) and SSE
-(the events). The TUI keeps the widgets, the dialogs and their wording, the key dispatch (take_key,
-land, settle), selection, ranking and the dwell, the tutorial checklist and the splitter
-sizes. It still reads plain rows straight from the store and re-queries on its 1 s tick;
-phase 2 puts the query surface and the change feed in front of both. The unsent text
-moved to the hub with the rest, though the design below keeps it on the client, in a
-local file per target: it goes there with the client in phase 2.
+(the stats pane draws the hub's, through `Context.usage`), and the person's commands on
+sessions and items (send, queue, dispatch, mode, Park and End, rename, close and reopen,
+permissions, host commands). It never imports Textual. Its owner gives it `spawn` (work on
+a worker thread) and `post` (a callback back on the owner's thread), and listens for its
+`Event`s: `notice`, a toast for what the hub did by itself (a relaunch's outcome, a
+subagent sync failing), and `landed`, a transcript read that brought something. Those are
+the seams phase 2 puts behind HTTP and SSE. The TUI keeps the widgets, the dialogs and
+their wording, the key dispatch (take_key, land, settle), selection, ranking and the
+dwell, the tutorial checklist and the splitter sizes. It still reads plain rows straight
+from the store and re-queries on its 1 s tick; phase 2 puts the query surface and the
+change feed in front of both.
+
+**Phase 2 so far: the hub ready for remote clients.** Still in process, no daemon, no
+visible change. A command returns what it did (`Done`): whether it acted, its own notices,
+for the surface that gave it alone (behind HTTP, its response), and for submit whether it
+denied a permission; only what the hub does by itself goes to every listener (behind SSE,
+the events). Commands and status helpers take a session's id and an item's ref, not their
+rows. The unsent text per target is the client's, as the design below has it
+(`unsent.Unsent`, owned by the TUI), in memory for now: the local file per target comes
+when the client goes remote.
 
 ## Intent
 
