@@ -23,13 +23,15 @@ def boot_id(proc: Path = PROC) -> str:
 
 
 def start_time(pid: int, proc: Path = PROC) -> int | None:
-    """Field 22 of /proc/<pid>/stat: start time in clock ticks since boot."""
+    """Field 22 of /proc/<pid>/stat: start time in clock ticks since boot. None for a
+    process that has gone, or exited and not been reaped yet (state Z): it keeps its stat."""
     try:
         stat = (proc / str(pid) / "stat").read_text()
     except OSError:
         return None
     # comm (field 2) may contain spaces and parens; split after the last ')'
-    return int(stat.rsplit(")", 1)[1].split()[19])
+    fields = stat.rsplit(")", 1)[1].split()
+    return None if fields[0] in ("Z", "X") else int(fields[19])
 
 
 def is_alive(pid, start, boot, proc: Path = PROC) -> bool:

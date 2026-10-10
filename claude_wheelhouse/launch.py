@@ -10,7 +10,8 @@ its metacharacters are kept out of the title and refused in the directory.
 
 wsl.exe runs the command with no shell, so the user's profile never puts
 ~/.local/bin (where claude lives) on the PATH. The tab runs it through the user's
-login shell, giving it the environment of an ordinary WSL tab.
+interactive login shell, giving it the environment of an ordinary WSL tab: a login shell
+alone stops at ~/.bashrc's interactive guard, which skips anything set below it (brew).
 """
 
 import getpass
@@ -23,10 +24,35 @@ import sys
 from pathlib import Path
 
 from . import liveness
-from .store import Store, db_path, now
+from .transcript import NO_BRIEF
+from .store import Store, db_path, default_runner, now, runner
 
 PLUGIN_DIR = Path(__file__).parent / "plugin"
-PROTOCOL = (Path(__file__).parent / "protocol.md").read_text()
+# The decisions section is separable so its effect on how sessions behave (priming) can be
+# A/B tested: WHEELHOUSE_DECISIONS=0 launches sessions without it. See
+# .plan/decisions-priming-test.md.
+DECISIONS = (Path(__file__).parent / "protocol_decisions.md").read_text()
+
+
+def protocol(decisions: bool | None = None, runner: str = "tab") -> str:
+    """protocol.md, then what differs by how the session runs (protocol_tab.md or
+    protocol_sdk.md: how the person's messages reach it), then the decisions section."""
+    if decisions is None:
+        decisions = os.environ.get("WHEELHOUSE_DECISIONS", "1") != "0"
+    here = Path(__file__).parent
+    base = (here / "protocol.md").read_text() + (here / f"protocol_{runner}.md").read_text()
+    return base + "\n" + DECISIONS if decisions else base
+
+
+PROTOCOL = protocol()
+PROTOCOL_SDK = protocol(runner="sdk")
+# Sent whenever a tab resumes a conversation (adopt, Restore, relaunch): it triggers a turn,
+# so work the session was already doing shows up in the wheelhouse without waiting for its
+# next post. Safe to repeat: the session checks what the wheelhouse already holds.
+JOINED_TEXT = ("You have just been opened in the wheelhouse, mid-conversation. Call list_items to see "
+               "what it already holds for this session, then post as items the questions you are "
+               "already waiting on the person for and the tasks you have running (skip any already "
+               "there), and set your synopsis. Then stop: don't resume other work because of this message.")
 
 
 CMD_META = set('&|<>^%"')
@@ -36,14 +62,19 @@ def login_shell() -> str:
     return os.environ.get("SHELL") or pwd.getpwuid(os.getuid()).pw_shell or "/bin/bash"
 
 
+def tab_title(session) -> str:
+    """The session's Windows Terminal tab title, kept clear of cmd and wt metacharacters."""
+    title = "".join(c for c in session["name"] or Path(session["cwd"]).name if c not in CMD_META)
+    return title.replace(";", ",")
+
+
 def wt_argv(session, *, python: str, distro: str, user: str, shell: str) -> list[str]:
     if CMD_META & set(session["cwd"]):
         raise ValueError(f"can't launch in {session['cwd']}: it contains one of {''.join(sorted(CMD_META))}")
-    title = "".join(c for c in session["name"] or Path(session["cwd"]).name if c not in CMD_META)
     return [
-        "cmd.exe", "/c", "wt.exe", "-w", "0", "new-tab", "--title", title.replace(";", ","),
+        "cmd.exe", "/c", "wt.exe", "-w", "0", "new-tab", "--title", tab_title(session),
         "wsl.exe", "-d", distro, "-u", user, "--cd", session["cwd"].replace(";", r"\;"),
-        "--", shell, "-lc", f"exec {shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}",
+        "--", shell, "-lic", f"exec {shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}",
     ]
 
 
@@ -60,10 +91,11 @@ def claude_argv(session, *, python: str, resume: bool) -> list[str]:
             "--plugin-dir", str(PLUGIN_DIR),
             "--mcp-config", json.dumps(mcp),
             "--append-system-prompt", PROTOCOL]
-    if session["adopted"]:
+    if session["adopted"] or runner(session) == "sdk":
         # Claude records the system prompt at a conversation's first request and replays it
         # on every resume, so an adopted session would never see the protocol. "off" renders
         # it fresh each request; it has to stay off, since the old record outlives one launch.
+        # A host's session opened in a shell tab is the same case: it first ran the SDK protocol.
         argv += ["--system-prompt-snapshot", "off"]
     if session["name"]:
         argv += ["-n", session["name"]]
@@ -76,7 +108,7 @@ def opening_prompt(session) -> str:
     lines = []
     if session["ticket"]:
         lines.append(f"Ticket: {session['ticket']}")
-    lines.append(session["brief"] or "Session started from the wheelhouse. Wait for instructions.")
+    lines.append(session["brief"] or NO_BRIEF)
     prompt = "\n\n".join(lines)
     # claude reads a leading "-" as an option ("unknown option"), e.g. a pasted bullet list
     return f"Brief:\n{prompt}" if prompt.startswith("-") else prompt
@@ -94,9 +126,12 @@ def injected() -> str:
     argv[argv.index(PROTOCOL)] = "<protocol.md, above>"
     tools = "\n\n".join(f"{t.__name__}\n    {t.__doc__.strip()}" for t in mcp_server.TOOLS)
     notices = "\n".join([monitor.format_message({"body": "<message>", "item_ref": "Q1"}),
-                         *monitor.REQUEST_TEXT.values(), GONE_TEXT])
+                         *monitor.REQUEST_TEXT.values(), GONE_TEXT,
+                         monitor.format_message({"body": JOINED_TEXT, "item_ref": None, "kind": "notice"})])
     return "\n\n".join([
-        f"== protocol.md (appended to the system prompt) ==\n\n{PROTOCOL}",
+        f"== protocol.md, protocol_tab.md and protocol_decisions.md (appended to the system prompt) ==\n\n{PROTOCOL}",
+        "== protocol_sdk.md (in place of protocol_tab.md for a session run in the wheelhouse) ==\n\n"
+        + (Path(__file__).parent / "protocol_sdk.md").read_text(),
         f"== /wheelhouse skill ({PLUGIN_DIR / 'skills/wheelhouse/SKILL.md'}) ==\n\n{skill}",
         f"== MCP server \"wheelhouse\" ==\n\n{mcp_server.server.instructions}\n\n{tools}",
         f"== Notifications from the wheelhouse monitor ==\n\n{notices}",
@@ -106,15 +141,63 @@ def injected() -> str:
     ])
 
 
-def open_tab(store: Store, sid: str) -> None:
-    """Launch (or restore) a session in a new tab. Refuses if it is already running."""
+def open_session(store: Store, sid: str) -> None:
+    """Launch (or restore) a session the way it runs: a host for sdk, a tab for tab."""
     session = store.session(sid)
     if session is None:
         raise KeyError(sid)
+    (open_host if runner(session) == "sdk" else open_tab)(store, sid)
+
+
+def restore_session(store: Store, sid: str) -> None:
+    """Restore (or adopt) a session that isn't running, the way new sessions run now: a tab
+    from before hosts existed comes back as a host unless WHEELHOUSE_RUNNER=tab. The check
+    comes first, so a running tab is never recorded as hosted."""
+    session = store.session(sid)
+    if session is None:
+        raise KeyError(sid)
+    check_free(session)
+    store.set_runner(sid, default_runner())
+    open_session(store, sid)
+
+
+def check_free(session) -> None:
+    """Refuse to launch a session that is running, or still starting from the last launch."""
+    sid = session["id"]
     if liveness.is_alive(session["claude_pid"], session["claude_start"], session["boot_id"]):
         raise RuntimeError(f"session {session['name'] or sid} is already running")
-    if liveness.status(session) == "starting":   # a tab is opening but hasn't registered yet
+    if liveness.status(session) == "starting":   # opening but hasn't registered yet
         raise RuntimeError(f"session {session['name'] or sid} is still starting")
+
+
+def open_host(store: Store, sid: str) -> None:
+    """Start the session's SDK host, detached so that the TUI closing never takes it down."""
+    session = store.session(sid)
+    if session is None:
+        raise KeyError(sid)
+    check_free(session)
+    resuming = transcript_exists(sid)
+    store.mark_launched(sid)
+    logs = store.path.parent / "hosts"
+    logs.mkdir(exist_ok=True)
+    with open(logs / f"{sid}.log", "a") as log:
+        print(now(), sid, "resume" if resuming else "new", session["cwd"], file=log, flush=True)
+        # setsid --fork: the host is init's child, not ours, so when it exits it is reaped
+        # rather than left a zombie of the TUI that still looks alive
+        subprocess.run(["setsid", "--fork", sys.executable, "-m", "claude_wheelhouse", "host", sid],
+                       cwd=session["cwd"], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                       env=dict(os.environ, WHEELHOUSE_DB=str(store.path)), check=True)
+    if resuming:
+        store.notice(sid, JOINED_TEXT)
+
+
+def open_tab(store: Store, sid: str, notice: bool = True) -> None:
+    """Launch (or restore) a session in a new tab. Refuses if it is already running.
+    notice=False for a host handing its session over: it already knows the wheelhouse."""
+    session = store.session(sid)
+    if session is None:
+        raise KeyError(sid)
+    check_free(session)
     argv = wt_argv(session, python=sys.executable,
                    distro=os.environ.get("WSL_DISTRO_NAME", "Ubuntu"), user=getpass.getuser(),
                    shell=login_shell())
@@ -125,6 +208,8 @@ def open_tab(store: Store, sid: str) -> None:
         # cmd.exe warns about (and ignores) a \\wsl$ working directory, so start it from C:
         subprocess.Popen(argv, cwd="/mnt/c", stdin=subprocess.DEVNULL, stdout=log,
                          stderr=subprocess.STDOUT, start_new_session=True)
+    if notice and transcript_exists(sid):   # resuming: the session takes seconds to start, the notice waits
+        store.notice(sid, JOINED_TEXT)
 
 
 def run(sid: str) -> None:

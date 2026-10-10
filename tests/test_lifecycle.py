@@ -9,7 +9,7 @@ import threading
 
 import pytest
 
-from claude_wheelhouse import launch, liveness, monitor
+from claude_wheelhouse import hub, launch, liveness, monitor
 from claude_wheelhouse.store import Store
 from claude_wheelhouse.tui import WheelhouseApp
 
@@ -24,7 +24,6 @@ def fake_status(monkeypatch, state):
 
 
 async def press(app, pilot, button, *keys):
-    await pilot.press("s")
     await pilot.pause()
     await pilot.click(button)
     await pilot.pause()
@@ -44,7 +43,6 @@ async def press(app, pilot, button, *keys):
     ("#end", "live", 1, True, 1, True, False, "a parked flag doesn't make a running session deletable (round-3 #1)"),
     ("#end", "dead", 1, False, None, None, None, "a dead parked session is deleted"),
     ("#park", "live", 0, True, 0, False, True, "Park on a running session only asks it to park"),
-    ("#park", "dead", 0, True, 1, False, False, "Park on a dead session parks it"),
 ])
 async def test_buttons_ask_running_sessions_and_act_on_dead_ones(
         store, sid, monkeypatch, button, state, parked, kept, want_parked, end_flag, park_flag, desc):
@@ -105,10 +103,9 @@ async def test_a_pending_request_can_be_cancelled_or_forced(
     fake_status(monkeypatch, "live")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("s")
         await pilot.pause()
         label = "ending" if flag == "end" else "parking"
-        assert label in str(app.tables["#session-table"].get_row_at(0)[0]), "pending state shows"
+        assert app._info_text.splitlines()[1].startswith(label), "pending state shows"
         prompts = await press(app, pilot, button, *keys)
     assert all("demo" in p for p in prompts), "every prompt names the session"
     s = store.session(sid)
@@ -124,7 +121,7 @@ async def test_a_pending_request_can_be_cancelled_or_forced(
 @pytest.mark.parametrize("state, parked, launched, desc", [
     ("dead", 0, True, "a dead session is restored"),
     ("dead", 1, True, "a dead parked session is restored (and unparked)"),
-    ("live", 1, False, "a running parked session is not restored"),
+    ("live", 1, False, "a running parked session is not restored: no Restore shows (#62), and S does nothing"),
 ])
 async def test_restore_goes_by_liveness_not_the_parked_flag(store, sid, monkeypatch, state, parked, launched, desc):
     store.set_parked(sid, bool(parked))
@@ -133,7 +130,14 @@ async def test_restore_goes_by_liveness_not_the_parked_flag(store, sid, monkeypa
     monkeypatch.setattr(launch, "open_tab", lambda s, i: calls.append(i))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await press(app, pilot, "#restore")
+        await pilot.pause()
+        assert app.query_one("#restore").display == launched, desc
+        if launched:
+            await press(app, pilot, "#restore")
+        else:
+            app.session_list.focus()
+            await pilot.press("s")
+            await pilot.pause()
     assert bool(calls) == launched, desc
     if launched:
         assert store.session(sid)["parked"] == 0, desc
@@ -148,7 +152,10 @@ async def test_restore_all_skips_parked_sessions(store, sid, tmp_path, monkeypat
     monkeypatch.setattr(launch, "open_tab", lambda s, i: calls.append(i))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await press(app, pilot, "#restore-all", "y")
+        await pilot.pause()
+        for key in ("S", "y"):   # Restore all is in the footer (#62)
+            await pilot.press(key)
+            await pilot.pause()
     assert calls == [sid]
 
 
@@ -304,7 +311,6 @@ async def test_a_button_on_a_vanished_row_does_not_crash(store, sid, monkeypatch
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         seen = notices(app, monkeypatch)
-        await pilot.press("s")
         await pilot.pause()
         stale = store.sessions()
         store.end(sid)
@@ -383,3 +389,131 @@ def test_the_monitor_says_so_once_and_stops(store, sid):
     store.end(sid)
     assert monitor.poll_once(store, sid, out) is None
     assert out.getvalue().count("force-ended in the wheelhouse") == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("run, state, shell, stops, keys, killed, launched, said, desc", [
+    ("sdk", "live", None, True, ["y"], True, ["open"], "relaunched demo",
+     "a running host is stopped, then started again once its process has gone (#56)"),
+    ("sdk", "stalled", None, True, ["y"], True, ["open"], "relaunched demo", "so is a quiet one"),
+    ("sdk", "live", None, True, ["n"], False, [], None, "backed out of at the confirm"),
+    ("sdk", "live", None, False, ["y"], True, [], "didn't stop within",
+     "a host that doesn't stop isn't started twice: it says so"),
+    ("tab", "live", None, True, [], False, [], "/exit it there", "a running tab is the person's to /exit"),
+    ("sdk", "live", "tab", True, [], False, [], "/exit it there", "so is a host's session open in a shell tab"),
+])
+async def test_relaunch(store, sid, monkeypatch, run, state, shell, stops, keys, killed, launched, said, desc):
+    store.set_runner(sid, run)
+    store.set_shell(sid, shell)
+    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
+    fake_status(monkeypatch, state)
+    alive, kills, calls = {"now": state != "dead"}, [], []
+
+    def kill(pid, sig):
+        kills.append((pid, sig))
+        alive["now"] = not stops
+    monkeypatch.setattr(hub.os, "kill", kill)
+    monkeypatch.setattr(liveness, "is_alive", lambda *a: alive["now"])
+    monkeypatch.setattr(hub, "RELAUNCH_WAIT", 0)
+    monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
+    monkeypatch.setattr(launch, "restore_session", lambda s, i: calls.append("restore"))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        seen = notices(app, monkeypatch)
+        await press(app, pilot, "#relaunch", *keys)
+        app.refresh_data()
+        await pilot.pause()
+    assert kills == ([(4242, hub.signal.SIGTERM)] if killed else []), desc
+    assert calls == launched, desc
+    assert (said is None and not seen) or any(said in m for m in seen), f"{desc}: {seen}"
+
+
+def handed_to_a_tab(store, sid, alive):
+    store.set_shell(sid, "tab")
+    store.db.execute("UPDATE sessions SET claude_pid = 5555")
+    alive.add(5555)
+
+
+def a_newer_host(store, sid, alive):
+    store.db.execute("UPDATE sessions SET claude_pid = 5555")
+    alive.add(5555)
+
+
+def parked(store, sid, alive):
+    store.set_parked(sid, True)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("before, during_confirm, after_stop, killed, launched, said, desc", [
+    (None, handed_to_a_tab, None, [], [], "/exit it there",
+     "handed to a shell tab while the confirm was open: the person's tab is left alone (review 7)"),
+    (None, a_newer_host, None, [], [], "started again meanwhile",
+     "a newer host while the confirm was open: not stopped unasked"),
+    (None, None, a_newer_host, [4242], [], "relaunched demo",
+     "another wheelhouse started it after the stop: done, not 'didn't stop within' (review 7)"),
+    (parked, None, None, [4242], ["open"], "relaunched demo", "a parked one is unparked, as a dead one's relaunch is"),
+])
+async def test_relaunch_races(store, sid, monkeypatch, before, during_confirm, after_stop, killed, launched, said,
+                              desc):
+    store.set_runner(sid, "sdk")
+    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
+    fake_status(monkeypatch, "live")
+    alive, kills, calls = {4242}, [], []
+
+    def kill(pid, sig):
+        kills.append(pid)
+        alive.discard(pid)
+        if after_stop:
+            after_stop(store, sid, alive)
+    monkeypatch.setattr(hub.os, "kill", kill)
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: pid in alive)
+    monkeypatch.setattr(hub, "RELAUNCH_WAIT", 0)
+    monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
+    if before:
+        before(store, sid, alive)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        seen = notices(app, monkeypatch)
+        await press(app, pilot, "#relaunch")
+        if during_confirm:
+            during_confirm(store, sid, alive)
+        await pilot.press("y")
+        await pilot.pause()
+        app.refresh_data()
+        await pilot.pause()
+    assert kills == killed, desc
+    assert calls == launched, desc
+    assert any(said in m for m in seen) and not any("didn't stop" in m for m in seen), f"{desc}: {seen}"
+    assert not store.session(sid)["parked"] or not killed, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("stopped, keys, launched, exited, desc", [
+    (True, [], ["open"], True, "its host has gone: started before quitting, not left dead (review 7)"),
+    (False, [], [], False, "still stopping: quitting asks first"),
+    (False, ["y"], [], True, "and quits if told to"),
+    (False, ["n"], [], False, "or stays"),
+])
+async def test_quitting_mid_relaunch(store, sid, monkeypatch, stopped, keys, launched, exited, desc):
+    store.set_runner(sid, "sdk")
+    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
+    fake_status(monkeypatch, "live")
+    alive, calls, exits = {4242}, [], []
+    monkeypatch.setattr(hub.os, "kill", lambda pid, sig: None)   # SIGTERMed, still stopping
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: pid in alive)
+    monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await press(app, pilot, "#relaunch", "y")
+        monkeypatch.setattr(app, "exit", lambda *a, **kw: exits.append(True))
+        if stopped:
+            alive.clear()
+        await pilot.press("q")
+        await pilot.pause()
+        prompt = getattr(app.screen, "prompt", "")
+        for key in keys:
+            await pilot.press(key)
+            await pilot.pause()
+    assert calls == launched, desc
+    assert bool(exits) == exited, desc
+    assert stopped or "Still relaunching demo" in prompt, f"{desc}: {prompt}"

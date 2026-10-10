@@ -3,13 +3,12 @@
 The wheelhouse lists recent transcripts from ~/.claude/projects, plus sessions it already
 tracks whose process has gone (e.g. an adoption whose tab failed). If the chosen session is
 still running, the person types /exit in its tab first; the wheelhouse never kills it. Then
-the wheelhouse registers the session under its own id and opens it in a new tab like any
-restore: `claude --resume <id>` with the wheelhouse's MCP server, monitor, protocol and
-/wheelhouse commands.
+the wheelhouse registers the session under its own id and opens it like any restore (a host,
+or a tab under WHEELHOUSE_RUNNER=tab), resuming it by id with the wheelhouse's MCP server,
+protocol and /wheelhouse commands.
 """
 
 import json
-import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -17,12 +16,16 @@ from pathlib import Path
 
 from . import launch, liveness
 from .store import Store
+from .transcript import project_folder
 
 PROJECTS = Path.home() / ".claude/projects"
 WINDOW_DAYS = 14     # transcripts touched longer ago than this aren't offered
 LIMIT = 40
 CHUNK = 256 * 1024   # bytes read from each end of a transcript
 TITLE_WIDTH = 70
+
+
+JOINED_TEXT = launch.JOINED_TEXT
 
 
 class StillRunning(RuntimeError):
@@ -39,11 +42,7 @@ class Candidate:
     active: float         # last prompt or reply, epoch seconds
     running_pid: int | None
     name: str = ""        # its name in the wheelhouse, if it is already tracked there
-
-
-def project_folder(cwd: str) -> str:
-    """How Claude Code names a project's transcript folder."""
-    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    named: str = ""       # its own name in the transcript (its custom title, else Claude Code's), uncut
 
 
 def _records(data: bytes):
@@ -108,10 +107,12 @@ def read_transcript(path: Path) -> Candidate | None:
                 found[key] = rec[key]
     first = next((t for t in map(_prompt_text, head_recs) if t), "")
     last = found.get("lastPrompt", "")
-    title = found.get("customTitle") or found.get("aiTitle") or first or ("" if last.startswith("/") else last)
+    named = " ".join((found.get("customTitle") or found.get("aiTitle") or "").split())
+    title = named or first or ("" if last.startswith("/") else last)
     if not title:   # never prompted, e.g. opened to /resume something else and cancelled
         return None
-    return Candidate(path.stem, cwd, _one_line(title), _last_active(tail_recs or head_recs, path), None)
+    return Candidate(path.stem, cwd, _one_line(title), _last_active(tail_recs or head_recs, path), None,
+                     named=named)
 
 
 def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = liveness.SESSIONS,
@@ -146,8 +147,9 @@ def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = livenes
 
 
 def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSIONS,
-          proc: Path = liveness.PROC, open_tab=launch.open_tab) -> str:
-    """Register the session and open it in a new tab. Refuses while it is still running.
+          proc: Path = liveness.PROC, open_tab=launch.restore_session) -> str:
+    """Register the session and open it (a host, or a tab: see store.default_runner, which a
+    tracked session is switched to as well). Refuses while it is still running.
     A session the wheelhouse already tracks keeps its row (and its items), renamed if asked."""
     pid = liveness.running_pid(c.id, sessions, proc)
     if pid:

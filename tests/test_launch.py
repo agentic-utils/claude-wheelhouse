@@ -19,7 +19,7 @@ def test_wt_argv(over, title, cwd, desc):
     argv = launch.wt_argv(row(**over), python="/py", distro="Ubuntu", user="u", shell="/bin/zsh")
     assert argv[:8] == ["cmd.exe", "/c", "wt.exe", "-w", "0", "new-tab", "--title", title], desc
     assert argv[argv.index("--cd") + 1] == cwd, desc
-    assert argv[-4:] == ["--", "/bin/zsh", "-lc", "exec /py -m claude_wheelhouse run abc-123"], desc
+    assert argv[-4:] == ["--", "/bin/zsh", "-lic", "exec /py -m claude_wheelhouse run abc-123"], desc
 
 
 @pytest.mark.parametrize("over, resume, has, lacks, last, desc", [
@@ -150,7 +150,7 @@ def test_protocol_shows_everything_a_session_receives(db_file):
     for part, desc in parts:
         assert part in text, desc
     assert {t.__name__ for t in mcp_server.TOOLS} == {
-        "post_item", "update_item", "get_input", "list_items", "park_session", "end_session"}
+        "post_item", "update_item", "reply", "set_synopsis", "get_input", "list_items", "park_session", "end_session"}
 
 
 @pytest.mark.parametrize("env_shell, pw_shell, expected, desc", [
@@ -162,3 +162,32 @@ def test_login_shell(monkeypatch, env_shell, pw_shell, expected, desc):
     monkeypatch.setenv("SHELL", env_shell)
     monkeypatch.setattr(launch.pwd, "getpwuid", lambda uid: type("pw", (), {"pw_shell": pw_shell}))
     assert launch.login_shell() == expected, desc
+
+
+@pytest.mark.parametrize("resuming, notices, desc", [
+    (True, 1, "a tab resuming a conversation (adopt, Restore, relaunch) asks it to post its open work"),
+    (False, 0, "a fresh session has no open work to post"),
+])
+def test_open_tab_sends_the_join_notice_only_on_resume(store, sid, monkeypatch, resuming, notices, desc):
+    monkeypatch.setattr(launch.liveness, "is_alive", lambda *a: False)
+    monkeypatch.setattr(launch.subprocess, "Popen", lambda argv, **kw: None)
+    monkeypatch.setattr(launch, "transcript_exists", lambda sid: resuming)
+    launch.open_tab(store, sid)
+    got = [(m["kind"], m["body"]) for m in store.pending(sid)]
+    assert got == [("notice", launch.JOINED_TEXT)] * notices, desc
+
+
+@pytest.mark.parametrize("env, has_decisions, desc", [
+    (None, True, "the decisions section is on by default"),
+    ("1", True, "on when asked"),
+    ("0", False, "WHEELHOUSE_DECISIONS=0 leaves it out, for the priming A/B test"),
+])
+def test_decisions_section_is_separable(monkeypatch, env, has_decisions, desc):
+    if env is None:
+        monkeypatch.delenv("WHEELHOUSE_DECISIONS", raising=False)
+    else:
+        monkeypatch.setenv("WHEELHOUSE_DECISIONS", env)
+    text = launch.protocol()
+    assert text.startswith("# Wheelhouse protocol"), desc
+    assert ("## Decisions" in text) == has_decisions, desc
+    assert "This section is about reporting, not deciding" in launch.DECISIONS

@@ -68,6 +68,15 @@ def test_title(projects, records, title, desc):
     assert adopt.read_transcript(transcript(projects, records=records)).title == title, desc
 
 
+@pytest.mark.parametrize("records, named, desc", [
+    ([record(), {"type": "custom-title", "customTitle": "x" * 100}], "x" * 100, "a long custom title: whole, not cut"),
+    ([record(), {"type": "ai-title", "aiTitle": "VAT   rounding"}], "VAT rounding", "else Claude Code's title"),
+    ([record(message={"content": "x" * 200})], "", "a prompt isn't a name"),
+])
+def test_named(projects, records, named, desc):
+    assert adopt.read_transcript(transcript(projects, records=records)).named == named, desc
+
+
 @pytest.mark.parametrize("records, folder, cwd, desc", [
     ([record(), record(cwd="/elsewhere")], None, REPO, "the cwd matching the transcript folder, not the latest"),
     ([record(cwd="/a/b")], "-other", "/a/b", "falls back to the first cwd"),

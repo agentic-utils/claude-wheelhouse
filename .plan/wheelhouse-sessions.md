@@ -64,7 +64,7 @@ inbox too, by design: parking is your own signal to set it aside.
   over 30 s means the machine slept, and the stalled hint is suppressed for 60 s while
   everything catches up.
 - **Never respawn automatically.** The Sessions page has Restore on each dead row and
-  Restore All. Both re-check the process immediately before launching and refuse a
+  Restore All, and selecting a dead session (in either list) asks "Relaunch it?" Both re-check the process immediately before launching and refuse a
   session that is still starting (launched under 90 s ago, not yet registered), so a
   double press opens one tab. The launch wrapper then checks and registers in a single
   compare-and-set transaction before it execs Claude, so two tabs racing for the same
@@ -101,13 +101,15 @@ writes the session row, then opens a Windows Terminal tab:
 
 ```
 cmd.exe /c wt.exe -w 0 new-tab --title <name> wsl.exe -d <distro> -u <user> --cd <dir> -- \
-    <login shell> -lc "exec <python> -m claude_wheelhouse run <session-id>"
+    <login shell> -lic "exec <python> -m claude_wheelhouse run <session-id>"
 ```
 
 wsl.exe runs its command with no shell, so the user's profile never runs and
 `~/.local/bin`, where claude is installed, is missing from the `PATH`. Going through the
 user's login shell (`$SHELL`, else their passwd entry, else bash) gives the tab the
-environment of an ordinary WSL tab, which hooks and MCP servers need too.
+environment of an ordinary WSL tab, which hooks and MCP servers need too. It runs
+interactive (`-i`) as well, because a non-interactive bash stops at the interactive guard
+near the top of `~/.bashrc` and misses whatever is set below it, such as Homebrew's PATH.
 
 `wt.exe` is a Windows execution alias that WSL can't execute directly (it resolves on
 the `PATH` but does nothing), so it goes through `cmd.exe /c` as Microsoft's docs say.
@@ -170,6 +172,8 @@ items     id PK, session_id FK, ref ('T3' | 'Q1' | 'A2', unique per session),
           created_at, updated_at
 messages  id PK, session_id FK, item_ref (nullable), author (claude | person),
           body, created_at, claimed_at, delivered_at
+agent_items  (session_id FK, agent_id) PK, item_ref: the A item for each subagent
+          the wheelhouse tracks (see Subagents)
 ```
 
 Deleting a session cascades. Times are UTC ISO-8601; claim and request stamps carry
@@ -180,6 +184,57 @@ together against an older database can't both add the same column.
 Statuses: task `todo running blocked waiting done dropped`; question
 `open answered closed`; agent `running done failed`. A person's message on an open
 question marks it answered.
+
+## Subagents
+
+The wheelhouse tracks each session's subagents as A items itself (#69), one mechanism for
+SDK and tab sessions, rather than relying on the session to post them
+(`claude_wheelhouse/subagents.py`). Protocol version 7 tells sessions not to post their own.
+
+- **Start.** Claude Code writes `<session id>/subagents/agent-<agent id>.meta.json` beside
+  the transcript at launch: `description`, `agentType`, `toolUseId` (the Agent tool call;
+  absent for a forked skill), `requestShape` (`foreground` or `background`, absent in older
+  versions), and `parentAgentId` with `spawnDepth` 2 or more for a subagent's own
+  subagents, which are left out. The start is the first record's `timestamp` in
+  `agent-<agent id>.jsonl`. The item is made 15 s after the start (GRACE), so that a
+  session on older code that posts its own has done so first.
+- **Finish,** in the main transcript. A foreground subagent: its tool_result (done; failed
+  if `is_error`). A background one: its launch's tool_result (`toolUseResult.status:
+  "async_launched"`) finishes nothing; a `<task-notification>` with its `<task-id>` (the
+  agent id) or `<tool-use-id>` does, delivered as a `queue-operation`, a `queued_command`
+  attachment or a user turn. `<status>`: `completed` is done; `failed`, `killed` (the person
+  stopped it) and `stopped` (its session ended under it, reported on resume) are failed,
+  with the notification's summary as a note. Only the notification's header counts: every
+  `<task-id>` before `<summary>` (one can name several under one status), and the first
+  `<status>`, `<tool-use-id>` and `<summary>`; the subagent's text in `<result>` is never
+  read as fields. A notification quoted anywhere else (a message, tool output) is ignored.
+  SendMessage to a finished subagent resumes it: running again, after a restart too.
+- **Its session dies.** When the TUI's liveness check has a session dead, each of its
+  subagent items still running fails, with the note "the session stopped while this
+  subagent ran" (parked or not, on the next tick: no timer of its own). If the session is
+  resumed and the subagent's notification arrives, the item follows it as usual.
+- **Once.** `agent_items` keys the item by agent id, written in the item's transaction, so
+  a restart or a second wheelhouse never posts twice. A status is written only when it
+  changes, including a finish seen by a wheelhouse that didn't make the item.
+- **The session's own item** is taken instead of making one when there is an agent item
+  not yet tied to a subagent, made no more than 10 minutes before the subagent started nor
+  15 s after it, whose title equals the description or holds it, or is held by it (as
+  words, case and punctuation aside, and two words at least: a one-word description or
+  title matches only exactly). An exact title wins, then the one made nearest the start. One the
+  session posts after the wheelhouse made its own is a duplicate: the protocol now asks
+  sessions not to post.
+- **Cut-off.** The later of when the session joined the wheelhouse (`created_at`: launched
+  or adopted) and when the database was first opened by this code (`settings.agents_since`).
+  A subagent started after it gets an item, finished or not. One started before it gets an
+  item only if it was still running then: no finish in the transcript, and its transcript
+  written to within 30 minutes (LIVE) of the cut-off. So adopting a session, or upgrading,
+  brings in what's running and not the history.
+- **Cost.** The TUI syncs each session on a worker thread every tick while it runs (once
+  for one that isn't). The subagents folder is listed again only when its mtime changes;
+  the main transcript is read from the offset the last read reached. A first read starts at
+  the earliest subagent still running (`stats.window_start`), or at the end when none is.
+  An idle sync is two `stat`s, about 25 us; a first sync of a 13 MB transcript with 141
+  subagents takes 4 ms with nothing running.
 
 ## MCP tools (server name `wheelhouse`)
 
@@ -252,18 +307,167 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   adopted session never sees `--append-system-prompt`. Checked on 2.1.287: with the
   default the resumed session didn't see an appended instruction, with `off` it did, and
   a later default resume lost it again. So adopted sessions launch with `off` every time.
+- **Open work comes with it.** A session adopted mid-conversation may already be waiting
+  on the person, but the wheelhouse only sees items posted after adoption. Whenever a tab
+  resumes a conversation (Adopt, Restore, Restore All, relaunching a dead session),
+  `launch.open_tab` queues a notice (`messages.kind = 'notice'`, printed as `[wheelhouse] ...`
+  with no sender) asking the session to post its open questions and running tasks,
+  skipping any already listed, and to set its synopsis. The notification triggers a
+  turn as soon as the monitor starts. The protocol says the same, for a session that
+  joins without the notice.
 
 ## TUI
 
 - **Inbox tab.** Sessions on the left (a status dot, the name, the open-question count,
-  and a Cylon scanner while anything is running; parked sessions are left out). Items in the centre from
+  and a Cylon scanner while anything is running, resting while you type in an answer box (D41); parked sessions are left out). Items in the centre from
   every session, ordered: open questions, blocked or waiting tasks, running, the rest.
   Selecting a session filters; Esc clears. Detail on the right: body, thread, and an
-  answer box. Ctrl+S sends (Ctrl+Enter where the terminal reports it).
-- **Sessions tab.** Every session with status, name, ticket, directory, open-question
-  and running counts. Restore on a dead row, parked or not (unparks only once the launch
-  goes through), Restore All (dead and not parked), Park / unpark, End, New session,
-  Adopt (`a`). Park and End follow the lifecycle rules above.
+  answer box. Ctrl+S queues; Ctrl+Enter (ctrl+j) sends now.
+- **Where an item stands** (T71, `store.standing`): one table for every kind.
+
+  | kind       | active                          | settled           | finished (F shows)           |
+  |------------|---------------------------------|-------------------|------------------------------|
+  | task       | todo, running, blocked, waiting | done, dropped     | dismissed with Delete        |
+  | question   | open                            | answered          | closed                       |
+  | decision   | unseen                          | seen              | closed                       |
+  | agent      | running                         | done, failed      | dismissed with Delete        |
+  | permission | open                            | none              | allowed, denied              |
+
+  Active items rank as above. Settled ones stay in the inbox, dimmed, after every active
+  one, oldest first, so the latest to settle is lowest (a decision just seen, whose
+  `updated_at` is fresh, sinks rather than jumps up). A settled item with a word of the
+  person's queued or awaiting a reply is active, dismissed or not: it shows queued or
+  processing. Delete
+  closes a question or decision and dismisses a settled task or subagent
+  (`items.dismissed` holds the status it was dismissed in, so a session that changes the
+  status brings it back). Delete only ever closes: on a finished one shown with F it does
+  nothing but say that Ctrl+R reopens it, and one its session finished while selected,
+  held in sight with F off, it lets go of at once, as if the person had closed it. Ctrl+R
+  on a finished item (or the marked ones) in the item list brings it back, a question as
+  answered, a decision as seen, unless the item has an answer queued: then it takes that
+  back, as it always has. In the answer box it only ever takes back. A permission answered
+  goes at once, as before: Allow, Always and Deny are explicit acts, as Delete is. The
+  upgrade that adds `items.dismissed` dismisses the tasks and subagents already settled,
+  which were off the inbox before, so it doesn't fill with them.
+- **The dwell** (`tui.DWELL`, 1 s; `look`, `dwelt`). An unseen decision becomes seen only
+  once it has been in sight for a second without a break: selected, on the inbox or in its
+  own thread (ThreadView), with no dialog over it, whatever selected it. The app's own
+  selection (the top row at startup, the next row once an item or its session goes, a row
+  landed on as the filter clears) counts as the person's does: what's in sight for the
+  second is what changes.
+  The terminal window losing focus (AppBlur) is a break; regaining it (AppFocus) starts
+  the dwell again, and a terminal that doesn't report focus behaves as before. One
+  one-shot timer, restarted whenever the selection, the screen or the window's focus
+  changes and stopped while nothing is selected or the window is out of focus, so it
+  costs nothing idle; when it fires it settles the cursors first (a burst's arrows may
+  have moved them) and acts only if it is still the same look. Arrowing past a decision,
+  or resting on it for less than a second, leaves it unseen, so a burst typed ahead marks
+  nothing on the way and ends as the same keys typed slowly, given the same dwell. The
+  tutorial's screen-only steps (a question highlighted, the conversation followed) tick
+  the same way, but only from the person's own selection (`picked`). Explicit acts stay immediate: Delete,
+  answering it (Ctrl+Enter), Enter on a tutorial question. A decision seen by the dwell
+  while selected is settled and, by the sinking rule below, stays put until the
+  selection moves on.
+- **Sinking** (T66, T71, `tui.Sink`). The selected item keeps its place (D28, T70: `ranked`
+  pins its rank as shown) however its status changes; once the selection moves on it
+  re-sorts at once, and a settled one falls to the foot over 0.4 s, with gravity. Parked
+  sessions sit at the foot of the session list's visible room (above any scrollbar), blank rows above them,
+  falling there as they park and rising back as they're unparked. One `Sink` per list
+  lays its rows: a row that changes sides (active and settled, unparked and parked)
+  moves; anything else jumps. Its timer runs only during a move. Each frame is the list's
+  ordinary paint, so the cursor rides its row by key (D22). Every key that moves a
+  list's cursor (Up, Down, PageUp, PageDown, Ctrl+Home, Ctrl+End, Shift+Up and Shift+Down)
+  acts in the final order, never a frame's or a blank row, so keys typed during a move end
+  as typed after it. Delete closing and Ctrl+R reopening move at once (D33), as does a permission answered: the only changes that move a selected item. The item list's session column shows only while
+  it has every session's items (D31): following one session, it's redundant.
+- **Session view.** Selecting a session (one click, or Enter) also puts its main
+  conversation in the right-hand pane, so the person can follow and talk to a session
+  without switching tabs. It is read from the transcript
+  (`~/.claude/projects/<project>/<id>.jsonl`), tail only (the last 1 MB, at most 80
+  entries), re-read when the file changes. Shown: prompts, Claude's text, `[wheelhouse]`
+  notifications; each tool call is one line; tool results, thinking, sidechain
+  (subagent) records and bookkeeping are left out. The answer box sends a general
+  message (no ref) through the same queue. It stays read-mostly: it never mirrors
+  permission prompts or slash commands. The pane names the session's tab, since
+  `wt` can only focus a tab by index, not by title, and tabs move. An unanswered
+  AskUserQuestion or ExitPlanMode call in the transcript shows as "waiting for you in its
+  tab". A permission prompt leaves no record, so it can't be flagged this way; a
+  `Notification` hook in the wheelhouse plugin could report it. Selecting a session pins a
+  "💬 Conversation" row first in its filtered item list and highlights it, so no question
+  is selected while the pane shows the conversation; moving to a question shows that
+  question. With no session selected there is no conversation row: the list is in inbox
+  order, not grouped by session. The pane and the answer box change target only when the
+  person moves the highlight. The one-second refresh restores the highlight by the row's
+  key, not its position, so an item arriving above doesn't swap the text being typed. The person's words show in terminal green and Claude's in
+  white, here and in item threads. The pane is one widget drawing one Rich renderable, each
+  block's lines cached per width: as a Textual Markdown widget it made a child per
+  paragraph, and with a long conversation's ~900 children every layout pass took a quarter
+  of a second, so typing lagged and opening a session took over 3 seconds.
+- **Session area** (#58, which replaced the Sessions tab and the Inbox/Sessions tabs).
+  The session list, every session with parked ones dimmed at the foot; under it a
+  description of the current session (status, runner, mode, ticket, directory,
+  open-question, running, unseen-decision and queued counts, activity, synopsis or brief);
+  under that its buttons, only those that apply (#62, D26): Rename, Relaunch and Park on
+  a live session; Restore on a dead one, parked or not (unparks only once the launch goes
+  through); Unpark on a parked one, live or dead; End on either. Park and End follow the
+  lifecycle rules above (a dead session is no longer parked from here: End it, or Restore
+  it and park it). Under those the conversation buttons moved from the send bar (#59):
+  Mode (across two columns, for "Can't queue: relaunch") and Send (n) on any session,
+  Interrupt, Compact and Shell while it runs in the wheelhouse. Three to a row with a
+  blank row between rows, all 30% grey (#4d4d4d) with white text, lighter under the
+  pointer and pressed, dimmed when disabled, each with a tooltip (the ? overlay's text). A
+  hidden button leaves no hole: the grid places the shown ones in turn. New (`N`), Adopt
+  (`A`, the dialog listing the sessions on disk that can be adopted) and Restore all
+  (`Shift+S`, dead and not parked) act on no one session, so they're footer keys, not
+  buttons. The send bar keeps Send all and the activity line.
+- **D20: one current session, highlighted in the session list.** The session area's
+  buttons, Ctrl+S and Ctrl+T, the hint under the answer box and the activity line all act
+  on or describe it. The list's highlight follows the session in context: highlighting an
+  item, or following a session, moves it to that session, as the app's own move, which
+  filters nothing. The person moving it follows the session they move to, as a click
+  always did (filter and 💬 Conversation row), at once on every arrow: no follow waits on a
+  timer for a refresh or a key to overtake (review 11 dropped the 0.1 s debounce, and the
+  class of bugs in its window). The first visit to a session with a 1.2 MB transcript
+  costs about 15 ms to follow and 150 to 350 ms to lay out its conversation, every block's
+  markdown at once; later visits a few milliseconds. (T68 tried laying out only the newest
+  blocks, and older ones as the pane scrolled up to them, for about 60 ms less. It was
+  reverted: each interaction with scrolling, the mouse and a change while read turned up
+  another race.) The rendered blocks' cache (2048) holds about 25 conversations' worth at
+  one width: each shows its last 80 entries. Only a click or Enter offers to relaunch a
+  dead one. The item list's cursor goes to the selection by key whenever they differ,
+  except over an arrow of the person's whose highlight hasn't been handled yet. (Review 8
+  replaced the first D20, where the buttons acted on the highlighted session and the keys
+  on the session in context: the two could differ on screen, and the tutorial's "Ctrl+S,
+  or the Send button" sent another session's queue.) A full-screen item has no session
+  list, so its bar keeps Mode, Send, Interrupt, Compact and Shell, for its own session.
+  The stats pane still shows every running session while no session is followed and no
+  item selected.
+- **Resizable layout** (#60). Every boundary is a `Splitter` (`splitter.py`; Textual has
+  none): the two between the columns, the session list and its description (the
+  description 50% of the column by default), the items and the module panes under them,
+  and the conversation and the answer box. A one-cell line that captures the mouse on a
+  press, sizes one neighbour as a percentage of the parent while the other (1fr) takes
+  the rest, never past either's CSS minimum, and turns teal under the pointer and while
+  dragged. Percentages keep the proportions on a resized terminal. Each size is kept in
+  the settings table (`layout.<key>`), and a double-click deletes it, putting the
+  stylesheet's default back. The session column's minimum, 39 cells, is what its
+  buttons' captions need; the items' 12 and the right pane's 24 leave the three columns
+  on an 80-column terminal. The session list keeps 5 rows, the description giving way on a
+  short terminal. `splitter.fit` runs on the first layout and every resize: where the
+  sizes (a kept share, or the stylesheet's) don't fit, each sized pane shrinks towards its
+  minimum by its share of the overflow, in cells, leaving the kept share for a terminal
+  with room. A kept size that isn't a finite number is ignored, and one outside 0 to 1
+  clamped. A splitter with a neighbour missing does nothing, and a pane swapped for an
+  error card keeps its place under one (`-split`). A mouse move with no button held ends
+  a drag whose release was lost.
+- **Relaunch** (#56). Dead: as Restore. Running in the wheelhouse: SIGTERM to the host's
+  registered pid, checked against its start time first (the host's own clean stop:
+  Claude Code disconnected, waiting permissions and questions withdrawn, anything left
+  closed by the next host's `deny_stale`). The refresh tick starts it again with
+  `launch.open_session` (so it stays a host) once the process has gone, and gives up,
+  saying so, after 30 s. A tab, or a host's session in a shell tab, relaunches only once
+  it has exited. A signal rather than a new host command: every host since the first
+  handles SIGTERM, including the stale ones a relaunch is for.
 - **Look.** Matrix green inside panels; colour and a shimmering title bar on the chrome.
 
 ## Relationship to the cache dashboard
@@ -320,7 +524,8 @@ new tab (confirmed by `launch.log`).
 
 1. Restore All after a reboot also catches sessions that died days ago and were never
    parked. Should Restore All only take sessions that were live in the last boot?
-2. Notification size: the monitor prints answers up to 1,500 characters inline and
-   points to `get_input(ref)` for longer ones. Is that the right cut-off?
+2. Notification size: Claude Code cuts a monitor notification at 500 characters, so the
+   monitor keeps each line within 480 and a longer message leads with a
+   `get_input(message_id=N)` pointer. Settled by the platform, not a choice.
 3. When to take the first step of "Path to a single tool": straight after the prototype
    settles, or once the wheelhouse has been in daily use for a while?
