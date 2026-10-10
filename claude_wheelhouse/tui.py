@@ -279,7 +279,7 @@ class Transcript(Widget, can_focus=True):
         it does, so the reader's line stays put and what grew shows below it; with none above,
         the first unchanged block below it in the view. Found more than once (a block said
         twice, a run of the same tool line), the one followed by most of what followed it,
-        then the nearest."""
+        then preceded by most of what preceded it, then the nearest."""
         old, laid, scroll = self.blocks, self._laid, self.parent
         self.blocks = content.blocks if isinstance(content, Blocks) else list(content)
         self._laid = None
@@ -292,7 +292,8 @@ class Transcript(Widget, can_focus=True):
         for k in [top, *range(top - 1, -1, -1), *range(top + 1, bottom)]:
             found = [i for i, b in enumerate(new) if b == old[k]]
             if found:
-                at = max(found, key=lambda i: (agreed(old[k:], new[i:]), -abs(i - k)))
+                at = max(found, key=lambda i: (agreed(old[k:], new[i:]), agreed(old[k::-1], new[i::-1]),
+                                               -abs(i - k)))
                 y = self._layout(width)[2][at] + scroll.scroll_y - starts[k]
                 scroll.scroll_to(y=y, animate=False, immediate=y <= scroll.max_scroll_y)   # or once laid out
                 return

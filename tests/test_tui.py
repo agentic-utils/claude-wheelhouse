@@ -1952,6 +1952,7 @@ TOOL = ("tool", "`⚙ Bash gh pr checks`")
 LONG = BASE[:30] + [blk(30, 60)] + BASE[31:]
 QUEUED = [("you", f"**you · queued**\n\nyes {n}\n\nmore") for n in range(4)]
 TIED = BASE[:10] + [TOOL, blk(10, 4, who="claude")] + BASE[11:40] + [TOOL, blk(40, 30, who="claude")]
+TOOLS = BASE[:20] + [TOOL] * 6 + [blk(26, 12, who="claude")]
 
 
 @pytest.mark.anyio
@@ -1965,6 +1966,9 @@ TIED = BASE[:10] + [TOOL, blk(10, 4, who="claude")] + BASE[11:40] + [TOOL, blk(4
      "stays put and what grew shows below it"),
     (TIED, (41, 0), TIED[:-1] + [blk(40, 36, who="claude")], None,
      "the view's top a tool line said earlier too, each followed by one block: the nearest, not the earlier one"),
+    (TOOLS + BASE[27:], (26, 4), [("note", "warning")] + TOOLS[:-1] + [blk(26, 18, who="claude")] + BASE[27:],
+     "line 26.12", "the reply at the view's top grows under a run of the same tool line, a warning put in at the "
+     "head: the tool line right above it keeps its place, not its neighbour in the run"),
 ])
 async def test_a_changed_transcript_keeps_a_scrolled_up_place(blocks, top, new, grown, desc):
     """top: the block the view starts in and the line into it."""
