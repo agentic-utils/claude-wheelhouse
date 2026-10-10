@@ -20,9 +20,10 @@ methods on it:
 import importlib.metadata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
-from .stats import AccountUsage
+if TYPE_CHECKING:
+    from .stats import AccountUsage
 
 WHEELHOUSE_API = 1                 # bumped on any breaking change, matched exactly
 GROUP = "claude_wheelhouse.modules"
@@ -67,7 +68,7 @@ class Context:
     focus: Callable[[], str | None]      # the session in context (highlighted or followed), if any
     config: dict = field(default_factory=dict)
     # the account's session and weekly usage, which the hub fetches
-    usage: AccountUsage | None = None
+    usage: "AccountUsage | None" = None
 
 
 @dataclass

@@ -159,7 +159,11 @@ class Hub:
     def sends_now(self, sid: str) -> bool:
         """Running code from before queued answers, which would deliver one at once: so
         Ctrl+Enter sends, whatever the mode."""
-        return self.running(sid) and not can_queue(self.listed(sid))
+        return self.sends_at_once(self.listed(sid))
+
+    def sends_at_once(self, s) -> bool:
+        """sends_now, on the row given: submit's, read as it is now."""
+        return self.running(s["id"]) and not can_queue(s)
 
     def pending(self, sid: str) -> str | None:
         """The request (end or park) a session has been asked to act on, if any, read now."""
@@ -363,8 +367,8 @@ class Hub:
         elif mode(s) == "immediate":
             self.store.send(target[0], text, target[1])
             done.say(f"sent to {aimed(target)}")
-        # sends_now, on the row as it is now: its old monitor would deliver a draft at once anyway
-        elif self.running(target[0]) and not can_queue(s):
+        # on the row as it is now: its old monitor would deliver a draft at once anyway
+        elif self.sends_at_once(s):
             self.store.send(target[0], text, target[1])
             done.say(f"sent to {aimed(target)} now: that session runs older wheelhouse code, "
                      "so it can't queue until it's relaunched", "warning")
