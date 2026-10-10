@@ -63,8 +63,9 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
 - **Commands** answer the hub's `Done` as `{ok, notices, denied, sid?}` (`sid` for a new
   session). Park and End take `how` (ask, now, cancel, force), the TUI's choice of dialog
   still the client's; Unpark is `POST /sessions/{sid}/unpark`; Relaunch with `host`
-  `[pid, start]`, the host the client showed, stops it and starts it again, and without
-  it brings back a dead session; mode takes the mode wanted, so a repeat does nothing
+  `[pid, start]`, the host the client showed, stops it and starts it again (with
+  `compact: true`, once the session is compacted: a session's `compact_first` says when
+  to offer that), and without it brings back a dead session; mode takes the mode wanted, so a repeat does nothing
   (last write wins). A new session needs an existing directory's absolute path, and runs
   by a host: `runner` `tab` is refused, as a tab would open on the home machine's screen.
   Errors: `SessionGone` and an item not there 404, a permission decided already 409, a
@@ -103,8 +104,8 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
   the hub and publishes at once, without waiting for the tick. A session whose shown status changes with no write (a host dying,
   a Relaunch) publishes `sessions` for it, and a transcript read that brought something
   `conversation` and `stats` for it.
-- **Relaunch in progress** is kept in a `sessions.relaunch` column (the stopped host and
-  the deadline), so any hub started again in time, the daemon's or the TUI's, carries it
+- **Relaunch in progress** is kept in a `sessions.relaunch` column (the stopped host, the
+  deadline, and whether it is compacting first), so any hub started again in time, the daemon's or the TUI's, carries it
   on. One found past its deadline (the wheelhouse was down, the machine off) is let go
   with "<name> wasn't relaunched: Restore it", its host not started: the wheelhouse never
   restores a dead host by itself.

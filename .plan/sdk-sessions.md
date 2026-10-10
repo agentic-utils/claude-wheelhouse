@@ -279,3 +279,13 @@ so an hour's quiet is what turns the cache cold.
   pay for ever. A host just started (or just back from a shell tab) sends none until a
   turn of its own has ended, since it can't know the cache is warm. Compact under way, a
   pending permission and a turn Claude Code started itself all hold it off.
+- **Relaunch, compacting first.** A host's restart is what forces the cold rewrite
+  (quitting the TUI leaves detached hosts alone). Relaunch of a running host whose last
+  recorded context is over `COMPACT_FIRST_TOKENS` (150k) offers Compact first, Relaunch
+  now or Cancel. Compact first is the hub's (`Hub.compact_then_relaunch`, and the daemon's
+  relaunch with `compact: true`): it gives the host the ordinary `compact` command, so a
+  stale host understands it too, and marks the activity line so an earlier compaction's
+  line can't be taken for this one's. The relaunch is kept in `sessions.relaunch` as
+  compacting; each tick, once the activity line reads `idle · compacted`, the host is
+  stopped and started again as any Relaunch. Interrupt, Compact getting no notes, or 30
+  minutes without a compaction give it up, saying so, with the host left running.

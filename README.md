@@ -125,6 +125,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   wheelhouse too: its host stops (interrupting any turn under way; an open permission or
   question closes, since nothing is left to answer it) and starts again on the same
   conversation once the old process has gone, to pick up new wheelhouse code or settings.
+  A restart writes the session's whole context to the prompt cache again, so for one over
+  150k tokens Relaunch offers Compact first (`C`: it's asked what to keep, compacted, then
+  relaunched), Relaunch now (`R`) or Cancel.
   A tab session relaunches once you've `/exit`ed it. Nothing restarts on its own, and a resumed session is asked to
   post the questions and tasks it already had open. Park
   drops a session's items off the inbox until you unpark or restore it. End deletes its wheelhouse data. On a running

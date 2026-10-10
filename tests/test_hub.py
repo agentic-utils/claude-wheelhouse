@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from claude_wheelhouse import hub as hub_mod, launch, liveness, subagents, transcript, tutorial
+from claude_wheelhouse import host as host_mod, hub as hub_mod, launch, liveness, subagents, transcript, tutorial
 from claude_wheelhouse.hub import Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone
 
@@ -429,3 +429,68 @@ def test_a_subagents_conversation_follows_it_live_and_two_at_most(hub, store, si
     assert list(hub.agent_followers) == [(sid, ref), (sid, third)], "a third stops following the one asked for longest ago"
     hub.unfollow_agent()
     assert hub.agent_followers == {}
+
+
+@pytest.mark.parametrize("runner_, shell, status, tokens, offered, desc", [
+    ("sdk", None, "live", 160_000, True, "a running host past 150k: offered"),
+    ("sdk", None, "live", 150_000, False, "at the line, not past it"),
+    ("sdk", None, "live", None, False, "no size recorded yet"),
+    ("sdk", "tab", "live", 160_000, False, "handed to a shell tab: nothing to ask"),
+    ("sdk", None, "dead", 160_000, False, "dead: Relaunch is Restore, no host to compact"),
+    ("tab", None, "live", 160_000, False, "a tab: no Compact command"),
+])
+def test_compact_first_is_offered(hub, store, sid, monkeypatch, runner_, shell, status, tokens, offered, desc):
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
+    store.set_runner(sid, runner_)
+    store.set_shell(sid, shell)
+    store.db.execute("UPDATE sessions SET context_tokens = ?", (tokens,))
+    hub.refresh()
+    assert hub.compact_first(sid) is offered, desc
+
+
+@pytest.mark.parametrize("activity, stopped, said, desc", [
+    (host_mod.COMPACTED + " 220k → 40k tokens", True, "stopping its host", "compacted: its host is stopped"),
+    ("thinking", False, None, "still collecting notes: it waits"),
+    (hub_mod.COMPACTING_TO_RELAUNCH, False, None, "not taken up yet: it waits"),
+    ("interrupted", False, "Compact was interrupted", "interrupted: given up, and said so"),
+    (host_mod.NO_NOTES, False, "Compact got no notes back", "no notes: given up, and said so"),
+    ("timeout", False, "wasn't compacted within 30 minutes", "too long: given up, and said so"),
+])
+def test_compact_then_relaunch(hub, store, sid, heard, monkeypatch, activity, stopped, said, desc):
+    host(store, sid)
+    alive, killed = {4242}, []
+    monkeypatch.setattr(hub_mod.os, "kill", lambda pid, sig: killed.append(pid))
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: pid in alive)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live" if s["claude_pid"] in alive else "dead")
+    hub.refresh()
+    done = hub.compact_then_relaunch(sid, (4242, 1))
+    assert done.ok and told(done) == [("relaunching demo: compacting first (it's asked what to keep)",
+                                        "information")], desc
+    s = store.session(sid)
+    assert (s["host_command"], s["activity"]) == ("compact", hub_mod.COMPACTING_TO_RELAUNCH), desc
+    assert sid in hub.compacting and store.relaunches()[sid][2] is True, f"{desc}: kept in the store"
+    if activity == "timeout":
+        hub.relaunching[sid] = (0.0, (4242, 1))
+    else:
+        store.set_activity(sid, activity)
+    hub.refresh()
+    hub.finish_relaunches()
+    assert killed == ([4242] if stopped else []), desc
+    if said:
+        assert any(said in text for text, _ in heard), f"{desc}: {heard}"
+    under_way = sid in hub.relaunching
+    assert under_way == (stopped or not said), f"{desc}: given up only when said"
+    assert (sid in hub.compacting) == (under_way and not stopped), f"{desc}: compacting until stopped"
+    if stopped:
+        assert store.session(sid)["host_command"] is None, f"{desc}: no Compact left for the new host"
+        assert store.relaunches()[sid][2] is False, f"{desc}: now waiting for it to stop"
+
+
+def test_a_compacting_relaunch_is_carried_on_by_a_hub_started_again(store, sid, monkeypatch):
+    host(store, sid)
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
+    first = Hub(store)
+    first.refresh()
+    assert first.compact_then_relaunch(sid, (4242, 1)).ok
+    again = Hub(store)
+    assert sid in again.relaunching and sid in again.compacting

@@ -26,7 +26,7 @@ from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
 from claude_wheelhouse.store import Store, mode
 from claude_wheelhouse.tui import (BLANK, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice, Confirm,
-                                   Folders, Hint, PermissionButtons, RenameSession, SendBar, ThreadView, Transcript, hint,
+                                   Folders, Hint, PermissionButtons, RelaunchChoice, RenameSession, SendBar, ThreadView, Transcript, hint,
                                    render)
 
 
@@ -2131,6 +2131,8 @@ async def test_one_click_on_a_dead_session_opens_one_prompt_and_yes_closes_it(st
 @pytest.mark.parametrize("screen, labels, desc", [
     (lambda: Confirm("ok?"), ["[Y]es", "[N]o"], "the relaunch and destructive confirms"),
     (lambda: Choice("hm?"), ["[C]ancel request", "[F]orce", "Leave it [Esc]"], "a pending request's choice"),
+    (lambda: RelaunchChoice("big?"), ["[C]ompact first", "[R]elaunch now", "Cancel [Esc]"],
+     "Relaunch of a big session"),
 ])
 @pytest.mark.anyio
 async def test_button_labels_keep_their_key_hints(store, screen, labels, desc):
@@ -4374,3 +4376,34 @@ async def test_a_subagent_item_whose_transcript_is_missing_says_so(store, sid, t
         items.move_cursor(row=items.get_row_index(f"{sid}|{ref}"))
         await pilot.pause()
         assert "A `general-purpose` subagent." in app._detail_text and transcript.NO_AGENT_FILE in app._detail_text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tokens, keys, dialog, stopped, desc", [
+    (200_000, ("c",), "RelaunchChoice", ("compact", (4242, 1)), "past 150k: C compacts first"),
+    (200_000, ("r",), "RelaunchChoice", ("now", (4242, 1)), "past 150k: R relaunches now"),
+    (200_000, ("escape",), "RelaunchChoice", None, "Esc cancels"),
+    (200_000, ("enter",), "RelaunchChoice", None, "it opens on Cancel: a reflex Enter relaunches nothing"),
+    (100_000, ("y",), "Confirm", ("now", (4242, 1)), "a small one: the plain confirm"),
+])
+async def test_relaunch_offers_to_compact_a_big_session_first(store, sid, monkeypatch, tokens, keys, dialog,
+                                                              stopped, desc):
+    from claude_wheelhouse import hub as hub_mod, liveness
+    store.set_runner(sid, "sdk")
+    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b', context_tokens = ?",
+                     (tokens,))
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    calls = []
+    monkeypatch.setattr(hub_mod.Hub, "stop_host", lambda self, sid, host: calls.append(("now", host)) or hub_mod.Done())
+    monkeypatch.setattr(hub_mod.Hub, "compact_then_relaunch",
+                        lambda self, sid, host: calls.append(("compact", host)) or hub_mod.Done())
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.session_list.focus()
+        await pilot.press("l")
+        await pilot.pause()
+        assert type(app.screen).__name__ == dialog, desc
+        await pilot.press(*keys)
+        await pilot.pause()
+        assert calls == ([stopped] if stopped else []), desc
