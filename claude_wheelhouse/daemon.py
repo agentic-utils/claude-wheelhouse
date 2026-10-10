@@ -18,12 +18,14 @@ from the daemon's own origin, so a hostile page can't drive it or read it by DNS
 import asyncio
 import contextlib
 import fcntl
+import functools
 import hashlib
 import ipaddress
 import json
 import os
 import sqlite3
 import sys
+import threading
 import time
 import traceback
 from collections import deque
@@ -32,6 +34,7 @@ from concurrent.futures import ThreadPoolExecutor
 import uvicorn
 from sse_starlette import EventSourceResponse
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
@@ -177,8 +180,13 @@ def text(body: dict, key: str, required: bool = True) -> str | None:
 
 
 class Daemon:
-    """The hub, its routes and its feed. inline: the hub's work runs in the call that
-    starts it, as in a test; otherwise on worker threads, its callbacks on the event loop."""
+    """The hub, its routes and its feed. The event loop only serves: the hub runs on a
+    thread of its own (on_hub), its tick, its commands and its callbacks one at a time, as
+    it runs on the TUI's loop, and the queries that read the store or the disk run on
+    starlette's threads. So a slow disk or a locked database never holds up /sessions,
+    which serves the view the hub's thread last made, nor the event streams' pings.
+    inline: the hub's own background work runs in the call that starts it, as in a test;
+    otherwise on worker threads, its callbacks back on the hub's thread."""
 
     def __init__(self, store: Store, allowed: set[str], inline: bool = False):
         self.hub = Hub(store, **({} if inline else {"spawn": self.spawn, "post": self.post}))
@@ -186,17 +194,20 @@ class Daemon:
         self.feed = Feed()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="wheelhouse")
+        self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wheelhouse-hub")
+        self.loop_thread: int | None = None
         # a connection of its own, only to read data_version: it moves with every commit made
         # by any other connection, the hosts', the MCP servers' and the hub's own alike
         self.watch = sqlite3.connect(store.path, isolation_level=None, check_same_thread=False)
         self.read: tuple[int, dict] | None = None   # the marks last read, at that data_version
         self.marked: dict = {}                      # as last published
         self.shown: dict[str, str] = {}   # each session's status as last published
+        self.view: list[dict] = []        # /sessions, as the hub's thread last made it
         self.hub.listen(self.heard)
         self.app = Starlette(routes=[
-            Route("/sessions", self.query(self.sessions)),
+            Route("/sessions", self.query(self.sessions, run=None)),
             Route("/sessions", self.command(self.new_session), methods=["POST"]),
-            Route("/sessions/{sid}/conversation", self.query(self.conversation)),
+            Route("/sessions/{sid}/conversation", self.query(self.conversation, run=self.on_hub)),
             Route("/sessions/{sid}/{action}", self.command(self.session_command), methods=["POST"]),
             Route("/dispatch", self.command(lambda request, body: self.hub.send_all()), methods=["POST"]),
             Route("/items", self.query(self.items)),
@@ -213,21 +224,36 @@ class Daemon:
         self.pool.submit(work)
 
     def post(self, callback) -> None:
-        """From a worker thread: the hub's callback, on the event loop."""
+        """From a worker thread: the hub's callback, on the hub's thread."""
         try:
-            self.loop.call_soon_threadsafe(callback)
-        except RuntimeError:   # the loop has closed: the daemon is stopping
+            self.worker.submit(callback)
+        except RuntimeError:   # shut down: the daemon is stopping
             pass
+
+    async def on_hub(self, work, *args):
+        """work(*args) on the hub's thread, awaited."""
+        if self.loop is None:   # a test's loop: the lifespan, which takes it, isn't run
+            self.loop, self.loop_thread = asyncio.get_running_loop(), threading.get_ident()
+        return await self.loop.run_in_executor(self.worker, functools.partial(work, *args))
+
+    def publish(self, kind: str, sid: str | None = None, ref: str | None = None, **more) -> None:
+        """An event, from any thread: the feed is the event loop's."""
+        if self.loop is None or threading.get_ident() == self.loop_thread:
+            self.feed.publish(kind, sid, ref, **more)
+        else:
+            with contextlib.suppress(RuntimeError):   # the loop has closed: the daemon is stopping
+                self.loop.call_soon_threadsafe(functools.partial(self.feed.publish, kind, sid, ref, **more))
 
     def heard(self, event: Event) -> None:
         """What the hub says by itself, to every client: a notice as it is, and a transcript
         read that brought something as that session's conversation and stats (its context
         size) moving."""
         if event.kind == "notice":
-            self.feed.publish("notice", text=event.text, severity=event.severity)
+            self.publish("notice", text=event.text, severity=event.severity)
         elif event.kind == "landed":
-            self.feed.publish("conversation", event.sid)
-            self.feed.publish("stats", event.sid)
+            self.view = self.session_views()   # its context size
+            self.publish("conversation", event.sid)
+            self.publish("stats", event.sid)
 
     def tick(self) -> None:
         """The hub's refresh, as the TUI's tick has it, then what moved."""
@@ -261,13 +287,14 @@ class Daemon:
                "named": {sid: (s["name"], runner(s), s["shell"]) for sid, s in rows.items()}}
         moved = set().union(*(MOVES[kind] for kind in now if now[kind] != self.marked.get(kind)))
         self.marked = now
+        self.view = self.session_views()
         for kind in STORE_KINDS:
             if kind in moved:
-                self.feed.publish(kind)
+                self.publish(kind)
         shown = {sid: self.hub.shown_status(sid) for sid in self.hub.by_id}
         for sid in shown.keys() & self.shown.keys():
             if shown[sid] != self.shown[sid]:
-                self.feed.publish("sessions", sid)
+                self.publish("sessions", sid)
         self.shown = shown
 
     async def ticking(self) -> None:
@@ -276,7 +303,7 @@ class Daemon:
         last = None
         while True:
             try:
-                self.tick()
+                await self.on_hub(self.tick)
             except Exception as e:
                 said = f"{type(e).__name__}: {e}"
                 print(f"wheelhouse daemon: a tick failed: {said}", file=sys.stderr, flush=True)
@@ -287,14 +314,18 @@ class Daemon:
 
     @contextlib.asynccontextmanager
     async def lifespan(self, app):
-        self.loop = asyncio.get_running_loop()
+        self.loop, self.loop_thread = asyncio.get_running_loop(), threading.get_ident()
         task = asyncio.create_task(self.ticking())
         try:
             yield
         finally:
             self.feed.close()
             task.cancel()
-            self.pool.shutdown(wait=False, cancel_futures=True)
+            self.shutdown()
+
+    def shutdown(self) -> None:
+        self.pool.shutdown(wait=False, cancel_futures=True)
+        self.worker.shutdown(wait=False, cancel_futures=True)
 
     # requests
 
@@ -302,11 +333,13 @@ class Daemon:
         if request.headers.get("host") not in self.allowed:
             raise Refused(421, "this daemon isn't reached by that name")
 
-    def query(self, handler):
+    def query(self, handler, run=run_in_threadpool):
+        """A GET: handler(request), run on starlette's threads by default (it reads the store
+        or the disk), on the hub's (on_hub), or on the event loop (None: memory only)."""
         async def endpoint(request: Request) -> Response:
             try:
                 self.check_host(request)
-                return JSONResponse(handler(request))
+                return JSONResponse(handler(request) if run is None else await run(handler, request))
             except Exception as e:
                 return refusal(e)
         return endpoint
@@ -328,27 +361,32 @@ class Daemon:
             except Exception as e:
                 return refusal(e)
             raw = await request.body()
-            fingerprint = hashlib.sha256(f"{request.url.path}\n".encode() + raw).hexdigest()
-            if (kept := self.store.answered(key)) is not None:
-                if kept["fingerprint"] != fingerprint:
-                    return refusal(Refused(422, "that Idempotency-Key was used for another request"))
-                return Response(kept["body"], kept["status"], media_type="application/json",
-                                headers={"Idempotent-Replayed": "true"})
-            try:
-                body = json.loads(raw) if raw else {}
-                if not isinstance(body, dict):
-                    raise Refused(400, "the body must be a JSON object")
-                response = JSONResponse(done_json(handler(request, body)))
-            except json.JSONDecodeError:
-                response = refusal(Refused(400, "the body isn't JSON"))
-            except Exception as e:
-                response = refusal(e)
-            self.store.answer(key, fingerprint, response.status_code, response.body.decode())
-            seen = self.marks()
-            self.hub.refresh()   # what /sessions serves has the command's change before it's published
-            self.publish_moved(seen)
-            return response
+            return await self.on_hub(self.carry_out, handler, request, key, raw)
         return endpoint
+
+    def carry_out(self, handler, request: Request, key: str, raw: bytes) -> Response:
+        """A command, on the hub's thread: one at a time, so the same key sent twice at once
+        is still done once."""
+        fingerprint = hashlib.sha256(f"{request.url.path}\n".encode() + raw).hexdigest()
+        if (kept := self.store.answered(key)) is not None:
+            if kept["fingerprint"] != fingerprint:
+                return refusal(Refused(422, "that Idempotency-Key was used for another request"))
+            return Response(kept["body"], kept["status"], media_type="application/json",
+                            headers={"Idempotent-Replayed": "true"})
+        try:
+            body = json.loads(raw) if raw else {}
+            if not isinstance(body, dict):
+                raise Refused(400, "the body must be a JSON object")
+            response = JSONResponse(done_json(handler(request, body)))
+        except json.JSONDecodeError:
+            response = refusal(Refused(400, "the body isn't JSON"))
+        except Exception as e:
+            response = refusal(e)
+        self.store.answer(key, fingerprint, response.status_code, response.body.decode())
+        seen = self.marks()
+        self.hub.refresh()   # what /sessions serves has the command's change before it's published
+        self.publish_moved(seen)
+        return response
 
     async def events(self, request: Request) -> Response:
         try:
@@ -369,9 +407,12 @@ class Daemon:
                 "context": {"tokens": snap.context, "window": snap.window, "estimate": snap.estimate}
                 if snap and snap.context else None}
 
-    def sessions(self, request: Request) -> list[dict]:
-        """Every session as the last tick read it."""
+    def session_views(self) -> list[dict]:
+        """Every session as the hub's last refresh read it: on the hub's thread."""
         return [self.session_view(s) for s in self.hub.sessions]
+
+    def sessions(self, request: Request) -> list[dict]:
+        return self.view
 
     def conversation(self, request: Request) -> list[dict]:
         blocks = self.hub.conversation(request.path_params["sid"])

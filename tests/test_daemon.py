@@ -3,6 +3,7 @@
 import asyncio
 import json
 import sqlite3
+import time
 import uuid
 
 import anyio
@@ -26,6 +27,7 @@ def daemon(store, monkeypatch):
     d.feed = Feed(start=100)
     yield d
     d.pool.shutdown()
+    d.worker.shutdown()
     d.watch.close()
 
 
@@ -379,3 +381,21 @@ async def test_a_tick_that_fails_is_said_and_the_next_goes_on(daemon, monkeypatc
     task.cancel()
     assert len(calls) > 1, "ticking carries on"
     assert "a tick failed" in capsys.readouterr().err
+
+
+async def test_a_slow_disk_never_holds_up_the_sessions(daemon, tmp_path, monkeypatch):
+    scandir = daemon_mod.os.scandir
+
+    def slow(path):
+        time.sleep(0.5)   # a mount gone slow
+        return scandir(path)
+    monkeypatch.setattr(daemon_mod.os, "scandir", slow)
+    daemon.tick()
+    async with client(daemon) as c:
+        listing = asyncio.create_task(c.get("/fs", params={"path": str(tmp_path)}))
+        await asyncio.sleep(0.05)
+        started = time.monotonic()
+        assert (await c.get("/sessions")).status_code == 200
+        assert time.monotonic() - started < 0.25, "/sessions answered while the listing waits"
+        assert not listing.done()
+        assert (await listing).status_code == 200

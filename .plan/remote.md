@@ -42,6 +42,11 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
   such as a VPN's name for the machine), else 421: a page rebound by DNS to the daemon's
   address can neither read nor drive it. A POST with an `Origin` must come from the
   daemon's own (403); a client that sends none, as httpx doesn't, is accepted.
+- **Threads.** The event loop only serves. The hub runs on a thread of its own, its
+  tick, commands and callbacks one at a time as on the TUI's loop; the queries that read
+  the store or the disk (`/items`, a thread, `/fs`) run on starlette's threads; and
+  `/sessions` answers the view the hub's thread made at its last refresh. A slow mount or
+  a locked database holds up neither `/sessions` nor the streams' pings.
 - **Queries** answer the store's rows as JSON, with what the hub works out beside them: a
   session's shown status, mode, busy, stale, sends_now and context size (from its
   transcript, or its host's count after a compaction); an item's standing, and whether
