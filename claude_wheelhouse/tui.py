@@ -502,6 +502,9 @@ class SessionList(SinkList):
         if getattr(self.app, "session_list", None) is self:   # its room: the parked sessions keep to its foot
             self.app.paint_sessions()
 
+    def watch_show_horizontal_scrollbar(self, shown: bool) -> None:
+        self.on_resize()   # a long name's scrollbar takes the room's last line
+
     async def _on_click(self, event) -> None:
         # Textual runs every class's _on_click in turn, DataTable's after this one, so don't
         # call it here too: that made one click select twice and open two relaunch prompts
@@ -1693,7 +1696,7 @@ class WheelhouseApp(App):
             q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
             rows.append((s["id"], (dot, name, self.context_cell(s), q, unseen, queued, busy)))
         cells = dict(rows)
-        room = table.size.height - table.header_height
+        room = table.scrollable_content_region.height - table.header_height   # above any scrollbar
         laid = self.session_sink.lay(self, list(cells), {s["id"] for s in self.sessions if s["parked"]}, room)
         rows = [(k, cells[k]) if k else (f"{BLANK}{i}", ("",) * len(table.columns)) for i, k in enumerate(laid)]
         if fill(table, rows) and table.row_count:

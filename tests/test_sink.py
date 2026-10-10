@@ -201,6 +201,32 @@ async def test_delete_moves_at_once_both_ways(store, sid, subject, presses, desc
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("names, desc", [
+    (("alpha", "bravo", "charlie"), "short names: no scrollbar under the list"),
+    (("claude-wheelhouse", "a-really-quite-long-session-name", "charlie"),
+     "long names: the horizontal scrollbar takes the list's last line, and the parked one sits above it"),
+])
+async def test_a_parked_session_shows_at_the_foot(tmp_path, monkeypatch, names, desc):
+    """T66: the parked sessions sit at the foot of the list's visible rows, whatever the
+    width of its names, never under its scrollbar."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    store = Store(tmp_path / "w.db")
+    ids = [store.create_session(str(tmp_path), name=n) for n in names]
+    store.set_parked(ids[0], True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.refresh_data()
+        await moved(app, pilot)
+        await pilot.pause()
+        table = app.session_list
+        shown = table.scrollable_content_region.height - table.header_height
+        assert table.max_scroll_y == 0, f"{desc}: nothing to scroll to"
+        assert slots(app)[ids[0]] == shown - 1, f"{desc}: on the last line shown, {slots(app)}, {shown} shown"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("kind, status, said, desc", [
     ("task", "done", "dismissed T1", "Delete dismisses a done task"),
     ("agent", "failed", "dismissed A1", "and a failed subagent"),
@@ -271,7 +297,7 @@ async def test_a_parked_session_falls_to_the_foot_and_rises_back(store, sid, tmp
         app.refresh_data()   # laid out: the list knows its room
         await pilot.pause()
         table = app.session_list
-        room = table.size.height - table.header_height
+        room = table.scrollable_content_region.height - table.header_height
         assert slots(app) == {sid: 0, other: 1}, "no gap with nothing parked"
         for parked, end, desc in ((True, room - 1, "falls to the foot"), (False, 0, "rises back to the top")):
             store.set_parked(sid, parked)
