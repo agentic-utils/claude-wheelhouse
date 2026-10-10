@@ -140,7 +140,7 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "host_command", "TEXT"), ("sessions", "shell", "TEXT"),
                  ("sessions", "context_tokens", "INTEGER"), ("sessions", "context_max", "INTEGER"),
                  ("items", "answer", "TEXT"), ("sessions", "context_at", "TEXT"),
-                 ("items", "dismissed", "TEXT")]
+                 ("items", "dismissed", "TEXT"), ("sessions", "relaunch", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped: unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -339,6 +339,19 @@ class Store:
         """tab: the host has handed the session to an interactive tab and waits for it to exit."""
         with self.tx() as db:
             db.execute("UPDATE sessions SET shell = ? WHERE id = ?", (state, sid))
+
+    def set_relaunch(self, sid: str, host: tuple | None, deadline: float = 0.0) -> None:
+        """A Relaunch under way: the host it stopped, (pid, start time), and the epoch second
+        it gives up by, so a wheelhouse started again carries it on; None once it's done."""
+        with self.tx() as db:
+            db.execute("UPDATE sessions SET relaunch = ? WHERE id = ?",
+                       (json.dumps([*host, deadline]) if host else None, sid))
+
+    def relaunches(self) -> dict[str, tuple[float, tuple]]:
+        """Each Relaunch under way, by session: (its epoch deadline, the host it stopped)."""
+        return {r["id"]: (deadline, (pid, start)) for r in self._all(
+            "SELECT id, relaunch FROM sessions WHERE relaunch IS NOT NULL")
+            for pid, start, deadline in [json.loads(r["relaunch"])]}
 
     def unregister(self, sid: str) -> None:
         """The registered process is letting go of the session (a host handing over to a tab):

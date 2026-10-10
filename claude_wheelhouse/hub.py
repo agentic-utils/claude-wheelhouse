@@ -97,8 +97,11 @@ class Hub:
         self.by_id: dict = {}   # the sessions by id, as the last refresh read them
         self.statuses: dict[str, str] = {}
         # sessions whose host Relaunch has stopped: started again once it has gone. Each has
-        # a monotonic deadline and the stopped host, (pid, start time)
-        self.relaunching: dict[str, tuple[float, tuple]] = {}
+        # a monotonic deadline and the stopped host, (pid, start time). Kept in the store too
+        # (relaunch_under_way), so a hub started again carries on those an earlier one began
+        self.relaunching: dict[str, tuple[float, tuple]] = {
+            sid: (time.monotonic() + deadline - time.time(), host)
+            for sid, (deadline, host) in self.store.relaunches().items()}
         self.followers: dict[str, transcript.Follower] = {}
         # each session's context size for the session list: read on workers, by a follower
         # shared with the stats pane (stats.follower), so each transcript is read once
@@ -219,8 +222,18 @@ class Hub:
             pass   # exited between the check and the signal: finish_relaunches starts it again
         except OSError as e:
             return Done(False).say(f"couldn't stop its host: {e}", "error")
-        self.relaunching[sid] = (time.monotonic() + RELAUNCH_WAIT, host)
+        self.relaunch_under_way(sid, host)
         return Done().say(f"relaunching {display_name(s)}: stopping its host")
+
+    def relaunch_under_way(self, sid: str, host: tuple | None) -> None:
+        """A Relaunch that has stopped a session's host, kept here and in the store; or, with
+        no host, done with."""
+        if host:
+            self.relaunching[sid] = (time.monotonic() + RELAUNCH_WAIT, host)
+            self.store.set_relaunch(sid, host, time.time() + RELAUNCH_WAIT)
+        else:
+            self.relaunching.pop(sid, None)
+            self.store.set_relaunch(sid, None)
 
     def finish_relaunches(self) -> None:
         """Start each stopped host again once its process has really gone: launch refuses a
@@ -231,10 +244,10 @@ class Hub:
         for sid, (deadline, host) in list(self.relaunching.items()):
             s = next((x for x in self.sessions if x["id"] == sid), None)
             if s is None:   # ended meanwhile
-                del self.relaunching[sid]
+                self.relaunch_under_way(sid, None)
             elif not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
-                del self.relaunching[sid]
                 done = self.open_session(sid)   # as it ran: a host again, not WHEELHOUSE_RUNNER's way
+                self.relaunch_under_way(sid, None)   # after: a hub stopped between sees the new host
                 for notice in done.notices:
                     self.emit(notice)
                 if done.ok:
@@ -242,11 +255,11 @@ class Hub:
                     self.statuses[sid] = liveness.status(self.row(sid), waking=self.waking)   # not dead for a tick
                     self.announce(f"relaunched {display_name(s)}")
             elif (s["claude_pid"], s["claude_start"]) != host:
-                del self.relaunching[sid]
+                self.relaunch_under_way(sid, None)
                 self.store.set_parked(sid, False)
                 self.announce(f"relaunched {display_name(s)}")
             elif time.monotonic() > deadline:
-                del self.relaunching[sid]
+                self.relaunch_under_way(sid, None)
                 self.announce(f"{display_name(s)}'s host didn't stop within {RELAUNCH_WAIT}s, so it wasn't "
                               f"relaunched: see hosts/{sid}.log", "error")
 

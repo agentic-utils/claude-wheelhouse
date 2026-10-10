@@ -104,6 +104,34 @@ def test_a_relaunch_the_hub_finishes_is_said_to_every_listener(hub, store, sid, 
     assert heard == [("relaunched demo", "information")]
 
 
+@pytest.mark.parametrize("stops, wait, launched, said, desc", [
+    (True, 30, ["open"], "relaunched demo", "its host gone meanwhile: started again"),
+    (False, 0, [], "didn't stop within 0s", "still up by its deadline: given up on, and said so"),
+])
+def test_a_relaunch_under_way_is_carried_on_by_a_hub_started_again(store, sid, monkeypatch, stops, wait, launched,
+                                                                   said, desc):
+    host(store, sid)
+    alive, calls = {4242}, []
+    monkeypatch.setattr(hub_mod.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: pid in alive)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live" if s["claude_pid"] in alive else "dead")
+    monkeypatch.setattr(hub_mod, "RELAUNCH_WAIT", wait)
+    monkeypatch.setattr(launch, "open_session", lambda store, sid: calls.append("open"))
+    first = Hub(store)
+    first.refresh()
+    assert first.stop_host(sid, (4242, 1)).ok
+    if stops:
+        alive.clear()
+    again, heard = Hub(store), []   # the first one gone with it under way: a daemon restarted
+    again.listen(lambda e: heard.append(e.text))
+    assert sid in again.relaunching, desc
+    again.refresh()
+    again.finish_relaunches()
+    assert calls == launched, desc
+    assert any(said in text for text in heard), f"{desc}: {heard}"
+    assert sid not in again.relaunching and store.relaunches() == {}, f"{desc}: done with, here and in the store"
+
+
 @pytest.mark.parametrize("parked, status, read, desc", [
     (False, "live", True, "a running session's context is read"),
     (False, "dead", True, "so is a dead one's, once"),
