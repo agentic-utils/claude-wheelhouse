@@ -2995,11 +2995,11 @@ async def test_the_stats_pane_shows_account_usage(store, sid):
 @pytest.mark.anyio
 @pytest.mark.parametrize("context, compact, runner, chars, desc", [
     (None, False, "tab", "", "no transcript yet: no bar"),
-    (350_000, False, "tab", "▅", "350k: half way from 200k to 500k"),
-    (90_000, False, "tab", "▂", "90k: most of the first step"),
-    (350_000, True, "sdk", "▂", "compacted since the last response: the host's 90k count stands in (#54)"),
-    (350_000, True, "tab", "▅", "a tab session has no host count: the transcript's size until the next response"),
-    (350_000, False, "sdk", "▅", "no compaction since the last response: the transcript's size is exact"),
+    (350_000, False, "tab", "▃", "350k: into the third 125k"),
+    (90_000, False, "tab", "▁", "90k: within the first 125k"),
+    (350_000, True, "sdk", "▁", "compacted since the last response: the host's 90k count stands in (#54)"),
+    (350_000, True, "tab", "▃", "a tab session has no host count: the transcript's size until the next response"),
+    (350_000, False, "sdk", "▃", "no compaction since the last response: the transcript's size is exact"),
 ])
 async def test_the_session_list_shows_context_size(store, sid, tmp_path, monkeypatch, context, compact, runner,
                                                    chars, desc):

@@ -131,7 +131,7 @@ def window_for(model: str | None, peak: int) -> int:
 
 
 GRADES = ((150_000, OK), (300_000, WARN), (600_000, AMBER))   # below each: its colour; red above (#51)
-SCALE = (0, 100_000, 200_000, 500_000, 1_000_000)              # the session list's bar: two eighths a step
+STEP = 125_000                                                 # the session list's bar: an eighth each, linear
 
 
 def grade(size: int) -> tuple:
@@ -142,11 +142,10 @@ def grade(size: int) -> tuple:
 
 def context_bar(size: int) -> Text:
     """A context size in the session list: one cell in its grade's colour, filled in
-    eighths on the exponential SCALE, two eighths each for 100k, 200k, 500k and 1M (#51).
-    Any context at all shows at least one."""
-    fills = [max(0.0, min(1.0, (size - lo) / (hi - lo))) for lo, hi in zip(SCALE, SCALE[1:])]
-    eighths = math.floor(sum(fills) * 8 / len(fills) + 0.5)   # half up, not round()'s half to even
-    return Text(PARTIAL[max(eighths, 1 if size > 0 else 0)], style=hexc(grade(size)))
+    eighths on a linear scale, 125k each, so a full cell is 1M (#51). An eighth shows as
+    soon as any of its 125k is used, so any context at all shows one, and past 1M the cell
+    stays full."""
+    return Text(PARTIAL[min(math.ceil(size / STEP), 8)], style=hexc(grade(size)))
 
 
 @dataclass

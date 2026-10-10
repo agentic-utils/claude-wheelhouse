@@ -202,19 +202,18 @@ def test_context_grades(size, colour, desc):
 
 @pytest.mark.parametrize("size, char, desc", [
     (0, " ", "nothing yet"),
-    (10_000, "▁", "any context shows"),
-    (100_000, "▂", "100k: two eighths"),
-    (125_000, "▃", "125k: two and a half eighths round half up, not to even (#51)"),
-    (150_000, "▃", "150k: half way to 200k"),
-    (200_000, "▄", "200k: half way up"),
-    (350_000, "▅", "350k: half way to 500k"),
-    (500_000, "▆", "500k"),
-    (750_000, "▇", "750k: half way to 1M"),
+    (1, "▁", "any context shows"),
+    (125_000, "▁", "125k: the first eighth, full"),
+    (125_001, "▂", "past 125k: the second eighth begun"),
+    (250_000, "▂", "250k"),
+    (500_000, "▄", "500k: half the cell"),
+    (600_000, "▅", "600k: into the fifth eighth"),
+    (875_001, "█", "past 875k: the last eighth begun"),
     (1_000_000, "█", "1M fills the cell"),
     (1_500_000, "█", "past 1M stays full"),
 ])
 def test_the_context_bar(size, char, desc):
-    """Doug (#51): one cell, eight levels, on the 100k/200k/500k/1M scale, in its grade's colour."""
+    """Doug (#51): one cell, eight levels, linear at 125k an eighth, in its grade's colour."""
     bar = stats.context_bar(size)
     assert bar.plain == char, desc
     assert Style.parse(bar.style).color.get_truecolor() == stats.grade(size), desc
