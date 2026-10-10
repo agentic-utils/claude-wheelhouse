@@ -156,6 +156,23 @@ async def test_a_request_sent_again_is_done_once(daemon, store, sid, second, sta
         assert (again.json(), again.headers["idempotent-replayed"]) == (first.json(), "true"), desc
 
 
+async def test_an_answer_the_store_cant_keep_is_kept_in_memory_till_it_can(daemon, store, sid, monkeypatch, capsys):
+    answer = store.answer
+
+    def locked(*a, **kw):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(store, "answer", locked)
+    first = await call(daemon, "POST", f"/sessions/{sid}/send", {"text": "hello"}, key="k1")
+    again = await call(daemon, "POST", f"/sessions/{sid}/send", {"text": "hello"}, key="k1")
+    assert (first.status_code, again.json(), len(store.drafts(sid))) == (200, first.json(), 1), "done once"
+    assert "couldn't keep the answer" in capsys.readouterr().err
+    daemon.tick()
+    assert store.answered("k1") is None and daemon.unkept, "still locked: still in memory"
+    monkeypatch.setattr(store, "answer", answer)
+    daemon.tick()
+    assert store.answered("k1")["body"] == first.text and not daemon.unkept
+
+
 async def test_a_key_is_forgotten_after_a_day(daemon, store, sid):
     await call(daemon, "POST", f"/sessions/{sid}/send", {"text": "hello"}, key="k1")
     store.db.execute("UPDATE idempotency SET at = '2000-01-01T00:00:00+00:00'")

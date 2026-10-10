@@ -64,7 +64,9 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
 - **Idempotency.** Every POST needs an `Idempotency-Key` (400 without). Each answer is kept
   in the database's `idempotency` table for a day, so a request sent again, across a
   daemon restart too, is answered the same and done once; the same key on another request
-  is 422.
+  is 422. Commands run one at a time, so the same key sent twice at once is done once too.
+  An answer the database can't take when given (locked) is kept in memory and written at
+  a later tick: only a restart before then could let a retry act twice.
 - **Events.** `{seq, kind, sid?, ref?}`, kinds `sessions`, `items`, `thread`,
   `conversation`, `stats`, `notice` (the hub's own, with its text and severity) and
   `refetch`. Seqs start from the clock in milliseconds, so they rise across a restart. The

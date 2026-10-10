@@ -203,6 +203,7 @@ class Daemon:
         self.marked: dict = {}                      # as last published
         self.shown: dict[str, str] = {}   # each session's status as last published
         self.view: list[dict] = []        # /sessions, as the hub's thread last made it
+        self.unkept: dict[str, dict] = {}  # answers the store couldn't keep: kept here till a tick can
         self.hub.listen(self.heard)
         self.app = Starlette(routes=[
             Route("/sessions", self.query(self.sessions, run=None)),
@@ -257,6 +258,7 @@ class Daemon:
 
     def tick(self) -> None:
         """The hub's refresh, as the TUI's tick has it, then what moved."""
+        self.keep_answers()
         hub, seen = self.hub, self.marks()   # before the refresh: see publish_moved
         hub.refresh()
         hub.read_contexts()
@@ -264,6 +266,16 @@ class Daemon:
         hub.fetch_usage()
         hub.finish_relaunches()
         self.publish_moved(seen)
+
+    def keep_answers(self) -> None:
+        """The answers the store couldn't keep when given, kept now if it can: until then a
+        retry is answered from memory, so only a restart meanwhile could do one twice."""
+        for key, answer in list(self.unkept.items()):
+            try:
+                self.store.answer(key, **answer)
+            except sqlite3.Error:
+                return
+            del self.unkept[key]
 
     def data_version(self) -> int:
         return self.watch.execute("PRAGMA data_version").fetchone()[0]
@@ -368,7 +380,7 @@ class Daemon:
         """A command, on the hub's thread: one at a time, so the same key sent twice at once
         is still done once."""
         fingerprint = hashlib.sha256(f"{request.url.path}\n".encode() + raw).hexdigest()
-        if (kept := self.store.answered(key)) is not None:
+        if (kept := self.unkept.get(key) or self.store.answered(key)) is not None:
             if kept["fingerprint"] != fingerprint:
                 return refusal(Refused(422, "that Idempotency-Key was used for another request"))
             return Response(kept["body"], kept["status"], media_type="application/json",
@@ -382,7 +394,13 @@ class Daemon:
             response = refusal(Refused(400, "the body isn't JSON"))
         except Exception as e:
             response = refusal(e)
-        self.store.answer(key, fingerprint, response.status_code, response.body.decode())
+        answer = {"fingerprint": fingerprint, "status": response.status_code, "body": response.body.decode()}
+        try:
+            self.store.answer(key, **answer)
+        except sqlite3.Error as e:   # done, so kept all the same: a retry mustn't do it again
+            print(f"wheelhouse daemon: couldn't keep the answer to {key} ({e}): kept in memory meanwhile",
+                  file=sys.stderr, flush=True)
+            self.unkept[key] = answer
         seen = self.marks()
         self.hub.refresh()   # what /sessions serves has the command's change before it's published
         self.publish_moved(seen)
