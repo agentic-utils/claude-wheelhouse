@@ -283,6 +283,39 @@ async def test_a_command_publishes_what_it_moved_at_once(daemon, sid):
     assert kinds(daemon) == [(kind, None) for kind in STORE_KINDS]
 
 
+@pytest.mark.parametrize("method, path, body, seen, desc", [
+    ("POST", "/sessions/{sid}/rename", {"name": "renamed"}, lambda s: s["name"] == "renamed", "rename"),
+    ("POST", "/sessions", {"cwd": "{tmp}", "name": "fresh"}, lambda s: s["name"] == "fresh", "a new session"),
+    ("POST", "/sessions/{sid}/relaunch", None, lambda s: s["name"] == "demo" and not s["parked"],
+     "Relaunch of a dead one unparks it"),
+])
+async def test_a_client_refetching_on_a_commands_event_sees_what_it_did(daemon, store, sid, tmp_path, method,
+                                                                         path, body, seen, desc):
+    store.set_parked(sid, True)
+    daemon.tick()
+    daemon.feed.ring.clear()
+    await call(daemon, method, fill(path, sid, tmp_path), fill(body, sid, tmp_path))
+    assert ("sessions", None) in kinds(daemon), desc
+    assert any(seen(s) for s in (await call(daemon, "GET", "/sessions")).json()), desc
+
+
+async def test_a_write_between_the_refresh_and_the_version_read_is_published_next_tick(daemon, sid, db_file,
+                                                                                         monkeypatch):
+    daemon.tick()
+    refresh = daemon.hub.refresh
+
+    def refresh_then_written():
+        refresh()
+        Store(db_file).rename(sid, "late")
+    monkeypatch.setattr(daemon.hub, "refresh", refresh_then_written)
+    daemon.tick()
+    monkeypatch.setattr(daemon.hub, "refresh", refresh)
+    daemon.feed.ring.clear()
+    daemon.tick()
+    assert ("sessions", None) in kinds(daemon), "the write after the refresh is published at the next tick"
+    assert [s["name"] for s in (await call(daemon, "GET", "/sessions")).json()] == ["late"]
+
+
 async def test_a_status_changing_with_no_write_is_published(daemon, sid, monkeypatch):
     daemon.tick()
     daemon.feed.ring.clear()

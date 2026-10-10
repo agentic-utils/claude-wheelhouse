@@ -216,21 +216,24 @@ class Daemon:
 
     def tick(self) -> None:
         """The hub's refresh, as the TUI's tick has it, then what moved."""
-        hub = self.hub
+        hub, seen = self.hub, self.data_version()   # before the refresh: see publish_moved
         hub.refresh()
         hub.read_contexts()
         hub.watch_agents()
         hub.fetch_usage()
         hub.finish_relaunches()
-        self.publish_moved()
+        self.publish_moved(seen)
 
     def data_version(self) -> int:
         return self.watch.execute("PRAGMA data_version").fetchone()[0]
 
-    def publish_moved(self) -> None:
+    def publish_moved(self, version: int) -> None:
         """What has moved since last looked: the database, by data_version, and the status
-        each session shows, which liveness and Relaunch change with no write."""
-        if (version := self.data_version()) != self.version:
+        each session shows, which liveness and Relaunch change with no write. The version is
+        read before the hub's refresh, so what it marks is in the rows /sessions serves: a
+        write after it moves it again, for the next tick, and a client refetching on an
+        event never gets the rows from before it."""
+        if version != self.version:
             self.version = version
             for kind in STORE_KINDS:
                 self.feed.publish(kind)
@@ -274,7 +277,8 @@ class Daemon:
     def command(self, handler):
         """A POST: from a client, not another site's page; with an Idempotency-Key, whose
         answer is kept, so the same request sent again is answered the same and done once.
-        What it moved is published at once, not at the next tick."""
+        What it moved is published at once, not at the next tick, and the rows /sessions
+        serves are read again first, so a client refetching on that event sees it."""
         async def endpoint(request: Request) -> Response:
             try:
                 self.check_host(request)
@@ -303,7 +307,9 @@ class Daemon:
             except Exception as e:
                 response = refusal(e)
             self.store.answer(key, fingerprint, response.status_code, response.body.decode())
-            self.publish_moved()
+            seen = self.data_version()
+            self.hub.refresh()   # what /sessions serves has the command's change before it's published
+            self.publish_moved(seen)
             return response
         return endpoint
 
