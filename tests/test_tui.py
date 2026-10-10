@@ -2796,6 +2796,36 @@ async def test_the_word_after_acting_on_marks_names_each_act(store, sid, kinds, 
 
 
 @pytest.mark.anyio
+async def test_the_word_after_acting_on_marks_mid_sink_names_them_as_they_will_stand(store, sid, monkeypatch):
+    """A question answered sinks below a settled task; Delete on both, the move still under
+    way, names them in the order they'll stand, not the frame's."""
+    monkeypatch.setattr(tui.Sink, "SECONDS", 60)   # the move under way throughout
+    q = store.post_item(sid, "question", "q")
+    t = store.post_item(sid, "task", "t", status="done")
+    at = "UPDATE items SET updated_at = ? WHERE ref = ?"   # settled oldest first: the question to go below
+    store.db.execute(at, ("2026-10-09T09:00:00+00:00", t))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        items = app.items_table
+        items.focus()
+        items.move_cursor(row=items.get_row_index(f"{sid}|{t}"))   # selected, a question answered isn't pinned
+        await pilot.pause()
+        store.reply(sid, q, "thanks", status="answered")
+        store.db.execute(at, ("2026-10-09T10:00:00+00:00", q))
+        app.refresh_data()
+        await pilot.pause()
+        marks = [f"{sid}|{r}" for r in (q, t)]
+        assert app.item_sink.move and [k for k in items.keys() if k in marks] == marks, "mid-sink: Q1 still shows above"
+        items.set_marks(set(marks))
+        notes = []
+        app.notify = lambda text, **kw: notes.append(text)
+        await pilot.press("delete")
+        await pilot.pause()
+    assert notes == ["dismissed T1; closed Q1: F shows finished items"]
+
+
+@pytest.mark.anyio
 async def test_delete_closes_the_marked_questions_and_ctrl_r_reopens_them(store, sid):
     with one_second():   # Q1-Q3 in order, under the rows clicked
         q1, q2, q3 = (store.post_item(sid, "question", t) for t in "abc")
