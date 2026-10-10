@@ -216,11 +216,12 @@ class Daemon:
         self.shown: dict[str, str] = {}   # each session's status as last published
         self.view: list[dict] = []        # /sessions, as the hub's thread last made it
         self.unkept: dict[str, dict] = {}  # answers the store couldn't keep: kept here till a tick can
+        self.reading: dict[str, threading.Lock] = {}   # each session's transcript, read by one request at a time
         self.hub.listen(self.heard)
         self.app = Starlette(routes=[
             Route("/sessions", self.query(self.sessions, run=None)),
             Route("/sessions", self.command(self.new_session), methods=["POST"]),
-            Route("/sessions/{sid}/conversation", self.query(self.conversation, run=self.on_hub)),
+            Route("/sessions/{sid}/conversation", self.query(self.conversation)),
             Route("/sessions/{sid}/{action}", self.command(self.session_command), methods=["POST"]),
             Route("/dispatch", self.command(lambda request, body: self.hub.send_all()), methods=["POST"]),
             Route("/items", self.query(self.items)),
@@ -453,9 +454,13 @@ class Daemon:
         return self.view
 
     def conversation(self, request: Request) -> list[dict]:
-        blocks = self.hub.conversation(request.path_params["sid"])
+        """On starlette's threads, as it reads the transcript: the hub's followers are only
+        this query's, each session's read by one request at a time."""
+        sid = request.path_params["sid"]
+        with self.reading.setdefault(sid, threading.Lock()):
+            blocks = self.hub.conversation(sid)
         if blocks is None:
-            raise SessionGone(request.path_params["sid"])
+            raise SessionGone(sid)
         return [{"who": who, "text": markdown} for who, markdown in blocks]
 
     def items(self, request: Request) -> list[dict]:

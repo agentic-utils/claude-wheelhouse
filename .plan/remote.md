@@ -49,9 +49,10 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
   send a command at all. The key must never become optional.
 - **Threads.** The event loop only serves. The hub runs on a thread of its own, its
   tick, commands and callbacks one at a time as on the TUI's loop; the queries that read
-  the store or the disk (`/items`, a thread, `/fs`) run on starlette's threads; and
-  `/sessions` answers the view the hub's thread made at its last refresh. A slow mount or
-  a locked database holds up neither `/sessions` nor the streams' pings.
+  the store or the disk (`/items`, a thread, a conversation, `/fs`) run on starlette's
+  threads; and `/sessions` answers the view the hub's thread made at its last refresh. A
+  slow mount holds up neither the hub's tick and commands, nor `/sessions`, nor the
+  streams' pings; a locked database neither `/sessions` nor the pings.
 - **Queries** answer the store's rows as JSON, with what the hub works out beside them: a
   session's shown status, mode, busy, stale, sends_now and context size (from its
   transcript, or its host's count after a compaction); an item's standing, and whether

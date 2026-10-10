@@ -490,6 +490,23 @@ async def test_a_slow_disk_never_holds_up_the_sessions(daemon, tmp_path, monkeyp
         assert (await listing).status_code == 200
 
 
+async def test_a_slow_transcript_never_holds_up_the_hub(daemon, sid, monkeypatch):
+    read = daemon_mod.Hub.conversation
+
+    def slow(hub, sid):
+        time.sleep(0.5)   # a mount gone slow
+        return read(hub, sid)
+    monkeypatch.setattr(daemon_mod.Hub, "conversation", slow)
+    async with client(daemon) as c:
+        reading = asyncio.create_task(c.get(f"/sessions/{sid}/conversation"))
+        await asyncio.sleep(0.05)
+        started = time.monotonic()
+        r = await c.post(f"/sessions/{sid}/rename", json={"name": "x"}, headers={"Idempotency-Key": "k1"})
+        assert r.status_code == 200 and time.monotonic() - started < 0.25, "a command answered while it reads"
+        assert not reading.done()
+        assert (await reading).status_code == 200
+
+
 async def test_a_signal_to_stop_ends_the_streams_first(daemon, monkeypatch):
     monkeypatch.setattr(AppStatus, "should_exit", False)   # sse-starlette's, for the whole process: put back
     daemon.loop = asyncio.get_running_loop()
