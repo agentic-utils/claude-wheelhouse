@@ -206,7 +206,7 @@ session list), `F` show or hide finished items (the footer says which it will do
 highlighted question or decision or dismiss a done task or subagent, `N` new session, `A` adopt, `Shift+S` restore all, `Esc` all sessions (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue (not a dead one's: Restore it first), `Ctrl+T` switch the session between Queued and
-Immediate, `Ctrl+R` take a queued answer back (with none queued, in the inbox, bring back a finished item: a question
+Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
 as answered, a decision as seen), `?` list every key and button, `Q` quit (it asks first
 while a relaunch is waiting for a host to stop). Outside a text box, the buttons that have no other key:
 `I` Interrupt, `C` Compact, `H` Shell, `1` Allow, `2` Always and `3` Deny on a permission item (numbered

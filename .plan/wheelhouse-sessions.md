@@ -343,9 +343,9 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   status brings it back). Delete only ever closes: on a finished one shown with F it does
   nothing but say that Ctrl+R reopens it, and one its session finished while selected,
   held in sight with F off, it lets go of at once, as if the person had closed it. Ctrl+R
-  on a finished item (or the marked ones) in the inbox brings it back, a question as
+  on a finished item (or the marked ones) in the item list brings it back, a question as
   answered, a decision as seen, unless the item has an answer queued: then it takes that
-  back, as it always has. A permission answered
+  back, as it always has. In the answer box it only ever takes back. A permission answered
   goes at once, as before: Allow, Always and Deny are explicit acts, as Delete is. The
   upgrade that adds `items.dismissed` dismisses the tasks and subagents already settled,
   which were off the inbox before, so it doesn't fill with them.

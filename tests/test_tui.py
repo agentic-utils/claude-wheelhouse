@@ -2338,7 +2338,7 @@ async def test_a_refresh_racing_a_move_keeps_pane_and_highlight_together(store, 
     ("delete", "question", "closed", True, False, "closed", "Delete on a closed question (shown with f) leaves it closed"),
     ("backspace", "question", "closed", True, False, "closed", "as does Backspace"),
     ("ctrl+r", "question", "closed", True, False, "answered", "Ctrl+R reopens a closed question (shown with f) as answered"),
-    ("ctrl+r", "question", "closed", True, True, "answered", "from the answer box too, with nothing queued for it"),
+    ("ctrl+r", "question", "closed", True, True, "closed", "not from the answer box: there it only takes back (D44)"),
     ("ctrl+r", "question", "open", False, False, "open", "Ctrl+R on an open question with nothing queued leaves it"),
     ("delete", "task", "running", False, False, "running", "a task's status is the session's: Delete leaves it"),
     ("x", "question", "open", False, False, "open", "x no longer closes (#64)"),
@@ -2757,7 +2757,7 @@ async def test_marking_rows(store, sid, steps, marked, desc):
 ])
 async def test_ctrl_r_takes_a_queued_answer_back_before_it_reopens(store, sid, queued, where, box, status, desc):
     """Ctrl+R keeps its meaning where the item has an answer queued: taking it back. Only with
-    none, in the inbox, where Delete closes, does it reopen a finished item."""
+    none, in the item list, where Delete closes, does it reopen a finished item."""
     q = store.post_item(sid, "question", "which db?", status="closed")
     if queued:
         store.queue(sid, "a word", q)
@@ -2777,6 +2777,104 @@ async def test_ctrl_r_takes_a_queued_answer_back_before_it_reopens(store, sid, q
         assert (app.screen.box if where == "thread" else app.answer).text == box, desc
     assert store.item(sid, q)["status"] == status, desc
     assert bool(store.drafts(sid)) == (queued and not box), f"{desc}: the queue"
+
+
+async def ctrl_r_where(tmp_path, follow, focus, at, marks, typed, slow) -> dict:
+    """Q1 and Q2 closed, Q3 open, F on, nothing queued; the rows at marked, the highlight on
+    at (or, following, the conversation row), focus on the item list or the answer box, then
+    what's typed and Ctrl+R, typed slowly or sent as one raw burst. What it left: each status,
+    the box, the marks and the last word said."""
+    store = Store(tmp_path / f"{'slow' if slow else 'raw'}.db")
+    sid = store.create_session(str(tmp_path), name="demo")
+    with one_second():
+        refs = dict(zip(("Q1", "Q2", "Q3"), (store.post_item(sid, "question", t) for t in "abc")))
+    for name in ("Q1", "Q2"):
+        store.update_item(sid, refs[name], status="closed")
+    app = WheelhouseApp(store)
+    notes = []
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("f")
+        if follow:
+            app.follow(sid)
+        await pilot.pause()
+        items = app.items_table
+        items.focus()
+        items.move_cursor(row=items.get_row_index(f"{sid}|{refs[at] if at else ''}"))
+        await pilot.pause()
+        items.set_marks({f"{sid}|{refs[m]}" for m in marks})
+        if focus == "box":
+            app.answer.focus()
+        await pilot.pause()
+        app.notify = lambda text, **kw: notes.append(text)
+        keys = (*typed, "ctrl+r")
+        if slow:
+            await pilot.press(*keys)
+        else:
+            raw_keys(app, *keys)
+        for _ in range(4):
+            await pilot.pause()
+        assert_one_current(app, f"{'slow' if slow else 'raw'} {focus} {typed}")
+        return {"status": {n: store.item(sid, r)["status"] for n, r in refs.items()}, "box": app.answer.text,
+                "marked": sorted(n for n, r in refs.items() if f"{sid}|{r}" in items.marked),
+                "said": notes[-1:]}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("follow, focus, at, marks, typed, reopened, said, desc", [
+    (False, "items", "Q3", ("Q1", "Q2"), "", ("Q1", "Q2"), "reopened Q1, Q2", "the item list reopens the marked rows"),
+    (True, "items", None, ("Q1", "Q2"), "", ("Q1", "Q2"), "reopened Q1, Q2", "and so it does following the conversation"),
+    (False, "items", "Q1", (), "", ("Q1",), "reopened Q1 as answered", "or the highlighted finished one"),
+    (False, "box", "Q3", ("Q1", "Q2"), "typing", (), "the box isn't empty: queue or clear it first",
+     "review: typing in the answer box, Ctrl+R never reopens the marked rows"),
+    (True, "box", None, ("Q1", "Q2"), "typing", (), "the box isn't empty: queue or clear it first",
+     "nor following the conversation"),
+    (False, "box", "Q1", (), "half an answer", (), "the box isn't empty: queue or clear it first",
+     "review: half an answer to a closed question, Ctrl+R in the box leaves it closed, as before 4ea937b"),
+    (False, "box", "Q1", (), "", (), None, "an empty box with nothing queued: Ctrl+R there still only takes back"),
+])
+async def test_ctrl_r_reopens_only_from_the_item_list(tmp_path, follow, focus, at, marks, typed, reopened, said, desc):
+    """D44: Ctrl+R reopens only with the item list focused. In the answer box it only takes a
+    queued answer back, as it did before it reopened anything, so what's typed is never lost
+    to it and no other item changes."""
+    raw = await ctrl_r_where(tmp_path / "raw", follow, focus, at, marks, typed, slow=False)
+    slow = await ctrl_r_where(tmp_path / "slow", follow, focus, at, marks, typed, slow=True)
+    assert raw == slow, f"{desc}: raw {raw}, slow {slow}"
+    expected = {n: "answered" if n in reopened else "open" if n == "Q3" else "closed" for n in ("Q1", "Q2", "Q3")}
+    assert slow["status"] == expected, desc
+    assert slow["box"] == typed, f"{desc}: the box"
+    assert slow["marked"] == ([] if reopened else sorted(marks)), f"{desc}: the marks"
+    if said:
+        assert slow["said"] == [said], f"{desc}: the notice"
+    else:
+        assert slow["said"][0].startswith("nothing queued for"), f"{desc}: the notice"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("kinds, key, said, desc", [
+    (("question", "task"), "delete", "closed Q1; dismissed T1: F shows finished items",
+     "Delete on mixed marks says which it closed and which it dismissed"),
+    (("task", "agent"), "delete", "dismissed T1, A1: F shows finished items", "all dismissed: said so"),
+    (("question", "task"), "ctrl+r", "reopened Q1, T1", "Ctrl+R brings either back"),
+])
+async def test_the_word_after_acting_on_marks_names_each_act(store, sid, kinds, key, said, desc):
+    refs = [store.post_item(sid, k, k, status={"question": "open", "task": "done", "agent": "done"}[k]) for k in kinds]
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        items = app.items_table
+        items.focus()
+        if key == "ctrl+r":   # finished first, shown with F
+            for k, r in zip(kinds, refs):
+                app.close(store.item(sid, r), True)
+            await pilot.press("f")
+        await pilot.pause()
+        items.set_marks({f"{sid}|{r}" for r in refs})
+        notes = []
+        app.notify = lambda text, **kw: notes.append(text)
+        await pilot.press(key)
+        await pilot.pause()
+    assert notes == [said], desc
 
 
 @pytest.mark.anyio

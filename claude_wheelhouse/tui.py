@@ -1194,7 +1194,7 @@ DESCRIBE = {
     "app.submit": "Submit what's typed: queued, or sent at once, by the session's mode",
     "send_session": "Send the current session's queue (a dead one's waits: Restore it first)",
     "toggle_mode": "Switch the session between Queued and Immediate",
-    "recall": ("Take this item's latest queued answer back into the box; with none queued, in the inbox, "
+    "recall": ("Take this item's latest queued answer back into the box; with none queued, in the item list, "
                "reopen the highlighted finished item (or every marked one)"),
     "new_session": "New session",
     "adopt": "Adopt: pick a Claude Code session that isn't in the wheelhouse yet, from those on disk",
@@ -1284,7 +1284,8 @@ SEND_RULES = (
     "**Immediate**: Ctrl+Enter sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
 MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
-         "keep Shift+click for itself: Space and Shift+Up/Down do the same), then Delete or Backspace closes them together. "
+         "keep Shift+click for itself: Space and Shift+Up/Down do the same), then Delete or Backspace closes them together "
+         "and Ctrl+R reopens the finished ones. "
          "Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back.")
@@ -2586,9 +2587,13 @@ class WheelhouseApp(App):
                 self.close(it, closed)
             except SessionGone:   # ended meanwhile: the rest still go
                 continue
-            done.append(it["ref"])
+            done.append(it)
         self.items_table.set_marks(set())
-        self.notify(("closed " if closed else "reopened ") + ", ".join(done)
+        said = {}   # by verb: a task or subagent is dismissed, not closed
+        for it in done:
+            verb = ("closed" if it["kind"] in CLOSABLE else "dismissed") if closed else "reopened"
+            said.setdefault(verb, []).append(it["ref"])
+        self.notify("; ".join(f"{verb} {', '.join(refs)}" for verb, refs in said.items())
                     + ("" if not closed or self.show_finished else ": F shows finished items"))
         self.refresh_data()
 
@@ -2670,14 +2675,15 @@ class WheelhouseApp(App):
     @session_action
     def action_recall(self) -> None:
         """Ctrl+R: take this item's latest queued answer back into the box, to edit it or drop
-        it. With nothing queued for it, in the inbox, reopen the finished items marked, or else
-        the highlighted one if it's finished (close): what Delete closed comes back."""
+        it. With nothing queued for it and the item list focused, reopen the finished items
+        marked, or else the highlighted one if it's finished (close): what Delete closed comes
+        back. In a text box it only ever takes back, so typing there never reopens anything."""
         self.settle()
         box, target = self.composing()
         if box is None or not target:
             return
         drafts = [m for m in self.store.drafts(target[0]) if m["item_ref"] == target[1]]
-        if not drafts and self.screen is self.screen_stack[0]:
+        if not drafts and self.focused is self.items_table:
             if self.items_table.marked:
                 self.close_marked(False)
                 return

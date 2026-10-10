@@ -138,7 +138,8 @@ Where the build differs from the design above:
   transaction. `unqueue()` takes a draft back.
 - **Editing or dropping a queued answer.** Ctrl+R in a compose box takes the item's latest
   queued answer back into the box, to edit and queue again, or to clear and so drop. With
-  nothing queued for it, in the inbox, Ctrl+R reopens a finished item instead (Delete only closes).
+  nothing queued for it, in the item list, Ctrl+R reopens a finished item instead (Delete only closes);
+  in a text box it only ever takes back.
 - **One notification per poll.** The monitor prints everything sent since its last poll
   as one line (a single message reads as before). Two sends within one poll, or sends
   that waited for a dead session, share a line. A batch is split only when it won't fit:
