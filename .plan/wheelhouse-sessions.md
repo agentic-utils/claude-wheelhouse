@@ -350,11 +350,11 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   upgrade that adds `items.dismissed` dismisses the tasks and subagents already settled,
   which were off the inbox before, so it doesn't fill with them.
 - **The dwell** (`tui.DWELL`, 1 s; `look`, `dwelt`). An unseen decision becomes seen only
-  once the person has looked at it for a second without a break: selected by them
-  (`picked`), on the inbox or in its own thread (ThreadView), with no dialog over it. The
-  app's own selection (the top row at startup, the next row once an item or its session
-  goes, a row landed on as the filter clears) counts for nothing, and `picked` ends as the
-  app selects anything else, so its re-selecting the same row later doesn't count either.
+  once it has been in sight for a second without a break: selected, on the inbox or in its
+  own thread (ThreadView), with no dialog over it, whatever selected it. The app's own
+  selection (the top row at startup, the next row once an item or its session goes, a row
+  landed on as the filter clears) counts as the person's does: what's in sight for the
+  second is what changes.
   The terminal window losing focus (AppBlur) is a break; regaining it (AppFocus) starts
   the dwell again, and a terminal that doesn't report focus behaves as before. One
   one-shot timer, restarted whenever the selection, the screen or the window's focus
@@ -364,7 +364,7 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   or resting on it for less than a second, leaves it unseen, so a burst typed ahead marks
   nothing on the way and ends as the same keys typed slowly, given the same dwell. The
   tutorial's screen-only steps (a question highlighted, the conversation followed) tick
-  the same way, from the person's own selection. Explicit acts stay immediate: Delete,
+  the same way, but only from the person's own selection (`picked`). Explicit acts stay immediate: Delete,
   answering it (Ctrl+Enter), Enter on a tutorial question. A decision seen by the dwell
   while selected is settled and, by the sinking rule below, stays put until the
   selection moves on.

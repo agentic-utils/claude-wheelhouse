@@ -1441,7 +1441,7 @@ class WheelhouseApp(App):
         self.dwelling: tuple | None = None
         self.dwell_gen = 0
         self.dwell_timer = None
-        self.picked: tuple | None = None   # the selection the person last made, until the app selects another (saw)
+        self.picked: tuple | None = None   # the selection the person last made, not the app (saw)
         # where each list's cursor was last left by the app, or settled (settle): a cursor
         # anywhere else is the person's move, not yet acted on
         self.items_cursor: str | None = None
@@ -1671,15 +1671,12 @@ class WheelhouseApp(App):
     @property
     def selected(self) -> tuple[str, str | None] | None:
         """The highlighted row: (session id, item ref), or (session id, None) for the session's
-        conversation. Setting it restarts the dwell (look), and the app's move elsewhere ends
-        the person's pick: only their own selection counts as looked at (dwelt)."""
+        conversation. Setting it restarts the dwell (look), whatever made the selection."""
         return self._selected
 
     @selected.setter
     def selected(self, value: tuple[str, str | None] | None) -> None:
         self._selected = value
-        if value != self.picked:
-            self.picked = None
         self.look()
 
     def look(self) -> None:
@@ -1710,11 +1707,12 @@ class WheelhouseApp(App):
         self.look()
 
     def dwelt(self, gen: int) -> None:
-        """The person has looked at their own selection (picked) for DWELL without a break: an
-        unseen decision becomes seen, and a tutorial step it makes ticks (saw). The app's
-        selection, at startup or once an item goes, changes neither. Only if it is still what
-        they look at: the same selection, once the cursors have settled (a burst's arrows may
-        have moved them), on the inbox or in the selected item's thread, not under a dialog."""
+        """The selection has been in sight for DWELL without a break: an unseen decision becomes
+        seen, whatever selected it (the app's own selection, at startup or once an item goes,
+        included), and a tutorial step the person's own selection makes ticks (saw). Only if it
+        is still what they look at: the same selection, once the cursors have settled (a
+        burst's arrows may have moved them), on the inbox or in the selected item's thread,
+        not under a dialog."""
         self.settle()
         if gen != self.dwell_gen or self.selected is None:
             return
@@ -1722,10 +1720,10 @@ class WheelhouseApp(App):
         sid, ref = self.selected
         screen = self.screen
         if not (screen is self.screen_stack[0]
-                or isinstance(screen, ThreadView) and (screen.sid, screen.ref) == (sid, ref)) \
-                or self.selected != self.picked:
+                or isinstance(screen, ThreadView) and (screen.sid, screen.ref) == (sid, ref)):
             return
-        self.saw(sid, ref)
+        if self.selected == self.picked:
+            self.saw(sid, ref)
         if ref and self.store.mark_seen(sid, ref):   # a no-op unless it's an unseen decision
             self.paint_sessions()   # its D count
             self.paint_items()   # it keeps its place while selected (ranked), and sinks once left
@@ -2430,7 +2428,7 @@ class WheelhouseApp(App):
         if key is not None and key != self.items_cursor:
             self.items_cursor = key
             self.select_row(key)
-            self.picked = self.selected   # looked at for DWELL, it's seen (dwelt)
+            self.picked = self.selected   # the person's own pick: looked at for DWELL, a tutorial step it makes ticks (dwelt)
             # what the selection held re-sorts now, not at the next tick (ranked): a settled
             # item sinks as the key that moved on lands, so the keys behind it act on the same rows
             self.paint_items()

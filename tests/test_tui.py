@@ -2326,9 +2326,6 @@ async def test_the_selected_item_keeps_its_place(store, sid, kind, pick, answer,
         table = app.items_table
         order = lambda: [{v: k for k, v in refs.items()}[key.split("|")[1]] for key in table.keys()]
         assert order() == ["new", "old"], f"{desc}: newest first"
-        # the top row is the app's selection, which the dwell never marks: the person picks it
-        table.move_cursor(row=table.get_row_index(f"{sid}|{refs['old']}"))
-        await pilot.pause()
         for age in (pick, "new" if pick == "old" else "old"):   # the one, then away from it
             table.move_cursor(row=table.get_row_index(f"{sid}|{refs[age]}"))
             await pilot.pause()
@@ -2510,17 +2507,19 @@ async def dwell_steps(pilot, app, keys, steps) -> None:
     (("on D", "delete"), "closed", "Delete: at once"),
     (("on D", "answer"), "seen", "answering it: seen at once"),
     (("follow A", "on D", "short", "session B", "rest"), "unseen", "a switch to another session mid-dwell"),
-    (("gone E", "at D", "rest"), "unseen", "the top row at startup, the app's selection: unseen"),
-    (("on B's", "end B", "at D", "rest"), "unseen", "the next item, selected as a session ends: unseen"),
+    (("gone E", "at D", "short"), "unseen", "the top row at startup, the app's selection: not at once"),
+    (("gone E", "at D", "rest"), "seen", "but seen after the dwell all the same"),
+    (("on B's", "end B", "at D", "rest"), "seen", "the next item, selected as a session ends: seen after the dwell"),
+    (("on B's", "end B", "at D", "short", "blur", "rest"), "unseen", "unless the window loses focus first"),
     (("on D", "short", "blur", "rest"), "unseen", "the window losing focus mid-dwell: a break in looking"),
     (("on D", "short", "blur", "short", "focus", "rest"), "seen", "focus again, then a rest of the dwell: seen"),
 ])
 async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_path, monkeypatch, steps, want, desc):
     """Doug: "I need to look at an item for at least 1 second before the state changes". An
     unseen decision becomes seen only once it has stayed selected, on the inbox or in its
-    thread, for the dwell without a break, and only if the person selected it: not the app's
-    own selection, nor while the window is out of focus. The person's explicit acts, Delete
-    and answering, act at once."""
+    thread, for the dwell without a break, but not while the window is out of focus. Doug: "state
+    should change after 1 second visible whether or not I selected it myself", so the app's
+    own selection counts too. The person's explicit acts, Delete and answering, act at once."""
     monkeypatch.setattr("claude_wheelhouse.tui.DWELL", TIMED_DWELL)
     other = store.create_session(str(tmp_path), name="other")
     with one_second():
