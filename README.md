@@ -55,8 +55,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   and a subagent done or failed stay in the inbox, dimmed, below everything still
   needing you, the latest at the foot. One you've selected keeps its place, whatever its
   status does; once you move on it falls to the foot. `Delete` dismisses it (closes a
-  question or decision); `F` shows the dismissed and closed ones, and `Delete` on one
-  brings it back. One you've answered and the session hasn't replied to stays up, as
+  question or decision); `F` shows the dismissed and closed ones, and `Ctrl+R` on one
+  brings it back (`Delete` only ever closes: on one its session finished while you had it
+  selected, it lets it go at once). One you've answered and the session hasn't replied to stays up, as
   processing. A permission goes as soon as you answer it.
 - **Follow a session.** Click a session in the inbox's list (or move to it, or Enter on it): its items
   list gains a pinned first row, 💬 Conversation, highlighted, and drops its session column (it shows
@@ -202,10 +203,11 @@ offers the tutorial in one line: `Enter` takes it, `Esc` dismisses it for good.
 
 Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision or dismiss a done task or subagent (or bring back a finished one: a question as answered, a decision as seen), `N` new session, `A` adopt, `Shift+S` restore all, `Esc` all sessions (or clears a text
+highlighted question or decision or dismiss a done task or subagent, `N` new session, `A` adopt, `Shift+S` restore all, `Esc` all sessions (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue (not a dead one's: Restore it first), `Ctrl+T` switch the session between Queued and
-Immediate, `Ctrl+R` take a queued answer back, `?` list every key and button, `Q` quit (it asks first
+Immediate, `Ctrl+R` take a queued answer back (with none queued, in the inbox, bring back a finished item: a question
+as answered, a decision as seen), `?` list every key and button, `Q` quit (it asks first
 while a relaunch is waiting for a host to stop). Outside a text box, the buttons that have no other key:
 `I` Interrupt, `C` Compact, `H` Shell, `1` Allow, `2` Always and `3` Deny on a permission item (numbered
 as in Claude Code's own prompt), and `Shift+A` Send all (every running session's queue). A key whose button doesn't apply says so.
@@ -222,7 +224,7 @@ Closing several questions or decisions at once: in the item list, `Ctrl`+click m
 and `Shift`+click marks the range from the last one marked; from the keyboard, `Space`
 marks or unmarks the highlighted row and `Shift+Up`/`Shift+Down` extend the range (Windows
 Terminal keeps `Shift`+click for its own text selection). `Delete` or `Backspace` then closes the marked
-questions and decisions and dismisses the done tasks and subagents, or brings them back if they're all finished, `Esc` clears the marks, and a plain click
+questions and decisions and dismisses the done tasks and subagents, `Ctrl+R` brings back the finished ones, `Esc` clears the marks, and a plain click
 starts afresh.
 
 Text: drag the mouse over the conversation or a thread to select part of it (shown black

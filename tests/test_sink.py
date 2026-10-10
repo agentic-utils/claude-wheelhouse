@@ -172,14 +172,15 @@ async def test_delete_moves_at_once(store, sid):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("subject, presses, desc", [
-    ("one", 1, "Delete closes an open question: at the foot, at once"),
-    ("one", 2, "and again reopens it as answered: with the settled, at once, not held at the foot"),
-    ("three", 1, "Delete reopens a closed question: with the settled, at once"),
-    ("three", 2, "and again closes it: back at the foot, at once"),
+@pytest.mark.parametrize("subject, keys, desc", [
+    ("one", ("delete",), "Delete closes an open question: at the foot, at once"),
+    ("one", ("delete", "delete"), "and again leaves it closed: Delete never reopens"),
+    ("one", ("delete", "ctrl+r"), "then Ctrl+R reopens it as answered: with the settled, at once, not held at the foot"),
+    ("three", ("ctrl+r",), "Ctrl+R reopens a closed question: with the settled, at once"),
+    ("three", ("ctrl+r", "delete"), "and Delete closes it again: back at the foot, at once"),
 ])
-async def test_delete_moves_at_once_both_ways(store, sid, subject, presses, desc):
-    """D33: closing with Delete moves the item at once, and so does reopening it."""
+async def test_delete_moves_at_once_both_ways(store, sid, subject, keys, desc):
+    """D33: closing with Delete moves the item at once, and so does reopening it with Ctrl+R."""
     from claude_wheelhouse.store import inbox_rank
     with one_second():
         names = {store.post_item(sid, "question", t): t for t in ("one", "two", "three")}
@@ -194,8 +195,8 @@ async def test_delete_moves_at_once_both_ways(store, sid, subject, presses, desc
         await pilot.pause()
         app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{ref[subject]}"))
         await pilot.pause()
-        for _ in range(presses):
-            await pilot.press("delete")
+        for key in keys:
+            await pilot.press(key)
             await pilot.pause()
         expected = [names[it["ref"]] for it in sorted(store.items(sid), key=inbox_rank)]
         assert app.item_sink.move is None, f"{desc}: not sinking"
@@ -258,7 +259,11 @@ async def test_delete_dismisses_settled_tasks_and_subagents(store, sid, monkeypa
             await pilot.pause()
             await pilot.press("delete")
             await pilot.pause()
-            assert standing(store.item(sid, ref)) == "settled", f"{desc}: Delete on it again brings it back"
+            assert standing(store.item(sid, ref)) == "finished", f"{desc}: Delete on it again leaves it dismissed"
+            assert notes[-1] == f"{ref} is dismissed already: Ctrl+R reopens it", f"{desc}: {notes}"
+            await pilot.press("ctrl+r")
+            await pilot.pause()
+            assert standing(store.item(sid, ref)) == "settled", f"{desc}: Ctrl+R brings it back"
 
 
 @pytest.mark.anyio
@@ -417,10 +422,12 @@ async def test_every_cursor_key_typed_during_a_move_ends_as_typed_after_it(
     assert out["raw"] == out["slow"] == out["after"] == expected, f"{desc}: {out}"
 
 
-async def held(tmp_path, keys, slow) -> dict:
+async def held(tmp_path, keys, slow, closed=False) -> dict:
     """Alpha's task D selected as the session marks it done, so it holds there, above the
-    settled t0 and t1 it will sink below; then the keys, raw as a terminal sends a burst, or
-    slowly, each landing and its move ending before the next. What they left, by title."""
+    settled t0 and t1 it will sink below (or, closed, its question D as the session closes
+    it, finished, held in sight with F off); then the keys, raw as a terminal sends a burst,
+    or slowly, each landing and its move ending before the next. What they left, by title,
+    and D's status."""
     import itertools
     from unittest import mock
     from claude_wheelhouse import liveness
@@ -432,7 +439,7 @@ async def held(tmp_path, keys, slow) -> dict:
         store.update_item(sid, t0, status="done")
         for kind, t in (("question", "Q"), ("permission", "Bash: P1"), ("permission", "Bash: P2")):
             store.post_item(sid, kind, t)
-        d = store.post_item(sid, "task", "D")
+        d = store.post_item(sid, "question" if closed else "task", "D")
         store.post_item(sid, "question", "Q2")
     title = {it["ref"]: it["title"] for it in store.items(sid)}
     with mock.patch.object(liveness, "status", lambda s, waking=False: "live"):
@@ -444,7 +451,7 @@ async def held(tmp_path, keys, slow) -> dict:
             await pilot.pause()
             await moved(app, pilot)
             assert app.selected == (sid, d)
-            store.update_item(sid, d, status="done")
+            store.update_item(sid, d, status="closed" if closed else "done")
             app.refresh_data()
             await pilot.pause()
             if slow:
@@ -457,7 +464,8 @@ async def held(tmp_path, keys, slow) -> dict:
                 await pilot.pause()
             await moved(app, pilot)
             assert_one_current(app, f"{'slow' if slow else 'raw'} {keys}")
-            return {"rows": [title[r] for r in refs(app)], "selected": app.selected and title[app.selected[1]]}
+            return {"rows": [title[r] for r in refs(app)], "selected": app.selected and title[app.selected[1]],
+                    "D": store.item(sid, d)["status"]}
 
 
 @pytest.mark.anyio
@@ -471,5 +479,23 @@ async def test_delete_on_a_row_still_sinking_ends_as_typed_slowly(tmp_path, keys
     there, t0, as when typed slowly, not the one beside it in the frame."""
     raw = await held(tmp_path / "raw", keys, slow=False)
     slow = await held(tmp_path / "slow", keys, slow=True)
-    assert raw == slow == {"rows": ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0"], "selected": "t0"}, \
+    assert raw == slow == {"rows": ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0"], "selected": "t0", "D": "done"}, \
         f"{desc}: raw {raw}, slow {slow}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("keys, rows, selected, status, desc", [
+    (("delete",), ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0"], "Bash: P2",
+     "closed", "Delete on D held in sight as its session closed it (F off): it goes now, as if closed here"),
+    (("backspace",), ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0"], "Bash: P2", "closed", "as does Backspace"),
+    (("ctrl+r",), ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0", "D"], "D",
+     "answered", "Ctrl+R on it reopens it as answered: with the settled, still selected"),
+    (("ctrl+r", "delete"), ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0"], "t0", "closed", "and Delete closes it again, from the foot"),
+])
+async def test_delete_on_a_held_finished_item_sends_it_away(tmp_path, keys, rows, selected, status, desc):
+    """Delete only ever closes. On an item its session finished while selected, held
+    in place with F off, it lets it go at once, as closing it there would; Ctrl+R reopens it.
+    Raw or slow, the same."""
+    raw = await held(tmp_path / "raw", keys, slow=False, closed=True)
+    slow = await held(tmp_path / "slow", keys, slow=True, closed=True)
+    assert raw == slow == {"rows": rows, "selected": selected, "D": status}, f"{desc}: raw {raw}, slow {slow}"

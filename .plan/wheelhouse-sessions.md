@@ -340,7 +340,12 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   processing. Delete
   closes a question or decision and dismisses a settled task or subagent
   (`items.dismissed` holds the status it was dismissed in, so a session that changes the
-  status brings it back); on a finished one it brings it back. A permission answered
+  status brings it back). Delete only ever closes: on a finished one shown with F it does
+  nothing but say that Ctrl+R reopens it, and one its session finished while selected,
+  held in sight with F off, it lets go of at once, as if the person had closed it. Ctrl+R
+  on a finished item (or the marked ones) in the inbox brings it back, a question as
+  answered, a decision as seen, unless the item has an answer queued: then it takes that
+  back, as it always has. A permission answered
   goes at once, as before: Allow, Always and Deny are explicit acts, as Delete is. The
   upgrade that adds `items.dismissed` dismisses the tasks and subagents already settled,
   which were off the inbox before, so it doesn't fill with them.
@@ -373,7 +378,7 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   ordinary paint, so the cursor rides its row by key (D22). Every key that moves a
   list's cursor (Up, Down, PageUp, PageDown, Ctrl+Home, Ctrl+End, Shift+Up and Shift+Down)
   acts in the final order, never a frame's or a blank row, so keys typed during a move end
-  as typed after it. Delete moves at once, closing or reopening (D33), as does a permission answered: the only changes that move a selected item. The item list's session column shows only while
+  as typed after it. Delete closing and Ctrl+R reopening move at once (D33), as does a permission answered: the only changes that move a selected item. The item list's session column shows only while
   it has every session's items (D31): following one session, it's redundant.
 - **Session view.** Selecting a session (one click, or Enter) also puts its main
   conversation in the right-hand pane, so the person can follow and talk to a session

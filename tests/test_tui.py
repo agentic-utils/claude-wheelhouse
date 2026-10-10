@@ -2250,14 +2250,17 @@ async def test_a_refresh_racing_a_move_keeps_pane_and_highlight_together(store, 
     ("delete", "question", "open", False, False, "closed", "Delete closes a question"),
     ("backspace", "question", "open", False, False, "closed", "and so does Backspace"),
     ("delete", "question", "answered", False, False, "closed", "an answered one too"),
-    ("delete", "question", "closed", True, False, "answered", "Delete on a closed question (shown with f) reopens it"),
-    ("backspace", "question", "closed", True, False, "answered", "as does Backspace"),
+    ("delete", "question", "closed", True, False, "closed", "Delete on a closed question (shown with f) leaves it closed"),
+    ("backspace", "question", "closed", True, False, "closed", "as does Backspace"),
+    ("ctrl+r", "question", "closed", True, False, "answered", "Ctrl+R reopens a closed question (shown with f) as answered"),
+    ("ctrl+r", "question", "closed", True, True, "answered", "from the answer box too, with nothing queued for it"),
+    ("ctrl+r", "question", "open", False, False, "open", "Ctrl+R on an open question with nothing queued leaves it"),
     ("delete", "task", "running", False, False, "running", "a task's status is the session's: Delete leaves it"),
     ("x", "question", "open", False, False, "open", "x no longer closes (#64)"),
     ("backspace", "question", "open", False, True, "open", "in the answer box Backspace edits the text"),
     ("delete", "question", "open", False, True, "open", "and so does Delete"),
 ])
-async def test_delete_closes_and_reopens_questions(store, sid, key, kind, status, finished, focus_box, expected, desc):
+async def test_delete_closes_and_ctrl_r_reopens_questions(store, sid, key, kind, status, finished, focus_box, expected, desc):
     ref = store.post_item(sid, kind, "which db?", status=status)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -2398,8 +2401,9 @@ PIN_ACTS = {
     ("task dismissed awaiting", "reply", False, "a reply to the person's word on a dismissed task"),
     ("question open", "delete", True, "the person closing a question with Delete (D33)"),
     ("task done", "delete", True, "the person dismissing a done task with Delete (D33)"),
-    ("question closed", "delete", True, "the person reopening a question with Delete, F on (D33)"),
-    ("task dismissed", "delete", True, "the person bringing back a dismissed task with Delete, F on (D33)"),
+    ("question closed", "ctrl+r", True, "the person reopening a question with Ctrl+R, F on (D33)"),
+    ("task dismissed", "ctrl+r", True, "the person bringing back a dismissed task with Ctrl+R, F on (D33)"),
+    ("question closed", "delete", False, "Delete on a closed question, F on: it only ever closes, so it stays"),
     ("permission open", "#allow", True, "the person answering a permission: an explicit act, as Delete is"),
     ("permission open", "allowed", False, "a permission answered elsewhere (its own terminal)"),
 ])
@@ -2407,7 +2411,7 @@ async def test_a_selected_item_moves_only_on_delete(store, sid, live, start, act
     """Doug: "only move items when not selected (so eg the falling animation for completed
     tasks, which I think should also apply to seen decisions and answered questions, should
     only take place after I move focus to something else)". The one exception is the
-    person's own Delete, closing or reopening, which moves it at once (D33)."""
+    person's own Delete closing or Ctrl+R reopening, which moves it at once (D33)."""
     tick = itertools.count()
     stamp = lambda: (datetime(2026, 10, 8, 10, tzinfo=timezone.utc) + timedelta(seconds=next(tick))).isoformat()
     with mock.patch("claude_wheelhouse.store.now", stamp):   # one second apart: a fixed order
@@ -2432,8 +2436,8 @@ async def test_a_selected_item_moves_only_on_delete(store, sid, live, start, act
             where = lambda: [r.key.value for r in table.ordered_rows].index(f"{sid}|{ref}")
             before = where()
             assert app.selected == (sid, ref), desc
-            if act == "delete":
-                await pilot.press("delete")
+            if act in ("delete", "ctrl+r"):
+                await pilot.press(act)
             elif act.startswith("#"):
                 await pilot.click(act)
             else:
@@ -2605,12 +2609,13 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("start, finished, expected, desc", [
-    ("unseen", False, "closed", "Delete closes an unseen decision"),
-    ("seen", False, "closed", "and a seen one"),
-    ("closed", True, "seen", "Delete on a closed decision (shown with f) reopens it as seen"),
+@pytest.mark.parametrize("start, key, finished, expected, desc", [
+    ("unseen", "delete", False, "closed", "Delete closes an unseen decision"),
+    ("seen", "delete", False, "closed", "and a seen one"),
+    ("closed", "delete", True, "closed", "Delete on a closed decision (shown with f) leaves it closed"),
+    ("closed", "ctrl+r", True, "seen", "Ctrl+R reopens it as seen"),
 ])
-async def test_delete_closes_and_reopens_decisions(store, sid, start, finished, expected, desc):
+async def test_delete_closes_and_ctrl_r_reopens_decisions(store, sid, start, key, finished, expected, desc):
     d = store.post_item(sid, "decision", "cache in SQLite", alternative="Postgres", why="local", reverse="swap")
     if start == "closed":
         store.close_decision(sid, d)
@@ -2622,7 +2627,7 @@ async def test_delete_closes_and_reopens_decisions(store, sid, start, finished, 
         app.items_table.focus()
         app.items_table.move_cursor(row=0)
         await pilot.pause()
-        await pilot.press("delete")
+        await pilot.press(key)
         await pilot.pause()
     assert store.item(sid, d)["status"] == expected, desc
 
@@ -2660,7 +2665,38 @@ async def test_marking_rows(store, sid, steps, marked, desc):
 
 
 @pytest.mark.anyio
-async def test_x_closes_the_marked_questions_and_reopens_them(store, sid):
+@pytest.mark.parametrize("queued, where, box, status, desc", [
+    (True, "items", "a word", "closed", "a word queued on it: Ctrl+R takes it back, the item stays closed"),
+    (False, "items", "", "answered", "nothing queued: Ctrl+R reopens it"),
+    (False, "thread", "", "closed", "full screen, Ctrl+R only takes back: nothing queued, nothing done"),
+    (True, "thread", "a word", "closed", "and takes the word back there"),
+])
+async def test_ctrl_r_takes_a_queued_answer_back_before_it_reopens(store, sid, queued, where, box, status, desc):
+    """Ctrl+R keeps its meaning where the item has an answer queued: taking it back. Only with
+    none, in the inbox, where Delete closes, does it reopen a finished item."""
+    q = store.post_item(sid, "question", "which db?", status="closed")
+    if queued:
+        store.queue(sid, "a word", q)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("f")
+        app.items_table.focus()
+        app.items_table.move_cursor(row=0)
+        await pilot.pause()
+        if where == "thread":
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, ThreadView), desc
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        assert (app.screen.box if where == "thread" else app.answer).text == box, desc
+    assert store.item(sid, q)["status"] == status, desc
+    assert bool(store.drafts(sid)) == (queued and not box), f"{desc}: the queue"
+
+
+@pytest.mark.anyio
+async def test_delete_closes_the_marked_questions_and_ctrl_r_reopens_them(store, sid):
     with one_second():   # Q1-Q3 in order, under the rows clicked
         q1, q2, q3 = (store.post_item(sid, "question", t) for t in "abc")
         t = store.post_item(sid, "task", "build", status="running")
@@ -2681,11 +2717,22 @@ async def test_x_closes_the_marked_questions_and_reopens_them(store, sid):
         assert items.marked == set()
         await pilot.press("f")
         await pilot.pause()
-        items.set_marks({f"{sid}|{q1}", f"{sid}|{q3}"})
+        items.set_marks({f"{sid}|{q1}", f"{sid}|{q2}", f"{sid}|{q3}"})
         await pilot.pause()
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        assert [store.item(sid, r)["status"] for r in (q1, q2, q3)] == ["answered", "open", "answered"], \
+            "Ctrl+R reopens the finished ones marked, and leaves the open one"
+        assert items.marked == set()
+        items.set_marks({f"{sid}|{q1}", f"{sid}|{q3}"})
         await pilot.press("delete")
         await pilot.pause()
-    assert [store.item(sid, r)["status"] for r in (q1, q3)] == ["answered", "answered"], "all closed: Delete reopens"
+        items.set_marks({f"{sid}|{q1}", f"{sid}|{q3}"})
+        await pilot.press("delete")
+        await pilot.pause()
+        assert [store.item(sid, r)["status"] for r in (q1, q3)] == ["closed", "closed"], \
+            "all finished: Delete only ever closes, so they stay closed"
+        assert items.marked == {f"{sid}|{q1}", f"{sid}|{q3}"}, "nothing to act on: the marks stay"
 
 
 @pytest.mark.anyio

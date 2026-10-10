@@ -630,7 +630,7 @@ class Store:
                               (now(), sid, ref)).rowcount > 0
 
     def dismiss(self, sid: str, ref: str, dismissed: bool = True) -> None:
-        """The person dismisses a settled task or subagent (Delete), or brings it back. Kept as
+        """The person dismisses a settled task or subagent (Delete), or brings it back (Ctrl+R). Kept as
         the status it was dismissed in: a session that changes it brings it back."""
         with self.tx() as db:
             self._require(db, sid)

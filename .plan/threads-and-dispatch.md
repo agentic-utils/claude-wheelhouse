@@ -137,7 +137,8 @@ Where the build differs from the design above:
   cancellations use it). Queuing is a separate `queue()`, and `dispatch(sid)` sends a session's drafts in one
   transaction. `unqueue()` takes a draft back.
 - **Editing or dropping a queued answer.** Ctrl+R in a compose box takes the item's latest
-  queued answer back into the box, to edit and queue again, or to clear and so drop.
+  queued answer back into the box, to edit and queue again, or to clear and so drop. With
+  nothing queued for it, in the inbox, Ctrl+R reopens a finished item instead (Delete only closes).
 - **One notification per poll.** The monitor prints everything sent since its last poll
   as one line (a single message reads as before). Two sends within one poll, or sends
   that waited for a dead session, share a line. A batch is split only when it won't fit:

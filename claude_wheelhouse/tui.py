@@ -67,7 +67,7 @@ TAB_RELAUNCH = "a session in a tab relaunches once it has exited: /exit it there
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777"}
 PENDING = {"end": "ending", "park": "parking"}
-CLOSABLE = {"question": "answered", "decision": "seen"}   # what Delete closes, and what reopening makes it
+CLOSABLE = {"question": "answered", "decision": "seen"}   # what Delete closes, and what Ctrl+R reopening makes it
 
 
 def closable(item) -> bool:
@@ -1191,7 +1191,8 @@ DESCRIBE = {
     "app.submit": "Submit what's typed: queued, or sent at once, by the session's mode",
     "send_session": "Send the current session's queue (a dead one's waits: Restore it first)",
     "toggle_mode": "Switch the session between Queued and Immediate",
-    "recall": "Take this item's latest queued answer back into the box",
+    "recall": ("Take this item's latest queued answer back into the box; with none queued, in the inbox, "
+               "reopen the highlighted finished item (or every marked one)"),
     "new_session": "New session",
     "adopt": "Adopt: pick a Claude Code session that isn't in the wheelhouse yet, from those on disk",
     "restore_all": "Restore all: every dead session that isn't parked",
@@ -1199,7 +1200,7 @@ DESCRIBE = {
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
     "app.close_question": ("Close the highlighted question or decision, or dismiss a done task or subagent "
-                           "(or every marked one); on a finished one, bring it back"),
+                           "(or every marked one); it never reopens one: Ctrl+R does"),
     "help": "This list",
     "quit": "Quit the wheelhouse (sessions carry on without it)",
     "toggle_mark": "Mark or unmark the highlighted row",
@@ -1977,7 +1978,7 @@ class WheelhouseApp(App):
         rank it was shown with when it was selected, so its own change (a decision seen, a
         question answered, a task done) never moves it under the person. It re-sorts once the
         selection moves on, and a settled item then sinks (Sink). The exceptions are the person's
-        own explicit acts, Delete closing or reopening (close) and a permission answered
+        own explicit acts, Delete closing or Ctrl+R reopening (close) and a permission answered
         (answer_permission): it goes at once (D33), and is pinned where it went. self.ranks keeps each item's rank as shown: the next pin's, and what has
         somewhere to go (paint_items)."""
         key = self.selected and self.selected[1] and f"{self.selected[0]}|{self.selected[1]}"
@@ -1985,7 +1986,7 @@ class WheelhouseApp(App):
             self.pin = (key, self.ranks[key]) if key in self.ranks else None
         ranks = {item_key(it): inbox_rank(it, processing, busy) for it in items}
         if self.pin and self.pin[0] in ranks:
-            if self.pin[0] in self.repin:   # Delete or a permission answered: at once, and held there
+            if self.pin[0] in self.repin:   # Delete, Ctrl+R or a permission answered: at once, and held there
                 self.pin = (self.pin[0], ranks[self.pin[0]])
             else:
                 ranks[self.pin[0]] = self.pin[1]
@@ -2501,9 +2502,10 @@ class WheelhouseApp(App):
     @session_action
     def action_close_question(self) -> None:
         """Delete or Backspace in the item list: the person's call. It closes the highlighted
-        question or decision, or dismisses a settled task or subagent (store.standing); on a
-        finished one (shown with F) it brings it back, a question as answered, a decision as
-        seen. It moves at once, not sinking (D33)."""
+        question or decision, or dismisses a settled task or subagent (store.standing). It only
+        ever closes: a finished one held in sight as its session finished it (F off) goes now,
+        as if closed here, and one shown with F stays, with a word that Ctrl+R reopens it
+        (action_recall). It moves at once, not sinking (D33)."""
         self.settle()
         if isinstance(self.focused, (TextArea, Input)):
             return
@@ -2518,19 +2520,23 @@ class WheelhouseApp(App):
             what = "a running subagent" if item["kind"] == "agent" else f"a {item['kind']}"
             self.notify(f"{item['ref']} is {what}: its status is the session's to set", severity="warning")
             return
-        reopen = standing(item) == "finished"
-        self.close(item, not reopen)
         verb = "closed" if item["kind"] in CLOSABLE else "dismissed"
-        self.notify(f"reopened {item['ref']} as {CLOSABLE.get(item['kind'], item['status'])}" if reopen else
-                    f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
+        if standing(item) == "finished" and self.show_finished:
+            self.notify(f"{item['ref']} is {verb} already: Ctrl+R reopens it")
+            return
+        self.close(item, True)
+        self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
         self.refresh_data()
 
     def close(self, item, closed: bool) -> None:
-        """Close a question or decision, or reopen it: a question as answered, a decision as
-        seen. Dismiss a settled task or subagent, or bring it back. At once: no sinking, and
-        selected, it moves (D33), the one change that moves a selected item (ranked)."""
+        """Close a question or decision (Delete), or reopen it (Ctrl+R): a question as answered,
+        a decision as seen. Dismiss a settled task or subagent, or bring it back. At once: no
+        sinking, and selected, it moves (D33), the one change that moves a selected item
+        (ranked). One finished already only goes, from where it was held while selected."""
         self.item_sink.jump()
         self.repin.add(item_key(item))
+        if closed and standing(item) == "finished":
+            return
         if item["kind"] == "decision":
             self.store.close_decision(item["session_id"], item["ref"], closed)
         elif item["kind"] in DISMISSABLE:
@@ -2544,27 +2550,30 @@ class WheelhouseApp(App):
         self.store.answer_permission(sid, ref, decision, message)
         self.repin.add(f"{sid}|{ref}")
 
-    def close_marked(self) -> None:
-        """Delete on a multi-selection: closes its questions and decisions and dismisses its
-        settled tasks and subagents, or brings them back if they're all finished. Anything
-        else in it is left alone."""
+    def close_marked(self, closed: bool = True) -> None:
+        """Delete on a multi-selection closes its questions and decisions and dismisses its
+        settled tasks and subagents (and lets go of a finished one held in sight, as Delete
+        does); Ctrl+R brings back its finished ones. Anything else in it is left alone, and
+        with nothing to act on the marks stay."""
+        def acts(it):
+            finished = standing(it) == "finished"
+            return (not finished or not self.show_finished) if closed else finished
         picked = [it for key in self.items_table.keys() if key in self.items_table.marked
                   if (it := self.store.item(*key.split("|"))) and closable(it)]
-        if not picked:
-            self.notify("nothing among the marked rows to close", severity="warning")
+        if not picked or not any(acts(it) for it in picked):
+            self.notify("the marked rows are finished already: Ctrl+R reopens them" if picked and closed else
+                        f"nothing among the marked rows to {'close' if closed else 'reopen'}", severity="warning")
             return
-        reopen = all(standing(it) == "finished" for it in picked)
         done = []
-        for it in picked:
-            if reopen or standing(it) != "finished":
-                try:
-                    self.close(it, not reopen)
-                except SessionGone:   # ended meanwhile: the rest still go
-                    continue
-                done.append(it["ref"])
+        for it in filter(acts, picked):
+            try:
+                self.close(it, closed)
+            except SessionGone:   # ended meanwhile: the rest still go
+                continue
+            done.append(it["ref"])
         self.items_table.set_marks(set())
-        self.notify(("reopened " if reopen else "closed ") + ", ".join(done)
-                    + ("" if reopen or self.show_finished else ": F shows finished items"))
+        self.notify(("closed " if closed else "reopened ") + ", ".join(done)
+                    + ("" if not closed or self.show_finished else ": F shows finished items"))
         self.refresh_data()
 
     def action_help(self) -> None:
@@ -2642,16 +2651,29 @@ class WheelhouseApp(App):
         if box is self.answer:   # back to the items, cursor where it was: Down, Tab answers the next
             self.screen.set_focus(self.items_table)
 
+    @session_action
     def action_recall(self) -> None:
-        """Take this item's latest queued answer back into the box, to edit it or drop it."""
+        """Ctrl+R: take this item's latest queued answer back into the box, to edit it or drop
+        it. With nothing queued for it, in the inbox, reopen the finished items marked, or else
+        the highlighted one if it's finished (close): what Delete closed comes back."""
         self.settle()
         box, target = self.composing()
         if box is None or not target:
             return
+        drafts = [m for m in self.store.drafts(target[0]) if m["item_ref"] == target[1]]
+        if not drafts and self.screen is self.screen_stack[0]:
+            if self.items_table.marked:
+                self.close_marked(False)
+                return
+            item = target[1] and self.store.item(*target)
+            if item and closable(item) and standing(item) == "finished":
+                self.close(item, False)
+                self.notify(f"reopened {item['ref']} as {CLOSABLE.get(item['kind'], item['status'])}")
+                self.refresh_data()
+                return
         if box.text.strip():
             self.notify("the box isn't empty: queue or clear it first", severity="warning")
             return
-        drafts = [m for m in self.store.drafts(target[0]) if m["item_ref"] == target[1]]
         body = drafts and self.store.unqueue(drafts[-1]["id"])
         if not body:
             self.notify(f"nothing queued for {aimed(target)}")
