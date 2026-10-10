@@ -42,8 +42,8 @@ Your job: draft a two-line welcome message for new wheelhouse users. Do this now
    - "Tone for the welcome message?": friendly, formal, or pirate.
    - "Sign it off as whom?": the wheelhouse, the team, or no sign-off. Say in the body that \
 the right sign-off depends on the tone, so they're best answered together.
-4. Post a decision: "Writing it in British English". Alternative: American English. Why: \
-the wheelhouse's own text is British. To reverse: say so and it's rewritten.
+4. Post a decision: "Writing it in British English", why: over American English: the \
+wheelhouse's own text is British; undo: say so and it's rewritten.
 5. Say in one line of chat that you're waiting on the two questions, then stop.
 
 When the answers arrive, mark each question answered as the wheelhouse protocol says, then write the \

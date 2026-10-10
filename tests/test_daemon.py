@@ -232,7 +232,7 @@ def fails_once(real, after: bool):
 ])
 async def test_a_command_that_fails_is_kept_if_and_only_if_it_wrote(daemon, store, sid, monkeypatch, capsys, path,
                                                                     body, breaks, after, status, replayed, done, desc):
-    store.post_item(sid, "decision", "pick one", alternative="the other", why="simpler", reverse="pick again")
+    store.post_item(sid, "decision", "pick one", why="over the other: simpler; undo: pick again")
     store.post_item(sid, "permission", "Bash: ls")
     monkeypatch.setattr(store, breaks, fails_once(getattr(store, breaks), after))
     url = f"/sessions/{sid}/send" if path == "send" else f"/items/{sid}/{path}"

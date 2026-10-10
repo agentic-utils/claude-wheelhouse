@@ -277,7 +277,7 @@ def test_a_command_on_a_session_that_has_gone_raises(hub, store, sid):
     ("decision", False, "seen", "and reopens as seen"),
 ])
 def test_close_and_reopen(hub, store, sid, kind, closed, after, desc):
-    decided = {"alternative": "Postgres", "why": "local", "reverse": "migrate"} if kind == "decision" else {}
+    decided = {"why": "over Postgres: local; undo: migrate"} if kind == "decision" else {}
     ref = store.post_item(sid, kind, "used SQLite", **decided)
     if not closed:   # closed first, to reopen
         hub.close(sid, ref, True)

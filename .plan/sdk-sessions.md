@@ -299,3 +299,9 @@ so an hour's quiet is what turns the cache cold.
   turn Claude Code starts itself, ending while one of ours waits behind it, would take
   our turn's refs, as it already takes its place in `pending`; once every turn sent has
   ended, the matching starts clean.
+- **Slimmer decisions.** A decision's alternative, why and reverse were three required
+  fields, each its own labelled paragraph. They are one short line now, `why` ("over
+  Postgres: no server to run; undo: swap the DSN"), shown as **Why:** under the detail:
+  the same information in fewer words, for the session to write and the person to read.
+  PROTOCOL_VERSION 9. Question bodies are left as they are, uncapped: a cap could cut what
+  a question needs to stand on its own.
