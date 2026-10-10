@@ -856,11 +856,11 @@ def decision_body(body: str, status, fields: dict) -> str:
 def standing(item, busy=frozenset()) -> str:
     """Where an item stands in the inbox: active, settled or finished (SETTLED). A settled
     item the person has a word queued or awaiting a reply on, `busy` by (session, ref), is
-    active: the ball isn't back with them."""
-    status = item["status"]
-    if status in CLOSED - SETTLED[item["kind"]] or item["dismissed"] == status:
+    active, even if they dismissed it: the ball isn't back with them."""
+    status, waiting = item["status"], (item["session_id"], item["ref"]) in busy
+    if status in CLOSED - SETTLED[item["kind"]] or (item["dismissed"] == status and not waiting):
         return "finished"
-    if status in SETTLED[item["kind"]] and (item["session_id"], item["ref"]) not in busy:
+    if status in SETTLED[item["kind"]] and not waiting:
         return "settled"
     return "active"
 

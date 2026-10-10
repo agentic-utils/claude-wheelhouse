@@ -25,6 +25,8 @@ def anyio_backend():
     ("task", "done", True, None, "active", "a done task with a word queued or awaiting a reply doesn't"),
     ("task", "done", False, "done", "finished", "a done task dismissed"),
     ("task", "running", False, "done", "active", "a dismissed task the session took up again"),
+    ("task", "done", True, "done", "active", "a dismissed task with a word queued or awaiting a reply stays in sight"),
+    ("agent", "failed", True, "failed", "active", "so does a dismissed subagent"),
     ("question", "open", False, None, "active", "an open question"),
     ("question", "answered", False, None, "settled", "an answered question settles"),
     ("question", "answered", True, None, "active", "one with a further word queued or awaiting doesn't"),
