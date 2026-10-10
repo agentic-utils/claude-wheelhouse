@@ -1796,15 +1796,19 @@ class WheelhouseApp(App):
         """Items in inbox order (inbox_rank), but for the selected item, pinned: it keeps the
         rank it was shown with when it was selected, so its own change (a decision seen, a
         question answered, a task done) never moves it under the person. It re-sorts once the
-        selection moves on, and a settled item then sinks (Sink). Not one that finished: closed
-        with Delete, or a permission answered, it goes at once (D33). self.ranks keeps each item's
-        rank as shown: the next pin's, and what has somewhere to go (paint_items)."""
+        selection moves on, and a settled item then sinks (Sink). Not one that finished or came
+        back: closed or reopened with Delete, or a permission answered, it goes at once (D33),
+        and is pinned where it went. self.ranks keeps each item's rank as shown: the next pin's,
+        and what has somewhere to go (paint_items)."""
         key = self.selected and self.selected[1] and f"{self.selected[0]}|{self.selected[1]}"
         if self.pin is None or self.pin[0] != key:
             self.pin = (key, self.ranks[key]) if key in self.ranks else None
         ranks = {item_key(it): inbox_rank(it, processing, busy) for it in items}
-        if self.pin and self.pin[0] in ranks and band(ranks[self.pin[0]]) < 2:
-            ranks[self.pin[0]] = self.pin[1]
+        if self.pin and self.pin[0] in ranks:
+            if 2 in (band(ranks[self.pin[0]]), band(self.pin[1])):   # finished or reopened: at once, and held there
+                self.pin = (self.pin[0], ranks[self.pin[0]])
+            else:
+                ranks[self.pin[0]] = self.pin[1]
         self.ranks = ranks
         return sorted(items, key=lambda it: ranks[item_key(it)])
 

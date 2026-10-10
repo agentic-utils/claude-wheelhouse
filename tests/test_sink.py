@@ -169,6 +169,38 @@ async def test_delete_moves_at_once(store, sid):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("subject, presses, desc", [
+    ("one", 1, "Delete closes an open question: at the foot, at once"),
+    ("one", 2, "and again reopens it as answered: with the settled, at once, not held at the foot"),
+    ("three", 1, "Delete reopens a closed question: with the settled, at once"),
+    ("three", 2, "and again closes it: back at the foot, at once"),
+])
+async def test_delete_moves_at_once_both_ways(store, sid, subject, presses, desc):
+    """D33: closing with Delete moves the item at once, and so does reopening it."""
+    from claude_wheelhouse.store import inbox_rank
+    with one_second():
+        names = {store.post_item(sid, "question", t): t for t in ("one", "two", "three")}
+    ref = {t: r for r, t in names.items()}
+    store.reply(sid, ref["two"], "x", status="answered")
+    store.update_item(sid, ref["three"], status="closed")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        await pilot.press("f")
+        await pilot.pause()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{ref[subject]}"))
+        await pilot.pause()
+        for _ in range(presses):
+            await pilot.press("delete")
+            await pilot.pause()
+        expected = [names[it["ref"]] for it in sorted(store.items(sid), key=inbox_rank)]
+        assert app.item_sink.move is None, f"{desc}: not sinking"
+        assert [names[r] for r in refs(app)] == expected, desc
+        assert app.selected == (sid, ref[subject]), f"{desc}: still selected"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("kind, status, said, desc", [
     ("task", "done", "dismissed T1", "Delete dismisses a done task"),
     ("agent", "failed", "dismissed A1", "and a failed subagent"),
