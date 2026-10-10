@@ -445,7 +445,7 @@ async def select_now(table: DataTable) -> None:
         await table.app._dispatch_message(DataTable.RowSelected(table, row, table.coordinate_to_cell_key((row, 0)).row_key))
 
 
-class SessionList(DataTable):
+class SessionList(SinkList):
     """The inbox's sessions. One click selects a row: a plain table selects only on a second
     click, the first just moving the cursor there. The buttons under it act on the
     highlighted row and never take focus, so Tab goes straight on to the items; these keys
@@ -460,9 +460,16 @@ class SessionList(DataTable):
     async def action_select_cursor(self) -> None:
         await select_now(self)
 
+    def on_resize(self) -> None:
+        if getattr(self.app, "session_list", None) is self:   # its room: the parked sessions keep to its foot
+            self.app.paint_sessions()
+
     async def _on_click(self, event) -> None:
         # Textual runs every class's _on_click in turn, DataTable's after this one, so don't
         # call it here too: that made one click select twice and open two relaunch prompts
+        if self.blank(event.style.meta.get("row", -1)):   # the gap above the parked sessions
+            event.prevent_default()
+            return
         self.app.settle()   # first what the keys before it moved, as a key's land does
         self.call_next(self._after_click, self.cursor_coordinate)
 
@@ -1306,8 +1313,9 @@ class WheelhouseApp(App):
         self.pin: tuple[str, tuple] | None = None
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
         self.show_finished = False   # finished items (store.standing), after the rest
-        # the items that settle fall to the foot (T71): a frame repaints the list, but not while
-        # a key lands (tick)
+        # each list's rows that change sides (an item settling, a session parked) fall or rise
+        # there (T66, T71): a frame repaints the list, but not while a key lands (tick)
+        self.session_sink = Sink(lambda: self.landing or not self.screen_stack or self.paint_sessions())
         self.item_sink = Sink(lambda: self.landing or not self.screen_stack or self.paint_items())
         # the highlighted row: (session id, item ref), or (session id, None) for the
         # session's conversation, the first row while a session is selected
@@ -1375,7 +1383,7 @@ class WheelhouseApp(App):
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
         self.answer = self.query_one("#answer", Compose)
         self.session_list = self.query_one("#session-list", SessionList)
-        self.items_table.sink = self.item_sink
+        self.session_list.sink, self.items_table.sink = self.session_sink, self.item_sink
         self.session_info = self.query_one("#session-info-text", Static)
         # out of the Tab order, which goes from the session list straight to the items: the
         # buttons still click, and the list's own keys press them (SessionList)
@@ -1633,8 +1641,9 @@ class WheelhouseApp(App):
                 self.session_list.update_cell(s["id"], self.eye_col, cylon(self.frame))
 
     def paint_sessions(self) -> None:
-        """Every session: parked ones dimmed, after the rest, so the buttons below still
-        reach them (Unpark, Restore, End)."""
+        """Every session: parked ones dimmed, at the foot of the list's room (they fall there
+        as they park, and rise as they're unparked: Sink), so the buttons below still reach
+        them (Unpark, Restore, End)."""
         table = self.session_list
         keep, key = table.cursor_row, self.current_session()
         pending = key != self.sessions_cursor   # the person's move, not yet settled
@@ -1651,6 +1660,10 @@ class WheelhouseApp(App):
             unseen = Text(str(s["unseen_decisions"]), style=DECISION) if s["unseen_decisions"] else ""
             q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
             rows.append((s["id"], (dot, name, self.context_cell(s), q, unseen, queued, busy)))
+        cells = dict(rows)
+        room = table.size.height - table.header_height
+        laid = self.session_sink.lay(self, list(cells), {s["id"] for s in self.sessions if s["parked"]}, room)
+        rows = [(k, cells[k]) if k else (f"{BLANK}{i}", ("",) * len(table.columns)) for i, k in enumerate(laid)]
         if fill(table, rows) and table.row_count:
             # by key: Park and Unpark move the row, and the cursor goes with it. Not the person
             # moving it, so it changes nothing else (settle)
@@ -2579,7 +2592,7 @@ class WheelhouseApp(App):
     def current_session(self) -> str | None:
         """The current session: the one highlighted in the session list (D20)."""
         table = self.session_list
-        if not table.row_count:
+        if not table.row_count or table.blank(table.cursor_row):   # a blank row only as a rebuild lands
             return None
         return table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value
 

@@ -1,10 +1,10 @@
-"""Settled items sink to the foot of the inbox (T71): one status table for every kind
-(store.standing), and one animation (Sink)."""
+"""Settled items and parked sessions sink to the foot of their list, and rise again (T66, T71):
+one status table for every kind (store.standing), and one animation for both lists (Sink)."""
 
 import pytest
 
 from claude_wheelhouse.store import Store, standing
-from claude_wheelhouse.tui import Sink, WheelhouseApp
+from claude_wheelhouse.tui import BLANK, Sink, WheelhouseApp
 from test_tui import assert_one_current, one_second, raw_keys
 
 DECIDED = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"}
@@ -66,9 +66,9 @@ def test_a_dismissed_item_comes_back(store, sid, kind, change, back, desc):
 
 
 async def moved(app, pilot):
-    """Until the items have stopped moving."""
+    """Until both lists have stopped moving."""
     for _ in range(100):
-        if app.item_sink.move is None:
+        if app.session_sink.move is None and app.item_sink.move is None:
             return
         await pilot.pause(0.05)
     raise AssertionError("still moving")
@@ -200,16 +200,51 @@ async def test_the_session_column_only_with_every_session(store, sid, filtered, 
         assert len(table.ordered_columns) == 4, f"{desc}: back with Esc"
 
 
+def slots(app) -> dict[str, int]:
+    return {r.key.value: i for i, r in enumerate(app.session_list.ordered_rows) if not r.key.value.startswith(BLANK)}
+
+
+@pytest.mark.anyio
+async def test_a_parked_session_falls_to_the_foot_and_rises_back(store, sid, tmp_path, monkeypatch):
+    """T66: parked sessions sit at the foot of the list's room, falling there as they park,
+    rising back into the list as they're unparked; the cursor stays on its session."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    other = store.create_session(str(tmp_path), name="other")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.refresh_data()   # laid out: the list knows its room
+        await pilot.pause()
+        table = app.session_list
+        room = table.size.height - table.header_height
+        assert slots(app) == {sid: 0, other: 1}, "no gap with nothing parked"
+        for parked, end, desc in ((True, room - 1, "falls to the foot"), (False, 0, "rises back to the top")):
+            store.set_parked(sid, parked)
+            app.refresh_data()
+            seen = []
+            while app.session_sink.move is not None:
+                seen.append(slots(app)[sid])
+                assert app.current_session() == sid, f"{desc}: the cursor rides its row"
+                assert_one_current(app, f"{desc}: mid-move")
+                await pilot.pause(0.02)
+            seen.append(slots(app)[sid])
+            assert len(seen) > 3 and seen == sorted(seen, reverse=not parked), f"{desc}: step by step, {seen}"
+            assert seen[-1] == end and table.row_count == (room if parked else 2), desc
+        await pilot.press("down")   # never onto a blank row
+        assert app.current_session() == other
+
+
 async def moving(tmp_path, where, keys, slow) -> dict:
     """Sessions alpha, bravo and charlie, live, with questions one, two and three, alpha's.
-    A move starts (question one is answered and sinks), then the keys, from the items on two,
-    raw as a terminal sends a burst or slowly.
+    A move starts (bravo parks, or question one is answered and sinks), then the keys, from
+    the session list on alpha or the items on two, raw as a terminal sends a burst or slowly.
     What they left, by name."""
     from unittest import mock
     from claude_wheelhouse import liveness
     store = Store(tmp_path / "w.db")
     ids = {store.create_session(str(tmp_path), name=n): n for n in ("alpha", "bravo", "charlie")}
-    alpha = next(iter(ids))
+    alpha, bravo, _ = ids
     with one_second():
         refs_ = {store.post_item(alpha, "question", t): t for t in ("one", "two", "three")}
     one, two = list(refs_)[:2]
@@ -220,12 +255,16 @@ async def moving(tmp_path, where, keys, slow) -> dict:
             await pilot.pause()
             app.refresh_data()
             await pilot.pause()
-            app.items_table.focus()
-            app.items_table.move_cursor(row=app.items_table.get_row_index(f"{alpha}|{two}"))
-            await pilot.pause()
-            store.reply(alpha, one, "got it", status="answered")
+            if where == "sessions":
+                app.session_list.focus()
+                store.set_parked(bravo, True)
+            else:
+                app.items_table.focus()
+                app.items_table.move_cursor(row=app.items_table.get_row_index(f"{alpha}|{two}"))
+                await pilot.pause()
+                store.reply(alpha, one, "got it", status="answered")
             app.refresh_data()
-            sink = app.item_sink
+            sink = app.session_sink if where == "sessions" else app.item_sink
             assert sink.move, "under way"
             if slow:
                 for key in keys:
@@ -244,6 +283,9 @@ async def moving(tmp_path, where, keys, slow) -> dict:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("where, keys, current, selected, desc", [
+    ("sessions", ("down",), "charlie", None, "Down on alpha as bravo falls: charlie, its next in the final order"),
+    ("sessions", ("down", "down"), "bravo", None, "Down, Down: bravo, at the foot"),
+    ("sessions", ("down", "down", "up"), "charlie", None, "and back up: charlie, never a blank row"),
     ("items", ("down",), "alpha", "three", "Down on two as one sinks: three"),
     ("items", ("up",), "alpha", "two", "Up on two as one sinks: two is first now, so it stays"),
     ("items", ("down", "down"), "alpha", "one", "Down, Down: one, at the foot"),

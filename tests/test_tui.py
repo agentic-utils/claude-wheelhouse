@@ -19,7 +19,7 @@ from claude_wheelhouse import launch, stats, transcript
 from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
 from claude_wheelhouse.store import Store, mode
-from claude_wheelhouse.tui import (MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice, Confirm,
+from claude_wheelhouse.tui import (BLANK, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice, Confirm,
                                    Folders, Hint, PermissionButtons, RenameSession, SendBar, ThreadView, Transcript, hint,
                                    render)
 
@@ -3138,7 +3138,7 @@ async def test_parked_sessions_stay_in_the_list_after_the_rest(store, sid, tmp_p
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         t = app.query_one("#session-list", DataTable)
-        assert [r.key.value for r in t.ordered_rows] == [first, other, sid]
+        assert [r.key.value for r in t.ordered_rows if not r.key.value.startswith(BLANK)] == [first, other, sid]
         assert "dim" in str(t.get_row(sid)[1].style)
 
 
@@ -3154,7 +3154,8 @@ def test_the_keys_overlay_has_relaunch_and_no_tabs():
 
 
 def session_names(app) -> list[str]:
-    return [app.store.session(r.key.value)["name"] for r in app.session_list.ordered_rows]
+    return [app.store.session(r.key.value)["name"] for r in app.session_list.ordered_rows
+            if not r.key.value.startswith(BLANK)]
 
 
 @pytest.mark.anyio
@@ -3170,13 +3171,15 @@ async def test_the_cursor_stays_on_a_session_that_moves(store, sid, tmp_path, mo
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        app.session_list.move_cursor(row=session_names(app).index(start))
+        app.session_list.move_cursor(row=app.session_list.get_row_index(ids[start]))
         await pilot.pause()
         if parked:
             await pilot.click("#park")
         else:
             await park_live(app, pilot, ids[start])
         await pilot.pause()
+        while app.session_sink.move:   # it falls or rises there (T66)
+            await pilot.pause(0.05)
         assert session_names(app) == order, desc
         assert app.current_session() == ids[start], desc
 
