@@ -353,7 +353,7 @@ class Sink:
     def __init__(self, repaint):
         self.repaint = repaint   # the list's paint, which lays it again: each frame
         self.to: dict[str, int] | None = None   # each key's slot, the move's end: what the cursor keys act in (SinkList)
-        self.sunk: set[str] = set()
+        self.sunk: set[str] | None = None   # those sunk at the last lay; None: the next lay jumps
         self.move: tuple[dict[str, float], float] | None = None   # each key's slot at the start, and when
         self.timer = None
 
@@ -361,7 +361,7 @@ class Sink:
         top = sum(k not in sunk for k in keys)
         foot = max(top, room - (len(keys) - top))
         to = {k: i if i < top else foot + i - top for i, k in enumerate(keys)}
-        moved = self.to is not None and any(k in self.to and (k in sunk) != (k in self.sunk) for k in keys)
+        moved = self.sunk is not None and any(k in self.to and (k in sunk) != (k in self.sunk) for k in keys)
         if moved or (self.move and to != self.to):   # from wherever each row shows now
             self.move = (self.at(time.monotonic()), time.monotonic())
             if self.timer is None:
@@ -393,13 +393,14 @@ class Sink:
         return rows
 
     def jump(self, keep: bool = False) -> None:
-        """No move under way, and none for the next lay unless keep: Delete's change lands at once (D33)."""
+        """No move under way, and none for the next lay unless keep: Delete's change lands at once
+        (D33). The final order stays until then: a row Delete takes goes from its place there."""
         self.move = None
         if self.timer is not None:
             self.timer.stop()
             self.timer = None
         if not keep:
-            self.to = None
+            self.sunk = None
 
 
 class SinkList(DataTable):
@@ -428,6 +429,11 @@ class SinkList(DataTable):
         for k, slot in to.items():
             rows[slot] = k
         return rows
+
+    def final_row(self) -> int:
+        """The cursor's row in the final order: where its row goes once any move has ended."""
+        rows, here = self.final(), self.cursor_key()
+        return rows.index(here) if here in rows else self.cursor_row
 
     def go(self, where, page: int = 0) -> None:
         """The cursor to where(row, rows) in the final order, from its own row there, on that
@@ -1359,7 +1365,9 @@ class WheelhouseApp(App):
         # the selected item's key and its rank as it was shown when selected: it keeps that
         # place while selected, re-sorting once the selection moves on (ranked)
         self.pin: tuple[str, tuple] | None = None
-        self.repin: set[str] = set()   # items the person just closed or reopened (close): pinned where they go
+        # items the person just closed or reopened (close), or whose permission they answered
+        # (answer_permission): pinned where they go
+        self.repin: set[str] = set()
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
         self.show_finished = False   # finished items (store.standing), after the rest
         # each list's rows that change sides (an item settling, a session parked) fall or rise
@@ -1755,7 +1763,7 @@ class WheelhouseApp(App):
         as they park, and rise as they're unparked: Sink), so the buttons below still reach
         them (Unpark, Restore, End)."""
         table = self.session_list
-        keep, key = table.cursor_row, self.current_session()
+        keep, key = table.final_row(), self.current_session()   # in the final order, as the items' (paint_items)
         pending = key != self.sessions_cursor   # the person's move, not yet settled
         rows = []
         for s in sorted(self.sessions, key=lambda s: s["parked"]):   # stable: creation order within each
@@ -1797,7 +1805,9 @@ class WheelhouseApp(App):
             with table.prevent(DataTable.RowHighlighted):
                 table.clear(columns=True)
                 table.add_columns(*columns)
-        keep = table.cursor_row
+        # in the final order, not the frame's: a burst's keys land between frames, so a row that
+        # goes falls to the neighbour it has once moves end, as typed slowly (SinkList)
+        keep = table.final_row()
         rows_out = []
         names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
         processing = self.store.processing()
@@ -1883,7 +1893,7 @@ class WheelhouseApp(App):
             self.pin = (key, self.ranks[key]) if key in self.ranks else None
         ranks = {item_key(it): inbox_rank(it, processing, busy) for it in items}
         if self.pin and self.pin[0] in ranks:
-            if self.pin[0] in self.repin:   # closed or reopened with Delete: at once, and held there
+            if self.pin[0] in self.repin:   # Delete or a permission answered: at once, and held there
                 self.pin = (self.pin[0], ranks[self.pin[0]])
             else:
                 ranks[self.pin[0]] = self.pin[1]

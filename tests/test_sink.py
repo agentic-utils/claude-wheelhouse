@@ -415,3 +415,61 @@ async def test_every_cursor_key_typed_during_a_move_ends_as_typed_after_it(
     out["slow"].pop("early"), out["after"].pop("early")
     expected = {"current": current, "selected": selected, "marked": marked}
     assert out["raw"] == out["slow"] == out["after"] == expected, f"{desc}: {out}"
+
+
+async def held(tmp_path, keys, slow) -> dict:
+    """Alpha's task D selected as the session marks it done, so it holds there, above the
+    settled t0 and t1 it will sink below; then the keys, raw as a terminal sends a burst, or
+    slowly, each landing and its move ending before the next. What they left, by title."""
+    import itertools
+    from unittest import mock
+    from claude_wheelhouse import liveness
+    store = Store(tmp_path / "w.db")
+    sid = store.create_session(str(tmp_path), name="alpha")
+    seconds = itertools.count()   # a second apart, newest first; D done last, below t0
+    with mock.patch("claude_wheelhouse.store.now", lambda: f"2026-10-08T10:00:{next(seconds):02d}+00:00"):
+        t0, _ = (store.post_item(sid, "task", t) for t in ("t0", "t1"))
+        store.update_item(sid, t0, status="done")
+        for kind, t in (("question", "Q"), ("permission", "Bash: P1"), ("permission", "Bash: P2")):
+            store.post_item(sid, kind, t)
+        d = store.post_item(sid, "task", "D")
+        store.post_item(sid, "question", "Q2")
+    title = {it["ref"]: it["title"] for it in store.items(sid)}
+    with mock.patch.object(liveness, "status", lambda s, waking=False: "live"):
+        app = WheelhouseApp(store)
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.pause()
+            app.items_table.focus()
+            app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{d}"))
+            await pilot.pause()
+            await moved(app, pilot)
+            assert app.selected == (sid, d)
+            store.update_item(sid, d, status="done")
+            app.refresh_data()
+            await pilot.pause()
+            if slow:
+                for key in keys:
+                    await pilot.press(key)
+                    await moved(app, pilot)
+            else:
+                raw_keys(app, *keys)
+            for _ in range(4):
+                await pilot.pause()
+            await moved(app, pilot)
+            assert_one_current(app, f"{'slow' if slow else 'raw'} {keys}")
+            return {"rows": [title[r] for r in refs(app)], "selected": app.selected and title[app.selected[1]]}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("keys, desc", [
+    (("down", "down", "down", "down", "delete"), "Down off D as it holds, on down to it at the foot, Delete"),
+    (("down", "1", "down", "down", "delete"), "the same with a 1 on the way, which does nothing on a task"),
+])
+async def test_delete_on_a_row_still_sinking_ends_as_typed_slowly(tmp_path, keys, desc):
+    """Review 25: a burst's Delete lands on a frame the sink hasn't drawn yet. The row it takes
+    goes from its place in the final order, so the selection falls to the neighbour it has
+    there, t0, as when typed slowly, not the one beside it in the frame."""
+    raw = await held(tmp_path / "raw", keys, slow=False)
+    slow = await held(tmp_path / "slow", keys, slow=True)
+    assert raw == slow == {"rows": ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0"], "selected": "t0"}, \
+        f"{desc}: raw {raw}, slow {slow}"
