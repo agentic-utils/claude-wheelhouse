@@ -9,7 +9,7 @@ import threading
 
 import pytest
 
-from claude_wheelhouse import launch, liveness, monitor
+from claude_wheelhouse import hub, launch, liveness, monitor
 from claude_wheelhouse.store import Store
 from claude_wheelhouse.tui import WheelhouseApp
 
@@ -415,7 +415,7 @@ async def test_relaunch(store, sid, monkeypatch, run, state, shell, stops, keys,
         alive["now"] = not stops
     monkeypatch.setattr(tui.os, "kill", kill)
     monkeypatch.setattr(tui.liveness, "is_alive", lambda *a: alive["now"])
-    monkeypatch.setattr(tui, "RELAUNCH_WAIT", 0)
+    monkeypatch.setattr(hub, "RELAUNCH_WAIT", 0)
     monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
     monkeypatch.setattr(launch, "restore_session", lambda s, i: calls.append("restore"))
     app = WheelhouseApp(store)
@@ -424,7 +424,7 @@ async def test_relaunch(store, sid, monkeypatch, run, state, shell, stops, keys,
         await press(app, pilot, "#relaunch", *keys)
         app.refresh_data()
         await pilot.pause()
-    assert kills == ([(4242, tui.signal.SIGTERM)] if killed else []), desc
+    assert kills == ([(4242, hub.signal.SIGTERM)] if killed else []), desc
     assert calls == launched, desc
     assert (said is None and not seen) or any(said in m for m in seen), f"{desc}: {seen}"
 
@@ -469,7 +469,7 @@ async def test_relaunch_races(store, sid, monkeypatch, before, during_confirm, a
             after_stop(store, sid, alive)
     monkeypatch.setattr(tui.os, "kill", kill)
     monkeypatch.setattr(tui.liveness, "is_alive", lambda pid, *a: pid in alive)
-    monkeypatch.setattr(tui, "RELAUNCH_WAIT", 0)
+    monkeypatch.setattr(hub, "RELAUNCH_WAIT", 0)
     monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
     if before:
         before(store, sid, alive)

@@ -7,7 +7,6 @@ import math
 import os
 import re
 import shutil
-import signal
 import sqlite3
 import subprocess
 import time
@@ -41,33 +40,27 @@ from textual.widgets import (
 )
 
 from . import adopt, api, emoji, launch, liveness, stats, subagents, transcript, tutorial
-from .hub import Hub
+from .hub import RUNNING, TAB_RELAUNCH, Event, Hub, display_name, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
-from .store import (DISMISSABLE, FINISHED_RANK, SETTLED, SETTLED_RANK, SessionGone, Store, can_queue,
-                    default_runner, inbox_rank, mode, needs_relaunch, runner, standing)
+from .store import (DISMISSABLE, FINISHED_RANK, SETTLED, SETTLED_RANK, SessionGone, Store, default_runner,
+                    inbox_rank, mode, runner, standing)
 
 MATRIX = "#00ff41"
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
-# a hosted session's activity when nothing is under way: errored and stopped count as resting
-RESTING = ("idle", "interrupted", "stopped", "in a shell tab", "error")
 MARKED = Style(bgcolor="#3a1060")   # rows picked to close together
 DECISION = "bold #b967ff"   # an unseen decision: noticeable, not urgent
 STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "#05d9e8",
                 "dead": "bold #ff2a6d", "ending": "bold #d300c5", "parking": "bold #d300c5",
                 "relaunching": "bold #05d9e8"}
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
-RUNNING = ("live", "stalled", "starting")
 # seconds the person must stay on an item, without a break, before it counts as looked at:
 # an unseen decision becomes seen, a tutorial step ticks (dwelt). Passing over it does neither
 DWELL = 1.0
-RELAUNCH_WAIT = 30   # seconds a host has to stop for Relaunch before it gives up and says so
 NOTHING_SELECTED = "Select an item, or a session to follow its conversation."
-TAB_RELAUNCH = "a session in a tab relaunches once it has exited: /exit it there, then Relaunch"
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777"}
-PENDING = {"end": "ending", "park": "parking"}
 CLOSABLE = {"question": "answered", "decision": "seen"}   # what Delete closes, and what Ctrl+R reopening makes it
 
 
@@ -163,10 +156,6 @@ def share(stored: str | None) -> float | None:
     except (TypeError, ValueError):
         return None
     return min(max(value, 0.0), 1.0) if math.isfinite(value) else None
-
-
-def short(sid: str) -> str:
-    return sid[:6]
 
 
 def host_context(s) -> api.HostContext | None:
@@ -1351,8 +1340,6 @@ class WheelhouseApp(App):
         ScrollBar.renderer = KnurlRender   # Textual's hook for every scrollbar: a class variable
         self.hub = Hub(store)
         self.store = self.hub.store
-        self.wake = liveness.WakeDetector()
-        self.waking = False
         self.frame = 0
         self.eye_frame = 0   # the frame the busy sessions' eyes last moved on (animate)
         self.filter_sid: str | None = None
@@ -1394,11 +1381,7 @@ class WheelhouseApp(App):
         self.module_ids: dict[str, str] = {}   # each pane's widget id: the module that has it
         self.box_target: tuple | None = None
         self.landing = False   # a key's land under way, which the refresh tick waits out (tick)
-        self.statuses: dict[str, str] = {}
-        self.sessions = []
-        # sessions whose host Relaunch has stopped: started again once it has gone. Each has
-        # a monotonic deadline and the stopped host, (pid, start time)
-        self.relaunching: dict[str, tuple[float, tuple]] = {}
+        self.hub.listen(self.heard)
         # the tutorial steps only the screen sees (a question opened, the conversation
         # followed), by tutorial session
 
@@ -1568,10 +1551,7 @@ class WheelhouseApp(App):
             self.refresh_data()
 
     def refresh_data(self) -> None:
-        self.waking = self.wake.tick()
-        self.sessions = self.store.sessions()
-        # liveness only: the wheelhouse never deletes or parks anything by itself
-        self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
+        self.hub.refresh()
         if self.filter_sid and not any(s["id"] == self.filter_sid for s in self.sessions):
             self.clear_filter()   # the followed session went (ended elsewhere): as Esc, no ghost row
         self.read_contexts()
@@ -1579,7 +1559,7 @@ class WheelhouseApp(App):
         self.paint_sessions()
         self.paint_items()
         self.each_pane("tick")
-        self.finish_relaunches()
+        self.hub.finish_relaunches()
         self.paint_session_info()
         self.paint_sendbar()
         self.paint_checklist()
@@ -1654,37 +1634,44 @@ class WheelhouseApp(App):
         """The session whose conversation the right pane follows, if that row is highlighted."""
         return self.selected[0] if self.selected and self.selected[1] is None else None
 
+    # the hub's sessions and their liveness, as the widgets read them (hub.Hub)
+
+    @property
+    def sessions(self) -> list:
+        return self.hub.sessions
+
+    @property
+    def statuses(self) -> dict[str, str]:
+        return self.hub.statuses
+
+    @property
+    def relaunching(self) -> dict[str, tuple[float, tuple]]:
+        return self.hub.relaunching
+
     def running(self, sid: str) -> bool:
-        return self.statuses.get(sid) in RUNNING
+        return self.hub.running(sid)
 
     def dead(self, sid: str) -> bool:
-        """It can't receive (D30): Send, Ctrl+S and Send all leave its queue alone (#62)."""
-        return self.statuses.get(sid) == "dead"
+        return self.hub.dead(sid)
 
     def stale(self, s) -> bool:
-        """Running older wheelhouse code: a relaunch picks up the new code."""
-        return self.running(s["id"]) and needs_relaunch(s)
+        return self.hub.stale(s)
 
     def sends_now(self, s) -> bool:
-        """Running code from before queued answers, which would deliver one at once: so
-        Ctrl+Enter sends, whatever the mode."""
-        return self.running(s["id"]) and not can_queue(s)
+        return self.hub.sends_now(s)
 
-    @staticmethod
-    def pending(s) -> str | None:
-        """The request (end or park) a session has been asked to act on, if any."""
-        return next((what for what in PENDING if s[f"{what}_requested_at"]), None)
+    pending = staticmethod(Hub.pending)
 
     def shown_status(self, s) -> str:
-        st = self.statuses.get(s["id"], "dead")
-        if s["id"] in self.relaunching:
-            return "relaunching"
-        what = self.pending(s)
-        return PENDING[what] if what and st in RUNNING else st
+        return self.hub.shown_status(s)
 
     def busy(self, s) -> bool:
-        working = bool(s["running"]) or (runner(s) == "sdk" and not (s["activity"] or "idle").startswith(RESTING))
-        return working and self.statuses.get(s["id"]) in ("live", "stalled")
+        return self.hub.busy(s)
+
+    def heard(self, event: Event) -> None:
+        """What the hub says: a notice is a toast."""
+        if event.kind == "notice":
+            self.notify(event.text, severity=event.severity)
 
     def read_contexts(self) -> None:
         """The context size of each session with a bar, read on a worker thread, never the
@@ -1800,9 +1787,7 @@ class WheelhouseApp(App):
         if not pending:   # where the app put it; the person's move stays theirs to settle
             self.sessions_cursor = self.current_session()
 
-    @staticmethod
-    def display_name(s) -> str:
-        return s["name"] or os.path.basename(s["cwd"]) or short(s["id"])
+    display_name = staticmethod(display_name)
 
     def paint_items(self) -> None:
         """The inbox: active items in inbox order, then the settled, dimmed, sinking there as
@@ -2210,9 +2195,7 @@ class WheelhouseApp(App):
 
     @session_action
     def relaunch(self, sid: str) -> None:
-        if self.open_session(sid, restore=True):
-            self.store.set_parked(sid, False)
-            self.notify("relaunching")
+        if self.hub.relaunch(sid):
             self.refresh_data()
 
     @on(Button.Pressed, "#relaunch")
@@ -2242,57 +2225,10 @@ class WheelhouseApp(App):
 
     @session_action
     def stop_host(self, sid: str, host: tuple) -> None:
-        """Stop a session's host, as SIGTERM does (its own clean stop: Claude Code is
-        disconnected, and an open permission or question closes as withdrawn, or as lost
-        when the new host starts). The confirm may have sat open meanwhile, so only the
-        host it was asked about, (pid, start time), is stopped: one handed to a shell tab
-        registers the tab's Claude Code instead, the person's to /exit. The refresh tick
-        starts it again once the process has gone (finish_relaunches)."""
-        s = self.row(sid)
-        if runner(s) != "sdk" or s["shell"]:
-            self.notify(TAB_RELAUNCH, severity="warning")
-            return
-        if not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
-            self.relaunch(sid)   # gone meanwhile: nothing to stop
-            return
-        if (s["claude_pid"], s["claude_start"]) != host:
-            self.notify(f"{self.display_name(s)} started again meanwhile: Relaunch again to stop this host",
-                        severity="warning")
-            return
-        try:
-            os.kill(s["claude_pid"], signal.SIGTERM)
-        except ProcessLookupError:
-            pass   # exited between the check and the signal: the tick starts it again
-        except OSError as e:
-            self.notify(f"couldn't stop its host: {e}", severity="error")
-            return
-        self.relaunching[sid] = (time.monotonic() + RELAUNCH_WAIT, host)
-        self.notify(f"relaunching {self.display_name(s)}: stopping its host")
-        self.refresh_data()
-
-    def finish_relaunches(self) -> None:
-        """Start each stopped host again once its process has really gone: launch refuses a
-        session whose registered process is alive, and a new host registers only if free.
-        One that another wheelhouse has started meanwhile (a newer pid, alive) is relaunched
-        already. A relaunch unparks, as one of a dead session does."""
-        for sid, (deadline, host) in list(self.relaunching.items()):
-            s = next((x for x in self.sessions if x["id"] == sid), None)
-            if s is None:   # ended meanwhile
-                del self.relaunching[sid]
-            elif not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
-                del self.relaunching[sid]
-                if self.open_session(sid):   # as it ran: a host again, not WHEELHOUSE_RUNNER's way
-                    self.store.set_parked(sid, False)
-                    self.statuses[sid] = liveness.status(self.row(sid), waking=self.waking)   # not dead for a tick
-                    self.notify(f"relaunched {self.display_name(s)}")
-            elif (s["claude_pid"], s["claude_start"]) != host:
-                del self.relaunching[sid]
-                self.store.set_parked(sid, False)
-                self.notify(f"relaunched {self.display_name(s)}")
-            elif time.monotonic() > deadline:
-                del self.relaunching[sid]
-                self.notify(f"{self.display_name(s)}'s host didn't stop within {RELAUNCH_WAIT}s, so it wasn't "
-                            f"relaunched: see hosts/{sid}.log", severity="error")
+        """Stop the session's host, if it is still the one the confirm was about: the hub
+        starts it again once it has gone (hub.Hub.stop_host)."""
+        if self.hub.stop_host(sid, host):
+            self.refresh_data()
 
     async def action_quit(self) -> None:
         """Quit, but not silently out from under a relaunch: a host stopped and not yet
@@ -2775,7 +2711,7 @@ class WheelhouseApp(App):
         if not form:
             return
         sid = self.store.create_session(**form)
-        self.open_session(sid)
+        self.hub.open_session(sid)
 
     def action_adopt(self) -> None:
         if isinstance(self.focused, (TextArea, Input)):
@@ -2792,16 +2728,6 @@ class WheelhouseApp(App):
             return
         self.notify(f"adopting {form['name'] or short(form['candidate'].id)}")
         self.refresh_data()
-
-    def open_session(self, sid: str, restore: bool = False) -> bool:
-        """Launch a session the way it runs, a host or a tab; a restore runs it the way new
-        sessions run now (launch.restore_session)."""
-        try:
-            (launch.restore_session if restore else launch.open_session)(self.store, sid)
-        except Exception as e:   # already running, wt.exe missing...
-            self.notify(str(e), severity="error")
-            return False
-        return True
 
     async def action_press(self, button_id: str) -> None:
         """A key standing in for a button that never takes focus: as a click on it, on the
@@ -2895,11 +2821,7 @@ class WheelhouseApp(App):
         screen.set_focus(nxt, scroll_visible=not isinstance(nxt, Transcript))
 
     def row(self, sid: str):
-        """The session's row, or SessionGone: it can end at any moment (in-session /wheelhouse end)."""
-        s = self.store.session(sid)
-        if s is None:
-            raise SessionGone(sid)
-        return s
+        return self.hub.row(sid)
 
     def label(self, sid: str) -> str:
         s = self.row(sid)
@@ -2915,7 +2837,7 @@ class WheelhouseApp(App):
         if self.statuses.get(sid) != "dead":
             self.notify("only a dead session can be restored", severity="warning")
             return
-        if self.open_session(sid, restore=True):
+        if self.hub.open_session(sid, restore=True):
             self.store.set_parked(sid, False)
 
     def action_restore_all(self) -> None:
@@ -2928,7 +2850,7 @@ class WheelhouseApp(App):
 
         def go(yes: bool) -> None:
             if yes:
-                n = sum(self.open_session(sid, restore=True) for sid in dead)
+                n = sum(self.hub.open_session(sid, restore=True) for sid in dead)
                 self.notify(f"restoring {n} session(s)")
         self.push_screen(Confirm(f"Restore {len(dead)} dead session(s)?"), go)
 
@@ -3002,7 +2924,7 @@ class WheelhouseApp(App):
     @session_action
     def act_on_dead(self, sid: str, what: str) -> None:
         """The confirm may have sat open while the session came back: check again."""
-        if liveness.status(self.row(sid), waking=self.waking) in RUNNING:
+        if liveness.status(self.row(sid), waking=self.hub.waking) in RUNNING:
             self.notify(f"the session is running again: press {what.capitalize()} to ask it instead",
                         severity="warning")
             self.refresh_data()
