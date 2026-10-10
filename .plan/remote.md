@@ -67,7 +67,9 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
   by a host: `runner` `tab` is refused, as a tab would open on the home machine's screen.
   Errors: `SessionGone` and an item not there 404, a permission decided already 409, a
   bad body (a decision for an item that isn't a permission too) 400. Anything else is the
-  daemon's own failure, 500, as JSON too, and is not kept with the key, so a retry tries again. `StillStarting` and `NotAllowed` don't exist yet.
+  daemon's own failure, 500, as JSON too, kept with the key if and only if the command
+  wrote anything first: a retry then replays the 500 rather than act twice, and one that
+  wrote nothing tries again. `StillStarting` and `NotAllowed` don't exist yet.
 - **Idempotency.** Every POST needs an `Idempotency-Key` (400 without). Each answer is kept
   in the database's `idempotency` table for a day, so a request sent again, across a
   daemon restart too, is answered the same and done once; the same key on another request

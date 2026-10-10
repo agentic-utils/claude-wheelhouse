@@ -399,13 +399,16 @@ class Daemon:
 
     def carry_out(self, handler, request: Request, key: str, raw: bytes) -> Response:
         """A command, on the hub's thread: one at a time, so the same key sent twice at once
-        is still done once."""
+        is still done once. One that fails unexpectedly (the database locked) is kept if and
+        only if it wrote anything first (store.written): a retry then gets the same 500 rather
+        than act twice; one that wrote nothing escapes unkept, so a retry tries again."""
         fingerprint = hashlib.sha256(f"{request.url.path}\n".encode() + raw).hexdigest()
         if (kept := self.unkept.get(key) or self.store.answered(key)) is not None:
             if kept["fingerprint"] != fingerprint:
                 return refusal(Refused(422, "that Idempotency-Key was used for another request"))
             return Response(kept["body"], kept["status"], media_type="application/json",
                             headers={"Idempotent-Replayed": "true"})
+        wrote = self.store.written()
         try:
             body = json.loads(raw) if raw else {}
             if not isinstance(body, dict):
@@ -413,7 +416,11 @@ class Daemon:
             response = JSONResponse(done_json(handler(request, body)))
         except json.JSONDecodeError:
             response = refusal(Refused(400, "the body isn't JSON"))
-        except ANSWERED as e:   # anything else isn't kept: it escapes, so a retry tries again
+        except ANSWERED as e:
+            response = refusal(e)
+        except Exception as e:
+            if self.store.written() == wrote:
+                raise
             response = refusal(e)
         answer = {"fingerprint": fingerprint, "status": response.status_code, "body": response.body.decode()}
         try:

@@ -392,7 +392,8 @@ class Hub:
     def submit(self, target: tuple, text: str) -> Done:
         """What the person submitted for a target: an open permission is denied with it at
         once, never queued (#53); otherwise it's queued or sent at once, by the session's mode.
-        Answering an item is an explicit act: a decision is seen at once, not after the dwell.
+        Answering an item is an explicit act: a decision is seen at once, not after the dwell,
+        in the same transaction as the send or the queue (store._mark_seen).
         Whether it went (not if the permission was answered meanwhile), and whether it denied
         a permission."""
         s = self.row(target[0])
@@ -419,8 +420,6 @@ class Hub:
                          "Restore it, then Ctrl+S or Send sends its queue")
             else:
                 done.say(f"queued for {aimed(target)}: Ctrl+S or Send sends the session's queue")
-        if target[1]:
-            self.store.mark_seen(*target)
         return done
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> Done:

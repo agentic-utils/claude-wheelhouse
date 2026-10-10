@@ -1,3 +1,6 @@
+import contextlib
+import threading
+
 import pytest
 
 from claude_wheelhouse.store import SessionGone, Store
@@ -331,3 +334,26 @@ def test_a_database_with_the_dropped_rename_columns_still_works(db_file):
 def test_renaming_a_session_that_has_gone_says_so(store):
     with pytest.raises(SessionGone):
         store.rename("gone", "x")
+
+
+@pytest.mark.parametrize("write, counted, desc", [
+    (lambda s, sid: s.rename(sid, "x"), 1, "a write on this thread"),
+    (lambda s, sid: s.rename(sid, s.session(sid)["name"]), 1, "a row rewritten as it was is still written"),
+    (lambda s, sid: s.session(sid), 0, "a read"),
+    (lambda s, sid: (t := threading.Thread(target=s.rename, args=(sid, "x"))).start() or t.join(), 0,
+     "another thread's, on the same connection"),
+    (lambda s, sid: s.answer_permission(sid, "P9", "allow"), 0, "a transaction that changed nothing"),
+])
+def test_written_counts_this_threads_committed_rows(store, sid, write, counted, desc):
+    before = store.written()
+    with contextlib.suppress(KeyError):
+        write(store, sid)
+    assert store.written() - before == counted, desc
+
+
+def test_a_transaction_rolled_back_is_not_written(store, sid):
+    before = store.written()
+    with pytest.raises(RuntimeError), store.tx() as db:
+        db.execute("UPDATE sessions SET name = 'x'")
+        raise RuntimeError
+    assert store.written() == before and store.session(sid)["name"] == "demo"

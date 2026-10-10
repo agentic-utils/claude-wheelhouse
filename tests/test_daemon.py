@@ -199,6 +199,50 @@ async def test_a_command_the_daemon_fails_is_answered_as_json(daemon, store, sid
     assert "Traceback" in capsys.readouterr().err, desc
 
 
+def fails_once(real, after: bool):
+    """real, but its first call fails as a locked database would: after acting, or before."""
+    calls = []
+
+    def broken(*a, **kw):
+        if calls:
+            return real(*a, **kw)
+        calls.append(1)
+        if after:
+            real(*a, **kw)
+        raise sqlite3.OperationalError("database is locked")
+    return broken
+
+
+# (path, body, the store method that fails once, whether it acted first, the second answer's
+# status, whether it's replayed, what's done in the end, desc). The session is dead, so an
+# answer is queued; it has a decision D1 and a permission P1
+@pytest.mark.parametrize("path, body, breaks, after, status, replayed, done, desc", [
+    ("send", {"text": "yes", "ref": "D1"}, "queue", True, 500, True, (1, "seen", "open"),
+     "queued, then failed: the 500 kept, so a retry doesn't queue it twice"),
+    ("send", {"text": "yes", "ref": "D1"}, "queue", False, 200, False, (1, "seen", "open"),
+     "failed before queueing: nothing kept, so a retry queues it"),
+    ("send", {"text": "yes", "ref": "D1"}, "_mark_seen", False, 200, False, (1, "seen", "open"),
+     "marking the decision seen failed: one transaction with the queue, so a retry does both"),
+    ("send", {"text": "no", "ref": "P1"}, "answer_permission", True, 500, True, (0, "unseen", "denied"),
+     "a permission denied, then failed: a retry replays, not 'answered meanwhile'"),
+    ("P1/permission", {"decision": "allow"}, "answer_permission", True, 500, True, (0, "unseen", "allowed"),
+     "a permission allowed, then failed: a retry replays, not 409"),
+    ("P1/permission", {"decision": "allow"}, "answer_permission", False, 200, False, (0, "unseen", "allowed"),
+     "failed before allowing: a retry allows it"),
+])
+async def test_a_command_that_fails_is_kept_if_and_only_if_it_wrote(daemon, store, sid, monkeypatch, capsys, path,
+                                                                    body, breaks, after, status, replayed, done, desc):
+    store.post_item(sid, "decision", "pick one", alternative="the other", why="simpler", reverse="pick again")
+    store.post_item(sid, "permission", "Bash: ls")
+    monkeypatch.setattr(store, breaks, fails_once(getattr(store, breaks), after))
+    url = f"/sessions/{sid}/send" if path == "send" else f"/items/{sid}/{path}"
+    first = await call(daemon, "POST", url, body, key="k1")
+    again = await call(daemon, "POST", url, body, key="k1")
+    assert first.status_code == 500 and "database is locked" in first.json()["error"], desc
+    assert (again.status_code, again.headers.get("idempotent-replayed") == "true") == (status, replayed), desc
+    assert (len(store.drafts(sid)), store.item(sid, "D1")["status"], store.item(sid, "P1")["status"]) == done, desc
+
+
 def test_a_callback_that_fails_is_said_with_its_traceback(daemon, capsys):
     daemon.post(lambda: 1 / 0)
     daemon.worker.submit(lambda: None).result()   # the hub's thread has run it

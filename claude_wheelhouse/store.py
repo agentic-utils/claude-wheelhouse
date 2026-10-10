@@ -232,6 +232,7 @@ class Store:
         self.db.execute("PRAGMA foreign_keys=ON")
         # one connection, possibly many threads (the MCP server runs tools in worker threads)
         self.lock = threading.RLock()
+        self.mine = threading.local()   # rows each thread's committed transactions changed (written)
         with self.tx() as db:   # one transaction, so processes starting together can't both migrate
             for statement in SCHEMA.split(";"):
                 if statement.strip():
@@ -260,6 +261,7 @@ class Store:
     @contextmanager
     def tx(self):
         with self.lock:
+            before = self.db.total_changes
             self.db.execute("BEGIN IMMEDIATE")
             try:
                 yield self.db
@@ -267,6 +269,13 @@ class Store:
                 self.db.execute("ROLLBACK")
                 raise
             self.db.execute("COMMIT")
+            self.mine.n = self.written() + self.db.total_changes - before
+
+    def written(self) -> int:
+        """How many rows this thread's transactions have changed, counting only those that
+        committed: another thread's writes on the same connection (a subagent sync on a
+        worker) never count, nor a transaction rolled back."""
+        return getattr(self.mine, "n", 0)
 
     def _all(self, sql: str, params=()) -> list[sqlite3.Row]:
         with self.lock:
@@ -653,9 +662,16 @@ class Store:
     def mark_seen(self, sid: str, ref: str) -> bool:
         """The person has viewed a decision: True if it was unseen until now."""
         with self.tx() as db:
-            return db.execute("UPDATE items SET status = 'seen', updated_at = ? WHERE session_id = ? "
-                              "AND ref = ? AND kind = 'decision' AND status = 'unseen'",
-                              (now(), sid, ref)).rowcount > 0
+            return self._mark_seen(db, sid, ref)
+
+    @staticmethod
+    def _mark_seen(db, sid: str, ref: str | None) -> bool:
+        """Answering an item is an explicit act: a decision is seen at once, not after the
+        dwell. In the answer's own transaction, so a command that fails between the two never
+        leaves one done without the other."""
+        return ref is not None and db.execute(
+            "UPDATE items SET status = 'seen', updated_at = ? WHERE session_id = ? AND ref = ? "
+            "AND kind = 'decision' AND status = 'unseen'", (now(), sid, ref)).rowcount > 0
 
     def dismiss(self, sid: str, ref: str, dismissed: bool = True) -> None:
         """The person dismisses a settled task or subagent (Delete), or brings it back (Ctrl+R). Kept as
@@ -725,9 +741,11 @@ class Store:
         return self._all("SELECT * FROM messages WHERE session_id = ? ORDER BY id", (sid,))
 
     def send(self, sid: str, body: str, item_ref: str | None = None) -> None:
-        """A message from the person, sent now; the session's monitor delivers it."""
+        """A message from the person, sent now; the session's monitor delivers it. An answer
+        to an unseen decision marks it seen, in the same transaction (_mark_seen)."""
         with self.tx() as db:
             self._require(db, sid)
+            self._mark_seen(db, sid, item_ref)
             db.execute(
                 "INSERT INTO messages (session_id, item_ref, author, body, created_at) VALUES (?, ?, 'person', ?, ?)",
                 (sid, item_ref, body, now()),
@@ -741,9 +759,11 @@ class Store:
                        "VALUES (?, 'person', ?, ?, 'notice')", (sid, body, now()))
 
     def queue(self, sid: str, body: str, item_ref: str | None = None) -> None:
-        """A message from the person, held as a draft until dispatch() sends it."""
+        """A message from the person, held as a draft until dispatch() sends it. An answer to
+        an unseen decision marks it seen, in the same transaction (_mark_seen)."""
         with self.tx() as db:
             self._require(db, sid)
+            self._mark_seen(db, sid, item_ref)
             db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, draft) "
                        "VALUES (?, ?, 'person', ?, ?, 1)", (sid, item_ref, body, now()))
 
