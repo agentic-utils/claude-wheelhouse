@@ -235,10 +235,11 @@ async def test_a_parked_session_falls_to_the_foot_and_rises_back(store, sid, tmp
         assert app.current_session() == other
 
 
-async def moving(tmp_path, where, keys, slow) -> dict:
-    """Sessions alpha, bravo and charlie, live, with questions one, two and three, alpha's.
-    A move starts (bravo parks, or question one is answered and sinks), then the keys, from
-    the session list on alpha or the items on two, raw as a terminal sends a burst or slowly.
+async def moving(tmp_path, where, keys, typed, count=3, start=None) -> dict:
+    """Sessions alpha, bravo and charlie, live, with questions one, two and three (or count of
+    one to four), alpha's. A move starts (bravo parks, or question one is answered and sinks),
+    then the keys, from the session list on alpha (or start) or the items on two (or start):
+    raw as a terminal sends a burst, slowly, both during the move, or after it has ended.
     What they left, by name."""
     from unittest import mock
     from claude_wheelhouse import liveness
@@ -246,8 +247,8 @@ async def moving(tmp_path, where, keys, slow) -> dict:
     ids = {store.create_session(str(tmp_path), name=n): n for n in ("alpha", "bravo", "charlie")}
     alpha, bravo, _ = ids
     with one_second():
-        refs_ = {store.post_item(alpha, "question", t): t for t in ("one", "two", "three")}
-    one, two = list(refs_)[:2]
+        refs_ = {store.post_item(alpha, "question", t): t for t in ("one", "two", "three", "four")[:count]}
+    one = list(refs_)[0]
     # a long move, so the keys land inside it however slowly they're typed
     with mock.patch.object(liveness, "status", lambda s, waking=False: "live"), mock.patch.object(Sink, "SECONDS", 3):
         app = WheelhouseApp(store)
@@ -257,20 +258,25 @@ async def moving(tmp_path, where, keys, slow) -> dict:
             await pilot.pause()
             if where == "sessions":
                 app.session_list.focus()
+                app.session_list.move_cursor(row=[*ids.values()].index(start or "alpha"))
+                await pilot.pause()
                 store.set_parked(bravo, True)
             else:
                 app.items_table.focus()
-                app.items_table.move_cursor(row=app.items_table.get_row_index(f"{alpha}|{two}"))
+                ref = next(r for r, t in refs_.items() if t == (start or "two"))
+                app.items_table.move_cursor(row=app.items_table.get_row_index(f"{alpha}|{ref}"))
                 await pilot.pause()
                 store.reply(alpha, one, "got it", status="answered")
             app.refresh_data()
             sink = app.session_sink if where == "sessions" else app.item_sink
             assert sink.move, "under way"
-            if slow:
+            if typed == "after":
+                await moved(app, pilot)
+            if typed == "raw":
+                raw_keys(app, *keys)
+            else:
                 for key in keys:
                     await pilot.press(key)
-            else:
-                raw_keys(app, *keys)
             for _ in range(3):
                 await pilot.pause()
             early = sink.move is not None
@@ -278,7 +284,8 @@ async def moving(tmp_path, where, keys, slow) -> dict:
             await moved(app, pilot)
             assert_one_current(app, f"{where} {keys}: after the move")
             return {"current": ids.get(app.current_session()), "early": early,
-                    "selected": app.selected and refs_.get(app.selected[1])}
+                    "selected": app.selected and refs_.get(app.selected[1]),
+                    "marked": sorted(refs_[k.split("|")[1]] for k in app.items_table.marked)}
 
 
 @pytest.mark.anyio
@@ -293,7 +300,35 @@ async def moving(tmp_path, where, keys, slow) -> dict:
 async def test_keys_typed_during_a_move_end_as_typed_slowly(tmp_path, where, keys, current, selected, desc):
     """Arrows step through the final order, never a frame's, so a burst typed during a move
     ends as the same keys typed slowly do (and D22 holds while it moves)."""
-    raw = await moving(tmp_path / "raw", where, keys, slow=False)
-    slow = await moving(tmp_path / "slow", where, keys, slow=True)
+    raw = await moving(tmp_path / "raw", where, keys, "raw")
+    slow = await moving(tmp_path / "slow", where, keys, "slow")
     assert raw.pop("early") and slow.pop("early"), f"{desc}: the keys landed mid-move"
-    assert raw == slow == {"current": current, "selected": selected}, f"{desc}: raw {raw}, slow {slow}"
+    assert raw == slow == {"current": current, "selected": selected, "marked": []}, f"{desc}: raw {raw}, slow {slow}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("where, start, keys, current, selected, marked, desc", [
+    ("items", "two", ("shift+up",), "alpha", "two", ["two"], "Shift+Up on two as one sinks: two is first, so only it"),
+    ("items", "four", ("shift+down",), "alpha", "one", ["four", "one"], "Shift+Down on four: one, below it now"),
+    ("items", "four", ("down", "shift+up"), "alpha", "four", ["four", "one"], "Down then Shift+Up: back to four"),
+    ("items", "three", ("pageup",), "alpha", "two", [], "PageUp on three: two, the top now"),
+    ("items", "two", ("pagedown",), "alpha", "one", [], "PageDown on two: one, the foot now"),
+    ("items", "three", ("ctrl+home",), "alpha", "two", [], "Ctrl+Home: two, the top now"),
+    ("items", "two", ("ctrl+end",), "alpha", "one", [], "Ctrl+End: one, the foot now"),
+    ("items", "three", ("home", "end"), "alpha", "three", [], "Home and End scroll sideways, the cursor stays"),
+    ("sessions", "alpha", ("ctrl+end",), "bravo", None, [], "Ctrl+End as bravo falls: bravo, at the foot"),
+    ("sessions", "alpha", ("pagedown",), "bravo", None, [], "PageDown: bravo, at the foot"),
+    ("sessions", "alpha", ("pagedown", "pageup"), "alpha", None, [], "and PageUp: alpha, never a blank row"),
+    ("sessions", "charlie", ("ctrl+home",), "alpha", None, [], "Ctrl+Home from charlie: alpha"),
+])
+async def test_every_cursor_key_typed_during_a_move_ends_as_typed_after_it(
+        tmp_path, where, start, keys, current, selected, marked, desc):
+    """Every key that moves a list's cursor acts in the final order, never a frame's: a burst
+    typed during a move ends as the same keys typed once it has ended, so Delete on what they
+    marked closes what the person meant."""
+    out = {typed: await moving(tmp_path / typed, where, keys, typed, count=4, start=start)
+           for typed in ("raw", "slow", "after")}
+    assert out["raw"].pop("early"), f"{desc}: the burst landed mid-move"
+    out["slow"].pop("early"), out["after"].pop("early")
+    expected = {"current": current, "selected": selected, "marked": marked}
+    assert out["raw"] == out["slow"] == out["after"] == expected, f"{desc}: {out}"

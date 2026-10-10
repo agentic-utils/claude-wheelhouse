@@ -348,8 +348,7 @@ class Sink:
 
     def __init__(self, repaint):
         self.repaint = repaint   # the list's paint, which lays it again: each frame
-        self.keys: list[str] = []   # the final order, which Up and Down step through (SinkList)
-        self.to: dict[str, int] | None = None   # each key's slot, the move's end
+        self.to: dict[str, int] | None = None   # each key's slot, the move's end: what the cursor keys act in (SinkList)
         self.sunk: set[str] = set()
         self.move: tuple[dict[str, float], float] | None = None   # each key's slot at the start, and when
         self.timer = None
@@ -363,7 +362,7 @@ class Sink:
             self.move = (self.at(time.monotonic()), time.monotonic())
             if self.timer is None:
                 self.timer = app.set_interval(self.FRAME, self.repaint)
-        self.keys, self.to, self.sunk = list(keys), to, set(sunk)
+        self.to, self.sunk = to, set(sunk)
         return self.frame()
 
     def at(self, now: float) -> dict[str, float]:
@@ -400,29 +399,68 @@ class Sink:
 
 
 class SinkList(DataTable):
-    """A list a Sink lays. Up and Down step through its final order, never a moving frame's
-    nor a blank row, so keys typed during a move act as they would after it; the cursor
-    otherwise steps off a blank row the way it was going."""
+    """A list a Sink lays. Every key that moves its cursor (Up, Down, PageUp, PageDown,
+    Ctrl+Home, Ctrl+End, the item list's Shift+Up and Shift+Down) acts in its final order
+    (final), never a moving frame's, so keys typed during a move act as they would after it;
+    the cursor steps off a blank row the way it was going. Home and End scroll sideways."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.sink: Sink | None = None
 
+    def keys(self) -> list[str]:
+        return [r.key.value for r in self.ordered_rows]
+
+    def cursor_key(self) -> str | None:
+        return self.keys()[self.cursor_row] if self.row_count else None
+
+    def final(self) -> list[str | None]:
+        """The rows as they stand once any move has ended, a key or None for a blank: the
+        frame shown, but for a move under way."""
+        to = self.sink and self.sink.to
+        if not to or any(k not in self.rows for k in to):
+            return [None if self.blank(i) else k for i, k in enumerate(self.keys())]
+        rows: list[str | None] = [None] * (max(to.values()) + 1)
+        for k, slot in to.items():
+            rows[slot] = k
+        return rows
+
+    def go(self, where, page: int = 0) -> None:
+        """The cursor to where(row, rows) in the final order, from its own row there, on that
+        key's row in the frame; scrolled a page first for PageUp and PageDown, as DataTable's."""
+        rows = self.final()
+        if not any(rows):
+            return
+        here = self.cursor_key()
+        i = rows.index(here) if here in rows else min(self.cursor_row, len(rows) - 1)
+        j = max(0, min(where(i, len(rows)), len(rows) - 1))
+        down, up = range(j, len(rows)), range(j, -1, -1)
+        j = next(n for n in (*(down if j >= i else up), *(up if j >= i else down)) if rows[n])
+        self._set_hover_cursor(False)
+        if page:
+            self.scroll_relative(y=page, animate=False, force=True)
+        self.cursor_coordinate = Coordinate(self.get_row_index(rows[j]), self.cursor_column)
+
+    def page(self) -> int:
+        return self.scrollable_content_region.height - (self.header_height if self.show_header else 0)
+
     def action_cursor_up(self) -> None:
-        self.step(-1)
+        self.go(lambda i, n: i - 1)
 
     def action_cursor_down(self) -> None:
-        self.step(1)
+        self.go(lambda i, n: i + 1)
 
-    def step(self, by: int) -> None:
-        keys = [k for k in (self.sink.keys if self.sink else []) if k in self.rows]
-        here = self.coordinate_to_cell_key((self.cursor_row, 0)).row_key.value if self.row_count else None
-        if here not in keys:
-            super().action_cursor_down() if by > 0 else super().action_cursor_up()
-            return
-        self._set_hover_cursor(False)
-        nxt = keys[max(0, min(keys.index(here) + by, len(keys) - 1))]
-        self.cursor_coordinate = Coordinate(self.get_row_index(nxt), self.cursor_column)
+    def action_page_up(self) -> None:
+        self.go(lambda i, n: i - self.page(), -self.page())
+
+    def action_page_down(self) -> None:
+        self.go(lambda i, n: i + self.page(), self.page())
+
+    def action_scroll_top(self) -> None:
+        self.go(lambda i, n: 0)
+
+    def action_scroll_bottom(self) -> None:
+        self.go(lambda i, n: n - 1)
 
     def blank(self, row: int) -> bool:
         return 0 <= row < self.row_count and self.ordered_rows[row].key.value.startswith(BLANK)
@@ -504,12 +542,6 @@ class ItemList(SinkList):
         self.marked: set[str] = set()
         self.anchor: str | None = None
 
-    def keys(self) -> list[str]:
-        return [r.key.value for r in self.ordered_rows]
-
-    def cursor_key(self) -> str | None:
-        return self.keys()[self.cursor_row] if self.row_count else None
-
     def set_marks(self, marks: set[str], anchor: str | None = None) -> None:
         self.marked = {k for k in marks if not k.endswith("|")}   # not the conversation row
         self.anchor = anchor
@@ -521,7 +553,7 @@ class ItemList(SinkList):
         self.set_marks(marks ^ {key}, key)
 
     def extend_to(self, key: str) -> None:
-        keys = self.keys()
+        keys = [k for k in self.final() if k]   # the range as it will stand, not a moving frame's
         anchor = self.anchor if self.anchor in keys else self.cursor_key()
         lo, hi = sorted((keys.index(anchor), keys.index(key)))
         self.set_marks(set(keys[lo:hi + 1]), anchor)
@@ -558,7 +590,7 @@ class ItemList(SinkList):
             return
         if self.anchor not in self.keys():
             self.anchor = self.cursor_key()
-        self.move_cursor(row=max(0, min(self.cursor_row + step, self.row_count - 1)), animate=False)
+        self.go(lambda i, n: i + step)
         self.extend_to(self.cursor_key())
 
 
