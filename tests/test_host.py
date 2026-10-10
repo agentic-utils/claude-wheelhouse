@@ -983,10 +983,11 @@ def test_restore_session(store, tmp_path, monkeypatch, stored, env, alive, opene
 
 
 def finish_at(h, tokens):
-    """A turn ends with the context at tokens."""
+    """A turn ends with the context at tokens, as read() ends one."""
     async def usage():
         return {"totalTokens": tokens, "maxTokens": 1_000_000}
     h.client.get_context_usage = usage
+    h.pending = max(0, h.pending - 1)
     run(h.finished(SimpleNamespace(result="", is_error=False, subtype="success")))
 
 
@@ -1026,3 +1027,46 @@ def test_compact_nudge_closes_saying_so(host, store, sid):
     ref = store.items(sid)[0]["ref"]
     assert [m["body"] for m in store.thread(sid, ref)] == ["Compacted: the context is 40k now."]
     assert host_mod.HOST_QUESTION != store.item(sid, ref)["answer"], "a restart's deny_stale leaves it be"
+
+
+H = 3600
+
+
+@pytest.mark.parametrize("state, due, desc", [
+    ({}, True, "big, quiet and 55 minutes on: keep it warm"),
+    ({"tokens": 150_000}, False, "at the line, not past it: not worth it"),
+    ({"tokens": None}, False, "no turn has ended under this host: its cache may be cold already"),
+    ({"last": 54 * 60}, False, "not 55 minutes since the last turn"),
+    ({"pending": 1}, False, "a turn is running (or waits on a permission)"),
+    ({"compact_nonce": "ab12"}, False, "Compact is under way"),
+    ({"quiet": None}, False, "a turn Claude Code started itself is running"),
+    ({"quiet": 8 * H}, False, "quiet for 8 hours: abandoned, stop paying"),
+    ({"quiet": 8 * H - 60}, True, "just inside the 8 hours"),
+])
+def test_keepalive_due(host, state, due, desc):
+    at = 100 * H
+    host.tokens = state.get("tokens", 200_000)
+    host.last_turn = at - state.get("last", 55 * 60)
+    quiet = state.get("quiet", 2 * H)
+    host.quiet_since = None if quiet is None else at - quiet
+    host.pending = state.get("pending", 0)
+    host.compact_nonce = state.get("compact_nonce")
+    assert host.keepalive_due(at) is due, desc
+
+
+def test_keepalive_turn(host, store, sid, monkeypatch):
+    """Sent once, as a keepalive: its end restarts the 55 minutes but not the quiet time,
+    so the 8 hours run out; a real turn starts them both again."""
+    finish_at(host, 200_000)
+    quiet = host.quiet_since
+    host.last_turn -= host_mod.KEEPALIVE_AFTER
+    run(host.poll())
+    run(host.poll())
+    assert host.client.queries == [host_mod.KEEPALIVE_TEXT], "once, not every poll"
+    finish_at(host, 200_000)
+    assert host.quiet_since == quiet and host.last_turn > quiet, "the keepalive's end isn't the person's"
+    store.send(sid, "go on")
+    run(host.poll())
+    assert host.quiet_since is None, "the person's turn ends the quiet"
+    finish_at(host, 200_000)
+    assert host.quiet_since > quiet

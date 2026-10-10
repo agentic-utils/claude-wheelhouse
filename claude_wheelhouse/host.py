@@ -55,6 +55,15 @@ NUDGE_TOKENS = 200_000
 # NUDGE_TOKENS; then it is marked done, and the next crossing nudges again
 NUDGE = '{"from": "context nudge"}'
 NUDGE_DONE = '{"from": "context nudge", "done": true}'
+# Keepalive: the hosts' prompt cache lives an hour (1 h cache writes) and a cold one is
+# written again whole. A session over KEEPALIVE_TOKENS, quiet and waiting on the person,
+# gets a tiny turn KEEPALIVE_AFTER seconds after its last, to keep it warm, until it has
+# been quiet KEEPALIVE_FOR seconds: an abandoned session doesn't pay for ever
+KEEPALIVE_TOKENS = 150_000
+KEEPALIVE_AFTER = 55 * 60
+KEEPALIVE_FOR = 8 * 3600
+KEEPALIVE_TEXT = ("[wheelhouse] Keepalive: the person is away, and this turn only keeps your prompt cache "
+                  "warm. Reply with the one word ok and do nothing else: no tools, no wheelhouse calls.")
 # an answer's `n:` or `Qn:` markers: at the start, or after a comma, semicolon or line
 # break, and never a time (`1:30`)
 ANSWER_MARK = re.compile(r"(?:^|[,;\n])\s*[Qq]?(\d+)\s*:(?!\d)")
@@ -191,6 +200,13 @@ class Host:
         self.compact_notes: str | None = None   # seen in a reply, sent as /compact once the turn ends
         self.turn_text: list[str] = []   # this turn's text so far, where Compact's block may straddle blocks
         self.compacted_from = None   # tokens before the last compaction, until its turn ends
+        # keepalive: the context size the last turn ended at (None until one has, so a host
+        # just started never pays to warm a cache it can't know is warm), when the last turn
+        # ended, and since when the session has been quiet (None while a turn other than a
+        # keepalive runs), all monotonic
+        self.tokens: int | None = None
+        self.last_turn = time.monotonic()
+        self.quiet_since: float | None = time.monotonic()
         self.owner = False   # registered as the session's process: only then does it write the activity
         self.stopping = False
         self.stop_reason = ""
@@ -229,11 +245,14 @@ class Host:
         else:
             self.store.set_activity(self.sid, "idle")
 
-    async def turn(self, text: str) -> None:
-        """Send a user turn; Claude Code queues it behind any turn still running."""
+    async def turn(self, text: str, keepalive: bool = False) -> None:
+        """Send a user turn; Claude Code queues it behind any turn still running. Only a
+        keepalive leaves the session quiet."""
         await self.client.query(text)
         self.pending += 1
         self.compact_idle = None
+        if not keepalive:
+            self.quiet_since = None
         try:   # sent: a locked database mustn't make the caller think otherwise
             self.store.set_activity(self.sid, "thinking")
         except sqlite3.OperationalError:
@@ -402,6 +421,8 @@ class Host:
                 and time.monotonic() - self.compact_idle > COMPACT_TIMEOUT):   # quiet all that time: nothing to overwrite
             self.end_compact()
             self.store.set_activity(self.sid, NO_NOTES)
+        if self.keepalive_due(time.monotonic()):
+            await self.turn(KEEPALIVE_TEXT, keepalive=True)
         command = self.store.take_command(self.sid)
         if command == "interrupt":
             await self.client.interrupt()
@@ -415,6 +436,14 @@ class Host:
         elif command == "shell":
             await self.shell()
         return not self.stopping
+
+    def keepalive_due(self, at: float) -> bool:
+        """Whether a keepalive turn is due: nothing running (only the person can move the
+        session on), no Compact under way, the context past KEEPALIVE_TOKENS, the last turn
+        KEEPALIVE_AFTER ago, and quiet for less than KEEPALIVE_FOR."""
+        return (not self.pending and self.compact_nonce is None and self.quiet_since is not None
+                and (self.tokens or 0) > KEEPALIVE_TOKENS and at - self.last_turn >= KEEPALIVE_AFTER
+                and at - self.quiet_since < KEEPALIVE_FOR)
 
     def forget_delivered(self) -> None:
         """Drop remembered ids someone else has since recorded as delivered (a shell tab's
@@ -445,6 +474,8 @@ class Host:
             try:
                 if isinstance(m, (AssistantMessage, UserMessage)):
                     self.compact_idle = None   # a turn is running, maybe one Claude Code started itself
+                    if not self.pending:   # one it started itself: the session isn't quiet
+                        self.quiet_since = None
                 if isinstance(m, AssistantMessage):
                     for b in m.content:
                         if isinstance(b, TextBlock) and self.compact_nonce:   # the turn's text, whole: the last block wins
@@ -484,8 +515,12 @@ class Host:
                 return
         tokens = await self.context()
         if tokens is not None:
+            self.tokens = tokens
             self.nudge(tokens)
         if not self.pending:
+            self.last_turn = time.monotonic()
+            if self.quiet_since is None:
+                self.quiet_since = self.last_turn
             if self.compact_nonce:   # quiet from here: Compact's wait for its notes counts down
                 self.compact_idle = time.monotonic()
             if m.is_error:
@@ -567,6 +602,7 @@ class Host:
         await self.steady(self.store.set_shell, self.sid, None)
         self.pending, self.turn_text = 0, []
         self.end_compact()
+        self.tokens = None   # the tab ran turns this host never saw: its cache is the tab's
         self.reader.cancel()
         await self.steady(self.deny_stale)
         await self.connect()

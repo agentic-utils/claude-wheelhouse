@@ -147,7 +147,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   bar above the footer has a line saying what the session in context is doing. A session whose
   context passes 200k tokens posts one question item, `context 220k: compact?`, with Compact a key
   away (`C`): it closes by itself once the session is compacted, and comes back only when the
-  context passes 200k again. Closing the wheelhouse leaves the hosts
+  context passes 200k again. One over 150k that sits idle waiting on you gets a one-word
+  keepalive turn every 55 minutes, for up to 8 hours, so its prompt cache (an hour's) doesn't go
+  cold and get written again whole. Closing the wheelhouse leaves the hosts
   running. `WHEELHOUSE_RUNNER=tab` makes tabs the default again. Restore and Adopt bring a
   session back the way new sessions run, so a tab from before hosts existed comes back as
   a host once you `/exit` it; Shell is the way back to a tab. Host logs are under `~/.local/state/claude-wheelhouse/hosts/`.
