@@ -35,13 +35,18 @@ versions already locked. The TUI is unchanged and still owns its own hub; it bec
 client in 2c, and Shell's tmux window comes in 2d. As built:
 
 - **Binding and the lock.** `127.0.0.1:7428` by default; `--address` takes an IP address,
-  never an unspecified one (`0.0.0.0`, `::`). One per user: `daemon.lock` in the state dir
+  never an unspecified one (`0.0.0.0`, `::`). It's meant for the VPN interface's: bound to
+  a LAN address, the daemon is open to everyone on that LAN, with nothing but the Host
+  check between them and every session. One per user: `daemon.lock` in the state dir
   (the database's directory), held with `flock`, says which process holds it and where.
 - **Host and Origin.** Every request, GETs and the stream too, must name the daemon in its
   `Host` (its address and port, `localhost` too on the loopback, and each `--name` given,
   such as a VPN's name for the machine), else 421: a page rebound by DNS to the daemon's
   address can neither read nor drive it. A POST with an `Origin` must come from the
-  daemon's own (403); a client that sends none, as httpx doesn't, is accepted.
+  daemon's own (403); a client that sends none, as httpx doesn't, is accepted. The
+  `Idempotency-Key` every command needs is the cross-site guard too: a page can send a
+  custom header only after a CORS preflight, which the daemon never grants, so it can't
+  send a command at all. The key must never become optional.
 - **Threads.** The event loop only serves. The hub runs on a thread of its own, its
   tick, commands and callbacks one at a time as on the TUI's loop; the queries that read
   the store or the disk (`/items`, a thread, `/fs`) run on starlette's threads; and

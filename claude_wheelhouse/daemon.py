@@ -11,9 +11,13 @@ short ring so a client reconnecting with Last-Event-ID gets what it missed, or "
 when the ring no longer holds it. The hub's own notices (a relaunch finishing, a subagent
 sync failing) go out the same way, as "notice".
 
-It never binds 0.0.0.0: 127.0.0.1 by default, or the address given (the VPN interface's).
-Every request must name the daemon in its Host, and a POST from a browser page must come
-from the daemon's own origin, so a hostile page can't drive it or read it by DNS rebinding."""
+It never binds 0.0.0.0: 127.0.0.1 by default, or the address given (the VPN interface's;
+a LAN address would open it to everyone on that LAN). Every request must name the daemon in
+its Host, and a POST from a browser page must come from the daemon's own origin, so a
+hostile page can't drive it or read it by DNS rebinding. The Idempotency-Key every command
+needs is the guard against cross-site requests too: a custom header makes a page's request
+a CORS preflight, which the daemon never grants, so a page can't send a command without
+it. It must never become optional."""
 
 import asyncio
 import contextlib
