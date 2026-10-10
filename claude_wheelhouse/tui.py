@@ -403,6 +403,9 @@ class ItemList(DataTable):
         meta = event.style.meta
         if "row" not in meta or meta["row"] < 0:
             return
+        if meta["row"] >= self.row_count:   # the settle refilled the list, shorter: below its rows, as typed slowly
+            event.prevent_default()   # not DataTable's, which would clamp the cursor onto the last row
+            return
         key = self.keys()[meta["row"]]
         if event.ctrl or event.shift:
             event.prevent_default()   # not DataTable's: a click on the highlighted row opens it
@@ -1868,8 +1871,8 @@ class WheelhouseApp(App):
     @session_action
     def offer_relaunch(self, sid: str) -> None:
         """Selecting a session that has died (shown red) offers to bring it back."""
-        if self.statuses.get(sid) != "dead":
-            return
+        if self.statuses.get(sid) != "dead" or isinstance(self.screen, Confirm):   # a double-click's second
+            return   # click selects it again before its first offer shows; done slowly, it's the dialog's
         s = self.row(sid)
         name = s["name"] or os.path.basename(s["cwd"]) or short(sid)
         self.push_screen(Confirm(f"{name} isn't running. Relaunch it?"),

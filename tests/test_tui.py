@@ -655,6 +655,34 @@ async def test_the_hint_mentions_ctrl_s_only_where_it_sends(store, sid, monkeypa
     assert ("Ctrl+S" in base) is ctrl_s, f"{desc}: {base}"
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("status, down, note, desc", [
+    ("dead", 1, "queued for Q1, but the session isn't running: Restore it, then Ctrl+S or Send sends its queue",
+     "an answer queued for a dead session's question says its queue isn't running"),
+    ("dead", 0, "queued for the session, but the session isn't running: Restore it, then Ctrl+S or Send sends "
+     "its queue", "a general message queued for a dead session says the same"),
+    ("live", 1, "queued for Q1: Ctrl+S or Send sends the session's queue", "a live session's queue just waits"),
+])
+async def test_queueing_for_a_dead_session_says_to_restore_it(store, sid, monkeypatch, status, down, note, desc):
+    by_name(monkeypatch, {"demo": status})
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)
+        app.items_table.focus()
+        await pilot.press(*["down"] * down)
+        await pilot.pause()
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda text, **kw: notes.append(text))
+        app.answer.text = "ship it"
+        await pilot.press("ctrl+enter")
+        await pilot.pause()
+    assert notes == [note], f"{desc}: the notice"
+    assert [m["body"] for m in store.drafts(sid)] == ["ship it"], f"{desc}: queued"
+
+
 def test_a_general_message_cut_short_shows_whole_in_the_conversation(store, sid, tmp_path, monkeypatch):
     long = " ".join(["word"] * 200)
     store.send(sid, long)
@@ -724,6 +752,36 @@ async def test_one_click_on_a_session_follows_it(store, sid, tmp_path, monkeypat
         await pilot.pause()
         assert app.viewing == other and "other · conversation" in app._detail_text
         assert follows == [other]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status, clicks, keys, stack, opened, desc", [
+    ("dead", 1, (), ["Screen", "Confirm"], 0, "a click on a dead session offers to relaunch it"),
+    ("dead", 2, (), ["Screen", "Confirm"], 0, "a double-click offers it once: its second click is the dialog's"),
+    ("dead", 1, ("y",), ["Screen"], 1, "a click, then Y: relaunched"),
+    ("dead", 2, ("y",), ["Screen"], 1, "a double-click, then Y: relaunched, no second offer left behind"),
+    ("dead", 1, ("n", "down"), ["Screen"], 0, "a click, then N: declined"),
+    ("dead", 2, ("n", "down"), ["Screen"], 0, "a double-click, then N: declined, no second offer left behind"),
+    ("live", 2, (), ["Screen"], 0, "a double-click on a running session offers nothing"),
+])
+async def test_a_double_click_on_a_dead_session_offers_one_relaunch(store, sid, tmp_path, monkeypatch, status, clicks,
+                                                                    keys, stack, opened, desc):
+    """Review 19: each click of a double-click selected the session, and each offered a relaunch."""
+    other = store.create_session(str(tmp_path), name="other")
+    by_name(monkeypatch, {"demo": "live", "other": status})
+    launched = []
+    monkeypatch.setattr(WheelhouseApp, "open_session", lambda self, s, restore=False: launched.append(s) or True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        for _ in range(3):
+            await pilot.pause()
+        raw_click(app, app.session_list, (3, 1 + app.session_list.get_row_index(other)), clicks)
+        raw_keys(app, *keys)
+        for _ in range(12):
+            await pilot.pause()
+        assert [type(s).__name__ for s in app.screen_stack] == stack, f"{desc}: the screens"
+        assert app.current_session() == other, f"{desc}: followed"
+    assert launched == [other] * opened, f"{desc}: relaunched"
 
 
 def assert_one_current(app, desc):
@@ -1082,8 +1140,9 @@ def raw_click(app, widget, offset, times=1) -> None:
         app._driver.send_message(event)
 
 
-async def two_lists(tmp_path, where, steps, slow) -> dict:
-    """Sessions A, followed, and B, each with decisions one and two, all unseen; then the steps
+async def two_lists(tmp_path, where, steps, slow, counts=(2, 2)) -> dict:
+    """Sessions A, followed, and B, each with decisions one and two (or as many of one, two,
+    three and four as counts gives), all unseen; then the steps
     from the items or the session list, typed slowly or sent as one raw burst. A step is a key,
     or a click as the terminal delivers it: "click A" or "click B" on that session in the list,
     "click 1" or "double 1" on the items' row 1 (row 0 is the conversation). What they left, by
@@ -1092,8 +1151,8 @@ async def two_lists(tmp_path, where, steps, slow) -> dict:
     store = Store(tmp_path / f"{'slow' if slow else 'raw'}.db")
     a, b = (store.create_session(str(tmp_path), name=n) for n in ("alpha", "bravo"))
     with one_second():
-        for s in (a, b):
-            for title in ("one", "two"):
+        for s, count in zip((a, b), counts):
+            for title in ("one", "two", "three", "four")[:count]:
                 store.post_item(s, "decision", title, alternative="x", why="y", reverse="z")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -1193,6 +1252,25 @@ async def test_a_raw_burst_then_a_click_ends_as_typed_slowly(tmp_path, monkeypat
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     raw = await two_lists(tmp_path / "raw", where, steps, slow=False)
     slow = await two_lists(tmp_path / "slow", where, steps, slow=True)
+    assert raw == slow, f"{desc}: raw {raw}, slow {slow}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("steps, desc", [
+    (("down", "click 4"), "Down to B, a click on a row only A's longer list had: nothing, no IndexError"),
+    (("down", "double 4"), "the same as a double-click: nothing opens, the cursor not clamped onto B's last row"),
+    (("down", "click 3"), "Down to B, a click on another row B's list doesn't have"),
+    (("down", "click 1"), "Down to B, a click on a row B's list has too: B's one"),
+    (("down", "double 1"), "Down to B, a double-click on B's one opens it"),
+])
+async def test_a_raw_burst_then_a_click_on_a_shorter_list_ends_as_typed_slowly(tmp_path, monkeypatch, steps, desc):
+    """Review 19: a click's settle can follow another session and refill the items, so the
+    row it was on may be gone: as typed slowly, where the click lands below the rows, it
+    does nothing."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    raw = await two_lists(tmp_path / "raw", "sessions", steps, slow=False, counts=(4, 1))
+    slow = await two_lists(tmp_path / "slow", "sessions", steps, slow=True, counts=(4, 1))
     assert raw == slow, f"{desc}: raw {raw}, slow {slow}"
 
 
