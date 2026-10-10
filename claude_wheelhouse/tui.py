@@ -258,12 +258,21 @@ def _block_strips(who: str, md: str, width: int, console) -> tuple[tuple[Strip, 
             tuple("".join(seg.text for seg in line).rstrip() for line in lines))
 
 
+def agreed(a: list, b: list) -> int:
+    """How many items a and b have in common from their starts."""
+    n = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
 class Transcript(Widget, can_focus=True):
     """A conversation or a thread: one widget drawing cached lines, as Blocks does, and
     selectable. Drag selects, Ctrl+A selects it all, Ctrl+C copies (Textual's screen binding,
     which copies through the terminal: OSC 52, which Windows Terminal supports)."""
     ALLOW_SELECT = True
-    KEEP = 3   # blocks matched to keep a reader's place (update)
     DEFAULT_CSS = "Transcript { height: auto; }"
     BINDINGS = [Binding("ctrl+a", "select_all", "Select all", show=False)]
 
@@ -274,23 +283,26 @@ class Transcript(Widget, can_focus=True):
 
     def update(self, content: "Blocks | list[tuple[str, str]]") -> None:
         """New blocks. Scrolled up to read (not at the end, which follows), the block at the top
-        of the view keeps its place on screen, whatever changed above it: found in the new
-        blocks by a run of KEEP from it, so a block said twice isn't taken for its twin, the
-        nearest where the run is found more than once."""
+        of the view keeps its place on screen, whatever changed above it; if it changed itself
+        (a reply growing as it streams, a queued answer sent), the first unchanged block below
+        it in the view does. Found more than once (a block said twice, a run of the same tool
+        line), the one followed by most of what followed it, then the nearest."""
         old, laid, scroll = self.blocks, self._laid, self.parent
         self.blocks = content.blocks if isinstance(content, Blocks) else list(content)
         self._laid = None
         self.refresh(layout=True)
         if not laid or not isinstance(scroll, VerticalScroll) or scroll.scroll_y >= scroll.max_scroll_y - 1:
             return
-        width, starts = laid[0], laid[3]
+        width, starts, new = laid[0], laid[3], self.blocks
         top = bisect.bisect_right(starts, scroll.scroll_y) - 1
-        run = old[top:top + self.KEEP]
-        found = [i for i in range(len(self.blocks) - len(run) + 1) if self.blocks[i:i + len(run)] == run]
-        if found:
-            at = min(found, key=lambda i: abs(i - top))
-            y = self._layout(width)[2][at] + scroll.scroll_y - starts[top]
-            scroll.scroll_to(y=y, animate=False, immediate=y <= scroll.max_scroll_y)   # or once laid out
+        bottom = bisect.bisect_left(starts, scroll.scroll_y + scroll.scrollable_content_region.height)
+        for k in range(top, bottom):
+            found = [i for i, b in enumerate(new) if b == old[k]]
+            if found:
+                at = max(found, key=lambda i: (agreed(old[k:], new[i:]), -abs(i - k)))
+                y = self._layout(width)[2][at] + scroll.scroll_y - starts[k]
+                scroll.scroll_to(y=y, animate=False, immediate=y <= scroll.max_scroll_y)   # or once laid out
+                return
 
     def _layout(self, width: int) -> tuple[list[Strip], list[str], list[int]]:
         """Each line as a strip and as text, and the line each block starts on."""

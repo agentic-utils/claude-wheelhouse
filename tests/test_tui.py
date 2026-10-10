@@ -1,4 +1,5 @@
 import asyncio
+import bisect
 import functools
 import html
 import itertools
@@ -1742,15 +1743,19 @@ def test_each_voice_has_its_colour(who, colour, desc):
     assert styles == {colour}, desc
 
 
-def long_conversation(sid, tmp_path, monkeypatch, turns: int = 200, twice: bool = False) -> None:
+def long_conversation(sid, tmp_path, monkeypatch, turns: int = 200, twice: bool = False, tools: int = 0) -> None:
     """A conversation many pages long, with markdown in every block (twice: the person's
-    turns alone, each but the first said twice over)."""
+    turns alone, each but the first said twice over; tools: that many of the same tool line
+    before the last four turns)."""
     folder = tmp_path / "projects/-home-u-repo"
     folder.mkdir(parents=True)
     recs = [{"type": "user" if i % 2 or twice else "assistant", "timestamp": "2026-10-07T21:30:00Z",
              "message": {"content": f"para one {(i + 1) // 2 if twice else i}\n\npara two\n\n- a\n- b"}
              if i % 2 or twice else
              {"content": [{"type": "text", "text": f"reply {i}\n\n```\ncode\n```\n\nmore"}]}} for i in range(turns)]
+    recs[-4:-4] = [{"type": "assistant", "timestamp": "2026-10-07T21:30:00Z", "message": {"content": [
+        {"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": "gh pr checks"}}]}}
+        for i in range(tools)]
     folder.joinpath(f"{sid}.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
     monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
 
@@ -1825,41 +1830,71 @@ def start_waiting(sid, tmp_path) -> None:
         f.write(json.dumps(rec) + "\n")
 
 
+def stream_into(sid, tmp_path, app, below: int) -> None:
+    """The reply at the top of the view, or below that many blocks under it, grows in place as
+    it streams, and a new turn drops the oldest off."""
+    path = tmp_path / f"projects/-home-u-repo/{sid}.jsonl"
+    recs = [json.loads(line) for line in path.read_text().splitlines()]
+    top = bisect.bisect_right(app.detail._layout(app.detail.size.width)[2], app.detail_scroll.scroll_y) - 1
+    i = int(re.search(r"(?:para one|reply) (\d+)", app.detail.blocks[top + below][1])[1])
+    content = recs[i]["message"]["content"]
+    grown = "\n\n".join(f"streamed {k}" for k in range(9))
+    if isinstance(content, str):
+        recs[i]["message"]["content"] = f"{content}\n\n{grown}"
+    else:
+        content[0]["text"] += f"\n\n{grown}"
+    path.write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+    append_turn(sid, tmp_path, "the newest turn")
+
+
+UP, NEAR_END = ("pageup",) * 3, ("up",) * 3
+
+
 @pytest.mark.anyio
-@pytest.mark.parametrize("change, up, twice, desc", [
-    ("turn", 0, False, "a new turn, followed at its end: it shows at the true end"),
-    ("turn", 3, False, "a new turn, the oldest dropping off, scrolled up to read: what shows stays put"),
-    ("rename", 3, False, "renamed, scrolled up to read: what shows stays put, not sent to the end"),
-    ("shell", 3, False, "handed to a shell, its tab line changed, scrolled up to read: what shows stays put"),
-    ("waiting", 3, False, "a warning put in under its head, scrolled up to read: what shows stays put"),
-    ("waiting", 3, True, "a warning put in, each block said twice: what shows stays put"),
+@pytest.mark.parametrize("change, keys, shape, desc", [
+    ("turn", (), {}, "a new turn, followed at its end: it shows at the true end"),
+    ("turn", UP, {}, "a new turn, the oldest dropping off, scrolled up to read: what shows stays put"),
+    ("rename", UP, {}, "renamed, scrolled up to read: what shows stays put, not sent to the end"),
+    ("long name", NEAR_END, {}, "renamed at length, 3 lines from the end: kept once laid out, past the old end"),
+    ("shell", UP, {}, "handed to a shell, its tab line changed, scrolled up to read: what shows stays put"),
+    ("waiting", UP, {"turns": 60}, "a warning put in under its head, scrolled up to read: what shows stays put"),
+    ("waiting", UP, {"turns": 60, "twice": True}, "a warning put in, each block said twice: what shows stays put"),
+    ("turn", ("pageup",), {"tools": 60}, "a new turn, the view's top among the same tool line 60 times: kept on its own"),
+    ("streamed below", UP, {}, "the block under the view's top grows as it streams: what shows down to it stays put"),
+    ("streamed", UP, {}, "the block at the view's top grows as it streams: from the next one down stays put"),
 ])
 @pytest.mark.parametrize("width", [160, 100])   # the lines each block takes, and so the shift, differ
-async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch, change, up, twice, desc, width):
-    """A reader scrolled up keeps their place across a change; one at the end stays there."""
+async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch, change, keys, shape, desc, width):
+    """A reader scrolled up keeps their place across a change; one at the end stays there.
+    waiting: under the 80 entries shown, so no oldest turn drops off to undo the warning's shift."""
     if change == "shell":   # a host's session, whose tab line shows only once handed to a shell
         sid = store.create_session(str(tmp_path), name="demo", runner="sdk")
-    # waiting: under the 80 entries shown, so no oldest turn drops off to undo the warning's shift
-    long_conversation(sid, tmp_path, monkeypatch, turns=60 if change == "waiting" else 200, twice=twice)
+    long_conversation(sid, tmp_path, monkeypatch, **shape)
     app = WheelhouseApp(store)
     async with app.run_test(size=(width, 40)) as pilot:
         await pilot.pause()
         app.follow(sid)
         await pilot.pause()
         app.detail.focus(scroll_visible=False)
-        before = (await scroll_by(pilot, ["pageup"] * up))[-1]
+        before = (await scroll_by(pilot, keys))[-1]
+        starts, y = app.detail._layout(app.detail.size.width)[2], int(app.detail_scroll.scroll_y)
+        rows = [at - y for at in starts[bisect.bisect_right(starts, y):][:2]]   # the next two blocks' on screen
+        kept = {"streamed": slice(rows[0], None), "streamed below": slice(rows[1])}.get(change, slice(None))
         head = app.detail.blocks[:2]
         {"turn": lambda: append_turn(sid, tmp_path, "the newest turn"),
          "rename": lambda: store.rename(sid, "renamed"),
+         "long name": lambda: store.rename(sid, "renamed " + "at length " * 100),
          "shell": lambda: store.set_shell(sid, "open"),
-         "waiting": lambda: start_waiting(sid, tmp_path)}[change]()
+         "waiting": lambda: start_waiting(sid, tmp_path),
+         "streamed below": lambda: stream_into(sid, tmp_path, app, 1),
+         "streamed": lambda: stream_into(sid, tmp_path, app, 0)}[change]()
         app.refresh_data()
         await pilot.wait_for_scheduled_animations()
         await pilot.pause()
-        assert app.detail.blocks[:2] != head or change == "turn", f"{desc}: the change made"
+        assert app.detail.blocks[:2] != head or change in ("turn", "streamed below", "streamed"), f"{desc}: the change made"
         full = laid_in_full(app)
-        assert painted(app) == (full[-app.detail_scroll.size.height:] if up == 0 else before), desc
-        assert ("the newest turn" in "\n".join(painted(app))) == (up == 0), desc
+        assert painted(app)[kept] == (full[-app.detail_scroll.size.height:] if not keys else before)[kept], desc
+        assert ("the newest turn" in "\n".join(painted(app))) == (not keys), desc
 
 
 @pytest.mark.anyio
