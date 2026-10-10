@@ -16,8 +16,8 @@ from .store import GONE_TEXT, SessionGone, Store, runner
 
 HEARTBEAT_SECONDS = 30
 
-server = MCPServer("wheelhouse", instructions="Wheelhouse: post and update tasks, questions and "
-                   "subagent statuses; read the person's answers. See the wheelhouse protocol.")
+server = MCPServer("wheelhouse", instructions="Wheelhouse: post and update tasks and questions; read "
+                   "the person's answers. It tracks your subagents itself. See the wheelhouse protocol.")
 TOOLS = []   # registered tool functions, in order: `claude-wheelhouse protocol` lists them
 _store: Store | None = None
 _sid = ""

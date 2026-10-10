@@ -35,8 +35,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   Ctrl+Enter sends to it straight away, whatever its mode, until it's relaunched.
 - **Subagents.** The wheelhouse tracks each session's subagents itself, in tabs and in the
   wheelhouse alike, from the files Claude Code writes: an agent item (`A1`) appears, titled
-  with the subagent's description, when one starts, and turns done or failed when it ends
-  (failed, with the reason in its thread, when it errors or you stop it). An agent item the
+  with the subagent's description, about 15 s after one starts, and turns done or failed
+  when it ends (failed, with the reason in its thread, when it errors, you stop it, or its
+  session stops while it runs). An agent item the
   session posted itself for the same subagent is taken over rather than listed twice. The
   history doesn't flood in: only subagents started after a session joins the wheelhouse,
   or still running then, get an item, and the same goes for sessions already in it when

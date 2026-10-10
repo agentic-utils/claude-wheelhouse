@@ -204,16 +204,23 @@ SDK and tab sessions, rather than relying on the session to post them
   agent id) or `<tool-use-id>` does, delivered as a `queue-operation`, a `queued_command`
   attachment or a user turn. `<status>`: `completed` is done; `failed`, `killed` (the person
   stopped it) and `stopped` (its session ended under it, reported on resume) are failed,
-  with the notification's summary as a note. A notification quoted anywhere else (a
-  message, tool output) is ignored. SendMessage to a finished subagent resumes it: running
-  again.
+  with the notification's summary as a note. Only the notification's header counts: every
+  `<task-id>` before `<summary>` (one can name several under one status), and the first
+  `<status>`, `<tool-use-id>` and `<summary>`; the subagent's text in `<result>` is never
+  read as fields. A notification quoted anywhere else (a message, tool output) is ignored.
+  SendMessage to a finished subagent resumes it: running again, after a restart too.
+- **Its session dies.** When the TUI's liveness check has a session dead, each of its
+  subagent items still running fails, with the note "the session stopped while this
+  subagent ran" (parked or not, on the next tick: no timer of its own). If the session is
+  resumed and the subagent's notification arrives, the item follows it as usual.
 - **Once.** `agent_items` keys the item by agent id, written in the item's transaction, so
   a restart or a second wheelhouse never posts twice. A status is written only when it
-  changes.
+  changes, including a finish seen by a wheelhouse that didn't make the item.
 - **The session's own item** is taken instead of making one when there is an agent item
-  not yet tied to a subagent, made no more than 10 minutes before the subagent started,
-  whose title equals the description or holds it, or is held by it (as words, case and
-  punctuation aside). An exact title wins, then the one made nearest the start. One the
+  not yet tied to a subagent, made no more than 10 minutes before the subagent started nor
+  15 s after it, whose title equals the description or holds it, or is held by it (as
+  words, case and punctuation aside, and two words at least: a one-word description or
+  title matches only exactly). An exact title wins, then the one made nearest the start. One the
   session posts after the wheelhouse made its own is a duplicate: the protocol now asks
   sessions not to post.
 - **Cut-off.** The later of when the session joined the wheelhouse (`created_at`: launched

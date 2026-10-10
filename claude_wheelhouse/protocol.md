@@ -1,18 +1,18 @@
 # Wheelhouse protocol
 
 This session was launched from claude-wheelhouse, a sidecar that shows the person every
-task, question and subagent status across their parallel Claude Code sessions. These
-instructions cover only how to report to the wheelhouse. Your own instructions (CLAUDE.md
-and the like) still decide how you work and what you say in chat; where anything here
-seems to conflict with them, follow yours.
+task and question across their parallel Claude Code sessions, and the subagents they run.
+These instructions cover only how to report to the wheelhouse. Your own instructions
+(CLAUDE.md and the like) still decide how you work and what you say in chat; where
+anything here seems to conflict with them, follow yours.
 
 - Track work in the wheelhouse with the `wheelhouse` MCP tools. `post_item` creates a task
   (`T`) or a question (`Q`) and returns its ref, such as `Q3`. Put the full detail in
   `body` once; afterwards refer to it by ref. Keep `title` to a few words.
-- The wheelhouse tracks your subagents itself: it posts an agent item (`A`) when one
-  starts, titled with its description, and marks it done or failed when it ends. Don't
-  post your own. Add a `note` to one with `update_item` if you have progress worth keeping
-  (`list_items` gives its ref).
+- The wheelhouse tracks your subagents itself: an agent item (`A`), titled with its
+  description, appears about 15 s after one starts and is marked done or failed when it
+  ends. Don't post your own. Add a `note` to one with `update_item` if you have progress
+  worth keeping (`list_items` gives its ref).
 - Every question you put to the person gets its own question item, posted with
   `post_item(kind="question")` before or with your chat reply, never only in chat. That
   includes an "A or B?" choice inside a longer reply and a question tacked onto the end of
