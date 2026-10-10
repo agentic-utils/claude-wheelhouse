@@ -2984,7 +2984,9 @@ class WheelhouseApp(App):
             return
         here = chain.index(self.focused) if self.focused in chain else (-1 if step > 0 else 0)
         nxt = chain[(here + step) % len(chain)]
-        screen.set_focus(nxt)   # at once, not after a refresh as focus() does: keys behind it go there
+        # at once, not after a refresh as focus() does: keys behind it go there. A conversation
+        # or thread stays where it's scrolled to, not taken to its top as Textual would (D43)
+        screen.set_focus(nxt, scroll_visible=not isinstance(nxt, Transcript))
 
     def row(self, sid: str):
         """The session's row, or SessionGone: it can end at any moment (in-session /wheelhouse end)."""

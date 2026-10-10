@@ -4033,6 +4033,36 @@ async def test_the_focused_conversation_scrolls_from_the_keyboard(store, sid, ke
         assert app.detail_scroll.scroll_y > 0, desc
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("pane, desc", [
+    ("conversation", "a long conversation, at its newest turn, stays there"),
+    ("thread", "a long item scrolled down part way stays there"),
+])
+async def test_tab_into_the_detail_pane_leaves_it_where_it_is_scrolled(store, sid, tmp_path, monkeypatch, pane, desc):
+    """D43: focus moved to the pane by Tab, not a scroll to its top."""
+    if pane == "conversation":
+        long_conversation(sid, tmp_path, monkeypatch)
+    else:
+        store.post_item(sid, "question", "long?", "\n\n".join(f"line {i}" for i in range(200)))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if pane == "conversation":
+            app.follow(sid)
+            await scroll_by(pilot, [])
+        else:
+            app.detail_scroll.scroll_to(y=30, animate=False)
+        await pilot.pause()
+        before, y = painted(app), app.detail_scroll.scroll_y
+        assert y > 0, desc
+        app.items_table.focus()
+        await pilot.press("tab", "tab")
+        await pilot.wait_for_scheduled_animations()
+        await pilot.pause()
+        assert focused_id(app) == "detail", desc
+        assert (app.detail_scroll.scroll_y, painted(app)) == (y, before), desc
+
+
 @pytest.fixture
 def keyed(store, tmp_path, monkeypatch):
     """A session running in the wheelhouse with an open permission (selected, so Allow,
