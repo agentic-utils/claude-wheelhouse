@@ -23,6 +23,13 @@ def no_tutorial_offer(monkeypatch):
     monkeypatch.setattr("claude_wheelhouse.tutorial.should_offer", lambda store: False)
 
 
+@pytest.fixture(autouse=True)
+def no_dwell_timer(monkeypatch):
+    """The dwell (tui.DWELL) never lapses on its own in a test, wherever a slow run puts its
+    second: a test rests on an item with test_tui.dwell, or sets its own DWELL to time it."""
+    monkeypatch.setattr("claude_wheelhouse.tui.DWELL", 3600)
+
+
 @pytest.fixture
 def db_file(tmp_path, monkeypatch):
     path = tmp_path / "wheelhouse.db"

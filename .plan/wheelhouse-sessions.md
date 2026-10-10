@@ -344,6 +344,19 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   goes at once, as before: Allow, Always and Deny are explicit acts, as Delete is. The
   upgrade that adds `items.dismissed` dismisses the tasks and subagents already settled,
   which were off the inbox before, so it doesn't fill with them.
+- **The dwell** (`tui.DWELL`, 1 s; `look`, `dwelt`). An unseen decision becomes seen only
+  once the person has looked at it for a second without a break: selected, on the inbox
+  or in its own thread (ThreadView), with no dialog over it. One one-shot timer, restarted
+  whenever the selection or the screen changes and stopped while nothing is selected, so
+  it costs nothing idle; when it fires it settles the cursors first (a burst's arrows may
+  have moved them) and acts only if it is still the same look. Arrowing past a decision,
+  or resting on it for less than a second, leaves it unseen, so a burst typed ahead marks
+  nothing on the way and ends as the same keys typed slowly, given the same dwell. The
+  tutorial's screen-only steps (a question highlighted, the conversation followed) tick
+  the same way, from the person's own selection. Explicit acts stay immediate: Delete,
+  answering it (Ctrl+Enter), Enter on a tutorial question. A decision seen by the dwell
+  while selected is settled and, by the sinking rule below, stays put until the
+  selection moves on.
 - **Sinking** (T66, T71, `tui.Sink`). The selected item keeps its place (D28, T70: `ranked`
   pins its rank as shown) however its status changes; once the selection moves on it
   re-sorts at once, and a settled one falls to the foot over 0.4 s, with gravity. Parked

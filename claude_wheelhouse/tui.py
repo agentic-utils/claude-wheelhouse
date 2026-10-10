@@ -56,6 +56,9 @@ STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "
                 "relaunching": "bold #05d9e8"}
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
 RUNNING = ("live", "stalled", "starting")
+# seconds the person must stay on an item, without a break, before it counts as looked at:
+# an unseen decision becomes seen, a tutorial step ticks (dwelt). Passing over it does neither
+DWELL = 1.0
 RELAUNCH_WAIT = 30   # seconds a host has to stop for Relaunch before it gives up and says so
 NOTHING_SELECTED = "Select an item, or a session to follow its conversation."
 TAB_RELAUNCH = "a session in a tab relaunches once it has exited: /exit it there, then Relaunch"
@@ -1339,6 +1342,12 @@ class WheelhouseApp(App):
         self.waking = False
         self.frame = 0
         self.filter_sid: str | None = None
+        # the dwell (DWELL): what the person is looking at, (selection, screen), its generation,
+        # bumped whenever that changes, and its one-shot timer, running only while they rest
+        self.dwelling: tuple | None = None
+        self.dwell_gen = 0
+        self.dwell_timer = None
+        self.picked: tuple | None = None   # the selection the person last made, not the app (saw)
         # where each list's cursor was last left by the app, or settled (settle): a cursor
         # anywhere else is the person's move, not yet acted on
         self.items_cursor: str | None = None
@@ -1355,7 +1364,7 @@ class WheelhouseApp(App):
         self.item_sink = Sink(lambda: self.landing or not self.screen_stack or self.paint_items())
         # the highlighted row: (session id, item ref), or (session id, None) for the
         # session's conversation, the first row while a session is selected
-        self.selected: tuple[str, str | None] | None = None
+        self.selected: tuple[str, str | None] | None = None   # its setter restarts the dwell (look)
         self.followers: dict[str, transcript.Follower] = {}
         # each session's context size for the session list: read on workers, by a follower
         # shared with the stats pane (stats.follower), so each transcript is read once
@@ -1437,6 +1446,8 @@ class WheelhouseApp(App):
         self.checklist = self.query_one("#checklist", Static)
         self.set_interval(0.1, self.animate)
         self.set_interval(1.0, self.tick)
+        # a screen over the inbox, or a thread opened, is a break in looking: the dwell restarts
+        self.screen_change_signal.subscribe(self, lambda _: self.look(), immediate=True)
         self.refresh_data()
         if tutorial.should_offer(self.store):
             self.push_screen(TutorialOffer(), self.offer_answered)
@@ -1558,6 +1569,62 @@ class WheelhouseApp(App):
         self.paint_checklist()
         if isinstance(self.screen, ThreadView) and self.screen.is_mounted:   # not before its widgets exist
             self.screen.paint()   # an action here (queue, take back) shows at once
+
+    @property
+    def selected(self) -> tuple[str, str | None] | None:
+        """The highlighted row: (session id, item ref), or (session id, None) for the session's
+        conversation. Setting it restarts the dwell (look)."""
+        return self._selected
+
+    @selected.setter
+    def selected(self, value: tuple[str, str | None] | None) -> None:
+        self._selected = value
+        self.look()
+
+    def look(self) -> None:
+        """What the person is looking at, the selection on this screen, may have changed: if
+        it has, the dwell starts again. One one-shot timer, restarted on each change and none
+        while nothing is selected: a pass over an item, or a rest shorter than DWELL, leaves
+        it as it was (dwelt)."""
+        if not self.is_running or not self.screen_stack:   # before the app runs, or as it shuts down
+            return
+        at = (self._selected, self.screen)
+        if at == self.dwelling:
+            return
+        self.dwelling = at
+        self.dwell_gen += 1
+        if self.dwell_timer is not None:
+            self.dwell_timer.stop()
+            self.dwell_timer = None
+        if at[0] is not None:
+            gen = self.dwell_gen
+            # fired on the timer's own task: it waits its turn in the app's queue, behind any key
+            # being handled, as a key does
+            self.dwell_timer = self.set_timer(DWELL, lambda: self.call_later(self.dwelt, gen))
+
+    def dwelt(self, gen: int) -> None:
+        """The person has looked at the selection for DWELL without a break: an unseen decision
+        becomes seen, and a tutorial step the person's own selection makes ticks (saw). Only if
+        it is still what they look at: the same selection, once the cursors have settled (a
+        burst's arrows may have moved them), on the inbox or in the selected item's thread,
+        not under a dialog."""
+        self.settle()
+        if gen != self.dwell_gen or self.selected is None:
+            return
+        self.dwell_timer = None
+        sid, ref = self.selected
+        screen = self.screen
+        if not (screen is self.screen_stack[0]
+                or isinstance(screen, ThreadView) and (screen.sid, screen.ref) == (sid, ref)):
+            return
+        if self.selected == self.picked:
+            self.saw(sid, ref)
+        if ref and self.store.mark_seen(sid, ref):   # a no-op unless it's an unseen decision
+            self.paint_sessions()   # its D count
+            self.paint_items()   # it keeps its place while selected (ranked), and sinks once left
+            self.paint_detail()
+            if isinstance(screen, ThreadView) and screen.is_mounted:
+                screen.paint()
 
     @property
     def viewing(self) -> str | None:
@@ -2028,7 +2095,8 @@ class WheelhouseApp(App):
 
     def saw(self, sid: str, ref: str | None, step: str | None = None) -> None:
         """The person opened something of the tutorial's: a question or its conversation.
-        Called only from what the person does, never from automatic selection."""
+        Called only from what the person does, never from automatic selection: Enter at once,
+        their own selection once they have looked at it (dwelt)."""
         s = next((s for s in self.sessions if s["id"] == sid), None)
         if not tutorial.is_tutorial(self.store, s):
             return
@@ -2217,7 +2285,7 @@ class WheelhouseApp(App):
         pane follows the conversation rather than whichever question comes first."""
         self.filter_sid = sid
         self.selected = (sid, None)
-        self.saw(sid, None)
+        self.picked = self.selected   # the conversation followed ticks its step once looked at (dwelt)
         self.retarget()
         self.paint_items()
         self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
@@ -2244,7 +2312,7 @@ class WheelhouseApp(App):
             self.sessions_cursor = sid   # first: following repaints, and may settle again
             if sid != self.filter_sid:
                 # an items move pending is in the list following replaces: it's superseded, never
-                # selected (which would mark a decision seen), here or by a settle within follow
+                # selected, here or by a settle within follow
                 self.items_cursor = self.items_table.cursor_key()
                 self.follow(sid)
             self.paint_session_info()
@@ -2252,7 +2320,7 @@ class WheelhouseApp(App):
         if key is not None and key != self.items_cursor:
             self.items_cursor = key
             self.select_row(key)
-            self.saw(*self.selected)
+            self.picked = self.selected   # looked at for DWELL, it's seen (dwelt)
             # what the selection held re-sorts now, not at the next tick (ranked): a settled
             # item sinks as the key that moved on lands, so the keys behind it act on the same rows
             self.paint_items()
@@ -2260,9 +2328,7 @@ class WheelhouseApp(App):
     def select_row(self, key: str) -> None:
         sid, ref = key.split("|")
         if self.selected != (sid, ref or None):
-            self.selected = (sid, ref or None)
-            if ref:
-                self.store.mark_seen(sid, ref)   # a no-op unless it's an unseen decision
+            self.selected = (sid, ref or None)   # an unseen decision is seen once looked at (dwelt)
             self.retarget()
             self.paint_detail()
             self.each_pane("tick")
@@ -2460,6 +2526,8 @@ class WheelhouseApp(App):
                             "Restore it, then Ctrl+S or Send sends its queue")
             else:
                 self.notify(f"queued for {aimed(target)}: Ctrl+S or Send sends the session's queue")
+        if target[1]:   # answering a decision is an explicit act: seen at once, not after the dwell
+            self.store.mark_seen(*target)
         box.text = ""
         self.refresh_data()
         if box is self.answer:   # back to the items, cursor where it was: Down, Tab answers the next

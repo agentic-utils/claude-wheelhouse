@@ -5,7 +5,7 @@ import pytest
 
 from claude_wheelhouse.store import Store, standing
 from claude_wheelhouse.tui import BLANK, Sink, WheelhouseApp
-from test_tui import assert_one_current, one_second, raw_keys
+from test_tui import assert_one_current, dwell, one_second, raw_keys
 
 DECIDED = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"}
 
@@ -103,7 +103,7 @@ def refs(app) -> list[str]:
 SETTLE = {
     "task": lambda st, s, r: st.update_item(s, r, status="done"),
     "question": lambda st, s, r: st.reply(s, r, "got it", status="answered"),
-    "decision": lambda st, s, r: None,   # seen as it's selected
+    "decision": None,   # seen once rested on (the dwell)
     "agent": lambda st, s, r: st.update_item(s, r, status="failed"),
 }
 
@@ -133,7 +133,10 @@ async def test_a_settled_item_holds_while_selected_and_sinks_after(store, sid, k
         assert before[-1] == old, f"{desc}: the settled item at the foot"
         table.move_cursor(row=table.get_row_index(f"{sid}|{top}"))
         await pilot.pause()
-        SETTLE[kind](store, sid, top)
+        if kind == "decision":
+            dwell(app)
+        else:
+            SETTLE[kind](store, sid, top)
         app.refresh_data()
         await pilot.pause()
         assert standing(store.item(sid, top)) == "settled", desc

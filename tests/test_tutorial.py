@@ -8,7 +8,7 @@ from claude_wheelhouse.store import Store
 from claude_wheelhouse.tui import BUTTONS, Compose, ItemList, KeysHelp, ThreadView, Transcript, TutorialOffer, \
     WheelhouseApp, key_name, keys_help
 from claude_wheelhouse.tutorial import should_offer as real_should_offer   # before conftest stubs it
-from test_tui import one_second
+from test_tui import dwell, one_second
 
 
 @pytest.fixture
@@ -219,8 +219,13 @@ async def test_the_checklist_follows_the_tutorial(store, sid, tut):
         assert "▶ Open a question" in app._checklist_text
         items.move_cursor(row=keys.index(f"{tut}|{q1}"))
         await pilot.pause()
-        assert "✔ Open a question" in app._checklist_text, "highlighting a question ticks it"
+        assert "▶ Open a question" in app._checklist_text, "passing over a question doesn't tick it"
+        dwell(app)
+        await pilot.pause()
+        assert "✔ Open a question" in app._checklist_text, "highlighting a question, and resting there, ticks it"
         app.follow(tut)
+        await pilot.pause()
+        dwell(app)
         await pilot.pause()
         assert "✔ Follow the conversation" in app._checklist_text
         store.end(tut)
@@ -342,8 +347,10 @@ async def test_closing_the_decision_ticks_it(store, sid, tut):
         app.answer_permission(tut, "P1", "allow")   # the person allows it: it goes at once
         app.refresh_data()
         await pilot.pause()
+        dwell(app)
+        await pilot.pause()
         assert app.selected == (tut, "D1") and store.item(tut, "D1")["status"] == "seen", \
-            "P1 went, so D1 under the cursor was selected (and marked seen) automatically"
+            "P1 went, so D1 under the cursor was selected automatically, and seen once rested on"
         assert step not in app._checklist_text, "automatic selection doesn't tick it"
         keys = [items.coordinate_to_cell_key((i, 0)).row_key.value for i in range(items.row_count)]
         for ref in ("T1", "D1"):

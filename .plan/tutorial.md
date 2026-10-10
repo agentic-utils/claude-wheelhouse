@@ -112,9 +112,10 @@ really use.
 - The checklist sits at the top of the right-hand pane while the tutorial session exists.
   Each step is worked out from the store on the refresh: both questions answered, the
   answers sent, a reply after they went, the decision closed (not just seen: the app's
-  automatic selection marks a decision seen), the permission allowed. The two
-  only the screen knows (a question highlighted or opened, the conversation followed) are
-  recorded as the person does them, never by the app's own automatic selection, and kept
+  automatic selection marks a decision seen once it has rested there a second), the
+  permission allowed. The two only the screen knows (a question highlighted or opened,
+  the conversation followed) are recorded as the person does them (a highlight once
+  they've rested on it a second, the dwell; Enter at once), never by the app's own automatic selection, and kept
   in the store (`tutorial_seen`), so a restart of the app keeps them. The next step shows
   how to do it; the rest are one line each.
 - Starting refuses before creating anything if `claude` isn't on PATH. The host starts

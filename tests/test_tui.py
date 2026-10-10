@@ -971,6 +971,13 @@ async def test_one_current_session_whatever_happens(store, sid, tmp_path, monkey
                 f"{desc}: {drafts}"
 
 
+def dwell(app) -> None:
+    """The dwell lapsing (tui.DWELL): the person rested on what they're looking at. Its timer
+    fired at once, rather than waited for."""
+    assert app.dwell_timer is not None, "a dwell is running"
+    app.dwelt(app.dwell_gen)
+
+
 def raw_keys(app, *keys) -> None:
     """Keys as a terminal sends a burst: all posted at once, with no idle wait between them.
     Pilot.press waits for idle after each key, which hid review 12's bugs: an action key
@@ -1087,18 +1094,19 @@ async def test_a_raw_burst_opens_what_the_cursor_is_on(store, sid, tmp_path, whe
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("where, burst, selected, seen, desc", [
-    ("items", ("down", "shift+tab", "down"), None, ["A:one"], "from the items: Down, Shift+Tab, Down (review 13)"),
+@pytest.mark.parametrize("where, burst, selected, dwelt, desc", [
+    ("items", ("down", "shift+tab", "down"), None, [], "from the items: Down, Shift+Tab, Down (review 13)"),
     ("sessions", ("down", "tab", "down"), "one", ["B:one"], "from the session list: Down, Tab, Down (review 13)"),
     ("items", ("shift+tab", "down"), None, [], "from the items: Shift+Tab, Down"),
 ])
-async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp_path, where, burst, selected, seen,
+async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp_path, where, burst, selected, dwelt,
                                                                    desc):
     """Following A, a burst that moves both lists' cursors and ends on session B follows B
     (D22), and ends as the same keys typed slowly do: each key settles the one before it
-    (land), so the decision a Down landed on before a Tab moved on is selected and marked
-    seen, A's in the items or B's in the list following B rebuilt, as it would be typed
-    slowly. Nothing the cursor didn't stop on is marked."""
+    (land), so the decision a Down landed on before a Tab moved on is selected, A's in the
+    items or B's in the list following B rebuilt, as it would be typed slowly. A pass over a
+    decision marks nothing: only the one the burst ends on is seen, once the person has
+    rested on it (the dwell)."""
     extra = {"alternative": "x", "why": "y", "reverse": "z"}
     other = store.create_session(str(tmp_path), name="other")
     for s in (sid, other):
@@ -1122,9 +1130,13 @@ async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp
         title = {(s, it["ref"]): it["title"] for s in (sid, other) for it in store.items(s)}
         assert app.current_session() == other, desc
         assert app.selected[0] == other and title.get(app.selected) == selected, f"{desc}: selected {app.selected}"
-        marked = sorted(f"{names[s]}:{it['title']}" for s in (sid, other) for it in store.items(s)
-                        if it["status"] != "unseen")
-        assert marked == seen, f"{desc}: marked seen {marked}"
+        def marked():
+            return sorted(f"{names[s]}:{it['title']}" for s in (sid, other) for it in store.items(s)
+                          if it["status"] != "unseen")
+        assert marked() == [], f"{desc}: passed over, nothing seen yet, got {marked()}"
+        dwell(app)
+        await pilot.pause()
+        assert marked() == dwelt, f"{desc}: seen once rested on, got {marked()}"
         assert_one_current(app, desc)
 
 
@@ -1152,7 +1164,8 @@ async def two_lists(tmp_path, where, steps, slow, counts=(2, 2)) -> dict:
     or a click as the terminal delivers it: "click A" or "click B" on that session in the list,
     "click 1" or "double 1" on the items' row 1 (row 0 is the conversation). What they left, by
     name: the thread open, the current session, the selection, the text in the box, what was
-    marked seen and the focus. D22 holds either way."""
+    marked seen once the person rested at the end (the dwell: a pass marks nothing) and the
+    focus. D22 holds either way."""
     store = Store(tmp_path / f"{'slow' if slow else 'raw'}.db")
     a, b = (store.create_session(str(tmp_path), name=n) for n in ("alpha", "bravo"))
     with one_second():
@@ -1184,6 +1197,9 @@ async def two_lists(tmp_path, where, steps, slow, counts=(2, 2)) -> dict:
                 for _ in range(3):
                     await pilot.pause()
         for _ in range(4):
+            await pilot.pause()
+        if app.dwell_timer is not None:   # the same dwell, raw or slow: a rest at the end
+            dwell(app)
             await pilot.pause()
         names = {a: "A", b: "B"}
         title = {(s, it["ref"]): it["title"] for s in (a, b) for it in store.items(s)}
@@ -1245,8 +1261,8 @@ async def test_a_click_then_a_raw_burst_ends_as_typed_slowly(tmp_path, monkeypat
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("where, steps, desc", [
-    ("items", ("down", "click B"), "Down on A's items, a click on B: A's one was seen"),
-    ("items", ("down", "down", "click B"), "Down, Down on A's items, a click on B: both were seen"),
+    ("items", ("down", "click B"), "Down on A's items, a click on B: A's one passed over, unseen"),
+    ("items", ("down", "down", "click B"), "Down, Down on A's items, a click on B: both passed over"),
     ("items", ("down", "click A"), "Down on A's items, a click on A: its one stays selected"),
     ("items", ("enter", "click B"), "Enter on A's conversation, a click on B"),
     ("sessions", ("down", "click 1"), "Down in the session list, a click on an item: of the session Down reached"),
@@ -1254,7 +1270,7 @@ async def test_a_click_then_a_raw_burst_ends_as_typed_slowly(tmp_path, monkeypat
 ])
 async def test_a_raw_burst_then_a_click_ends_as_typed_slowly(tmp_path, monkeypatch, where, steps, desc):
     """Review 18: a click settles what the keys before it moved, as a key does (land), with no
-    key behind it to: else the Down's decision was never marked seen, or the items' click was
+    key behind it to: else the Down's decision was never selected, or the items' click was
     on the session the list left."""
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
@@ -2129,6 +2145,8 @@ async def test_the_selected_item_keeps_its_place(store, sid, kind, pick, answer,
             await pilot.pause()
             if age == pick and answer:
                 store.send(sid, "the cache", refs[age])
+            elif age == pick:   # a decision seen once rested on
+                dwell(app)
             app.refresh_data()
             await pilot.pause()
             while app.item_sink.move:   # a settled item sinks to the foot (T71)
@@ -2244,6 +2262,115 @@ async def test_a_selected_item_moves_only_on_delete(store, sid, live, start, act
             assert app.selected == (sid, ref) and table.cursor_key() == f"{sid}|{ref}", f"{desc}: still selected"
 
 
+DECIDED = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"}
+TIMED_DWELL = 1.0   # the dwell these tests time for real: a rest is 1.5 of it, a short look half of it
+
+
+async def dwell_steps(pilot, app, keys, steps) -> None:
+    """The steps of test_an_unseen_decision_is_seen_only_after_the_dwell, on the items by key."""
+    for step in steps:
+        how, _, what = step.partition(" ")
+        if how == "on":
+            app.items_table.move_cursor(row=app.items_table.get_row_index(keys[what]))
+            await pilot.pause()
+        elif how == "rest":
+            await pilot.pause(TIMED_DWELL * 1.5)
+        elif how == "short":
+            await pilot.pause(TIMED_DWELL / 2)
+        elif how == "follow":
+            app.follow(keys[what])
+            await pilot.pause()
+        elif how == "session":   # the person's move in the session list
+            app.session_list.move_cursor(row=app.session_list.get_row_index(keys[what]))
+            await pilot.pause()
+        elif how == "answer":
+            app.answer.text = "noted"
+            app.answer.focus()
+            await pilot.press("ctrl+enter")
+        else:   # a key on the items: enter, delete, question_mark, escape
+            if not isinstance(app.screen, ThreadView) and app.screen is app.screen_stack[0]:
+                app.items_table.focus()
+            await pilot.press(how)
+        await pilot.pause()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("steps, want, desc", [
+    (("on D", "on E", "rest"), "unseen", "a pass over it: unseen"),
+    (("on D", "short", "on E", "rest"), "unseen", "a rest shorter than the dwell, then on: unseen"),
+    (("on D", "rest"), "seen", "a rest of the dwell, in the all-sessions view: seen"),
+    (("follow A", "on D", "rest"), "seen", "the same following its session"),
+    (("on D", "short", "on E", "on D", "short"), "unseen",
+     "a rest, away, back: the dwell starts again, so two short looks don't add up"),
+    (("on D", "short", "on E", "on D", "short", "short"), "seen", "and the restarted dwell lapses"),
+    (("on D", "enter"), "unseen", "a thread opened on it: not at once"),
+    (("on D", "enter", "rest"), "seen", "a thread opened on it: seen after the dwell"),
+    (("on D", "short", "enter"), "unseen", "opening the thread starts the dwell again (it takes a while to open)"),
+    (("on D", "question_mark", "rest"), "unseen", "the keys overlay over it: not looked at"),
+    (("on D", "question_mark", "rest", "escape", "rest"), "seen", "back from the overlay: the dwell starts again"),
+    (("on D", "delete"), "closed", "Delete: at once"),
+    (("on D", "answer"), "seen", "answering it: seen at once"),
+    (("follow A", "on D", "short", "session B", "rest"), "unseen", "a switch to another session mid-dwell"),
+])
+async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_path, monkeypatch, steps, want, desc):
+    """Doug: "I need to look at an item for at least 1 second before the state changes". An
+    unseen decision becomes seen only once it has stayed selected, on the inbox or in its
+    thread, for the dwell without a break; the person's explicit acts, Delete and answering,
+    act at once."""
+    monkeypatch.setattr("claude_wheelhouse.tui.DWELL", TIMED_DWELL)
+    other = store.create_session(str(tmp_path), name="other")
+    with one_second():
+        d = store.post_item(sid, "decision", "D", **DECIDED)
+        e = store.post_item(sid, "question", "E")
+        store.post_item(other, "decision", "B's", **DECIDED)
+    keys = {"D": f"{sid}|{d}", "E": f"{sid}|{e}", "A": sid, "B": other}
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await dwell_steps(pilot, app, keys, steps)
+        assert store.item(sid, d)["status"] == want, f"{desc}: {store.item(sid, d)['status']}"
+        if "session B" in steps:
+            assert app.selected == (other, None), f"{desc}: B's conversation followed"
+        if app.screen is app.screen_stack[0]:
+            assert_one_current(app, desc)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("leave, desc", [
+    (False, "seen by the dwell while selected: held in place, not sinking"),
+    (True, "and once the selection moves on, it sinks to the foot"),
+])
+async def test_a_decision_seen_by_the_dwell_sinks_only_once_left(store, sid, monkeypatch, leave, desc):
+    """The owner's rule for settled items: a decision that becomes seen while selected stays
+    where it is until the selection moves on, then sinks (ranked, Sink), with seen arriving
+    by the dwell's own timer."""
+    monkeypatch.setattr("claude_wheelhouse.tui.DWELL", TIMED_DWELL)
+    with one_second():
+        old = store.post_item(sid, "task", "old", status="done")
+        d = store.post_item(sid, "decision", "D", **DECIDED)
+        q = store.post_item(sid, "question", "Q")
+    for ref, at in ((old, "09:00"), (d, "10:02"), (q, "10:01")):   # a fixed order
+        store.db.execute("UPDATE items SET updated_at = ? WHERE ref = ?", (f"2026-10-09T{at}:00+00:00", ref))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        order = lambda: [k.split("|")[1] for k in table.keys()]
+        before = order()
+        assert before[-1] == old, f"{desc}: the settled task at the foot, {before}"
+        await dwell_steps(pilot, app, {"D": f"{sid}|{d}", "Q": f"{sid}|{q}"}, ("on D", "rest"))
+        app.refresh_data()
+        await pilot.pause()
+        assert store.item(sid, d)["status"] == "seen", f"{desc}: seen by the timer"
+        assert order() == before and app.item_sink.move is None, f"{desc}: held while selected"
+        if leave:
+            await dwell_steps(pilot, app, {"Q": f"{sid}|{q}"}, ("on Q",))
+            while app.item_sink.move is not None:
+                assert_one_current(app, f"{desc}: mid-move")
+                await pilot.pause(0.03)
+            assert order()[-2:] == [old, d] and app.selected == (sid, q), f"{desc}: {order()}"
+
+
 @pytest.mark.anyio
 async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid):
     q = store.post_item(sid, "question", "which db?")
@@ -2260,7 +2387,10 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
         items.focus()
         items.move_cursor(row=1)
         await refresh(pilot, sid)
-        assert store.item(sid, d)["status"] == "seen", "viewing it marks it seen"
+        assert store.item(sid, d)["status"] == "unseen", "not seen until the person has rested on it"
+        dwell(app)
+        await refresh(pilot, sid)
+        assert store.item(sid, d)["status"] == "seen", "viewing it for the dwell marks it seen"
         assert str(sessions.get_row_at(0)[4]) == ""
         items.move_cursor(row=0)
         await refresh(pilot, sid)
