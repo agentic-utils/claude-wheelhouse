@@ -800,7 +800,7 @@ class ThreadView(Screen):
 
     def paint(self) -> None:
         s = self.app.store.session(self.sid)
-        blocks = thread_blocks(self.app.store, self.sid, self.ref, s and (s["name"] or short(self.sid)))
+        blocks, _ = self.app.item_blocks(self.sid, self.ref, s and (s["name"] or short(self.sid)))
         text = "\n\n".join(md for _, md in blocks)
         if text != self.text:
             scroll = self.query_one("#thread-scroll")
@@ -1392,6 +1392,7 @@ class WheelhouseApp(App):
         # the highlighted row: (session id, item ref), or (session id, None) for the
         # session's conversation, the first row while a session is selected
         self.selected: tuple[str, str | None] | None = None   # its setter restarts the dwell (look)
+        self.detail_follows = False   # the detail pane shows a conversation: it follows its newest turn
         self.modules = api.load()
         self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid, usage=self.hub.usage)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
@@ -1906,16 +1907,27 @@ class WheelhouseApp(App):
         self.keep_unsent(self.answer, self.box_target, target)
         self.box_target = target
 
+    def item_blocks(self, sid: str, ref: str, session_name: str = "") -> tuple[list[tuple[str, str]], bool]:
+        """An item's thread (thread_blocks), and for a subagent's, under it, the subagent's own
+        conversation, followed live (Hub.agent_conversation). Whether it has one."""
+        agent = self.hub.agent_conversation(sid, ref)
+        return thread_blocks(self.store, sid, ref, session_name) + (agent or []), agent is not None
+
     def paint_detail(self) -> None:
+        agent = False
         if self.viewing:
             blocks = self.conversation(self.viewing)
         elif self.selected:
-            blocks = thread_blocks(self.store, *self.selected)
+            blocks, agent = self.item_blocks(*self.selected)
         else:   # what was shown has gone (a followed session ended, say): not left standing
             blocks = [("note", NOTHING_SELECTED)]
+        if not agent and not isinstance(self.screen, ThreadView):   # which may follow one itself
+            self.hub.unfollow_agent()
+        # a conversation, the session's or a subagent's, shows its newest turn, and follows it
+        self.detail_follows = bool(self.viewing or agent)
         text = "\n\n".join(md for _, md in blocks)
         if text != getattr(self, "_detail_text", None):
-            following = self.viewing and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1
+            following = self.detail_follows and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1
             self._detail_text = text
             self.detail.update(render(blocks))
             if following:   # stay at the newest turn, unless the person has scrolled up to read
@@ -2266,7 +2278,7 @@ class WheelhouseApp(App):
             self.retarget()
             self.paint_detail()
             self.each_pane("tick")
-            if self.viewing:
+            if self.detail_follows:
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 
     @on(DataTable.RowSelected, "#items")

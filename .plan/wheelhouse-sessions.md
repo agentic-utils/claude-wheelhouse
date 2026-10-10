@@ -229,6 +229,18 @@ SDK and tab sessions, rather than relying on the session to post them
   item only if it was still running then: no finish in the transcript, and its transcript
   written to within 30 minutes (LIVE) of the cut-off. So adopting a session, or upgrading,
   brings in what's running and not the history.
+- **Its conversation.** Selecting an A item shows, under its body and thread, the
+  subagent's own conversation from `agent-<agent id>.jsonl` (`Hub.agent_conversation`,
+  `transcript.agent_blocks`): the same record format as a session's, every record a
+  sidechain one. Its first user turn is the prompt; later ones (SendMessage) are the
+  session's; tool calls are one line each, tool results and thinking are left out, and a
+  `SubagentHandback` call shows its message whole, as the result. The item finds its
+  agent id through `agent_items`; an A item tied to no subagent, or one whose file isn't
+  there, says so. Only the selected subagent is followed (one `transcript.AgentFollower`,
+  dropped once no A item is shown), re-read from its tail only when its size or mtime
+  changes, so a session's hundreds of subagent files cost nothing until one is opened.
+  The pane follows its newest turn, as a session's conversation does, and a reader
+  scrolled up keeps their place; `Enter` (ThreadView) shows the same.
 - **Cost.** The TUI syncs each session on a worker thread every tick while it runs (once
   for one that isn't). The subagents folder is listed again only when its mtime changes;
   the main transcript is read from the offset the last read reached. A first read starts at

@@ -4256,3 +4256,89 @@ async def test_a_button_key_that_does_not_apply_says_so(store, tmp_path, monkeyp
         await pilot.press(key)
         await pilot.pause()
         assert (got, notes) == ([], [said]), desc
+
+
+def subagent_file(tmp_path, sid, aid, n):
+    """A session's transcript in a fake projects folder, and a subagent's beside it: its
+    prompt, then n tool calls."""
+    folder = tmp_path / "projects/-home-u-repo"
+    (folder / sid / "subagents").mkdir(parents=True, exist_ok=True)
+    folder.joinpath(f"{sid}.jsonl").write_text("")
+    recs = [{"type": "user", "isSidechain": True, "timestamp": "2026-10-10T22:25:07Z",
+             "message": {"content": "find the VAT rounding bug"}}]
+    recs += [{"type": "assistant", "isSidechain": True, "timestamp": "2026-10-10T22:25:30Z", "message": {"content": [
+        {"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": f"step {i}"}}]}} for i in range(n)]
+    path = folder / sid / "subagents" / f"agent-{aid}.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in recs))
+    return path
+
+
+async def laid(pilot):
+    """The app's moves have landed and been laid out: a scroll to the end after a refresh too."""
+    for _ in range(2):
+        await pilot.wait_for_scheduled_animations()
+        await pilot.pause()
+
+
+def say(path, text):
+    with open(path, "a") as f:
+        f.write(json.dumps({"type": "assistant", "isSidechain": True, "timestamp": "2026-10-10T22:30:00Z",
+                            "message": {"content": [{"type": "text", "text": text}]}}) + "\n")
+
+
+@pytest.mark.anyio
+async def test_a_subagent_items_own_conversation_follows_it_live(store, sid, tmp_path, monkeypatch):
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    path = subagent_file(tmp_path, sid, "ag1", 60)
+    store.track_agent(sid, "ag1", "find the bug", "A `general-purpose` subagent.", datetime.now(timezone.utc))
+    ref = store.agent_links(sid)["ag1"][0]
+    q = store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await laid(pilot)
+        items = app.query_one("#items", DataTable)
+        items.focus()
+        items.move_cursor(row=items.get_row_index(f"{sid}|{ref}"))
+        await laid(pilot)
+        text, scroll = app._detail_text, app.detail_scroll
+        assert text.index("A `general-purpose` subagent.") < text.index(transcript.AGENT_HEAD) \
+            < text.index("find the VAT rounding bug") < text.index("`⚙ Bash: step 59`"), "its body, then its conversation"
+        assert scroll.max_scroll_y > 0 and scroll.scroll_y == scroll.max_scroll_y, "at the end"
+        say(path, "It rounds per line.")
+        app.refresh_data()
+        await laid(pilot)
+        assert app._detail_text.endswith("It rounds per line.") and scroll.scroll_y == scroll.max_scroll_y, \
+            "followed live, at the end"
+        scroll.scroll_to(y=5, animate=False, immediate=True)
+        await laid(pilot)
+        line = app.detail._layout(app.detail.size.width)[1][5]
+        say(path, "Fixed it.")
+        app.refresh_data()
+        await laid(pilot)
+        assert app._detail_text.endswith("Fixed it.")
+        assert app.detail._layout(app.detail.size.width)[1][int(scroll.scroll_y)] == line, "a scrolled-up reader keeps their line"
+        await pilot.press("enter")
+        await laid(pilot)
+        convo = app._detail_text[app._detail_text.index(transcript.AGENT_HEAD):]
+        assert isinstance(app.screen, ThreadView) and app.screen.text.endswith(convo), "full screen, the same"
+        thread = app.screen.query_one("#thread-scroll")
+        assert thread.scroll_y == thread.max_scroll_y > 0, "opened at the end"
+        await pilot.press("escape")
+        items.focus()
+        items.move_cursor(row=items.get_row_index(f"{sid}|{q}"))
+        await laid(pilot)
+        assert app.hub.agent_follower is None, "no longer followed once another item is selected"
+
+
+@pytest.mark.anyio
+async def test_a_subagent_item_whose_transcript_is_missing_says_so(store, sid, tmp_path, monkeypatch):
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    store.track_agent(sid, "gone", "find the bug", "A `general-purpose` subagent.", datetime.now(timezone.utc))
+    ref = store.agent_links(sid)["gone"][0]
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        items = app.query_one("#items", DataTable)
+        items.move_cursor(row=items.get_row_index(f"{sid}|{ref}"))
+        await pilot.pause()
+        assert "A `general-purpose` subagent." in app._detail_text and transcript.NO_AGENT_FILE in app._detail_text

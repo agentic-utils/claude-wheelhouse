@@ -262,6 +262,7 @@ GET  /sessions                         list, with status, mode, queue count, con
 GET  /sessions/{sid}/conversation      transcript blocks
 GET  /items?sid=&finished=             inbox, ranked as today
 GET  /items/{sid}/{ref}/thread
+GET  /items/{sid}/{ref}/conversation   a subagent item's own transcript blocks (Hub.agent_conversation)
 POST /sessions                         new session {cwd, name, ticket, brief}
 POST /sessions/{sid}/{restore|relaunch|park|end|interrupt|compact|shell|rename|mode}
 POST /sessions/{sid}/send              {text, ref?}  immediate, or queued per mode

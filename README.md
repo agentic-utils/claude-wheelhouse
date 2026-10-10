@@ -41,7 +41,11 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   session posted itself for the same subagent is taken over rather than listed twice. The
   history doesn't flood in: only subagents started after a session joins the wheelhouse,
   or still running then, get an item, and the same goes for sessions already in it when
-  you upgrade to this version.
+  you upgrade to this version. Select an agent item and the right-hand pane shows its
+  description, then the subagent's own conversation, read live from its transcript: the
+  prompt its session gave it, each tool call as one line, its replies and its result,
+  following it at the end as it works unless you've scrolled up to read. `Enter` shows
+  the same full screen. If its transcript can't be found, the pane says so.
 - **Decisions.** If your own instructions let a session decide some things without asking
   you, it reports each one as a decision (`D1`): what it decided, the alternative, why, and
   how to reverse it. Decisions block nothing. Each session counts its unseen ones (the `D`

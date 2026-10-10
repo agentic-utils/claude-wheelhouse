@@ -40,6 +40,9 @@ BATCH = re.compile(r"\[wheelhouse\] from \S+, \d+ answers: ")
 FROM = re.compile(r"(?:\[wheelhouse\] from \S+ )?(on \S+|\(general\)):\s")
 CUT = re.compile(r"\[cut short, full text: get_input\(message_id=(\d+)\)\] ")
 CUT_MARK = " [cut short]"   # a message shown as it arrived, cut, when its full text has gone
+# a subagent's own tool for handing its result back to the session that started it: its
+# message is the result, shown whole as its reply, not cut to a tool line
+HANDBACK = "SubagentHandback"
 # the opening prompt of a session started with a ticket and no brief (launch.opening_prompt)
 OPENING = re.compile(r"(?:Ticket: [^\n]*\n\n)?" + re.escape(NO_BRIEF))
 
@@ -60,7 +63,9 @@ def locate(sid: str, projects: Path | None = None) -> Path | None:
     return next((projects or PROJECTS).glob(f"*/{sid}.jsonl"), None)
 
 
-def tail_records(path: Path, limit: int = TAIL_BYTES) -> list[dict]:
+def tail_records(path: Path, limit: int = TAIL_BYTES, sidechain: bool = False) -> list[dict]:
+    """The last records of a transcript. A session's leaves out its subagents' (sidechain)
+    records; a subagent's own transcript is nothing but, so sidechain keeps them."""
     with open(path, "rb") as f:
         size = f.seek(0, 2)
         f.seek(max(0, size - limit))
@@ -74,7 +79,7 @@ def tail_records(path: Path, limit: int = TAIL_BYTES) -> list[dict]:
             rec = json.loads(line)
         except ValueError:
             continue
-        if isinstance(rec, dict) and not rec.get("isSidechain"):
+        if isinstance(rec, dict) and (sidechain or not rec.get("isSidechain")):
             recs.append(rec)
     return recs
 
@@ -153,6 +158,9 @@ def entries(recs: list[dict], full=None) -> list[Entry]:
                         out[-1].text += "\n\n" + part["text"].strip()
                     else:
                         out.append(Entry("claude", part["text"].strip(), at))
+                elif part.get("type") == "tool_use" and part.get("name") == HANDBACK \
+                        and isinstance(message := (part.get("input") or {}).get("message"), str) and message.strip():
+                    out.append(Entry("claude", message.strip(), at))
                 elif part.get("type") == "tool_use" and not WHEELHOUSE_TOOL.match(part.get("name", "")):
                     out.append(Entry("tool", tool_line(part.get("name", "?"), part.get("input")), at))
     return out[-MAX_ENTRIES:]
@@ -196,16 +204,48 @@ def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=
         out.append(("note", "_No transcript found for this session yet._"))
     elif tab and (waiting := waiting_in_tab(recs)):
         out.append(("warn", f"> ⚠ **Waiting for you in its tab:** {waiting}."))
-    for e in entries(recs or [], full):
-        if e.who == "tool":
-            out.append(("tool", "`⚙ " + e.text.replace("`", "'") + "`"))
-        elif e.who == "note":
-            out.append(("note", f"_{e.text}{_hhmm(e.at)}_"))
-        else:
-            text = hard_breaks(e.text) if e.who == "you" else e.text
-            out.append((e.who, f"**{e.who}**{_hhmm(e.at)}\n\n{text}"))
+    out += [entry_block(e) for e in entries(recs or [], full)]
     out += [("you", f"**you · queued**\n\n{hard_breaks(body)}") for body in queued]
     return out
+
+
+def entry_block(e: Entry, label: str | None = None) -> tuple[str, str]:
+    """One entry as a (who, markdown) block, headed by who it is or by label."""
+    if e.who == "tool":
+        return "tool", "`⚙ " + e.text.replace("`", "'") + "`"
+    if e.who == "note":
+        return "note", f"_{e.text}{_hhmm(e.at)}_"
+    text = hard_breaks(e.text) if e.who == "you" else e.text
+    return e.who, f"**{label or e.who}**{_hhmm(e.at)}\n\n{text}"
+
+
+AGENT_HEAD = "### Its conversation"
+NO_AGENT_LINK = ("_No subagent transcript is linked to this item: the session posted it itself, and the "
+                 "wheelhouse hasn't matched it to one of the session's subagents._")
+NO_AGENT_FILE = "_Its transcript isn't found beside its session's yet, so only what the session's transcript says of it shows._"
+
+
+def agent_blocks(recs: list[dict] | None, linked: bool = True) -> list[tuple[str, str]]:
+    """A subagent's own conversation, from its transcript, as (who, markdown) blocks: the
+    prompt its session gave it, its tool calls and replies, and its result, the last of
+    them. What the session sends it later (SendMessage) is the session's. None for recs:
+    its transcript isn't found; linked False: the item isn't tied to a subagent at all."""
+    out = [("head", AGENT_HEAD)]
+    if not linked:
+        return out + [("note", NO_AGENT_LINK)]
+    if recs is None:
+        return out + [("note", NO_AGENT_FILE)]
+    said = entries(recs)
+    if not said:
+        return out + [("note", "_Nothing in its transcript yet._")]
+    first = next((i for i, e in enumerate(said) if e.who == "you"), None)
+    return out + [entry_block(e, ("prompt" if i == first else "session") if e.who == "you" else None)
+                  for i, e in enumerate(said)]
+
+
+def agent_path(main: Path, sid: str, agent_id: str) -> Path:
+    """Where Claude Code writes a subagent's own transcript, beside its session's (subagents.py)."""
+    return main.parent / sid / "subagents" / f"agent-{agent_id}.jsonl"
 
 
 def markdown(name: str, tab: str, recs: list[dict] | None, queued=()) -> str:
@@ -214,6 +254,7 @@ def markdown(name: str, tab: str, recs: list[dict] | None, queued=()) -> str:
 
 class Follower:
     """One session's transcript, re-read only when the file has changed."""
+    sidechain = False   # a session's: its subagents' records are left out (tail_records)
 
     def __init__(self, sid: str, projects: Path | None = None):
         self.sid, self.projects = sid, projects
@@ -222,9 +263,12 @@ class Follower:
         self.recs: list[dict] | None = None
         self.blocks_key, self.blocks = None, None   # the app's rendering of recs, kept with them
 
+    def find(self) -> Path | None:
+        return locate(self.sid, self.projects)
+
     def read(self) -> list[dict] | None:
         if self.path is None:
-            self.path = locate(self.sid, self.projects)
+            self.path = self.find()
             if self.path is None:
                 return None
         try:
@@ -234,5 +278,20 @@ class Follower:
             return None
         if (st.st_size, st.st_mtime_ns) != self.seen:
             self.seen = (st.st_size, st.st_mtime_ns)
-            self.recs = tail_records(self.path)
+            self.recs = tail_records(self.path, sidechain=self.sidechain)
         return self.recs
+
+
+class AgentFollower(Follower):
+    """One subagent's own transcript (agent_path), followed as a session's is: re-read only
+    when it has changed, its tail only. main: its session's transcript, if already known."""
+    sidechain = True
+
+    def __init__(self, sid: str, agent_id: str, main: Path | None = None, projects: Path | None = None):
+        super().__init__(sid, projects)
+        self.agent_id, self.main = agent_id, main
+
+    def find(self) -> Path | None:
+        main = self.main or locate(self.sid, self.projects)
+        path = main and agent_path(main, self.sid, self.agent_id)
+        return path if path and path.exists() else None

@@ -535,6 +535,11 @@ class Store:
                             ON i.session_id = a.session_id AND i.ref = a.item_ref WHERE a.session_id = ?""", (sid,))
         return {r["agent_id"]: (r["item_ref"], r["status"]) for r in rows}
 
+    def agent_of(self, sid: str, ref: str) -> str | None:
+        """The agent id of the subagent an A item tracks, if the wheelhouse has tied it to one."""
+        row = self._one("SELECT agent_id FROM agent_items WHERE session_id = ? AND item_ref = ?", (sid, ref))
+        return row["agent_id"] if row else None
+
     def track_agent(self, sid: str, agent_id: str, title: str, body: str, started: datetime,
                     status: str | None = None, note: str = "") -> str:
         """The subagent's A item, made once per agent id, with its status (None: nothing

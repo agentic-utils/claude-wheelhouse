@@ -123,6 +123,10 @@ class Hub:
         # each session's subagents, tracked as A items (#69): read on workers, as contexts are
         self.agent_watchers: dict[str, subagents.AgentWatcher] = {}
         self.agent_errors: dict[str, str] = {}   # each session's watcher error last said
+        # the one subagent whose own conversation a surface shows (agent_conversation): only
+        # it is followed, of the hundreds a session can have, and none once none is shown
+        # (its session's id and item's ref, its follower)
+        self.agent_follower: tuple[tuple[str, str], transcript.AgentFollower] | None = None
         self.usage = stats.AccountUsage()   # the account's, for every surface: fetched once
 
     # events
@@ -581,3 +585,32 @@ class Hub:
         if follower.blocks_key != key:   # parsed once per change, not on every refresh tick
             follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued, functools.partial(self.sent, sid))
         return follower.blocks
+
+    def agent_conversation(self, sid: str, ref: str) -> list[tuple[str, str]] | None:
+        """A subagent item's own conversation as (who, markdown) blocks, from its transcript
+        beside its session's (transcript.agent_blocks): read now, as conversation is, and
+        again only once the file has changed, so asked each refresh it follows the subagent
+        live. Following one stops following the last (unfollow_agent too); saying so when
+        its transcript isn't found, or the item isn't tied to a subagent. None if the item
+        isn't a subagent's, or has gone."""
+        item = self.store.item(sid, ref)
+        if item is None or item["kind"] != "agent":
+            return None
+        if self.agent_follower and self.agent_follower[0] == (sid, ref):
+            follower = self.agent_follower[1]
+        else:
+            aid = self.store.agent_of(sid, ref)
+            if aid is None:
+                self.agent_follower = None
+                return transcript.agent_blocks(None, linked=False)
+            watcher = self.agent_watchers.get(sid)
+            follower = transcript.AgentFollower(sid, aid, watcher and watcher.main)
+            self.agent_follower = ((sid, ref), follower)
+        recs = follower.read()
+        if follower.blocks_key != follower.seen or follower.blocks is None:   # parsed once per change
+            follower.blocks_key, follower.blocks = follower.seen, transcript.agent_blocks(recs)
+        return follower.blocks
+
+    def unfollow_agent(self) -> None:
+        """No surface shows a subagent's conversation now: its transcript is no longer read."""
+        self.agent_follower = None

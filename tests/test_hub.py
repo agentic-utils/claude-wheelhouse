@@ -1,10 +1,12 @@
 """The hub on its own, with no Textual: what it keeps, decides and says."""
 
+import json
 import time
+from datetime import datetime, timezone
 
 import pytest
 
-from claude_wheelhouse import hub as hub_mod, launch, liveness, subagents, tutorial
+from claude_wheelhouse import hub as hub_mod, launch, liveness, subagents, transcript, tutorial
 from claude_wheelhouse.hub import Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone
 
@@ -342,3 +344,81 @@ def test_the_status_helpers_read_the_listed_row_by_id(hub, store, sid, monkeypat
     monkeypatch.setattr(store, "session", lambda sid: reads.append(sid))
     helper(hub, sid)
     assert reads == [], f"{desc}: painted every tick, so from the refresh's rows, not the store"
+
+
+# a subagent's own conversation (#69)
+
+AGENT_RECS = [
+    {"type": "user", "isSidechain": True, "timestamp": "2026-10-10T22:25:07Z",
+     "message": {"content": "find the VAT rounding bug"}},
+    {"type": "user", "isSidechain": True, "isMeta": True, "message": {"content": "<system-reminder>x</system-reminder>"}},
+    {"type": "assistant", "isSidechain": True, "timestamp": "2026-10-10T22:25:30Z", "message": {"content": [
+        {"type": "thinking", "thinking": "hmm"},
+        {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "grep -rn round"}}]}},
+    {"type": "user", "isSidechain": True, "message": {"content": [{"type": "tool_result", "tool_use_id": "t1",
+                                                                   "content": "invoice.py:12"}]}},
+    {"type": "assistant", "isSidechain": True, "timestamp": "2026-10-10T22:26:00Z", "message": {"content": [
+        {"type": "text", "text": "It rounds per line."}]}},
+    {"type": "assistant", "isSidechain": True, "timestamp": "2026-10-10T22:26:10Z", "message": {"content": [
+        {"type": "tool_use", "id": "t2", "name": "SubagentHandback", "input": {"message": "Fixed in invoice.py."}}]}},
+]
+
+
+def write_agent(tmp_path, sid, aid="a1", recs=AGENT_RECS):
+    """A session's transcript in a fake projects folder, and a subagent's beside it."""
+    folder = tmp_path / "projects/-home-u-repo"
+    (folder / sid / "subagents").mkdir(parents=True, exist_ok=True)
+    folder.joinpath(f"{sid}.jsonl").write_text("")
+    path = folder / sid / "subagents" / f"agent-{aid}.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in recs))
+    return path
+
+
+@pytest.fixture
+def projects(tmp_path, monkeypatch):
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    return tmp_path
+
+
+def agent_item(store, sid, aid="a1", title="find the bug"):
+    store.track_agent(sid, aid, title, "A `general-purpose` subagent.", datetime.now(timezone.utc))
+    return store.agent_links(sid)[aid][0]
+
+
+@pytest.mark.parametrize("linked, written, shows, desc", [
+    (True, True, ["head", "you", "tool", "claude", "claude"], "its prompt, tool calls, reply and result"),
+    (True, False, ["head", "note"], "linked, but its file isn't there: said so"),
+    (False, True, ["head", "note"], "an A item the session posted, tied to no subagent: said so"),
+])
+def test_a_subagent_items_conversation(hub, store, sid, projects, linked, written, shows, desc):
+    ref = agent_item(store, sid) if linked else store.post_item(sid, "agent", "mine", status="running")
+    if written:
+        write_agent(projects, sid)
+    blocks = hub.agent_conversation(sid, ref)
+    assert [who for who, _ in blocks] == shows, desc
+    if shows[1] == "you":
+        mds = [md for _, md in blocks]
+        assert mds[1].startswith("**prompt** · 22:25Z") and "find the VAT rounding bug" in mds[1]
+        assert mds[2] == "`⚙ Bash: grep -rn round`"
+        assert mds[-1].endswith("Fixed in invoice.py."), "its handed-back result, whole"
+    else:
+        assert blocks[1][1] == (transcript.NO_AGENT_FILE if linked else transcript.NO_AGENT_LINK), desc
+
+
+def test_only_a_subagent_item_has_its_conversation(hub, store, sid):
+    q = store.post_item(sid, "question", "which db?")
+    assert (hub.agent_conversation(sid, q), hub.agent_conversation(sid, "A9")) == (None, None)
+
+
+def test_a_subagents_conversation_follows_it_live_and_one_at_a_time(hub, store, sid, projects):
+    ref, other = agent_item(store, sid), agent_item(store, sid, "a2", "other")
+    path = write_agent(projects, sid, recs=AGENT_RECS[:1])
+    write_agent(projects, sid, "a2")
+    assert [who for who, _ in hub.agent_conversation(sid, ref)] == ["head", "you"]
+    with open(path, "a") as f:
+        f.write(json.dumps(AGENT_RECS[4]) + "\n")
+    assert hub.agent_conversation(sid, ref)[-1][1].endswith("It rounds per line."), "read again once it changed"
+    hub.agent_conversation(sid, other)
+    assert hub.agent_follower[0] == (sid, other), "following another stops following the first"
+    hub.unfollow_agent()
+    assert hub.agent_follower is None
