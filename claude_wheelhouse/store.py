@@ -31,6 +31,14 @@ STATUSES = {
 INITIAL_STATUS = {"task": "todo", "question": "open", "agent": "running", "decision": "unseen",
                   "permission": "open"}
 CLOSED = {"done", "dropped", "closed", "failed", "allowed", "denied"}
+# Where an item stands in the inbox (standing), one table for every kind (T71). Active: ranked
+# as it has always been. Settled: done with, but kept in sight: dimmed, after the rest. Finished:
+# off the inbox until F shows it (closed, a permission answered, or dismissed by the person).
+SETTLED = {"task": {"done", "dropped"}, "question": {"answered"}, "decision": {"seen"},
+           "agent": {"done", "failed"}, "permission": set()}
+# kinds whose settled items the person dismisses (Delete), recorded in items.dismissed; a
+# question or a decision is closed instead
+DISMISSABLE = ("task", "agent")
 # what a decision records besides its title (what was decided): post_item's keyword name, label
 DECISION_FIELDS = (("alternative", "Alternative"), ("why", "Why"), ("reverse", "To reverse"))
 # Bump when a session still running older code (its MCP server and monitor keep the code
@@ -131,7 +139,8 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "runner", "TEXT"), ("sessions", "activity", "TEXT NOT NULL DEFAULT ''"),
                  ("sessions", "host_command", "TEXT"), ("sessions", "shell", "TEXT"),
                  ("sessions", "context_tokens", "INTEGER"), ("sessions", "context_max", "INTEGER"),
-                 ("items", "answer", "TEXT"), ("sessions", "context_at", "TEXT")]
+                 ("items", "answer", "TEXT"), ("sessions", "context_at", "TEXT"),
+                 ("items", "dismissed", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped: unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -529,8 +538,8 @@ class Store:
     def _agent_status(self, db, sid, ref, status, note) -> None:
         """Only a change is written, so a transcript read again moves nothing."""
         self._check_status("agent", status)
-        if db.execute("UPDATE items SET status = ?, updated_at = ? WHERE session_id = ? AND ref = ? AND status != ?",
-                      (status, now(), sid, ref, status)).rowcount and note:
+        if db.execute("UPDATE items SET status = ?, updated_at = ?, dismissed = NULL WHERE session_id = ? AND ref = ? "
+                      "AND status != ?", (status, now(), sid, ref, status)).rowcount and note:
             self._said(db, sid, ref, note, "note")
 
     def update_item(self, sid: str, ref: str, *, status=None, title=None, body=None, note=None) -> None:
@@ -544,9 +553,9 @@ class Store:
         with self.tx() as db:
             self._require(db, sid)
             db.execute(
-                """UPDATE items SET status = coalesce(?, status), title = coalesce(?, title),
-                   body = coalesce(?, body), updated_at = ? WHERE session_id = ? AND ref = ?""",
-                (status, title, body, now(), sid, ref),
+                f"""UPDATE items SET status = coalesce(?, status), title = coalesce(?, title),
+                   body = coalesce(?, body), updated_at = ?, {UNDISMISS} WHERE session_id = ? AND ref = ?""",
+                (status, title, body, now(), status, sid, ref),
             )
             if note:
                 self._said(db, sid, ref, note, "note")
@@ -568,8 +577,8 @@ class Store:
         with self.tx() as db:
             self._require(db, sid)
             self._said(db, sid, ref, text, "reply")
-            db.execute("UPDATE items SET status = coalesce(?, status), updated_at = ? "
-                       "WHERE session_id = ? AND ref = ?", (status, now(), sid, ref))
+            db.execute(f"UPDATE items SET status = coalesce(?, status), updated_at = ?, {UNDISMISS} "
+                       "WHERE session_id = ? AND ref = ?", (status, now(), status, sid, ref))
 
     @staticmethod
     def _said(db, sid, ref, text, kind) -> int:
@@ -611,6 +620,16 @@ class Store:
             return db.execute("UPDATE items SET status = 'seen', updated_at = ? WHERE session_id = ? "
                               "AND ref = ? AND kind = 'decision' AND status = 'unseen'",
                               (now(), sid, ref)).rowcount > 0
+
+    def dismiss(self, sid: str, ref: str, dismissed: bool = True) -> None:
+        """The person dismisses a settled task or subagent (Delete), or brings it back. Kept as
+        the status it was dismissed in: a session that changes it brings it back."""
+        with self.tx() as db:
+            self._require(db, sid)
+            done = db.execute("UPDATE items SET dismissed = CASE WHEN ? THEN status END WHERE session_id = ? "
+                              f"AND ref = ? AND kind IN {DISMISSABLE}", (dismissed, sid, ref)).rowcount
+        if not done:
+            raise KeyError(f"no task or subagent {ref} in this session")
 
     def close_decision(self, sid: str, ref: str, closed: bool = True) -> None:
         """The person closes a decision (or reopens it, as seen)."""
@@ -764,6 +783,10 @@ class Store:
 
 RANK = {"open": 0, "blocked": 1, "waiting": 1, "answered": 2, "processing": 2, "unseen": 2, "seen": 2,
         "running": 3, "todo": 4}
+SETTLED_RANK, FINISHED_RANK = 10, 11   # after every active item's rank
+# in a write that may set an item's status (the first parameter, or NULL to leave it): a change
+# of status brings back an item the person dismissed
+UNDISMISS = "dismissed = CASE WHEN coalesce(?, status) = status THEN dismissed END"
 
 # (session_id, item_ref) of items whose latest word is the person's, sent, with no reply since
 AWAITING = """SELECT session_id, item_ref FROM messages WHERE item_ref IS NOT NULL AND draft = 0
@@ -822,9 +845,25 @@ def decision_body(body: str, status, fields: dict) -> str:
     return "\n\n".join(parts)
 
 
-def inbox_rank(item, processing=frozenset()) -> tuple:
+def standing(item, busy=frozenset()) -> str:
+    """Where an item stands in the inbox: active, settled or finished (SETTLED). A settled
+    item the person has a word queued or awaiting a reply on, `busy` by (session, ref), is
+    active: the ball isn't back with them."""
+    status = item["status"]
+    if status in CLOSED - SETTLED[item["kind"]] or item["dismissed"] == status:
+        return "finished"
+    if status in SETTLED[item["kind"]] and (item["session_id"], item["ref"]) not in busy:
+        return "settled"
+    return "active"
+
+
+def inbox_rank(item, processing=frozenset(), busy=frozenset()) -> tuple:
     """Questions waiting on the person first, then blocked, running, the rest; newest first within a rank.
-    An open question in `processing` (D28) waits on the session, so it ranks as answered does."""
+    An open question in `processing` (D28) waits on the session, so it ranks as answered does.
+    Then the settled (standing), oldest first, so the latest to settle sinks lowest; then the finished."""
+    where = standing(item, busy)
+    if where != "active":
+        return (SETTLED_RANK if where == "settled" else FINISHED_RANK, -_neg_time(item["updated_at"]))
     status = "processing" if item["status"] == "open" and (item["session_id"], item["ref"]) in processing \
         else item["status"]
     return (RANK.get(status, 9), _neg_time(item["updated_at"]))

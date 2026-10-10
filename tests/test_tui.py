@@ -78,10 +78,10 @@ async def test_finished_items_toggle_in_and_take_a_message(store, sid):
         await pilot.pause()
         items = app.query_one("#items", DataTable)
         refs = lambda: [str(items.get_row_at(i)[1]) for i in range(items.row_count)]
-        assert refs() == [t], "finished items hidden by default"
+        assert refs() == [t, done], "a done task stays, settled, at the foot; a closed question is hidden (T71)"
         await pilot.press("f")
         await pilot.pause()
-        assert refs()[0] == t and set(refs()[1:]) == {done, closed}, "finished items after the rest"
+        assert refs() == [t, done, closed], "finished items after the rest"
         items.move_cursor(row=refs().index(closed))
         await pilot.pause()
         app.query_one("#answer", TextArea).text = "the punchline"
@@ -725,7 +725,7 @@ async def test_enter_on_a_session_follows_its_conversation(store, sid, tmp_path,
         assert [(m["item_ref"], m["body"]) for m in store.drafts(sid)] == [(None, "ship it")], "a general message"
         assert "**you · queued**\n\nship it" in app._detail_text
         items = app.query_one("#items", DataTable)
-        assert [str(items.get_row_at(i)[3]) for i in range(items.row_count)] == ["Conversation", "which db?"], \
+        assert [str(items.get_row_at(i)[-1]) for i in range(items.row_count)] == ["Conversation", "which db?"], \
             "the session's conversation is the pinned first row, and it is highlighted, not the question"
         assert items.cursor_row == 0
         items.focus()
@@ -2099,11 +2099,12 @@ async def test_the_item_list_shows_a_question_awaiting_the_session(store, sid, k
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("kind, pick, answer, desc", [
-    ("decision", "old", False, "a decision seen as it's selected would jump to the top of its rank"),
-    ("question", "new", True, "a question answered while selected would fall below the open one"),
+@pytest.mark.parametrize("kind, pick, answer, after, desc", [
+    ("decision", "new", False, ["old", "new"],
+     "a decision seen as it's selected keeps its place; once left, it settles at the foot (T71)"),
+    ("question", "new", True, ["old", "new"], "a question answered while selected would fall below the open one"),
 ])
-async def test_the_selected_item_keeps_its_place(store, sid, kind, pick, answer, desc):
+async def test_the_selected_item_keeps_its_place(store, sid, kind, pick, answer, after, desc):
     """Doug: "only move items when not selected". The selected row keeps its place while
     it's selected, however its status changes; it re-sorts once the selection moves on."""
     extra = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"} if kind == "decision" else {}
@@ -2123,7 +2124,9 @@ async def test_the_selected_item_keeps_its_place(store, sid, kind, pick, answer,
                 store.send(sid, "the cache", refs[age])
             app.refresh_data()
             await pilot.pause()
-            assert order() == (["new", "old"] if age == pick else ["old", "new"]), \
+            while app.item_sink.move:   # a settled item sinks to the foot (T71)
+                await pilot.pause(0.05)
+            assert order() == (["new", "old"] if age == pick else after), \
                 f"{desc}: {'held while selected' if age == pick else 're-sorted once the selection moved on'}"
             assert app.selected == (sid, refs[age]) and table.cursor_key() == f"{sid}|{refs[age]}", desc
 

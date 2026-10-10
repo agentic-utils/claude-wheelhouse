@@ -21,6 +21,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.message import Message
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
+from textual.coordinate import Coordinate
 from textual.screen import ModalScreen, Screen
 from textual.scrollbar import ScrollBar
 from textual.strip import Strip
@@ -41,8 +42,8 @@ from textual.widgets import (
 from . import adopt, api, emoji, launch, liveness, stats, subagents, transcript, tutorial
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
-from .store import (CLOSED, SessionGone, Store, can_queue, default_runner, inbox_rank, mode, needs_relaunch,
-                    runner)
+from .store import (DISMISSABLE, FINISHED_RANK, SETTLED, SETTLED_RANK, SessionGone, Store, can_queue,
+                    default_runner, inbox_rank, mode, needs_relaunch, runner, standing)
 
 MATRIX = "#00ff41"
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
@@ -63,6 +64,12 @@ VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777"}
 PENDING = {"end": "ending", "park": "parking"}
 CLOSABLE = {"question": "answered", "decision": "seen"}   # what Delete closes, and what reopening makes it
+
+
+def closable(item) -> bool:
+    """What Delete acts on: a question or decision whatever its status, a task or subagent
+    once it has settled (store.SETTLED), dismissed or not."""
+    return item["kind"] in CLOSABLE or (item["kind"] in DISMISSABLE and item["status"] in SETTLED[item["kind"]])
 # where each module slot (api.SLOTS) is mounted: at the end of this container
 SLOT_PARENTS = {"inbox.side": "#items-pane"}
 LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of its parent
@@ -131,6 +138,16 @@ def item_rows(items, names) -> list[tuple]:
         last = it["session_id"]
         grouped.append((it, n))
     return inbox + grouped
+
+
+def item_key(item) -> str:
+    """An item's row key in the item list."""
+    return f"{item['session_id']}|{item['ref']}"
+
+
+def band(rank: tuple) -> int:
+    """Where an inbox rank (store.inbox_rank) puts an item: 0 active, 1 settled, 2 finished."""
+    return 2 if rank[0] >= FINISHED_RANK else 1 if rank[0] >= SETTLED_RANK else 0
 
 
 def share(stored: str | None) -> float | None:
@@ -316,6 +333,110 @@ class Transcript(Widget, can_focus=True):
         self.text_select_all()
 
 
+BLANK = "\x00blank"   # a blank row's key, with its place after it: no session id or item key starts so
+
+
+class Sink:
+    """A list's rows that change sides, from its top to its foot or back (an item settling, a
+    session parked), fall or rise there over SECONDS rather than jump (T66, T71); anything
+    else jumps, as it always has. lay takes the list's final order, its rows on top first,
+    then those sunk to the foot, and gives the rows to show now, None for a blank row. With
+    room, the visible rows, the sunk ones sit at the foot of those, below a gap. Its timer
+    runs only while a move does: nothing runs while nothing moves."""
+    SECONDS = 0.4
+    FRAME = 1 / 30
+
+    def __init__(self, repaint):
+        self.repaint = repaint   # the list's paint, which lays it again: each frame
+        self.keys: list[str] = []   # the final order, which Up and Down step through (SinkList)
+        self.to: dict[str, int] | None = None   # each key's slot, the move's end
+        self.sunk: set[str] = set()
+        self.move: tuple[dict[str, float], float] | None = None   # each key's slot at the start, and when
+        self.timer = None
+
+    def lay(self, app, keys: list[str], sunk: set[str], room: int = 0) -> list[str | None]:
+        top = sum(k not in sunk for k in keys)
+        foot = max(top, room - (len(keys) - top))
+        to = {k: i if i < top else foot + i - top for i, k in enumerate(keys)}
+        moved = self.to is not None and any(k in self.to and (k in sunk) != (k in self.sunk) for k in keys)
+        if moved or (self.move and to != self.to):   # from wherever each row shows now
+            self.move = (self.at(time.monotonic()), time.monotonic())
+            if self.timer is None:
+                self.timer = app.set_interval(self.FRAME, self.repaint)
+        self.keys, self.to, self.sunk = list(keys), to, set(sunk)
+        return self.frame()
+
+    def at(self, now: float) -> dict[str, float]:
+        """Each key's slot now: falling with gravity, rising as if thrown up."""
+        if self.move is None:
+            return dict(self.to or {})
+        start, began = self.move
+        t = min(1.0, (now - began) / self.SECONDS)
+        out = {}
+        for k, end in self.to.items():
+            a = start.get(k, end)
+            out[k] = a + (end - a) * (t * t if end > a else 1 - (1 - t) ** 2)
+        return out
+
+    def frame(self) -> list[str | None]:
+        now = time.monotonic()
+        if self.move and now - self.move[1] >= self.SECONDS:
+            self.jump(keep=True)
+        slots = self.at(now)
+        rows: list[str | None] = []
+        # never two in one slot. Whole slots passed, so each row moves one way only, never back
+        for k in sorted(slots, key=lambda k: (slots[k], self.to[k])):
+            rows += [None] * max(0, int(slots[k]) - len(rows)) + [k]
+        return rows
+
+    def jump(self, keep: bool = False) -> None:
+        """No move under way, and none for the next lay unless keep: Delete's change lands at once (D33)."""
+        self.move = None
+        if self.timer is not None:
+            self.timer.stop()
+            self.timer = None
+        if not keep:
+            self.to = None
+
+
+class SinkList(DataTable):
+    """A list a Sink lays. Up and Down step through its final order, never a moving frame's
+    nor a blank row, so keys typed during a move act as they would after it; the cursor
+    otherwise steps off a blank row the way it was going."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.sink: Sink | None = None
+
+    def action_cursor_up(self) -> None:
+        self.step(-1)
+
+    def action_cursor_down(self) -> None:
+        self.step(1)
+
+    def step(self, by: int) -> None:
+        keys = [k for k in (self.sink.keys if self.sink else []) if k in self.rows]
+        here = self.coordinate_to_cell_key((self.cursor_row, 0)).row_key.value if self.row_count else None
+        if here not in keys:
+            super().action_cursor_down() if by > 0 else super().action_cursor_up()
+            return
+        self._set_hover_cursor(False)
+        nxt = keys[max(0, min(keys.index(here) + by, len(keys) - 1))]
+        self.cursor_coordinate = Coordinate(self.get_row_index(nxt), self.cursor_column)
+
+    def blank(self, row: int) -> bool:
+        return 0 <= row < self.row_count and self.ordered_rows[row].key.value.startswith(BLANK)
+
+    def validate_cursor_coordinate(self, value: Coordinate) -> Coordinate:
+        value = super().validate_cursor_coordinate(value)
+        if not self.blank(value.row):
+            return value
+        ahead = value.row >= self.cursor_coordinate.row
+        down, up = range(value.row, self.row_count), range(value.row, -1, -1)
+        row = next((i for i in (*(down if ahead else up), *(up if ahead else down)) if not self.blank(i)), value.row)
+        return Coordinate(row, value.column)
+
+
 async def select_now(table: DataTable) -> None:
     """Enter on a list: its row is selected as the key arrives (take_key), not posted, where
     the keys typed behind Enter would act before what it opens."""
@@ -355,7 +476,7 @@ class SessionList(DataTable):
         self.app.call_next(select_now, self)
 
 
-class ItemList(DataTable):
+class ItemList(SinkList):
     """The inbox's items, with a multi-selection to close questions in one go, by row key
     so it survives refreshes. Ctrl+click toggles a row, Shift+click takes the range from the
     last one toggled; Space and Shift+Up/Down do the same from the keyboard, for terminals
@@ -940,7 +1061,8 @@ DESCRIBE = {
     "clear_filter": "Clear a text selection first, then the marks, else show every session's items again",
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
-    "app.close_question": "Close the highlighted question or decision (or every marked one); on a closed one, reopen it",
+    "app.close_question": ("Close the highlighted question or decision, or dismiss a done task or subagent "
+                           "(or every marked one); on a finished one, bring it back"),
     "help": "This list",
     "quit": "Quit the wheelhouse (sessions carry on without it)",
     "toggle_mark": "Mark or unmark the highlighted row",
@@ -1183,7 +1305,10 @@ class WheelhouseApp(App):
         # place while selected, re-sorting once the selection moves on (ranked)
         self.pin: tuple[str, tuple] | None = None
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
-        self.show_finished = False   # done, dropped, closed and failed items, after the rest
+        self.show_finished = False   # finished items (store.standing), after the rest
+        # the items that settle fall to the foot (T71): a frame repaints the list, but not while
+        # a key lands (tick)
+        self.item_sink = Sink(lambda: self.landing or not self.screen_stack or self.paint_items())
         # the highlighted row: (session id, item ref), or (session id, None) for the
         # session's conversation, the first row while a session is selected
         self.selected: tuple[str, str | None] | None = None
@@ -1250,6 +1375,7 @@ class WheelhouseApp(App):
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
         self.answer = self.query_one("#answer", Compose)
         self.session_list = self.query_one("#session-list", SessionList)
+        self.items_table.sink = self.item_sink
         self.session_info = self.query_one("#session-info-text", Static)
         # out of the Tab order, which goes from the session list straight to the items: the
         # buttons still click, and the list's own keys press them (SessionList)
@@ -1264,7 +1390,6 @@ class WheelhouseApp(App):
             if (stored := share(self.store.setting(LAYOUT + splitter.key))) is not None:
                 splitter.apply(stored)
         self.eye_col = self.session_list.add_columns("", "session", "ctx", "?", "D", "✉", "")[-1]
-        self.items_table.add_columns("session", "ref", "status", "title")
         self.checklist = self.query_one("#checklist", Static)
         self.set_interval(0.1, self.animate)
         self.set_interval(1.0, self.tick)
@@ -1540,18 +1665,28 @@ class WheelhouseApp(App):
         return s["name"] or os.path.basename(s["cwd"]) or short(s["id"])
 
     def paint_items(self) -> None:
+        """The inbox: active items in inbox order, then the settled, dimmed, sinking there as
+        they settle (Sink) once they aren't selected (ranked), then with F the finished. The
+        session column shows only where the inbox has every session's items (D31)."""
         table = self.items_table
+        columns = ("ref", "status", "title") if self.filter_sid else ("session", "ref", "status", "title")
+        if tuple(str(c.label) for c in table.ordered_columns) != columns:
+            with table.prevent(DataTable.RowHighlighted):
+                table.clear(columns=True)
+                table.add_columns(*columns)
         keep = table.cursor_row
         rows_out = []
         names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
         processing = self.store.processing()
-        items = self.ranked(self.store.items(self.filter_sid), processing)
-        shown = [it for it in items if it["status"] not in CLOSED]
-        rows = item_rows(shown, names)
-        if self.show_finished:
-            rows += item_rows([it for it in items if it not in shown], names)
         queued = {(m["session_id"], m["item_ref"]) for m in self.store.drafts()}
         awaiting = self.store.awaiting()
+        busy = queued | awaiting
+        items = self.ranked(self.store.items(self.filter_sid), processing, busy)
+        active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
+        for it in items:
+            bands[band(self.ranks[item_key(it)])].append(it)
+        rows = item_rows(active, names) + item_rows(settled, names) + item_rows(finished if self.show_finished else [], names)
+        sunk = {item_key(it) for it in settled + finished}
         if self.filter_sid:   # the session's own conversation, pinned first
             general = (self.filter_sid, None) in queued
             rows_out.append((f"{self.filter_sid}|", (names.get(self.filter_sid, "")[:14], Text("💬"),
@@ -1561,9 +1696,10 @@ class WheelhouseApp(App):
             # an unfinished item of any kind with an answer waiting to be sent shows as queued, and one
             # whose answer went with no reply since as processing (D28); neither is stored
             key = (it["session_id"], it["ref"])
-            status = it["status"] if it["status"] in CLOSED else "queued" if key in queued \
+            where = standing(it, busy)
+            status = it["status"] if where != "active" else "queued" if key in queued \
                 else "processing" if key in processing else it["status"]
-            style = "dim" if status in CLOSED else "bold #05d9e8" if status == "queued" \
+            style = "dim" if where != "active" else "bold #05d9e8" if status == "queued" \
                 else "bold #ffd300" if status == "open" else DECISION if status == "unseen" \
                 else "bold #ff2a6d" if status in ("blocked", "waiting") else MATRIX
             name = names.get(it["session_id"], "")[:14]
@@ -1573,13 +1709,17 @@ class WheelhouseApp(App):
                 shown = Text(status if status == "processing" else f"⏳ {status}", style="dim")
                 title = Text(it["title"], style="dim")
             else:
-                shown, title = Text(status, style=style), it["title"]
+                shown, title = Text(status, style=style), Text(it["title"], style="dim") if where != "active" else it["title"]
             if nested is None:
                 cells = (name, it["ref"], shown, title)
             else:   # a subagent, tucked under its session's name
                 cells = (name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
                          shown, Text(it["title"], style="dim"))
-            rows_out.append((f"{it['session_id']}|{it['ref']}", cells))
+            rows_out.append((item_key(it), cells))
+        if self.filter_sid:   # the session column goes: the inbox follows the one session
+            rows_out = [(k, cells[1:]) for k, cells in rows_out]
+        cells = dict(rows_out)
+        rows_out = [(k, cells[k]) for k in self.item_sink.lay(self, list(cells), sunk) if k]
         table.marked &= {k for k, _ in rows_out}   # a marked item that went is unmarked
         rows_out = [(k, marked(cells) if k in table.marked else cells) for k, cells in rows_out]
         arrow = table.cursor_key()
@@ -1607,20 +1747,21 @@ class WheelhouseApp(App):
             self.retarget(move_list=False)
         self.paint_detail()
 
-    def ranked(self, items, processing) -> list:
+    def ranked(self, items, processing, busy=frozenset()) -> list:
         """Items in inbox order (inbox_rank), but for the selected item, pinned: it keeps the
         rank it was shown with when it was selected, so its own change (a decision seen, a
-        question answered) never moves it under the person. It re-sorts once the selection
-        moves on. self.ranks keeps each item's rank as shown: the next pin's, and where a row
-        that has somewhere to go can be told from the rest."""
+        question answered, a task done) never moves it under the person. It re-sorts once the
+        selection moves on, and a settled item then sinks (Sink). Not one that finished: closed
+        with Delete, or a permission answered, it goes at once (D33). self.ranks keeps each item's
+        rank as shown: the next pin's, and what has somewhere to go (paint_items)."""
         key = self.selected and self.selected[1] and f"{self.selected[0]}|{self.selected[1]}"
         if self.pin is None or self.pin[0] != key:
             self.pin = (key, self.ranks[key]) if key in self.ranks else None
-        ranks = {f"{it['session_id']}|{it['ref']}": inbox_rank(it, processing) for it in items}
-        if self.pin and self.pin[0] in ranks:
+        ranks = {item_key(it): inbox_rank(it, processing, busy) for it in items}
+        if self.pin and self.pin[0] in ranks and band(ranks[self.pin[0]]) < 2:
             ranks[self.pin[0]] = self.pin[1]
         self.ranks = ranks
-        return sorted(items, key=lambda it: ranks[f"{it['session_id']}|{it['ref']}"])
+        return sorted(items, key=lambda it: ranks[item_key(it)])
 
     def keep_unsent(self, box, old, new) -> None:
         """Park what's typed for the old target and bring back what was typed for the new one."""
@@ -2058,6 +2199,9 @@ class WheelhouseApp(App):
             self.items_cursor = key
             self.select_row(key)
             self.saw(*self.selected)
+            # what the selection held re-sorts now, not at the next tick (ranked): a settled
+            # item sinks as the key that moved on lands, so the keys behind it act on the same rows
+            self.paint_items()
 
     def select_row(self, key: str) -> None:
         sid, ref = key.split("|")
@@ -2127,9 +2271,10 @@ class WheelhouseApp(App):
 
     @session_action
     def action_close_question(self) -> None:
-        """Closing a question or a decision is the person's call: Delete or Backspace in the item list closes the highlighted
-        (or open) one, and on a closed one (shown with f) reopens it, a question as
-        answered and a decision as seen."""
+        """Delete or Backspace in the item list: the person's call. It closes the highlighted
+        question or decision, or dismisses a settled task or subagent (store.standing); on a
+        finished one (shown with F) it brings it back, a question as answered, a decision as
+        seen. It moves at once, not sinking (D33)."""
         self.settle()
         if isinstance(self.focused, (TextArea, Input)):
             return
@@ -2140,35 +2285,41 @@ class WheelhouseApp(App):
         item = target and target[1] and self.store.item(*target)
         if not item:
             return
-        if item["kind"] not in CLOSABLE:
-            self.notify(f"{item['ref']} is a {item['kind']}: its status is the session's to set",
-                        severity="warning")
+        if not closable(item):
+            what = "a running subagent" if item["kind"] == "agent" else f"a {item['kind']}"
+            self.notify(f"{item['ref']} is {what}: its status is the session's to set", severity="warning")
             return
-        reopen = item["status"] == "closed"
+        reopen = standing(item) == "finished"
         self.close(item, not reopen)
-        self.notify(f"reopened {item['ref']} as {CLOSABLE[item['kind']]}" if reopen else
-                    f"closed {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
+        verb = "closed" if item["kind"] in CLOSABLE else "dismissed"
+        self.notify(f"reopened {item['ref']} as {CLOSABLE.get(item['kind'], item['status'])}" if reopen else
+                    f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
         self.refresh_data()
 
     def close(self, item, closed: bool) -> None:
-        """Close a question or decision, or reopen it: a question as answered, a decision as seen."""
+        """Close a question or decision, or reopen it: a question as answered, a decision as
+        seen. Dismiss a settled task or subagent, or bring it back. At once: no sinking (D33)."""
+        self.item_sink.jump()
         if item["kind"] == "decision":
             self.store.close_decision(item["session_id"], item["ref"], closed)
+        elif item["kind"] in DISMISSABLE:
+            self.store.dismiss(item["session_id"], item["ref"], closed)
         else:
             self.store.update_item(item["session_id"], item["ref"], status="closed" if closed else "answered")
 
     def close_marked(self) -> None:
-        """Delete on a multi-selection: closes its questions and decisions, or reopens them if
-        they're all closed. Tasks and subagents in it are left alone."""
-        closable = [it for key in self.items_table.keys() if key in self.items_table.marked
-                     if (it := self.store.item(*key.split("|"))) and it["kind"] in CLOSABLE]
-        if not closable:
-            self.notify("no questions or decisions among the marked rows", severity="warning")
+        """Delete on a multi-selection: closes its questions and decisions and dismisses its
+        settled tasks and subagents, or brings them back if they're all finished. Anything
+        else in it is left alone."""
+        picked = [it for key in self.items_table.keys() if key in self.items_table.marked
+                  if (it := self.store.item(*key.split("|"))) and closable(it)]
+        if not picked:
+            self.notify("nothing among the marked rows to close", severity="warning")
             return
-        reopen = all(it["status"] == "closed" for it in closable)
+        reopen = all(standing(it) == "finished" for it in picked)
         done = []
-        for it in closable:
-            if reopen or it["status"] != "closed":
+        for it in picked:
+            if reopen or standing(it) != "finished":
                 try:
                     self.close(it, not reopen)
                 except SessionGone:   # ended meanwhile: the rest still go
