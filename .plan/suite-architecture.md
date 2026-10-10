@@ -402,19 +402,23 @@ The prototype's `board/claude_board/` becomes `claude_wheelhouse`, and the
 become `WHEELHOUSE_*`, and the MCP server and injected plugin are both named
 `wheelhouse`.
 
-`store.py` is already most of a service. Out of `tui.py` and into the service:
+`store.py` is already most of a service. Out of `tui.py` and into the service,
+`hub.py` (built for the remote plan's phase 1, `.plan/remote.md`):
 
-- `session_action`, the shared "does this session still exist" guard, becomes
-  the service's own precondition on every session command (raises
-  `SessionGone`).
-- the liveness re-check in `act_on_dead` becomes part of the `restore` and
-  dead-session `park`/`end` commands.
-- the Park and End decision table (running: set a request; dead: act now;
-  cancel and force) moves into commands, so the rule that the wheelhouse
-  never deletes or hides a running session's data behind its back is enforced
-  in one place any surface must go through.
+- every session command reads the session's row through `Hub.row`, which
+  raises `SessionGone` for one that has gone, as the store's writes do.
+  `session_action` stays in the TUI as what turns that into a toast.
+- the liveness re-check in `act_on_dead` is `Hub.act_on_dead`; `Hub.restore`
+  restores only a dead session.
+- the Park and End commands (`ask`, `act_on_dead`, `cancel_request`,
+  `force`) are the hub's. The decision of which to offer (running: ask; dead:
+  act now; pending: cancel or force) still picks the TUI's dialog; enforcing
+  it in the commands, with the planned `NotAllowed`, waits for a second
+  surface.
 
-The TUI keeps dialogs, confirm wording and layout.
+The TUI keeps dialogs, confirm wording and layout. Queries returning frozen
+dataclasses, the typed errors beyond `SessionGone` and the `changes()` feed
+are not built: the TUI reads store rows and re-queries on its tick.
 
 ### Review (PR tab of `claude_dashboard.py` to `packages/review`)
 

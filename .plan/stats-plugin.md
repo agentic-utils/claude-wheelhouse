@@ -36,17 +36,18 @@ repaint without a read of its own.
 
 - **`claude_wheelhouse/api.py`**, the one module a plugin imports: `WHEELHOUSE_API`
   (1), `Module`, `Pane` (title, slot, surfaces), `Context` (state dir, `sessions()`,
-  `focus()`, config), `HostContext`, `load()` and `panes(slot)`. Each session from
+  `focus()`, config, usage), `HostContext`, `load()` and `panes(slot)`. Each session from
   `sessions()` carries `context`, the SDK host's last recorded `HostContext` (#54): an
-  added key, so the API stays at 1.
+  added key, so the API stays at 1. `usage` is the account's usage, which the hub
+  fetches (`hub.Hub.fetch_usage`): an added field with a default, so the API stays at 1.
 - **Discovery.** `load()` reads the entry-point group. The hub's own `pyproject.toml`
   declares `stats = "claude_wheelhouse.stats_pane:module"`, the same way a third party
   would. A module that fails to import, isn't a `Module`, or was written against another
   API is reported with the reason, never raised.
-- **`claude_wheelhouse/stats_pane.py`**, the stats module: the widget, its followers,
-  its worker reads (`run_worker` on the widget, `exit_on_error=False`, results applied
-  with `call_from_thread`) and the account usage fetch. `stats.py` stays the pure part:
-  parsing, following, layout and drawing.
+- **`claude_wheelhouse/stats_pane.py`**, the stats module: the widget, its followers
+  and its worker reads (`run_worker` on the widget, `exit_on_error=False`, results
+  applied with `call_from_thread`). It draws the hub's account usage from `Context`.
+  `stats.py` stays the pure part: parsing, following, layout and drawing.
 - **What `tui.py` hosts.** `mount_panes()` mounts each pane's `tui` surface at the end
   of its slot's container once the app's own widgets are up, with the module's id as the
   widget's id. `each_pane(hook)` calls the hooks.

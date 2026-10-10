@@ -1,6 +1,23 @@
 # Remote wheelhouse (design)
 
-Status: design agreed, phase 1 next. No code yet.
+Status: design agreed. Phase 1 built: `hub.py` is the service, owned by the TUI in
+process; phase 2 next.
+
+**Phase 1 as built.** `hub.Hub` holds the hub logic `tui.py` had: liveness and wake
+detection, Relaunch from the stop to the start again, launch, restore and adopt, the
+transcript followers (conversations, context sizes, subagents), the account usage fetch
+(the stats pane draws the hub's, through `Context.usage`), the unsent text per target,
+and the person's commands on sessions and items (send, queue, dispatch, mode, Park and
+End, rename, close and reopen, permissions, host commands). It never imports Textual. Its
+owner gives it `spawn` (work on a worker thread) and `post` (a callback back on the
+owner's thread), and listens for its `Event`s: `notice`, a toast, and `landed`, a
+transcript read that brought something. Those are the seams phase 2 puts behind HTTP and
+SSE. The TUI keeps the widgets, the dialogs and their wording, the key dispatch (take_key,
+land, settle), selection, ranking and the dwell, the tutorial checklist and the splitter
+sizes. It still reads plain rows straight from the store and re-queries on its 1 s tick;
+phase 2 puts the query surface and the change feed in front of both. The unsent text
+moved to the hub with the rest, though the design below keeps it on the client, in a
+local file per target: it goes there with the client in phase 2.
 
 ## Intent
 
