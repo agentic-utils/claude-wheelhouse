@@ -1109,6 +1109,9 @@ async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp
         app.follow(sid)
         await pilot.pause()
         store.db.execute("UPDATE items SET status = 'unseen'")
+        app.refresh_data()   # the decision seen as it was selected at the start rises again (T71): let it land
+        while app.item_sink.move or app.session_sink.move:
+            await pilot.pause(0.05)
         (app.items_table if where == "items" else app.session_list).focus()
         await pilot.pause()
         raw_keys(app, *burst)
@@ -1161,6 +1164,9 @@ async def two_lists(tmp_path, where, steps, slow, counts=(2, 2)) -> dict:
         app.follow(a)
         await pilot.pause()
         store.db.execute("UPDATE items SET status = 'unseen'")
+        app.refresh_data()   # the decision seen as it was selected at the start rises again (T71): let it land
+        while app.item_sink.move or app.session_sink.move:
+            await pilot.pause(0.05)
         (app.items_table if where == "items" else app.session_list).focus()
         await pilot.pause()
         for step in steps:
