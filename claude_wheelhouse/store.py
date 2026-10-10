@@ -140,6 +140,7 @@ DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration
 AGENTS_SINCE = "agents_since"
 # seconds: how long before a subagent starts the session's own A item for it may be made
 AGENT_MATCH_BEFORE = 600
+AGENT_MATCH_AFTER = 15   # subagents.GRACE: by then the wheelhouse makes its own
 REQUESTS = ("end", "park")   # what the wheelhouse can ask a running session to do
 CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print is retaken
 
@@ -493,22 +494,27 @@ class Store:
         return {r["agent_id"]: (r["item_ref"], r["status"]) for r in rows}
 
     def track_agent(self, sid: str, agent_id: str, title: str, body: str, started: datetime,
-                    status: str = "running", note: str = "") -> str:
-        """The subagent's A item, made once per agent id. The session's own A item for it is
-        taken instead when there is one (agent_match), so it isn't listed twice."""
+                    status: str | None = None, note: str = "") -> str:
+        """The subagent's A item, made once per agent id, with its status (None: nothing
+        said yet, so running when made and left alone when it exists, as another wheelhouse
+        may have made it). The session's own A item for it is taken instead when there is
+        one (agent_match), so it isn't listed twice. Returns the item's status as stored."""
         with self.tx() as db:
             self._require(db, sid)
             row = db.execute("SELECT item_ref FROM agent_items WHERE session_id = ? AND agent_id = ?",
                              (sid, agent_id)).fetchone()
             if row:
-                return row["item_ref"]
-            ref = agent_match(db, sid, title, started)
-            if ref is None:
-                ref = self._insert_item(db, sid, "agent", title, body, "running")   # then finished, with its note
-            db.execute("INSERT INTO agent_items (session_id, agent_id, item_ref) VALUES (?, ?, ?)",
-                       (sid, agent_id, ref))
-            self._agent_status(db, sid, ref, status, note)
-        return ref
+                ref = row["item_ref"]
+            else:
+                ref = agent_match(db, sid, title, started)
+                if ref is None:
+                    ref = self._insert_item(db, sid, "agent", title, body, "running")   # then finished, with its note
+                db.execute("INSERT INTO agent_items (session_id, agent_id, item_ref) VALUES (?, ?, ?)",
+                           (sid, agent_id, ref))
+                status = status or "running"
+            if status:
+                self._agent_status(db, sid, ref, status, note)
+            return db.execute("SELECT status FROM items WHERE session_id = ? AND ref = ?", (sid, ref)).fetchone()["status"]
 
     def agent_status(self, sid: str, agent_id: str, status: str, note: str = "") -> None:
         """A tracked subagent finished (done or failed), or was resumed (running)."""
@@ -774,18 +780,23 @@ def agent_words(text: str) -> str:
 
 def agent_match(db, sid: str, title: str, started: datetime) -> str | None:
     """The session's own A item for a subagent, if it posted one: not yet tied to another
-    subagent, made no more than AGENT_MATCH_BEFORE before the subagent started, and titled
-    with its description, or with words that hold it or that it holds (case and punctuation
-    aside). An exact title wins, then the item made nearest the start."""
+    subagent, made no more than AGENT_MATCH_BEFORE before the subagent started nor
+    AGENT_MATCH_AFTER after, and titled with its description, or with words that hold it or
+    that it holds, two words at least (case and punctuation aside). An exact title wins, then
+    the item made nearest the start."""
     want = agent_words(title)
     since = started - timedelta(seconds=AGENT_MATCH_BEFORE)
+    until = started + timedelta(seconds=AGENT_MATCH_AFTER)
     rows = db.execute("""SELECT ref, title, created_at FROM items i WHERE session_id = ? AND kind = 'agent'
                          AND NOT EXISTS (SELECT 1 FROM agent_items a WHERE a.session_id = i.session_id
                                          AND a.item_ref = i.ref)""", (sid,)).fetchall()
     best = None
     for r in rows:
         made, have = datetime.fromisoformat(r["created_at"]), agent_words(r["title"])
-        if made < since or not want or not have or not (f" {want} " in f" {have} " or f" {have} " in f" {want} "):
+        if not since <= made <= until or not want or not have:
+            continue
+        held, holder = sorted((want, have), key=lambda w: w.count(" "))   # fewer words inside more
+        if have != want and (" " not in held or f" {held} " not in f" {holder} "):
             continue
         key = (have != want, abs((made - started).total_seconds()))
         if best is None or key < best[0]:

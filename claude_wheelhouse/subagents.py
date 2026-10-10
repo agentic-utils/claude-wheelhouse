@@ -9,6 +9,9 @@ for SDK and tab sessions: from the files Claude Code writes, not from the sessio
   person stops it, stopped when its session ended under it). A background launch's own
   tool_result ("Async agent launched") finishes nothing. SendMessage to a finished
   subagent resumes it, so its item runs again.
+- Its session dying: the TUI says so (sync's alive), and a subagent still running then
+  fails, with a note. A notification read later, when the session is resumed, updates it
+  as usual.
 
 Each subagent gets one item, keyed by its agent id in the agent_items table, so restarts
 (and a second wheelhouse) never post twice; an A item the session posted for it itself is
@@ -33,11 +36,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import stats, transcript
-from .store import AGENTS_SINCE
+from .store import AGENT_MATCH_AFTER, AGENTS_SINCE
 
 # seconds after a subagent starts before its item is made: a session that posts its own A
 # item for it (as the protocol asked before version 7) has done so by then, and it's taken
-GRACE = 15
+GRACE = AGENT_MATCH_AFTER
 RELOCATE = 10   # seconds between looks for a transcript not found yet
 # seconds: a subagent started before the cut-off whose transcript was last written longer
 # before it than this had finished (or died with its session), and is passed over unread
@@ -45,9 +48,11 @@ LIVE = 1800
 FIRST_LINE = 1 << 20   # read no further than this for a subagent transcript's first record
 FINISH = {"completed": "done", "failed": "failed", "killed": "failed", "stopped": "failed"}
 FIELD = re.compile(r"<(task-id|tool-use-id|status|summary)>(.*?)</\1>", re.S)
+TASK_ID = re.compile(r"<task-id>(.*?)</task-id>", re.S)
 RESULT_ID = re.compile(rb'"tool_use_id":\s*"([^"]+)"')
 SEND = re.compile(rb'"name":\s*"SendMessage"')
 NOTE_MAX = 500
+DIED = "the session stopped while this subagent ran"
 
 
 @dataclass
@@ -89,6 +94,18 @@ def notification(rec: dict) -> str | None:
     return text if isinstance(text, str) and text.lstrip().startswith("<task-notification>") else None
 
 
+def fields(text: str) -> tuple[list[str], dict[str, str]]:
+    """A notification's task ids, and the first of each other field. Only its header counts:
+    the subagent's own text in <result>, and the description quoted in <summary>, can hold
+    anything. One notification can name several task ids under one status (subagents its
+    session's end stopped)."""
+    head = text.split("<result>", 1)[0]
+    first: dict[str, str] = {}
+    for k, v in FIELD.findall(head):
+        first.setdefault(k, v)
+    return TASK_ID.findall(head.split("<summary>", 1)[0]), first
+
+
 def result_text(block: dict) -> str:
     content = block.get("content")
     if isinstance(content, list):
@@ -116,9 +133,9 @@ class AgentWatcher:
         self.ready = False     # a first sync has finished
         self.error: str | None = None   # the last sync's failure
 
-    def sync(self, store, now: float | None = None) -> bool:
+    def sync(self, store, now: float | None = None, alive: bool = True) -> bool:
         """Reads what's new and brings the session's A items up to date. True if it
-        changed any."""
+        changed any. Not alive: the session has died, so what's still running fails."""
         now = time.time() if now is None else now
         if self.cutoff is None:
             s = store.session(self.sid)
@@ -138,7 +155,24 @@ class AgentWatcher:
         self.list_agents()
         self.read_main()
         self.ready = True
-        return self.apply(store, now)
+        changed = self.apply(store, now, alive)
+        if not alive:
+            changed = self.died(store) or changed
+        return changed
+
+    def unfinished(self) -> bool:
+        """An item it made is still running, as last written."""
+        return "running" in (self.links or {}).values()
+
+    def died(self, store) -> bool:
+        """The session is dead: each subagent item still running fails, saying so."""
+        gone = [aid for aid, status in (self.links or {}).items() if status == "running"]
+        for aid in gone:
+            store.agent_status(self.sid, aid, "failed", DIED)
+            self.links[aid] = "failed"
+            if aid in self.agents:
+                self.agents[aid].status, self.agents[aid].note = "failed", DIED
+        return bool(gone)
 
     def list_agents(self) -> None:
         folder = self.main.parent / self.sid / "subagents"
@@ -208,12 +242,12 @@ class AgentWatcher:
         if b"<task-notification>" in line:
             text = notification(json.loads(line))
             if text:
-                fields = dict(FIELD.findall(text))
-                aid = fields.get("task-id")
-                aid = aid if aid in self.agents else self.by_tool.get(fields.get("tool-use-id"))
-                status = FINISH.get(fields.get("status"))
-                if aid and status:
-                    self.set(aid, status, "" if status == "done" else fields.get("summary", ""))
+                ids, first = fields(text)
+                status = FINISH.get(first.get("status"))
+                aids = [i for i in ids if i in self.agents] or [self.by_tool.get(first.get("tool-use-id"))]
+                for aid in aids:
+                    if aid and status:
+                        self.set(aid, status, "" if status == "done" else first.get("summary", ""))
                 return
         if b'"tool_result"' in line and any(i.decode() in self.by_tool for i in RESULT_ID.findall(line)):
             rec = json.loads(line)
@@ -234,18 +268,19 @@ class AgentWatcher:
             for block in (rec.get("message") or {}).get("content") or []:
                 if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "SendMessage":
                     aid = (block.get("input") or {}).get("to")
-                    if aid in self.agents and self.agents[aid].status not in (None, "running"):
+                    # finished as the transcript said, or as the item was written before a restart
+                    if aid in self.agents and (self.agents[aid].status or self.links.get(aid)) not in (None, "running"):
                         self.set(aid, "running", "")
 
     def set(self, aid: str, status: str, note: str) -> None:
         a = self.agents[aid]
         a.status, a.note = status, (note or "").strip()[:NOTE_MAX]
 
-    def apply(self, store, now: float) -> bool:
-        """Each subagent's item made (after GRACE, unless it has already finished), and
-        its status written when the transcript has changed it. One from before the cut-off
-        that the transcript says has finished is dropped: the first read has seen
-        everything since it started."""
+    def apply(self, store, now: float, alive: bool = True) -> bool:
+        """Each subagent's item made (after GRACE, unless it has already finished or its
+        session has died), and its status written when the transcript has changed it. One
+        from before the cut-off that the transcript says has finished is dropped: the first
+        read has seen everything since it started."""
         changed = False
         for aid, a in list(self.agents.items()):
             had = self.links.get(aid)
@@ -254,12 +289,14 @@ class AgentWatcher:
                 self.skipped.add(aid)
                 continue
             if had is None:
-                if a.status in (None, "running") and now - a.started.timestamp() < GRACE:
+                if alive and a.status in (None, "running") and now - a.started.timestamp() < GRACE:
                     continue
-                store.track_agent(self.sid, aid, a.title, a.body, a.started, a.status or "running", a.note)
+                # another wheelhouse may have made it: then its status as now stored
+                self.links[aid], changed = store.track_agent(self.sid, aid, a.title, a.body, a.started,
+                                                             a.status, a.note), True
             elif a.status is None or a.status == had:
                 continue
             else:
                 store.agent_status(self.sid, aid, a.status, a.note)
-            self.links[aid], changed = a.status or "running", True
+                self.links[aid], changed = a.status, True
         return changed

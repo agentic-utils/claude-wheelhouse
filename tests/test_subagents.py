@@ -244,20 +244,27 @@ def test_a_finish_appended_later_is_read_from_where_the_last_read_stopped(store,
     assert agents(store, sid)["Check pages"]["status"] == "done"
 
 
-@pytest.mark.parametrize("posted, made_ago, matched, desc", [
-    ("Check pages", 5, True, "the session's own item, titled with the description, is taken"),
-    ("check   PAGES!", 5, True, "case, spaces and punctuation aside"),
-    ("Adversarial check pages round", 5, True, "a title holding the description"),
-    ("Check pages", 900, False, "an item made more than 10 minutes before the start is another's"),
-    ("Review the plan", 5, False, "a different title is another's"),
+@pytest.mark.parametrize("described, posted, made_ago, matched, desc", [
+    ("Check pages", "Check pages", 5, True, "the session's own item, titled with the description, is taken"),
+    ("Check pages", "check   PAGES!", 5, True, "case, spaces and punctuation aside"),
+    ("Check pages", "Adversarial check pages round", 5, True, "a title holding the description"),
+    ("Check all the pages", "the pages", 5, True, "a title the description holds, two words or more"),
+    ("Check pages", "Check pages", 900, False, "an item made more than 10 minutes before the start is another's"),
+    ("Check pages", "Check pages", -10, True, "an item made within 15 s after the start is taken"),
+    ("Check pages", "Check pages", -20, False, "an item made more than 15 s after the start is another's"),
+    ("Review the plan", "Review", 5, False, "one word held in the description isn't enough"),
+    ("Review", "Review the plan", 5, False, "a one-word description holds only an exact title"),
+    ("Review", "review!", 5, True, "a one-word description's exact title is taken"),
+    ("Check pages", "Review the plan", 5, False, "a different title is another's"),
 ])
-def test_the_sessions_own_item_is_taken_not_duplicated(store, sid, joined, posted, made_ago, matched, desc):
+def test_the_sessions_own_item_is_taken_not_duplicated(store, sid, joined, described, posted, made_ago, matched,
+                                                       desc):
     started = NOW - 600
     ref = store.post_item(sid, "agent", posted, status="running")
     store.db.execute("UPDATE items SET created_at = ? WHERE ref = ?",
                      (datetime.fromtimestamp(started - made_ago, timezone.utc).isoformat(timespec="seconds"), ref))
-    t = joined.agent("a1", "Check pages", started=started)
-    joined.write(tool_use(t, "Check pages"), launched(t, "a1"), notified("a1", t, "completed"))
+    t = joined.agent("a1", described, started=started)
+    joined.write(tool_use(t, described), launched(t, "a1"), notified("a1", t, "completed"))
     AgentWatcher(sid).sync(store, NOW)
     items = [i for i in store.items(sid) if i["kind"] == "agent"]
     assert len(items) == (1 if matched else 2), desc
@@ -338,9 +345,16 @@ def test_refresh_cost(store, sid, joined, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_the_wheelhouse_posts_a_subagents_item_on_its_refresh(store, sid, joined):
+@pytest.mark.parametrize("state, status, desc", [
+    ("live", "running", "the refresh tracks a running session's subagent"),
+    ("dead", "failed", "a dead session's running subagent fails"),
+])
+async def test_the_wheelhouse_posts_a_subagents_item_on_its_refresh(store, sid, joined, monkeypatch,
+                                                                    state, status, desc):
+    from claude_wheelhouse import liveness
     from claude_wheelhouse.tui import WheelhouseApp
 
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: state)
     t = joined.agent("a1", "Check pages")
     joined.write(tool_use(t, "Check pages"), launched(t, "a1"))
     app = WheelhouseApp(store)
@@ -349,4 +363,111 @@ async def test_the_wheelhouse_posts_a_subagents_item_on_its_refresh(store, sid, 
             await pilot.pause(0.1)
             if agents(store, sid):
                 break
-    assert [i["status"] for i in agents(store, sid).values()] == ["running"], "the refresh tracks it"
+    assert [i["status"] for i in agents(store, sid).values()] == [status], desc
+
+
+@pytest.mark.anyio
+async def test_a_failing_sync_warns_once_per_error(store, sid, joined, monkeypatch):
+    from claude_wheelhouse.tui import WheelhouseApp
+
+    errors = iter(["disk gone", "disk gone", "disk gone", "locked"])
+
+    def failing(self, *a, **k):
+        raise OSError(next(errors, "locked"))
+
+    monkeypatch.setattr(AgentWatcher, "sync", failing)
+    app = WheelhouseApp(store)
+    told = []
+    monkeypatch.setattr(app, "notify", lambda text, **kw: told.append((text, kw.get("severity"))))
+    async with app.run_test(size=(160, 40)) as pilot:
+        for _ in range(8):
+            app.refresh_data()
+            await pilot.pause(0.1)
+    assert told == [("demo: couldn't track subagents: disk gone", "warning"),
+                    ("demo: couldn't track subagents: locked", "warning")], "each distinct error once"
+
+
+# review r21's probes (P1 to P5): each builds the transcripts, syncs, and gives the statuses
+
+def p1_one_notification_names_three(store, sid, s, db_file):
+    for a in ("a1", "a2", "a3"):
+        t = s.agent(a, f"Job {a}")
+        s.write(tool_use(t, f"Job {a}"), launched(t, a))
+    AgentWatcher(sid).sync(store, NOW)
+    text = ("<task-notification>\n<task-id>a1</task-id>\n<task-id>a2</task-id>\n<task-id>a3</task-id>\n"
+            "<status>stopped</status>\n<summary>3 background agents didn't finish before the previous session "
+            "ended</summary>\n</task-notification>")
+    s.write({"type": "user", "timestamp": iso(NOW - 10), "message": {"role": "user", "content": text}})
+    AgentWatcher(sid).sync(store, NOW)
+
+
+def p2_result_quotes_the_fields(store, sid, s, db_file):
+    t1, t2 = s.agent("a1", "Reviewer"), s.agent("a2", "Builder")
+    s.write(tool_use(t1, "Reviewer"), launched(t1, "a1"), tool_use(t2, "Builder"), launched(t2, "a2"))
+    text = (f"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>{t1}</tool-use-id>\n"
+            "<status>completed</status>\n<summary>Agent \"Reviewer\" finished</summary>\n"
+            "<result>The parser reads <task-id>a2</task-id> and <status>failed</status> from the text.</result>\n"
+            "</task-notification>")
+    s.write({"type": "user", "timestamp": iso(NOW - 10), "message": {"role": "user", "content": text}})
+    AgentWatcher(sid).sync(store, NOW)
+
+
+def p3_resumed_after_a_restart(store, sid, s, db_file):
+    t = s.agent("a1", "Job")
+    s.write(tool_use(t, "Job"), launched(t, "a1"), notified("a1", t, "completed"))
+    AgentWatcher(sid).sync(store, NOW)
+    w = AgentWatcher(sid)   # the wheelhouse restarts
+    w.sync(store, NOW)
+    s.write(send("a1"))     # and the session resumes the finished subagent
+    w.sync(store, NOW)
+
+
+def p4_a_second_wheelhouse_finishes_it(store, sid, s, db_file):
+    t = s.agent("a1", "Job", started=NOW - 5)
+    s.write(tool_use(t, "Job", at=NOW - 5), launched(t, "a1"))
+    b = AgentWatcher(sid)
+    b.sync(Store(db_file), NOW)        # within GRACE: makes nothing
+    AgentWatcher(sid).sync(store, NOW + 20)   # another wheelhouse makes the item, then quits
+    s.write(notified("a1", t, "completed"))
+    b.sync(Store(db_file), NOW + 25)   # the first sees the finish
+    b.sync(Store(db_file), NOW + 30)
+
+
+def p5_its_session_died(store, sid, s, db_file):
+    t = s.agent("a1", "Job")
+    s.write(tool_use(t, "Job"), launched(t, "a1"))
+    w = AgentWatcher(sid)
+    w.sync(store, NOW)
+    w.sync(store, NOW + 86400, alive=False)   # killed: no notification is ever written
+    return w
+
+
+def p5_resumed_and_finished(store, sid, s, db_file):
+    w = p5_its_session_died(store, sid, s, db_file)
+    s.write(notified("a1", "toolu_a1", "completed"))   # resumed later, and it finished after all
+    w.sync(store, NOW + 86500)
+
+
+@pytest.mark.parametrize("scenario, want, desc", [
+    (p1_one_notification_names_three, {"Job a1": "failed", "Job a2": "failed", "Job a3": "failed"},
+     "P1: a notification with several task ids under one status finishes every one"),
+    (p2_result_quotes_the_fields, {"Reviewer": "done", "Builder": "running"},
+     "P2: task ids and statuses quoted in <result> are the subagent's text, not fields"),
+    (p3_resumed_after_a_restart, {"Job": "running"},
+     "P3: SendMessage after a restart resumes an item the store has as finished"),
+    (p4_a_second_wheelhouse_finishes_it, {"Job": "done"},
+     "P4: a finish seen by a wheelhouse that didn't make the item is still written"),
+    (p5_its_session_died, {"Job": "failed"},
+     "P5: a running subagent whose session died fails"),
+    (p5_resumed_and_finished, {"Job": "done"},
+     "P5: the notification of a session resumed later updates the item as usual"),
+])
+def test_review_probes(store, sid, joined, db_file, scenario, want, desc):
+    scenario(store, sid, joined, db_file)
+    got = {k: v["status"] for k, v in agents(store, sid).items()}
+    assert got == want, f"{desc}: {got}"
+
+
+def test_a_dead_sessions_subagent_says_why_it_failed(store, sid, joined, db_file):
+    p5_its_session_died(store, sid, joined, db_file)
+    assert notes(store, sid, "A1") == ["the session stopped while this subagent ran"]

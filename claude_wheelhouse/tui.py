@@ -1193,6 +1193,7 @@ class WheelhouseApp(App):
         self.contexts: dict[str, stats.UsageFollower] = {}
         # each session's subagents, tracked as A items (#69): read on workers, as contexts are
         self.agent_watchers: dict[str, subagents.AgentWatcher] = {}
+        self.agent_errors: dict[str, str] = {}   # each session's watcher error last shown
         self.modules = api.load()
         self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
@@ -1443,25 +1444,33 @@ class WheelhouseApp(App):
 
     def watch_agents(self) -> None:
         """Each session's subagents brought up to date as A items, on a worker thread: every
-        one not parked once, and every one running each tick. The items show at the next
-        refresh."""
-        listed = {s["id"] for s in self.sessions if not s["parked"] or self.running(s["id"])}
-        for sid in [sid for sid in self.agent_watchers if sid not in listed]:
-            del self.agent_watchers[sid]
-        for sid in listed:
-            watcher = self.agent_watchers.setdefault(sid, subagents.AgentWatcher(sid))
-            if watcher.syncing or (watcher.ready and not self.running(sid)):
+        one not parked once, every one running each tick, and once more when one dies with
+        a subagent item still running, which then fails (parked or not). The items show at
+        the next refresh. A sync's failure shows once, as a warning, until it changes."""
+        watchers = self.agent_watchers
+        listed = {s["id"]: s for s in self.sessions if not s["parked"] or self.running(s["id"])
+                  or (s["id"] in watchers and watchers[s["id"]].unfinished())}
+        for sid in [sid for sid in watchers if sid not in listed]:
+            del watchers[sid]
+            self.agent_errors.pop(sid, None)
+        for sid, s in listed.items():
+            watcher = watchers.setdefault(sid, subagents.AgentWatcher(sid))
+            if watcher.error and watcher.error != self.agent_errors.get(sid):
+                self.agent_errors[sid] = watcher.error
+                self.notify(f"{self.display_name(s)}: {watcher.error}", severity="warning")
+            alive = self.running(sid)
+            if watcher.syncing or (watcher.ready and not alive and not watcher.unfinished()):
                 continue
             watcher.syncing = True
-            self.run_worker(functools.partial(self.sync_agents, watcher), thread=True, group="agents",
+            self.run_worker(functools.partial(self.sync_agents, watcher, alive), thread=True, group="agents",
                             exit_on_error=False)
 
-    def sync_agents(self, watcher: subagents.AgentWatcher) -> None:
+    def sync_agents(self, watcher: subagents.AgentWatcher, alive: bool = True) -> None:
         """On a worker thread. A failed sync (the session ended under it, a transcript gone
         between stat and open) is tried again next tick, from where it got to, and says why
         in the watcher's error."""
         try:
-            watcher.sync(self.store)
+            watcher.sync(self.store, alive=alive)
             watcher.error = None
         except Exception as e:
             watcher.error = f"couldn't track subagents: {e}"[:120]
