@@ -78,7 +78,7 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
   last 1024 are kept: a client reconnecting with `Last-Event-ID` gets what it missed, and
   one connecting afresh, or whose id the ring no longer holds (or never held), gets
   `refetch` at the latest seq. A client reading slower than events come falls behind the
-  ring the same way.
+  ring the same way. A signal to stop (Ctrl+C, SIGTERM) ends each stream cleanly first.
 - **Change detection.** Each second the daemon reads `PRAGMA data_version` on a
   connection of its own, which moves with every commit by any other connection, the hub's
   own included, and only if it has moved, a cheap mark of the `items` and `messages`

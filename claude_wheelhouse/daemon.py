@@ -566,6 +566,21 @@ def refusal(e: Exception) -> JSONResponse:
     return JSONResponse({"error": error}, status)
 
 
+class Server(uvicorn.Server):
+    """uvicorn's, but a signal to stop ends the event streams first, each once it has sent
+    what it has, so a client sees its stream end cleanly rather than cut off."""
+
+    def __init__(self, daemon: Daemon, config: uvicorn.Config):
+        super().__init__(config)
+        self.daemon = daemon
+
+    def handle_exit(self, sig, frame) -> None:
+        if self.daemon.loop is not None:
+            with contextlib.suppress(RuntimeError):   # the loop has closed already
+                self.daemon.loop.call_soon_threadsafe(self.daemon.feed.close)
+        super().handle_exit(sig, frame)
+
+
 def main(address: str = ADDRESS, port: int = PORT, names=()) -> None:
     """Serve until stopped (Ctrl+C, or SIGTERM from systemd): one per user, or AlreadyRunning."""
     address = checked_address(address)
@@ -576,6 +591,6 @@ def main(address: str = ADDRESS, port: int = PORT, names=()) -> None:
     try:
         daemon = Daemon(store, allowed)
         print(f"wheelhouse daemon on {url}, state in {store.path.parent}", flush=True)
-        uvicorn.Server(uvicorn.Config(daemon.app, host=address, port=port, log_level="warning")).run()
+        Server(daemon, uvicorn.Config(daemon.app, host=address, port=port, log_level="warning")).run()
     finally:
         lock.close()

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import signal
 import sqlite3
 import time
 import uuid
@@ -9,6 +10,7 @@ import uuid
 import anyio
 import httpx2
 import pytest
+from sse_starlette.sse import AppStatus
 
 from claude_wheelhouse import daemon as daemon_mod, launch, liveness
 from claude_wheelhouse.daemon import AlreadyRunning, Daemon, Feed, checked_address, hosts, take_lock
@@ -421,3 +423,12 @@ async def test_a_slow_disk_never_holds_up_the_sessions(daemon, tmp_path, monkeyp
         assert time.monotonic() - started < 0.25, "/sessions answered while the listing waits"
         assert not listing.done()
         assert (await listing).status_code == 200
+
+
+async def test_a_signal_to_stop_ends_the_streams_first(daemon, monkeypatch):
+    monkeypatch.setattr(AppStatus, "should_exit", False)   # sse-starlette's, for the whole process: put back
+    daemon.loop = asyncio.get_running_loop()
+    server = daemon_mod.Server(daemon, daemon_mod.uvicorn.Config(daemon.app))
+    server.handle_exit(signal.SIGTERM, None)
+    await asyncio.sleep(0)
+    assert daemon.feed.closed and server.should_exit
