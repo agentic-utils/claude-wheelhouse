@@ -121,6 +121,12 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+-- how many times each of items and messages has been written, by the triggers below: the
+-- daemon's mark of each (MARKED), moved by any change a client could see, whoever writes it
+CREATE TABLE IF NOT EXISTS marks (
+    kind TEXT PRIMARY KEY,
+    n    INTEGER NOT NULL DEFAULT 0
+);
 -- the daemon's answer to each request a client sent with an Idempotency-Key, for a day
 -- (KEYS_KEPT): the same request sent again is answered the same and done once
 CREATE TABLE IF NOT EXISTS idempotency (
@@ -137,6 +143,14 @@ DROP INDEX IF EXISTS messages_pending;
 CREATE INDEX IF NOT EXISTS messages_unsent
     ON messages (session_id) WHERE delivered_at IS NULL AND draft = 0;
 """
+# the tables the daemon marks (marks), each bumped by a trigger on every row inserted,
+# updated or deleted, by any connection: in the schema, so a writer running older code
+# bumps them too once any newer one has opened the database. Each trigger is one statement
+# of its own, as its body holds a ";"
+MARKED = ("items", "messages")
+TRIGGERS = [f"CREATE TRIGGER IF NOT EXISTS {table}_marked_{op.lower()} AFTER {op} ON {table} "
+            f"BEGIN UPDATE marks SET n = n + 1 WHERE kind = '{table}'; END"
+            for table in MARKED for op in ("INSERT", "UPDATE", "DELETE")]
 
 # columns added after the first release: (table, column, type)
 ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_requested_at", "TEXT"),
@@ -251,6 +265,9 @@ class Store:
             for statement in INDEXES.split(";"):
                 if statement.strip():
                     db.execute(statement)
+            db.executemany("INSERT OR IGNORE INTO marks (kind) VALUES (?)", [(t,) for t in MARKED])
+            for trigger in TRIGGERS:
+                db.execute(trigger)
             # a decision used to be finished once seen, and now stays until closed: those
             # seen before then are closed, once, rather than come back to the inbox
             if db.execute("SELECT 1 FROM settings WHERE key = ?", (DECISIONS_CLOSE,)).fetchone() is None:

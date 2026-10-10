@@ -336,6 +336,41 @@ def test_renaming_a_session_that_has_gone_says_so(store):
         store.rename("gone", "x")
 
 
+def marks(store):
+    return dict(store.db.execute("SELECT kind, n FROM marks"))
+
+
+@pytest.mark.parametrize("write, moved, desc", [
+    (lambda s, sid: s.heartbeat(sid), set(), "a heartbeat: the sessions carry no mark"),
+    (lambda s, sid: s.post_item(sid, "task", "two"), {"items"}, "an item inserted"),
+    (lambda s, sid: s.update_item(sid, "T1", title="again"), {"items"}, "an item updated"),
+    (lambda s, sid: s.queue(sid, "later"), {"messages"}, "a message inserted"),
+    (lambda s, sid: s.confirm(s.claim(sid)), {"messages"}, "a message updated"),
+    (lambda s, sid: s.unqueue(s.drafts(sid)[0]["id"]), {"messages"}, "a message deleted"),
+    (lambda s, sid: s.end(sid), {"items", "messages"}, "a session ended: its items and messages go by cascade"),
+    (lambda s, sid: s.db.execute("UPDATE items SET body = 'by older code'"), {"items"},
+     "a write that knows nothing of the marks, as older code's"),
+])
+def test_every_write_to_items_and_messages_moves_its_mark(store, sid, db_file, write, moved, desc):
+    store.post_item(sid, "task", "do it")
+    store.send(sid, "hello")
+    store.queue(sid, "draft")
+    before = marks(store)
+    write(Store(db_file), sid)
+    after = marks(store)
+    assert {kind for kind in after if after[kind] != before[kind]} == moved, desc
+
+
+def test_an_older_database_gains_the_marks_on_open(db_file, sid, store):
+    for trigger in store.db.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'").fetchall():
+        store.db.execute(f"DROP TRIGGER {trigger[0]}")
+    store.db.execute("DROP TABLE marks")
+    again = Store(db_file)
+    assert len(again.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'trigger'").fetchall()) == 6
+    store.post_item(sid, "task", "after")   # by the connection opened before: it sees the triggers too
+    assert marks(again) == {"items": 1, "messages": 0}
+
+
 @pytest.mark.parametrize("write, counted, desc", [
     (lambda s, sid: s.rename(sid, "x"), 1, "a write on this thread"),
     (lambda s, sid: s.rename(sid, s.session(sid)["name"]), 1, "a row rewritten as it was is still written"),

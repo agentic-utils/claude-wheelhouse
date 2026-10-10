@@ -55,12 +55,11 @@ LOCK = "daemon.lock"
 # what a change in the database may have moved: every session's row, the inbox, the threads,
 # and the conversations, which show what's queued
 STORE_KINDS = ("sessions", "items", "thread", "conversation")
-# each table the queries read besides the sessions, marked by a digest of every row as it is,
-# so any change a client could see moves it, two edits in the same second and a draft taken
-# back and queued again under its id too (a few ms each on a wheelhouse of 400 items and 700
-# messages): read only when data_version says something was written, which a host's
-# heartbeat does every second
-MARKS = {"items": "SELECT * FROM items ORDER BY id", "messages": "SELECT * FROM messages ORDER BY id"}
+# each table the queries read besides the sessions (store.MARKED) is marked by how many times
+# it has been written, kept by triggers in the schema, so any change a client could see moves
+# it, whoever writes it, two edits in the same second and a draft taken back and queued again
+# under its id too. A read of two rows, whatever the history: a host's heartbeat, every
+# second, writes only the sessions, which carry no mark
 # what each mark moving moves: "sessions" is the rows but for heartbeat_at, "listed" what the
 # inbox shows of each session (its name, and whether it's parked, which leaves its items
 # out), "named" what a conversation shows of it (its name, its folder's name for a tab
@@ -169,14 +168,6 @@ class Feed:
         self.moved.set()
 
 
-def digest(rows) -> bytes:
-    """A mark of rows that moves with any change to any of them."""
-    h = hashlib.sha1()
-    for row in rows:
-        h.update(repr(tuple(row)).encode())
-    return h.digest()
-
-
 def done_json(done: Done) -> dict:
     return {"ok": done.ok, "notices": [{"text": e.text, "severity": e.severity} for e in done.notices],
             "denied": done.denied, **({"sid": done.sid} if done.sid else {})}
@@ -208,11 +199,10 @@ class Daemon:
         self.pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="wheelhouse")
         self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wheelhouse-hub")
         self.loop_thread: int | None = None
-        # a connection of its own, only to read data_version: it moves with every commit made
-        # by any other connection, the hosts', the MCP servers' and the hub's own alike
+        # a connection of its own, only to read the marks, outside the store's lock: they move
+        # with every commit made by any connection, the hosts', the MCP servers' and the hub's
         self.watch = sqlite3.connect(store.path, isolation_level=None, check_same_thread=False)
-        self.read: tuple[int, dict] | None = None   # the marks last read, at that data_version
-        self.marked: dict = {}                      # as last published
+        self.marked: dict = {}                      # the marks as last published
         self.shown: dict[str, str] = {}   # each session's status as last published
         self.view: list[dict] = []        # /sessions, as the hub's thread last made it
         self.unkept: dict[str, dict] = {}  # answers the store couldn't keep: kept here till a tick can
@@ -297,15 +287,9 @@ class Daemon:
                 return
             del self.unkept[key]
 
-    def data_version(self) -> int:
-        return self.watch.execute("PRAGMA data_version").fetchone()[0]
-
     def marks(self) -> dict:
-        """Each table's mark (MARKS), read again only if anything has been written since."""
-        version = self.data_version()
-        if self.read is None or self.read[0] != version:
-            self.read = (version, {kind: digest(self.watch.execute(sql)) for kind, sql in MARKS.items()})
-        return self.read[1]
+        """Each marked table's count of writes (store.MARKED), as the triggers keep it."""
+        return dict(self.watch.execute("SELECT kind, n FROM marks"))
 
     def publish_moved(self, marks: dict) -> None:
         """What has moved since last published: each kind whose mark has, and the status each

@@ -85,12 +85,14 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
   one connecting afresh, or whose id the ring no longer holds (or never held), gets
   `refetch` at the latest seq. A client reading slower than events come falls behind the
   ring the same way. A signal to stop (Ctrl+C, SIGTERM) ends each stream cleanly first.
-- **Change detection.** Each second the daemon reads `PRAGMA data_version` on a
-  connection of its own, which moves with every commit by any other connection, the hub's
-  own included, and only if it has moved, a mark of the `items` and `messages` tables, a
-  digest of every row, so any change a client could see moves it (two edits in the same
-  second, a draft taken back and queued again under its id); then it refreshes the hub as the
-  TUI's tick does. The sessions' mark is the rows that refresh read but for `heartbeat_at`,
+- **Change detection.** Each second the daemon reads the marks of the `items` and
+  `messages` tables, a count of writes to each kept in a `marks` table by triggers on
+  every insert, update and delete. The triggers live in the schema, which every `Store`
+  creates on open, so every writer bumps them (hosts, MCP servers, the TUI, the daemon,
+  and older code once any newer has opened the database), and any change a client could
+  see moves a mark (two edits in the same second, a draft taken back and queued again
+  under its id). Reading them costs the same whatever the history; then it refreshes the
+  hub as the TUI's tick does. The sessions' mark is the rows that refresh read but for `heartbeat_at`,
   so the heartbeat every host writes each second publishes nothing. Each kind whose mark
   moved is published for all: the sessions' rows `sessions` (and `items` if a name or
   parked changed, as the inbox shows the name and leaves a parked session's items out,
