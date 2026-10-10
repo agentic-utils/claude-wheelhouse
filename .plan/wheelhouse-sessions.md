@@ -319,7 +319,7 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
 ## TUI
 
 - **Inbox tab.** Sessions on the left (a status dot, the name, the open-question count,
-  and a Cylon scanner while anything is running; parked sessions are left out). Items in the centre from
+  and a Cylon scanner while anything is running, resting while you type in an answer box (D41); parked sessions are left out). Items in the centre from
   every session, ordered: open questions, blocked or waiting tasks, running, the rest.
   Selecting a session filters; Esc clears. Detail on the right: body, thread, and an
   answer box. Ctrl+S queues; Ctrl+Enter (ctrl+j) sends now.

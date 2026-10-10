@@ -2564,10 +2564,11 @@ async def test_a_failed_transcript_read_is_shown_not_fatal(store, sid, monkeypat
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("focus_answer, moves, desc", [
-    (False, True, "the shimmer runs while the answer box is idle"),
-    (True, False, "the shimmer rests while you type"),
+    (False, True, "the shimmer and the eyes run while the answer box is idle"),
+    (True, False, "the shimmer and the eyes rest while you type (D41)"),
 ])
-async def test_the_stats_shimmer_rests_while_typing(store, sid, focus_answer, moves, desc):
+async def test_the_stats_shimmer_and_eyes_rest_while_typing(store, sid, monkeypatch, focus_answer, moves, desc):
+    monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: True)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -2575,9 +2576,30 @@ async def test_the_stats_shimmer_rests_while_typing(store, sid, focus_answer, mo
             app.answer.focus()
             await pilot.pause()
         before = app.query_one("#stats").frame
+        eye = str(app.session_list.get_cell(sid, app.eye_col))
         for _ in range(4):
             app.animate()
+            app.refresh_data()   # nor does the refresh move them
         assert (app.query_one("#stats").frame != before) == moves, desc
+        assert (str(app.session_list.get_cell(sid, app.eye_col)) != eye) == moves, desc
+
+
+@pytest.mark.anyio
+async def test_typing_redraws_the_hint_only_when_it_changes(store, sid, monkeypatch):
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=0)
+        await refresh(pilot, sid)
+        app.answer.focus()
+        await pilot.pause()
+        drawn = []
+        monkeypatch.setattr(Hint, "update", lambda self, *a, **kw: drawn.append(a))
+        await pilot.press(*"sqlite")
+        assert drawn == [], "a key that changes no suggestion leaves the hint alone"
+        await pilot.press(*" :smi")
+        assert drawn and all(x != y for x, y in zip(drawn, drawn[1:])), "suggestions redraw only as they change"
 
 
 @pytest.mark.anyio

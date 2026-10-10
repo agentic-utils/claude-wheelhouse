@@ -2,6 +2,7 @@
 
 import asyncio
 import functools
+import gc
 import math
 import os
 import re
@@ -817,8 +818,10 @@ class Hint(Label):
                 self.update(text)
 
     def suggest(self, text: Text | None) -> None:
-        self.suggesting = text
-        self.update(self.base if text is None else text)
+        # called on every key typed: most change nothing, and an update lays out the screen
+        if text != self.suggesting:
+            self.suggesting = text
+            self.update(self.base if text is None else text)
 
 
 class Dialog(ModalScreen):
@@ -1341,6 +1344,7 @@ class WheelhouseApp(App):
         self.wake = liveness.WakeDetector()
         self.waking = False
         self.frame = 0
+        self.eye_frame = 0   # the frame the busy sessions' eyes last moved on (animate)
         self.filter_sid: str | None = None
         # the dwell (DWELL): what the person is looking at, (selection, screen), its generation,
         # bumped whenever that changes, and its one-shot timer, running only while they rest
@@ -1449,6 +1453,9 @@ class WheelhouseApp(App):
         # a screen over the inbox, or a thread opened, is a break in looking: the dwell restarts
         self.screen_change_signal.subscribe(self, lambda _: self.look(), immediate=True)
         self.refresh_data()
+        # what's loaded by the first paint lives as long as the app: kept out of the full
+        # collections, which otherwise walk it all, a pause typing can feel, every few seconds
+        self.call_after_refresh(lambda: (gc.collect(), gc.freeze()))
         if tutorial.should_offer(self.store):
             self.push_screen(TutorialOffer(), self.offer_answered)
 
@@ -1535,13 +1542,12 @@ class WheelhouseApp(App):
 
     def animate(self) -> None:
         self.frame += 1
-        self.title_bar.update(shimmer(self.frame))
-        if self.frame % 2 == 0:
+        self.title_bar.update(shimmer(self.frame), layout=False)   # one line, never a new size
+        # the eyes and panes rest while you type: each frame repaints the whole session list
+        # (D41). No screen at all while the app shuts down, when asking what has focus would raise
+        if self.frame % 2 == 0 and self.screen_stack and not isinstance(self.focused, Compose):
             self.sweep_eyes()
-            # it rests while you type. No screen at all while the app shuts down, when
-            # asking what has focus would raise
-            if self.screen_stack and not isinstance(self.focused, Compose):
-                self.each_pane("animate", self.frame // 2)   # 5 frames a second, as in the dashboard
+            self.each_pane("animate", self.frame // 2)   # 5 frames a second, as in the dashboard
 
     def tick(self) -> None:
         """The refresh, each second, skipped while a key lands (land): a refresh settles, and a
@@ -1739,9 +1745,10 @@ class WheelhouseApp(App):
 
     def sweep_eyes(self) -> None:
         """Move the Cylon eye on busy rows without rebuilding the table."""
+        self.eye_frame = self.frame
         for s in self.sessions:
             if self.busy(s) and s["id"] in self.session_list.rows:
-                self.session_list.update_cell(s["id"], self.eye_col, cylon(self.frame))
+                self.session_list.update_cell(s["id"], self.eye_col, cylon(self.eye_frame))
 
     def paint_sessions(self) -> None:
         """Every session: parked ones dimmed, at the foot of the list's room (they fall there
@@ -1753,7 +1760,7 @@ class WheelhouseApp(App):
         rows = []
         for s in sorted(self.sessions, key=lambda s: s["parked"]):   # stable: creation order within each
             st = self.shown_status(s)
-            busy = cylon(self.frame) if self.busy(s) else Text("")
+            busy = cylon(self.eye_frame) if self.busy(s) else Text("")
             dot = Text("●", style="#777777" if s["parked"] else STATUS_STYLE[st])
             name = Text(self.display_name(s), style="dim" if s["parked"] else "")
             if self.stale(s):
