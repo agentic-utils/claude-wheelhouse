@@ -45,8 +45,10 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
 - **Decisions.** If your own instructions let a session decide some things without asking
   you, it reports each one as a decision (`D1`): what it decided, the alternative, why, and
   how to reverse it. Decisions block nothing. Each session counts its unseen ones (the `D`
-  column); one becomes seen once you've looked at it for a second without moving on
-  (highlighted, or open full screen), so arrowing past it leaves it unseen. Answering it
+  column); one becomes seen once you've picked it and looked at it for a second without
+  moving on (highlighted, or open full screen), so arrowing past it leaves it unseen, as
+  does a row the wheelhouse highlights itself (at startup, or once an item goes) or a
+  second spent in another window, where your terminal reports focus. Answering it
   or closing it counts at once. It stays in the inbox until you close it with `Delete`, as
   with a question. To push back, answer in its thread ("reverse that").
 - **Done with, not gone.** A task done or dropped, a question answered, a decision seen

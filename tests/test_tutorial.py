@@ -349,8 +349,8 @@ async def test_closing_the_decision_ticks_it(store, sid, tut):
         await pilot.pause()
         dwell(app)
         await pilot.pause()
-        assert app.selected == (tut, "D1") and store.item(tut, "D1")["status"] == "seen", \
-            "P1 went, so D1 under the cursor was selected automatically, and seen once rested on"
+        assert app.selected == (tut, "D1") and store.item(tut, "D1")["status"] == "unseen", \
+            "P1 went, so D1 under the cursor was selected automatically, and stays unseen: not the person's pick"
         assert step not in app._checklist_text, "automatic selection doesn't tick it"
         keys = [items.coordinate_to_cell_key((i, 0)).row_key.value for i in range(items.row_count)]
         for ref in ("T1", "D1"):
