@@ -1814,6 +1814,21 @@ async def scroll_by(pilot, keys) -> list[list[str]]:
     return seen
 
 
+def lay_out_in_full(monkeypatch) -> None:
+    """Every conversation laid out in full, as before T68: the reference the lazy one matches."""
+    update = Transcript.update
+    monkeypatch.setattr(Transcript, "update", lambda self, content, **_: update(self, content))
+
+
+async def mouse(pilot, kind, widget, offset) -> None:
+    """A mouse event through the app, as the terminal delivers one (the pilot's skip on_event)."""
+    event = kind(**_get_mouse_message_arguments(widget, offset) | {"widget": None})
+    event.set_sender(pilot.app)
+    pilot.app._driver.send_message(event)
+    await pilot.wait_for_scheduled_animations()
+    await pilot.pause()
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("keys, desc", [
     (["pageup"] * 12, "PgUp, a page at a time"),
@@ -1826,17 +1841,18 @@ async def test_scrolling_up_a_long_conversation_shows_what_laying_it_all_out_wou
     """T68: older blocks laid out as the pane nears them show as if laid out from the start,
     with no jump: what shows after every key is what a conversation laid out in full shows."""
     long_conversation(sid, tmp_path, monkeypatch)
-    update = Transcript.update
     seen = {}
-    for tail in (True, False):
-        monkeypatch.setattr(Transcript, "update", lambda self, content, tail=tail, **_: update(self, content, tail))
+    for lazy in (True, False):
+        if not lazy:
+            lay_out_in_full(monkeypatch)
         app = WheelhouseApp(store)
         async with app.run_test(size=(160, 40)) as pilot:
             await pilot.pause()
             app.follow(sid)
             await pilot.pause()
+            assert (app.detail.start > 0) == lazy, desc
             app.detail.focus(scroll_visible=False)
-            seen[tail] = await scroll_by(pilot, keys)
+            seen[lazy] = await scroll_by(pilot, keys)
     assert seen[True] == seen[False], desc
 
 
@@ -1888,14 +1904,29 @@ def append_turn(sid, tmp_path, text: str) -> None:
         f.write(json.dumps(rec) + "\n")
 
 
+def start_waiting(sid, tmp_path) -> None:
+    """The session asks in its tab, which puts a warning under the conversation's head."""
+    rec = {"type": "assistant", "timestamp": "2026-10-07T21:31:00Z", "message": {"content": [
+        {"type": "tool_use", "id": "t1", "name": next(iter(transcript.ASKS_IN_TAB)), "input": {}}]}}
+    with (tmp_path / f"projects/-home-u-repo/{sid}.jsonl").open("a") as f:
+        f.write(json.dumps(rec) + "\n")
+
+
 @pytest.mark.anyio
-@pytest.mark.parametrize("up, desc", [
-    (0, "followed at its end: the new turn shows at the true end"),
-    (3, "scrolled up to read: what shows stays put"),
+@pytest.mark.parametrize("change, up, desc", [
+    ("turn", 0, "a new turn, followed at its end: it shows at the true end"),
+    ("turn", 3, "a new turn, scrolled up to read: what shows stays put"),
+    ("rename", 3, "renamed, scrolled up to read: what shows stays put, not sent to the end"),
+    ("shell", 3, "handed to a shell, its tab line changed, scrolled up to read: what shows stays put"),
+    ("waiting", 3, "a warning put in under its head, scrolled up to read: what shows stays put"),
 ])
-async def test_a_new_turn_in_a_long_conversation(store, sid, tmp_path, monkeypatch, up, desc):
-    """T68: the same conversation again keeps the older blocks laid out above, so nothing moves."""
-    long_conversation(sid, tmp_path, monkeypatch)
+async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch, change, up, desc):
+    """T68: the same conversation again (the same session) keeps the older blocks laid out
+    above, wherever they've moved to in it, so nothing moves."""
+    if change == "shell":   # a host's session, whose tab line shows only once handed to a shell
+        sid = store.create_session(str(tmp_path), name="demo", runner="sdk")
+    # waiting: under the 80 entries shown, so no oldest turn drops off to undo the warning's shift
+    long_conversation(sid, tmp_path, monkeypatch, turns=60 if change == "waiting" else 200)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -1903,10 +1934,15 @@ async def test_a_new_turn_in_a_long_conversation(store, sid, tmp_path, monkeypat
         await pilot.pause()
         app.detail.focus(scroll_visible=False)
         before = (await scroll_by(pilot, ["pageup"] * up))[-1]
-        append_turn(sid, tmp_path, "the newest turn")
+        head = app.detail.blocks[:2]
+        {"turn": lambda: append_turn(sid, tmp_path, "the newest turn"),
+         "rename": lambda: store.rename(sid, "renamed"),
+         "shell": lambda: store.set_shell(sid, "open"),
+         "waiting": lambda: start_waiting(sid, tmp_path)}[change]()
         app.refresh_data()
         await pilot.wait_for_scheduled_animations()
         await pilot.pause()
+        assert app.detail.blocks[:2] != head or change == "turn", f"{desc}: the change made"
         laid, full = app.detail._layout(app.detail.size.width)[1], laid_in_full(app)
         assert laid == full[-len(laid):], desc
         assert painted(app) == (full[-app.detail_scroll.size.height:] if up == 0 else before), desc
@@ -1914,12 +1950,8 @@ async def test_a_new_turn_in_a_long_conversation(store, sid, tmp_path, monkeypat
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("keys, drag, desc", [
-    (["ctrl+a", "ctrl+c"], False, "Ctrl+A copies it all, laid out first"),
-    (["home", "ctrl+c"], True, "a selection keeps its text as older blocks are laid out above it"),
-])
-async def test_copying_from_a_long_conversation(store, sid, tmp_path, monkeypatch, keys, drag, desc):
-    """T68: what's copied is what laying it all out at once would give."""
+async def test_ctrl_a_copies_all_of_a_long_conversation(store, sid, tmp_path, monkeypatch):
+    """T68: laid out first, so what's copied is what laying it all out at once would give."""
     long_conversation(sid, tmp_path, monkeypatch)
     app = WheelhouseApp(store)
     copied = []
@@ -1928,18 +1960,71 @@ async def test_copying_from_a_long_conversation(store, sid, tmp_path, monkeypatc
         await pilot.pause()
         app.follow(sid)
         await pilot.pause()
-        if drag:   # over the pane's first two lines
-            await pilot.mouse_down(app.detail, offset=(0, app.detail_scroll.scroll_y))
-            await pilot.mouse_up(app.detail, offset=(20, app.detail_scroll.scroll_y + 1))
-            await pilot.press("ctrl+c")
-        expected = copied.pop() if drag else "\n".join(laid_in_full(app)).rstrip("\n")
-        assert expected.count("\n") == 1 if drag else expected.startswith("demo · conversation"), desc
-        assert app.detail.start > 0, f"{desc}: only the newest blocks laid out"
+        expected = "\n".join(laid_in_full(app)).rstrip("\n")
+        assert expected.startswith("demo · conversation") and app.detail.start > 0, "only the newest laid out"
         app.detail.focus(scroll_visible=False)
-        await pilot.press(*keys)
+        await pilot.press("ctrl+a", "ctrl+c")
         await pilot.pause()
-        assert app.detail.start == 0, f"{desc}: all of it laid out"
-    assert copied == [expected], desc
+        assert app.detail.start == 0, "all of it laid out"
+    assert copied == [expected]
+
+
+async def drag_the_scrollbar(pilot) -> list:
+    """The thumb, grabbed at the bottom, dragged up a row at a time to the top."""
+    bar = pilot.app.detail_scroll.vertical_scrollbar
+    await mouse(pilot, events.MouseDown, bar, (0, bar.size.height - 1))
+    seen = []
+    for y in range(bar.size.height - 2, -1, -1):
+        await mouse(pilot, events.MouseMove, bar, (0, y))
+        seen.append(painted(pilot.app))
+    await mouse(pilot, events.MouseUp, bar, (0, 0))
+    return seen
+
+
+async def select_up_past_the_top(pilot) -> list:
+    """Text pressed on in view and dragged up a page and more, the pane scrolling up meanwhile
+    as Textual's auto-scroll would, then copied."""
+    app, copied = pilot.app, []
+    app.copy_to_clipboard = copied.append
+    scroll, page = app.detail_scroll, app.detail_scroll.size.height
+    line = next(i for i in range(10, 30) if painted(app)[i].strip())
+    at = lambda x, row: (x, int(scroll.scroll_y) + row)   # in the pane's rows, wherever it's scrolled
+    await mouse(pilot, events.MouseDown, app.detail, at(len(painted(app)[line]) + 2, line))
+    await mouse(pilot, events.MouseMove, app.detail, at(5, 2))
+    scroll.scroll_to(y=max(0, scroll.scroll_y - page), animate=False)
+    await pilot.pause()
+    await mouse(pilot, events.MouseMove, app.detail, at(5, 1))
+    await mouse(pilot, events.MouseUp, app.detail, at(5, 1))
+    app.detail.focus(scroll_visible=False)
+    await pilot.press("ctrl+c")
+    await pilot.pause()
+    return copied
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("gesture, desc", [
+    (drag_the_scrollbar, "the scrollbar dragged up moves with the mouse, not twice as fast"),
+    (select_up_past_the_top, "a selection dragged up keeps its anchor on the line first pressed"),
+])
+async def test_a_press_in_a_long_conversation_lays_it_all_out_first(
+        store, sid, tmp_path, monkeypatch, gesture, desc):
+    """T68: older blocks laid out under a gesture under way would move what it holds on to
+    (Textual keeps where the thumb or the selection started), so a press lays out the rest
+    first, and the gesture goes as it does on a conversation laid out in full."""
+    long_conversation(sid, tmp_path, monkeypatch)
+    seen = {}
+    for lazy in (True, False):
+        if not lazy:
+            lay_out_in_full(monkeypatch)
+        app = WheelhouseApp(store)
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.pause()
+            app.follow(sid)
+            await scroll_by(pilot, [])
+            assert (app.detail.start > 0) == lazy, desc
+            seen[lazy] = await gesture(pilot)
+            assert app.detail.start == 0, desc
+    assert seen[True] and seen[True] == seen[False], desc
 
 
 async def restore_button(pilot):

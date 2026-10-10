@@ -286,17 +286,22 @@ class Transcript(Widget, can_focus=True):
         super().__init__(**kwargs)
         self.blocks: list[tuple[str, str]] = [("note", placeholder)] if placeholder else []
         self.start: int | None = 0   # the first block laid out; None: the newest, to fill two pages
+        self.tail: str | None = None   # the session whose conversation this is, laid out from its end
         self._laid: tuple | None = None
 
-    def update(self, content: "Blocks | list[tuple[str, str]]", tail: bool = False) -> None:
+    def update(self, content: "Blocks | list[tuple[str, str]]", tail: str | None = None) -> None:
         blocks = content.blocks if isinstance(content, Blocks) else list(content)
-        if not tail:
+        if tail is None:
             self.start = 0
-        elif blocks[:1] != self.blocks[:1] or self.start is None:
+        elif tail != self.tail or self.start is None:
             self.start = None   # another conversation
-        elif self.start:   # the same one keeps what's laid above, though its oldest turns drop off
+        elif self.start:   # the same one keeps what's laid above, wherever its oldest laid block
+            # has moved to (its oldest turns drop off, a warning goes in under its head), or all
+            # of it, that block gone
             top = self.blocks[self.start]
-            self.start = next((i for i in range(min(self.start, len(blocks) - 1), -1, -1) if blocks[i] == top), None)
+            self.start = min((i for i, block in enumerate(blocks) if block == top),
+                             key=lambda i: abs(i - self.start), default=0)
+        self.tail = tail
         self.blocks = blocks
         self._laid = None
         self.refresh(layout=True)
@@ -326,7 +331,8 @@ class Transcript(Widget, can_focus=True):
         """Lay out older blocks while fewer than `lines` are laid above where the scroll stands
         or is going, keeping what shows where it is: the scroll moves down by the lines added
         and its height grows by them at once, before the next layout (set_scroll: a key behind
-        this one acts on them), and a selection moves with them."""
+        this one acts on them). A press in the pane lays out all of it first (on_event), so
+        nothing moves under a selection or a scrollbar being dragged."""
         scroll = self.parent
         if not self.start or self._laid is None or min(scroll.scroll_y, scroll.scroll_target_y) >= lines:
             return
@@ -342,9 +348,6 @@ class Transcript(Widget, can_focus=True):
             scroll.vertical_scrollbar.position = scroll.scroll_y
         if moving:   # a smooth scroll carries on to where it was going
             scroll.scroll_to(y=to + added)
-        if (selection := self.screen.selections.get(self)) is not None:
-            moved = type(selection)(*(None if end is None else end + (0, added) for end in selection))
-            self.screen.selections = {**self.screen.selections, self: moved}
         self.refresh(layout=True)
 
     def get_content_width(self, container, viewport) -> int:
@@ -358,7 +361,7 @@ class Transcript(Widget, can_focus=True):
         return height
 
     def render_lines(self, crop):
-        if self.start and crop.y < crop.height:   # under a page above what shows: a scrollbar dragged, say
+        if self.start and crop.y < crop.height:   # under a page above what shows: scrolled by no key or wheel
             self.call_later(self.keep_above, crop.height)
         return super().render_lines(crop)
 
@@ -1573,7 +1576,22 @@ class WheelhouseApp(App):
         if isinstance(event, events.Key) and not event.is_forwarded:
             await self.take_key(event)
             return
+        if isinstance(event, events.MouseDown) and not event.is_forwarded and self.detail.start:
+            await self.lay_out_pressed(event)
         await super().on_event(event)
+
+    async def lay_out_pressed(self, event: events.MouseDown) -> None:
+        """A press in the conversation pane, on its text or its scrollbar, lays out all of it
+        first, on screen, before the press starts a selection or grabs the bar: older blocks
+        laid out as either went on would move what they hold on to (T68). The mouse's next
+        events wait behind it."""
+        try:
+            under, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
+        except Exception:
+            return
+        if self.detail_scroll in under.ancestors_with_self:
+            self.detail.keep_above(math.inf)
+            await self.detail.wait_for_refresh()
 
     async def take_key(self, event: events.Key) -> None:
         """Every key, one rule: it acts once what the keys before it set in motion has landed
@@ -2030,7 +2048,7 @@ class WheelhouseApp(App):
         if text != getattr(self, "_detail_text", None):
             following = self.viewing and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1
             self._detail_text = text
-            self.detail.update(render(blocks), tail=bool(self.viewing))
+            self.detail.update(render(blocks), tail=self.viewing)
             if following:   # stay at the newest turn, unless the person has scrolled up to read
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 

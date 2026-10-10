@@ -430,17 +430,19 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   class of bugs in its window). The first visit to a session with a 1.2 MB transcript
   costs about 15 ms to follow and 20 to 50 ms to lay out its conversation (it was 150 to
   350 ms, every block's markdown: T68 lays out only the newest blocks, two pages of them,
-  and older ones as the pane scrolls up to within a page of them, before a key or the wheel
-  acts, so what shows doesn't move and a burst doesn't stop short; Home and Ctrl+A
-  lay out the rest); later visits a few milliseconds. The rendered blocks' cache
-  (2048) holds about 25 conversations' worth at one width: each shows its last 80 entries.
-  Only a click or Enter offers to relaunch a dead one. The item list's cursor goes to the selection by key whenever they differ, except over an arrow of the
-  person's whose highlight hasn't been handled yet. (Review 8 replaced the first D20, where the buttons acted on the highlighted
-  session and the keys on the session in context: the two could differ on screen, and the
-  tutorial's "Ctrl+S, or the Send button" sent another session's queue.) A full-screen
-  item has no session list, so its bar keeps Mode, Send, Interrupt, Compact and Shell, for
-  its own session. The stats pane still shows every running session while no session is
-  followed and no item selected.
+  and older ones as the pane scrolls up to within a page of them, before a key or the
+  wheel acts, so what shows doesn't move and a burst doesn't stop short; Home, Ctrl+A and
+  a press in the pane, to select or drag the scrollbar, lay out the rest); later visits a
+  few milliseconds. The rendered blocks' cache (2048) holds about 25 conversations' worth
+  at one width: each shows its last 80 entries. Only a click or Enter offers to relaunch a
+  dead one. The item list's cursor goes to the selection by key whenever they differ,
+  except over an arrow of the person's whose highlight hasn't been handled yet. (Review 8
+  replaced the first D20, where the buttons acted on the highlighted session and the keys
+  on the session in context: the two could differ on screen, and the tutorial's "Ctrl+S,
+  or the Send button" sent another session's queue.) A full-screen item has no session
+  list, so its bar keeps Mode, Send, Interrupt, Compact and Shell, for its own session.
+  The stats pane still shows every running session while no session is followed and no
+  item selected.
 - **Resizable layout** (#60). Every boundary is a `Splitter` (`splitter.py`; Textual has
   none): the two between the columns, the session list and its description (the
   description 50% of the column by default), the items and the module panes under them,
