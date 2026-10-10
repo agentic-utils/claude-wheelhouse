@@ -40,6 +40,8 @@ repaint without a read of its own.
   `sessions()` carries `context`, the SDK host's last recorded `HostContext` (#54): an
   added key, so the API stays at 1. `usage` is the account's usage, which the hub
   fetches (`hub.Hub.fetch_usage`): an added field with a default, so the API stays at 1.
+  The hub fetches it whether or not a stats pane is installed to show it: one call a
+  minute, which a daemon will serve to whichever clients connect.
 - **Discovery.** `load()` reads the entry-point group. The hub's own `pyproject.toml`
   declares `stats = "claude_wheelhouse.stats_pane:module"`, the same way a third party
   would. A module that fails to import, isn't a `Module`, or was written against another

@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from .stats import AccountUsage
+
 WHEELHOUSE_API = 1                 # bumped on any breaking change, matched exactly
 GROUP = "claude_wheelhouse.modules"
 OWN = ("stats",)                   # declared in this package's pyproject.toml
@@ -64,8 +66,8 @@ class Context:
     sessions: Callable[[], list[dict]]
     focus: Callable[[], str | None]      # the session in context (highlighted or followed), if any
     config: dict = field(default_factory=dict)
-    # the account's session and weekly usage (a stats.AccountUsage), which the hub fetches
-    usage: object = None
+    # the account's session and weekly usage, which the hub fetches
+    usage: AccountUsage | None = None
 
 
 @dataclass

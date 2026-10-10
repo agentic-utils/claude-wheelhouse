@@ -247,7 +247,8 @@ class Hub:
                               f"relaunched: see hosts/{sid}.log", "error")
 
     def restore(self, sid: str) -> Done:
-        """A dead session brought back where it left off, and unparked. Whether it was."""
+        """Restore: only a dead session, brought back where it left off and unparked; one
+        that isn't dead is left as it is, and said so. Whether it was restored."""
         if self.statuses.get(sid) != "dead":
             return Done(False).say("only a dead session can be restored", "warning")
         done = self.open_session(sid, restore=True)
@@ -517,7 +518,9 @@ class Hub:
 
     def fetch_usage(self) -> None:
         """The account's session and weekly usage, fetched on a worker thread when it's due
-        (at most once a minute, stats.AccountUsage)."""
+        (at most once a minute, stats.AccountUsage). Fetched whether or not any surface
+        shows it (no stats pane, say): one call a minute, and a daemon serves it to clients
+        that come and go."""
         if self.usage.due(time.time()):
             self.spawn(self.usage.fetch, "usage")
 
