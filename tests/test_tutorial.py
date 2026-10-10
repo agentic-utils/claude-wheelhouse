@@ -8,6 +8,7 @@ from claude_wheelhouse.store import Store
 from claude_wheelhouse.tui import BUTTONS, Compose, ItemList, KeysHelp, ThreadView, Transcript, TutorialOffer, \
     WheelhouseApp, key_name, keys_help
 from claude_wheelhouse.tutorial import should_offer as real_should_offer   # before conftest stubs it
+from test_tui import one_second
 
 
 @pytest.fixture
@@ -327,8 +328,9 @@ def test_an_earlier_host_that_exits_as_its_told_is_no_error(store, monkeypatch):
 
 @pytest.mark.anyio
 async def test_closing_the_decision_ticks_it(store, sid, tut):
-    setup_items(store, tut)
-    store.post_item(tut, "permission", "Bash: touch tutorial-ok")
+    with one_second():   # P1 just above D1 (inbox order): a second's boundary between them put P1 first
+        setup_items(store, tut)
+        store.post_item(tut, "permission", "Bash: touch tutorial-ok")
     app = WheelhouseApp(store)
     step = "✔ Read and close the decision"
     async with app.run_test(size=(160, 40)) as pilot:

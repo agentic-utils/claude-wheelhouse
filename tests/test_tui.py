@@ -53,10 +53,11 @@ async def test_answer_reaches_the_session(store, sid, live):
 @pytest.mark.anyio
 async def test_subagents_sit_under_their_session(store, sid, tmp_path):
     other = store.create_session(str(tmp_path), name="other")
-    store.post_item(sid, "agent", "fork one", status="running")
-    store.post_item(other, "agent", "fork two", status="running")
-    store.post_item(sid, "agent", "fork three", status="running")
-    q = store.post_item(sid, "question", "which db?")
+    with one_second():   # A1 before A2 in demo's group
+        store.post_item(sid, "agent", "fork one", status="running")
+        store.post_item(other, "agent", "fork two", status="running")
+        store.post_item(sid, "agent", "fork three", status="running")
+        q = store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
