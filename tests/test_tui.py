@@ -2758,10 +2758,12 @@ async def test_renaming_a_session_that_has_gone_says_so(store, sid, live, monkey
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        if ends == "before the button":
+        if ends == "before the button":   # pressed before the app's next tick hides the button
             store.end(sid)
             monkeypatch.setattr(app, "current_session", lambda: sid)   # the row still showing it
-        await pilot.click("#rename")
+            app.query_one("#rename", Button).press()
+        else:
+            await pilot.click("#rename")
         await pilot.pause()
         if ends == "while the dialog is open":
             store.end(sid)
