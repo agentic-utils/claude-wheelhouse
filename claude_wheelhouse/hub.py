@@ -40,6 +40,16 @@ def display_name(s) -> str:
     return s["name"] or os.path.basename(s["cwd"]) or short(s["id"])
 
 
+def requested(s) -> str | None:
+    """The request (end or park) a session's row says it has been asked to act on, if any."""
+    return next((what for what in PENDING if s[f"{what}_requested_at"]), None)
+
+
+def working(s) -> bool:
+    """Whether a session's row says a turn or a tool is under way, whatever its liveness."""
+    return bool(s["running"]) or (runner(s) == "sdk" and not (s["activity"] or "idle").startswith(RESTING))
+
+
 def aimed(target) -> str:
     """What a message goes to: an item's ref, or the session itself (a general message)."""
     return target[1] or "the session"
@@ -84,6 +94,7 @@ class Hub:
         self.wake = liveness.WakeDetector()
         self.waking = False
         self.sessions = []
+        self.by_id: dict = {}   # the sessions by id, as the last refresh read them
         self.statuses: dict[str, str] = {}
         # sessions whose host Relaunch has stopped: started again once it has gone. Each has
         # a monotonic deadline and the stopped host, (pid, start time)
@@ -120,6 +131,7 @@ class Hub:
         wheelhouse never deletes or parks anything by itself."""
         self.waking = self.wake.tick()
         self.sessions = self.store.sessions()
+        self.by_id = {s["id"]: s for s in self.sessions}
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
 
     def row(self, sid: str):
@@ -129,6 +141,12 @@ class Hub:
             raise SessionGone(sid)
         return s
 
+    def listed(self, sid: str):
+        """The session's row as the last refresh read it, as every session is painted from;
+        one it didn't see, read now (row)."""
+        s = self.by_id.get(sid)
+        return s if s is not None else self.row(sid)
+
     def running(self, sid: str) -> bool:
         return self.statuses.get(sid) in RUNNING
 
@@ -136,30 +154,28 @@ class Hub:
         """It can't receive (D30): Send, Ctrl+S and Send all leave its queue alone (#62)."""
         return self.statuses.get(sid) == "dead"
 
-    def stale(self, s) -> bool:
+    def stale(self, sid: str) -> bool:
         """Running older wheelhouse code: a relaunch picks up the new code."""
-        return self.running(s["id"]) and needs_relaunch(s)
+        return self.running(sid) and needs_relaunch(self.listed(sid))
 
-    def sends_now(self, s) -> bool:
+    def sends_now(self, sid: str) -> bool:
         """Running code from before queued answers, which would deliver one at once: so
         Ctrl+Enter sends, whatever the mode."""
-        return self.running(s["id"]) and not can_queue(s)
+        return self.running(sid) and not can_queue(self.listed(sid))
 
-    @staticmethod
-    def pending(s) -> str | None:
-        """The request (end or park) a session has been asked to act on, if any."""
-        return next((what for what in PENDING if s[f"{what}_requested_at"]), None)
+    def pending(self, sid: str) -> str | None:
+        """The request (end or park) a session has been asked to act on, if any, read now."""
+        return requested(self.row(sid))
 
-    def shown_status(self, s) -> str:
-        st = self.statuses.get(s["id"], "dead")
-        if s["id"] in self.relaunching:
+    def shown_status(self, sid: str) -> str:
+        st = self.statuses.get(sid, "dead")
+        if sid in self.relaunching:
             return "relaunching"
-        what = self.pending(s)
+        what = requested(self.listed(sid))
         return PENDING[what] if what and st in RUNNING else st
 
-    def busy(self, s) -> bool:
-        working = bool(s["running"]) or (runner(s) == "sdk" and not (s["activity"] or "idle").startswith(RESTING))
-        return working and self.statuses.get(s["id"]) in ("live", "stalled")
+    def busy(self, sid: str) -> bool:
+        return working(self.listed(sid)) and self.statuses.get(sid) in ("live", "stalled")
 
     # launching and Relaunch
 
@@ -348,7 +364,8 @@ class Hub:
         elif mode(s) == "immediate":
             self.store.send(target[0], text, target[1])
             done.say(f"sent to {aimed(target)}")
-        elif self.sends_now(s):   # its old monitor would deliver a draft at once anyway
+        # sends_now, on the row as it is now: its old monitor would deliver a draft at once anyway
+        elif self.running(target[0]) and not can_queue(s):
             self.store.send(target[0], text, target[1])
             done.say(f"sent to {aimed(target)} now: that session runs older wheelhouse code, "
                      "so it can't queue until it's relaunched", "warning")
@@ -422,18 +439,22 @@ class Hub:
         """Whether an unseen decision became seen: a no-op for anything else."""
         return self.store.mark_seen(sid, ref)
 
-    def close(self, item, closed: bool) -> Done:
+    def close(self, sid: str, ref: str, closed: bool) -> Done:
         """Close a question or decision, or reopen it: a question as answered, a decision as
         seen. Dismiss a settled task or subagent, or bring it back. One finished already has
         nothing to close."""
+        item = self.store.item(sid, ref)
+        if item is None:
+            self.row(sid)   # SessionGone if that's why
+            raise KeyError(f"no item {ref} in this session")
         if closed and standing(item) == "finished":
             return Done(False)
         if item["kind"] == "decision":
-            self.store.close_decision(item["session_id"], item["ref"], closed)
+            self.store.close_decision(sid, ref, closed)
         elif item["kind"] in DISMISSABLE:
-            self.store.dismiss(item["session_id"], item["ref"], closed)
+            self.store.dismiss(sid, ref, closed)
         else:
-            self.store.update_item(item["session_id"], item["ref"], status="closed" if closed else "answered")
+            self.store.update_item(sid, ref, status="closed" if closed else "answered")
         return Done()
 
     # the transcripts

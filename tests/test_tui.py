@@ -812,7 +812,7 @@ def assert_one_current(app, desc):
     item = in_context and in_context[1] and app.store.item(*in_context)
     asking = bool(item) and item["kind"] == "permission" and item["status"] == "open"
     s = app.row(app.bar_session(app.screen)) if app.bar_session(app.screen) else None
-    sends = "send" if s and (mode(s) == "immediate" or app.sends_now(s)) else "queue"
+    sends = "send" if s and (mode(s) == "immediate" or app.sends_now(s["id"])) else "queue"
     dead = bool(s) and app.dead(s["id"])
     assert [h.base for h in app.screen.query(Hint)] == [PERMISSION_HINT if asking else hint(sends, dead)], f"{desc}: the hint"
     assert [p.display for p in app.screen.query(PermissionButtons)] == [asking], f"{desc}: the permission buttons"
@@ -1521,7 +1521,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
                "box": app.screen.box.text if isinstance(app.screen, ThreadView) else app.answer.text,
                "unsent": sorted(app.unsent.values()), "hosts": hosts, "quit": bool(exits), "launched": launched,
                "names": sorted(row["name"] for row in store.sessions()),
-               "pending": s and app.pending(s), "parked": bool(s and s["parked"]),
+               "pending": s and app.pending(alpha), "parked": bool(s and s["parked"]),
                "queued": [m["body"] for m in store.drafts(alpha)] + [m["body"] for m in store.pending(alpha)],
                "current": current and store.session(current)["name"], "finished": app.show_finished}
         if isinstance(app.screen, ThreadView) or len(app.screen_stack) == 1:
@@ -3050,8 +3050,8 @@ async def test_new_session_runner(store, tmp_path, monkeypatch, tick, runner_, d
 def test_hosted_busy(activity, busy, desc):
     from types import SimpleNamespace
     s = {"id": "s1", "running": 0, "runner": "sdk", "activity": activity}
-    hub = SimpleNamespace(statuses={"s1": "live"})
-    assert Hub.busy(hub, s) is busy, desc
+    hub = SimpleNamespace(statuses={"s1": "live"}, listed={"s1": s}.get)
+    assert Hub.busy(hub, "s1") is busy, desc
 
 
 @pytest.mark.anyio

@@ -58,7 +58,7 @@ def test_shown_status(hub, store, sid, monkeypatch, status, requested, relaunchi
     if relaunching:
         hub.relaunching[sid] = (0.0, (1, 1))
     hub.refresh()
-    assert hub.shown_status(store.session(sid)) == shown, desc
+    assert hub.shown_status(sid) == shown, desc
 
 
 def host(store, sid, pid=4242):
@@ -243,8 +243,8 @@ def test_close_and_reopen(hub, store, sid, kind, closed, after, desc):
     decided = {"alternative": "Postgres", "why": "local", "reverse": "migrate"} if kind == "decision" else {}
     ref = store.post_item(sid, kind, "used SQLite", **decided)
     if not closed:   # closed first, to reopen
-        hub.close(store.item(sid, ref), True)
-    hub.close(store.item(sid, ref), closed)
+        hub.close(sid, ref, True)
+    hub.close(sid, ref, closed)
     assert store.item(sid, ref)["status"] == after, desc
 
 
@@ -278,3 +278,32 @@ def test_the_tutorial_offer_answered(hub, store, heard, monkeypatch, take, start
 def test_a_commands_notices_go_to_its_surface_alone(hub, sid, heard, command, said, desc):
     hub.refresh()
     assert (told(command(hub, sid)), heard) == (said, []), desc
+
+
+@pytest.mark.parametrize("gone, raised, desc", [
+    ("item", KeyError, "an item that isn't there"),
+    ("session", SessionGone, "a session that has ended"),
+])
+def test_close_by_id_of_what_isnt_there(hub, store, sid, gone, raised, desc):
+    if gone == "session":
+        ref = store.post_item(sid, "question", "which db?")
+        store.end(sid)
+    else:
+        ref = "Q9"
+    with pytest.raises(raised):
+        hub.close(sid, ref, True)
+
+
+@pytest.mark.parametrize("helper, desc", [
+    (lambda hub, sid: hub.shown_status(sid), "the status shown"),
+    (lambda hub, sid: hub.busy(sid), "busy"),
+    (lambda hub, sid: hub.stale(sid), "stale"),
+    (lambda hub, sid: hub.sends_now(sid), "sends now"),
+])
+def test_the_status_helpers_read_the_listed_row_by_id(hub, store, sid, monkeypatch, helper, desc):
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    hub.refresh()
+    reads = []
+    monkeypatch.setattr(store, "session", lambda sid: reads.append(sid))
+    helper(hub, sid)
+    assert reads == [], f"{desc}: painted every tick, so from the refresh's rows, not the store"

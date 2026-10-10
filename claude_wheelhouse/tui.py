@@ -1670,19 +1670,20 @@ class WheelhouseApp(App):
     def dead(self, sid: str) -> bool:
         return self.hub.dead(sid)
 
-    def stale(self, s) -> bool:
-        return self.hub.stale(s)
+    def stale(self, sid: str) -> bool:
+        return self.hub.stale(sid)
 
-    def sends_now(self, s) -> bool:
-        return self.hub.sends_now(s)
+    def sends_now(self, sid: str) -> bool:
+        return self.hub.sends_now(sid)
 
-    pending = staticmethod(Hub.pending)
+    def pending(self, sid: str) -> str | None:
+        return self.hub.pending(sid)
 
-    def shown_status(self, s) -> str:
-        return self.hub.shown_status(s)
+    def shown_status(self, sid: str) -> str:
+        return self.hub.shown_status(sid)
 
-    def busy(self, s) -> bool:
-        return self.hub.busy(s)
+    def busy(self, sid: str) -> bool:
+        return self.hub.busy(sid)
 
     def heard(self, event: Event) -> None:
         """What the hub says: a notice is a toast; a transcript read that landed repaints."""
@@ -1723,7 +1724,7 @@ class WheelhouseApp(App):
         """Move the Cylon eye on busy rows without rebuilding the table."""
         self.eye_frame = self.frame
         for s in self.sessions:
-            if self.busy(s) and s["id"] in self.session_list.rows:
+            if self.busy(s["id"]) and s["id"] in self.session_list.rows:
                 self.session_list.update_cell(s["id"], self.eye_col, cylon(self.eye_frame))
 
     def paint_sessions(self) -> None:
@@ -1735,11 +1736,11 @@ class WheelhouseApp(App):
         pending = key != self.sessions_cursor   # the person's move, not yet settled
         rows = []
         for s in sorted(self.sessions, key=lambda s: s["parked"]):   # stable: creation order within each
-            st = self.shown_status(s)
-            busy = cylon(self.eye_frame) if self.busy(s) else Text("")
+            st = self.shown_status(s["id"])
+            busy = cylon(self.eye_frame) if self.busy(s["id"]) else Text("")
             dot = Text("●", style="#777777" if s["parked"] else STATUS_STYLE[st])
             name = Text(self.display_name(s), style="dim" if s["parked"] else "")
-            if self.stale(s):
+            if self.stale(s["id"]):
                 name.append(" ⟳", style="bold #ff2a6d")
             queued = Text(f"✉ {s['drafts']}", style="bold #05d9e8") if s["drafts"] else ""
             # decisions inform, they don't block: counted, but not blinking like questions
@@ -1998,7 +1999,7 @@ class WheelhouseApp(App):
         to one running in a wheelhouse host (#62)."""
         if s is None:
             return [(id_, label, True, False) for label, id_, _ in CONVERSATION]
-        if self.sends_now(s):   # its old monitor would deliver a draft at once anyway
+        if self.sends_now(s["id"]):   # its old monitor would deliver a draft at once anyway
             mode_ = ("Can't queue: relaunch", True)
         else:
             mode_ = (f"Mode: {mode(s).capitalize()}", False)
@@ -2022,7 +2023,7 @@ class WheelhouseApp(App):
             for args in self.controls(s):
                 show_button(bar, *args)
         total = sum(x["drafts"] for x in self.sessions if not self.dead(x["id"]))   # Send all skips the dead
-        sends = "send" if s is not None and (mode(s) == "immediate" or self.sends_now(s)) else "queue"
+        sends = "send" if s is not None and (mode(s) == "immediate" or self.sends_now(s["id"])) else "queue"
         for h in self.screen.query(Hint):
             h.set_base(PERMISSION_HINT if asking else hint(sends, s is not None and self.dead(s["id"])))
         for row in self.screen.query(PermissionButtons):
@@ -2099,13 +2100,13 @@ class WheelhouseApp(App):
 
     def describe(self, s) -> Text:
         """A session's description: what the old Sessions tab's row and synopsis showed."""
-        st = self.shown_status(s)
+        st = self.shown_status(s["id"])
         t = Text(self.display_name(s), style="bold #ffd300")
         t.append("\n")
         t.append(st, style=STATUS_STYLE[st])
         if s["parked"]:
             t.append(" · parked", style="#777777")
-        if self.stale(s):
+        if self.stale(s["id"]):
             t.append(" · needs relaunch", style="bold #ff2a6d")
         where = ("shell tab" if s["shell"] else "in the wheelhouse") if runner(s) == "sdk" else "tab"
         t.append(f" · {where} · {mode(s)}", style="#777777")
@@ -2348,7 +2349,7 @@ class WheelhouseApp(App):
         (ranked). One finished already only goes, from where it was held while selected."""
         self.item_sink.jump()
         self.repin.add(item_key(item))
-        self.told(self.hub.close(item, closed))
+        self.told(self.hub.close(item["session_id"], item["ref"], closed))
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's Allow, Always or Deny: an explicit act, as Delete is, so selected, the
@@ -2774,7 +2775,7 @@ class WheelhouseApp(App):
         if not self.running(sid):
             self.push_screen(Confirm(act), lambda yes: yes and self.act_on_dead(sid, what))
             return
-        pending = self.pending(self.row(sid))
+        pending = self.pending(sid)
         if pending is None:
             self.push_screen(Confirm(ask), lambda yes: yes and self.ask(sid, what))
         elif pending != what:
