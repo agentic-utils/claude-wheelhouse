@@ -2339,7 +2339,7 @@ class WheelhouseApp(App):
         def acts(it):
             finished = standing(it) == "finished"
             return (not finished or not self.show_finished) if closed else finished
-        picked = [it for key in self.items_table.keys() if key in self.items_table.marked
+        picked = [it for key in self.items_table.final() if key in self.items_table.marked   # as they'll stand
                   if (it := self.store.item(*key.split("|"))) and closable(it)]
         if not picked or not any(acts(it) for it in picked):
             self.notify("the marked rows are finished already: Ctrl+R reopens them" if picked and closed else

@@ -2718,15 +2718,20 @@ async def test_ctrl_r_reopens_only_from_the_item_list(tmp_path, follow, focus, a
     (("question", "task"), "ctrl+r", "reopened Q1, T1", "Ctrl+R brings either back"),
 ])
 async def test_the_word_after_acting_on_marks_names_each_act(store, sid, kinds, key, said, desc):
-    refs = [store.post_item(sid, k, k, status={"question": "open", "task": "done", "agent": "done"}[k]) for k in kinds]
+    with one_second():   # and closed in it below, so the finished keep the order they're named in
+        refs = [store.post_item(sid, k, k, status={"question": "open", "task": "done", "agent": "done"}[k])
+                for k in kinds]
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         items = app.items_table
         items.focus()
         if key == "ctrl+r":   # finished first, shown with F
-            for k, r in zip(kinds, refs):
-                app.close(store.item(sid, r), True)
+            # closing stamps Q1 and dismissing leaves T1's stamp: a second passing between post
+            # and close would put T1, the older, first among the finished, and in the notice
+            with one_second():
+                for k, r in zip(kinds, refs):
+                    app.close(store.item(sid, r), True)
             await pilot.press("f")
         await pilot.pause()
         items.set_marks({f"{sid}|{r}" for r in refs})
