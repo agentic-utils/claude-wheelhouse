@@ -336,21 +336,25 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   Active items rank as above. Settled ones stay in the inbox, dimmed, after every active
   one, oldest first, so the latest to settle is lowest (a decision just seen, whose
   `updated_at` is fresh, sinks rather than jumps up). A settled item with a word of the
-  person's queued or awaiting a reply is active: it shows queued or processing. Delete
+  person's queued or awaiting a reply is active, dismissed or not: it shows queued or
+  processing. Delete
   closes a question or decision and dismisses a settled task or subagent
   (`items.dismissed` holds the status it was dismissed in, so a session that changes the
   status brings it back); on a finished one it brings it back. A permission answered
-  goes at once, as before: Allow, Always and Deny are explicit acts, as Delete is.
+  goes at once, as before: Allow, Always and Deny are explicit acts, as Delete is. The
+  upgrade that adds `items.dismissed` dismisses the tasks and subagents already settled,
+  which were off the inbox before, so it doesn't fill with them.
 - **Sinking** (T66, T71, `tui.Sink`). The selected item keeps its place (D28, T70: `ranked`
   pins its rank as shown) however its status changes; once the selection moves on it
   re-sorts at once, and a settled one falls to the foot over 0.4 s, with gravity. Parked
-  sessions sit at the foot of the session list's visible room, blank rows above them,
+  sessions sit at the foot of the session list's visible room (above any scrollbar), blank rows above them,
   falling there as they park and rising back as they're unparked. One `Sink` per list
   lays its rows: a row that changes sides (active and settled, unparked and parked)
   moves; anything else jumps. Its timer runs only during a move. Each frame is the list's
-  ordinary paint, so the cursor rides its row by key (D22). Up and Down step through the
-  final order, never a frame's or a blank row, so keys typed during a move end as typed
-  after it. Delete moves at once (D33). The item list's session column shows only while
+  ordinary paint, so the cursor rides its row by key (D22). Every key that moves a
+  list's cursor (Up, Down, PageUp, PageDown, Ctrl+Home, Ctrl+End, Shift+Up and Shift+Down)
+  acts in the final order, never a frame's or a blank row, so keys typed during a move end
+  as typed after it. Delete moves at once, closing or reopening (D33). The item list's session column shows only while
   it has every session's items (D31): following one session, it's redundant.
 - **Session view.** Selecting a session (one click, or Enter) also puts its main
   conversation in the right-hand pane, so the person can follow and talk to a session
