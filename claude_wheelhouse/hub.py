@@ -110,9 +110,12 @@ class Hub:
         # sessions whose host Relaunch has stopped: started again once it has gone. Each has
         # a monotonic deadline and the stopped host, (pid, start time). Kept in the store too
         # (relaunch_under_way), so a hub started again carries on those an earlier one began
+        # in time. One past its deadline (lapsed: the wheelhouse was down, or the machine off)
+        # is never started again: the wheelhouse never restores a dead host by itself
+        under_way = self.store.relaunches()
         self.relaunching: dict[str, tuple[float, tuple]] = {
-            sid: (time.monotonic() + deadline - time.time(), host)
-            for sid, (deadline, host) in self.store.relaunches().items()}
+            sid: (time.monotonic() + deadline - time.time(), host) for sid, (deadline, host) in under_way.items()}
+        self.lapsed = {sid for sid, (deadline, host) in under_way.items() if deadline < time.time()}
         self.followers: dict[str, transcript.Follower] = {}
         # each session's context size for the session list: read on workers, by a follower
         # shared with the stats pane (stats.follower), so each transcript is read once
@@ -244,18 +247,23 @@ class Hub:
             self.store.set_relaunch(sid, host, time.time() + RELAUNCH_WAIT)
         else:
             self.relaunching.pop(sid, None)
+            self.lapsed.discard(sid)
             self.store.set_relaunch(sid, None)
 
     def finish_relaunches(self) -> None:
         """Start each stopped host again once its process has really gone: launch refuses a
         session whose registered process is alive, and a new host registers only if free.
         One that another wheelhouse has started meanwhile (a newer pid, alive) is relaunched
-        already. A relaunch unparks, as one of a dead session does. The hub does this by
-        itself, so what happened goes to every listener."""
+        already. A relaunch unparks, as one of a dead session does. One a hub started again
+        found past its deadline (lapsed) is let go, its host not started: Restore is the
+        person's. The hub does this by itself, so what happened goes to every listener."""
         for sid, (deadline, host) in list(self.relaunching.items()):
             s = next((x for x in self.sessions if x["id"] == sid), None)
             if s is None:   # ended meanwhile
                 self.relaunch_under_way(sid, None)
+            elif sid in self.lapsed and not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
+                self.relaunch_under_way(sid, None)
+                self.announce(f"{display_name(s)} wasn't relaunched: Restore it", "warning")
             elif not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
                 done = self.open_session(sid)   # as it ran: a host again, not WHEELHOUSE_RUNNER's way
                 self.relaunch_under_way(sid, None)   # after: a hub stopped between sees the new host

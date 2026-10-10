@@ -79,7 +79,10 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
   a Relaunch) publishes `sessions` for it, and a transcript read that brought something
   `conversation` and `stats` for it.
 - **Relaunch in progress** is kept in a `sessions.relaunch` column (the stopped host and
-  the deadline), so any hub started again, the daemon's or the TUI's, carries it on.
+  the deadline), so any hub started again in time, the daemon's or the TUI's, carries it
+  on. One found past its deadline (the wheelhouse was down, the machine off) is let go
+  with "<name> wasn't relaunched: Restore it", its host not started: the wheelhouse never
+  restores a dead host by itself.
 - **Still to come:** the routes the TUI will need beyond the sketch (adopt, restore all,
   take back a queued answer, mark seen, the tutorial offer, the account usage), the module
   routes and `WHEELHOUSE_API` 2 (phase 3), a systemd unit and the TUI starting the daemon.

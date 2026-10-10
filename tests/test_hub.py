@@ -1,5 +1,7 @@
 """The hub on its own, with no Textual: what it keeps, decides and says."""
 
+import time
+
 import pytest
 
 from claude_wheelhouse import hub as hub_mod, launch, liveness, subagents, tutorial
@@ -130,6 +132,23 @@ def test_a_relaunch_under_way_is_carried_on_by_a_hub_started_again(store, sid, m
     assert calls == launched, desc
     assert any(said in text for text in heard), f"{desc}: {heard}"
     assert sid not in again.relaunching and store.relaunches() == {}, f"{desc}: done with, here and in the store"
+
+
+def test_a_relaunch_found_past_its_deadline_is_let_go_and_said(store, sid, monkeypatch):
+    host(store, sid)
+    store.set_parked(sid, True)
+    store.set_relaunch(sid, (4242, 1), time.time() - 86400)   # a day ago: the machine was off
+    calls, heard = [], []
+    monkeypatch.setattr(liveness, "is_alive", lambda *a: False)
+    monkeypatch.setattr(launch, "open_session", lambda store, sid: calls.append("open"))
+    monkeypatch.setattr(launch, "restore_session", lambda store, sid: calls.append("restore"))
+    hub = Hub(store)
+    hub.listen(lambda e: heard.append((e.text, e.severity)))
+    hub.refresh()
+    hub.finish_relaunches()
+    assert calls == [], "never started again by itself"
+    assert heard == [("demo wasn't relaunched: Restore it", "warning")]
+    assert sid not in hub.relaunching and store.relaunches() == {} and store.session(sid)["parked"]
 
 
 @pytest.mark.parametrize("parked, status, read, desc", [
