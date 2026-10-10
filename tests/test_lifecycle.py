@@ -403,7 +403,6 @@ def test_the_monitor_says_so_once_and_stops(store, sid):
     ("sdk", "live", "tab", True, [], False, [], "/exit it there", "so is a host's session open in a shell tab"),
 ])
 async def test_relaunch(store, sid, monkeypatch, run, state, shell, stops, keys, killed, launched, said, desc):
-    from claude_wheelhouse import tui
     store.set_runner(sid, run)
     store.set_shell(sid, shell)
     store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
@@ -413,8 +412,8 @@ async def test_relaunch(store, sid, monkeypatch, run, state, shell, stops, keys,
     def kill(pid, sig):
         kills.append((pid, sig))
         alive["now"] = not stops
-    monkeypatch.setattr(tui.os, "kill", kill)
-    monkeypatch.setattr(tui.liveness, "is_alive", lambda *a: alive["now"])
+    monkeypatch.setattr(hub.os, "kill", kill)
+    monkeypatch.setattr(liveness, "is_alive", lambda *a: alive["now"])
     monkeypatch.setattr(hub, "RELAUNCH_WAIT", 0)
     monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
     monkeypatch.setattr(launch, "restore_session", lambda s, i: calls.append("restore"))
@@ -456,7 +455,6 @@ def parked(store, sid, alive):
 ])
 async def test_relaunch_races(store, sid, monkeypatch, before, during_confirm, after_stop, killed, launched, said,
                               desc):
-    from claude_wheelhouse import tui
     store.set_runner(sid, "sdk")
     store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
     fake_status(monkeypatch, "live")
@@ -467,8 +465,8 @@ async def test_relaunch_races(store, sid, monkeypatch, before, during_confirm, a
         alive.discard(pid)
         if after_stop:
             after_stop(store, sid, alive)
-    monkeypatch.setattr(tui.os, "kill", kill)
-    monkeypatch.setattr(tui.liveness, "is_alive", lambda pid, *a: pid in alive)
+    monkeypatch.setattr(hub.os, "kill", kill)
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: pid in alive)
     monkeypatch.setattr(hub, "RELAUNCH_WAIT", 0)
     monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
     if before:
@@ -497,13 +495,12 @@ async def test_relaunch_races(store, sid, monkeypatch, before, during_confirm, a
     (False, ["n"], [], False, "or stays"),
 ])
 async def test_quitting_mid_relaunch(store, sid, monkeypatch, stopped, keys, launched, exited, desc):
-    from claude_wheelhouse import tui
     store.set_runner(sid, "sdk")
     store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
     fake_status(monkeypatch, "live")
     alive, calls, exits = {4242}, [], []
-    monkeypatch.setattr(tui.os, "kill", lambda pid, sig: None)   # SIGTERMed, still stopping
-    monkeypatch.setattr(tui.liveness, "is_alive", lambda pid, *a: pid in alive)
+    monkeypatch.setattr(hub.os, "kill", lambda pid, sig: None)   # SIGTERMed, still stopping
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: pid in alive)
     monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:

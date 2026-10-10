@@ -2,8 +2,9 @@
 
 import pytest
 
-from claude_wheelhouse import hub as hub_mod, launch, liveness, subagents
+from claude_wheelhouse import hub as hub_mod, launch, liveness, subagents, tutorial
 from claude_wheelhouse.hub import Hub
+from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone
 
 
 @pytest.fixture
@@ -142,3 +143,101 @@ def test_the_usage_is_fetched_at_most_once_a_minute(hub, monkeypatch):
         now[0] = at
         hub.fetch_usage()
     assert groups == ["usage", "usage"]
+
+
+def queues(store, sid):
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # on code that queues
+
+
+@pytest.mark.parametrize("kind, mode, status, queued, sent, said, desc", [
+    ("question", "queued", "live", ["yes"], [], "queued for Q1: Ctrl+S", "queued, by default"),
+    ("question", "queued", "dead", ["yes"], [], "but the session isn't running", "a dead session's queue waits"),
+    ("question", "immediate", "live", [], ["yes"], "sent to Q1", "immediate mode sends at once"),
+    (None, "queued", "live", ["yes"], [], "queued for the session", "a general message, to the session"),
+    ("permission", "queued", "live", [], [], "denied P1, with your message", "a permission is denied, never queued"),
+])
+def test_submit_queues_or_sends_by_the_sessions_mode(hub, store, sid, heard, monkeypatch, kind, mode, status,
+                                                     queued, sent, said, desc):
+    queues(store, sid)
+    store.set_mode(sid, mode)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
+    ref = kind and store.post_item(sid, kind, "which db?")
+    hub.refresh()
+    assert hub.submit((sid, ref), "yes"), desc
+    assert [m["body"] for m in store.drafts(sid)] == queued, desc
+    assert [m["body"] for m in store.pending(sid)] == sent, desc
+    assert any(said in text for text, _ in heard), f"{desc}: {heard}"
+    assert kind != "permission" or store.item(sid, ref)["status"] == "denied", desc
+
+
+def test_a_permission_answered_meanwhile_is_not_submitted(hub, store, sid, heard):
+    ref = store.post_item(sid, "permission", "Bash: rm -rf build")
+    hub.asking = lambda target: True   # open as the box was submitted, answered by the time it lands
+    store.answer_permission(sid, ref, "allow")
+    assert not hub.submit((sid, ref), "no")
+    assert heard[-1][1] == "warning"
+
+
+@pytest.mark.parametrize("status, left, said, desc", [
+    ("dead", ["a"], "demo isn't running: Restore it first", "a dead session's queue stays queued (#62)"),
+    ("live", [], "sent 1 to demo", "a live one's goes, as one message"),
+])
+def test_send_queue_leaves_a_dead_sessions_queue(hub, store, sid, heard, monkeypatch, status, left, said, desc):
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
+    store.queue(sid, "a")
+    hub.refresh()
+    hub.send_queue(sid)
+    assert [m["body"] for m in store.drafts(sid)] == left, desc
+    assert heard[-1][0] == said, desc
+
+
+@pytest.mark.parametrize("now, what, acted, desc", [
+    ("dead", "park", True, "still dead: parked at once"),
+    ("dead", "end", True, "still dead: ended at once"),
+    ("live", "park", False, "running again while the confirm sat open: left alone, and said so"),
+])
+def test_act_on_dead_checks_again(hub, store, sid, heard, monkeypatch, now, what, acted, desc):
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: now)
+    assert hub.act_on_dead(sid, what) == acted, desc
+    s = store.session(sid)
+    assert (s is None if what == "end" else bool(s["parked"])) == acted, desc
+    assert bool(heard) != acted, desc
+
+
+def test_a_command_on_a_session_that_has_gone_raises(hub, store, sid):
+    store.end(sid)
+    for command in (lambda: hub.toggle_mode(sid), lambda: hub.rename(sid, "x"), lambda: hub.act_on_dead(sid, "end")):
+        with pytest.raises(SessionGone):
+            command()
+
+
+@pytest.mark.parametrize("kind, closed, after, desc", [
+    ("question", True, "closed", "a question closes"),
+    ("question", False, "answered", "and reopens as answered"),
+    ("decision", True, "closed", "a decision closes"),
+    ("decision", False, "seen", "and reopens as seen"),
+])
+def test_close_and_reopen(hub, store, sid, kind, closed, after, desc):
+    decided = {"alternative": "Postgres", "why": "local", "reverse": "migrate"} if kind == "decision" else {}
+    ref = store.post_item(sid, kind, "used SQLite", **decided)
+    if not closed:   # closed first, to reopen
+        hub.close(store.item(sid, ref), True)
+    hub.close(store.item(sid, ref), closed)
+    assert store.item(sid, ref)["status"] == after, desc
+
+
+def refuse(store):
+    raise RuntimeError("claude missing")
+
+
+@pytest.mark.parametrize("take, start, started, setting, desc", [
+    (False, None, False, "dismissed", "declined: never offered again"),
+    (True, refuse, False, "dismissed", "a start that fails is said, and not offered again"),
+    (True, lambda store: store.set_setting(tutorial.OFFER_KEY, "taken"), True, "taken", "taken: it starts"),
+])
+def test_the_tutorial_offer_answered(hub, store, heard, monkeypatch, take, start, started, setting, desc):
+    if start:
+        monkeypatch.setattr(tutorial, "start", start)
+    assert hub.answer_offer(take) == started, desc
+    assert store.setting(tutorial.OFFER_KEY) == setting, desc
+    assert len(heard) == 1, desc

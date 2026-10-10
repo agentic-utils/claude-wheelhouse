@@ -39,8 +39,8 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import adopt, api, emoji, liveness, stats, subagents, transcript, tutorial
-from .hub import RUNNING, TAB_RELAUNCH, Event, Hub, display_name, short
+from . import api, emoji, stats, subagents, transcript, tutorial
+from .hub import TAB_RELAUNCH, Event, Hub, aimed, display_name, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .store import (DISMISSABLE, FINISHED_RANK, SETTLED, SETTLED_RANK, SessionGone, Store, default_runner,
@@ -165,11 +165,6 @@ def host_context(s) -> api.HostContext | None:
     if runner(s) != "sdk" or at is None or not s["context_tokens"] or not s["context_max"]:
         return None
     return api.HostContext(s["context_tokens"], s["context_max"], at)
-
-
-def aimed(target) -> str:
-    """What a message goes to: an item's ref, or the session itself (a general message)."""
-    return target[1] or "the session"
 
 
 def thread_blocks(store: Store, sid: str, ref: str, session_name: str = "") -> list[tuple[str, str]]:
@@ -1014,7 +1009,7 @@ class AdoptSession(Dialog):
         c = self.chosen()
         if c is None:
             return
-        pid = liveness.running_pid(c.id)   # check again: it may have exited, or come back
+        pid = self.app.hub.running_pid(c.id)   # check again: it may have exited, or come back
         if pid:
             self.query_one("#adopt-hint", Label).update(
                 f"Still running (pid {pid}): type /exit in its tab, then press Adopt.")
@@ -1616,7 +1611,7 @@ class WheelhouseApp(App):
             return
         if self.selected == self.picked:
             self.saw(sid, ref)
-        if ref and self.store.mark_seen(sid, ref):   # a no-op unless it's an unseen decision
+        if ref and self.hub.mark_seen(sid, ref):   # a no-op unless it's an unseen decision
             self.paint_sessions()   # its D count
             self.paint_items()   # it keeps its place while selected (ranked), and sinks once left
             self.paint_detail()
@@ -2328,19 +2323,12 @@ class WheelhouseApp(App):
         (ranked). One finished already only goes, from where it was held while selected."""
         self.item_sink.jump()
         self.repin.add(item_key(item))
-        if closed and standing(item) == "finished":
-            return
-        if item["kind"] == "decision":
-            self.store.close_decision(item["session_id"], item["ref"], closed)
-        elif item["kind"] in DISMISSABLE:
-            self.store.dismiss(item["session_id"], item["ref"], closed)
-        else:
-            self.store.update_item(item["session_id"], item["ref"], status="closed" if closed else "answered")
+        self.hub.close(item, closed)
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's Allow, Always or Deny: an explicit act, as Delete is, so selected, the
         item moves at once (ranked)."""
-        self.store.answer_permission(sid, ref, decision, message)
+        self.hub.answer_permission(sid, ref, decision, message)
         self.repin.add(f"{sid}|{ref}")
 
     def close_marked(self, closed: bool = True) -> None:
@@ -2379,18 +2367,8 @@ class WheelhouseApp(App):
 
     def offer_answered(self, take: bool) -> None:
         """The first-run offer, answered either way: it never comes back."""
-        if not take:
-            self.store.set_setting(tutorial.OFFER_KEY, "dismissed")
-            self.notify("make tutorial runs the tutorial any time; ? lists every key")
-            return
-        try:
-            tutorial.start(self.store)
-        except Exception as e:   # claude missing, say
-            self.store.set_setting(tutorial.OFFER_KEY, "dismissed")
-            self.notify(f"couldn't start the tutorial: {e}", severity="error")
-            return
-        self.notify("tutorial started: follow the checklist on the right")
-        self.refresh_data()
+        if self.hub.answer_offer(take):
+            self.refresh_data()
 
     def composing(self):
         """The compose box in use and the item it answers: the thread view's, or the inbox's."""
@@ -2419,30 +2397,11 @@ class WheelhouseApp(App):
         box, target, text = self.typed()
         if not box:
             return
-        s = self.row(target[0])
-        if self.asking(target):   # never queued: the session is waiting on it (#53)
-            try:
-                self.answer_permission(*target, "deny", text)
-                self.notify(f"denied {target[1]}, with your message")
-            except KeyError as e:   # answered meanwhile
-                self.notify(str(e.args[0]), severity="warning")
-                return
-        elif mode(s) == "immediate":
-            self.store.send(target[0], text, target[1])
-            self.notify(f"sent to {aimed(target)}")
-        elif self.sends_now(s):   # its old monitor would deliver a draft at once anyway
-            self.store.send(target[0], text, target[1])
-            self.notify(f"sent to {aimed(target)} now: that session runs older wheelhouse code, "
-                        "so it can't queue until it's relaunched", severity="warning")
-        else:
-            self.store.queue(target[0], text, target[1])
-            if self.dead(target[0]):   # aimed names the item, so say whose queue isn't running
-                self.notify(f"queued for {aimed(target)}, but the session isn't running: "
-                            "Restore it, then Ctrl+S or Send sends its queue")
-            else:
-                self.notify(f"queued for {aimed(target)}: Ctrl+S or Send sends the session's queue")
-        if target[1]:   # answering a decision is an explicit act: seen at once, not after the dwell
-            self.store.mark_seen(*target)
+        asking = self.asking(target)   # never queued: the session is waiting on it (#53)
+        if not self.hub.submit(target, text):   # a permission answered meanwhile
+            return
+        if asking:   # an explicit act, as Delete is: selected, the item moves at once (ranked)
+            self.repin.add(f"{target[0]}|{target[1]}")
         box.text = ""
         self.refresh_data()
         if box is self.answer:   # back to the items, cursor where it was: Down, Tab answers the next
@@ -2472,7 +2431,7 @@ class WheelhouseApp(App):
         if box.text.strip():
             self.notify("the box isn't empty: queue or clear it first", severity="warning")
             return
-        body = drafts and self.store.unqueue(drafts[-1]["id"])
+        body = drafts and self.hub.unqueue(drafts[-1]["id"])
         if not body:
             self.notify(f"nothing queued for {aimed(target)}")
             return
@@ -2499,15 +2458,7 @@ class WheelhouseApp(App):
         return None
 
     def asking(self, target):
-        """The open permission item a target is, if it is one."""
-        item = target and target[1] and self.store.item(*target)
-        return item if item and item["kind"] == "permission" and item["status"] == "open" else None
-
-    def sent_note(self, sid: str, n: int) -> str:
-        s = self.store.session(sid)
-        name = (s["name"] or short(sid)) if s else short(sid)
-        late = "" if self.running(sid) else " (not running: delivered when it's restored)"
-        return f"{n} to {name}{late}"
+        return self.hub.asking(target)
 
     def context_session(self) -> str | None:
         """The session a key acts on, or None (said so) with no session in context. A dialog
@@ -2527,25 +2478,12 @@ class WheelhouseApp(App):
 
     @session_action
     def send_session(self, sid: str) -> None:
-        if self.dead(sid):   # as its hidden Send button: its drafts stay drafts (#62)
-            self.notify(f"{self.display_name(self.row(sid))} isn't running: Restore it first", severity="warning")
-            return
-        n = self.store.dispatch(sid)
-        self.notify(f"sent {self.sent_note(sid, n)}" if n else "nothing queued for that session")
+        self.hub.send_queue(sid)   # a dead one's, as its hidden Send button: its drafts stay drafts (#62)
         self.refresh_data()
 
     @session_action
     def send_all(self) -> None:
-        """Every queue but a dead session's, which stays queued until it's restored (#62)."""
-        queued = dict.fromkeys(m["session_id"] for m in self.store.drafts())
-        sent = [(sid, n) for sid in queued if not self.dead(sid) and (n := self.store.dispatch(sid))]
-        if sent:
-            self.notify("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent))
-        elif any(self.dead(sid) for sid in queued):
-            self.notify("nothing queued for a running session: a dead one's queue waits until it's restored",
-                        severity="warning")
-        else:
-            self.notify("nothing queued")
+        self.hub.send_all()
         self.refresh_data()
 
     def action_toggle_mode(self) -> None:
@@ -2555,14 +2493,7 @@ class WheelhouseApp(App):
 
     @session_action
     def toggle_mode(self, sid: str) -> None:
-        s = self.row(sid)
-        new = "immediate" if mode(s) == "queued" else "queued"
-        self.store.set_mode(sid, new)
-        name = s["name"] or short(sid)
-        self.notify(f"{name}: answers now send as you submit them" if new == "immediate" else
-                    f"{name}: answers now queue until you send them (Ctrl+S or Send)")
-        if new == "immediate" and (n := len(self.store.drafts(sid))):
-            self.notify(f"{n} answer(s) still queued for {name}: Ctrl+S or Send sends them")
+        self.hub.toggle_mode(sid)
         self.refresh_data()
 
     @on(Button.Pressed, "#mode")
@@ -2616,12 +2547,7 @@ class WheelhouseApp(App):
         self.push_screen(Confirm(ask), lambda yes: yes and self.host_command(sid, what))
 
     def host_command(self, sid: str, what: str) -> None:
-        try:
-            self.store.command(sid, what)
-        except SessionGone:
-            return
-        self.notify({"interrupt": "interrupting", "compact": "compacting: asking what to keep",
-                     "shell": "opening a terminal tab"}[what])
+        self.hub.host_command(sid, what)
 
     @on(Splitter.Resized)
     def keep_layout(self, event: Splitter.Resized) -> None:
@@ -2648,26 +2574,17 @@ class WheelhouseApp(App):
         self.push_screen(NewSession(), self.launch_new)
 
     def launch_new(self, form) -> None:
-        if not form:
-            return
-        sid = self.store.create_session(**form)
-        self.hub.open_session(sid)
+        if form:
+            self.hub.new_session(**form)
 
     def action_adopt(self) -> None:
         if isinstance(self.focused, (TextArea, Input)):
             return
-        self.push_screen(AdoptSession(adopt.candidates(self.store)), self.launch_adopted)
+        self.push_screen(AdoptSession(self.hub.adoptable()), self.launch_adopted)
 
     def launch_adopted(self, form) -> None:
-        if not form:
-            return
-        try:
-            adopt.adopt(self.store, form["candidate"], form["name"])
-        except Exception as e:   # came back to life, wt.exe missing...
-            self.notify(str(e), severity="error")
-            return
-        self.notify(f"adopting {form['name'] or short(form['candidate'].id)}")
-        self.refresh_data()
+        if form and self.hub.adopt(form["candidate"], form["name"]):
+            self.refresh_data()
 
     async def action_press(self, button_id: str) -> None:
         """A key standing in for a button that never takes focus: as a click on it, on the
@@ -2774,25 +2691,17 @@ class WheelhouseApp(App):
         sid = self.current_session()
         if not sid:
             return
-        if self.statuses.get(sid) != "dead":
-            self.notify("only a dead session can be restored", severity="warning")
-            return
-        if self.hub.open_session(sid, restore=True):
-            self.store.set_parked(sid, False)
+        self.hub.restore(sid)
 
     def action_restore_all(self) -> None:
         if isinstance(self.focused, (TextArea, Input)):
             return
-        dead = [s["id"] for s in self.sessions if self.statuses.get(s["id"]) == "dead" and not s["parked"]]
+        dead = self.hub.restorable()
         if not dead:
             self.notify("nothing to restore")
             return
-
-        def go(yes: bool) -> None:
-            if yes:
-                n = sum(self.hub.open_session(sid, restore=True) for sid in dead)
-                self.notify(f"restoring {n} session(s)")
-        self.push_screen(Confirm(f"Restore {len(dead)} dead session(s)?"), go)
+        self.push_screen(Confirm(f"Restore {len(dead)} dead session(s)?"),
+                         lambda yes: yes and self.hub.restore_all(dead))
 
     @on(Button.Pressed, "#park")
     @session_action
@@ -2802,7 +2711,7 @@ class WheelhouseApp(App):
         if not sid:
             return
         if self.row(sid)["parked"]:
-            self.store.set_parked(sid, False)
+            self.hub.unpark(sid)
             self.follow(sid)   # as Park: it stays current
             self.refresh_data()
             return
@@ -2820,11 +2729,8 @@ class WheelhouseApp(App):
 
     @session_action
     def rename(self, sid: str, name: str | None) -> None:
-        if name is None or name == self.row(sid)["name"]:   # cancelled, or unchanged
-            return
-        self.store.rename(sid, name)
-        self.notify(f"renamed to {name}" if name else "name cleared: it shows its directory")
-        self.refresh_data()
+        if self.hub.rename(sid, name):   # not if cancelled, or unchanged
+            self.refresh_data()
 
     @on(Button.Pressed, "#end")
     @session_action
@@ -2856,26 +2762,21 @@ class WheelhouseApp(App):
 
     @session_action
     def ask(self, sid: str, what: str) -> None:
-        self.store.request(sid, what)
+        self.hub.ask(sid, what)
         self.keep_current(sid, what)
-        self.notify(f"asked the session to {what}")
         self.refresh_data()
 
     @session_action
     def act_on_dead(self, sid: str, what: str) -> None:
-        """The confirm may have sat open while the session came back: check again."""
-        if liveness.status(self.row(sid), waking=self.hub.waking) in RUNNING:
-            self.notify(f"the session is running again: press {what.capitalize()} to ask it instead",
-                        severity="warning")
-            self.refresh_data()
-            return
-        self.force(sid, what)
+        """The confirm may have sat open while the session came back: the hub checks again."""
+        if self.hub.act_on_dead(sid, what):
+            self.keep_current(sid, what)
+        self.refresh_data()
 
     @session_action
     def resolve_request(self, sid: str, what: str, choice: str) -> None:
         if choice == "cancel":
-            self.store.cancel_request(sid, what)
-            self.notify(f"{what} request cancelled")
+            self.hub.cancel_request(sid, what)
             self.refresh_data()
         elif choice == "force":
             warning = ("Deletes its wheelhouse data now, without its session-end steps." if what == "end"
@@ -2885,10 +2786,7 @@ class WheelhouseApp(App):
 
     @session_action
     def force(self, sid: str, what: str) -> None:
-        if what == "end":
-            self.store.end(sid)
-        else:
-            self.store.set_parked(sid, True)
+        self.hub.force(sid, what)
         self.keep_current(sid, what)
         self.refresh_data()
 
