@@ -1,7 +1,8 @@
 # Remote wheelhouse (design)
 
 Status: design agreed. Phase 1 built: `hub.py` is the service, owned by the TUI in
-process. Phase 2 under way: the hub is ready for remote clients, still in process.
+process. Phase 2 under way: the hub is ready for remote clients, and the daemon serves it
+over HTTP and SSE; no client uses the daemon yet.
 
 **Phase 1 as built.** `hub.Hub` holds the hub logic `tui.py` had: liveness and wake
 detection, Relaunch from the stop to the start again, launch, restore and adopt, the
@@ -26,6 +27,56 @@ the events). Commands and status helpers take a session's id and an item's ref, 
 rows. The unsent text per target is the client's, as the design below has it
 (`unsent.Unsent`, owned by the TUI), in memory for now: the local file per target comes
 when the client goes remote.
+
+**Phase 2 so far: the daemon (2b).** `claude-wheelhouse daemon` (`daemon.py`) owns a hub of
+its own and serves the API sketch below, but for the module routes, with Starlette and
+uvicorn, and the events with sse-starlette, all now declared in `pyproject.toml` at the
+versions already locked. The TUI is unchanged and still owns its own hub; it becomes a
+client in 2c, and Shell's tmux window comes in 2d. As built:
+
+- **Binding and the lock.** `127.0.0.1:7428` by default; `--address` takes an IP address,
+  never an unspecified one (`0.0.0.0`, `::`). One per user: `daemon.lock` in the state dir
+  (the database's directory), held with `flock`, says which process holds it and where.
+- **Host and Origin.** Every request, GETs and the stream too, must name the daemon in its
+  `Host` (its address and port, `localhost` too on the loopback, and each `--name` given,
+  such as a VPN's name for the machine), else 421: a page rebound by DNS to the daemon's
+  address can neither read nor drive it. A POST with an `Origin` must come from the
+  daemon's own (403); a client that sends none, as httpx doesn't, is accepted.
+- **Queries** answer the store's rows as JSON, with what the hub works out beside them: a
+  session's shown status, mode, busy, stale, sends_now and context size (from its
+  transcript, or its host's count after a compaction); an item's standing, and whether
+  it's queued, processing or awaiting a reply, ranked as the TUI ranks them (the selected
+  item's pin stays the client's). The dataclass views the suite plan has are not built.
+- **Commands** answer the hub's `Done` as `{ok, notices, denied, sid?}` (`sid` for a new
+  session). Park and End take `how` (ask, now, cancel, force), the TUI's choice of dialog
+  still the client's; Unpark is `POST /sessions/{sid}/unpark`; Relaunch with `host`
+  `[pid, start]`, the host the client showed, stops it and starts it again, and without
+  it brings back a dead session; mode takes the mode wanted, so a repeat does nothing
+  (last write wins). Errors: `SessionGone` and an item not there 404, a permission decided
+  already 409, a bad body 400. `StillStarting` and `NotAllowed` don't exist yet.
+- **Idempotency.** Every POST needs an `Idempotency-Key` (400 without). Each answer is kept
+  in the database's `idempotency` table for a day, so a request sent again, across a
+  daemon restart too, is answered the same and done once; the same key on another request
+  is 422.
+- **Events.** `{seq, kind, sid?, ref?}`, kinds `sessions`, `items`, `thread`,
+  `conversation`, `stats`, `notice` (the hub's own, with its text and severity) and
+  `refetch`. Seqs start from the clock in milliseconds, so they rise across a restart. The
+  last 1024 are kept: a client reconnecting with `Last-Event-ID` gets what it missed, and
+  one connecting afresh, or whose id the ring no longer holds (or never held), gets
+  `refetch` at the latest seq. A client reading slower than events come falls behind the
+  ring the same way.
+- **Change detection.** Each second the daemon refreshes the hub as the TUI's tick does,
+  then reads `PRAGMA data_version` on a connection of its own, which moves with every
+  commit by any other connection, the hub's own included: a change publishes `sessions`,
+  `items`, `thread` and `conversation` for all. A command publishes at once, without
+  waiting for the tick. A session whose shown status changes with no write (a host dying,
+  a Relaunch) publishes `sessions` for it, and a transcript read that brought something
+  `conversation` and `stats` for it.
+- **Relaunch in progress** is kept in a `sessions.relaunch` column (the stopped host and
+  the deadline), so any hub started again, the daemon's or the TUI's, carries it on.
+- **Still to come:** the routes the TUI will need beyond the sketch (adopt, restore all,
+  take back a queued answer, mark seen, the tutorial offer, the account usage), the module
+  routes and `WHEELHOUSE_API` 2 (phase 3), a systemd unit and the TUI starting the daemon.
 
 ## Intent
 

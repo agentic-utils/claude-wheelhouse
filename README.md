@@ -250,6 +250,11 @@ on a thin teal track. Drag the thumb, or click the track to page. The thumb brig
 under the pointer and turns white while you drag it. Text boxes and the footer, one row
 high, have none.
 
+`claude-wheelhouse daemon` serves the wheelhouse over HTTP, for the remote clients to come
+(`.plan/remote.md`). Nothing uses it yet: the app still runs its own. It listens on
+`127.0.0.1:7428` (`--address` and `--port` change that, never to `0.0.0.0`), and runs once
+per user.
+
 ## Test
 
 ```

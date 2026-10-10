@@ -427,7 +427,9 @@ become `WHEELHOUSE_*`, and the MCP server and injected plugin are both named
 
 The TUI keeps dialogs, confirm wording and layout. Queries returning frozen
 dataclasses, the typed errors beyond `SessionGone` and the `changes()` feed
-are not built: the TUI reads store rows and re-queries on its tick.
+are not built: the TUI reads store rows and re-queries on its tick. The daemon
+(`.plan/remote.md`, phase 2) serves the rows as JSON and publishes a change feed of its
+own, polling `PRAGMA data_version` on a connection of its own, so its own commits count too.
 
 ### Review (PR tab of `claude_dashboard.py` to `packages/review`)
 
