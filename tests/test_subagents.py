@@ -274,7 +274,7 @@ def test_the_sessions_own_item_is_taken_not_duplicated(store, sid, joined, descr
 def test_an_exact_title_wins_over_one_that_holds_it(store, sid, joined):
     near = store.post_item(sid, "agent", "Check pages again later")
     exact = store.post_item(sid, "agent", "Check pages")
-    t = joined.agent("a1", "Check pages", started=NOW - 1)
+    t = joined.agent("a1", "Check pages", started=time.time() - 1)   # the items are made now, within 15 s of it
     joined.write(notified("a1", t, "completed"))
     AgentWatcher(sid).sync(store, NOW)
     assert (store.item(sid, exact)["status"], store.item(sid, near)["status"]) == ("done", "running")
