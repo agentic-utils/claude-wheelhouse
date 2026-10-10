@@ -172,6 +172,8 @@ items     id PK, session_id FK, ref ('T3' | 'Q1' | 'A2', unique per session),
           created_at, updated_at
 messages  id PK, session_id FK, item_ref (nullable), author (claude | person),
           body, created_at, claimed_at, delivered_at
+agent_items  (session_id FK, agent_id) PK, item_ref: the A item for each subagent
+          the wheelhouse tracks (see Subagents)
 ```
 
 Deleting a session cascades. Times are UTC ISO-8601; claim and request stamps carry
@@ -182,6 +184,50 @@ together against an older database can't both add the same column.
 Statuses: task `todo running blocked waiting done dropped`; question
 `open answered closed`; agent `running done failed`. A person's message on an open
 question marks it answered.
+
+## Subagents
+
+The wheelhouse tracks each session's subagents as A items itself (#69), one mechanism for
+SDK and tab sessions, rather than relying on the session to post them
+(`claude_wheelhouse/subagents.py`). Protocol version 7 tells sessions not to post their own.
+
+- **Start.** Claude Code writes `<session id>/subagents/agent-<agent id>.meta.json` beside
+  the transcript at launch: `description`, `agentType`, `toolUseId` (the Agent tool call;
+  absent for a forked skill), `requestShape` (`foreground` or `background`, absent in older
+  versions), and `parentAgentId` with `spawnDepth` 2 or more for a subagent's own
+  subagents, which are left out. The start is the first record's `timestamp` in
+  `agent-<agent id>.jsonl`. The item is made 15 s after the start (GRACE), so that a
+  session on older code that posts its own has done so first.
+- **Finish,** in the main transcript. A foreground subagent: its tool_result (done; failed
+  if `is_error`). A background one: its launch's tool_result (`toolUseResult.status:
+  "async_launched"`) finishes nothing; a `<task-notification>` with its `<task-id>` (the
+  agent id) or `<tool-use-id>` does, delivered as a `queue-operation`, a `queued_command`
+  attachment or a user turn. `<status>`: `completed` is done; `failed`, `killed` (the person
+  stopped it) and `stopped` (its session ended under it, reported on resume) are failed,
+  with the notification's summary as a note. A notification quoted anywhere else (a
+  message, tool output) is ignored. SendMessage to a finished subagent resumes it: running
+  again.
+- **Once.** `agent_items` keys the item by agent id, written in the item's transaction, so
+  a restart or a second wheelhouse never posts twice. A status is written only when it
+  changes.
+- **The session's own item** is taken instead of making one when there is an agent item
+  not yet tied to a subagent, made no more than 10 minutes before the subagent started,
+  whose title equals the description or holds it, or is held by it (as words, case and
+  punctuation aside). An exact title wins, then the one made nearest the start. One the
+  session posts after the wheelhouse made its own is a duplicate: the protocol now asks
+  sessions not to post.
+- **Cut-off.** The later of when the session joined the wheelhouse (`created_at`: launched
+  or adopted) and when the database was first opened by this code (`settings.agents_since`).
+  A subagent started after it gets an item, finished or not. One started before it gets an
+  item only if it was still running then: no finish in the transcript, and its transcript
+  written to within 30 minutes (LIVE) of the cut-off. So adopting a session, or upgrading,
+  brings in what's running and not the history.
+- **Cost.** The TUI syncs each session on a worker thread every tick while it runs (once
+  for one that isn't). The subagents folder is listed again only when its mtime changes;
+  the main transcript is read from the offset the last read reached. A first read starts at
+  the earliest subagent still running (`stats.window_start`), or at the end when none is.
+  An idle sync is two `stat`s, about 25 us; a first sync of a 13 MB transcript with 141
+  subagents takes 4 ms with nothing running.
 
 ## MCP tools (server name `wheelhouse`)
 

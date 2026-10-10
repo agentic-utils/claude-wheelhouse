@@ -33,6 +33,14 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   code (a tab session once you've `/exit`ed it). It still queues answers as usual,
   unless it is old enough to predate queued answers: then it can't hold them, so
   Ctrl+Enter sends to it straight away, whatever its mode, until it's relaunched.
+- **Subagents.** The wheelhouse tracks each session's subagents itself, in tabs and in the
+  wheelhouse alike, from the files Claude Code writes: an agent item (`A1`) appears, titled
+  with the subagent's description, when one starts, and turns done or failed when it ends
+  (failed, with the reason in its thread, when it errors or you stop it). An agent item the
+  session posted itself for the same subagent is taken over rather than listed twice. The
+  history doesn't flood in: only subagents started after a session joins the wheelhouse,
+  or still running then, get an item, and the same goes for sessions already in it when
+  you upgrade to this version.
 - **Decisions.** If your own instructions let a session decide some things without asking
   you, it reports each one as a decision (`D1`): what it decided, the alternative, why, and
   how to reverse it. Decisions block nothing. Each session counts its unseen ones (the `D`
