@@ -47,8 +47,16 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   how to reverse it. Decisions block nothing. Each session counts its unseen ones (the `D`
   column); viewing one marks it seen, and it stays in the inbox until you close it with
   `Delete`, as with a question. To push back, answer in its thread ("reverse that").
+- **Done with, not gone.** A task done or dropped, a question answered, a decision seen
+  and a subagent done or failed stay in the inbox, dimmed, below everything still
+  needing you, the latest at the foot. One you've selected keeps its place, whatever its
+  status does; once you move on it falls to the foot. `Delete` dismisses it (closes a
+  question or decision); `F` shows the dismissed and closed ones, and `Delete` on one
+  brings it back. One you've answered and the session hasn't replied to stays up, as
+  processing. A permission goes as soon as you answer it.
 - **Follow a session.** Click a session in the inbox's list (or move to it, or Enter on it): its items
-  list gains a pinned first row, 💬 Conversation, highlighted, and the right-hand pane
+  list gains a pinned first row, 💬 Conversation, highlighted, and drops its session column (it shows
+  only while the list has every session's items, after `Esc`), and the right-hand pane
   follows its conversation, read live from its transcript: your prompts and general
   messages (in green, line breaks kept, without the `[wheelhouse] from …` prefix, and in
   full even when the notification that delivered one was cut short) and Claude's replies
@@ -83,7 +91,8 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   size the same way, as a one-cell bar in the same colours, filled in eighths on an
   exponential scale: two eighths each for 100k, 200k, 500k and 1M.
 - **Sessions.** The left-hand column lists every session (parked ones dimmed, at the
-  foot). Under it, a description of the highlighted one: its status, where it runs, its
+  foot of the list's room: they fall there as you park them, and rise back as you unpark
+  them). Under it, a description of the highlighted one: its status, where it runs, its
   ticket, directory and counts, what it's doing, and its synopsis, which the session keeps
   up to date itself (its brief until it sets one), in a box that takes half the column.
   The highlighted session is the current one: highlighting an item moves the list's
@@ -189,7 +198,7 @@ offers the tutorial in one line: `Enter` takes it, `Esc` dismisses it for good.
 
 Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision (or reopen a closed one: a question as answered, a decision as seen), `N` new session, `A` adopt, `Shift+S` restore all, `Esc` all sessions (or clears a text
+highlighted question or decision or dismiss a done task or subagent (or bring back a finished one: a question as answered, a decision as seen), `N` new session, `A` adopt, `Shift+S` restore all, `Esc` all sessions (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue (not a dead one's: Restore it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back, `?` list every key and button, `Q` quit (it asks first
@@ -209,7 +218,7 @@ Closing several questions or decisions at once: in the item list, `Ctrl`+click m
 and `Shift`+click marks the range from the last one marked; from the keyboard, `Space`
 marks or unmarks the highlighted row and `Shift+Up`/`Shift+Down` extend the range (Windows
 Terminal keeps `Shift`+click for its own text selection). `Delete` or `Backspace` then closes the marked
-questions and decisions, or reopens them if they're all closed, `Esc` clears the marks, and a plain click
+questions and decisions and dismisses the done tasks and subagents, or brings them back if they're all finished, `Esc` clears the marks, and a plain click
 starts afresh.
 
 Text: drag the mouse over the conversation or a thread to select part of it (shown black
