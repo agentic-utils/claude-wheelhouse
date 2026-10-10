@@ -1898,6 +1898,31 @@ async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("up, desc", [
+    (False, "at the newest reply: a new one shows at the end"),
+    (True, "scrolled up to read: what shows stays put, not sent to the end"),
+])
+async def test_a_new_reply_in_a_long_thread(store, sid, up, desc):
+    ref = store.post_item(sid, "question", "q", body="\n\n".join(f"para {i}" for i in range(80)), status="open")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(ThreadView(sid, ref))
+        await pilot.pause()
+        scroll = app.screen.query_one("#thread-scroll")
+        if up:
+            scroll.scroll_to(y=20, animate=False, immediate=True)
+            await pilot.pause()
+        y = scroll.scroll_y
+        store.reply(sid, ref, "a new reply", status="open")
+        app.screen.paint()
+        await pilot.wait_for_scheduled_animations()
+        await pilot.pause()
+        assert scroll.max_scroll_y > y, f"{desc}: the reply made it longer"
+        assert scroll.scroll_y == (y if up else scroll.max_scroll_y), desc
+
+
+@pytest.mark.anyio
 async def test_ctrl_a_copies_all_of_a_long_conversation(store, sid, tmp_path, monkeypatch):
     long_conversation(sid, tmp_path, monkeypatch)
     app = WheelhouseApp(store)

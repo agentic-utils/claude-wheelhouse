@@ -810,9 +810,12 @@ class ThreadView(Screen):
         blocks = thread_blocks(self.app.store, self.sid, self.ref, s and (s["name"] or short(self.sid)))
         text = "\n\n".join(md for _, md in blocks)
         if text != self.text:
+            scroll = self.query_one("#thread-scroll")
+            following = self.text is None or scroll.scroll_y >= scroll.max_scroll_y - 1
             self.text = text
             self.query_one("#thread", Transcript).update(render(blocks))
-            self.query_one("#thread-scroll").scroll_end(animate=False)
+            if following:   # at the newest reply, or opening: scrolled up to read, it keeps its place
+                scroll.scroll_end(animate=False)
 
 
 PERMISSION_HINT = "Allow, Always or Deny above, at once · or type what to do instead: Ctrl+Enter denies with it"

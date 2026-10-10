@@ -436,7 +436,8 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   (the oldest entry dropping off, the tab line, a warning under the head): the block at
   the view's top is found again and kept where it was on screen, or, if it changed itself
   (a reply streaming in), the first unchanged block below it in the view. Found more than
-  once, the one followed by most of what followed it wins, then the nearest. The
+  once, the one followed by most of what followed it wins, then the nearest. An item open
+  full screen keeps a scrolled-up reader's place across a new reply too. The
   rendered blocks' cache (2048) holds about 25 conversations' worth at
   one width: each shows its last 80 entries. Only a click or Enter offers to relaunch a
   dead one. The item list's cursor goes to the selection by key whenever they differ,
