@@ -342,7 +342,9 @@ class Store:
                     AND i.status = 'running') AS running,
                  (SELECT count(*) FROM messages m WHERE m.session_id = s.id AND m.draft = 1) AS drafts,
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id
-                    AND i.kind = 'decision' AND i.status = 'unseen') AS unseen_decisions
+                    AND i.kind = 'decision' AND i.status = 'unseen') AS unseen_decisions,
+                 (SELECT count(*) FROM agent_items a JOIN items i ON i.session_id = a.session_id
+                    AND i.ref = a.item_ref WHERE a.session_id = s.id AND i.status = 'running') AS running_agents
                FROM sessions s ORDER BY s.created_at"""
         )
 

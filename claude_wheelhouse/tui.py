@@ -1445,11 +1445,12 @@ class WheelhouseApp(App):
     def watch_agents(self) -> None:
         """Each session's subagents brought up to date as A items, on a worker thread: every
         one not parked once, every one running each tick, and once more when one dies with
-        a subagent item still running, which then fails (parked or not). The items show at
-        the next refresh. A sync's failure shows once, as a warning, until it changes."""
+        a subagent item still running, which then fails (parked or not): one parked and dead
+        already when the wheelhouse starts too, by the items it tracks (running_agents). The
+        items show at the next refresh. A sync's failure shows once, as a warning, until it changes."""
         watchers = self.agent_watchers
         listed = {s["id"]: s for s in self.sessions if not s["parked"] or self.running(s["id"])
-                  or (s["id"] in watchers and watchers[s["id"]].unfinished())}
+                  or (watchers[s["id"]].unfinished() if s["id"] in watchers else s["running_agents"])}
         for sid in [sid for sid in watchers if sid not in listed]:
             del watchers[sid]
             self.agent_errors.pop(sid, None)

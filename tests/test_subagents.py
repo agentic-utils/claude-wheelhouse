@@ -367,6 +367,35 @@ async def test_the_wheelhouse_posts_a_subagents_item_on_its_refresh(store, sid, 
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("parked, desc", [
+    (False, "a session that died with a subagent running fails it at a fresh wheelhouse"),
+    (True, "so does a parked one, with no watcher yet to say it has one (review 22, P10)"),
+])
+async def test_a_dead_session_s_running_subagent_fails_at_a_fresh_wheelhouse(store, sid, joined, monkeypatch,
+                                                                            parked, desc):
+    from claude_wheelhouse import liveness
+    from claude_wheelhouse.tui import WheelhouseApp
+
+    t = joined.agent("a1", "Job")
+    joined.write(tool_use(t, "Job"), launched(t, "a1"))
+    AgentWatcher(sid).sync(store, NOW + 20)   # an earlier wheelhouse made it, running
+    assert agents(store, sid)["Job"]["status"] == "running", desc
+    store.set_parked(sid, parked)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "dead")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        for _ in range(30):
+            await pilot.pause(0.1)
+            if agents(store, sid)["Job"]["status"] != "running":
+                break
+        for _ in range(3):   # and then it's left alone: no watcher made again each tick
+            app.refresh_data()
+            await pilot.pause()
+        assert sid not in app.agent_watchers or not parked, f"{desc}: let go once it's failed"
+    assert agents(store, sid)["Job"]["status"] == "failed", desc
+
+
+@pytest.mark.anyio
 async def test_a_failing_sync_warns_once_per_error(store, sid, joined, monkeypatch):
     from claude_wheelhouse.tui import WheelhouseApp
 
