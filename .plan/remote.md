@@ -31,7 +31,7 @@ inside the TUI process: relaunch orchestration, liveness, transcript reading, th
 fetch, unsent drafts. Serving that process to a browser keeps it there and gives one hub
 per browser tab. Pulling it into a daemon gives one hub, any number of thin clients, and
 the web surface the suite architecture already reserved a slot for. Starlette, uvicorn,
-sse-starlette and httpx are already installed as dependencies of `mcp`, so the server
+sse-starlette and httpx2 are already installed as dependencies of `mcp`, so the server
 adds no new dependency tree.
 
 ## 1. Goals and non-goals
@@ -133,7 +133,7 @@ user unit (WSL's `systemd=true`), and started by the TUI if it isn't running.
 
 | Concern | Today | After |
 |---|---|---|
-| Change polling (`PRAGMA data_version`) | TUI, 1 s tick | Daemon, pushes events |
+| Change detection | TUI re-queries on a 1 s tick | Daemon, pushes events (proposed: polls `PRAGMA data_version` to skip unchanged ticks) |
 | Liveness, wake detection | TUI | Daemon; status is a field on the session view |
 | Relaunch orchestration | TUI memory (`relaunching` dict) | Daemon, state in a DB column so a restart resumes it |
 | Launch, restore, adopt | TUI calls `launch.py` | Daemon command |
@@ -154,8 +154,9 @@ opens.
 ### API sketch
 
 Resources are the service's queries, as JSON (the suite plan's frozen dataclasses through
-`asdict`). Commands are POSTs. Errors map from the existing hierarchy: `SessionGone` 404,
-`StillStarting` and "already decided" 409, `NotAllowed` 403.
+`asdict`). Commands are POSTs. Errors map from the `WheelhouseError` hierarchy the suite
+plan adds: `SessionGone` 404 (the one that exists today), and the planned `StillStarting`
+and "already decided" 409 and `NotAllowed` 403.
 
 ```
 GET  /sessions                         list, with status, mode, queue count, context size
@@ -244,7 +245,7 @@ it, and both see it go. Unsent box text is per client, by design.
 
 - **Service:** the existing pytest suite moves with the logic; the hub's rules (park and
   end on a running session, relaunch waits) get tested without Textual.
-- **API:** contract tests through httpx's ASGI transport: error mapping, idempotent
+- **API:** contract tests through httpx2's ASGI transport: error mapping, idempotent
   replays, a permission decided twice, an offline outbox replayed, the SSE resume and the
   gap refetch.
 - **TUI client:** Textual pilot tests against a fake API, including a dropped stream.
