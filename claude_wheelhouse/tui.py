@@ -274,7 +274,10 @@ def _block_strips(who: str, md: str, width: int, console) -> tuple[tuple[Strip, 
 class Transcript(Widget, can_focus=True):
     """A conversation or a thread: one widget drawing cached lines, as Blocks does, and
     selectable. Drag selects, Ctrl+A selects it all, Ctrl+C copies (Textual's screen binding,
-    which copies through the terminal: OSC 52, which Windows Terminal supports)."""
+    which copies through the terminal: OSC 52, which Windows Terminal supports). A
+    conversation (tail) lays out only its newest blocks, two pages of them, and older ones as
+    the pane scrolls up to within a page of them (T68): a block's markdown takes 5 to 60 ms
+    to render, and laying out every block made a long conversation's first visit 150 to 350."""
     ALLOW_SELECT = True
     DEFAULT_CSS = "Transcript { height: auto; }"
     BINDINGS = [Binding("ctrl+a", "select_all", "Select all", show=False)]
@@ -282,28 +285,82 @@ class Transcript(Widget, can_focus=True):
     def __init__(self, placeholder: str = "", **kwargs):
         super().__init__(**kwargs)
         self.blocks: list[tuple[str, str]] = [("note", placeholder)] if placeholder else []
+        self.start: int | None = 0   # the first block laid out; None: the newest, to fill two pages
         self._laid: tuple | None = None
 
-    def update(self, content: "Blocks | list[tuple[str, str]]") -> None:
-        self.blocks = content.blocks if isinstance(content, Blocks) else list(content)
+    def update(self, content: "Blocks | list[tuple[str, str]]", tail: bool = False) -> None:
+        blocks = content.blocks if isinstance(content, Blocks) else list(content)
+        if not tail:
+            self.start = 0
+        elif blocks[:1] != self.blocks[:1] or self.start is None:
+            self.start = None   # another conversation
+        elif self.start:   # the same one keeps what's laid above, though its oldest turns drop off
+            top = self.blocks[self.start]
+            self.start = next((i for i in range(min(self.start, len(blocks) - 1), -1, -1) if blocks[i] == top), None)
+        self.blocks = blocks
         self._laid = None
         self.refresh(layout=True)
 
     def _layout(self, width: int) -> tuple[list[Strip], list[str]]:
         if self._laid is None or self._laid[0] != width:
-            strips, texts = [], []
-            for who, md in self.blocks:
-                s, t = _block_strips(who, md, width, self.app.console)
-                strips.extend(s)
-                texts.extend(t)
-            self._laid = (width, strips, texts)
+            start, self.start, self._laid = self.start, len(self.blocks), (width, [], [])
+            self._grow(2 * (self.parent.size.height or self.app.size.height), start)
         return self._laid[1], self._laid[2]
+
+    def _grow(self, lines: float, start: int | None = None) -> int:
+        """Lay out older blocks above those laid: down to block start, if given, else until at
+        least `lines` more lines are laid or there are none left. Returns the lines added."""
+        width, strips, texts = self._laid
+        older, i, added = [], self.start, 0
+        while i > 0 and (i > start if start is not None else added < lines):
+            i -= 1
+            older.append(_block_strips(*self.blocks[i], width, self.app.console))
+            added += len(older[-1][0])
+        older.reverse()
+        self._laid = (width, [s for block, _ in older for s in block] + strips,
+                      [t for _, block in older for t in block] + texts)
+        self.start = i
+        return added
+
+    def keep_above(self, lines: float) -> None:
+        """Lay out older blocks while fewer than `lines` are laid above where the scroll stands
+        or is going, keeping what shows where it is: the scroll moves down by the lines added
+        and its height grows by them at once, before the next layout (set_scroll: a key behind
+        this one acts on them), and a selection moves with them."""
+        scroll = self.parent
+        if not self.start or self._laid is None or min(scroll.scroll_y, scroll.scroll_target_y) >= lines:
+            return
+        at, to = scroll.scroll_y, scroll.scroll_target_y
+        moving = self.app.animator.is_being_animated(scroll, "scroll_y")
+        self.app.animator.force_stop_animation(scroll, "scroll_y")
+        added = self._grow(2 * lines)
+        scroll.set_scroll(None, at + added)
+        scroll.set_reactive(Widget.scroll_target_y, to + added)
+        scroll.set_reactive(Widget.virtual_size, scroll.virtual_size + (0, added))
+        scroll._scroll_update(scroll.virtual_size)   # the scrollbar's sizes
+        if scroll.show_vertical_scrollbar:
+            scroll.vertical_scrollbar.position = scroll.scroll_y
+        if moving:   # a smooth scroll carries on to where it was going
+            scroll.scroll_to(y=to + added)
+        if (selection := self.screen.selections.get(self)) is not None:
+            moved = type(selection)(*(None if end is None else end + (0, added) for end in selection))
+            self.screen.selections = {**self.screen.selections, self: moved}
+        self.refresh(layout=True)
 
     def get_content_width(self, container, viewport) -> int:
         return container.width
 
     def get_content_height(self, container, viewport, width: int) -> int:
-        return len(self._layout(width)[0])
+        fresh = self.start is None
+        height = len(self._layout(width)[0])
+        if fresh:   # shown from its end in this very frame: at the old scroll, it would lay out more above
+            self.parent.set_scroll(None, max(0, height - container.height))
+        return height
+
+    def render_lines(self, crop):
+        if self.start and crop.y < crop.height:   # under a page above what shows: a scrollbar dragged, say
+            self.call_later(self.keep_above, crop.height)
+        return super().render_lines(crop)
 
     def render_line(self, y: int) -> Strip:
         width = self.size.width
@@ -334,7 +391,33 @@ class Transcript(Widget, can_focus=True):
         self.refresh()
 
     def action_select_all(self) -> None:
+        self.keep_above(math.inf)   # all of it, laid out first
         self.text_select_all()
+
+
+class ConversationScroll(VerticalScroll):
+    """The conversation pane's scroll. Each scroll up by key or wheel has its Transcript lay out
+    older blocks first, enough to take it: laid out at the next frame, keys or a flick of the
+    wheel in a burst would stop at the oldest block laid out (T68)."""
+
+    def ahead(self, lines: float) -> None:
+        self.query_one(Transcript).keep_above(lines)
+
+    def action_scroll_up(self) -> None:
+        self.ahead(self.size.height)
+        super().action_scroll_up()
+
+    def action_page_up(self) -> None:
+        self.ahead(self.size.height)
+        super().action_page_up()
+
+    def action_scroll_home(self) -> None:
+        self.ahead(math.inf)   # the oldest turn, not the oldest laid out
+        super().action_scroll_home()
+
+    def _on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        self.ahead(self.size.height)
+        super()._on_mouse_scroll_up(event)
 
 
 BLANK = "\x00blank"   # a blank row's key, with its place after it: no session id or item key starts so
@@ -1422,7 +1505,7 @@ class WheelhouseApp(App):
             with Vertical(id="detail-pane", classes="panel"):
                 with VerticalScroll(id="checklist-scroll"):   # scrolls on a short terminal (review 9)
                     yield Static(id="checklist")
-                with VerticalScroll(id="detail-scroll"):
+                with ConversationScroll(id="detail-scroll"):
                     yield Transcript(NOTHING_SELECTED, id="detail")
                 yield Splitter("answer", "#answer", "#detail-scroll", "y")
                 yield PermissionButtons()
@@ -1437,7 +1520,7 @@ class WheelhouseApp(App):
         self.title_bar = self.query_one("#title", Static)
         self.items_table = self.query_one("#items", ItemList)
         self.detail = self.query_one("#detail", Transcript)
-        self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
+        self.detail_scroll = self.query_one("#detail-scroll", ConversationScroll)
         self.answer = self.query_one("#answer", Compose)
         self.session_list = self.query_one("#session-list", SessionList)
         self.session_list.sink, self.items_table.sink = self.session_sink, self.item_sink
@@ -1948,7 +2031,7 @@ class WheelhouseApp(App):
         if text != getattr(self, "_detail_text", None):
             following = self.viewing and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1
             self._detail_text = text
-            self.detail.update(render(blocks))
+            self.detail.update(render(blocks), tail=bool(self.viewing))
             if following:   # stay at the newest turn, unless the person has scrolled up to read
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 
