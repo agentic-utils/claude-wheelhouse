@@ -121,9 +121,12 @@ Where the build differs from the design above:
   Immediate (`sessions.send_mode`; NULL means `store.DEFAULT_MODE`, `"queued"`). Ctrl+Enter
   (and `ctrl+j`, as Windows Terminal sends it) submits: queued, or sent at once in
   Immediate mode. Ctrl+T switches the session in context. Ctrl+S sends that session's
-  queue. Send all is a button only: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S as
-  plain Ctrl+S. A bar above the footer, on the inbox and in the thread view, always
-  shows Send all (n), disabled while every queue is empty; its buttons take no focus. The
+  queue, and refuses on a dead session, as its Send button does: the queue waits until
+  the session is restored (#62). Send all sends every queue but a dead session's, from
+  its button or Shift+A (not Ctrl+Shift+S or Ctrl+Alt+S: Windows Terminal sends both as
+  plain Ctrl+S). A bar above the footer, on the inbox and in the thread view, always
+  shows Send all (n), counting the running sessions' queues and disabled while they are
+  all empty; its buttons take no focus. The
   mode button and Send (n) were in it too, until #59 moved them under the session list,
   for the current session, the one highlighted there, which is also the one the keys act
   on (D20 in `wheelhouse-sessions.md`); the thread view's bar keeps them, for its session.

@@ -2199,8 +2199,11 @@ class WheelhouseApp(App):
                         "so it can't queue until it's relaunched", severity="warning")
         else:
             self.store.queue(target[0], text, target[1])
-            then = "it isn't running: Restore it, then " if self.dead(target[0]) else ""
-            self.notify(f"queued for {aimed(target)}: {then}Ctrl+S or Send sends the session's queue")
+            if self.dead(target[0]):   # aimed names the item, so say whose queue isn't running
+                self.notify(f"queued for {aimed(target)}, but the session isn't running: "
+                            "Restore it, then Ctrl+S or Send sends its queue")
+            else:
+                self.notify(f"queued for {aimed(target)}: Ctrl+S or Send sends the session's queue")
         box.text = ""
         self.refresh_data()
         if box is self.answer:   # back to the items, cursor where it was: Down, Tab answers the next
