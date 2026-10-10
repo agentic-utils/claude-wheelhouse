@@ -23,7 +23,9 @@ import ipaddress
 import json
 import os
 import sqlite3
+import sys
 import time
+import traceback
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
@@ -244,8 +246,18 @@ class Daemon:
         self.shown = shown
 
     async def ticking(self) -> None:
+        """A tick every TICK seconds. One that fails (the database locked, a session ending
+        mid-tick) is said on stderr, its traceback the first time, and the next goes on."""
+        last = None
         while True:
-            self.tick()
+            try:
+                self.tick()
+            except Exception as e:
+                said = f"{type(e).__name__}: {e}"
+                print(f"wheelhouse daemon: a tick failed: {said}", file=sys.stderr, flush=True)
+                if said != last:
+                    traceback.print_exc()
+                last = said
             await asyncio.sleep(TICK)
 
     @contextlib.asynccontextmanager

@@ -1,6 +1,8 @@
 """The daemon, in process: its routes through httpx2's ASGI transport, never a socket."""
 
+import asyncio
 import json
+import sqlite3
 import uuid
 
 import anyio
@@ -10,7 +12,7 @@ import pytest
 from claude_wheelhouse import daemon as daemon_mod, launch, liveness
 from claude_wheelhouse.daemon import STORE_KINDS, AlreadyRunning, Daemon, Feed, checked_address, hosts, take_lock
 from claude_wheelhouse.hub import Event
-from claude_wheelhouse.store import Store
+from claude_wheelhouse.store import SessionGone, Store
 
 pytestmark = pytest.mark.anyio
 URL = "http://127.0.0.1:7428"
@@ -333,3 +335,20 @@ async def test_a_status_changing_with_no_write_is_published(daemon, sid, monkeyp
 def test_what_the_hub_says_by_itself_goes_to_every_client(daemon, event, published, desc):
     daemon.hub.emit(event)
     assert [{k: v for k, v in e.items() if k != "seq"} for e in daemon.feed.ring] == published, desc
+
+
+@pytest.mark.parametrize("error", [sqlite3.OperationalError("database is locked"), SessionGone("s1")])
+async def test_a_tick_that_fails_is_said_and_the_next_goes_on(daemon, monkeypatch, capsys, error):
+    calls = []
+
+    def refresh():
+        calls.append(1)
+        if len(calls) == 1:
+            raise error
+    monkeypatch.setattr(daemon.hub, "refresh", refresh)
+    monkeypatch.setattr(daemon_mod, "TICK", 0.01)
+    task = asyncio.create_task(daemon.ticking())
+    await asyncio.sleep(0.1)
+    task.cancel()
+    assert len(calls) > 1, "ticking carries on"
+    assert "a tick failed" in capsys.readouterr().err
