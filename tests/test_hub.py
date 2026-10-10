@@ -410,15 +410,22 @@ def test_only_a_subagent_item_has_its_conversation(hub, store, sid):
     assert (hub.agent_conversation(sid, q), hub.agent_conversation(sid, "A9")) == (None, None)
 
 
-def test_a_subagents_conversation_follows_it_live_and_one_at_a_time(hub, store, sid, projects):
-    ref, other = agent_item(store, sid), agent_item(store, sid, "a2", "other")
+def test_a_subagents_conversation_follows_it_live_and_two_at_most(hub, store, sid, projects):
+    ref, other, third = (agent_item(store, sid, aid, aid) for aid in ("a1", "a2", "a3"))
     path = write_agent(projects, sid, recs=AGENT_RECS[:1])
-    write_agent(projects, sid, "a2")
+    for aid in ("a2", "a3"):
+        write_agent(projects, sid, aid)
     assert [who for who, _ in hub.agent_conversation(sid, ref)] == ["head", "you"]
     with open(path, "a") as f:
         f.write(json.dumps(AGENT_RECS[4]) + "\n")
     assert hub.agent_conversation(sid, ref)[-1][1].endswith("It rounds per line."), "read again once it changed"
-    hub.agent_conversation(sid, other)
-    assert hub.agent_follower[0] == (sid, other), "following another stops following the first"
+    following = hub.agent_followers[(sid, ref)]
+    for _ in range(2):   # a full screen on one while the inbox shows another, each tick
+        hub.agent_conversation(sid, other)
+        hub.agent_conversation(sid, ref)
+    assert hub.agent_followers[(sid, ref)] is following and len(hub.agent_followers) == 2, \
+        "two shown at once are each followed, not read afresh in turn"
+    hub.agent_conversation(sid, third)
+    assert list(hub.agent_followers) == [(sid, ref), (sid, third)], "a third stops following the one asked for longest ago"
     hub.unfollow_agent()
-    assert hub.agent_follower is None
+    assert hub.agent_followers == {}

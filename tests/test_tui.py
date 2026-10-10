@@ -4335,7 +4335,7 @@ async def test_a_subagent_items_own_conversation_follows_it_live(store, sid, tmp
         items.focus()
         items.move_cursor(row=items.get_row_index(f"{sid}|{q}"))
         await laid(pilot)
-        assert app.hub.agent_follower is None, "no longer followed once another item is selected"
+        assert app.hub.agent_followers == {}, "no longer followed once another item is selected"
 
 
 @pytest.mark.anyio

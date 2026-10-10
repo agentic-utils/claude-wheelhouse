@@ -157,3 +157,98 @@ def test_the_persons_line_breaks_survive_rendering():
 def test_hosted_session_header_has_no_tab():
     out = transcript.blocks("demo", None, [])
     assert "Runs in the wheelhouse" in out[0][1] and not any(who == "warn" for who, _ in out)
+
+
+def lines(*recs):
+    return "".join(json.dumps(r) + "\n" for r in recs)
+
+
+ONE, TWO = lines(user("one")), lines(user("two"))
+
+
+@pytest.mark.parametrize("text, limit, expected, desc", [
+    (ONE + TWO, len(TWO), ["two"], "a window starting exactly on a record keeps it whole"),
+    (ONE + TWO, len(TWO) + 1, ["two"], "one starting a byte into a record drops it"),
+    (ONE + TWO, len(TWO) - 1, [transcript.OVERSIZE], "a newest record larger than the window: a stand-in for it"),
+    (ONE + TWO[:-1], len(TWO) - 2, [transcript.OVERSIZE], "one still being written, too"),
+    (ONE + TWO, 10_000, ["one", "two"], "a short transcript, whole"),
+])
+def test_the_tail_window(tmp_path, text, limit, expected, desc):
+    path = tmp_path / "s.jsonl"
+    path.write_text(text)
+    got = transcript.tail_records(path, limit=limit)
+    assert [r["type"] if r["type"] == transcript.OVERSIZE else r["message"]["content"] for r in got] == expected, desc
+
+
+def test_a_record_too_large_to_show_is_said_so():
+    assert transcript.entries([{"type": transcript.OVERSIZE}]) == [Entry("note", "a turn too large to show here")]
+
+
+def test_a_follower_whose_transcript_has_gone_says_so(tmp_path):
+    (tmp_path / "p").mkdir()
+    path = tmp_path / "p/abc.jsonl"
+    path.write_text(ONE)
+    follower = transcript.Follower("abc", projects=tmp_path)
+    assert len(follower.read()) == 1
+    follower.blocks_key, follower.blocks = follower.seen, ["shown"]
+    path.unlink()
+    assert follower.read() is None
+    assert (follower.seen, follower.recs, follower.blocks) == (None, None, None), "nothing of it left standing"
+
+
+FORK_PROMPT = user([{"type": "tool_result", "tool_use_id": "f", "content": "Fork started"},
+                    {"type": "text", "text": "<fork-boilerplate>\nYou are a worker fork.\n</fork-boilerplate>\n\n"
+                                             "Your directive: count the PRs"}], uuid="u1")
+SKILL_PROMPT = user("Base directory for this skill: /s/two-linear\n\n# two-linear\n\nRuns.\n\n\nARGUMENTS: file 2 tickets",
+                    isMeta=True, uuid="u1")
+STARTED = assistant({"type": "tool_use", "id": "f", "name": "Agent", "input": {"prompt": "count the PRs"}})
+
+
+def agent_file(tmp_path, *recs):
+    """A session's transcript, and a subagent's beside it, as agent_path has it."""
+    folder = tmp_path / "-home-u-repo"
+    (folder / "abc/subagents").mkdir(parents=True)
+    (folder / "abc.jsonl").write_text("")
+    path = folder / "abc/subagents/agent-a1.jsonl"
+    path.write_text(lines(*recs))
+    return path
+
+
+def shown(tmp_path, *recs, limit=None, monkeypatch=None):
+    agent_file(tmp_path, *recs)
+    if limit:
+        monkeypatch.setattr(transcript, "TAIL_BYTES", limit)
+    follower = transcript.AgentFollower("abc", "a1", projects=tmp_path)
+    recs = follower.read()
+    return [md.split("\n\n")[-1] if who != "head" else who for who, md in transcript.agent_blocks(recs, prompt=follower.prompt)]
+
+
+@pytest.mark.parametrize("recs, expected, desc", [
+    ([user("find the bug", uuid="u1"), assistant(TEXT), user("[Request interrupted by user]", uuid="u2")],
+     ["head", "find the bug", "On it.", "[Request interrupted by user]"], "only the first user record is its prompt"),
+    ([{"type": "fork-context-ref", "agentId": "a1"}, STARTED, FORK_PROMPT, assistant(TEXT)],
+     ["head", "count the PRs", "On it."], "a fork: its directive, and none of its session's records before it"),
+    ([{"type": "fork-context-ref", "agentId": "a1"}, user("[SYSTEM NOTIFICATION] a task ended", isMeta=True), STARTED,
+      FORK_PROMPT, assistant(TEXT)], ["head", "count the PRs", "On it."], "past its session's own notices too"),
+    ([user("<system-reminder>x</system-reminder>", isMeta=True), user("find the bug", uuid="u1")],
+     ["head", "find the bug"], "a meta record isn't its prompt"),
+    ([SKILL_PROMPT, assistant(TEXT)], ["head", "file 2 tickets", "On it."], "a skill: what it was asked"),
+    ([user("[SYSTEM NOTIFICATION] a task ended", isMeta=True), assistant(BASH), user([{"type": "tool_result",
+      "tool_use_id": "t1", "content": "ok"}], uuid="u1"), assistant(TEXT)], ["head", "`⚙ Bash: Run tests`", "On it."],
+     "one with no prompt in it at all keeps all it has"),
+    ([{"type": "fork-context-ref", "agentId": "a1"}, STARTED], ["head", "_Nothing in its transcript yet._"],
+     "a fork not yet given its directive"),
+])
+def test_a_subagents_prompt(tmp_path, recs, expected, desc):
+    assert shown(tmp_path, *recs) == expected, desc
+
+
+def test_a_subagents_prompt_shows_however_long_it_runs(tmp_path, monkeypatch):
+    steps = [assistant({"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": f"step {i}"}})
+             for i in range(200)]
+    got = shown(tmp_path, user("find the bug", uuid="u1"), *steps, user("stop", uuid="u2"), limit=5000,
+                monkeypatch=monkeypatch)
+    assert got[:2] == ["head", "find the bug"] and got[-1] == "stop" and len(got) < 200
+    labels = [md.split("**")[1] for who, md in transcript.agent_blocks(
+        [user("stop")], prompt=user("find the bug")) if who == "you"]
+    assert labels == ["prompt", "session"], "a later turn of the session's is labelled as its"

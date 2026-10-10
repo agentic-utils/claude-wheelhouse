@@ -45,6 +45,13 @@ CUT_MARK = " [cut short]"   # a message shown as it arrived, cut, when its full 
 HANDBACK = "SubagentHandback"
 # the opening prompt of a session started with a ticket and no brief (launch.opening_prompt)
 OPENING = re.compile(r"(?:Ticket: [^\n]*\n\n)?" + re.escape(NO_BRIEF))
+# a fork subagent's prompt: Claude Code's standing rules for forks wrapped round it, then the
+# directive its session gave it
+FORK = re.compile(r"<fork-boilerplate>.*?</fork-boilerplate>\s*(?:Your directive:\s*)?", re.S)
+# a skill run as a subagent: its first turn is the skill itself (meta), what it was asked last
+SKILL_ARGS = "\n\nARGUMENTS: "
+# stands in the tail for a newest record too large to read within it (tail_records)
+OVERSIZE = "wheelhouse-oversize"
 
 
 @dataclass
@@ -63,25 +70,46 @@ def locate(sid: str, projects: Path | None = None) -> Path | None:
     return next((projects or PROJECTS).glob(f"*/{sid}.jsonl"), None)
 
 
-def tail_records(path: Path, limit: int = TAIL_BYTES, sidechain: bool = False) -> list[dict]:
-    """The last records of a transcript. A session's leaves out its subagents' (sidechain)
-    records; a subagent's own transcript is nothing but, so sidechain keeps them."""
+def tail_records(path: Path, limit: int | None = None, sidechain: bool = False) -> list[dict]:
+    """The last records of a transcript, in its last limit bytes (TAIL_BYTES). A session's
+    leaves out its subagents' (sidechain) records; a subagent's own transcript is nothing
+    but, so sidechain keeps them."""
+    limit = limit or TAIL_BYTES
     with open(path, "rb") as f:
         size = f.seek(0, 2)
-        f.seek(max(0, size - limit))
+        start = max(0, size - limit)
+        f.seek(max(0, start - 1))   # a byte early, to see whether the window starts a record
         data = f.read()
-    lines = data.splitlines()
-    if size > limit:
-        lines = lines[1:]   # cut mid-record
+    if start:   # drop the record the window starts inside; one starting exactly at it is whole
+        data = data[data.find(b"\n") + 1:] if b"\n" in data else b""
     recs = []
-    for line in lines:
+    for line in data.splitlines():
         try:
             rec = json.loads(line)
         except ValueError:
             continue
         if isinstance(rec, dict) and (sidechain or not rec.get("isSidechain")):
             recs.append(rec)
+    if start and b"\n" not in data:   # the newest record is larger than the window: said so
+        recs.append({"type": OVERSIZE})
     return recs
+
+
+def prompt_record(path: Path) -> dict | None:
+    """A subagent's prompt: its transcript's first user record, read from its start, past
+    any of the wheelhouse's or Claude Code's own (meta) but a skill's. Records before it (a
+    fork's reference to its session's history, and that session's own call starting it)
+    aren't the subagent's."""
+    with open(path, "rb") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and rec.get("type") == "user" and \
+                    (not rec.get("isMeta") or SKILL_ARGS in _text((rec.get("message") or {}).get("content"))):
+                return rec
+    return None
 
 
 def _text(content) -> str:
@@ -124,18 +152,23 @@ def tool_line(name: str, args) -> str:
     return line if len(line) <= TOOL_WIDTH else line[:TOOL_WIDTH - 1] + "…"
 
 
-def entries(recs: list[dict], full=None) -> list[Entry]:
-    """full: the person's message by id, for one a notification cut short (general_text)."""
+def entries(recs: list[dict], full=None, agent: bool = False) -> list[Entry]:
+    """full: the person's message by id, for one a notification cut short (general_text).
+    agent: a subagent's transcript, whose fork prompt keeps its directive (FORK)."""
     out = []
     for rec in recs:
         kind, at = rec.get("type"), rec.get("timestamp", "")
         msg = rec.get("message") or {}
         if kind == "system" and rec.get("subtype") == "compact_boundary":
             out.append(Entry("note", "conversation compacted", at))
+        elif kind == OVERSIZE:
+            out.append(Entry("note", "a turn too large to show here", at))
         elif kind == "user" and not rec.get("isMeta"):
             if rec.get("isCompactSummary"):
                 continue
             text = _text(msg.get("content")).strip()
+            if agent and text.startswith("<fork-boilerplate>"):
+                text = FORK.sub("", text, count=1).strip()
             origin = (rec.get("origin") or {}).get("kind")
             if origin == "task-notification" or text.startswith("<task-notification>"):
                 event = EVENT.search(text)
@@ -225,22 +258,35 @@ NO_AGENT_LINK = ("_No subagent transcript is linked to this item: the session po
 NO_AGENT_FILE = "_Its transcript isn't found beside its session's yet, so only what the session's transcript says of it shows._"
 
 
-def agent_blocks(recs: list[dict] | None, linked: bool = True) -> list[tuple[str, str]]:
+def prompt_entry(rec: dict | None) -> Entry | None:
+    """A subagent's prompt, from its prompt_record: a skill's is what the skill was asked."""
+    if rec is None:
+        return None
+    if rec.get("isMeta"):
+        text = _text((rec.get("message") or {}).get("content"))
+        cut = text.rfind(SKILL_ARGS)
+        return Entry("you", text[cut + len(SKILL_ARGS):].strip(), rec.get("timestamp", "")) \
+            if cut >= 0 and text[cut + len(SKILL_ARGS):].strip() else None
+    return next((e for e in entries([rec], agent=True) if e.who == "you"), None)
+
+
+def agent_blocks(recs: list[dict] | None, linked: bool = True, prompt: dict | None = None) -> list[tuple[str, str]]:
     """A subagent's own conversation, from its transcript, as (who, markdown) blocks: the
-    prompt its session gave it, its tool calls and replies, and its result, the last of
-    them. What the session sends it later (SendMessage) is the session's. None for recs:
-    its transcript isn't found; linked False: the item isn't tied to a subagent at all."""
+    prompt its session gave it (prompt, its prompt_record, read apart from recs, the
+    tail after it, so it shows however long the subagent runs), its tool calls and
+    replies, and its result, the last of them. What the session sends it later
+    (SendMessage) is the session's. None for recs: its transcript isn't found; linked
+    False: the item isn't tied to a subagent at all."""
     out = [("head", AGENT_HEAD)]
     if not linked:
         return out + [("note", NO_AGENT_LINK)]
     if recs is None:
         return out + [("note", NO_AGENT_FILE)]
-    said = entries(recs)
-    if not said:
+    first, said = prompt_entry(prompt), entries(recs, agent=True)
+    if not (first or said):
         return out + [("note", "_Nothing in its transcript yet._")]
-    first = next((i for i, e in enumerate(said) if e.who == "you"), None)
-    return out + [entry_block(e, ("prompt" if i == first else "session") if e.who == "you" else None)
-                  for i, e in enumerate(said)]
+    return out + ([entry_block(first, "prompt")] if first else []) \
+        + [entry_block(e, "session" if e.who == "you" else None) for e in said]
 
 
 def agent_path(main: Path, sid: str, agent_id: str) -> Path:
@@ -273,23 +319,49 @@ class Follower:
                 return None
         try:
             st = self.path.stat()
-        except OSError:
-            self.path = None
+        except OSError:   # gone: said so, not its last turns left standing
+            self.forget()
             return None
         if (st.st_size, st.st_mtime_ns) != self.seen:
             self.seen = (st.st_size, st.st_mtime_ns)
-            self.recs = tail_records(self.path, sidechain=self.sidechain)
+            self.recs = self.load(self.path)
         return self.recs
+
+    def load(self, path: Path) -> list[dict]:
+        return tail_records(path, sidechain=self.sidechain)
+
+    def forget(self) -> None:
+        self.path = self.seen = self.recs = None
+        self.blocks_key = self.blocks = None
 
 
 class AgentFollower(Follower):
     """One subagent's own transcript (agent_path), followed as a session's is: re-read only
-    when it has changed, its tail only. main: its session's transcript, if already known."""
+    when it has changed, its tail only, and its prompt once from its start. main: its
+    session's transcript, if already known."""
     sidechain = True
 
     def __init__(self, sid: str, agent_id: str, main: Path | None = None, projects: Path | None = None):
         super().__init__(sid, projects)
         self.agent_id, self.main = agent_id, main
+        # its prompt (prompt_record, agent_blocks): read once, as the file only grows
+        self.prompt: dict | None = None
+
+    def load(self, path: Path) -> list[dict]:
+        """The tail after its prompt: what comes before that isn't the subagent's."""
+        if self.prompt is None:
+            self.prompt = prompt_record(path)
+            if self.prompt is None:
+                return []
+        recs, uuid = tail_records(path, sidechain=True), self.prompt.get("uuid")
+        if prompt_entry(self.prompt) is None:   # no prompt in it at all (it starts mid-way): kept whole
+            return recs
+        at = next((i for i, r in enumerate(recs) if (r.get("uuid") == uuid if uuid else r == self.prompt)), None)
+        return recs if at is None else recs[at + 1:]
+
+    def forget(self) -> None:
+        super().forget()
+        self.prompt = None
 
     def find(self) -> Path | None:
         main = self.main or locate(self.sid, self.projects)
