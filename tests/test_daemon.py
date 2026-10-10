@@ -584,3 +584,30 @@ async def test_a_conversation_never_waits_on_a_read_under_way(daemon, sid, monke
         else:
             assert r.json() == (await reading).json(), desc
         assert (await reading).status_code == 200, desc
+
+
+async def test_a_client_gone_before_its_body_is_let_go_quietly(daemon, store, sid, capsys):
+    scope = {"type": "http", "method": "POST", "path": f"/sessions/{sid}/rename", "raw_path": b"",
+             "query_string": b"", "root_path": "", "scheme": "http", "http_version": "1.1",
+             "server": ("127.0.0.1", 7428), "client": ("127.0.0.1", 50000),
+             "headers": [(b"host", b"127.0.0.1:7428"), (b"idempotency-key", b"k1")]}
+    sent = []
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+    await daemon.app(scope, receive, send)
+    assert sent[0]["status"] == 499 and capsys.readouterr().err == ""
+    assert store.session(sid)["name"] == "demo" and store.answered("k1") is None
+
+
+async def test_a_session_gone_is_no_longer_followed(daemon, store, sid, db_file):
+    other = store.create_session("/", name="other")
+    daemon.tick()
+    for s in (sid, other):
+        assert (await call(daemon, "GET", f"/sessions/{s}/conversation")).status_code == 200
+    Store(db_file).end(other)
+    daemon.tick()
+    assert (set(daemon.hub.followers), set(daemon.reading)) == ({sid}, {sid})

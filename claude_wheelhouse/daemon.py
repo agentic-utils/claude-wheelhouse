@@ -39,7 +39,7 @@ import uvicorn
 from sse_starlette import EventSourceResponse
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
@@ -299,6 +299,7 @@ class Daemon:
         write after them moves them again, for the next tick, and a client refetching on an
         event never gets the rows from before it."""
         rows = {s["id"]: s for s in self.hub.sessions}
+        self.forget_gone()
         now = {**marks, "sessions": {sid: {**dict(s), "heartbeat_at": None} for sid, s in rows.items()},
                "listed": {sid: (s["name"], s["parked"]) for sid, s in rows.items()},
                "named": {sid: (s["name"], s["cwd"], runner(s), s["shell"]) for sid, s in rows.items()}}
@@ -313,6 +314,14 @@ class Daemon:
             if shown[sid] != self.shown[sid]:
                 self.publish("sessions", sid)
         self.shown = shown
+
+    def forget_gone(self) -> None:
+        """The transcripts followed for sessions the last refresh no longer found, let go.
+        A conversation asked for one again finds it gone before following it again."""
+        for sid in self.hub.followers.keys() - self.hub.by_id.keys():
+            self.hub.followers.pop(sid, None)
+        for sid in self.reading.keys() - self.hub.by_id.keys():
+            self.reading.pop(sid, None)
 
     async def ticking(self) -> None:
         """A tick every TICK seconds. One that fails (the database locked, a session ending
@@ -377,6 +386,8 @@ class Daemon:
                     raise Refused(400, "every command needs an Idempotency-Key")
                 raw = await request.body()
                 return await self.on_hub(self.carry_out, handler, request, key, raw)
+            except ClientDisconnect:   # gone before it sent the body: nothing done, nobody to tell
+                return Response(status_code=499)
             except Exception as e:
                 return refusal(e)
         return endpoint
