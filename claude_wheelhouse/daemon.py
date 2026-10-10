@@ -55,17 +55,17 @@ LOCK = "daemon.lock"
 # what a change in the database may have moved: every session's row, the inbox, the threads,
 # and the conversations, which show what's queued
 STORE_KINDS = ("sessions", "items", "thread", "conversation")
-# a cheap mark of each table the queries read besides the sessions, which moves with any
-# change a client would see (both under 0.3 ms on a wheelhouse of 400 items and 700 messages): read only
-# when data_version says something was written, which a host's heartbeat does every second
-MARKS = {
-    "items": "SELECT count(*), max(id), max(updated_at), count(dismissed), count(answer) FROM items",
-    "messages": "SELECT count(*), max(id), total(draft), count(claimed_at), max(claimed_at), count(delivered_at), "
-                "max(delivered_at) FROM messages",
-}
-# what each mark moving moves: "sessions" is the rows but for heartbeat_at, "named" what a
-# conversation shows of its session (its name and whether it runs in a tab)
-MOVES = {"sessions": {"sessions"}, "named": {"conversation"}, "items": {"items", "thread"},
+# each table the queries read besides the sessions, marked by a digest of every row as it is,
+# so any change a client could see moves it, two edits in the same second and a draft taken
+# back and queued again under its id too (a few ms each on a wheelhouse of 400 items and 700
+# messages): read only when data_version says something was written, which a host's
+# heartbeat does every second
+MARKS = {"items": "SELECT * FROM items ORDER BY id", "messages": "SELECT * FROM messages ORDER BY id"}
+# what each mark moving moves: "sessions" is the rows but for heartbeat_at, "listed" what the
+# inbox shows of each session (its name, and whether it's parked, which leaves its items
+# out), "named" what a conversation shows of it (its name, its folder's name for a tab
+# with none, and whether it runs in a tab)
+MOVES = {"sessions": {"sessions"}, "listed": {"items"}, "named": {"conversation"}, "items": {"items", "thread"},
          "messages": {"items", "thread", "conversation"}}
 HOW = {"ask": Hub.ask, "now": Hub.act_on_dead, "cancel": Hub.cancel_request, "force": Hub.force}
 
@@ -167,6 +167,14 @@ class Feed:
         """Every stream ends, once it has sent what it has: the daemon is stopping."""
         self.closed = True
         self.moved.set()
+
+
+def digest(rows) -> bytes:
+    """A mark of rows that moves with any change to any of them."""
+    h = hashlib.sha1()
+    for row in rows:
+        h.update(repr(tuple(row)).encode())
+    return h.digest()
 
 
 def done_json(done: Done) -> dict:
@@ -288,7 +296,7 @@ class Daemon:
         """Each table's mark (MARKS), read again only if anything has been written since."""
         version = self.data_version()
         if self.read is None or self.read[0] != version:
-            self.read = (version, {kind: tuple(self.watch.execute(sql).fetchone()) for kind, sql in MARKS.items()})
+            self.read = (version, {kind: digest(self.watch.execute(sql)) for kind, sql in MARKS.items()})
         return self.read[1]
 
     def publish_moved(self, marks: dict) -> None:
@@ -300,7 +308,8 @@ class Daemon:
         event never gets the rows from before it."""
         rows = {s["id"]: s for s in self.hub.sessions}
         now = {**marks, "sessions": {sid: {**dict(s), "heartbeat_at": None} for sid, s in rows.items()},
-               "named": {sid: (s["name"], runner(s), s["shell"]) for sid, s in rows.items()}}
+               "listed": {sid: (s["name"], s["parked"]) for sid, s in rows.items()},
+               "named": {sid: (s["name"], s["cwd"], runner(s), s["shell"]) for sid, s in rows.items()}}
         moved = set().union(*(MOVES[kind] for kind in now if now[kind] != self.marked.get(kind)))
         self.marked = now
         self.view = self.session_views()

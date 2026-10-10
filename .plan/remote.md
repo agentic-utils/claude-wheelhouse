@@ -81,12 +81,15 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
   ring the same way. A signal to stop (Ctrl+C, SIGTERM) ends each stream cleanly first.
 - **Change detection.** Each second the daemon reads `PRAGMA data_version` on a
   connection of its own, which moves with every commit by any other connection, the hub's
-  own included, and only if it has moved, a cheap mark of the `items` and `messages`
-  tables (counts, the last id, the latest timestamps); then it refreshes the hub as the
+  own included, and only if it has moved, a mark of the `items` and `messages` tables, a
+  digest of every row, so any change a client could see moves it (two edits in the same
+  second, a draft taken back and queued again under its id); then it refreshes the hub as the
   TUI's tick does. The sessions' mark is the rows that refresh read but for `heartbeat_at`,
   so the heartbeat every host writes each second publishes nothing. Each kind whose mark
-  moved is published for all: the sessions' rows `sessions` (and `conversation` if a name
-  or runner changed), items `items` and `thread`, messages those and `conversation`. The
+  moved is published for all: the sessions' rows `sessions` (and `items` if a name or
+  parked changed, as the inbox shows the name and leaves a parked session's items out,
+  and `conversation` if a name or runner changed), items `items` and `thread`, messages
+  those and `conversation`. The
   marks are read before the refresh, so the rows `/sessions` serves always hold what an
   event said, and a write after them is published at the next tick. A command refreshes
   the hub and publishes at once, without waiting for the tick. A session whose shown status changes with no write (a host dying,

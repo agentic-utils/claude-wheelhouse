@@ -12,7 +12,7 @@ import httpx2
 import pytest
 from sse_starlette.sse import AppStatus
 
-from claude_wheelhouse import daemon as daemon_mod, launch, liveness
+from claude_wheelhouse import daemon as daemon_mod, launch, liveness, store as store_mod
 from claude_wheelhouse.daemon import AlreadyRunning, Daemon, Feed, checked_address, hosts, take_lock
 from claude_wheelhouse.hub import Event
 from claude_wheelhouse.store import SessionGone, Store
@@ -298,7 +298,9 @@ def kinds(daemon):
     (lambda s, sid: None, [], "nothing written, nothing said"),
     (lambda s, sid: s.heartbeat(sid), [], "a host's heartbeat moves nothing a client sees"),
     (lambda s, sid: s.set_activity(sid, "thinking"), ["sessions"], "a session's row"),
-    (lambda s, sid: s.rename(sid, "x"), ["sessions", "conversation"], "its name, which its conversation shows"),
+    (lambda s, sid: s.rename(sid, "x"), ["sessions", "items", "conversation"],
+     "its name, which its items and its conversation show"),
+    (lambda s, sid: s.set_parked(sid, True), ["sessions", "items"], "parked, which leaves its items out of the inbox"),
     (lambda s, sid: s.post_item(sid, "task", "from an MCP server"), ["items", "thread"], "an item posted"),
     (lambda s, sid: s.set_answer(sid, "T1", "yes"), ["items", "thread"], "an item's answer, updated_at as it was"),
     (lambda s, sid: s.dismiss(sid, "T1"), ["items", "thread"], "an item dismissed, updated_at as it was"),
@@ -335,7 +337,39 @@ async def test_a_command_publishes_what_it_moved_at_once(daemon, sid):
     daemon.tick()
     daemon.feed.ring.clear()
     await call(daemon, "POST", f"/sessions/{sid}/rename", {"name": "x"})
-    assert kinds(daemon) == [("sessions", None), ("conversation", None)]
+    assert kinds(daemon) == [("sessions", None), ("items", None), ("conversation", None)]
+
+
+@pytest.mark.parametrize("before, write, published, desc", [
+    (lambda s, sid: s.update_item(sid, "T1", title="first"), lambda s, sid: s.update_item(sid, "T1", title="second"),
+     ["items", "thread"], "an item edited twice in the same second, a tick between"),
+    (lambda s, sid: (s.post_item(sid, "task", "two"), s.dismiss(sid, "T1")),
+     lambda s, sid: (s.dismiss(sid, "T2"), s.dismiss(sid, "T1", False)),
+     ["items", "thread"], "one item dismissed and another brought back, as many dismissed"),
+    (lambda s, sid: s.queue(sid, "first"), lambda s, sid: (s.unqueue(s.drafts(sid)[-1]["id"]), s.queue(sid, "second")),
+     ["items", "thread", "conversation"], "a draft taken back and queued again, under the same id"),
+])
+async def test_a_change_that_leaves_the_counts_as_they_were_is_published(daemon, store, sid, db_file, monkeypatch,
+                                                                         before, write, published, desc):
+    monkeypatch.setattr(store_mod, "now", lambda: "2026-01-01T00:00:00+00:00")   # all in the same second
+    store.post_item(sid, "task", "do it")
+    before(store, sid)
+    daemon.tick()
+    daemon.feed.ring.clear()
+    write(Store(db_file), sid)
+    daemon.tick()
+    assert kinds(daemon) == [(kind, None) for kind in published], desc
+
+
+async def test_parking_a_session_by_another_connection_takes_its_items_out_of_the_inbox(daemon, store, sid, db_file):
+    store.post_item(sid, "task", "do it")
+    daemon.tick()
+    assert [i["ref"] for i in (await call(daemon, "GET", "/items")).json()] == ["T1"]
+    daemon.feed.ring.clear()
+    Store(db_file).set_parked(sid, True)
+    daemon.tick()
+    assert ("items", None) in kinds(daemon)
+    assert (await call(daemon, "GET", "/items")).json() == []
 
 
 @pytest.mark.parametrize("method, path, body, seen, desc", [
