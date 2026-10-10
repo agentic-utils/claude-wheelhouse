@@ -52,7 +52,9 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
   the store or the disk (`/items`, a thread, a conversation, `/fs`) run on starlette's
   threads; and `/sessions` answers the view the hub's thread made at its last refresh. A
   slow mount holds up neither the hub's tick and commands, nor `/sessions`, nor the
-  streams' pings; a locked database neither `/sessions` nor the pings.
+  streams' pings; a locked database neither `/sessions` nor the pings. A conversation
+  already being read is never waited on: it answers the blocks last read, or 503 with
+  `Retry-After` if there are none yet, so a hung transcript can't drain starlette's threads.
 - **Queries** answer the store's rows as JSON, with what the hub works out beside them: a
   session's shown status, mode, busy, stale, sends_now and context size (from its
   transcript, or its host's count after a compaction); an item's standing, and whether

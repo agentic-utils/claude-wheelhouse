@@ -77,9 +77,9 @@ class AlreadyRunning(RuntimeError):
 class Refused(Exception):
     """A request answered with an error status and its reason."""
 
-    def __init__(self, status: int, error: str):
+    def __init__(self, status: int, error: str, headers: dict | None = None):
         super().__init__(error)
-        self.status, self.error = status, error
+        self.status, self.error, self.headers = status, error, headers
 
 
 def checked_address(address: str) -> str:
@@ -462,10 +462,20 @@ class Daemon:
 
     def conversation(self, request: Request) -> list[dict]:
         """On starlette's threads, as it reads the transcript: the hub's followers are only
-        this query's, each session's read by one request at a time."""
+        this query's, each session's read by one request at a time. One that finds a read
+        under way never waits on it, so a hung transcript can't drain starlette's threads:
+        it answers the blocks last read, or 503 if there are none yet."""
         sid = request.path_params["sid"]
-        with self.reading.setdefault(sid, threading.Lock()):
-            blocks = self.hub.conversation(sid)
+        lock = self.reading.setdefault(sid, threading.Lock())
+        if lock.acquire(blocking=False):
+            try:
+                blocks = self.hub.conversation(sid)
+            finally:
+                lock.release()
+        elif (follower := self.hub.followers.get(sid)) is not None and follower.blocks is not None:
+            blocks = follower.blocks
+        else:
+            raise Refused(503, "this conversation is being read: try again shortly", {"Retry-After": "1"})
         if blocks is None:
             raise SessionGone(sid)
         return [{"who": who, "text": markdown} for who, markdown in blocks]
@@ -589,8 +599,9 @@ def refusal(e: Exception) -> JSONResponse:
     """An error as its status: a session gone or anything else not there 404, a bad request
     400, and a Refused as it says. Anything else is the daemon's own failure, 500, said on
     stderr with its traceback."""
+    headers = None
     if isinstance(e, Refused):
-        status, error = e.status, e.error
+        status, error, headers = e.status, e.error, e.headers
     elif isinstance(e, (SessionGone, KeyError)):
         status, error = 404, str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e)
     elif isinstance(e, ValueError):
@@ -599,7 +610,7 @@ def refusal(e: Exception) -> JSONResponse:
         status, error = 500, f"the daemon failed: {type(e).__name__}: {e}"
         print(f"wheelhouse daemon: {error}", file=sys.stderr, flush=True)
         traceback.print_exception(e)
-    return JSONResponse({"error": error}, status)
+    return JSONResponse({"error": error}, status, headers)
 
 
 class Server(uvicorn.Server):

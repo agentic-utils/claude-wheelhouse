@@ -558,3 +558,29 @@ async def test_a_signal_to_stop_ends_the_streams_first(daemon, monkeypatch):
     server.handle_exit(signal.SIGTERM, None)
     await asyncio.sleep(0)
     assert daemon.feed.closed and server.should_exit
+
+
+@pytest.mark.parametrize("read_before, status, desc", [
+    (True, 200, "a read under way: the blocks last read, at once"),
+    (False, 503, "a read under way and none before it: try again shortly"),
+])
+async def test_a_conversation_never_waits_on_a_read_under_way(daemon, sid, monkeypatch, read_before, status, desc):
+    read = daemon_mod.Hub.conversation
+    if read_before:
+        assert (await call(daemon, "GET", f"/sessions/{sid}/conversation")).status_code == 200
+
+    def slow(hub, sid):
+        time.sleep(0.5)   # a transcript on a mount gone slow
+        return read(hub, sid)
+    monkeypatch.setattr(daemon_mod.Hub, "conversation", slow)
+    async with client(daemon) as c:
+        reading = asyncio.create_task(c.get(f"/sessions/{sid}/conversation"))
+        await asyncio.sleep(0.05)
+        started = time.monotonic()
+        r = await c.get(f"/sessions/{sid}/conversation")
+        assert r.status_code == status and time.monotonic() - started < 0.25, desc
+        if status == 503:
+            assert r.headers["retry-after"] == "1" and r.json()["error"], desc
+        else:
+            assert r.json() == (await reading).json(), desc
+        assert (await reading).status_code == 200, desc
