@@ -1825,31 +1825,24 @@ def start_waiting(sid, tmp_path) -> None:
         f.write(json.dumps(rec) + "\n")
 
 
-# Laid out in full, a change that grows or shrinks what's above the view (the oldest turn
-# dropping off, the tab line, a warning under the head) moves what a reader scrolled up sees
-# by that many lines. Lazy layout (T68, reverted) kept it put; full layout always moved it.
-SHIFTS = pytest.mark.xfail(strict=True, reason="full layout: a change above the view moves it")
-
-
 @pytest.mark.anyio
 @pytest.mark.parametrize("change, up, twice, desc", [
     ("turn", 0, False, "a new turn, followed at its end: it shows at the true end"),
-    pytest.param("turn", 3, False, "a new turn, scrolled up to read: what shows stays put", marks=SHIFTS),
+    ("turn", 3, False, "a new turn, the oldest dropping off, scrolled up to read: what shows stays put"),
     ("rename", 3, False, "renamed, scrolled up to read: what shows stays put, not sent to the end"),
-    pytest.param("shell", 3, False, "handed to a shell, its tab line changed, scrolled up to read: what shows stays put",
-                 marks=SHIFTS),
-    pytest.param("waiting", 3, False, "a warning put in under its head, scrolled up to read: what shows stays put",
-                 marks=SHIFTS),
-    pytest.param("waiting", 3, True, "a warning put in, each block said twice: what shows stays put", marks=SHIFTS),
+    ("shell", 3, False, "handed to a shell, its tab line changed, scrolled up to read: what shows stays put"),
+    ("waiting", 3, False, "a warning put in under its head, scrolled up to read: what shows stays put"),
+    ("waiting", 3, True, "a warning put in, each block said twice: what shows stays put"),
 ])
-async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch, change, up, twice, desc):
+@pytest.mark.parametrize("width", [160, 100])   # the lines each block takes, and so the shift, differ
+async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch, change, up, twice, desc, width):
     """A reader scrolled up keeps their place across a change; one at the end stays there."""
     if change == "shell":   # a host's session, whose tab line shows only once handed to a shell
         sid = store.create_session(str(tmp_path), name="demo", runner="sdk")
     # waiting: under the 80 entries shown, so no oldest turn drops off to undo the warning's shift
     long_conversation(sid, tmp_path, monkeypatch, turns=60 if change == "waiting" else 200, twice=twice)
     app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
+    async with app.run_test(size=(width, 40)) as pilot:
         await pilot.pause()
         app.follow(sid)
         await pilot.pause()

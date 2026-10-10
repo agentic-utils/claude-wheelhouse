@@ -432,7 +432,10 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   markdown at once; later visits a few milliseconds. (T68 tried laying out only the newest
   blocks, and older ones as the pane scrolled up to them, for about 60 ms less. It was
   reverted: each interaction with scrolling, the mouse and a change while read turned up
-  another race.) The rendered blocks' cache (2048) holds about 25 conversations' worth at
+  another race.) A reader scrolled up keeps their place across a change above the view
+  (the oldest entry dropping off, the tab line, a warning under the head): the block at
+  the view's top is found again by a run of three and kept where it was on screen. The
+  rendered blocks' cache (2048) holds about 25 conversations' worth at
   one width: each shows its last 80 entries. Only a click or Enter offers to relaunch a
   dead one. The item list's cursor goes to the selection by key whenever they differ,
   except over an arrow of the person's whose highlight hasn't been handled yet. (Review 8

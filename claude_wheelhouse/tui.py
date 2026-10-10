@@ -1,6 +1,7 @@
 """The wheelhouse app: a Textual app. It only reads and writes the database."""
 
 import asyncio
+import bisect
 import functools
 import gc
 import math
@@ -261,6 +262,7 @@ class Transcript(Widget, can_focus=True):
     selectable. Drag selects, Ctrl+A selects it all, Ctrl+C copies (Textual's screen binding,
     which copies through the terminal: OSC 52, which Windows Terminal supports)."""
     ALLOW_SELECT = True
+    KEEP = 3   # blocks matched to keep a reader's place (update)
     DEFAULT_CSS = "Transcript { height: auto; }"
     BINDINGS = [Binding("ctrl+a", "select_all", "Select all", show=False)]
 
@@ -270,19 +272,36 @@ class Transcript(Widget, can_focus=True):
         self._laid: tuple | None = None
 
     def update(self, content: "Blocks | list[tuple[str, str]]") -> None:
+        """New blocks. Scrolled up to read (not at the end, which follows), the block at the top
+        of the view keeps its place on screen, whatever changed above it: found in the new
+        blocks by a run of KEEP from it, so a block said twice isn't taken for its twin, the
+        nearest where the run is found more than once."""
+        old, laid, scroll = self.blocks, self._laid, self.parent
         self.blocks = content.blocks if isinstance(content, Blocks) else list(content)
         self._laid = None
         self.refresh(layout=True)
+        if not laid or not isinstance(scroll, VerticalScroll) or scroll.scroll_y >= scroll.max_scroll_y - 1:
+            return
+        width, starts = laid[0], laid[3]
+        top = bisect.bisect_right(starts, scroll.scroll_y) - 1
+        run = old[top:top + self.KEEP]
+        found = [i for i in range(len(self.blocks) - len(run) + 1) if self.blocks[i:i + len(run)] == run]
+        if found:
+            at = min(found, key=lambda i: abs(i - top))
+            y = self._layout(width)[2][at] + scroll.scroll_y - starts[top]
+            scroll.scroll_to(y=y, animate=False, immediate=y <= scroll.max_scroll_y)   # or once laid out
 
-    def _layout(self, width: int) -> tuple[list[Strip], list[str]]:
+    def _layout(self, width: int) -> tuple[list[Strip], list[str], list[int]]:
+        """Each line as a strip and as text, and the line each block starts on."""
         if self._laid is None or self._laid[0] != width:
-            strips, texts = [], []
+            strips, texts, starts = [], [], []
             for who, md in self.blocks:
                 s, t = _block_strips(who, md, width, self.app.console)
+                starts.append(len(strips))
                 strips.extend(s)
                 texts.extend(t)
-            self._laid = (width, strips, texts)
-        return self._laid[1], self._laid[2]
+            self._laid = (width, strips, texts, starts)
+        return self._laid[1:]
 
     def get_content_width(self, container, viewport) -> int:
         return container.width
@@ -292,7 +311,7 @@ class Transcript(Widget, can_focus=True):
 
     def render_line(self, y: int) -> Strip:
         width = self.size.width
-        strips, texts = self._layout(width)
+        strips, texts, _ = self._layout(width)
         if y >= len(strips):
             return Strip.blank(width, self.rich_style)
         strip = strips[y]
