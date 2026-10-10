@@ -302,12 +302,14 @@ def test_a_restart_leaves_a_finished_item_alone(store, sid, joined):
 
 
 @pytest.mark.parametrize("started, active, finished, status, desc", [
-    (JOINED + 60, None, True, "done", "started after the session joined: tracked, finished or not"),
-    (JOINED - 600, None, True, None, "started before and finished: history, no item"),
-    (JOINED - 600, JOINED - 60, False, "running", "started before and still running then: tracked"),
-    (JOINED - 7200, JOINED - 3600, False, None, "started before, idle for over LIVE: taken as dead, no item"),
+    (60, None, True, "done", "started after the session joined: tracked, finished or not"),
+    (-600, None, True, None, "started before and finished: history, no item"),
+    (-600, -60, False, "running", "started before and still running then: tracked"),
+    (-7200, -3600, False, None, "started before, idle for over LIVE: taken as dead, no item"),
 ])
 def test_the_cut_off(store, sid, joined, started, active, finished, status, desc):
+    # seconds from JOINED, not times, in the test's id: every xdist worker collects the same
+    started, active = JOINED + started, None if active is None else JOINED + active
     t = joined.agent("a1", "Check pages", started=started, active=active)
     joined.write(tool_use(t, "Check pages", at=started), launched(t, "a1"),
                  *([notified("a1", t, "completed")] if finished else []))

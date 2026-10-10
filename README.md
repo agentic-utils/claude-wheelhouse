@@ -261,6 +261,9 @@ per user.
 make test
 ```
 
+The tests run in parallel, a worker a core (pytest-xdist). `uv run pytest -n 0` runs them
+serially, as a single test or a debugger wants.
+
 ## Licence
 
 MIT, see [LICENSE](LICENSE).

@@ -274,11 +274,12 @@ def test_usage_unavailable_after_a_failed_fetch():
     assert [r.plain for r in stats.gauges(None, u, NOW, 50)] == ["usage unavailable"]
 
 
-@pytest.mark.parametrize("now, shown, desc", [
-    (NOW - NOW % 2, stats.HOT, "on even seconds a flashing gauge is lit"),
-    (NOW - NOW % 2 + 1, tuple(int(c * 0.22) for c in stats.HOT), "on odd ones it's dark, as in the dashboard"),
+@pytest.mark.parametrize("second, shown, desc", [
+    (0, stats.HOT, "on even seconds a flashing gauge is lit"),
+    (1, tuple(int(c * 0.22) for c in stats.HOT), "on odd ones it's dark, as in the dashboard"),
 ])
-def test_flashing(now, shown, desc):
+def test_flashing(second, shown, desc):
+    now = NOW - NOW % 2 + second   # an offset, not the time, in the test's id: every xdist worker collects the same
     assert stats.flash(stats.HOT, True, now) == shown, desc
     assert stats.flash(stats.HOT, False, now) == stats.HOT, "a steady colour never flashes"
 

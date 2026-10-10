@@ -22,7 +22,11 @@ claude-wheelhouse = "claude_wheelhouse.cli:main"
 stats = "claude_wheelhouse.stats_pane:module"
 
 [dependency-groups]
-dev = ["httpx2>=2.13", "pytest>=8"]
+dev = ["httpx2>=2.13", "pytest>=8", "pytest-xdist>=3.8"]
+
+[tool.pytest.ini_options]
+# in parallel, a worker a core (pytest-xdist); `-n 0` runs it serially
+addopts = "-n auto"
 
 [build-system]
 requires = ["hatchling>=1.27"]
