@@ -6,6 +6,7 @@ import json
 import re
 import time
 import random
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
@@ -2135,6 +2136,107 @@ async def test_the_selected_item_keeps_its_place(store, sid, kind, pick, answer,
             assert order() == (["new", "old"] if age == pick else after), \
                 f"{desc}: {'held while selected' if age == pick else 're-sorted once the selection moved on'}"
             assert app.selected == (sid, refs[age]) and table.cursor_key() == f"{sid}|{refs[age]}", desc
+
+
+def pin_target(store, sid, start):
+    """The target item for test_a_selected_item_moves_only_on_delete, in its start state."""
+    if start in ("agent running", "agent dismissed"):
+        store.track_agent(sid, "ag1", "TARGET", "", datetime(2026, 10, 8, 10, tzinfo=timezone.utc))
+        ref = store.agent_links(sid)["ag1"][0]
+        if start == "agent dismissed":
+            store.agent_status(sid, "ag1", "done")
+            store.dismiss(sid, ref)
+        return ref
+    kind = start.split()[0]
+    extra = {"alternative": "a", "why": "b", "reverse": "c"} if kind == "decision" else {}
+    ref = store.post_item(sid, kind, "TARGET", **extra)
+    if start in ("task done", "task dismissed", "task dismissed awaiting"):
+        store.update_item(sid, ref, status="done")
+    if start in ("task dismissed", "task dismissed awaiting"):
+        store.dismiss(sid, ref)
+    if start == "question closed":
+        store.update_item(sid, ref, status="closed")
+    if start == "task dismissed awaiting":
+        store.send(sid, "a word", ref)
+    return ref
+
+
+PIN_ACTS = {
+    "done": lambda store, sid, ref: store.update_item(sid, ref, status="done"),
+    "answered": lambda store, sid, ref: store.reply(sid, ref, "ok", status="answered"),
+    "closed": lambda store, sid, ref: store.update_item(sid, ref, status="closed"),
+    "reopened": lambda store, sid, ref: store.update_item(sid, ref, status="open"),
+    "running": lambda store, sid, ref: store.update_item(sid, ref, status="running"),
+    "note": lambda store, sid, ref: store.update_item(sid, ref, note="progress"),
+    "queue": lambda store, sid, ref: store.queue(sid, "a word", ref),
+    "reply": lambda store, sid, ref: store.reply(sid, ref, "answer to your word"),
+    "seen": lambda store, sid, ref: store.mark_seen(sid, ref),
+    "agent done": lambda store, sid, ref: store.agent_status(sid, "ag1", "done"),
+    "agent failed": lambda store, sid, ref: store.agent_status(sid, "ag1", "failed"),
+    "agent running": lambda store, sid, ref: store.agent_status(sid, "ag1", "running"),
+}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("start, act, moves, desc", [
+    ("task running", "done", False, "a task the session marks done"),
+    ("question open", "answered", False, "a question the session answers"),
+    ("decision unseen", "seen", False, "a decision marked seen"),
+    ("agent running", "agent done", False, "a subagent that finishes"),
+    ("agent running", "agent failed", False, "a subagent that fails"),
+    ("question open", "closed", False, "a question the session closes"),
+    ("question closed", "reopened", False, "a question the session reopens"),
+    ("task dismissed", "running", False, "a dismissed task whose status the session changes"),
+    ("agent dismissed", "agent running", False, "a dismissed subagent that resumes"),
+    ("task dismissed", "note", False, "a note on a dismissed task"),
+    ("task dismissed", "queue", False, "the person queueing a word on a dismissed task"),
+    ("task dismissed awaiting", "reply", False, "a reply to the person's word on a dismissed task"),
+    ("question open", "delete", True, "the person closing a question with Delete (D33)"),
+    ("task done", "delete", True, "the person dismissing a done task with Delete (D33)"),
+    ("question closed", "delete", True, "the person reopening a question with Delete, F on (D33)"),
+    ("task dismissed", "delete", True, "the person bringing back a dismissed task with Delete, F on (D33)"),
+])
+async def test_a_selected_item_moves_only_on_delete(store, sid, live, start, act, moves, desc):
+    """Doug: "only move items when not selected (so eg the falling animation for completed
+    tasks, which I think should also apply to seen decisions and answered questions, should
+    only take place after I move focus to something else)". The one exception is the
+    person's own Delete, closing or reopening, which moves it at once (D33)."""
+    tick = itertools.count()
+    stamp = lambda: (datetime(2026, 10, 8, 10, tzinfo=timezone.utc) + timedelta(seconds=next(tick))).isoformat()
+    with mock.patch("claude_wheelhouse.store.now", stamp):   # one second apart: a fixed order
+        fill = [store.post_item(sid, "task", f"fill{n}") for n in range(2)]
+        store.update_item(sid, fill[0], status="done")   # something settled
+        finish = lambda title: store.dismiss(sid, store.post_item(sid, "task", title, status="done"))
+        store.update_item(sid, store.post_item(sid, "question", "closed q"), status="closed")
+        finish("dismissed t")   # finished, before the target and after it
+        ref = pin_target(store, sid, start)
+        finish("dismissed t2")
+        for n in range(2, 4):
+            store.post_item(sid, "task", f"fill{n}")
+        app = WheelhouseApp(store)
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.pause()
+            table = app.items_table
+            table.focus()
+            await pilot.press("f")   # finished items shown, so a finished target is in the list
+            await pilot.pause()
+            table.move_cursor(row=table.get_row_index(f"{sid}|{ref}"))
+            await pilot.pause()
+            where = lambda: [r.key.value for r in table.ordered_rows].index(f"{sid}|{ref}")
+            before = where()
+            assert app.selected == (sid, ref), desc
+            if act == "delete":
+                await pilot.press("delete")
+            else:
+                PIN_ACTS[act](store, sid, ref)
+                app.refresh_data()
+            await pilot.pause()
+            while app.item_sink.move:
+                await pilot.pause(0.05)
+            app.refresh_data()   # a later tick holds it too
+            await pilot.pause()
+            assert (where() != before) == moves, f"{desc}: {'moved at once' if moves else 'held while selected'}"
+            assert app.selected == (sid, ref) and table.cursor_key() == f"{sid}|{ref}", f"{desc}: still selected"
 
 
 @pytest.mark.anyio
