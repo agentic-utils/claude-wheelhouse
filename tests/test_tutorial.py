@@ -339,7 +339,7 @@ async def test_closing_the_decision_ticks_it(store, sid, tut):
         keys = [items.coordinate_to_cell_key((i, 0)).row_key.value for i in range(items.row_count)]
         items.move_cursor(row=keys.index(f"{tut}|P1"))
         await pilot.pause()
-        store.answer_permission(tut, "P1", "allow")
+        app.answer_permission(tut, "P1", "allow")   # the person allows it: it goes at once
         app.refresh_data()
         await pilot.pause()
         assert app.selected == (tut, "D1") and store.item(tut, "D1")["status"] == "seen", \

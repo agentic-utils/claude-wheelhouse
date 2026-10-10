@@ -354,7 +354,7 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   ordinary paint, so the cursor rides its row by key (D22). Every key that moves a
   list's cursor (Up, Down, PageUp, PageDown, Ctrl+Home, Ctrl+End, Shift+Up and Shift+Down)
   acts in the final order, never a frame's or a blank row, so keys typed during a move end
-  as typed after it. Delete moves at once, closing or reopening (D33): the one change that moves a selected item. The item list's session column shows only while
+  as typed after it. Delete moves at once, closing or reopening (D33), as does a permission answered: the only changes that move a selected item. The item list's session column shows only while
   it has every session's items (D31): following one session, it's redundant.
 - **Session view.** Selecting a session (one click, or Enter) also puts its main
   conversation in the right-hand pane, so the person can follow and talk to a session

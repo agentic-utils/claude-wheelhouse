@@ -2171,6 +2171,7 @@ PIN_ACTS = {
     "queue": lambda store, sid, ref: store.queue(sid, "a word", ref),
     "reply": lambda store, sid, ref: store.reply(sid, ref, "answer to your word"),
     "seen": lambda store, sid, ref: store.mark_seen(sid, ref),
+    "allowed": lambda store, sid, ref: store.answer_permission(sid, ref, "allow"),
     "agent done": lambda store, sid, ref: store.agent_status(sid, "ag1", "done"),
     "agent failed": lambda store, sid, ref: store.agent_status(sid, "ag1", "failed"),
     "agent running": lambda store, sid, ref: store.agent_status(sid, "ag1", "running"),
@@ -2195,6 +2196,8 @@ PIN_ACTS = {
     ("task done", "delete", True, "the person dismissing a done task with Delete (D33)"),
     ("question closed", "delete", True, "the person reopening a question with Delete, F on (D33)"),
     ("task dismissed", "delete", True, "the person bringing back a dismissed task with Delete, F on (D33)"),
+    ("permission open", "#allow", True, "the person answering a permission: an explicit act, as Delete is"),
+    ("permission open", "allowed", False, "a permission answered elsewhere (its own terminal)"),
 ])
 async def test_a_selected_item_moves_only_on_delete(store, sid, live, start, act, moves, desc):
     """Doug: "only move items when not selected (so eg the falling animation for completed
@@ -2227,6 +2230,8 @@ async def test_a_selected_item_moves_only_on_delete(store, sid, live, start, act
             assert app.selected == (sid, ref), desc
             if act == "delete":
                 await pilot.press("delete")
+            elif act.startswith("#"):
+                await pilot.click(act)
             else:
                 PIN_ACTS[act](store, sid, ref)
                 app.refresh_data()

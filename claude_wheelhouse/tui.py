@@ -1800,9 +1800,9 @@ class WheelhouseApp(App):
         """Items in inbox order (inbox_rank), but for the selected item, pinned: it keeps the
         rank it was shown with when it was selected, so its own change (a decision seen, a
         question answered, a task done) never moves it under the person. It re-sorts once the
-        selection moves on, and a settled item then sinks (Sink). The one exception is the
-        person's own Delete, closing or reopening (close): it goes at once (D33), and is pinned
-        where it went. self.ranks keeps each item's rank as shown: the next pin's, and what has
+        selection moves on, and a settled item then sinks (Sink). The exceptions are the person's
+        own explicit acts, Delete closing or reopening (close) and a permission answered
+        (answer_permission): it goes at once (D33), and is pinned where it went. self.ranks keeps each item's rank as shown: the next pin's, and what has
         somewhere to go (paint_items)."""
         key = self.selected and self.selected[1] and f"{self.selected[0]}|{self.selected[1]}"
         if self.pin is None or self.pin[0] != key:
@@ -2363,6 +2363,12 @@ class WheelhouseApp(App):
         else:
             self.store.update_item(item["session_id"], item["ref"], status="closed" if closed else "answered")
 
+    def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
+        """The person's Allow, Always or Deny: an explicit act, as Delete is, so selected, the
+        item moves at once (ranked)."""
+        self.store.answer_permission(sid, ref, decision, message)
+        self.repin.add(f"{sid}|{ref}")
+
     def close_marked(self) -> None:
         """Delete on a multi-selection: closes its questions and decisions and dismisses its
         settled tasks and subagents, or brings them back if they're all finished. Anything
@@ -2435,7 +2441,7 @@ class WheelhouseApp(App):
         s = self.row(target[0])
         if self.asking(target):   # never queued: the session is waiting on it (#53)
             try:
-                self.store.answer_permission(*target, "deny", text)
+                self.answer_permission(*target, "deny", text)
                 self.notify(f"denied {target[1]}, with your message")
             except KeyError as e:   # answered meanwhile
                 self.notify(str(e.args[0]), severity="warning")
@@ -2589,7 +2595,7 @@ class WheelhouseApp(App):
         box, aimed_at = self.composing()
         reason = emoji.convert(box.text.strip()) if box is not None and aimed_at == target and event.button.id == "deny" else ""
         try:
-            self.store.answer_permission(*target, event.button.id, reason)
+            self.answer_permission(*target, event.button.id, reason)
         except (KeyError, SessionGone) as e:   # answered meanwhile, or the session went
             self.notify(str(e.args[0] if e.args else e), severity="warning")
         else:
