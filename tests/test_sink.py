@@ -46,6 +46,26 @@ def test_where_each_status_stands(kind, status, busy, dismissed, expected, desc)
     assert standing(item, {("s", "X1")} if busy else set()) == expected, desc
 
 
+@pytest.mark.parametrize("kind, status, dismissed, desc", [
+    ("task", "done", "done", "a task done before the upgrade stays off the inbox, as it was"),
+    ("task", "dropped", "dropped", "so does a dropped one"),
+    ("agent", "done", "done", "and a finished subagent"),
+    ("agent", "failed", "failed", "and a failed one"),
+    ("task", "running", None, "a running task is left as it is"),
+    ("agent", "running", None, "so is a running subagent"),
+    ("question", "answered", None, "an answered question was in sight before, and stays so"),
+    ("decision", "seen", None, "so was a seen decision"),
+])
+def test_the_upgrade_keeps_what_was_off_the_inbox_off_it(db_file, store, sid, kind, status, dismissed, desc):
+    ref = store.post_item(sid, kind, "old", **(DECIDED if kind == "decision" else {}))
+    store.db.execute("UPDATE items SET status = ? WHERE ref = ?", (status, ref))
+    store.db.execute("ALTER TABLE items DROP COLUMN dismissed")   # as before the upgrade
+    assert Store(db_file).item(sid, ref)["dismissed"] == dismissed, desc
+    fresh = store.post_item(sid, kind, "new", **(DECIDED if kind == "decision" else {}))
+    store.db.execute("UPDATE items SET status = ? WHERE ref = ?", (status, fresh))
+    assert Store(db_file).item(sid, fresh)["dismissed"] is None, f"{desc}: once, at the upgrade"
+
+
 @pytest.mark.parametrize("kind, change, back, desc", [
     ("task", lambda st, s, r: st.update_item(s, r, status="running"), True, "the session takes the task up again"),
     ("task", lambda st, s, r: st.update_item(s, r, note="shipped"), False, "a note alone leaves it dismissed"),

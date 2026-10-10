@@ -226,9 +226,17 @@ class Store:
             for statement in SCHEMA.split(";"):
                 if statement.strip():
                     db.execute(statement)
+            added = set()
             for table, column, kind in ADDED_COLUMNS:
                 if column not in {r[1] for r in db.execute(f"PRAGMA table_info({table})")}:
                     db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+                    added.add((table, column))
+            if ("items", "dismissed") in added:
+                # settled tasks and subagents used to be off the inbox: those settled by the
+                # upgrade stay off it, dismissed, rather than flood it, dimmed
+                for kind in DISMISSABLE:
+                    db.execute(f"UPDATE items SET dismissed = status WHERE kind = ? AND status IN "
+                               f"({','.join('?' * len(SETTLED[kind]))})", (kind, *SETTLED[kind]))
             for statement in INDEXES.split(";"):
                 if statement.strip():
                     db.execute(statement)
