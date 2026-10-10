@@ -175,6 +175,37 @@ async def test_an_answer_the_store_cant_keep_is_kept_in_memory_till_it_can(daemo
     assert store.answered("k1")["body"] == first.text and not daemon.unkept
 
 
+async def test_the_same_key_sent_at_once_is_done_once(daemon, store, sid):
+    sent = await asyncio.gather(*(call(daemon, "POST", f"/sessions/{sid}/send", {"text": "hello"}, key="k1")
+                                  for _ in range(4)))
+    assert len(store.drafts(sid)) == 1
+    assert sorted(r.headers.get("idempotent-replayed", "") for r in sent) == ["", "true", "true", "true"], \
+        "one acts, the rest replay its answer"
+    assert all((r.status_code, r.json()) == (200, sent[0].json()) for r in sent)
+
+
+@pytest.mark.parametrize("breaks, acted, desc", [
+    ("answered", 0, "the kept answers can't be read: nothing done"),
+    ("marks", 1, "what it moved can't be read, after it was done"),
+])
+async def test_a_command_the_daemon_fails_is_answered_as_json(daemon, store, sid, monkeypatch, capsys, breaks, acted,
+                                                              desc):
+    def locked(*a, **kw):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(store if breaks == "answered" else daemon, breaks, locked)
+    r = await call(daemon, "POST", f"/sessions/{sid}/send", {"text": "hello"})
+    assert (r.status_code, r.json()["error"]) == (500, "the daemon failed: OperationalError: database is locked"), desc
+    assert len(store.drafts(sid)) == acted, desc
+    assert "Traceback" in capsys.readouterr().err, desc
+
+
+def test_a_callback_that_fails_is_said_with_its_traceback(daemon, capsys):
+    daemon.post(lambda: 1 / 0)
+    daemon.worker.submit(lambda: None).result()   # the hub's thread has run it
+    err = capsys.readouterr().err
+    assert "a callback failed: ZeroDivisionError" in err and "Traceback" in err
+
+
 async def test_a_key_is_forgotten_after_a_day(daemon, store, sid):
     await call(daemon, "POST", f"/sessions/{sid}/send", {"text": "hello"}, key="k1")
     store.db.execute("UPDATE idempotency SET at = '2000-01-01T00:00:00+00:00'")

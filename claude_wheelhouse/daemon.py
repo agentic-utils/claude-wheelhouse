@@ -237,9 +237,16 @@ class Daemon:
         self.pool.submit(work)
 
     def post(self, callback) -> None:
-        """From a worker thread: the hub's callback, on the hub's thread."""
+        """From a worker thread: the hub's callback, on the hub's thread. One that fails is
+        said on stderr, with its traceback, as nothing awaits it."""
+        def run():
+            try:
+                callback()
+            except Exception as e:
+                print(f"wheelhouse daemon: a callback failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+                traceback.print_exc()
         try:
-            self.worker.submit(callback)
+            self.worker.submit(run)
         except RuntimeError:   # shut down: the daemon is stopping
             pass
 
@@ -383,10 +390,10 @@ class Daemon:
                 key = request.headers.get("idempotency-key")
                 if not key:
                     raise Refused(400, "every command needs an Idempotency-Key")
+                raw = await request.body()
+                return await self.on_hub(self.carry_out, handler, request, key, raw)
             except Exception as e:
                 return refusal(e)
-            raw = await request.body()
-            return await self.on_hub(self.carry_out, handler, request, key, raw)
         return endpoint
 
     def carry_out(self, handler, request: Request, key: str, raw: bytes) -> Response:
@@ -405,7 +412,7 @@ class Daemon:
             response = JSONResponse(done_json(handler(request, body)))
         except json.JSONDecodeError:
             response = refusal(Refused(400, "the body isn't JSON"))
-        except Exception as e:
+        except ANSWERED as e:   # anything else isn't kept: it escapes, so a retry tries again
             response = refusal(e)
         answer = {"fingerprint": fingerprint, "status": response.status_code, "body": response.body.decode()}
         try:
@@ -561,9 +568,15 @@ class Daemon:
         return self.hub.close(request.path_params["sid"], request.path_params["ref"], closed)
 
 
+# the errors a request is answered with, each as its status (refusal): a command's is kept
+# with its key, as any other (the database locked) may not happen again
+ANSWERED = (Refused, SessionGone, KeyError, ValueError)
+
+
 def refusal(e: Exception) -> JSONResponse:
     """An error as its status: a session gone or anything else not there 404, a bad request
-    400, and a Refused as it says."""
+    400, and a Refused as it says. Anything else is the daemon's own failure, 500, said on
+    stderr with its traceback."""
     if isinstance(e, Refused):
         status, error = e.status, e.error
     elif isinstance(e, (SessionGone, KeyError)):
@@ -571,7 +584,9 @@ def refusal(e: Exception) -> JSONResponse:
     elif isinstance(e, ValueError):
         status, error = 400, str(e)
     else:
-        raise e
+        status, error = 500, f"the daemon failed: {type(e).__name__}: {e}"
+        print(f"wheelhouse daemon: {error}", file=sys.stderr, flush=True)
+        traceback.print_exception(e)
     return JSONResponse({"error": error}, status)
 
 
