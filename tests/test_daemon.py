@@ -124,8 +124,13 @@ async def test_each_route(daemon, store, sid, tmp_path, method, path, body, did,
     ("POST", "/sessions/{sid}/fly", None, 404, "a command that isn't one"),
     ("POST", "/sessions", ["not", "an", "object"], 400, "a body that isn't an object"),
     ("GET", "/fs?path=/no/such/dir", None, 404, "a directory that isn't there"),
+    ("POST", "/sessions", {"cwd": "/no/such/dir"}, 400, "a new session where there's no directory"),
+    ("POST", "/sessions", {"cwd": "."}, 400, "nor a relative path, which would be the daemon's"),
+    ("POST", "/sessions", {"cwd": "/", "runner": "tab"}, 400, "a tab, on a screen nobody remote sees"),
+    ("POST", "/items/{sid}/T1/permission", {"decision": "allow"}, 400, "a permission's answer to a task"),
 ])
 async def test_errors_map_to_statuses(daemon, store, sid, method, path, body, status, desc):
+    store.post_item(sid, "task", "do it")
     ref = store.post_item(sid, "permission", "Bash: ls")
     store.answer_permission(sid, ref, "deny")
     r = await call(daemon, method, path.format(sid=sid), body)

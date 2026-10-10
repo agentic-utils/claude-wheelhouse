@@ -57,8 +57,10 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
   still the client's; Unpark is `POST /sessions/{sid}/unpark`; Relaunch with `host`
   `[pid, start]`, the host the client showed, stops it and starts it again, and without
   it brings back a dead session; mode takes the mode wanted, so a repeat does nothing
-  (last write wins). Errors: `SessionGone` and an item not there 404, a permission decided
-  already 409, a bad body 400. `StillStarting` and `NotAllowed` don't exist yet.
+  (last write wins). A new session needs an existing directory's absolute path, and runs
+  by a host: `runner` `tab` is refused, as a tab would open on the home machine's screen.
+  Errors: `SessionGone` and an item not there 404, a permission decided already 409, a
+  bad body (a decision for an item that isn't a permission too) 400. `StillStarting` and `NotAllowed` don't exist yet.
 - **Idempotency.** Every POST needs an `Idempotency-Key` (400 without). Each answer is kept
   in the database's `idempotency` table for a day, so a request sent again, across a
   daemon restart too, is answered the same and done once; the same key on another request

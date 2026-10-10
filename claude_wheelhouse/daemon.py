@@ -41,7 +41,7 @@ from starlette.routing import Route
 
 from . import stats
 from .hub import Done, Event, Hub, host_context
-from .store import SessionGone, Store, default_runner, inbox_rank, mode, runner, standing
+from .store import SessionGone, Store, inbox_rank, mode, runner, standing
 
 ADDRESS, PORT = "127.0.0.1", 7428
 TICK = 1.0           # seconds between the hub's refreshes, as the TUI's tick
@@ -467,9 +467,15 @@ class Daemon:
     # commands
 
     def new_session(self, request: Request, body: dict) -> Done:
-        return self.hub.new_session(text(body, "cwd"), text(body, "name", False) or "",
-                                    text(body, "ticket", False) or "", text(body, "brief", False) or "",
-                                    text(body, "runner", False) or default_runner())
+        """A session in an existing directory, by its absolute path, run by a host: a tab
+        would open on the home machine's screen, where nobody remote is."""
+        cwd = text(body, "cwd")
+        if not os.path.isabs(cwd) or not os.path.isdir(cwd):
+            raise Refused(400, f"cwd must be an existing directory's absolute path: {cwd!r} isn't")
+        if (text(body, "runner", False) or "sdk") != "sdk":
+            raise Refused(400, "a session started remotely runs by a host: runner can only be sdk")
+        return self.hub.new_session(cwd, text(body, "name", False) or "", text(body, "ticket", False) or "",
+                                    text(body, "brief", False) or "", "sdk")
 
     def session_command(self, request: Request, body: dict) -> Done:
         """Relaunch with the host a client was shown, (pid, start time), stops that host and
@@ -510,7 +516,8 @@ class Daemon:
         """Allow, Always or Deny, once: a permission already decided, by another client or
         an outbox replayed late, is a conflict."""
         sid, ref = request.path_params["sid"], request.path_params["ref"]
-        self.item(sid, ref)
+        if self.item(sid, ref)["kind"] != "permission":
+            raise Refused(400, f"{ref} isn't a permission")
         try:
             return self.hub.answer_permission(sid, ref, text(body, "decision"), text(body, "message", False) or "")
         except KeyError:
