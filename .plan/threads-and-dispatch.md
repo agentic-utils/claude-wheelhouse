@@ -156,7 +156,9 @@ Where the build differs from the design above:
   marks a question answered: the person's message may itself be a clarifying question.
   `reply(ref, text, status)` requires `status` on a question, `open` (still waiting on
   the person) or `answered` (their input lets the session proceed); on a task or agent it
-  is optional. While the person's message is the latest on an item, with no reply since,
+  is optional. A session run in the wheelhouse (#16) has its turn's chat posted as the
+  reply by its host, and declares the status with `update_item` alone, so it never writes
+  its answer twice. While the person's message is the latest on an item, with no reply since,
   the item list shows it dimmed as `⏳ <status>` (derived, `Store.awaiting()`).
 - **D28: processing (#65).** An unfinished item of any kind whose answer has been sent
   (not a draft), with no reply since and nothing more queued, shows dimmed as
