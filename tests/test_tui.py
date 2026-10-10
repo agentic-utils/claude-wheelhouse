@@ -17,7 +17,7 @@ from textual.pilot import _get_mouse_message_arguments
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, TextArea
 
 from claude_wheelhouse import launch, stats, transcript, tui
-from claude_wheelhouse.hub import Hub
+from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
 from claude_wheelhouse.store import Store, mode
@@ -773,7 +773,7 @@ async def test_a_double_click_on_a_dead_session_offers_one_relaunch(store, sid, 
     other = store.create_session(str(tmp_path), name="other")
     by_name(monkeypatch, {"demo": "live", "other": status})
     launched = []
-    monkeypatch.setattr(Hub, "open_session", lambda self, s, restore=False: launched.append(s) or True)
+    monkeypatch.setattr(Hub, "open_session", lambda self, s, restore=False: launched.append(s) or Done())
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         for _ in range(3):
@@ -1493,7 +1493,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
     monkeypatch.setattr(WheelhouseApp, "host_command", lambda self, sid, what: hosts.append(what))
     monkeypatch.setattr(WheelhouseApp, "exit", lambda self, *a, **k: exits.append(True))
     monkeypatch.setattr(Hub, "open_session",
-                        lambda self, sid, restore=False: launched.append(store.session(sid)["name"]) or True)
+                        lambda self, sid, restore=False: launched.append(store.session(sid)["name"]) or Done())
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()

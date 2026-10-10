@@ -34,9 +34,15 @@ def test_the_hub_never_imports_textual():
 
 @pytest.fixture
 def heard(hub):
+    """What the hub says to every listener: only what it does by itself."""
     said = []
     hub.listen(lambda e: said.append((e.text, e.severity)))
     return said
+
+
+def told(done):
+    """What a command says to the surface that gave it."""
+    return [(e.text, e.severity) for e in done.notices]
 
 
 @pytest.mark.parametrize("status, requested, relaunching, shown, desc", [
@@ -75,28 +81,39 @@ def test_relaunch_stops_the_host_then_starts_it_again(hub, store, sid, heard, mo
     monkeypatch.setattr(hub_mod, "RELAUNCH_WAIT", wait)
     monkeypatch.setattr(launch, "open_session", lambda store, sid: calls.append("open"))
     hub.refresh()
-    hub.stop_host(sid, asked)
+    stopping = told(hub.stop_host(sid, asked))
     hub.refresh()
     hub.finish_relaunches()
     assert calls == launched, desc
-    assert any(said in text for text, _ in heard), f"{desc}: {heard}"
+    assert any(said in text for text, _ in stopping + heard), f"{desc}: {stopping} {heard}"
     assert sid not in hub.relaunching or asked != (4242, 1), f"{desc}: done with, either way"
 
 
 def test_relaunch_of_a_dead_session_unparks_it(hub, store, sid, heard, monkeypatch):
     monkeypatch.setattr(launch, "restore_session", lambda store, sid: None)
     store.set_parked(sid, True)
-    assert hub.relaunch(sid)
-    assert not store.session(sid)["parked"]
-    assert heard == [("relaunching", "information")]
+    done = hub.relaunch(sid)
+    assert done.ok and not store.session(sid)["parked"]
+    assert (told(done), heard) == ([("relaunching", "information")], [])
 
 
 def test_a_launch_that_fails_is_said_as_an_error(hub, sid, heard, monkeypatch):
     def refuse(store, sid):
         raise RuntimeError("already running")
     monkeypatch.setattr(launch, "open_session", refuse)
-    assert not hub.open_session(sid)
-    assert heard == [("already running", "error")]
+    done = hub.open_session(sid)
+    assert not done.ok
+    assert (told(done), heard) == ([("already running", "error")], [])
+
+
+def test_a_relaunch_the_hub_finishes_is_said_to_every_listener(hub, store, sid, heard, monkeypatch):
+    host(store, sid)
+    monkeypatch.setattr(liveness, "is_alive", lambda *a: False)
+    monkeypatch.setattr(launch, "open_session", lambda store, sid: None)
+    hub.refresh()
+    hub.relaunching[sid] = (float("inf"), (4242, 1))
+    hub.finish_relaunches()
+    assert heard == [("relaunched demo", "information")]
 
 
 @pytest.mark.parametrize("parked, status, read, desc", [
@@ -163,10 +180,13 @@ def test_submit_queues_or_sends_by_the_sessions_mode(hub, store, sid, heard, mon
     monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
     ref = kind and store.post_item(sid, kind, "which db?")
     hub.refresh()
-    assert hub.submit((sid, ref), "yes"), desc
+    done = hub.submit((sid, ref), "yes")
+    assert done.ok, desc
     assert [m["body"] for m in store.drafts(sid)] == queued, desc
     assert [m["body"] for m in store.pending(sid)] == sent, desc
-    assert any(said in text for text, _ in heard), f"{desc}: {heard}"
+    assert any(said in text for text, _ in told(done)), f"{desc}: {told(done)}"
+    assert heard == [], f"{desc}: said to the surface that gave it, not broadcast"
+    assert done.denied == (kind == "permission"), desc
     assert kind != "permission" or store.item(sid, ref)["status"] == "denied", desc
 
 
@@ -174,8 +194,9 @@ def test_a_permission_answered_meanwhile_is_not_submitted(hub, store, sid, heard
     ref = store.post_item(sid, "permission", "Bash: rm -rf build")
     hub.asking = lambda target: True   # open as the box was submitted, answered by the time it lands
     store.answer_permission(sid, ref, "allow")
-    assert not hub.submit((sid, ref), "no")
-    assert heard[-1][1] == "warning"
+    done = hub.submit((sid, ref), "no")
+    assert not done.ok and not done.denied
+    assert told(done)[-1][1] == "warning"
 
 
 @pytest.mark.parametrize("status, left, said, desc", [
@@ -186,9 +207,9 @@ def test_send_queue_leaves_a_dead_sessions_queue(hub, store, sid, heard, monkeyp
     monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
     store.queue(sid, "a")
     hub.refresh()
-    hub.send_queue(sid)
+    done = hub.send_queue(sid)
     assert [m["body"] for m in store.drafts(sid)] == left, desc
-    assert heard[-1][0] == said, desc
+    assert told(done)[-1][0] == said, desc
 
 
 @pytest.mark.parametrize("now, what, acted, desc", [
@@ -198,10 +219,11 @@ def test_send_queue_leaves_a_dead_sessions_queue(hub, store, sid, heard, monkeyp
 ])
 def test_act_on_dead_checks_again(hub, store, sid, heard, monkeypatch, now, what, acted, desc):
     monkeypatch.setattr(liveness, "status", lambda s, **kw: now)
-    assert hub.act_on_dead(sid, what) == acted, desc
+    done = hub.act_on_dead(sid, what)
+    assert done.ok == acted, desc
     s = store.session(sid)
     assert (s is None if what == "end" else bool(s["parked"])) == acted, desc
-    assert bool(heard) != acted, desc
+    assert bool(told(done)) != acted, desc
 
 
 def test_a_command_on_a_session_that_has_gone_raises(hub, store, sid):
@@ -238,6 +260,21 @@ def refuse(store):
 def test_the_tutorial_offer_answered(hub, store, heard, monkeypatch, take, start, started, setting, desc):
     if start:
         monkeypatch.setattr(tutorial, "start", start)
-    assert hub.answer_offer(take) == started, desc
+    done = hub.answer_offer(take)
+    assert done.ok == started, desc
     assert store.setting(tutorial.OFFER_KEY) == setting, desc
-    assert len(heard) == 1, desc
+    assert (len(told(done)), heard) == (1, []), desc
+
+
+@pytest.mark.parametrize("command, said, desc", [
+    (lambda hub, sid: hub.rename(sid, "x"), [("renamed to x", "information")], "a rename"),
+    (lambda hub, sid: hub.ask(sid, "park"), [("asked the session to park", "information")], "Park asked"),
+    (lambda hub, sid: (hub.store.queue(sid, "a"), hub.toggle_mode(sid))[1],
+     [("demo: answers now send as you submit them", "information"),
+      ("1 answer(s) still queued for demo: Ctrl+S or Send sends them", "information")], "both of a mode's notices"),
+    (lambda hub, sid: hub.host_command(sid, "interrupt"), [("interrupting", "information")], "a host command"),
+    (lambda hub, sid: hub.send_all(), [("nothing queued", "information")], "Send all with nothing queued"),
+])
+def test_a_commands_notices_go_to_its_surface_alone(hub, sid, heard, command, said, desc):
+    hub.refresh()
+    assert (told(command(hub, sid)), heard) == (said, []), desc

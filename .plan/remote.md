@@ -10,9 +10,12 @@ transcript followers (conversations, context sizes, subagents), the account usag
 and the person's commands on sessions and items (send, queue, dispatch, mode, Park and
 End, rename, close and reopen, permissions, host commands). It never imports Textual. Its
 owner gives it `spawn` (work on a worker thread) and `post` (a callback back on the
-owner's thread), and listens for its `Event`s: `notice`, a toast, and `landed`, a
-transcript read that brought something. Those are the seams phase 2 puts behind HTTP and
-SSE. The TUI keeps the widgets, the dialogs and their wording, the key dispatch (take_key,
+owner's thread), and listens for its `Event`s: `notice`, a toast for what the hub did by
+itself (a relaunch's outcome, a subagent sync failing), and `landed`, a transcript read
+that brought something. A command returns what it did (`Done`): whether it acted, its own
+notices, for the surface that gave it alone, and for submit whether it denied a
+permission. Those are the seams phase 2 puts behind HTTP (a command's response) and SSE
+(the events). The TUI keeps the widgets, the dialogs and their wording, the key dispatch (take_key,
 land, settle), selection, ranking and the dwell, the tutorial checklist and the splitter
 sizes. It still reads plain rows straight from the store and re-queries on its 1 s tick;
 phase 2 puts the query surface and the change feed in front of both. The unsent text

@@ -1,7 +1,7 @@
 """The hub: what the wheelhouse knows and does, whatever shows it (.plan/remote.md, phase 1).
 The TUI owns one, in process, and reads and acts through it; phase 2 puts it in a daemon,
-behind HTTP. It never imports Textual: what a surface should know, it says as events
-(Event) to whoever listens.
+behind HTTP. It never imports Textual: what a surface should know of what it does by
+itself, it says as events (Event) to whoever listens.
 
 It owns the sessions' liveness, and Relaunch, from the stop to the start again. Like the
 app before it, it never acts on a session by itself: a host that dies stays dead until
@@ -10,15 +10,15 @@ context size and each session's subagents, and fetches the account's usage, the 
 and fetching on the owner's worker threads (spawn), never on the thread that calls it.
 
 Its commands are the person's acts on sessions and items: each checks what it needs,
-writes the store and says what it did. One on a session that has gone raises SessionGone
-(row), which a surface reports; the dialogs that ask first, and their wording, are the
-surface's."""
+writes the store and returns what it did (Done), with what to say to the person, for the
+surface that gave it alone. One on a session that has gone raises SessionGone (row), which
+a surface reports; the dialogs that ask first, and their wording, are the surface's."""
 
 import functools
 import os
 import signal
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from . import adopt, launch, liveness, stats, subagents, transcript, tutorial
@@ -48,12 +48,27 @@ def aimed(target) -> str:
 @dataclass(frozen=True)
 class Event:
     """What a surface should know. "notice": text to show the person, with its severity
-    (information, warning or error). "landed": a read of a session's transcript (sid)
-    brought something, so what shows its context size can repaint."""
+    (information, warning or error): to every listener, of what the hub did by itself (a
+    relaunch finishing, a subagent sync failing), or in a command's Done, to its surface
+    alone. "landed": a read of a session's transcript (sid) brought something, so what
+    shows its context size can repaint."""
     kind: str
     text: str = ""
     severity: str = "information"
     sid: str | None = None
+
+
+@dataclass
+class Done:
+    """What a command did, for the surface that gave it: whether it acted (ok), what to say
+    to the person (notices), and for submit, whether it denied an open permission."""
+    ok: bool = True
+    notices: list[Event] = field(default_factory=list)
+    denied: bool = False
+
+    def say(self, text: str, severity: str = "information") -> "Done":
+        self.notices.append(Event("notice", text, severity))
+        return self
 
 
 class Hub:
@@ -93,7 +108,9 @@ class Hub:
         for listener in self.listeners:
             listener(event)
 
-    def say(self, text: str, severity: str = "information") -> None:
+    def announce(self, text: str, severity: str = "information") -> None:
+        """To every listener: only for what the hub does by itself. A command's notices go
+        in its Done, to the surface that gave it."""
         self.emit(Event("notice", text, severity))
 
     # sessions and their liveness
@@ -146,25 +163,24 @@ class Hub:
 
     # launching and Relaunch
 
-    def open_session(self, sid: str, restore: bool = False) -> bool:
+    def open_session(self, sid: str, restore: bool = False) -> Done:
         """Launch a session the way it runs, a host or a tab; a restore runs it the way new
         sessions run now (launch.restore_session)."""
         try:
             (launch.restore_session if restore else launch.open_session)(self.store, sid)
         except Exception as e:   # already running, wt.exe missing...
-            self.say(str(e), "error")
-            return False
-        return True
+            return Done(False).say(str(e), "error")
+        return Done()
 
-    def relaunch(self, sid: str) -> bool:
+    def relaunch(self, sid: str) -> Done:
         """A dead session brought back where it left off, and unparked. Whether it was."""
-        if not self.open_session(sid, restore=True):
-            return False
-        self.store.set_parked(sid, False)
-        self.say("relaunching")
-        return True
+        done = self.open_session(sid, restore=True)
+        if done.ok:
+            self.store.set_parked(sid, False)
+            done.say("relaunching")
+        return done
 
-    def stop_host(self, sid: str, host: tuple) -> bool:
+    def stop_host(self, sid: str, host: tuple) -> Done:
         """Stop a session's host, as SIGTERM does (its own clean stop: Claude Code is
         disconnected, and an open permission or question closes as withdrawn, or as lost
         when the new host starts). The confirm may have sat open meanwhile, so only the
@@ -173,69 +189,73 @@ class Hub:
         starts it again once the process has gone. Whether anything changed."""
         s = self.row(sid)
         if runner(s) != "sdk" or s["shell"]:
-            self.say(TAB_RELAUNCH, "warning")
-            return False
+            return Done(False).say(TAB_RELAUNCH, "warning")
         if not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
             return self.relaunch(sid)   # gone meanwhile: nothing to stop
         if (s["claude_pid"], s["claude_start"]) != host:
-            self.say(f"{display_name(s)} started again meanwhile: Relaunch again to stop this host", "warning")
-            return False
+            return Done(False).say(f"{display_name(s)} started again meanwhile: Relaunch again to stop this host",
+                                   "warning")
         try:
             os.kill(s["claude_pid"], signal.SIGTERM)
         except ProcessLookupError:
             pass   # exited between the check and the signal: finish_relaunches starts it again
         except OSError as e:
-            self.say(f"couldn't stop its host: {e}", "error")
-            return False
+            return Done(False).say(f"couldn't stop its host: {e}", "error")
         self.relaunching[sid] = (time.monotonic() + RELAUNCH_WAIT, host)
-        self.say(f"relaunching {display_name(s)}: stopping its host")
-        return True
+        return Done().say(f"relaunching {display_name(s)}: stopping its host")
 
     def finish_relaunches(self) -> None:
         """Start each stopped host again once its process has really gone: launch refuses a
         session whose registered process is alive, and a new host registers only if free.
         One that another wheelhouse has started meanwhile (a newer pid, alive) is relaunched
-        already. A relaunch unparks, as one of a dead session does."""
+        already. A relaunch unparks, as one of a dead session does. The hub does this by
+        itself, so what happened goes to every listener."""
         for sid, (deadline, host) in list(self.relaunching.items()):
             s = next((x for x in self.sessions if x["id"] == sid), None)
             if s is None:   # ended meanwhile
                 del self.relaunching[sid]
             elif not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
                 del self.relaunching[sid]
-                if self.open_session(sid):   # as it ran: a host again, not WHEELHOUSE_RUNNER's way
+                done = self.open_session(sid)   # as it ran: a host again, not WHEELHOUSE_RUNNER's way
+                for notice in done.notices:
+                    self.emit(notice)
+                if done.ok:
                     self.store.set_parked(sid, False)
                     self.statuses[sid] = liveness.status(self.row(sid), waking=self.waking)   # not dead for a tick
-                    self.say(f"relaunched {display_name(s)}")
+                    self.announce(f"relaunched {display_name(s)}")
             elif (s["claude_pid"], s["claude_start"]) != host:
                 del self.relaunching[sid]
                 self.store.set_parked(sid, False)
-                self.say(f"relaunched {display_name(s)}")
+                self.announce(f"relaunched {display_name(s)}")
             elif time.monotonic() > deadline:
                 del self.relaunching[sid]
-                self.say(f"{display_name(s)}'s host didn't stop within {RELAUNCH_WAIT}s, so it wasn't "
-                         f"relaunched: see hosts/{sid}.log", "error")
+                self.announce(f"{display_name(s)}'s host didn't stop within {RELAUNCH_WAIT}s, so it wasn't "
+                              f"relaunched: see hosts/{sid}.log", "error")
 
-    def restore(self, sid: str) -> bool:
+    def restore(self, sid: str) -> Done:
         """A dead session brought back where it left off, and unparked. Whether it was."""
         if self.statuses.get(sid) != "dead":
-            self.say("only a dead session can be restored", "warning")
-            return False
-        if not self.open_session(sid, restore=True):
-            return False
-        self.store.set_parked(sid, False)
-        return True
+            return Done(False).say("only a dead session can be restored", "warning")
+        done = self.open_session(sid, restore=True)
+        if done.ok:
+            self.store.set_parked(sid, False)
+        return done
 
     def restorable(self) -> list[str]:
         """What Restore all brings back: every dead session that isn't parked."""
         return [s["id"] for s in self.sessions if self.statuses.get(s["id"]) == "dead" and not s["parked"]]
 
-    def restore_all(self, sids: list[str]) -> None:
-        n = sum(self.open_session(sid, restore=True) for sid in sids)
-        self.say(f"restoring {n} session(s)")
+    def restore_all(self, sids: list[str]) -> Done:
+        done, n = Done(), 0
+        for sid in sids:
+            one = self.open_session(sid, restore=True)
+            done.notices.extend(one.notices)
+            n += one.ok
+        return done.say(f"restoring {n} session(s)")
 
-    def new_session(self, cwd: str, name: str, ticket: str, brief: str, runner: str) -> None:
+    def new_session(self, cwd: str, name: str, ticket: str, brief: str, runner: str) -> Done:
         sid = self.store.create_session(cwd, name=name, ticket=ticket, brief=brief, runner=runner)
-        self.open_session(sid)
+        return self.open_session(sid)
 
     def adoptable(self) -> list[adopt.Candidate]:
         """The Claude Code sessions on disk that aren't in the wheelhouse yet (adopt.candidates)."""
@@ -246,67 +266,62 @@ class Hub:
         """The pid of Claude Code running a session outside the wheelhouse, if it is running."""
         return liveness.running_pid(sid)
 
-    def adopt(self, candidate: adopt.Candidate, name: str) -> bool:
+    def adopt(self, candidate: adopt.Candidate, name: str) -> Done:
         """A session started outside the wheelhouse, brought in (adopt.adopt). Whether it was."""
         try:
             adopt.adopt(self.store, candidate, name)
         except Exception as e:   # came back to life, wt.exe missing...
-            self.say(str(e), "error")
-            return False
-        self.say(f"adopting {name or short(candidate.id)}")
-        return True
+            return Done(False).say(str(e), "error")
+        return Done().say(f"adopting {name or short(candidate.id)}")
 
-    def answer_offer(self, take: bool) -> bool:
+    def answer_offer(self, take: bool) -> Done:
         """The first-run tutorial offer, answered either way: it never comes back. Whether the
         tutorial started."""
         if not take:
             self.store.set_setting(tutorial.OFFER_KEY, "dismissed")
-            self.say("make tutorial runs the tutorial any time; ? lists every key")
-            return False
+            return Done(False).say("make tutorial runs the tutorial any time; ? lists every key")
         try:
             tutorial.start(self.store)
         except Exception as e:   # claude missing, say
             self.store.set_setting(tutorial.OFFER_KEY, "dismissed")
-            self.say(f"couldn't start the tutorial: {e}", "error")
-            return False
-        self.say("tutorial started: follow the checklist on the right")
-        return True
+            return Done(False).say(f"couldn't start the tutorial: {e}", "error")
+        return Done().say("tutorial started: follow the checklist on the right")
 
     # Park and End: a running session is asked; a dead one, or one forced, is acted on
 
-    def ask(self, sid: str, what: str) -> None:
+    def ask(self, sid: str, what: str) -> Done:
         self.store.request(sid, what)
-        self.say(f"asked the session to {what}")
+        return Done().say(f"asked the session to {what}")
 
-    def cancel_request(self, sid: str, what: str) -> None:
+    def cancel_request(self, sid: str, what: str) -> Done:
         self.store.cancel_request(sid, what)
-        self.say(f"{what} request cancelled")
+        return Done().say(f"{what} request cancelled")
 
-    def act_on_dead(self, sid: str, what: str) -> bool:
+    def act_on_dead(self, sid: str, what: str) -> Done:
         """Park or End a dead session now. The confirm may have sat open while it came back:
         then it's left as it is, and said so. Whether it was acted on."""
         if liveness.status(self.row(sid), waking=self.waking) in RUNNING:
-            self.say(f"the session is running again: press {what.capitalize()} to ask it instead", "warning")
-            return False
-        self.force(sid, what)
-        return True
+            return Done(False).say(f"the session is running again: press {what.capitalize()} to ask it instead",
+                                   "warning")
+        return self.force(sid, what)
 
-    def force(self, sid: str, what: str) -> None:
+    def force(self, sid: str, what: str) -> Done:
         if what == "end":
             self.store.end(sid)
         else:
             self.store.set_parked(sid, True)
+        return Done()
 
-    def unpark(self, sid: str) -> None:
+    def unpark(self, sid: str) -> Done:
         self.store.set_parked(sid, False)
+        return Done()
 
-    def rename(self, sid: str, name: str | None) -> bool:
+    def rename(self, sid: str, name: str | None) -> Done:
         """Whether the name changed: not if cancelled (None) or the same."""
         if name is None or name == self.row(sid)["name"]:
-            return False
+            return Done(False)
         self.store.rename(sid, name)
-        self.say(f"renamed to {name}" if name else "name cleared: it shows its directory")
-        return True
+        return Done().say(f"renamed to {name}" if name else "name cleared: it shows its directory")
 
     # answers and queues
 
@@ -315,39 +330,43 @@ class Hub:
         item = target and target[1] and self.store.item(*target)
         return item if item and item["kind"] == "permission" and item["status"] == "open" else None
 
-    def submit(self, target: tuple, text: str) -> bool:
+    def submit(self, target: tuple, text: str) -> Done:
         """What the person submitted for a target: an open permission is denied with it at
         once, never queued (#53); otherwise it's queued or sent at once, by the session's mode.
         Answering an item is an explicit act: a decision is seen at once, not after the dwell.
-        Whether it went: not if the permission was answered meanwhile."""
+        Whether it went (not if the permission was answered meanwhile), and whether it denied
+        a permission."""
         s = self.row(target[0])
+        done = Done()
         if self.asking(target):
             try:
                 self.answer_permission(*target, "deny", text)
-                self.say(f"denied {target[1]}, with your message")
             except KeyError as e:   # answered meanwhile
-                self.say(str(e.args[0]), "warning")
-                return False
+                return Done(False).say(str(e.args[0]), "warning")
+            done.denied = True
+            done.say(f"denied {target[1]}, with your message")
         elif mode(s) == "immediate":
             self.store.send(target[0], text, target[1])
-            self.say(f"sent to {aimed(target)}")
+            done.say(f"sent to {aimed(target)}")
         elif self.sends_now(s):   # its old monitor would deliver a draft at once anyway
             self.store.send(target[0], text, target[1])
-            self.say(f"sent to {aimed(target)} now: that session runs older wheelhouse code, "
+            done.say(f"sent to {aimed(target)} now: that session runs older wheelhouse code, "
                      "so it can't queue until it's relaunched", "warning")
         else:
             self.store.queue(target[0], text, target[1])
             if self.dead(target[0]):   # aimed names the item, so say whose queue isn't running
-                self.say(f"queued for {aimed(target)}, but the session isn't running: "
+                done.say(f"queued for {aimed(target)}, but the session isn't running: "
                          "Restore it, then Ctrl+S or Send sends its queue")
             else:
-                self.say(f"queued for {aimed(target)}: Ctrl+S or Send sends the session's queue")
+                done.say(f"queued for {aimed(target)}: Ctrl+S or Send sends the session's queue")
         if target[1]:
             self.store.mark_seen(*target)
-        return True
+        return done
 
-    def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
+    def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> Done:
+        """Allow, Always or Deny: KeyError if it was answered meanwhile."""
         self.store.answer_permission(sid, ref, decision, message)
+        return Done()
 
     def unqueue(self, msg_id: int) -> str | None:
         """A queued answer taken back: its text, or None if it went meanwhile."""
@@ -359,44 +378,43 @@ class Hub:
         late = "" if self.running(sid) else " (not running: delivered when it's restored)"
         return f"{n} to {name}{late}"
 
-    def send_queue(self, sid: str) -> None:
+    def send_queue(self, sid: str) -> Done:
         """A session's queue, sent as one message; a dead one's stays queued (#62)."""
         if self.dead(sid):
-            self.say(f"{display_name(self.row(sid))} isn't running: Restore it first", "warning")
-            return
+            return Done(False).say(f"{display_name(self.row(sid))} isn't running: Restore it first", "warning")
         n = self.store.dispatch(sid)
-        self.say(f"sent {self.sent_note(sid, n)}" if n else "nothing queued for that session")
+        return Done(bool(n)).say(f"sent {self.sent_note(sid, n)}" if n else "nothing queued for that session")
 
-    def send_all(self) -> None:
+    def send_all(self) -> Done:
         """Every queue but a dead session's, which stays queued until it's restored (#62)."""
         queued = dict.fromkeys(m["session_id"] for m in self.store.drafts())
         sent = [(sid, n) for sid in queued if not self.dead(sid) and (n := self.store.dispatch(sid))]
         if sent:
-            self.say("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent))
-        elif any(self.dead(sid) for sid in queued):
-            self.say("nothing queued for a running session: a dead one's queue waits until it's restored",
-                     "warning")
-        else:
-            self.say("nothing queued")
+            return Done().say("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent))
+        if any(self.dead(sid) for sid in queued):
+            return Done(False).say("nothing queued for a running session: a dead one's queue waits until "
+                                   "it's restored", "warning")
+        return Done(False).say("nothing queued")
 
-    def toggle_mode(self, sid: str) -> None:
+    def toggle_mode(self, sid: str) -> Done:
         s = self.row(sid)
         new = "immediate" if mode(s) == "queued" else "queued"
         self.store.set_mode(sid, new)
         name = s["name"] or short(sid)
-        self.say(f"{name}: answers now send as you submit them" if new == "immediate" else
-                 f"{name}: answers now queue until you send them (Ctrl+S or Send)")
+        done = Done().say(f"{name}: answers now send as you submit them" if new == "immediate" else
+                          f"{name}: answers now queue until you send them (Ctrl+S or Send)")
         if new == "immediate" and (n := len(self.store.drafts(sid))):
-            self.say(f"{n} answer(s) still queued for {name}: Ctrl+S or Send sends them")
+            done.say(f"{n} answer(s) still queued for {name}: Ctrl+S or Send sends them")
+        return done
 
-    def host_command(self, sid: str, what: str) -> None:
+    def host_command(self, sid: str, what: str) -> Done:
         """Interrupt, Compact or Shell, for the session's host to carry out."""
         try:
             self.store.command(sid, what)
         except SessionGone:
-            return
-        self.say({"interrupt": "interrupting", "compact": "compacting: asking what to keep",
-                  "shell": "opening a terminal tab"}[what])
+            return Done(False)
+        return Done().say({"interrupt": "interrupting", "compact": "compacting: asking what to keep",
+                           "shell": "opening a terminal tab"}[what])
 
     # items
 
@@ -404,18 +422,19 @@ class Hub:
         """Whether an unseen decision became seen: a no-op for anything else."""
         return self.store.mark_seen(sid, ref)
 
-    def close(self, item, closed: bool) -> None:
+    def close(self, item, closed: bool) -> Done:
         """Close a question or decision, or reopen it: a question as answered, a decision as
         seen. Dismiss a settled task or subagent, or bring it back. One finished already has
         nothing to close."""
         if closed and standing(item) == "finished":
-            return
+            return Done(False)
         if item["kind"] == "decision":
             self.store.close_decision(item["session_id"], item["ref"], closed)
         elif item["kind"] in DISMISSABLE:
             self.store.dismiss(item["session_id"], item["ref"], closed)
         else:
             self.store.update_item(item["session_id"], item["ref"], status="closed" if closed else "answered")
+        return Done()
 
     # the transcripts
 
@@ -458,7 +477,7 @@ class Hub:
             watcher = watchers.setdefault(sid, subagents.AgentWatcher(sid))
             if watcher.error and watcher.error != self.agent_errors.get(sid):
                 self.agent_errors[sid] = watcher.error
-                self.say(f"{display_name(s)}: {watcher.error}", "warning")
+                self.announce(f"{display_name(s)}: {watcher.error}", "warning")
             alive = self.running(sid)
             if watcher.syncing or (watcher.ready and not alive and not watcher.unfinished()):
                 continue

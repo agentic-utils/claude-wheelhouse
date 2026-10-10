@@ -41,7 +41,7 @@ from textual.widgets import (
 )
 
 from . import api, emoji, stats, subagents, transcript, tutorial
-from .hub import TAB_RELAUNCH, Event, Hub, aimed, display_name, short
+from .hub import TAB_RELAUNCH, Done, Event, Hub, aimed, display_name, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .store import (DISMISSABLE, FINISHED_RANK, SETTLED, SETTLED_RANK, SessionGone, Store, default_runner,
@@ -1691,6 +1691,12 @@ class WheelhouseApp(App):
         elif event.kind == "landed":
             self.read_landed(event.sid)
 
+    def told(self, done: Done) -> Done:
+        """What a command of the hub's did: its notices are toasts here, as this app gave it."""
+        for notice in done.notices:
+            self.heard(notice)
+        return done
+
     def spawn(self, work, group: str) -> None:
         """The hub's work, on a worker thread, never the UI's."""
         self.run_worker(work, thread=True, group=group, exit_on_error=False)
@@ -2149,7 +2155,7 @@ class WheelhouseApp(App):
 
     @session_action
     def relaunch(self, sid: str) -> None:
-        if self.hub.relaunch(sid):
+        if self.told(self.hub.relaunch(sid)).ok:
             self.refresh_data()
 
     @on(Button.Pressed, "#relaunch")
@@ -2181,7 +2187,7 @@ class WheelhouseApp(App):
     def stop_host(self, sid: str, host: tuple) -> None:
         """Stop the session's host, if it is still the one the confirm was about: the hub
         starts it again once it has gone (hub.Hub.stop_host)."""
-        if self.hub.stop_host(sid, host):
+        if self.told(self.hub.stop_host(sid, host)).ok:
             self.refresh_data()
 
     async def action_quit(self) -> None:
@@ -2342,12 +2348,12 @@ class WheelhouseApp(App):
         (ranked). One finished already only goes, from where it was held while selected."""
         self.item_sink.jump()
         self.repin.add(item_key(item))
-        self.hub.close(item, closed)
+        self.told(self.hub.close(item, closed))
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's Allow, Always or Deny: an explicit act, as Delete is, so selected, the
         item moves at once (ranked)."""
-        self.hub.answer_permission(sid, ref, decision, message)
+        self.told(self.hub.answer_permission(sid, ref, decision, message))
         self.repin.add(f"{sid}|{ref}")
 
     def close_marked(self, closed: bool = True) -> None:
@@ -2386,7 +2392,7 @@ class WheelhouseApp(App):
 
     def offer_answered(self, take: bool) -> None:
         """The first-run offer, answered either way: it never comes back."""
-        if self.hub.answer_offer(take):
+        if self.told(self.hub.answer_offer(take)).ok:
             self.refresh_data()
 
     def composing(self):
@@ -2416,10 +2422,10 @@ class WheelhouseApp(App):
         box, target, text = self.typed()
         if not box:
             return
-        asking = self.asking(target)   # never queued: the session is waiting on it (#53)
-        if not self.hub.submit(target, text):   # a permission answered meanwhile
+        done = self.told(self.hub.submit(target, text))   # an open permission is denied, never queued (#53)
+        if not done.ok:   # a permission answered meanwhile
             return
-        if asking:   # an explicit act, as Delete is: selected, the item moves at once (ranked)
+        if done.denied:   # an explicit act, as Delete is: selected, the item moves at once (ranked)
             self.repin.add(f"{target[0]}|{target[1]}")
         box.text = ""
         self.refresh_data()
@@ -2497,12 +2503,12 @@ class WheelhouseApp(App):
 
     @session_action
     def send_session(self, sid: str) -> None:
-        self.hub.send_queue(sid)   # a dead one's, as its hidden Send button: its drafts stay drafts (#62)
+        self.told(self.hub.send_queue(sid))   # a dead one's, as its hidden Send button: its drafts stay drafts (#62)
         self.refresh_data()
 
     @session_action
     def send_all(self) -> None:
-        self.hub.send_all()
+        self.told(self.hub.send_all())
         self.refresh_data()
 
     def action_toggle_mode(self) -> None:
@@ -2512,7 +2518,7 @@ class WheelhouseApp(App):
 
     @session_action
     def toggle_mode(self, sid: str) -> None:
-        self.hub.toggle_mode(sid)
+        self.told(self.hub.toggle_mode(sid))
         self.refresh_data()
 
     @on(Button.Pressed, "#mode")
@@ -2566,7 +2572,7 @@ class WheelhouseApp(App):
         self.push_screen(Confirm(ask), lambda yes: yes and self.host_command(sid, what))
 
     def host_command(self, sid: str, what: str) -> None:
-        self.hub.host_command(sid, what)
+        self.told(self.hub.host_command(sid, what))
 
     @on(Splitter.Resized)
     def keep_layout(self, event: Splitter.Resized) -> None:
@@ -2594,7 +2600,7 @@ class WheelhouseApp(App):
 
     def launch_new(self, form) -> None:
         if form:
-            self.hub.new_session(**form)
+            self.told(self.hub.new_session(**form))
 
     def action_adopt(self) -> None:
         if isinstance(self.focused, (TextArea, Input)):
@@ -2602,7 +2608,7 @@ class WheelhouseApp(App):
         self.push_screen(AdoptSession(self.hub.adoptable()), self.launch_adopted)
 
     def launch_adopted(self, form) -> None:
-        if form and self.hub.adopt(form["candidate"], form["name"]):
+        if form and self.told(self.hub.adopt(form["candidate"], form["name"])).ok:
             self.refresh_data()
 
     async def action_press(self, button_id: str) -> None:
@@ -2710,7 +2716,7 @@ class WheelhouseApp(App):
         sid = self.current_session()
         if not sid:
             return
-        self.hub.restore(sid)
+        self.told(self.hub.restore(sid))
 
     def action_restore_all(self) -> None:
         if isinstance(self.focused, (TextArea, Input)):
@@ -2720,7 +2726,7 @@ class WheelhouseApp(App):
             self.notify("nothing to restore")
             return
         self.push_screen(Confirm(f"Restore {len(dead)} dead session(s)?"),
-                         lambda yes: yes and self.hub.restore_all(dead))
+                         lambda yes: yes and self.told(self.hub.restore_all(dead)))
 
     @on(Button.Pressed, "#park")
     @session_action
@@ -2730,7 +2736,7 @@ class WheelhouseApp(App):
         if not sid:
             return
         if self.row(sid)["parked"]:
-            self.hub.unpark(sid)
+            self.told(self.hub.unpark(sid))
             self.follow(sid)   # as Park: it stays current
             self.refresh_data()
             return
@@ -2748,7 +2754,7 @@ class WheelhouseApp(App):
 
     @session_action
     def rename(self, sid: str, name: str | None) -> None:
-        if self.hub.rename(sid, name):   # not if cancelled, or unchanged
+        if self.told(self.hub.rename(sid, name)).ok:   # not if cancelled, or unchanged
             self.refresh_data()
 
     @on(Button.Pressed, "#end")
@@ -2781,21 +2787,21 @@ class WheelhouseApp(App):
 
     @session_action
     def ask(self, sid: str, what: str) -> None:
-        self.hub.ask(sid, what)
+        self.told(self.hub.ask(sid, what))
         self.keep_current(sid, what)
         self.refresh_data()
 
     @session_action
     def act_on_dead(self, sid: str, what: str) -> None:
         """The confirm may have sat open while the session came back: the hub checks again."""
-        if self.hub.act_on_dead(sid, what):
+        if self.told(self.hub.act_on_dead(sid, what)).ok:
             self.keep_current(sid, what)
         self.refresh_data()
 
     @session_action
     def resolve_request(self, sid: str, what: str, choice: str) -> None:
         if choice == "cancel":
-            self.hub.cancel_request(sid, what)
+            self.told(self.hub.cancel_request(sid, what))
             self.refresh_data()
         elif choice == "force":
             warning = ("Deletes its wheelhouse data now, without its session-end steps." if what == "end"
@@ -2805,7 +2811,7 @@ class WheelhouseApp(App):
 
     @session_action
     def force(self, sid: str, what: str) -> None:
-        self.hub.force(sid, what)
+        self.told(self.hub.force(sid, what))
         self.keep_current(sid, what)
         self.refresh_data()
 
