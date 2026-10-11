@@ -656,10 +656,11 @@ class Hub:
             follower = self.contexts.get(s["id"])
             snap = follower.snap if follower and follower.ready else None
             ran = (snap.requested or snap.model, snap.effort) if snap else (None, None)
-            return {"model": ran[0] or want[0], "effort": ran[1] or want[1], "pending": None, "hosted": False}
-        # hosted says its effort can be changed live, so the slider shows: not out of SDK mode
+            return {"model": ran[0] or want[0], "effort": ran[1] or want[1], "pending": None, "effort_live": False}
+        # effort_live: its effort can be changed live, so the slider shows. Not out of SDK mode,
+        # where a host's session runs on as it was set (features.py)
         return {"model": want[0] or (got[0] if hosted else None), "effort": want[1] or (got[1] if hosted else None),
-                "pending": pending, "hosted": hosted and self.sdk}
+                "pending": pending, "effort_live": hosted and self.sdk}
 
     # items
 

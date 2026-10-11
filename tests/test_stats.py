@@ -726,13 +726,13 @@ def test_the_title_says_model_and_effort(setting, effort, room, expected, desc):
 
 
 @pytest.mark.parametrize("setting, slider, pending, desc", [
-    ({"model": "claude-opus-5-5", "effort": "xhigh", "pending": None, "hosted": True}, True, "",
+    ({"model": "claude-opus-5-5", "effort": "xhigh", "pending": None, "effort_live": True}, True, "",
      "a session run by a host: the slider, over the gauges"),
-    ({"model": "claude-opus-5-5", "effort": "xhigh", "pending": "applying", "hosted": True}, True, "applying…",
+    ({"model": "claude-opus-5-5", "effort": "xhigh", "pending": "applying", "effort_live": True}, True, "applying…",
      "a change its host has yet to confirm, said under it"),
-    ({"model": "claude-opus-5-5", "effort": "xhigh", "pending": "on relaunch", "hosted": True}, True,
+    ({"model": "claude-opus-5-5", "effort": "xhigh", "pending": "on relaunch", "effort_live": True}, True,
      "on relaunch: old host", "a host on older code never will"),
-    ({"model": "claude-opus-5-5", "effort": "xhigh", "pending": None, "hosted": False}, False, None,
+    ({"model": "claude-opus-5-5", "effort": "xhigh", "pending": None, "effort_live": False}, False, None,
      "a tab's: none (Q52)"),
     (None, False, None, "nothing known: none"),
 ])
@@ -814,9 +814,9 @@ def test_the_pending_line_fits(pending, width, shown, desc):
 
 
 @pytest.mark.parametrize("setting, rows, desc", [
-    ({"model": "claude-sonnet-5-5", "effort": "high", "pending": "on relaunch", "hosted": True},
+    ({"model": "claude-sonnet-5-5", "effort": "high", "pending": "on relaunch", "effort_live": True},
      ["╭─ Sonnet 5.5 ─╮", "│eff ◂  high  ▸│", "│on relaunch   │"], "hosted: the model in the title, the effort lit"),
-    ({"model": "claude-sonnet-5-5", "effort": "high", "pending": None, "hosted": False},
+    ({"model": "claude-sonnet-5-5", "effort": "high", "pending": None, "effort_live": False},
      ["╭─ Sonnet 5.5 ─╮", "│effort  high  │"], "a tab: the effort the title can't hold on a line of its own"),
 ])
 def test_model_and_effort_are_readable_in_a_narrow_pane(setting, rows, desc):
@@ -826,9 +826,9 @@ def test_model_and_effort_are_readable_in_a_narrow_pane(setting, rows, desc):
 
 
 @pytest.mark.parametrize("setting, view_effort, lit, desc", [
-    ({"model": None, "effort": None, "pending": None, "hosted": True}, "medium", "medium",
+    ({"model": None, "effort": None, "pending": None, "effort_live": True}, "medium", "medium",
      "NULL columns and nothing applied (an old host): the transcript's"),
-    ({"model": None, "effort": "xhigh", "pending": None, "hosted": True}, "medium", "xhigh", "set: what it's set to"),
+    ({"model": None, "effort": "xhigh", "pending": None, "effort_live": True}, "medium", "xhigh", "set: what it's set to"),
 ])
 def test_the_slider_falls_back_on_the_transcript(setting, view_effort, lit, desc):
     s = snap(83_000, 600)

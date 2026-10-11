@@ -499,7 +499,7 @@ def test_the_slider_is_sdk_modes(store, tmp_path, monkeypatch, on, hosted):
     hub = Hub(store, sdk=on)
     hub.refresh()
     got = hub.model_state(hub.row(sid))
-    assert (got["model"], got["effort"], got["hosted"]) == ("claude-opus-5-5", "high", hosted)
+    assert (got["model"], got["effort"], got["effort_live"]) == ("claude-opus-5-5", "high", hosted)
 
 
 @pytest.mark.usefixtures("sdk_on")
@@ -526,7 +526,7 @@ def test_model_state(hub, store, tmp_path, monkeypatch, runner, status, shell, c
     store.set_shell(sid, shell)
     hub.refresh()
     got = hub.model_state(hub.row(sid))
-    assert (got["model"], got["effort"], got["pending"], got["hosted"]) == state, desc
+    assert (got["model"], got["effort"], got["pending"], got["effort_live"]) == state, desc
 
 
 @pytest.mark.parametrize("runner_, shell, status, tokens, offered, desc", [
@@ -730,7 +730,7 @@ def test_a_tabs_model_state_is_what_its_transcript_says(hub, store, tmp_path, mo
         follower.snap.model, follower.snap.requested, follower.snap.effort = "claude-opus-5-5", *ran
         hub.contexts[sid] = follower
     got = hub.model_state(hub.row(sid))
-    assert (got["model"], got["effort"], got["pending"], got["hosted"]) == (*state, None, False), desc
+    assert (got["model"], got["effort"], got["pending"], got["effort_live"]) == (*state, None, False), desc
 
 
 def ran_now(snap):

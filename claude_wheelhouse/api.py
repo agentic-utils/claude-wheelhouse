@@ -66,8 +66,8 @@ class Context:
     # the hub's sessions: id, name, whether it's running, "context", a HostContext for an
     # SDK-hosted session whose host has recorded one, else None, and what it is set to run
     # on (Hub.model_state): "model" and "effort" (None where unknown), "pending" (the host
-    # has yet to apply them: "applying" or "on relaunch") and "hosted" (run by a host, with
-    # SDK mode on, so its effort can be changed live)
+    # has yet to apply them: "applying" or "on relaunch") and "effort_live" (its effort can
+    # be changed live: run by a host, and SDK mode on)
     sessions: Callable[[], list[dict]]
     focus: Callable[[], str | None]      # the session in context (highlighted or followed), if any
     config: dict = field(default_factory=dict)

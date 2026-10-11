@@ -864,8 +864,10 @@ def layout(view, name: str, note: str | None, usage: "AccountUsage", now: float,
 
 
 def has_slider(view, setting: dict | None) -> bool:
-    """Whether the pane shows the effort slider: for one session, run by a host."""
-    return isinstance(view, Snapshot) and bool(setting and setting.get("hosted"))
+    """Whether the pane shows the effort slider: for one session, run by a host, with SDK mode
+    on (Hub.model_state's effort_live). EXPERIMENTAL (features.py): SDK mode is not for use by
+    anyone other than the author until Anthropic's terms are confirmed."""
+    return isinstance(view, Snapshot) and bool(setting and setting.get("effort_live"))
 
 
 def render(rows: list[Text], shown: list["Chart"], frame: int) -> Text:

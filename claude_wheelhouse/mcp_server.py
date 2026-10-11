@@ -102,7 +102,9 @@ HOSTED_TEXT = ("nothing to take: this session runs in the wheelhouse, so the per
 
 
 def hosted_here(s) -> bool:
-    """The session runs under its SDK host (not handed to a shell tab, whose monitor delivers)."""
+    """The session runs under its SDK host (not handed to a shell tab, whose monitor delivers).
+    EXPERIMENTAL (features.py): SDK mode is not for use by anyone other than the author until
+    Anthropic's terms are confirmed."""
     session = s.session(_sid)
     return session is not None and runner(session) == "sdk" and not session["shell"]
 

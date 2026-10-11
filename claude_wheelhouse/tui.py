@@ -848,7 +848,9 @@ class SendBar(Horizontal):
 class PermissionButtons(Horizontal):
     """Over the answer box while the item in context is an open permission (P) item: the
     answer is a button, applied at once whatever the session's send mode (#53). Text
-    typed in the box below is optional: Ctrl+Enter denies with it, also at once."""
+    typed in the box below is optional: Ctrl+Enter denies with it, also at once. Only a
+    host's session posts permission items. EXPERIMENTAL (features.py): SDK mode is not for
+    use by anyone other than the author until Anthropic's terms are confirmed."""
     DEFAULT_CSS = """
     PermissionButtons { height: 1; display: none; background: #12122a; }
     PermissionButtons Button { min-width: 12; margin: 0 1 0 0; padding: 0 1; }
