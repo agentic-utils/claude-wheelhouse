@@ -637,6 +637,14 @@ class Host:
                     self.compacted_from = meta.get("pre_tokens") or meta.get("preTokens") or 0
                 elif isinstance(m, ResultMessage):
                     ended = [self.sent.pop(k) for k in self.taken_up if k in self.sent]
+                    if not ended and self.sent and getattr(m, "origin", None) is None:
+                        # a turn of ours (Claude Code's own carry an origin) that replayed
+                        # none of our uuids: Claude Code has stopped replaying them. The
+                        # oldest is taken as this one, unanswered, so the host never wedges
+                        oldest = next(iter(self.sent))
+                        self.sent.pop(oldest)
+                        print(f"{now()} a turn ended with none of our turns replayed: taking {oldest} "
+                              "as ended (is replay-user-messages still honoured?)", file=sys.stderr, flush=True)
                     self.taken_up = []
                     refs = {}
                     for turn in ended:

@@ -1449,3 +1449,23 @@ def test_an_interrupted_keepalive_leaves_the_line_it_found(streamed, store, sid)
     assert h.client.queries == [host_mod.KEEPALIVE_TEXT]
     assert store.session(sid)["activity"] == "idle · compacted 300k → 160k tokens"
 
+
+@pytest.mark.parametrize("end, drained, said, desc", [
+    (result(), True, True, "ours, by its missing origin, though nothing was replayed: the oldest is taken, and said"),
+    (own(), False, False, "Claude Code's own: ours stays sent"),
+])
+def test_a_turn_end_with_no_replay_never_wedges_the_host(streamed, store, sid, capsys, end, drained, said, desc):
+    h = streamed
+    store.post_item(sid, "question", "which?")
+    store.send(sid, "this one", "Q1")
+
+    async def go():
+        reader = asyncio.create_task(h.read())
+        await h.poll()
+        await feed(h, text("An answer."), end, None)   # Claude Code replayed nothing
+        await reader
+    run(go())
+    assert (h.pending == 0) == drained, desc
+    assert ("none of our turns replayed" in capsys.readouterr().err) == said, desc
+    assert [m["body"] for m in store.thread(sid, "Q1") if m["author"] == "claude"] == [], \
+        f"{desc}: nothing posted on a guess"
