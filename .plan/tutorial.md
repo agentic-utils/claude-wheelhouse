@@ -92,8 +92,10 @@ really use.
   Superseded by Q66 below.
 - **The tutorial is tab mode's** (Q66, option B): "Tutorial has to be tab". The demo opens
   in a Windows Terminal tab, and the steps cover what tab mode offers: questions and
-  answers, decisions, items, End. The permission and conversation steps are SDK mode's,
-  offered only when it is on (`--enable-sdk`, or `enable-sdk=true` in a `.env`).
+  answers, decisions, items, End.
+- **Always a tab** (D66): the tutorial is a tab session even with SDK mode on. The
+  permission and conversation steps come back as SDK-only top-ups (below), offered only
+  when SDK mode is on, once the top-up machinery is built.
 - **Layout improvements**: parked, to come back to separately.
 
 ## As built
@@ -103,22 +105,16 @@ really use.
   Claude Code gets it at once, since it never exits by itself), recreates
   `claude-wheelhouse-tutorial/` next to the database (deleted on a restart only if it
   carries the tutorial's marker file), creates a session there, opens it in a Windows
-  Terminal tab, then opens the app. In SDK mode the session runs in the wheelhouse
-  instead, with a host, so its two SDK-only steps can be done.
-- Steps carry the way of running they need (`STEPS`' last field: `tab`, `sdk`, or any), and
-  the checklist is built from how the tutorial's session runs, so one started either way
-  keeps its own list. A tab demo: find the demo in its tab (it ticks once the session has
-  posted, so past any trust prompt), open a question, answer both, send them, see the
-  reply, read and close the decision, end it. SDK mode's: the same without the tab step,
-  plus allow the permission prompt and follow the conversation.
+  Terminal tab, then opens the app. It is a tab whether SDK mode is on or not.
+- The steps: find the demo in its tab (it ticks once the session has posted, so past any
+  trust prompt), open a question, answer both, send them, see the reply, read and close
+  the decision, end it.
 - The tutorial session is simply the one whose directory is `claude-wheelhouse-tutorial/`: no schema column.
   Its `.claude/settings.json` allows the wheelhouse's own tools (so a tester in default
-  permission mode isn't asked about each post). In SDK mode it also always asks for
-  `touch tutorial-ok`, so a permission item appears even in auto mode.
+  permission mode isn't asked about each post).
 - The brief has the session post a task, two related questions (tone, and a sign-off that
   depends on the tone) and a decision, then wait. On the answers it replies, writes the
-  message in chat (in SDK mode, runs the `touch` first, which is the permission prompt),
-  then marks the task done. It's told to touch nothing else and to skip its own session-end routine (no
+  message in chat, then marks the task done. It's told to touch nothing else and to skip its own session-end routine (no
   memory or handoff notes) when ended.
 - First run: with no sessions and no `tutorial_offer` setting (a new `settings` table), a
   one-line offer sits at the top of the screen. Enter starts the tutorial, Esc dismisses
@@ -126,16 +122,16 @@ really use.
 - The checklist sits at the top of the right-hand pane while the tutorial session exists.
   Each step is worked out from the store on the refresh: both questions answered, the
   answers sent, a reply after they went, the decision closed (not just seen: the app's
-  automatic selection marks a decision seen once it has rested there a second), the
-  permission allowed. The two only the screen knows (a question highlighted or opened,
-  the conversation followed) are recorded as the person does them (a highlight once
-  they've rested on it a second, the dwell; Enter at once), never by the app's own automatic selection, and kept
-  in the store (`tutorial_seen`), so a restart of the app keeps them. The next step shows
-  how to do it; the rest are one line each.
-- Starting refuses before creating anything if `claude` isn't on PATH. The tab or host
-  starts detached, so a later failure comes afterwards: a host's stop reason (Claude Code
-  won't start), or for a tab, "its tab has closed" once it isn't running. The checklist
-  shows it, with `claude-wheelhouse tutorial` to start afresh.
+  automatic selection marks a decision seen once it has rested there a second). The one
+  only the screen knows (a question highlighted or opened) is recorded as the person does
+  it (a highlight once they've rested on it a second, the dwell; Enter at once), never by
+  the app's own automatic selection, and kept in the store (`tutorial_seen`), so a restart
+  of the app keeps it. The next step shows how to do it; the rest are one line each.
+- Starting refuses before creating anything if `claude` isn't on PATH. The tab starts
+  detached, so a later failure comes afterwards: once it isn't running, "its tab didn't
+  start Claude Code" if it never registered (wt.exe failed, or Claude Code did), else "its
+  tab has closed". A tutorial an earlier version ran in the wheelhouse shows its host's
+  stop reason. The checklist shows it, with `claude-wheelhouse tutorial` to start afresh.
 - `?` opens every key, generated from the bindings themselves (a test fails if a binding
   has no description), the mouse, every button and the send-mode rules.
 
@@ -219,7 +215,7 @@ other step ids:
 |---|---|
 | `demo` | the tutorial's demo session is running; Start launches one |
 | `session` | any running session of the person's, hosted in the wheelhouse |
-| `sdk` | SDK mode is on (`--enable-sdk`): the step is offered only then |
+| `sdk` | SDK mode is on (`--enable-sdk`, or `enable-sdk=true` in a `.env`): the step is offered only then. The permission and conversation steps, which the tab tutorial leaves out, come back this way |
 | a step id | that step is done first (`send` needs `queue`) |
 
 A step whose needs aren't met stays pending and shows in the checklist greyed, with what
@@ -312,8 +308,9 @@ Table-driven, one case a line, as `test_tutorial.py` does now:
   session". The effort step asks the person to move their own session's slider and put it
   back; no demo is launched for it.
 - **SDK-only steps** (Q66): a step that needs SDK mode (`needs=("sdk",)`) is offered only
-  when it is on, never pending for a new user. Built so far: `STEPS`' runner field and
-  `steps_for`; the `tutorial_steps` table and the badge are still to come.
+  when it is on, never pending for a new user. Not built yet: the core tutorial is always a
+  tab (D66), and the permission and conversation steps wait for the `tutorial_steps` table
+  and the badge.
 
 ## Open questions
 

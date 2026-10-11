@@ -2341,15 +2341,15 @@ class WheelhouseApp(App):
             self.refit()   # its height may have changed: the answer box below gives or takes
 
     def saw(self, sid: str, ref: str | None, step: str | None = None) -> None:
-        """The person opened something of the tutorial's: a question or its conversation.
-        Called only from what the person does, never from automatic selection: Enter at once,
-        their own selection once they have looked at it (dwelt)."""
+        """The person opened something of the tutorial's: a question. Called only from what
+        the person does, never from automatic selection: Enter at once, their own selection
+        once they have looked at it (dwelt)."""
         found = self.client.tutorial()
         if found is None or found[0] != sid:
             return
-        if step is None:
-            item = ref and self.client.item(sid, ref)
-            step = "follow" if ref is None else {"question": "open"}.get(item and item["kind"])
+        if step is None and ref is not None:
+            item = self.client.item(sid, ref)
+            step = {"question": "open"}.get(item and item["kind"])
         if step:
             self.client.see(sid, step)
             self.paint_checklist()

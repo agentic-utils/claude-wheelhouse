@@ -286,14 +286,14 @@ def test_close_and_reopen(hub, store, sid, kind, closed, after, desc):
     assert store.item(sid, ref)["status"] == after, desc
 
 
-def refuse(store, sdk=None):
+def refuse(store):
     raise RuntimeError("claude missing")
 
 
 @pytest.mark.parametrize("take, start, started, setting, desc", [
     (False, None, False, "dismissed", "declined: never offered again"),
     (True, refuse, False, "dismissed", "a start that fails is said, and not offered again"),
-    (True, lambda store, sdk=None: store.set_setting(tutorial.OFFER_KEY, "taken"), True, "taken", "taken: it starts"),
+    (True, lambda store: store.set_setting(tutorial.OFFER_KEY, "taken"), True, "taken", "taken: it starts"),
 ])
 def test_the_tutorial_offer_answered(hub, store, heard, monkeypatch, take, start, started, setting, desc):
     if start:

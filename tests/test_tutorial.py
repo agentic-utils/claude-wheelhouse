@@ -3,7 +3,7 @@ import json
 import pytest
 from textual.widgets import DataTable, Static, TextArea
 
-from claude_wheelhouse import launch, tutorial
+from claude_wheelhouse import features, launch, tutorial
 from claude_wheelhouse.store import Store
 from claude_wheelhouse.tui import BUTTONS, Compose, ItemList, KeysHelp, ThreadView, Transcript, TutorialOffer, \
     SDK_BUTTONS, WheelhouseApp, key_name, keys_help
@@ -13,14 +13,8 @@ from test_tui import dwell, one_second
 
 @pytest.fixture
 def tut(store):
-    """The tutorial's session, as a new user gets it: a tab."""
+    """The tutorial's session: a tab, SDK mode or not."""
     return tutorial.prepare(store)
-
-
-@pytest.fixture
-def tut_sdk(store):
-    """The tutorial's session in SDK mode: run in the wheelhouse, with its own steps."""
-    return tutorial.prepare(store, sdk=True)
 
 
 @pytest.fixture
@@ -65,11 +59,6 @@ def close_decision(store, sid, q1, q2):
     store.close_decision(sid, "D1")
 
 
-def allow(store, sid, q1, q2):
-    store.post_item(sid, "permission", "Bash: touch tutorial-ok")
-    store.answer_permission(sid, "P1", "allow")
-
-
 def one_answer(store, sid, q1, q2):
     store.queue(sid, "pirate", q1)
 
@@ -88,20 +77,13 @@ def reply_first(store, sid, q1, q2):   # a reply before anything was sent doesn'
     ([answer, send, reply], set(), {"open", "queue", "send", "reply"}, "the session replied after they went"),
     ([see_decision], set(), set(), "its seen status doesn't tick it: automatic selection sets that"),
     ([see_decision, close_decision], set(), {"decision"}, "the person closing the decision does"),
-    ([allow], set(), {"permission"}, "the permission allowed"),
-    ([], {"follow"}, {"follow"}, "the conversation followed"),
-    ([answer, send, reply, see_decision, close_decision, allow], {"follow"},
-     {"open", "queue", "send", "reply", "decision", "permission", "follow"}, "all but end, which goes with the session"),
 ])
-def test_checklist_steps_come_from_the_store(store, tut_sdk, actions, seen, done, desc):
-    """In SDK mode, as before: every step but the tab's own."""
-    q1, q2 = setup_items(store, tut_sdk)
+def test_checklist_steps_come_from_the_store(store, tut, actions, seen, done, desc):
+    q1, q2 = setup_items(store, tut)
     for act in actions:
-        act(store, tut_sdk, q1, q2)
-    got = {key for key, _, _, ok in tutorial.steps(store, tut_sdk, seen) if ok}
-    assert got == done, desc
-    assert [key for key, *_ in tutorial.steps(store, tut_sdk, seen)] == [
-        "open", "queue", "send", "permission", "reply", "decision", "follow", "end"]
+        act(store, tut, q1, q2)
+    got = {key for key, _, _, ok in tutorial.steps(store, tut, seen) if ok}
+    assert got == done | {"start"}, f"{desc}: started, as it has posted"
 
 
 @pytest.mark.parametrize("actions, setup, done, desc", [
@@ -116,16 +98,13 @@ def test_a_tab_tutorial_has_the_tabs_steps(store, tut, actions, setup, done, des
         act(store, tut, q1, q2)
     steps = tutorial.steps(store, tut, set())
     assert [key for key, *_ in steps] == ["start", "open", "queue", "send", "reply", "decision", "end"], \
-        "no permission or conversation step: those are SDK mode's"
+        "no permission or conversation step: those come back as SDK-only top-ups"
     assert {key for key, _, _, ok in steps if ok} == done, desc
 
 
-@pytest.mark.parametrize("on, runner, brief, settings, desc", [
-    (False, "tab", tutorial.BRIEF, tutorial.SETTINGS, "a tab, asking no permission"),
-    (True, "sdk", tutorial.BRIEF_SDK, tutorial.SETTINGS_SDK, "SDK mode: run in the wheelhouse, asking for the touch"),
-])
-def test_prepare_starts_afresh(store, tmp_path, monkeypatch, on, runner, brief, settings, desc):
-    monkeypatch.setattr(tutorial.features, "_flag", on)
+@pytest.mark.parametrize("on, desc", [(False, "a new user's"), (True, "with SDK mode on, still a tab (D66)")])
+def test_prepare_starts_afresh(store, tmp_path, monkeypatch, on, desc):
+    monkeypatch.setattr(features, "_flag", on)
     other = store.create_session(str(tmp_path), name="real work")
     store.post_item(other, "task", "keep me")
     old = tutorial.prepare(store)
@@ -137,21 +116,23 @@ def test_prepare_starts_afresh(store, tmp_path, monkeypatch, on, runner, brief, 
     assert [it["title"] for it in store.items(other)] == ["keep me"], "other sessions are untouched"
     path = tutorial.tutorial_dir(store)
     assert not (path / "tutorial-ok").exists(), "its directory is recreated"
-    assert json.loads((path / ".claude/settings.json").read_text()) == settings, desc
+    assert json.loads((path / ".claude/settings.json").read_text()) == tutorial.SETTINGS, desc
     s = store.session(new)
-    assert (s["cwd"], s["name"], s["runner"], s["brief"]) == (str(path), "tutorial", runner, brief), desc
-    assert (tutorial.TOUCH in brief) is on, f"{desc}: only a hosted session runs the touch"
+    assert (s["cwd"], s["name"], s["runner"], s["brief"]) == (str(path), "tutorial", "tab", tutorial.BRIEF), desc
+    assert "touch" not in json.dumps(tutorial.SETTINGS), f"{desc}: asking no permission"
     assert (s["model"], s["effort"]) == ("claude-sonnet-5-5", "high"), "New session's defaults"
     assert tutorial.session_id(store) == new
 
 
 @pytest.mark.parametrize("sdk, exits, killed, desc", [
-    (True, True, [], "a host that exits when its row goes is left to"),
+    (True, True, [], "a host (an earlier version's tutorial) that exits when its row goes is left to"),
     (True, False, [4242], "one that doesn't is told to"),
     (False, False, [4242], "a tab's Claude Code, which never exits by itself, is told to"),
 ])
 def test_an_earlier_tutorials_host_is_stopped(store, monkeypatch, sdk, exits, killed, desc):
-    sid = tutorial.prepare(store, sdk=sdk)
+    sid = tutorial.prepare(store)
+    if sdk:
+        store.set_runner(sid, "sdk")
     store.register(sid, 4242, 1, "boot")
     calls = []
     monkeypatch.setattr(tutorial, "STOP_WAIT", 0)
@@ -177,10 +158,10 @@ def test_when_the_tutorial_is_offered(store, tmp_path, sessions, setting, offere
 
 @pytest.mark.parametrize("on, opens, desc", [
     (False, "tab", "a tab, as a new user has it"),
-    (True, "host", "in SDK mode, a host"),
+    (True, "tab", "with SDK mode on, still a tab (D66)"),
 ])
 def test_start_launches_the_session_and_settles_the_offer(store, monkeypatch, fake_claude, on, opens, desc):
-    monkeypatch.setattr(tutorial.features, "_flag", on)
+    monkeypatch.setattr(features, "_flag", on)
     launched = []
     monkeypatch.setattr(launch, "open_host", lambda s, i: launched.append(("host", i)))
     monkeypatch.setattr(launch, "open_tab", lambda s, i: launched.append(("tab", i)))
@@ -243,8 +224,7 @@ async def test_the_answer_box_stays_on_screen_under_the_checklist(store, tut, pe
 
 
 @pytest.mark.anyio
-async def test_the_checklist_follows_the_tutorial(store, sid, tut_sdk, sdk_on):
-    tut = tut_sdk   # SDK mode's, which has the conversation step
+async def test_the_checklist_follows_the_tutorial(store, sid, tut):
     q1, _ = setup_items(store, tut)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -267,7 +247,7 @@ async def test_the_checklist_follows_the_tutorial(store, sid, tut_sdk, sdk_on):
         await pilot.pause()
         dwell(app)
         await pilot.pause()
-        assert "✔ Follow the conversation" in app._checklist_text
+        assert tutorial.seen(store, tut) == {"open"}, "following the conversation is no step of a tab's"
         store.end(tut)
         app.refresh_data()
         await pilot.pause()
@@ -348,11 +328,14 @@ def test_start_refuses_without_claude(store, tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_a_host_that_cant_start_says_why(store, fake_claude, sdk_on):
-    """The real path: the host starts detached (setsid returns at once), then Claude Code
+async def test_a_host_that_cant_start_says_why(store, fake_claude):
+    """An earlier version's tutorial, run in the wheelhouse, relaunched with SDK mode off.
+    The real path: the host starts detached (setsid returns at once), then Claude Code
     fails to start inside it. The host records why, and the checklist says so."""
     import asyncio
-    sid = tutorial.start(store)
+    sid = tutorial.prepare(store)
+    store.set_runner(sid, "sdk")
+    launch.open_session(store, sid)
     for _ in range(300):
         why = tutorial.stopped(store.session(sid))
         if why:
@@ -414,14 +397,21 @@ async def test_closing_the_decision_ticks_it(store, sid, tut):
         assert step in pilot.app._checklist_text, "kept across a restart of the app"
 
 
+@pytest.mark.parametrize("registered, why, desc", [
+    (False, "stopped: its tab didn't start Claude Code (launch.log", "never registered: wt.exe or Claude Code failed"),
+    (True, "stopped: its tab has closed", "registered, and its Claude Code has gone"),
+])
 @pytest.mark.anyio
-async def test_a_closed_tab_says_so(store, tut):
+async def test_a_stopped_tab_says_why(store, tut, registered, why, desc):
     """A tab's session has no host to record why it stopped: once it isn't running, the
-    checklist says its tab has closed, with how to start afresh."""
+    checklist says whether its tab never started Claude Code or has closed, with how to
+    start afresh."""
+    if registered:
+        store.register(tut, 4242, 1, "an-old-boot")   # a pid of another boot: not alive
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert app.hub.statuses[tut] == "dead", "never launched, so not running"
-        assert "stopped: its tab has closed" in app._checklist_text
+        assert app.hub.statuses[tut] == "dead", f"{desc}: not running"
+        assert why in app._checklist_text, desc
         assert "claude-wheelhouse tutorial starts it afresh" in app._checklist_text
         assert "▶ Find the demo in its tab" in app._checklist_text

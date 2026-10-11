@@ -136,7 +136,7 @@ def main() -> None:
         from .tutorial import start
         store = Store()
         try:
-            start(store, sdk=features.sdk_enabled())
+            start(store)   # always a tab, SDK mode or not
         except Exception as e:
             sys.exit(f"couldn't start the tutorial: {e}")
         run_app(args, store)
