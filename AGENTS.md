@@ -8,13 +8,21 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 `claude_wheelhouse/`:
 
 - `cli.py`: the `claude-wheelhouse` entry point and its subcommands (`tui`, the default;
-  `tutorial`, `run`, `host`, `mcp`, `monitor`, `protocol`, `daemon`).
+  `tutorial`, `run`, `host`, `mcp`, `monitor`, `protocol`, `daemon`, `token`).
 - `store.py`: the SQLite store, the only source of truth. Schema, added columns,
   triggers, `PROTOCOL_VERSION`. Every public write is its own committed transaction.
 - `hub.py`: what the wheelhouse knows and does, whatever shows it. Owns liveness and
   Relaunch. Never imports Textual: it tells surfaces what happened as events.
 - `tui.py`: the Textual app. Reads and acts through the hub and the store.
-- `daemon.py`: the hub served over HTTP (`.plan/remote.md`); no client uses it yet.
+- `daemon.py`: the hub served over HTTP and SSE (`.plan/remote.md`), once per user on
+  `127.0.0.1:7428`. The app goes through it by default; `--local` runs a hub in process.
+- `client.py`: the app's way to the hub, `LocalClient` (in process) or `RemoteClient`
+  (the daemon). Both answer the same calls with the same values.
+- `connect.py`: finding, starting, restarting and stopping (`halt`) the local daemon,
+  through `daemon.lock` in the state directory; `--connect` for another machine's.
+- `auth.py`: the daemon's token, `daemon.token` (mode 0600) beside the database.
+- `fingerprint.py`: a hash of the package's source, so an app on newer code restarts a
+  daemon on older code. Bump its `API` when the daemon's routes change incompatibly.
 - `host.py`: a session run through the Claude Agent SDK, one detached process per session.
   Experimental, and off unless `features.sdk_enabled()`: read `features.py` first.
 - `features.py`: SDK mode's switch, `sdk_enabled()`, and the plan usage mode,
@@ -63,6 +71,10 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   tabs, stub the plan usage poll (no test runs the real `claude`: `test_plan_usage.py`
   uses a fake, and `WHEELHOUSE_CLAUDE` points every other probe, a test-started daemon's
   too, at one that isn't there), the tutorial offer and the dwell timer. A test that needs a real host or the shipped behaviour opts in explicitly.
+- A test marked `both` runs three ways (the `via` fixture): through a hub in process, and
+  through a daemon served on the test's database, fetching at each refresh or on the
+  client's own threads. Mark a TUI test `both` when its behaviour must hold through the
+  daemon too.
 - A test that depends on the app's timers (Sink moves, the dwell, `tick`, `animate`)
   uses the `clock` fixture and moves time with `clock.advance`. Never sleep on wall-clock
   time. The fixture fails on any app timer it doesn't know: add it to the fixture.
@@ -70,6 +82,17 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   assertion message.
 - `test_host` pins Agent SDK internals (`Host.control`): rerun it after bumping
   `claude-agent-sdk`.
+
+## State
+
+The state directory is the database's: `~/.local/state/claude-wheelhouse/`, or the
+directory of `WHEELHOUSE_DB`. It holds `wheelhouse.db` (WAL), `daemon.token`,
+`daemon.lock`, `daemon.log`, `launch.log` and the tutorial's scratch directory. A module
+that keeps files of its own gets it as `api.Context.state_dir`. Environment variables:
+`WHEELHOUSE_DB`, `WHEELHOUSE_PORT`, `WHEELHOUSE_TOKEN` (`--connect`), `WHEELHOUSE_DECISIONS=0`,
+and `WHEELHOUSE_SESSION_ID` and `WHEELHOUSE_PYTHON`, which a launched session is given.
+`claude-wheelhouse daemon --stop` stops the local daemon; quit the app first, or it starts
+another.
 
 ## The live database
 

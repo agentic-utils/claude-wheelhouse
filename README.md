@@ -7,6 +7,59 @@
 A sidecar for running several Claude Code sessions in parallel, on Windows with WSL and
 Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
 
+## Requirements
+
+- Windows with WSL and Windows Terminal. The wheelhouse runs inside WSL and opens each
+  session in a new Windows Terminal tab (through `cmd.exe` and `wt.exe`).
+- [uv](https://docs.astral.sh/uv/), which installs everything else, Python included.
+- Python 3.12 or later (`requires-python` in `pyproject.toml`). uv fetches 3.12 if your
+  system doesn't have it.
+- Claude Code, installed in WSL and logged in, with `claude` on the `PATH` of your login
+  shell: each tab starts `claude` through `$SHELL -lic`. The wheelhouse was built and
+  checked against Claude Code 2.1 (2.1.287 to 2.1.296).
+- git, to clone the repository.
+
+## Install
+
+In WSL, on the Linux filesystem (the database refuses to live under `/mnt/`):
+
+```
+git clone https://github.com/agentic-utils/claude-wheelhouse.git
+cd claude-wheelhouse
+make install
+```
+
+`make install` runs `uv sync --reinstall-package claude-wheelhouse`, which builds a `.venv`
+inside the clone: the wheelhouse installs nothing outside it (uv keeps its own cache
+of downloads, and any Python it fetched). To update, `git pull` and
+`make install` again; sessions running older code then show "needs relaunch".
+
+The `claude-wheelhouse` command lives in that `.venv`, so from the clone run it as
+`uv run claude-wheelhouse …` (this README writes it plain). `make` on its own lists the
+`make` targets.
+
+## First run
+
+```
+make tutorial
+```
+
+`make tutorial` (`uv run claude-wheelhouse tutorial`) opens the wheelhouse and starts a
+short demo session in a new Windows Terminal tab that posts a task, two related questions
+and a decision; a checklist at the top of the right-hand pane walks you through answering,
+sending and ending it. If Claude Code asks whether you trust the demo's folder, say yes in
+its tab. It always starts afresh (any earlier tutorial is ended), in its own scratch
+directory, `claude-wheelhouse-tutorial/` next to the database. It is a real Claude Code
+session on Sonnet 5.5 at high effort, and costs a few cents' worth of tokens on your
+Claude Code account. The first time the wheelhouse opens with no sessions it offers the
+tutorial in one line: `Enter` takes it, `Esc` dismisses it for good.
+
+After that, `make run` (`uv run claude-wheelhouse`) opens the wheelhouse, and `N` starts a
+session. Run it in a Windows Terminal tab, which draws its colours and carries its copies
+to the clipboard.
+
+## What it does
+
 - **Inbox.** Every task, question and subagent status from every session in one list,
   open questions first. Pick one to preview its detail and thread; Enter opens it full
   screen as a conversation, with the session's replies. Ctrl+Enter submits an answer, and
@@ -82,11 +135,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   transcripts, in claude-dashboard's colours. A bordered panel, titled with the session,
   model, effort and window, holds three gauges: context size against its window (green under
   150k, yellow under 300k, amber under 600k, then red), and the account's session and weekly usage with their reset times, as
-  `/usage` shows them: every 5 minutes the wheelhouse runs a short `claude -p "/usage"`
-  in the background (no tokens are spent), and says how old the numbers are when a
-  reading is late. `--usage-mode persistent` (or `usage-mode=persistent` in a `.env` in
-  the directory you start the app from, or in `~/.config/claude-wheelhouse/.env`) keeps
-  one Claude Code running and asks it instead: quicker per reading, but it stays in memory. A change takes effect when the daemon restarts. Under them, whether the prompt cache is warm
+  `/usage` shows them (see [The usage gauges](#the-usage-gauges)). Under them, whether the prompt cache is warm
   and when it goes cold (once cold, what the next turn re-pays), and its compactions.
   Straight after a compaction a session keeps its pre-compaction size until the next
   response sizes it. Below the panel, two charts of the last two hours, subagents included: how each turn's
@@ -170,23 +219,7 @@ how to work.
 `claude-wheelhouse protocol` prints all of it in one go, exactly as a session receives it,
 along with the launch command.
 
-## Run
-
-```
-make install
-make run
-```
-
-`make` on its own lists every command.
-
-New to the wheelhouse? `make tutorial` (or `claude-wheelhouse tutorial`) starts a short demo
-session in a new Windows Terminal tab that posts a task, two related questions and a
-decision; a checklist at the top of the right-hand pane walks you through answering,
-sending and ending it. If Claude Code asks whether you trust the demo's folder, say yes in
-its tab. It always starts afresh (any earlier tutorial
-is ended), in its own scratch directory, `claude-wheelhouse-tutorial/` next to the
-database, and costs a few cents of your usual model's tokens. The first time the wheelhouse opens with no sessions it
-offers the tutorial in one line: `Enter` takes it, `Esc` dismisses it for good.
+## Using it
 
 Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
@@ -234,6 +267,8 @@ on a thin teal track. Drag the thumb, or click the track to page. The thumb brig
 under the pointer and turns white while you drag it. Text boxes and the footer, one row
 high, have none.
 
+## The daemon
+
 The app goes through the wheelhouse daemon (`.plan/remote.md`): `claude-wheelhouse` starts
 it if none is running, or joins the one that is, and the daemon carries on when the app
 closes (a Relaunch under way too). It runs once per user, on `127.0.0.1:7428`
@@ -258,6 +293,76 @@ it, never from the command line. There it answers and manages the sessions, but 
 a tab would open on the daemon's machine. `claude-wheelhouse --local` runs the app with a hub of its
 own, without the daemon, as it ran before.
 
+To stop the daemon, quit the app (`Q`) first, since an open app starts it again, then run
+`claude-wheelhouse daemon --stop`. It stops the daemon by the pid in `daemon.lock`, with no
+token needed, and says what it did ("no wheelhouse daemon is running" if there was none).
+Running sessions carry on in their tabs, and the next `claude-wheelhouse` starts a fresh
+daemon. To reset the token, stop the daemon and delete `daemon.token`: the next start makes
+a new one, which each `--connect` machine then needs.
+
+## The usage gauges
+
+<!-- T85 -->
+The session and weekly gauges come from Claude Code itself: every 5 minutes by default,
+the wheelhouse runs a short `claude -p "/usage"` and reads what it prints. It reads no
+credentials. `--usage-mode persistent`, or `usage-mode=persistent` in a `.env` file,
+keeps one Claude Code running for the gauges instead of starting one each time.
+
+## Where state lives
+
+Everything the wheelhouse keeps is in `~/.local/state/claude-wheelhouse/` (or the directory
+of `WHEELHOUSE_DB`, if you set it):
+
+- `wheelhouse.db`, with `wheelhouse.db-wal` and `wheelhouse.db-shm` beside it while it's
+  open: sessions, items, answers, settings and pane sizes.
+- `daemon.token`, `daemon.lock` and `daemon.log`: the daemon's secret, the lock that says
+  one is running (and its pid), and its output.
+- `launch.log`: each tab launch, with any error from `cmd.exe` or `wt.exe`.
+- `claude-wheelhouse-tutorial/`: the tutorial's scratch directory.
+
+The sessions' conversations stay where Claude Code keeps them, in `~/.claude/projects`,
+which the wheelhouse reads.
+
+## Known limits
+
+- Windows, WSL and Windows Terminal only.
+- Only sessions launched or adopted from the wheelhouse are tracked.
+- Permission prompts, Claude's question dialog, slash commands (`/model` and `/effort`
+  included) and plan approval still happen in the session's tab.
+- The wheelhouse never closes a tab or stops Claude Code: Relaunch and Adopt of a running
+  session wait for you to `/exit` it in its tab.
+- A `/rename` in Claude Code isn't picked up: use Rename.
+- A session's directory can't contain any of `& | < > ^ % "`, since the tab's command line
+  goes through `cmd.exe`.
+- The database must be on the Linux filesystem: it refuses a path under `/mnt/`, where
+  SQLite's locking is unreliable.
+- An app on another machine (`--connect`) answers and manages sessions but can't start
+  them.
+- This is a 0.1 prototype with no releases yet: update with `git pull` and `make install`.
+
+## Reporting bugs
+
+Open an issue at <https://github.com/agentic-utils/claude-wheelhouse/issues>. Say what you
+did, what you expected and what happened, and attach:
+
+- `launch.log` and `daemon.log` from `~/.local/state/claude-wheelhouse/`;
+- the output of `uv run claude-wheelhouse protocol`, run in the clone;
+- the commit you're on (`git rev-parse --short HEAD` in the clone) and `claude --version`.
+
+The logs hold your directory paths and session ids: look them over before you attach them.
+
+## Uninstall
+
+1. End your sessions: End each one in the wheelhouse, or `/exit` it in its tab.
+2. Quit the app (`Q`), then in the clone run `uv run claude-wheelhouse daemon --stop`.
+3. Delete the clone: `make install` put the wheelhouse in the clone's `.venv`, and nowhere
+   else.
+4. Delete the state directory: `rm -rf ~/.local/state/claude-wheelhouse`. If you made a
+   `~/.config/claude-wheelhouse/.env`, delete that too.
+
+Nothing was added to your Claude Code settings, so there is nothing to undo there. The
+sessions' conversations stay in `~/.claude/projects`, as Claude Code's own.
+
 ## Test
 
 ```
@@ -266,6 +371,10 @@ make test
 
 The tests run in parallel, a worker a core (pytest-xdist). `uv run pytest -n 0` runs them
 serially, as a single test or a debugger wants.
+
+To work on the wheelhouse, read [AGENTS.md](AGENTS.md) first. From inside a wheelhouse
+session, `unset WHEELHOUSE_DB WHEELHOUSE_SESSION_ID WHEELHOUSE_TOKEN` before running the
+tests: they refuse to start while they would reach your own wheelhouse's state.
 
 ## Licence
 
