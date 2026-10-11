@@ -71,7 +71,9 @@ def main() -> None:
                                parents=[sdk]), sub=True)
     run = sub.add_parser("run", help="inside a launched tab: exec Claude for a session")
     run.add_argument("session_id")
-    host = sub.add_parser("host", help="inside the wheelhouse: a session's host process (started by the wheelhouse)")
+    # host: a hosted session's process, started by the wheelhouse in SDK mode alone, so
+    # left out of --help (no help, and not in the metavar below) like --enable-sdk
+    host = sub.add_parser("host")
     host.add_argument("session_id")
     sub.add_parser("mcp", help="the per-session MCP server (stdio)")
     sub.add_parser("monitor", help="the per-session plugin monitor")
@@ -87,6 +89,7 @@ def main() -> None:
                         "needed): the next start reads the token file again, or makes one if there's none")
     daemon.add_argument("--start-pipe", type=int, default=None, help=argparse.SUPPRESS)   # connect.start's
     sub.add_parser("token", help="print the daemon's token, for a client on another machine (--connect)")
+    sub.metavar = "{" + ",".join(c for c in sub.choices if c != "host") + "}"
     args = p.parse_args()
     if getattr(args, "enable_sdk", False):
         features.enable_sdk()

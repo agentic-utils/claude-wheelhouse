@@ -83,6 +83,16 @@ def test_the_flag_is_left_out_of_help(monkeypatch, capsys):
         cli.main()
     out = capsys.readouterr().out
     assert "sdk" not in out.lower() and "agent" not in out.lower()
+    assert "host" not in out, "the host command is SDK mode's alone (review 68)"
+
+
+def test_the_hidden_host_command_still_runs(monkeypatch):
+    from claude_wheelhouse import host
+    seen = []
+    monkeypatch.setattr(host, "main", seen.append)
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", "host", "abc"])
+    cli.main()
+    assert seen == ["abc"]
 
 
 @pytest.mark.parametrize("argv, on, desc", [
