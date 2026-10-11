@@ -45,7 +45,7 @@ from textual.widgets import (
 )
 
 from . import api, emoji, models, stats, subagents, transcript, tutorial
-from .hub import TAB_RELAUNCH, Done, Event, Hub, aimed, display_name, host_context, short
+from .hub import COMPACT_RELAUNCH_WAIT, TAB_RELAUNCH, Done, Event, Hub, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .stats_pane import SessionStats
@@ -1259,16 +1259,18 @@ class RelaunchChoice(Dialog):
         with Vertical(id="dialog"):
             yield Label(self.prompt, classes="dialog-prompt")
             with Horizontal(classes="buttons"):
-                yield Button(Text("[C]ompact first"), variant="success", id="compact")
-                yield Button(Text("[R]elaunch now"), variant="error", id="now")
-                yield Button(Text("Cancel [Esc]"), id="cancel")
+                # ids of its own: the app's host buttons (#compact) answer a press that bubbles up
+                yield Button(Text("[C]ompact first"), variant="success", id="relaunch-compact")
+                yield Button(Text("[R]elaunch now"), variant="error", id="relaunch-now")
+                yield Button(Text("Cancel [Esc]"), id="relaunch-cancel")
 
     def on_mount(self) -> None:
-        self.set_focus(self.query_one("#cancel", Button))   # a reflex Enter must not relaunch
+        self.set_focus(self.query_one("#relaunch-cancel", Button))   # a reflex Enter must not relaunch
 
     @on(Button.Pressed)
     def pressed(self, event: Button.Pressed) -> None:
-        self.action_answer(None if event.button.id == "cancel" else event.button.id)
+        event.stop()   # answered here: not the app's too
+        self.action_answer({"relaunch-compact": "compact", "relaunch-now": "now"}.get(event.button.id))
 
 
 class TutorialOffer(Dialog):
@@ -2439,10 +2441,19 @@ class WheelhouseApp(App):
         if not self.relaunching:
             self.exit()
             return
-        names = ", ".join(self.display_name(self.row(sid)) for sid in self.relaunching)
-        self.push_screen(Confirm(f"Still relaunching {names}: its host hasn't stopped yet. Quit anyway, "
-                                 "and leave it stopped? (Restore brings it back.)"),
-                         lambda yes: yes and self.exit())
+        stopping = ", ".join(self.display_name(self.row(sid)) for sid in self.relaunching
+                             if sid not in self.hub.compacting)
+        compacting = ", ".join(self.display_name(self.row(sid)) for sid in self.relaunching
+                               if sid in self.hub.compacting)
+        said = []
+        if stopping:
+            said.append(f"Still relaunching {stopping}: its host hasn't stopped yet. Quit anyway, and leave it "
+                        "stopped? (Restore brings it back.)")
+        if compacting:
+            said.append(f"{'Also c' if stopping else 'C'}ompacting {compacting} first, to relaunch it once "
+                        f"compacted. {'' if stopping else 'Quit anyway? '}It keeps running; it is relaunched "
+                        f"only if the wheelhouse is open within {COMPACT_RELAUNCH_WAIT // 60} minutes of Relaunch.")
+        self.push_screen(Confirm(" ".join(said)), lambda yes: yes and self.exit())
 
     def follow(self, sid: str) -> None:
         """Filter the items to the session and highlight its conversation row, so the right

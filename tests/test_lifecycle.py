@@ -517,3 +517,30 @@ async def test_quitting_mid_relaunch(store, sid, monkeypatch, stopped, keys, lau
     assert calls == launched, desc
     assert bool(exits) == exited, desc
     assert stopped or "Still relaunching demo" in prompt, f"{desc}: {prompt}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("keys, exited, desc", [
+    ([], False, "compacting first: quitting asks, saying what happens"),
+    (["y"], True, "and quits if told to"),
+])
+async def test_quitting_while_compacting_first(store, sid, monkeypatch, keys, exited, desc):
+    store.set_runner(sid, "sdk")
+    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b', context_tokens = 200000")
+    fake_status(monkeypatch, "live")
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
+    exits = []
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert app.hub.compact_then_relaunch(sid, (4242, 1)).ok
+        monkeypatch.setattr(app, "exit", lambda *a, **kw: exits.append(True))
+        await pilot.press("q")
+        await pilot.pause()
+        prompt = getattr(app.screen, "prompt", "")
+        for key in keys:
+            await pilot.press(key)
+            await pilot.pause()
+    assert bool(exits) == exited, desc
+    assert prompt.startswith("Compacting demo first, to relaunch it once compacted. Quit anyway?"), prompt
+    assert "hasn't stopped" not in prompt and "Restore" not in prompt, f"{desc}: nothing is stopped: {prompt}"
