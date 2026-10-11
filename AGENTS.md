@@ -16,6 +16,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `tui.py`: the Textual app. Reads and acts through the hub and the store.
 - `daemon.py`: the hub served over HTTP (`.plan/remote.md`); no client uses it yet.
 - `host.py`: a session run through the Claude Agent SDK, one detached process per session.
+  Experimental, and off unless `features.sdk_enabled()`: read `features.py` first.
+- `features.py`: SDK mode's switch, `sdk_enabled()`.
 - `launch.py`: Windows Terminal tabs (`wt.exe` through `cmd.exe`), the `claude` command
   line, and the protocol text injected into a session.
 - `mcp_server.py`: the per-session `wheelhouse` MCP server. Each tool's docstring is its
@@ -40,7 +42,7 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 ## Run
 
 - `make install` (`uv sync --reinstall-package claude-wheelhouse`), then `make run` or
-  `make tutorial`. `make` lists the targets. Python 3.12, managed by uv.
+  `make tutorial` (`claude-wheelhouse tutorial`). `make` lists the targets. Python 3.12, managed by uv.
 - The install is editable: `.venv` imports this checkout. In another clone or worktree,
   that venv's `pytest` script imports the main checkout, not yours. Run
   `python -m pytest` from your clone's root, or set `PYTHONPATH=<your clone>`.
@@ -53,8 +55,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `conftest.py` refuses to run (`test isolation: ...`) while the database or its state
   directory resolves under `~/.local/state/claude-wheelhouse`. Don't weaken that guard.
 - The autouse `isolated_db` fixture gives every test its own database. Other autouse
-  fixtures run sessions as tabs, stub the usage fetch, the tutorial offer and the dwell
-  timer. A test that needs a real host or the shipped behaviour opts in explicitly.
+  fixtures turn SDK mode off (`sdk_off`; a test of it takes `sdk_on`), run sessions as
+  tabs, stub the usage fetch, the tutorial offer and the dwell timer. A test that needs a real host or the shipped behaviour opts in explicitly.
 - A test that depends on the app's timers (Sink moves, the dwell, `tick`, `animate`)
   uses the `clock` fixture and moves time with `clock.advance`. Never sleep on wall-clock
   time. The fixture fails on any app timer it doesn't know: add it to the fixture.

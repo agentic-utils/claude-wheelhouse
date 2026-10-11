@@ -23,20 +23,18 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   you type `:gri` the hint line suggests matches (Tab or Enter takes the first). Text you haven't sent stays with the item (or session) you typed it
   for: moving to another clears the box, and coming back restores it. Each session shows
   its queued count (`✉ 3`). Sending doesn't change a question's status: the session's
-  reply declares it, `open` while it still needs you or `answered`. A session run in the
-  wheelhouse doesn't write its reply twice: its host posts what the turn ends by saying in the item's
-  thread as the reply, and the session sets the status alone. Until it replies the
+  reply declares it, `open` while it still needs you or `answered`. Until it replies the
   question shows as `processing` (dimmed), awaiting the session, and the session list's
   question count leaves it out: it counts only questions awaiting you, a queued answer
   not yet sent included. Tasks, decisions and subagents you answer show `queued` and
   `processing` the same way. Answers reach the session
   as a notification, even when it's idle. A running session started from an older
   wheelhouse shows "needs relaunch" (`⟳` in the session list): Relaunch gives it the new wheelhouse
-  code (a tab session once you've `/exit`ed it). It still queues answers as usual,
+  code (once you've `/exit`ed it in its tab). It still queues answers as usual,
   unless it is old enough to predate queued answers: then it can't hold them, so
   Ctrl+Enter sends to it straight away, whatever its mode, until it's relaunched.
-- **Subagents.** The wheelhouse tracks each session's subagents itself, in tabs and in the
-  wheelhouse alike, from the files Claude Code writes: an agent item (`A1`) appears, titled
+- **Subagents.** The wheelhouse tracks each session's subagents itself, from the files
+  Claude Code writes: an agent item (`A1`) appears, titled
   with the subagent's description, about 15 s after one starts, and turns done or failed
   when it ends (failed, with the reason in its thread, when it errors, you stop it, or its
   session stops while it runs). An agent item the
@@ -64,7 +62,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   question or decision); `F` shows the dismissed and closed ones, and `Ctrl+R` on one
   brings it back (`Delete` only ever closes: on one its session finished while you had it
   selected, it lets it go at once). One you've answered and the session hasn't replied to stays up, as
-  processing. A permission goes as soon as you answer it.
+  processing.
 - **Follow a session.** Click a session in the inbox's list (or move to it, or Enter on it): its items
   list gains a pinned first row, 💬 Conversation, highlighted, and drops its session column (it shows
   only while the list has every session's items, after `Esc`), and the right-hand pane
@@ -86,14 +84,8 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   150k, yellow under 300k, amber under 600k, then red), and the account's session and weekly usage with their reset times, as
   `/usage` shows them, fetched once a minute. Under them, whether the prompt cache is warm
   and when it goes cold (once cold, what the next turn re-pays), and its compactions.
-  Straight after a compaction a wheelhouse-hosted session shows the size its Claude Code
-  reports, marked `~` as an estimate until the next response sizes it exactly; a tab
-  session keeps its pre-compaction size until then. For a session run in the wheelhouse,
-  an effort slider sits over the gauges: Tab reaches it, Left and Right (or Home and End)
-  change the effort live, and a click on a level picks it. Where the pane is too narrow for
-  every level, it shows the current one between arrows, and a click on an arrow steps it.
-  No warning: effort has no side effects.
-  Below the panel, two charts of the last two hours, subagents included: how each turn's
+  Straight after a compaction a session keeps its pre-compaction size until the next
+  response sizes it. Below the panel, two charts of the last two hours, subagents included: how each turn's
   context was assembled (read from cache, new, cache miss) and the output tokens it made.
   Each bar covers a fixed stretch of clock (about 2 minutes at 60 columns), the rightmost
   the current one, and the scale steps 1, 2, 5, 10 so the bars hold still between turns.
@@ -107,72 +99,37 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   linear scale: an eighth for each 125k begun, so the cell is full past 875k.
 - **Sessions.** The left-hand column lists every session (parked ones dimmed, at the
   foot of the list's room: they fall there as you park them, and rise back as you unpark
-  them). Under it, a description of the highlighted one: its status, where it runs, its
-  ticket, directory and counts, what it's doing, and its synopsis, which the session keeps
-  up to date itself (its brief until it sets one), in a box that takes half the column.
+  them). Under it, a description of the highlighted one: its status, ticket, directory
+  and counts, and its synopsis, which the session keeps up to date itself (its brief until
+  it sets one), in a box that takes half the column.
   The highlighted session is the current one: highlighting an item moves the list's
   highlight to the item's session, and moving the list's highlight follows that session.
   The buttons under the description act on it, and only those that apply show, each with
   a tooltip saying what it does: its lifecycle (Rename, Relaunch and Park on a running
-  session, Restore on a dead one, Unpark on a parked one, End on either, Model on one run in
-  the wheelhouse), then its
-  conversation (Mode, Send on one that isn't dead, and Interrupt, Compact and Shell while it runs in the
-  wheelhouse). New (`N`), Adopt (`A`, a list of the sessions on disk you can adopt) and
-  Restore all (`Shift+S`) act on no one session, so they're keys in the footer. Ctrl+S and Ctrl+T, the
-  hint under the answer box and the activity line act on or describe the same session.
+  session, Restore on a dead one, Unpark on a parked one, End on either), then its
+  conversation (Mode, and Send on one that isn't dead). New (`N`), Adopt (`A`, a list of the sessions on disk you can adopt) and
+  Restore all (`Shift+S`) act on no one session, so they're keys in the footer. Ctrl+S, Ctrl+T and the
+  hint under the answer box act on or describe the same session.
   An item opened full screen has Mode, Send and the rest in its bar, for its own session. New session (directory, optional name, optional ticket, opening brief,
-  model and effort) runs Claude in the wheelhouse (below), or in a Windows Terminal tab if you tick the box.
+  model and effort) opens Claude in a Windows Terminal tab.
   The model is Sonnet 5.5, Opus 5.5, Haiku 5.5 or Fable 5.1 (Sonnet 5.5 unless changed), and the effort
   any level from low to max, starting at the model's default (high; xhigh for Haiku). Every launch of the
-  session passes both, Restore and Relaunch included.
+  session passes both, Restore and Relaunch included; to change them while it runs, use `/model` and
+  `/effort` in its tab.
   Browse… picks the directory from a tree (Enter opens a folder, Backspace goes up,
   Ctrl+Enter or Choose takes the highlighted one). Rename changes a session's name, and
   is the only way to: a `/rename` in Claude Code isn't picked up, and the next launch
   gives Claude Code the wheelhouse's name again.
   Restore brings back sessions that died
   (reboot, crash), one at a time or all at once; selecting a dead (red) session also
-  offers to relaunch it, unless it's parked. Relaunch does it in one click for a running session run in the
-  wheelhouse too: its host stops (interrupting any turn under way; an open permission or
-  question closes, since nothing is left to answer it) and starts again on the same
-  conversation once the old process has gone, to pick up new wheelhouse code or settings.
-  A restart writes the session's whole context to the prompt cache again, so for one over
-  150k tokens Relaunch offers Compact first (`C`: it's asked what to keep, compacted, then
-  relaunched), Relaunch now (`R`) or Cancel.
-  A tab session relaunches once you've `/exit`ed it. Nothing restarts on its own, and a resumed session is asked to
+  offers to relaunch it, unless it's parked. A running session relaunches once you've
+  `/exit`ed it in its tab. Nothing restarts on its own, and a resumed session is asked to
   post the questions and tasks it already had open. Park
   drops a session's items off the inbox until you unpark or restore it. End deletes its wheelhouse data. On a running
   session, Park and End only ask the session to do it (press again to cancel or force);
   the wheelhouse never deletes anything by itself.
   The buttons stay out of the Tab order, and each has a key: with the list focused, `R` renames, `L` relaunches,
   `S` restores, `Shift+S` restores all, `P` parks or unparks and `E` ends; the rest are under Keys below.
-- **Run in the wheelhouse.** New sessions run through the Claude Agent SDK in a small
-  host process of their own (`claude-wheelhouse host`), with no tab: you read them in the
-  conversation pane and answer from the inbox, where your messages arrive as ordinary
-  turns. Claude Code still loads your CLAUDE.md, settings, permission mode, hooks,
-  plugins, skills and MCP servers. A tool call your permission settings would have asked
-  about becomes a permission item (`P1`), answered with the Allow, Always (keeps the rule
-  Claude Code suggests) and Deny buttons over its answer box, at once in either send mode.
-  Text typed in the box is optional: Deny or Ctrl+Enter denies the call with it as what to
-  do instead, also at once. A question Claude asks with its question dialog becomes a
-  question item. Its buttons include Interrupt, Compact (the session is asked what to keep,
-  then compacted with that, and the bar reports the token drop) and Shell, which hands the
-  session to the real Claude Code in a tab and takes it back when you `/exit` there.
-  Model (`M`) changes the model it runs on, live, after warning that the prompt cache goes
-  with the old model; the effort slider in the stats pane changes its effort. A tab
-  session's model and effort are set when it's created; change them in the tab itself
-  with `/model` and `/effort`; the
-  bar above the footer has a line saying what the session in context is doing. A session whose
-  context passes 200k tokens posts one question item, `context 220k: compact?`, with Compact a key
-  away (`C`): it closes by itself once the session is compacted (or back under 150k), and comes
-  back only when the context passes 200k again. One over 150k that sits idle with a question
-  or decision of its own waiting on you gets a one-word
-  keepalive turn every 55 minutes, for up to 8 hours, so its prompt cache (an hour's) doesn't go
-  cold and get written again whole. None follows a compaction, which leaves no cache to
-  keep. Closing the wheelhouse leaves the hosts running. `WHEELHOUSE_RUNNER=tab` makes tabs the default again. Restore and Adopt bring a
-  session back the way new sessions run, so a tab from before hosts existed comes back as
-  a host once you `/exit` it; Shell is the way back to a tab. Host logs are under `~/.local/state/claude-wheelhouse/hosts/`.
-  This runs on your own Claude login, which Anthropic's terms allow for individual use;
-  see `.plan/sdk-sessions.md` before offering it to others.
 - **Adopt.** Brings a session the wheelhouse didn't launch into the wheelhouse: pick it
   from the recent sessions in `~/.claude/projects` (one whose adoption failed is offered
   again). If it's still running, type `/exit` in
@@ -194,19 +151,17 @@ report to the wheelhouse, and defer to your own instructions (CLAUDE.md and the 
 how to work.
 
 - [`protocol.md`](claude_wheelhouse/protocol.md): appended to the session's system prompt,
-  followed by how your messages reach it ([`protocol_sdk.md`](claude_wheelhouse/protocol_sdk.md)
-  in the wheelhouse, [`protocol_tab.md`](claude_wheelhouse/protocol_tab.md) in a tab) and
+  followed by how your messages reach it ([`protocol_tab.md`](claude_wheelhouse/protocol_tab.md)) and
   [`protocol_decisions.md`](claude_wheelhouse/protocol_decisions.md), which
   has the session report the choices it makes without asking.
   `WHEELHOUSE_DECISIONS=0` launches sessions without that section.
-- In a tab, [the `/wheelhouse` skill](claude_wheelhouse/plugin/skills/wheelhouse/SKILL.md):
+- [The `/wheelhouse` skill](claude_wheelhouse/plugin/skills/wheelhouse/SKILL.md):
   `/wheelhouse park` and `/wheelhouse end`.
 - [The `wheelhouse` MCP server](claude_wheelhouse/mcp_server.py): the tools the session
   posts and reads through. Each tool's description is its docstring.
-- In a tab, [the monitor](claude_wheelhouse/monitor.py) ([plugin entry](claude_wheelhouse/plugin/monitors/monitors.json))
+- [The monitor](claude_wheelhouse/monitor.py) ([plugin entry](claude_wheelhouse/plugin/monitors/monitors.json))
   delivers your answers, the End and Park requests, and the note an adopted session gets
-  on joining, as `[wheelhouse]` notifications. In the wheelhouse, [the host](claude_wheelhouse/host.py)
-  sends the same as turns.
+  on joining, as `[wheelhouse]` notifications.
 
 `claude-wheelhouse protocol` prints all of it in one go, exactly as a session receives it,
 along with the launch command.
@@ -220,10 +175,11 @@ make run
 
 `make` on its own lists every command.
 
-New to the wheelhouse? `make tutorial` starts a short demo session, run in the wheelhouse,
-that posts a task, two related questions and a decision, then asks permission for one
-harmless command; a checklist at the top of the right-hand pane walks you through
-answering, sending, allowing and ending it. It always starts afresh (any earlier tutorial
+New to the wheelhouse? `make tutorial` (or `claude-wheelhouse tutorial`) starts a short demo
+session in a new Windows Terminal tab that posts a task, two related questions and a
+decision; a checklist at the top of the right-hand pane walks you through answering,
+sending and ending it. If Claude Code asks whether you trust the demo's folder, say yes in
+its tab. It always starts afresh (any earlier tutorial
 is ended), in its own scratch directory, `claude-wheelhouse-tutorial/` next to the
 database, and costs a few cents of your usual model's tokens. The first time the wheelhouse opens with no sessions it
 offers the tutorial in one line: `Enter` takes it, `Esc` dismisses it for good.
@@ -234,14 +190,10 @@ highlighted question or decision or dismiss a done task or subagent, `N` new ses
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue (not a dead one's: Restore it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
-as answered, a decision as seen), `?` list every key and button, `Q` quit (with `--local`, it asks first
-while a relaunch is waiting for a host to stop: through the daemon there's nothing to ask). Outside a text box, the buttons that have no other key:
-`I` Interrupt, `C` Compact, `H` Shell, `M` Model, `1` Allow, `2` Always and `3` Deny on a permission item (numbered
-as in Claude Code's own prompt), and `Shift+A` Send all (every running session's queue). A key whose button doesn't apply says so.
+as answered, a decision as seen), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
 
 `Tab` goes round the panes: the session list, the items, the answer box, then the conversation (one
-stop, where the arrows, `PgUp`, `PgDn`, `Home` and `End` scroll it), then the stats pane's effort slider
-while it shows, and `Shift+Tab` goes back.
+stop, where the arrows, `PgUp`, `PgDn`, `Home` and `End` scroll it), and `Shift+Tab` goes back.
 `Ctrl+Enter` in the answer box goes back to the items with the cursor where it was, so answering a run
 of items is: type, `Ctrl+Enter`, `Down`, `Tab`, type, `Ctrl+Enter`. An item opened full screen has two
 stops, its answer box and its thread. Keys typed ahead of the screen end as if typed slowly: each acts once the one
@@ -298,7 +250,8 @@ daemon --stop`), start it again (open the app), then give the new token to each 
 machine. `claude-wheelhouse --connect host:7428` runs
 the app on another machine against a daemon listening on an address that machine reaches
 (a VPN's): the token comes from `--token-file`, else `WHEELHOUSE_TOKEN`, else it asks for
-it, never from the command line. `claude-wheelhouse --local` runs the app with a hub of its
+it, never from the command line. There it answers and manages the sessions, but starts none:
+a tab would open on the daemon's machine. `claude-wheelhouse --local` runs the app with a hub of its
 own, without the daemon, as it ran before.
 
 ## Test
