@@ -1,4 +1,5 @@
 import json
+import sys
 
 import pytest
 from textual.widgets import DataTable, Static, TextArea
@@ -147,6 +148,8 @@ def test_an_earlier_tutorials_host_is_stopped(store, monkeypatch, sdk, exits, ki
     (1, None, False, "not once there are sessions"),
     (0, "dismissed", False, "not once dismissed"),
     (0, "taken", False, "not once taken"),
+    (2, tutorial.RESET, True, "reset by claude-wheelhouse tutorial: offered though there are sessions"),
+    (0, tutorial.RESET, True, "reset, and empty"),
 ])
 def test_when_the_tutorial_is_offered(store, tmp_path, sessions, setting, offered, desc):
     for _ in range(sessions):
@@ -154,6 +157,86 @@ def test_when_the_tutorial_is_offered(store, tmp_path, sessions, setting, offere
     if setting:
         store.set_setting(tutorial.OFFER_KEY, setting)
     assert real_should_offer(store) is offered, desc
+
+
+@pytest.fixture
+def daemon_lock(db_file):
+    """A daemon's lock held, as a running daemon holds it (connect.holder)."""
+    import fcntl
+    from claude_wheelhouse import connect
+    with open(db_file.parent / connect.LOCK, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock.write("pid 4242 at http://127.0.0.1:7428\n")
+        lock.flush()
+        yield
+
+
+@pytest.mark.parametrize("argv, said, daemon, reset, desc", [
+    (["tutorial"], "y", False, True, "y: reset"),
+    (["tutorial"], "YES\n", False, True, "yes, in any case: reset"),
+    (["tutorial"], "n", False, False, "n: nothing changed"),
+    (["tutorial"], "", False, False, "Enter: no, the default"),
+    (["tutorial"], EOFError, False, False, "no input to read: no"),
+    (["tutorial", "--yes"], None, False, True, "--yes: reset without asking"),
+    (["tutorial", "-y"], None, True, False, "a daemon running: refused, even with --yes"),
+    (["tutorial"], None, True, False, "a daemon running: refused before asking"),
+])
+def test_the_tutorial_command_resets_the_offer(store, tmp_path, monkeypatch, capsys, request,
+                                               argv, said, daemon, reset, desc):
+    from claude_wheelhouse import cli
+    if daemon:
+        request.getfixturevalue("daemon_lock")
+    other = store.create_session(str(tmp_path), name="real work")
+    store.post_item(other, "task", "keep me")
+    tut = tutorial.prepare(store)
+    store.set_setting(tutorial.OFFER_KEY, "dismissed")
+    asked = []
+
+    def ask(prompt):
+        asked.append(prompt)
+        if said is EOFError:
+            raise EOFError
+        return said
+    monkeypatch.setattr("builtins.input", ask)
+    monkeypatch.setattr(tutorial.liveness, "is_alive", lambda pid, start, boot: False)
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", *argv])
+    if daemon:
+        with pytest.raises(SystemExit, match="quit the app, stop the daemon .*make stop"):
+            cli.main()
+    else:
+        cli.main()
+    assert bool(asked) is (said is not None), f"{desc}: asked only without --yes, and never with a daemon"
+    assert store.setting(tutorial.OFFER_KEY) == (tutorial.RESET if reset else "dismissed"), desc
+    assert (store.session(tut) is None) is reset, f"{desc}: the tutorial session ended only on a reset"
+    assert [it["title"] for it in store.items(other)] == ["keep me"], f"{desc}: other sessions are kept"
+    assert real_should_offer(store) is reset, f"{desc}: offered at the next start"
+    out = capsys.readouterr().out
+    if reset:
+        assert "ended the earlier tutorial session" in out and "offers the tutorial" in out, desc
+    elif not daemon:
+        assert out.strip() == "nothing changed", desc
+
+
+@pytest.mark.parametrize("key, setting, desc", [
+    ("enter", "taken", "Enter takes it"),
+    ("escape", "dismissed", "Esc dismisses it"),
+])
+@pytest.mark.anyio
+async def test_a_reset_offer_shows_once_over_sessions(store, tmp_path, monkeypatch, fake_claude, key, setting, desc):
+    monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
+    monkeypatch.setattr(launch, "open_tab", lambda s, i: None)
+    store.create_session(str(tmp_path), name="real work")
+    store.set_setting(tutorial.OFFER_KEY, tutorial.RESET)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, TutorialOffer), f"{desc}: offered though there is a session"
+        await pilot.press(key)
+        await pilot.pause()
+    assert store.setting(tutorial.OFFER_KEY) == setting, f"{desc}: the answer replaces the reset"
+    async with WheelhouseApp(store).run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert not isinstance(pilot.app.screen, TutorialOffer), f"{desc}: offered once"
 
 
 @pytest.mark.parametrize("on, opens, desc", [
@@ -349,7 +432,7 @@ async def test_a_host_that_cant_start_says_why(store, fake_claude):
             await pilot.pause(0.1)
             if why in app._checklist_text:
                 break
-        assert why in app._checklist_text and f"{tutorial.COMMAND} starts it afresh" in app._checklist_text
+        assert why in app._checklist_text and f"{tutorial.COMMAND} offers it again at the next start" in app._checklist_text
 
 
 def test_an_earlier_host_that_exits_as_its_told_is_no_error(store, monkeypatch):
@@ -413,7 +496,7 @@ async def test_a_stopped_tab_says_why(store, tut, registered, why, desc):
         await pilot.pause()
         assert app.hub.statuses[tut] == "dead", f"{desc}: not running"
         assert why in app._checklist_text, desc
-        assert f"{tutorial.COMMAND} starts it afresh" in app._checklist_text
+        assert f"{tutorial.COMMAND} offers it again at the next start" in app._checklist_text
         assert "▶ Find the demo in its tab" in app._checklist_text
 
 
@@ -454,25 +537,25 @@ def test_the_tutorial_comes_back_as_a_tab(store, tut, monkeypatch, on, how, stor
 @pytest.mark.anyio
 async def test_every_hint_names_the_same_fixed_command(store, monkeypatch, fake_claude):
     """Review 68: the offer, the ? overlay, the dismiss notice and a stopped tutorial's
-    checklist all name the command that starts the tutorial. Guessing it from
+    checklist all name the command that has it offered again. Guessing it from
     PATH named a command that fails under make run, where uv puts the venv's
     claude-wheelhouse on PATH but the person's shell can't run it, so every hint names both."""
     from claude_wheelhouse.hub import Hub
     said = "claude-wheelhouse tutorial (make tutorial in a source checkout)"
     monkeypatch.setattr(tutorial.shutil, "which", lambda cmd, *a, **k: f"/venv/bin/{cmd}")   # as under uv run
-    assert f"{said} starts it afresh any time" in keys_help(), "? overlay"
+    assert f"{said} has it offered again" in keys_help(), "? overlay"
     monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert f"{said} runs it any time" in str(app.screen.query_one("#offer").render()), "offer"
+        assert f"{said} offers it again" in str(app.screen.query_one("#offer").render()), "offer"
     assert [e.text for e in Hub(store).answer_offer(False).notices] == \
-        [f"{said} runs the tutorial any time; ? lists every key"], "dismiss notice"
+        [f"{said} offers the tutorial again; ? lists every key"], "dismiss notice"
     tutorial.prepare(store)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert f"\n{said} starts it afresh" in app._checklist_text, "checklist"
+        assert f"\n{said} offers it again at the next start" in app._checklist_text, "checklist"
 
 
 @pytest.mark.parametrize("how", ["restore", "open"])

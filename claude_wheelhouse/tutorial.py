@@ -8,6 +8,9 @@ prompt, following the conversation) come back as SDK-only top-ups (.plan/tutoria
 The tutorial session is the one whose directory is the tutorial's own scratch directory
 (tutorial_dir), next to the database. Starting the tutorial always starts afresh: any
 earlier tutorial session is ended (its items go with it) and its directory recreated.
+
+The offer is how it starts. `claude-wheelhouse tutorial` (reset) doesn't start it: run while
+no wheelhouse is, it ends any tutorial session and has the next start offer it again.
 """
 
 import json
@@ -22,6 +25,7 @@ from .store import Store, runner
 
 NAME = "tutorial"
 OFFER_KEY = "tutorial_offer"   # settings: unset until the first-run offer is taken or dismissed
+RESET = "reset"   # OFFER_KEY as reset() leaves it: offered at the next start, sessions or not, until answered
 SEEN_KEY = "tutorial_seen"     # settings: the steps only the screen knows about, for the current tutorial
 STOP_WAIT = 5.0   # seconds an earlier tutorial's host gets to exit before it is told to
 # what the tutorial's directory allows: the wheelhouse's own tools run without a prompt
@@ -66,8 +70,9 @@ STEPS = (
 )
 
 
-# what starts the tutorial, named by every hint (the offer, the ? overlay, the checklist, the
-# dismiss notice): fixed, as which copy the person's own shell runs can't be told from here
+# what has the next start offer the tutorial again (reset), named by every hint (the offer, the
+# ? overlay, the checklist, the dismiss notice): fixed, as which copy the person's own shell
+# runs can't be told from here
 COMMAND = "claude-wheelhouse tutorial (make tutorial in a source checkout)"
 
 
@@ -88,8 +93,10 @@ def session_id(store: Store) -> str | None:
 
 
 def should_offer(store: Store) -> bool:
-    """The first-run offer: a wheelhouse with no sessions that has never offered it."""
-    return store.setting(OFFER_KEY) is None and not store.sessions()
+    """The first-run offer: a wheelhouse with no sessions that has never offered it, or one
+    reset() has asked to offer it again. Answering it either way overwrites the setting."""
+    offer = store.setting(OFFER_KEY)
+    return offer == RESET or (offer is None and not store.sessions())
 
 
 def steps(store: Store, sid: str, seen: set[str]) -> list[tuple[str, str, str, bool]]:
@@ -161,6 +168,17 @@ def stop_earlier(store: Store) -> None:
                 os.kill(pid, signal.SIGTERM)
             except ProcessLookupError:   # it went in the meantime
                 pass
+
+
+def reset(store: Store) -> bool:
+    """claude-wheelhouse tutorial: end any tutorial session (stop_earlier: the person's other
+    sessions are kept) and have the next start offer the tutorial, sessions or not. Only while
+    no wheelhouse runs (cli.py), as the app decides on the offer once, as it starts. Whether
+    a tutorial session was ended."""
+    ended = session_id(store) is not None
+    stop_earlier(store)
+    store.set_setting(OFFER_KEY, RESET)
+    return ended
 
 
 def prepare(store: Store) -> str:

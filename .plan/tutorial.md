@@ -84,7 +84,8 @@ really use.
 ## Resolved
 
 - **Approach** (Q16): B with the `?` overlay. "Note we'll need a way for me to re-run the
-  tutorial even if I've taken it before": `make tutorial` always starts afresh.
+  tutorial even if I've taken it before": `make tutorial` always starts afresh (since Q72,
+  by having the next start offer it, below).
 - **First-run trigger** (Q17): offer it on first install, "as long as there's an easy way
   to dismiss it with a single keypress": Enter takes it, Esc dismisses it.
 - **Checklist placement** (Q18): the top of the right-hand pane.
@@ -97,15 +98,26 @@ really use.
   permission and conversation steps come back as SDK-only top-ups (below), offered only
   when SDK mode is on, once the top-up machinery is built.
 - **Layout improvements**: parked, to come back to separately.
+- **Re-running it** (Q72, option A): launching the demo straight from `make tutorial` while
+  the app was open just joined it to the running wheelhouse, which confused. `make tutorial`
+  asks y/N first, then clears the saved answer to the offer and removes the old tutorial
+  session, leaving a one-time marker so the next start shows the offer even though other
+  sessions exist. It refuses while the app or daemon is up, because the offer is only
+  checked at startup. No tab is launched from the make target, and the person's other
+  sessions are never touched.
 
 ## As built
 
-- `make tutorial` runs `claude-wheelhouse tutorial`: it ends any earlier tutorial session
+- Taking the offer (`tutorial.start`): it ends any earlier tutorial session
   (its items go with it; a host that hasn't exited after 5 seconds gets SIGTERM, a tab's
   Claude Code gets it at once, since it never exits by itself), recreates
   `claude-wheelhouse-tutorial/` next to the database (deleted on a restart only if it
-  carries the tutorial's marker file), creates a session there, opens it in a Windows
-  Terminal tab, then opens the app. It is a tab whether SDK mode is on or not.
+  carries the tutorial's marker file), creates a session there and opens it in a Windows
+  Terminal tab. It is a tab whether SDK mode is on or not.
+- `make tutorial` runs `claude-wheelhouse tutorial` (`tutorial.reset`): refused while the
+  daemon's lock is held (`connect.holder`), with how to stop it; then a y/N (`--yes` skips
+  it); then it ends any tutorial session as above and sets `tutorial_offer` to `reset`. It
+  never opens the app or a tab.
 - The steps: find the demo in its tab (it ticks once the session has posted, so past any
   trust prompt), open a question, answer both, send them, see the reply, read and close
   the decision, end it.
@@ -118,7 +130,8 @@ really use.
   memory or handoff notes) when ended.
 - First run: with no sessions and no `tutorial_offer` setting (a new `settings` table), a
   one-line offer sits at the top of the screen. Enter starts the tutorial, Esc dismisses
-  it; either way the setting is written and it never comes back.
+  it; either way the setting is written and it never comes back. `tutorial_offer = reset`
+  (from `make tutorial`) shows it once more, sessions or not, and the answer overwrites it.
 - The checklist sits at the top of the right-hand pane while the tutorial session exists.
   Each step is worked out from the store on the refresh: both questions answered, the
   answers sent, a reply after they went, the decision closed (not just seen: the app's
@@ -162,9 +175,9 @@ a '2 new tutorial steps' badge."
   reason.
 - Two steps only the screen sees (`open`, `follow`) are kept in the `tutorial_seen`
   setting, a JSON blob tied to one tutorial session id.
-- `tutorial_offer` (unset, `taken`, `dismissed`) gates the one-line modal offer
-  (`TutorialOffer`), shown only when it is unset and there are no sessions. Esc dismisses
-  it for good.
+- `tutorial_offer` (unset, `taken`, `dismissed`, `reset`) gates the one-line modal offer
+  (`TutorialOffer`), shown when it is unset and there are no sessions, or when it is
+  `reset` (`make tutorial`). Esc dismisses it until the next `make tutorial`.
 
 ## The model
 
@@ -183,8 +196,8 @@ pending = [s for s in STEPS if no row for s.id has done_at or dismissed_at]
   step's row is ignored.
 - `new_in` is shown in the checklist ("new in 0.2.0") and in release notes. The pending
   rule never reads it.
-- `make tutorial` still starts afresh: it runs every step, done or not, and records any
-  it ticks. Nothing is cleared.
+- Taking the offer `make tutorial` re-arms still starts afresh: it runs every step, done
+  or not, and records any it ticks. Nothing is cleared.
 
 ## A step
 

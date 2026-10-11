@@ -55,8 +55,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 
 ## Run
 
-- `make install` (`uv sync --reinstall-package claude-wheelhouse`), then `make run` or
-  `make tutorial` (`claude-wheelhouse tutorial`). `make` lists the targets. Python 3.12, managed by uv.
+- `make install` (`uv sync --reinstall-package claude-wheelhouse`), then `make run`.
+  `make tutorial` (`claude-wheelhouse tutorial`), with the app and daemon stopped, has the
+  next start offer the tutorial again. `make` lists the targets. Python 3.12, managed by uv.
 - The install is editable: `.venv` imports this checkout. In another clone or worktree,
   that venv's `pytest` script imports the main checkout, not yours. Run
   `uv run python -m pytest` from your clone's root, or set `PYTHONPATH=<your clone>`.

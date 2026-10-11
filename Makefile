@@ -13,7 +13,7 @@ run: ## Run the wheelhouse app
 stop: ## Stop the daemon (quit the app first, or it starts a new one)
 	uv run claude-wheelhouse daemon --stop
 
-tutorial: ## Start the tutorial afresh (ending any earlier one) and open the wheelhouse
+tutorial: ## Have the next make run offer the tutorial again, ending any earlier tutorial session (quit the app and make stop first)
 	uv run claude-wheelhouse tutorial
 
 test: ## Run the tests

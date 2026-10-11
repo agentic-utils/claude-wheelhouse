@@ -48,20 +48,33 @@ the clipboard.
 ## First run
 
 ```
-make tutorial
+make run
 ```
 
-`make tutorial` (`uv run claude-wheelhouse tutorial`) opens the wheelhouse and starts a
-short demo session in a new Windows Terminal tab that posts a task, two related questions
-and a decision; a checklist at the top of the right-hand pane walks you through answering,
-sending and ending it. If Claude Code asks whether you trust the demo's folder, say yes in
-its tab. It always starts afresh (any earlier tutorial is ended), in its own scratch
-directory, `claude-wheelhouse-tutorial/` next to the database. It is a real Claude Code
-session on Sonnet 5.5 at high effort, and costs a few cents' worth of tokens on your
-Claude Code account. The first time the wheelhouse opens with no sessions it offers the
-tutorial in one line: `Enter` takes it, `Esc` dismisses it for good. That line, and the
-app's help, name `claude-wheelhouse tutorial (make tutorial in a source checkout)`: in your
-clone, that is `make tutorial`.
+The first time the wheelhouse opens with no sessions it offers the tutorial in one line:
+`Enter` takes it, `Esc` dismisses it. Taking it starts a short demo session in a new
+Windows Terminal tab that posts a task, two related questions and a decision; a checklist
+at the top of the right-hand pane walks you through answering, sending and ending it. If
+Claude Code asks whether you trust the demo's folder, say yes in its tab. It always starts
+afresh (any earlier tutorial is ended), in its own scratch directory,
+`claude-wheelhouse-tutorial/` next to the database. It is a real Claude Code session on
+Sonnet 5.5 at high effort, and costs a few cents' worth of tokens on your Claude Code
+account.
+
+To be offered it again, quit the app, then:
+
+```
+make stop
+make tutorial
+make run
+```
+
+`make tutorial` (`uv run claude-wheelhouse tutorial`) asks first (`--yes` skips the
+question), then ends the earlier tutorial session, if there is one, and has the next start
+offer the tutorial even though you have other sessions. Your other sessions are kept. It
+refuses while the daemon runs, since the app decides on the offer only as it starts. The
+offer, and the app's help, name `claude-wheelhouse tutorial (make tutorial in a source
+checkout)`: in your clone, that is `make tutorial`.
 
 After that, `make run` (`uv run claude-wheelhouse`) opens the wheelhouse, and `N` starts a
 session.

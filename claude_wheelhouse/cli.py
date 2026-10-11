@@ -18,7 +18,7 @@ def truecolour(environ=os.environ) -> None:
 
 def client_args(p: argparse.ArgumentParser, sub: bool = False) -> None:
     """How the app reaches the hub: the local daemon by default, started if none runs. Given
-    before or after tui or tutorial: a subcommand's defaults are left out (SUPPRESS), so it
+    before or after tui: a subcommand's defaults are left out (SUPPRESS), so it
     never undoes what was given before it."""
     unset = {"default": argparse.SUPPRESS} if sub else {}
     how = p.add_mutually_exclusive_group()
@@ -56,6 +56,30 @@ def run_app(args, store=None) -> None:
     app.run()
 
 
+def tutorial_again(yes: bool) -> None:
+    """claude-wheelhouse tutorial: the tutorial offered at the app's next start (tutorial.reset),
+    once the person says yes (or --yes). Refused while a daemon runs: the app goes through
+    it, and decides on the offer only as it starts."""
+    from . import tutorial
+    from .connect import STOP, holder
+    from .store import Store, db_path
+    if held := holder(db_path().parent):
+        sys.exit(f"claude-wheelhouse: the wheelhouse daemon is running ({held}): quit the app, stop the daemon "
+                 f"with {STOP} (make stop in a source checkout), then run this again")
+    if not yes:
+        try:
+            said = input("This ends the tutorial session, if there is one (your other sessions are kept), and the "
+                         "wheelhouse offers the tutorial when it next starts. Go ahead? [y/N] ")
+        except EOFError:
+            said = ""
+        if said.strip().lower() not in ("y", "yes"):
+            print("nothing changed")
+            return
+    ended = tutorial.reset(Store())
+    print(("ended the earlier tutorial session" if ended else "no tutorial session to end")
+          + "; the wheelhouse's next start (make run in a source checkout) offers the tutorial")
+
+
 def main() -> None:
     # host: a hosted session's process, started by the wheelhouse in SDK mode alone
     # (launch.open_host runs `host <id>`), so taken before the main parser: neither --help
@@ -87,8 +111,9 @@ def main() -> None:
     client_args(p)
     sub = p.add_subparsers(dest="cmd")
     client_args(sub.add_parser("tui", help="the wheelhouse app (default)", parents=[sdk, usage]), sub=True)
-    client_args(sub.add_parser("tutorial", help="start the tutorial afresh, then open the wheelhouse app",
-                               parents=[sdk, usage]), sub=True)
+    again = sub.add_parser("tutorial", help="have the app offer the tutorial at its next start, ending any "
+                           "earlier tutorial session (run with the app and the daemon stopped)")
+    again.add_argument("--yes", "-y", action="store_true", help="don't ask first")
     run = sub.add_parser("run", help="inside a launched tab: exec Claude for a session")
     run.add_argument("session_id")
     sub.add_parser("mcp", help="the per-session MCP server (stdio)")
@@ -149,14 +174,7 @@ def main() -> None:
             first = " (the daemon makes it the first time it starts)" if e.errno == errno.ENOENT else ""
             sys.exit(f"claude-wheelhouse: {e}{first}")
     elif args.cmd == "tutorial":
-        from .store import Store
-        from .tutorial import start
-        store = Store()
-        try:
-            start(store)   # always a tab, SDK mode or not
-        except Exception as e:
-            sys.exit(f"couldn't start the tutorial: {e}")
-        run_app(args, store)
+        tutorial_again(args.yes)
     elif args.cmd == "monitor":
         from .monitor import main as monitor_main
         monitor_main()
