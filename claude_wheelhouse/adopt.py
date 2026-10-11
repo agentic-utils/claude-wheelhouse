@@ -148,12 +148,13 @@ def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = livenes
 
 
 def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSIONS,
-          proc: Path = liveness.PROC, open_tab=None, sdk: bool | None = None) -> str:
+          proc: Path = liveness.PROC, open_tab=None, sdk: bool | None = None, may_tab: bool = True) -> str:
     """Register the session and open it as launch.restore_runner says (the way new sessions
     run now; the tutorial's, a tab), tracked already or not. Refuses while it is still
     running. A session the wheelhouse already tracks keeps its row (and its items), renamed
-    if asked. sdk: whether SDK mode is on, else features.sdk_enabled()."""
-    open_tab = open_tab or functools.partial(launch.restore_session, sdk=sdk)
+    if asked. sdk: whether SDK mode is on, else features.sdk_enabled(). may_tab false (a
+    request from another machine): a tab is refused (launch.NotHere), and a new row goes."""
+    open_tab = open_tab or functools.partial(launch.restore_session, sdk=sdk, may_tab=may_tab)
     pid = liveness.running_pid(c.id, sessions, proc)
     if pid:
         raise StillRunning(pid)

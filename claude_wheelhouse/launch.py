@@ -157,12 +157,28 @@ def injected(sdk: bool | None = None) -> str:
     ])
 
 
-def open_session(store: Store, sid: str) -> None:
-    """Launch (or restore) a session the way it runs: a host for sdk, a tab for tab."""
+class NotHere(RuntimeError):
+    """A tab asked for by another machine (may_tab false): it would open on this machine's
+    screen, where nobody there sees it."""
+
+    def __init__(self, session):
+        self.name = session["name"] or os.path.basename(session["cwd"]) or session["id"][:6]
+        super().__init__(f"{self.name} opens in a tab: restore it from the daemon's machine")
+
+
+def open_session(store: Store, sid: str, may_tab: bool = True) -> None:
+    """Launch (or restore) a session the way it runs: a host for sdk, a tab for tab. The one
+    place a wheelhouse opens a session's tab: with may_tab false (a request from another
+    machine) it refuses one (NotHere) before anything is done."""
     session = store.session(sid)
     if session is None:
         raise KeyError(sid)
-    (open_host if runner(session) == "sdk" else open_tab)(store, sid)
+    if runner(session) == "sdk":
+        open_host(store, sid)
+    elif not may_tab:
+        raise NotHere(session)
+    else:
+        open_tab(store, sid)
 
 
 def restore_runner(store: Store, cwd: str, sdk: bool | None = None) -> str:
@@ -174,15 +190,19 @@ def restore_runner(store: Store, cwd: str, sdk: bool | None = None) -> str:
     return "tab" if cwd == str(tutorial.tutorial_dir(store)) else default_runner(sdk)
 
 
-def restore_session(store: Store, sid: str, sdk: bool | None = None) -> None:
-    """Restore (or adopt) a session that isn't running, as restore_runner says. The check
-    comes first, so a running tab is never recorded as hosted."""
+def restore_session(store: Store, sid: str, sdk: bool | None = None, may_tab: bool = True) -> None:
+    """Restore (or adopt) a session that isn't running, as restore_runner says. The checks
+    come first, so a running tab is never recorded as hosted, and a tab another machine
+    asked for (may_tab false) is refused before its runner changes."""
     session = store.session(sid)
     if session is None:
         raise KeyError(sid)
     check_free(session)
-    store.set_runner(sid, restore_runner(store, session["cwd"], sdk))
-    open_session(store, sid)
+    how = restore_runner(store, session["cwd"], sdk)
+    if how == "tab" and not may_tab:
+        raise NotHere(session)
+    store.set_runner(sid, how)
+    open_session(store, sid, may_tab)
 
 
 def check_free(session) -> None:

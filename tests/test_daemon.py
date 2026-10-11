@@ -26,8 +26,8 @@ TOKEN = "the-test-token"
 @pytest.fixture
 def daemon(store, monkeypatch, sdk_on):
     """A daemon in SDK mode, which a remote client's sessions need (test_sdk_mode_off_refuses_new_sessions)."""
-    monkeypatch.setattr(launch, "open_session", lambda store, sid: None)
-    monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None: None)
+    monkeypatch.setattr(launch, "open_session", lambda store, sid, may_tab=True: None)
+    monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None, may_tab=True: None)
     d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True)
     d.feed = Feed(start=100)
     yield d
@@ -873,6 +873,8 @@ NEW_ROUTES = [
 async def test_each_new_route(daemon, store, sid, tmp_path, method, path, body, did, desc):
     store.post_item(sid, "task", "do it")
     store.post_item(sid, "permission", "Bash: ls")
+    if path == "/restore-all":
+        await daemon.on_hub(daemon.tick)   # the session dead, as the client showed it
     r = await call(daemon, method, fill(path, sid, tmp_path), fill(body, sid, tmp_path))
     assert r.status_code < 500 and did(store, sid, r), f"{desc}: {r.status_code} {r.text}"
 
@@ -1051,7 +1053,7 @@ async def test_sdk_mode_off_refuses_hosted_sessions(store, monkeypatch, body, pe
     """Out of SDK mode (features.py) the daemon creates no host's session, so a remote
     client can't create a session at all: a host is SDK mode's, and a tab is this machine's."""
     opened = []
-    monkeypatch.setattr(launch, "open_session", lambda store, sid: opened.append(sid))
+    monkeypatch.setattr(launch, "open_session", lambda store, sid, may_tab=True: opened.append(sid))
     d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True, sdk=False)
     try:
         async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=d.app, client=(peer, 50000)),
@@ -1069,92 +1071,78 @@ async def test_sdk_mode_off_refuses_hosted_sessions(store, monkeypatch, body, pe
 
 
 REMOTE = "100.64.0.7"
+HERE = "127.0.0.1"
+GONE_HOST = {"host": [999999, 1]}   # the host the client was shown, gone meanwhile
+OFF = "SDK mode is off: this wheelhouse doesn't start sessions remotely"
+HELD = "opens in a tab: restore it from the daemon's machine"
+GONE = "host has stopped: Relaunch it from the daemon's machine"
 
 
-@pytest.mark.parametrize("sdk, path, body, tut, peer, refused, desc", [
-    (False, "/sessions/{sid}/relaunch", {}, False, REMOTE, True, "Relaunch of a dead session: back as a tab"),
-    (False, "/sessions/{sid}/restore", {}, False, REMOTE, True, "Restore: back as a tab"),
-    (False, "/restore-all", {"sids": ["{sid}"]}, False, REMOTE, True, "Restore all: back as tabs"),
-    (False, "/adopt", {"id": "adoptee"}, False, REMOTE, True, "Adopt: opened as a tab"),
-    (False, "/tutorial/offer", {"take": True}, False, REMOTE, True, "the tutorial: a tab"),
-    (False, "/sessions/{sid}/shell", {}, False, REMOTE, True, "Shell: the host hands over to a tab"),
-    (True, "/sessions/{sid}/relaunch", {}, True, REMOTE, True, "SDK mode on: the tutorial is a tab all the same"),
-    (True, "/tutorial/offer", {"take": True}, False, REMOTE, True, "SDK mode on: the tutorial still"),
-    (True, "/sessions/{sid}/relaunch", {}, False, REMOTE, False, "SDK mode on: back by a host, which may"),
-    (True, "/adopt", {"id": "adoptee"}, False, REMOTE, False, "SDK mode on: adopted by a host"),
-    (False, "/tutorial/offer", {"take": False}, False, REMOTE, False, "the offer dismissed: nothing opens"),
-    (False, "/sessions/{sid}/relaunch", {}, False, "127.0.0.1", False, "from this machine, a tab may"),
-    (False, "/restore-all", {"sids": ["{sid}"]}, False, "127.0.0.1", False, "Restore all from this machine"),
-    (False, "/adopt", {"id": "adoptee"}, False, "127.0.0.1", False, "Adopt from this machine"),
+@pytest.mark.parametrize("sdk, env, path, body, how, peer, status, said, opened_want, desc", [
+    (False, "tab", "/sessions/{sid}/relaunch", {}, None, REMOTE, 403, OFF, [], "Relaunch of a dead session: a tab"),
+    (False, "tab", "/restore-all", {"sids": ["{sid}"]}, None, REMOTE, 403, OFF, [], "Restore all: tabs"),
+    (False, "tab", "/adopt", {"id": "adoptee"}, None, REMOTE, 403, OFF, [], "Adopt: a tab"),
+    (False, "tab", "/tutorial/offer", {"take": True}, None, REMOTE, 403, OFF, [], "the tutorial: a tab"),
+    (False, "tab", "/sessions/{sid}/shell", {}, None, REMOTE, 403, OFF, [], "Shell: the host hands over to a tab"),
+    (False, "tab", "/sessions/{sid}/restore", {}, None, REMOTE, 200, HELD, [], "Restore: held back where it resolves"),
+    (False, "tab", "/sessions/{sid}/restore", {}, "live", REMOTE, 200, "only a dead session can be restored", [],
+     "Restore of a running session: the hub's own answer"),
+    (False, "tab", "/sessions/{sid}/restore", {}, "stale", REMOTE, 200, "only a dead session can be restored", [],
+     "live at the last tick, gone since (review 75): not restored, and no tab"),
+    (True, "tab", "/restore-all", {"sids": ["{sid}"]}, "stale", REMOTE, 200, "only a dead session can be restored",
+     [], "Restore all the same (review 75)"),
+    (True, "sdk", "/sessions/{sid}/relaunch", {}, "tut", REMOTE, 200, "tut " + HELD, [],
+     "SDK mode on: the tutorial is a tab all the same"),
+    (True, "sdk", "/tutorial/offer", {"take": True}, None, REMOTE, 403, "it would open in a tab", [],
+     "SDK mode on: the tutorial still"),
+    (True, "tab", "/sessions/{sid}/relaunch", {}, None, REMOTE, 200, HELD, [], "SDK mode on, new sessions in tabs"),
+    (True, "tab", "/adopt", {"id": "adoptee"}, None, REMOTE, 200, "adopt it from the daemon's machine", [],
+     "Adopt, the same"),
+    (True, "sdk", "/sessions/{sid}/relaunch", {}, None, REMOTE, 200, "relaunching", ["host"], "back by a host"),
+    (True, "sdk", "/adopt", {"id": "adoptee"}, None, REMOTE, 200, "adopting", ["host"], "adopted by a host"),
+    (True, "sdk", "/restore-all", {"sids": ["{sid}", "{tut}"]}, None, REMOTE, 200, "tut " + HELD, ["host"],
+     "the rest restored, the tutorial held back"),
+    (False, "tab", "/tutorial/offer", {"take": False}, None, REMOTE, 200, "runs the tutorial any time", [],
+     "the offer dismissed: nothing opens"),
+    (False, "tab", "/sessions/{sid}/relaunch", GONE_HOST, "host", REMOTE, 200, GONE, [],
+     "a host gone meanwhile would come back as a tab"),
+    (False, "tab", "/sessions/{sid}/relaunch", {**GONE_HOST, "compact": True}, "host", REMOTE, 200, GONE, [],
+     "compacting first, the same"),
+    (True, "tab", "/sessions/{sid}/relaunch", GONE_HOST, "host", REMOTE, 200, GONE, [], "SDK mode on, the same"),
+    (False, "tab", "/sessions/{sid}/relaunch", {}, None, HERE, 200, "relaunching", ["tab"], "this machine: a tab"),
+    (False, "tab", "/restore-all", {"sids": ["{sid}"]}, None, HERE, 200, "restoring 1", ["tab"], "Restore all here"),
+    (False, "tab", "/adopt", {"id": "adoptee"}, None, HERE, 200, "adopting", ["tab"], "Adopt here"),
+    (False, "tab", "/sessions/{sid}/relaunch", GONE_HOST, "host", HERE, 200, "relaunching", ["tab"],
+     "a host gone meanwhile, here: back as a tab"),
 ])
-async def test_another_machine_opens_no_tab(store, tmp_path, monkeypatch, sdk, path, body, tut, peer, refused, desc):
+async def test_another_machine_opens_no_tab(store, tmp_path, monkeypatch, sdk, env, path, body, how, peer, status,
+                                            said, opened_want, desc):
     """A tab opens on this machine's screen, where nobody on another machine sees it: so no
-    route opens one for another machine's request (Daemon.no_remote_tab)."""
+    request from another machine opens one. What opens is recorded at the bottom, open_tab
+    and open_host, so a path that misses the rule shows."""
     from claude_wheelhouse import adopt, tutorial
-    monkeypatch.setenv("WHEELHOUSE_RUNNER", "sdk" if sdk else "tab")   # SDK mode's own default (launch is stubbed)
+    monkeypatch.setenv("WHEELHOUSE_RUNNER", env)
     opened = []
-    monkeypatch.setattr(launch, "open_session", lambda store, sid: opened.append("open"))
-    monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None: opened.append("restore"))
-    monkeypatch.setattr(adopt, "adopt", lambda *a, **k: opened.append("adopt"))
+    monkeypatch.setattr(launch, "open_tab", lambda store, sid, notice=True: opened.append("tab"))
+    monkeypatch.setattr(launch, "open_host", lambda store, sid: opened.append("host"))
     monkeypatch.setattr(tutorial, "start", lambda store: opened.append("tutorial"))
     monkeypatch.setattr(hub_mod.Hub, "host_command", lambda self, sid, what: opened.append(what) or hub_mod.Done())
-    cwd = tutorial.tutorial_dir(store) if tut else tmp_path
-    cwd.mkdir(exist_ok=True)
-    sid = store.create_session(str(cwd), name="demo")
-    d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True, sdk=sdk)
-    monkeypatch.setattr(d.hub, "adoptable", lambda: [adopt.Candidate("adoptee", str(tmp_path), "t", 0.0, None)])
-    try:
-        d.tick()
-        body = json.loads(json.dumps(body).replace("{sid}", sid))
-        async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=d.app, client=(peer, 50000)),
-                                      base_url=URL, headers={"Authorization": f"Bearer {TOKEN}"}) as c:
-            r = await c.post(path.format(sid=sid), json=body, headers={"Idempotency-Key": str(uuid.uuid4())})
-    finally:
-        d.pool.shutdown()
-        d.worker.shutdown()
-        d.watch.close()
-    if refused:
-        assert r.status_code == 403 and "doesn't start sessions remotely" in r.json()["error"], f"{desc}: {r.text}"
-        assert opened == [], desc
-    else:
-        assert r.status_code == 200 and (opened or body.get("take") is False), f"{desc}: {r.text} {opened}"
-
-
-GONE_HOST = {"host": [999999, 1]}   # the host the client was shown, gone meanwhile
-
-
-@pytest.mark.parametrize("sdk, runner_env, path, body, live, peer, said, opened_want, desc", [
-    (False, "tab", "/sessions/{sid}/relaunch", GONE_HOST, False, REMOTE, "host has stopped: Relaunch it from the "
-     "daemon's machine", [], "a host gone meanwhile would come back as a tab"),
-    (False, "tab", "/sessions/{sid}/relaunch", {**GONE_HOST, "compact": True}, False, REMOTE, "host has stopped",
-     [], "compacting first, the same"),
-    (True, "tab", "/sessions/{sid}/relaunch", GONE_HOST, False, REMOTE, "host has stopped", [],
-     "SDK mode on, but new sessions run in tabs"),
-    (False, "tab", "/sessions/{sid}/relaunch", GONE_HOST, False, "127.0.0.1", "relaunching", ["restore"],
-     "from this machine it comes back, as a tab"),
-    (True, "sdk", "/restore-all", {"sids": ["{sid}", "{tut}"]}, False, REMOTE, "tut opens in a tab: restore it from "
-     "the daemon's machine", ["restore"], "the rest still restored, the tutorial held back"),
-    (False, "tab", "/sessions/{sid}/restore", {}, True, REMOTE, "only a dead session can be restored", [],
-     "a running session: the hub's own answer, not a refusal"),
-    (False, "tab", "/restore-all", {"sids": ["{sid}"]}, True, REMOTE, "restoring", ["restore"],
-     "a running one is the hub's to refuse"),
-])
-async def test_another_machine_is_told_rather_than_opening_a_tab(store, tmp_path, monkeypatch, sdk, runner_env, path,
-                                                                 body, live, peer, said, opened_want, desc):
-    from claude_wheelhouse import tutorial
-    monkeypatch.setenv("WHEELHOUSE_RUNNER", runner_env)
-    opened = []
-    monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None: opened.append("restore"))
-    monkeypatch.setattr(launch, "open_session", lambda store, sid: opened.append("open"))
-    sid = store.create_session(str(tmp_path), name="demo", runner="sdk")
+    monkeypatch.setattr(liveness, "running_pid", lambda *a, **k: None)
+    sid = store.create_session(str(tmp_path), name="demo", runner="sdk" if how == "host" else "tab")
     tut_dir = tutorial.tutorial_dir(store)
     tut_dir.mkdir(exist_ok=True)
     tut = store.create_session(str(tut_dir), name="tut", runner="tab")
+    if how == "tut":
+        sid = tut
     d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True, sdk=sdk)
+    monkeypatch.setattr(d.hub, "adoptable", lambda: [adopt.Candidate("adoptee", str(tmp_path), "t", 0.0, None)])
     try:
+        if how in ("live", "stale"):
+            store.register(sid, 4242, 1, "b")
+            monkeypatch.setattr(liveness, "is_alive", lambda *a, **k: True)
         d.tick()
-        if live:
-            d.hub.statuses[sid] = "live"
+        if how == "stale":   # its tab has /exited since the last tick
+            monkeypatch.setattr(liveness, "is_alive", lambda *a, **k: False)
         body = json.loads(json.dumps(body).replace("{sid}", sid).replace("{tut}", tut))
         async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=d.app, client=(peer, 50000)),
                                       base_url=URL, headers={"Authorization": f"Bearer {TOKEN}"}) as c:
@@ -1163,5 +1151,7 @@ async def test_another_machine_is_told_rather_than_opening_a_tab(store, tmp_path
         d.pool.shutdown()
         d.worker.shutdown()
         d.watch.close()
-    assert r.status_code == 200 and any(said in t for t in told(r)), f"{desc}: {r.status_code} {r.text}"
-    assert opened == opened_want, desc
+    assert r.status_code == status, f"{desc}: {r.text}"
+    words = [r.json()["error"]] if status == 403 else told(r)
+    assert any(said in t for t in words), f"{desc}: {words}"
+    assert opened == opened_want, f"{desc}: {opened}"

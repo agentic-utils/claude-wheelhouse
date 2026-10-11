@@ -485,14 +485,20 @@ class Store:
         with self.tx() as db:
             db.execute("UPDATE sessions SET shell = ? WHERE id = ?", (state, sid))
 
-    def set_relaunch(self, sid: str, host: tuple | None, deadline: float = 0.0, asked: float | None = None) -> None:
+    def set_relaunch(self, sid: str, host: tuple | None, deadline: float = 0.0, asked: float | None = None,
+                     may_tab: bool = True) -> None:
         """A Relaunch under way: the host it stopped (or, compacting first, will stop once
         the session is compacted, the epoch second Compact was asked for in `asked`), (pid,
         start time), and the epoch second it gives up by, so a wheelhouse started again
         carries it on; None once it's done. Compacting first, the row has five values: the
         Hub of older code (from before #16's token savings) unpacks three, and would fail to
-        start on one if the code were rolled back while it is under way."""
-        relaunch = [*host, deadline] + ([True, asked] if asked is not None else []) if host else None
+        start on one if the code were rolled back while it is under way. Asked for by another
+        machine (may_tab false: relaunch_may_tab), a sixth, false, which older code ignores."""
+        if not host:
+            relaunch = None
+        else:
+            relaunch = [*host, deadline] + ([asked is not None, asked] if asked is not None or not may_tab else [])
+            relaunch += [] if may_tab else [False]
         with self.tx() as db:
             db.execute("UPDATE sessions SET relaunch = ? WHERE id = ?",
                        (json.dumps(relaunch) if relaunch else None, sid))
@@ -503,6 +509,13 @@ class Store:
         return {r["id"]: (deadline, (pid, start), (rest[1] if len(rest) > 1 else 0.0) if rest and rest[0] else None)
                 for r in self._all("SELECT id, relaunch FROM sessions WHERE relaunch IS NOT NULL")
                 for pid, start, deadline, *rest in [json.loads(r["relaunch"])]}
+
+    def relaunch_may_tab(self, sid: str) -> bool:
+        """Whether the Relaunch under way may bring the session back in a tab: not one another
+        machine asked for (set_relaunch), where a tab here would go unseen."""
+        s = self.session(sid)
+        relaunch = json.loads(s["relaunch"]) if s is not None and s["relaunch"] else []
+        return len(relaunch) < 6 or relaunch[5] is not False
 
     def unregister(self, sid: str) -> None:
         """The registered process is letting go of the session (a host handing over to a tab):

@@ -51,8 +51,8 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import auth, fingerprint, launch, liveness, models, stats, tutorial
-from .hub import Done, Event, Hub, display_name, host_context
+from . import auth, fingerprint, liveness, models, stats, tutorial
+from .hub import Done, Event, Hub, host_context
 from .store import SessionGone, Store, inbox_rank, mode, runner, standing
 
 ADDRESS, PORT = "127.0.0.1", 7428
@@ -768,15 +768,19 @@ class Daemon:
 
     def no_remote_tab(self, request: Request, runner: str) -> None:
         """A tab opens on this machine's screen, where nobody on another machine sees it: so
-        another machine's request that would open one is refused. Out of SDK mode every
-        session starts in a tab, so another machine starts none; the tutorial is always one."""
+        another machine's request known to open one is refused (403) before anything is
+        done (New session's tab, the tutorial, Shell). Where a session comes back (Restore,
+        Relaunch, Adopt) the hub refuses as its runner resolves (launch.open_session)."""
         if runner == "tab" and not this_machine(request):
             why = "SDK mode is off" if not self.hub.sdk else "it would open in a tab"
             raise Refused(403, f"{why}: this wheelhouse doesn't start sessions remotely")
 
-    def restore_runner(self, s) -> str:
-        """How Restore, Relaunch of a dead session and Restore all bring a session (its row) back."""
-        return launch.restore_runner(self.store, s["cwd"], self.hub.sdk)
+    def remote_needs_sdk(self, request: Request) -> None:
+        """Out of SDK mode every session comes back in a tab, so another machine can bring
+        none back: said at once (403), before anything is done. In SDK mode the hub decides
+        each, where the runner resolves (launch.open_session, may_tab)."""
+        if not self.hub.sdk:
+            self.no_remote_tab(request, "tab")
 
     def adopt(self, request: Request, body: dict) -> Done:
         """A session on disk brought in, by its id, as Adopt offered it: one gone from the
@@ -785,28 +789,16 @@ class Daemon:
         found = next((c for c in self.hub.adoptable() if c.id == want), None)
         if found is None:
             raise KeyError(f"no session {want} to adopt")
-        self.no_remote_tab(request, launch.restore_runner(self.store, found.cwd, self.hub.sdk))
-        return self.hub.adopt(found, text(body, "name", False) or "")
+        self.remote_needs_sdk(request)
+        return self.hub.adopt(found, text(body, "name", False) or "", this_machine(request))
 
     def restore_all(self, request: Request, body: dict) -> Done:
         """The dead sessions the client showed the person, brought back: what it confirmed."""
         sids = body.get("sids")
         if not (isinstance(sids, list) and all(isinstance(sid, str) for sid in sids)):
             raise Refused(400, "sids must be a list of session ids")
-        here, kept, held = this_machine(request), [], []
-        for sid in sids:   # one ended meanwhile, or not dead, is the hub's to say
-            s = self.store.session(sid)
-            dead = s is not None and self.hub.statuses.get(sid) == "dead"
-            if not here and dead and self.restore_runner(s) == "tab":
-                held.append(s)
-            else:
-                kept.append(sid)
-        if held and not kept:
-            self.no_remote_tab(request, "tab")
-        done = self.hub.restore_all(kept)
-        for s in held:
-            done.say(f"{display_name(s)} opens in a tab: restore it from the daemon's machine", "warning")
-        return done
+        self.remote_needs_sdk(request)
+        return self.hub.restore_all(sids, this_machine(request))
 
     def answer_offer(self, request: Request, body: dict) -> Done:
         take = body.get("take")
@@ -865,8 +857,8 @@ class Daemon:
         if action == "relaunch":
             host = body.get("host")
             if host is None:
-                self.no_remote_tab(request, self.restore_runner(hub.row(sid)))
-                return hub.relaunch(sid)
+                self.remote_needs_sdk(request)
+                return hub.relaunch(sid, this_machine(request))
             if not (isinstance(host, list) and len(host) == 2 and all(isinstance(n, int) for n in host)):
                 raise Refused(400, "host must be [pid, start time]")
             may_tab = this_machine(request)   # its host gone meanwhile, it may come back as a tab
@@ -892,8 +884,8 @@ class Daemon:
             self.no_remote_tab(request, "tab")
         if action in ("interrupt", "compact", "shell"):
             return hub.host_command(sid, action)
-        if action == "restore" and hub.statuses.get(sid) == "dead":   # else the hub says it isn't
-            self.no_remote_tab(request, self.restore_runner(hub.row(sid)))
+        if action == "restore":   # one that isn't dead, the hub says so; another machine's, not in a tab
+            return hub.restore(sid, this_machine(request))
         commands = {"restore": hub.restore, "unpark": hub.unpark, "dispatch": hub.send_queue}
         if action not in commands:
             raise Refused(404, f"no command {action}")

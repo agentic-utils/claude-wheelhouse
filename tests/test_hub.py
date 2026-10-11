@@ -11,6 +11,8 @@ from claude_wheelhouse import host as host_mod, hub as hub_mod, launch, liveness
 from claude_wheelhouse.hub import Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone
 
+real_open_session = launch.open_session   # before any test stubs it
+
 
 @pytest.fixture
 def hub(store):
@@ -72,7 +74,7 @@ def test_relaunch_stops_the_host_then_starts_it_again(hub, store, sid, heard, mo
     monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: pid in alive)
     monkeypatch.setattr(liveness, "status", lambda s, **kw: "live" if s["claude_pid"] in alive else "dead")
     monkeypatch.setattr(hub_mod, "RELAUNCH_WAIT", wait)
-    monkeypatch.setattr(launch, "open_session", lambda store, sid: calls.append("open"))
+    monkeypatch.setattr(launch, "open_session", lambda store, sid, may_tab=True: calls.append("open"))
     hub.refresh()
     stopping = told(hub.stop_host(sid, asked))
     hub.refresh()
@@ -83,7 +85,7 @@ def test_relaunch_stops_the_host_then_starts_it_again(hub, store, sid, heard, mo
 
 
 def test_relaunch_of_a_dead_session_unparks_it(hub, store, sid, heard, monkeypatch):
-    monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None: None)
+    monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None, may_tab=True: None)
     store.set_parked(sid, True)
     done = hub.relaunch(sid)
     assert done.ok and not store.session(sid)["parked"]
@@ -91,7 +93,7 @@ def test_relaunch_of_a_dead_session_unparks_it(hub, store, sid, heard, monkeypat
 
 
 def test_a_launch_that_fails_is_said_as_an_error(hub, sid, heard, monkeypatch):
-    def refuse(store, sid):
+    def refuse(store, sid, may_tab=True):
         raise RuntimeError("already running")
     monkeypatch.setattr(launch, "open_session", refuse)
     done = hub.open_session(sid)
@@ -102,7 +104,7 @@ def test_a_launch_that_fails_is_said_as_an_error(hub, sid, heard, monkeypatch):
 def test_a_relaunch_the_hub_finishes_is_said_to_every_listener(hub, store, sid, heard, monkeypatch):
     host(store, sid)
     monkeypatch.setattr(liveness, "is_alive", lambda *a: False)
-    monkeypatch.setattr(launch, "open_session", lambda store, sid: None)
+    monkeypatch.setattr(launch, "open_session", lambda store, sid, may_tab=True: None)
     hub.refresh()
     hub.relaunching[sid] = (float("inf"), (4242, 1))
     hub.finish_relaunches()
@@ -121,7 +123,7 @@ def test_a_relaunch_under_way_is_carried_on_by_a_hub_started_again(store, sid, m
     monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: pid in alive)
     monkeypatch.setattr(liveness, "status", lambda s, **kw: "live" if s["claude_pid"] in alive else "dead")
     monkeypatch.setattr(hub_mod, "RELAUNCH_WAIT", wait)
-    monkeypatch.setattr(launch, "open_session", lambda store, sid: calls.append("open"))
+    monkeypatch.setattr(launch, "open_session", lambda store, sid, may_tab=True: calls.append("open"))
     first = Hub(store)
     first.refresh()
     assert first.stop_host(sid, (4242, 1)).ok
@@ -143,8 +145,8 @@ def test_a_relaunch_found_past_its_deadline_is_let_go_and_said(store, sid, monke
     store.set_relaunch(sid, (4242, 1), time.time() - 86400)   # a day ago: the machine was off
     calls, heard = [], []
     monkeypatch.setattr(liveness, "is_alive", lambda *a: False)
-    monkeypatch.setattr(launch, "open_session", lambda store, sid: calls.append("open"))
-    monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None: calls.append("restore"))
+    monkeypatch.setattr(launch, "open_session", lambda store, sid, may_tab=True: calls.append("open"))
+    monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None, may_tab=True: calls.append("restore"))
     hub = Hub(store)
     hub.listen(lambda e: heard.append((e.text, e.severity)))
     hub.refresh()
@@ -439,7 +441,7 @@ def test_a_subagents_conversation_follows_it_live_and_two_at_most(hub, store, si
 ])
 @pytest.mark.usefixtures("sdk_on")
 def test_a_new_session_stores_its_model_and_effort(hub, store, tmp_path, monkeypatch, model, effort, stored, desc):
-    monkeypatch.setattr(launch, "open_session", lambda store, sid: None)
+    monkeypatch.setattr(launch, "open_session", lambda store, sid, may_tab=True: None)
     done = hub.new_session(str(tmp_path), "n", "", "", "sdk", model, effort)
     s = store.session(done.sid)
     assert (s["model"], s["effort"]) == stored, desc
@@ -452,7 +454,7 @@ def test_a_new_session_stores_its_model_and_effort(hub, store, tmp_path, monkeyp
 ])
 def test_sdk_mode_gates_a_new_hosted_session(store, tmp_path, monkeypatch, on, runner, ok, desc):
     opened = []
-    monkeypatch.setattr(launch, "open_session", lambda store, sid: opened.append(sid))
+    monkeypatch.setattr(launch, "open_session", lambda store, sid, may_tab=True: opened.append(sid))
     done = Hub(store, sdk=on).new_session(str(tmp_path), "n", "", "", runner)
     assert done.ok is ok and len(store.sessions()) == len(opened) == int(ok), desc
     if ok:
@@ -553,7 +555,7 @@ def compacting(hub, store, sid, monkeypatch, alive):
     monkeypatch.setattr(hub_mod.os, "kill", lambda pid, sig: killed.append(pid))
     monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: pid in alive)
     monkeypatch.setattr(liveness, "status", lambda s, **kw: "live" if s["claude_pid"] in alive else "dead")
-    monkeypatch.setattr(launch, "open_session", lambda store, sid: opened.append(sid))
+    monkeypatch.setattr(launch, "open_session", lambda store, sid, may_tab=True: opened.append(sid))
     store.set_context(sid, 220_000, 1_000_000)
     hub.refresh()
     done = hub.compact_then_relaunch(sid, (4242, 1))
@@ -633,6 +635,26 @@ def test_a_compacting_relaunch_whose_host_died_is_relaunched(hub, store, sid, he
         hub.refresh()
         hub.finish_relaunches()
     assert (killed, opened) == ([], [sid])
+
+
+def test_another_machines_compacting_relaunch_never_comes_back_as_a_tab(hub, store, sid, heard, monkeypatch):
+    """Review 75: asked for by another machine, a Relaunch compacting first carries that on
+    (store.relaunch_may_tab), so a host that dies just as it is to be stopped isn't
+    brought back in a tab here, where nobody there sees it."""
+    alive = {4242}
+    killed, opened = compacting(hub, store, sid, monkeypatch, alive)
+    hub.relaunch_under_way(sid, (4242, 1), asked=hub.compacting[sid], may_tab=False)   # as the daemon asks
+    assert not store.relaunch_may_tab(sid)
+    tabs = []
+    monkeypatch.setattr(launch, "open_tab", lambda store, sid, notice=True: tabs.append(sid))
+    monkeypatch.setattr(launch, "open_session", real_open_session)
+    compacted_to(store, sid, 40_000, "idle")
+    take = store.take_command
+    monkeypatch.setattr(store, "take_command", lambda *a: alive.clear() or take(*a))   # it dies just then
+    hub.refresh()
+    hub.finish_relaunches()
+    assert (killed, tabs) == ([], []), heard
+    assert any("host has stopped: Relaunch it from the daemon's machine" in text for text, _ in heard), heard
 
 
 @pytest.mark.parametrize("activity, command, sent, desc", [

@@ -778,7 +778,7 @@ async def test_a_double_click_on_a_dead_session_offers_one_relaunch(store, sid, 
     other = store.create_session(str(tmp_path), name="other")
     by_name(monkeypatch, {"demo": "live", "other": status})
     launched = []
-    monkeypatch.setattr(Hub, "open_session", lambda self, s, restore=False: launched.append(s) or Done())
+    monkeypatch.setattr(Hub, "open_session", lambda self, s, restore=False, **k: launched.append(s) or Done())
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         for _ in range(3):
@@ -1537,7 +1537,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
     monkeypatch.setattr(WheelhouseApp, "host_command", lambda self, sid, what: hosts.append(what))
     monkeypatch.setattr(WheelhouseApp, "exit", lambda self, *a, **k: exits.append(True))
     monkeypatch.setattr(Hub, "open_session",
-                        lambda self, sid, restore=False: launched.append(store.session(sid)["name"]) or Done())
+                        lambda self, sid, restore=False, **k: launched.append(store.session(sid)["name"]) or Done())
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -3487,7 +3487,7 @@ async def test_host_buttons(store, tmp_path, monkeypatch, runner_, live, shown, 
 async def test_new_session_runner(store, tmp_path, monkeypatch, on, tick, runner_, desc):
     monkeypatch.setattr(features, "_flag", on)
     launched = []
-    monkeypatch.setattr(launch, "open_session", lambda s, i, watch=None: launched.append(s.session(i)["runner"]))
+    monkeypatch.setattr(launch, "open_session", lambda s, i, watch=None, may_tab=True: launched.append(s.session(i)["runner"]))
     monkeypatch.setenv("WHEELHOUSE_RUNNER", "sdk")
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
@@ -4830,7 +4830,7 @@ async def test_a_shimmer_frame_moves_the_bars_on_screen_under_a_border(store, si
 async def test_new_session_model_and_effort(store, tmp_path, monkeypatch, model, effort, launched, desc):
     from textual.widgets import Select
     opened = []
-    monkeypatch.setattr(launch, "open_session", lambda s, i: opened.append((s.session(i)["model"], s.session(i)["effort"])))
+    monkeypatch.setattr(launch, "open_session", lambda s, i, may_tab=True: opened.append((s.session(i)["model"], s.session(i)["effort"])))
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
         await pilot.press("n")

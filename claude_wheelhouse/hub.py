@@ -239,21 +239,24 @@ class Hub:
 
     # launching and Relaunch
 
-    def open_session(self, sid: str, restore: bool = False) -> Done:
+    def open_session(self, sid: str, restore: bool = False, may_tab: bool = True, elsewhere: str | None = None) -> Done:
         """Launch a session the way it runs, a host or a tab; a restore the way new sessions
-        run now (launch.restore_runner)."""
+        run now (launch.restore_runner). may_tab false: asked for by another machine, so a
+        tab is refused (launch.NotHere) and said as a warning, its own words or elsewhere."""
         try:
             if restore:
-                launch.restore_session(self.store, sid, sdk=self.sdk)
+                launch.restore_session(self.store, sid, sdk=self.sdk, may_tab=may_tab)
             else:
-                launch.open_session(self.store, sid)
+                launch.open_session(self.store, sid, may_tab)
+        except launch.NotHere as e:
+            return Done(False).say(elsewhere or str(e), "warning")
         except Exception as e:   # already running, wt.exe missing...
             return Done(False).say(str(e), "error")
         return Done()
 
-    def relaunch(self, sid: str) -> Done:
+    def relaunch(self, sid: str, may_tab: bool = True, elsewhere: str | None = None) -> Done:
         """A dead session brought back where it left off, and unparked. Whether it was."""
-        done = self.open_session(sid, restore=True)
+        done = self.open_session(sid, restore=True, may_tab=may_tab, elsewhere=elsewhere)
         if done.ok:
             self.store.set_parked(sid, False)
             done.say("relaunching")
@@ -261,12 +264,9 @@ class Hub:
 
     def host_gone(self, sid: str, s, may_tab: bool) -> Done:
         """Relaunch of a host that has gone meanwhile: it comes back as a dead session does
-        (relaunch), unless that is a tab and may_tab is false (a request from another
-        machine, where a tab here would go unseen)."""
-        if not may_tab and launch.restore_runner(self.store, s["cwd"], self.sdk) == "tab":
-            return Done(False).say(f"{display_name(s)}'s host has stopped: Relaunch it from the daemon's machine",
-                                   "warning")
-        return self.relaunch(sid)
+        (relaunch), and for another machine (may_tab false) not in a tab."""
+        return self.relaunch(sid, may_tab,
+                             f"{display_name(s)}'s host has stopped: Relaunch it from the daemon's machine")
 
     def stop_host(self, sid: str, host: tuple, may_tab: bool = True) -> Done:
         """Stop a session's host, as SIGTERM does (its own clean stop: Claude Code is
@@ -289,7 +289,7 @@ class Hub:
             pass   # exited between the check and the signal: finish_relaunches starts it again
         except OSError as e:
             return Done(False).say(f"couldn't stop its host: {e}", "error")
-        self.relaunch_under_way(sid, host)
+        self.relaunch_under_way(sid, host, may_tab=may_tab)
         return Done().say(f"relaunching {display_name(s)}: stopping its host")
 
     def compact_first(self, sid: str) -> bool:
@@ -316,17 +316,19 @@ class Hub:
         activity = s["activity"] or ""
         if not (s["host_command"] == "compact" or activity.startswith("compacting") or activity == AWAITING_NOTES):
             self.store.command(sid, "compact")
-        self.relaunch_under_way(sid, host, asked=time.time())
+        self.relaunch_under_way(sid, host, asked=time.time(), may_tab=may_tab)
         return Done().say(f"relaunching {display_name(s)}: compacting first (it's asked what to keep)")
 
-    def relaunch_under_way(self, sid: str, host: tuple | None, asked: float | None = None) -> None:
+    def relaunch_under_way(self, sid: str, host: tuple | None, asked: float | None = None,
+                           may_tab: bool = True) -> None:
         """A Relaunch that has stopped a session's host, or is compacting before it does
         (Compact asked for at the epoch second `asked`), kept here and in the store; or, with
-        no host, done with."""
+        no host, done with. may_tab false: another machine asked, and it carries on so
+        (store.relaunch_may_tab)."""
         if host:
             wait = COMPACT_RELAUNCH_WAIT if asked is not None else RELAUNCH_WAIT
             self.relaunching[sid] = (time.monotonic() + wait, host)
-            self.store.set_relaunch(sid, host, time.time() + wait, asked)
+            self.store.set_relaunch(sid, host, time.time() + wait, asked, may_tab)
             if asked is not None:
                 self.compacting[sid] = asked
             else:
@@ -362,14 +364,14 @@ class Hub:
         elif not mine and alive:
             why = "its host was started again meanwhile"
         elif not alive:   # died: relaunched as any stopped host, from the next tick
-            self.relaunch_under_way(sid, host)
+            self.relaunch_under_way(sid, host, may_tab=self.store.relaunch_may_tab(sid))
             return
         elif since(s["interrupted_at"], self.compacting[sid]):   # by any wheelhouse, older ones too
             why = "Compact was interrupted"
         elif compacted_since(s, self.compacting[sid]) and activity.startswith(IDLE_LINES):
             for what in ("compact", "interrupt"):   # either, left untaken, would greet the new host
                 self.store.take_command(sid, what)   # (a Shell stays: the person's, for the new host)
-            done = self.stop_host(sid, host)
+            done = self.stop_host(sid, host, self.store.relaunch_may_tab(sid))
             for notice in done.notices:
                 self.emit(notice)
             if not done.ok:
@@ -402,7 +404,8 @@ class Hub:
                 self.relaunch_under_way(sid, None)
                 self.announce(f"{display_name(s)} wasn't relaunched: Restore it", "warning")
             elif not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
-                done = self.open_session(sid)   # as it ran: a host again, not WHEELHOUSE_RUNNER's way
+                # as it ran: a host again, not WHEELHOUSE_RUNNER's way
+                done = self.open_session(sid, may_tab=self.store.relaunch_may_tab(sid))
                 self.relaunch_under_way(sid, None)   # after: a hub stopped between sees the new host
                 for notice in done.notices:
                     self.emit(notice)
@@ -419,12 +422,13 @@ class Hub:
                 self.announce(f"{display_name(s)}'s host didn't stop within {RELAUNCH_WAIT}s, so it wasn't "
                               f"relaunched: see hosts/{sid}.log", "error")
 
-    def restore(self, sid: str) -> Done:
+    def restore(self, sid: str, may_tab: bool = True) -> Done:
         """Restore: only a dead session, brought back where it left off and unparked; one
-        that isn't dead is left as it is, and said so. Whether it was restored."""
+        that isn't dead is left as it is, and said so. Whether it was restored. may_tab
+        false: another machine asked, so not in a tab (open_session)."""
         if self.statuses.get(sid) != "dead":
             return Done(False).say("only a dead session can be restored", "warning")
-        done = self.open_session(sid, restore=True)
+        done = self.open_session(sid, restore=True, may_tab=may_tab)
         if done.ok:
             self.store.set_parked(sid, False)
         return done
@@ -433,10 +437,12 @@ class Hub:
         """What Restore all brings back: every dead session that isn't parked."""
         return [s["id"] for s in self.sessions if self.statuses.get(s["id"]) == "dead" and not s["parked"]]
 
-    def restore_all(self, sids: list[str]) -> Done:
+    def restore_all(self, sids: list[str], may_tab: bool = True) -> Done:
+        """Restore each of the sessions the person was shown: as restore, so only a dead one,
+        and for another machine (may_tab false) not in a tab."""
         done, n = Done(), 0
         for sid in sids:
-            one = self.open_session(sid, restore=True)
+            one = self.restore(sid, may_tab)
             done.notices.extend(one.notices)
             n += one.ok
         return done.say(f"restoring {n} session(s)")
@@ -464,10 +470,13 @@ class Hub:
         """The pid of Claude Code running a session outside the wheelhouse, if it is running."""
         return liveness.running_pid(sid)
 
-    def adopt(self, candidate: adopt.Candidate, name: str) -> Done:
-        """A session started outside the wheelhouse, brought in (adopt.adopt). Whether it was."""
+    def adopt(self, candidate: adopt.Candidate, name: str, may_tab: bool = True) -> Done:
+        """A session started outside the wheelhouse, brought in (adopt.adopt). Whether it was.
+        may_tab false: another machine asked, so not in a tab."""
         try:
-            adopt.adopt(self.store, candidate, name, sdk=self.sdk)
+            adopt.adopt(self.store, candidate, name, sdk=self.sdk, may_tab=may_tab)
+        except launch.NotHere as e:
+            return Done(False).say(f"{e.name} opens in a tab: adopt it from the daemon's machine", "warning")
         except Exception as e:   # came back to life, wt.exe missing...
             return Done(False).say(str(e), "error")
         return Done().say(f"adopting {name or short(candidate.id)}")

@@ -24,8 +24,8 @@ def until(check, seconds=10.0, desc=""):
 
 @pytest.fixture
 def no_launch(monkeypatch):
-    monkeypatch.setattr(launch, "open_session", lambda store, sid: None)
-    monkeypatch.setattr(launch, "restore_session", lambda store, sid: None)
+    monkeypatch.setattr(launch, "open_session", lambda store, sid, may_tab=True: None)
+    monkeypatch.setattr(launch, "restore_session", lambda store, sid, **k: None)
 
 
 @pytest.fixture

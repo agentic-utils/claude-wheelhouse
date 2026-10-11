@@ -433,8 +433,8 @@ async def test_relaunch(store, sid, monkeypatch, run, state, shell, stops, keys,
     monkeypatch.setattr(hub.os, "kill", kill)
     monkeypatch.setattr(liveness, "is_alive", lambda *a: alive["now"])
     monkeypatch.setattr(hub, "RELAUNCH_WAIT", 0)
-    monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
-    monkeypatch.setattr(launch, "restore_session", lambda s, i, sdk=None: calls.append("restore"))
+    monkeypatch.setattr(launch, "open_session", lambda s, i, may_tab=True: calls.append("open"))
+    monkeypatch.setattr(launch, "restore_session", lambda s, i, sdk=None, may_tab=True: calls.append("restore"))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         seen = notices(app, monkeypatch)
@@ -486,7 +486,7 @@ async def test_relaunch_races(store, sid, monkeypatch, before, during_confirm, a
     monkeypatch.setattr(hub.os, "kill", kill)
     monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: pid in alive)
     monkeypatch.setattr(hub, "RELAUNCH_WAIT", 0)
-    monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
+    monkeypatch.setattr(launch, "open_session", lambda s, i, may_tab=True: calls.append("open"))
     if before:
         before(store, sid, alive)
     app = WheelhouseApp(store)
@@ -519,7 +519,7 @@ async def test_quitting_mid_relaunch(store, sid, monkeypatch, stopped, keys, lau
     alive, calls, exits = {4242}, [], []
     monkeypatch.setattr(hub.os, "kill", lambda pid, sig: None)   # SIGTERMed, still stopping
     monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: pid in alive)
-    monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
+    monkeypatch.setattr(launch, "open_session", lambda s, i, may_tab=True: calls.append("open"))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await press(app, pilot, "#relaunch", "y")
