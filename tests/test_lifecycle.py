@@ -198,6 +198,24 @@ def test_a_relaunch_drops_leftover_requests(store, sid):
     assert s["end_requested_at"] is None and s["park_requested_at"] is None
 
 
+def test_a_relaunch_in_the_second_of_the_last_runs_final_beat_is_starting(store, sid, monkeypatch):
+    """A running host's Relaunch marks the launch as soon as the old host has gone, so
+    its final heartbeat can share the launch's second (store.now has second resolution). That
+    beat once read as this launch's registration: dead, with the old pid, and Restore allowed."""
+    from datetime import datetime
+
+    from claude_wheelhouse import store as store_mod
+    monkeypatch.setattr(store_mod, "now", lambda: "2026-01-01T00:00:00+00:00")   # all in the same second
+    store.register(sid, 4242, 1, "an-old-boot")   # the last run, gone
+    store.heartbeat(sid)
+    store.mark_launched(sid)
+    session = store.session(sid)
+    assert not liveness.registered_this_launch(session)
+    assert liveness.status(session, now=datetime.fromisoformat("2026-01-01T00:00:00+00:00")) == "starting"
+    store.register(sid, 4343, 2, "an-old-boot")   # this launch registers, in the same second, then goes
+    assert liveness.registered_this_launch(store.session(sid))
+
+
 def test_confirm_only_touches_its_own_claim(store, sid):
     """Round-3 #3: a claim retaken by someone else must not be confirmed by the old claimer."""
     store.send(sid, "hello")

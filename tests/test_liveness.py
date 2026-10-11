@@ -29,7 +29,7 @@ def proc(tmp_path):
 
 def session(**over):
     base = dict(parked=0, claude_pid=4242, claude_start=1000, boot_id=BOOT,
-                heartbeat_at=ago(10), launched_at=ago(600))
+                heartbeat_at=ago(10), launched_at=ago(600), launched_over=None)
     return base | over
 
 
@@ -44,7 +44,12 @@ def session(**over):
     ({"claude_pid": 4244}, False, "dead", "a zombie: exited, its parent hasn't reaped it"),
     ({"claude_pid": None, "heartbeat_at": None, "launched_at": ago(10)}, False, "starting", "just launched"),
     ({"claude_pid": None, "heartbeat_at": None, "launched_at": ago(300)}, False, "dead", "launch never registered"),
-    ({"claude_pid": 9999, "heartbeat_at": ago(900), "launched_at": ago(5)}, False, "starting", "restore in progress"),
+    ({"claude_pid": 9999, "heartbeat_at": ago(900), "launched_at": ago(5), "launched_over": 1000}, False, "starting",
+     "restore in progress"),
+    ({"claude_pid": 9999, "heartbeat_at": ago(5), "launched_at": ago(5), "launched_over": 1000}, False, "starting",
+     "relaunched in the second of the last run's final beat: still that run's registration"),
+    ({"claude_pid": 9999, "claude_start": 2000, "heartbeat_at": ago(5), "launched_at": ago(5), "launched_over": 1000},
+     False, "dead", "another process registered in the launch's own second, and has gone"),
     ({"claude_pid": None, "heartbeat_at": None, "launched_at": None}, False, "dead", "never launched"),
 ])
 def test_status(proc, over, waking, expected, desc):

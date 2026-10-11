@@ -192,7 +192,7 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "model", "TEXT"), ("sessions", "effort", "TEXT"),
                  ("sessions", "applied_model", "TEXT"), ("sessions", "applied_effort", "TEXT"),
                  ("sessions", "interrupted_at", "TEXT"), ("sessions", "model_chosen_at", "TEXT"),
-                 ("sessions", "effort_chosen_at", "TEXT")]
+                 ("sessions", "effort_chosen_at", "TEXT"), ("sessions", "launched_over", "INTEGER")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -542,10 +542,11 @@ class Store:
 
     def mark_launched(self, sid: str) -> None:
         """A (re)launch also drops any request left over from the last run. It keeps the last
-        run's pid, which register_if_free compares against (liveness.registered_this_launch)."""
+        run's pid, which register_if_free compares against, and notes its start time in
+        launched_over, so a registration since this launch shows (liveness.registered_this_launch)."""
         with self.tx() as db:
-            db.execute("""UPDATE sessions SET launched_at = ?, end_requested_at = NULL,
-                          park_requested_at = NULL, end_told_at = NULL, park_told_at = NULL
+            db.execute("""UPDATE sessions SET launched_at = ?, launched_over = claude_start,
+                          end_requested_at = NULL, park_requested_at = NULL, end_told_at = NULL, park_told_at = NULL
                           WHERE id = ?""", (now(), sid))
 
     def register(self, sid: str, pid: int, start: int, boot_id: str) -> None:

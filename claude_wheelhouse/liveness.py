@@ -41,11 +41,12 @@ def is_alive(pid, start, boot, proc: Path = PROC) -> bool:
 
 
 def registered_this_launch(session) -> bool:
-    """A Claude Code registered (or beat) since the session's last launch. claude_pid alone
-    can be the last launch's: a launch doesn't clear it, so register_if_free still sees a
-    live one."""
-    launched, beat = session["launched_at"], session["heartbeat_at"]
-    return bool(session["claude_pid"] and beat and launched and beat >= launched)
+    """A Claude Code registered since the session's last launch. claude_pid alone can be the
+    last launch's: a launch doesn't clear it, so register_if_free still sees a live one. So
+    the launch notes the registered process's start time (launched_over), and only another
+    process's registration counts. Not the heartbeat: it has second resolution, and the last
+    run's final beat can share the launch's second."""
+    return bool(session["claude_pid"]) and session["claude_start"] != session["launched_over"]
 
 
 def status(session, *, now: datetime | None = None, waking: bool = False, proc: Path = PROC) -> str:
