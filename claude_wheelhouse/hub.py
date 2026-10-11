@@ -468,9 +468,9 @@ class Hub:
         tutorial started."""
         if not take:
             self.store.set_setting(tutorial.OFFER_KEY, "dismissed")
-            return Done(False).say("make tutorial runs the tutorial any time; ? lists every key")
+            return Done(False).say("claude-wheelhouse tutorial runs the tutorial any time; ? lists every key")
         try:
-            tutorial.start(self.store)
+            tutorial.start(self.store, sdk=self.sdk)
         except Exception as e:   # claude missing, say
             self.store.set_setting(tutorial.OFFER_KEY, "dismissed")
             return Done(False).say(f"couldn't start the tutorial: {e}", "error")

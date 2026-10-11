@@ -1296,7 +1296,8 @@ class TutorialOffer(Dialog):
 
     def compose(self) -> ComposeResult:
         yield Label(Text.assemble(("New here? ", "bold #ffd300"), ("Enter", "bold"), ": take the tutorial · ",
-                                  ("Esc", "bold"), ": dismiss  (make tutorial runs it any time)"), id="offer")
+                                  ("Esc", "bold"), ": dismiss  (claude-wheelhouse tutorial runs it any time)"),
+                    id="offer")
 
 
 
@@ -1462,7 +1463,7 @@ def keys_help(sdk: bool = False) -> str:
     out += ["## Tab order", TABS.format(slider=SLIDER_TAB if sdk else ""), "## Mouse", MOUSE, "## Buttons", whose,
             *[f"- {text}" for text in buttons],
             "## Sending", SEND_RULES,
-            "## The tutorial", "`make tutorial` starts it afresh any time. Esc or ? closes this list."]
+            "## The tutorial", "`claude-wheelhouse tutorial` starts it afresh any time. Esc or ? closes this list."]
     return "\n\n".join(out)
 
 
@@ -2324,7 +2325,7 @@ class WheelhouseApp(App):
         why = tutorial.stopped(session) if not self.running(sid) else None
         if why:
             text.append(f"\n{why}", style="bold #ff2a6d")
-            text.append("\nmake tutorial starts it afresh", style="#e8e8e8")
+            text.append("\nclaude-wheelhouse tutorial starts it afresh", style="#e8e8e8")
         for key, what, how, done in steps:
             if done:
                 text.append(f"\n✔ {what}", style="dim")
