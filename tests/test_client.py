@@ -238,6 +238,18 @@ def test_a_token_refused_on_a_fetch_is_said_as_the_stream_says_it(store, sid, se
         c.disconnect()
 
 
+
+def test_a_command_refused_for_its_token_is_said_as_the_stream_says_it(store, sid, served):
+    """A command's Done says why in the same words as the stream, refresh and fetch, not
+    the daemon's own text."""
+    d = served(store.path)
+    c = RemoteClient(d.url, "not-the-token", why_refused=lambda: "stop it (pid 7)")
+    try:
+        done = c.restore(sid)
+        assert not done.ok and [(n.text, n.severity) for n in done.notices] == [("stop it (pid 7)", "error")], done
+    finally:
+        c.disconnect()
+
 def test_the_account_usage_comes_from_the_daemon(store, served, monkeypatch):
     d = served(store.path)
     d.daemon.hub.usage.limits = {"five_hour": (12.0, 1700000000.0)}

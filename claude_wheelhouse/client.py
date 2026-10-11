@@ -284,8 +284,8 @@ class RemoteClient:
             data = self.command(path, body)
         except Unreachable as e:
             return Done(False).say(str(e), "error")
-        except Refused as e:
-            return Done(False).say(e.error, "error")
+        except Refused as e:   # a token refused said as the stream, refresh and fetch say it
+            return Done(False).say(self.refusal_of(e), "error")
         return Done(data.get("ok", True), [Event("notice", n["text"], n.get("severity", "information"))
                                           for n in data.get("notices", [])], data.get("denied", False), data.get("sid"))
 

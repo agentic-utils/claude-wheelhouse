@@ -931,7 +931,10 @@ def main(address: str = ADDRESS, port: int = PORT, names=(), start_pipe: int | N
     signal, but kept from every process this one starts (hosts, tabs), which would
     otherwise hold it open after this one had gone."""
     if start_pipe is not None:
-        os.set_inheritable(start_pipe, False)
+        try:
+            os.set_inheritable(start_pipe, False)
+        except OSError as e:   # a number that isn't an open descriptor: said in a line, as cli does
+            raise ValueError(f"--start-pipe {start_pipe}: {e.strerror}") from None
     address = checked_address(address)
     allowed = hosts(address, port, names)
     store = Store()

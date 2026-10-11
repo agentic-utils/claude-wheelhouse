@@ -350,6 +350,12 @@ def test_main_refuses_every_interface_before_anything_else(monkeypatch):
         daemon_mod.main("0.0.0.0")
 
 
+
+def test_main_says_a_start_pipe_that_isnt_open_in_a_line(monkeypatch):
+    monkeypatch.setattr(daemon_mod, "Store", lambda: pytest.fail("opened the store"))
+    with pytest.raises(ValueError, match="--start-pipe 987654: Bad file descriptor"):
+        daemon_mod.main(start_pipe=987654)
+
 def test_one_daemon_per_user(tmp_path):
     first = take_lock(tmp_path)
     with pytest.raises(AlreadyRunning, match=f"pid {os.getpid()}"):
