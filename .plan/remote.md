@@ -126,7 +126,8 @@ was before 2c, its hub in process: the way back, at once.
   URL-safe base64. The daemon makes it the first time it starts, under its lock, so two
   starting at once can't make two, and reuses it on every start after, but only while the
   file is the user's own and nobody else's to read or write: otherwise it refuses to
-  start, saying `chmod 600 <path>`, as ssh does with a key file. A temporary file left by
+  start, saying `chmod 600 <path>`, as ssh does with a key file, and an app joining a daemon
+  already running on such a file says the same. A temporary file left by
   a start that died mid-write is removed at the next. Every request
   presents it as `Authorization: Bearer <token>`, GETs, commands, `/hello` and the event
   stream alike; one that doesn't gets 401 (with `WWW-Authenticate: Bearer`) and a message
@@ -147,9 +148,16 @@ was before 2c, its hub in process: the way back, at once.
   - **A token file that no longer matches the running daemon** (deleted, unreadable,
     replaced or restored): the daemon keeps the token it read as it started, so the app
     says what is wrong with the file, names the daemon's pid and says to stop it, at once,
-    without waiting; `claude-wheelhouse token` says the same. Under a running app, a token
-    refused is said as that, not as the daemon unreachable, and the token file is read again
-    whenever the stream reconnects, so stopping and starting the daemon is enough.
+    without waiting; `claude-wheelhouse token` says the same, and checks the file's token
+    against the daemon's `/hello`, so it never prints one the daemon refuses. Under a
+    running app, a token refused is said as that, not as the daemon unreachable, and the
+    token file is read again whenever the stream reconnects, so stopping and starting the
+    daemon is enough: refused is said only if the file's token is the one refused. A daemon
+    that stops as it starts (on a token file it refuses, say) is said at once with its own
+    words, not after the start's wait.
+  - **A daemon from before 2c** (the same lock, no token, no `/hello`) is said as running
+    older code, to be stopped with `claude-wheelhouse daemon --stop`, not as a token file
+    gone.
   - **`--connect`** takes the token from `--token-file PATH`, else `WHEELHOUSE_TOKEN`,
     else asks for it on the terminal without echo. Never a flag's value, which `ps` and
     the shell's history would show.
@@ -244,12 +252,16 @@ was before 2c, its hub in process: the way back, at once.
   - A conversation a client has asked for is announced ("conversation") at the tick
     whenever its transcript has changed since it was last served, not only when a turn with
     usage lands: tool results, notices and a reply streamed in place grow it too, and the
-    TUI in process saw those at its next read. Once a tick: not again when the context read
-    has announced it. One asked for before its transcript existed (a new session's) is
+    TUI in process saw those at its next read. Once per change: a context read that lands
+    after the tick has announced it (it runs on the pool and is said on the hub's thread)
+    doesn't announce the same transcript again. One asked for before its transcript existed (a new session's) is
     looked for at each tick until it does.
   - New session, from this machine only, may still open a tab: a peer on the loopback, on
     the address the daemon listens on (an app here joins at the lock's address, a VPN's
-    say, so its requests come from there), or on any other address of this machine's own. Under
+    say, so its requests come from there), or on any other address of this machine's own
+    (one a socket here can bind to, never an unspecified, broadcast or multicast one; with
+    `ip_nonlocal_bind` set, which lets any address bind, only the loopback and the listen
+    address). Under
     `--connect` it offers no tab and no Browse (the directories are the daemon's), and the
     daemon checks the directory.
   - The text typed but not sent is still in memory, per client: the file per target, and
