@@ -275,13 +275,16 @@ GET  /sessions/{sid}/conversation      transcript blocks
 GET  /items?sid=&finished=             inbox, ranked as today
 GET  /items/{sid}/{ref}/thread
 GET  /items/{sid}/{ref}/conversation   a subagent item's own transcript blocks (Hub.agent_conversation)
-POST /sessions                         new session {cwd, name, ticket, brief}
+POST /sessions                         new session {cwd, name, ticket, brief, model?, effort?}
 POST /sessions/{sid}/{restore|relaunch|park|end|interrupt|compact|shell|rename|mode}
 POST /sessions/{sid}/send              {text, ref?}  immediate, or queued per mode
+POST /sessions/{sid}/model             {model}   a hosted session's, applied live (.plan/model-effort.md)
+POST /sessions/{sid}/effort            {effort}  the same, for effort
 POST /sessions/{sid}/dispatch          send the queue;  POST /dispatch for Send all
 POST /items/{sid}/{ref}/permission     {decision: allow|always|deny, message?}
 POST /items/{sid}/{ref}/close
 GET  /fs?path=                         directory listing for the New session picker
+GET  /models                           the models and effort levels offered, with defaults
 GET  /modules/{id}/...                 a module's own routes
 GET  /events                           SSE stream
 ```
