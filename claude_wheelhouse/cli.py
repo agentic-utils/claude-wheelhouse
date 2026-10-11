@@ -1,6 +1,7 @@
 """claude-wheelhouse: the TUI by default, plus the per-session processes it launches."""
 
 import argparse
+import errno
 import os
 import sys
 
@@ -72,6 +73,8 @@ def main() -> None:
     daemon.add_argument("--port", type=int, default=None, help="the port to listen on (default 7428)")
     daemon.add_argument("--name", action="append", default=[], help="another name clients reach this machine by "
                         "(a VPN's name for it), so their requests are accepted: repeat for more")
+    daemon.add_argument("--stop", action="store_true", help="stop the daemon running, by its pid (no token "
+                        "needed): the next start reads the token file again, or makes one if there's none")
     sub.add_parser("token", help="print the daemon's token, for a client on another machine (--connect)")
     args = p.parse_args()
 
@@ -84,6 +87,13 @@ def main() -> None:
     elif args.cmd == "mcp":
         from .mcp_server import main as mcp_main
         mcp_main()
+    elif args.cmd == "daemon" and args.stop:
+        from .connect import NoDaemon, halt
+        from .store import db_path
+        try:
+            print(halt(db_path().parent))
+        except NoDaemon as e:
+            sys.exit(f"claude-wheelhouse: {e}")
     elif args.cmd == "daemon":
         from .auth import TokenError
         from .daemon import ADDRESS, PORT, AlreadyRunning, main as daemon_main
@@ -96,12 +106,17 @@ def main() -> None:
         print(injected())
     elif args.cmd == "token":
         from . import auth
+        from .connect import holder, token_trouble
         from .store import db_path
         state_dir = db_path().parent
         try:
             print(auth.read(auth.path(state_dir)))
         except auth.TokenError as e:
-            sys.exit(f"claude-wheelhouse: {e} (the daemon makes it the first time it starts)")
+            held = holder(state_dir)
+            if held is not None:
+                sys.exit(f"claude-wheelhouse: {token_trouble(e, auth.path(state_dir), held)}")
+            first = " (the daemon makes it the first time it starts)" if e.errno == errno.ENOENT else ""
+            sys.exit(f"claude-wheelhouse: {e}{first}")
     elif args.cmd == "tutorial":
         from .store import Store
         from .tutorial import start

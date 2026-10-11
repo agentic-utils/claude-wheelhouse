@@ -187,6 +187,25 @@ def test_a_refused_token_is_said_once(store, sid, served, heard):
         c.disconnect()
 
 
+def test_a_token_refused_by_the_local_daemon_is_said_as_that_and_its_file_read_again(store, sid, served, heard):
+    """The token file put right (the daemon stopped and started again on it, say): the
+    Reviver reads it again, and the client takes it. Never said as the daemon lost."""
+    d = served(store.path)
+    revived = []
+
+    def revive():
+        revived.append(1)
+        return d.url, TOKEN
+    c = heard(RemoteClient(d.url, "not-the-token", revive=revive, why_refused=lambda: "stop it (pid 7)"))
+    try:
+        until(lambda: c.token == TOKEN and c.last_event is not None, desc="reconnected on the file's token")
+        assert ("notice", "the daemon refused this client: stop it (pid 7)") in heard.said, heard.said
+        assert not [text for _, text in heard.said if "unreachable" in text], heard.said
+        assert c.connected and revived
+    finally:
+        c.disconnect()
+
+
 def test_the_account_usage_comes_from_the_daemon(store, served, monkeypatch):
     d = served(store.path)
     d.daemon.hub.usage.limits = {"five_hour": (12.0, 1700000000.0)}

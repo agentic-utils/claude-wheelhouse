@@ -32,6 +32,7 @@ BACKOFF = (0.5, 1, 2, 5)   # seconds between tries to reconnect, the last repeat
 AGENT_POLL = 1.0    # a subagent's conversation shown: fetched again each second, as no event says it grew
 USAGE_POLL = 60     # the account's usage, as the hub fetches it
 UNREACHABLE = "not connected to the daemon: nothing was sent"
+REFUSED = "its token isn't this daemon's: claude-wheelhouse token, on its machine, prints it"
 LOST = "lost the daemon mid-command: it may or may not have been done, so check before trying again"
 
 
@@ -136,17 +137,21 @@ class RemoteClient:
 
     synchronous: no stream and no threads of its own; each refresh fetches everything at
     once, after before_fetch (a test's: the daemon's tick), as the hub in process read the
-    store. revive: called when the daemon can't be reached, to start the local one again if it
-    has gone; its URL, or None. elsewhere: the daemon is another machine's (--connect)."""
+    store. revive: called when the daemon can't be reached or refuses the token, to start the
+    local one again if it has gone and read its token file again; (its URL, the token or None
+    if it can't be read), or None. why_refused: what to say when the daemon refuses the token,
+    if not REFUSED (the local daemon's, naming it). elsewhere: the daemon is another
+    machine's (--connect)."""
     remote = True
     elsewhere = False
     store = None   # the database is the daemon's
 
-    def __init__(self, url: str, token: str, revive: Callable[[], str | None] | None = None, synchronous: bool = False,
+    def __init__(self, url: str, token: str, revive: Callable[[], tuple[str, str | None] | None] | None = None,
+                 synchronous: bool = False, why_refused: Callable[[], str] | None = None,
                  before_fetch: Callable[[], None] | None = None, transport=None):
         import httpx2   # here, not at the top: the TUI in process (--local) never loads it
         self.httpx = httpx2
-        self.url, self.token, self.revive = url, token, revive
+        self.url, self.token, self.revive, self.why_refused = url, token, revive, why_refused
         self.synchronous, self.before_fetch = synchronous, before_fetch
         self.transport = transport
         self.http = self.make_http(TIMEOUT)
@@ -670,18 +675,21 @@ class RemoteClient:
         """The daemon's events, from its stream, for as long as the client runs: each
         marks what it moved to fetch. A stream that ends or can't connect is tried again,
         backing off, from the last event's id; a local daemon gone is started again
-        (revive)."""
+        (revive). A token refused is said as that, not as the daemon lost, and the local
+        one's file is read again (revive), as it may have been put right."""
         tries = 0
         http = self.make_http(STREAM_READ)
         try:
             while not self.stopping:
+                refused = False
                 try:
                     headers = {}
                     if self.last_event:
                         headers["Last-Event-ID"] = self.last_event
                     with http.sse("/events", headers=headers) as events:
                         if events.response.status_code == 401:
-                            self.refused("its token isn't this daemon's: claude-wheelhouse token prints it")
+                            refused = True
+                            self.refused(self.why_refused() if self.why_refused else REFUSED)
                             raise self.httpx.TransportError("the token was refused")
                         if events.response.status_code != 200:
                             raise self.httpx.TransportError(f"the stream answered {events.response.status_code}")
@@ -699,11 +707,12 @@ class RemoteClient:
                     pass   # RuntimeError: its connection closed under it (disconnect); Unreachable is one
                 if self.stopping:
                     return
-                self.lost()
-                if self.revive is not None:
-                    url = self.revive()
-                    if url and url != self.url:
-                        self.url = url
+                if not refused:
+                    self.lost()
+                if self.revive is not None and (found := self.revive()) is not None:
+                    url, token = found[0], found[1] or self.token
+                    if (url, token) != (self.url, self.token):
+                        self.url, self.token = url, token
                         http.close()
                         http = self.make_http(STREAM_READ)
                         old, self.http = self.http, self.make_http(TIMEOUT)

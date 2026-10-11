@@ -7,9 +7,11 @@ runs, with "pid N at URL" in it. The kernel lets go of a flock when its holder d
 lock file left by a daemon that crashed is only text: not held, none runs."""
 
 import contextlib
+import errno
 import fcntl
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -20,15 +22,20 @@ from .client import RemoteClient
 
 PORT = 7428
 START_WAIT = 10   # seconds a daemon started has to take its lock and answer
-HELLO_WAIT = 3    # seconds a running daemon has to answer before it's called hung
+HELLO_WAIT = 3    # seconds another machine's daemon has to answer (--connect)
 STOP_WAIT = 10    # seconds a daemon asked to stop has to let go of its lock
 REVIVES = 3       # daemons started again after one went, within REVIVE_SPAN, before giving up
 REVIVE_SPAN = 300
 LOCK, LOG = "daemon.lock", "daemon.log"
+STOP = "claude-wheelhouse daemon --stop"
 
 
 class NoDaemon(RuntimeError):
     """The daemon can't be had: why, for the person, with what to do."""
+
+
+class TokenRefused(NoDaemon):
+    """The daemon answers, but refuses the token given (401)."""
 
 
 def holder(state_dir: Path) -> str | None:
@@ -103,8 +110,8 @@ def hello(url: str, token: str, wait: float, state_dir: Path | None = None) -> d
             try:
                 r = http.get(f"{url}/hello")
                 if r.status_code == 401:
-                    raise NoDaemon(f"the daemon at {url} refuses this token: claude-wheelhouse token, on its "
-                                   "machine, prints the one it takes")
+                    raise TokenRefused(f"the daemon at {url} refuses this token: claude-wheelhouse token, on "
+                                       "its machine, prints the one it takes")
                 if r.status_code == 200 and r.json().get("ready"):
                     return r.json()
             except (httpx2.TransportError, ValueError):
@@ -116,22 +123,68 @@ def hello(url: str, token: str, wait: float, state_dir: Path | None = None) -> d
             time.sleep(0.1)
 
 
-def stop(url: str, token: str, state_dir: Path, pid: int) -> None:
+def stop(url: str, token: str, state_dir: Path, pid: int) -> bool:
     """Ask the daemon (pid) to stop, and wait for it to let go of its lock: until the lock
     is free or held by another daemon (another app's, started meanwhile), which the caller
-    goes round again to join."""
+    goes round again to join. Whether this request stopped it: not if another app's asked
+    first (both found it on older code)."""
     import uuid
 
     import httpx2
-    with httpx2.Client(timeout=5) as http, contextlib.suppress(httpx2.TransportError):
-        http.post(f"{url}/shutdown", json={}, headers={"Idempotency-Key": str(uuid.uuid4()),
-                                                       "Authorization": auth.header(token)})
+    stopped = False
+    with httpx2.Client(timeout=5) as http, contextlib.suppress(httpx2.TransportError, ValueError):
+        r = http.post(f"{url}/shutdown", json={}, headers={"Idempotency-Key": str(uuid.uuid4()),
+                                                           "Authorization": auth.header(token)})
+        stopped = r.status_code == 200 and r.json().get("ok") is True
     deadline = time.monotonic() + STOP_WAIT
     while pid_of(holder(state_dir)) == pid:
         if time.monotonic() >= deadline:
             raise NoDaemon(f"the daemon (pid {pid}) at {url} runs older code and didn't stop when asked: stop "
                            "it, then start the wheelhouse again (claude-wheelhouse --local runs without it)")
         time.sleep(0.1)
+    return stopped
+
+
+def halt(state_dir: Path) -> str:
+    """The local daemon stopped (claude-wheelhouse daemon --stop), by the pid its lock
+    names, with SIGTERM, as systemd stops it: no token needed, so it works when the token
+    file is what's wrong. What was done, for the person."""
+    held = holder(state_dir)
+    if held is None:
+        return "no wheelhouse daemon is running"
+    pid = pid_of(held)
+    if pid is None:
+        raise NoDaemon(f"the daemon's lock ({state_dir / LOCK}) names no pid: {held}")
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + STOP_WAIT
+    while pid_of(holder(state_dir)) == pid:
+        if time.monotonic() >= deadline:
+            raise NoDaemon(f"the daemon (pid {pid}) didn't stop within {STOP_WAIT} s: kill {pid}")
+        time.sleep(0.1)
+    return f"stopped the daemon (pid {pid})"
+
+
+def token_trouble(e: auth.TokenError, file: Path, held: str | None) -> str:
+    """What's wrong with the token file while a daemon runs (held, its lock), and what to do:
+    the daemon took the token when it started and keeps it, so the fix is to stop it, and the
+    next start reads the file afresh, or makes one if there's none."""
+    pid = pid_of(held)
+    daemon = f"the daemon (pid {pid})" if pid else "the daemon"
+    if e.errno == errno.ENOENT:
+        return (f"the token file {file} has gone, but {daemon} still runs on the token it read when it started: "
+                f"stop it ({STOP}), and the next start makes a new token (give that to each --connect machine)")
+    if e.errno is not None:
+        return (f"{e}. If it's yours, chmod 600 {file}; otherwise delete it and stop {daemon} ({STOP}), and "
+                "the next start makes a new token")
+    return f"{e}: delete it and stop {daemon} ({STOP}), and the next start makes a new token"
+
+
+def refused_trouble(file: Path, held: str | None) -> str:
+    pid = pid_of(held)
+    daemon = f"the daemon (pid {pid})" if pid else "the daemon"
+    return (f"{daemon} refuses the token in {file}: the file has changed since it started (replaced or "
+            f"restored). Stop it ({STOP}), and the next start takes the file's token")
 
 
 def token_of(state_dir: Path, wait: float = 0) -> str:
@@ -190,20 +243,26 @@ def local(state_dir: Path, port: int) -> tuple[str, str, list[str]]:
                 raise NoDaemon(f"the daemon didn't start: {last_line(state_dir) or 'see ' + LOG} "
                                f"(in {state_dir}). claude-wheelhouse --local runs without it")
             continue
-        url, token = url_of(held), token_of(state_dir, START_WAIT)
+        url, file = url_of(held), auth.path(state_dir)
+        try:   # written before the daemon listens: waited for only from one this app has just started
+            token = token_of(state_dir, 0 if found else START_WAIT)
+        except auth.TokenError as e:
+            raise NoDaemon(token_trouble(e, file, held)) from None
         try:
-            info = hello(url, token, HELLO_WAIT if found else START_WAIT, state_dir)
+            info = hello(url, token, START_WAIT, state_dir)
         except Gone:
             continue
+        except TokenRefused:
+            raise NoDaemon(refused_trouble(file, held)) from None
         if info is None:
             raise NoDaemon(f"the daemon ({held}) holds its lock but doesn't answer. It's left running: stop it, "
                            "or run claude-wheelhouse --local without it")
         if info["code"] == fingerprint.code():
             return url, token, said
         if info["package"] == str(fingerprint.PACKAGE) and not restarted:
-            stop(url, token, state_dir, info["pid"])
             restarted = True
-            said.append("the daemon ran older code: restarted it on this code")
+            if stop(url, token, state_dir, info["pid"]):   # not another app's doing
+                said.append("the daemon ran older code: restarted it on this code")
             continue
         if info["api"] != fingerprint.API:
             raise NoDaemon(f"the daemon (pid {info['pid']}, from {info['package']}) speaks API {info['api']}, this "
@@ -215,13 +274,14 @@ def local(state_dir: Path, port: int) -> tuple[str, str, list[str]]:
 class Reviver:
     """The local daemon, started again when it has gone (its lock free) under a running
     TUI: up to REVIVES times in REVIVE_SPAN, then left to the person. Its address once it's
-    listening."""
+    listening, and the token file's token, read again (None if it can't be): a daemon
+    started again, or one that refused the client's, may take another."""
 
     def __init__(self, state_dir: Path, port: int):
         self.state_dir, self.port = state_dir, port
         self.started: list[float] = []
 
-    def __call__(self) -> str | None:
+    def __call__(self) -> tuple[str, str | None] | None:
         held = holder(self.state_dir)
         if held is None:
             now = time.monotonic()
@@ -234,12 +294,19 @@ class Reviver:
             except (OSError, subprocess.CalledProcessError):
                 return None
         held = listening(self.state_dir, START_WAIT)
-        return held and url_of(held)
+        if held is None:
+            return None
+        try:
+            token = token_of(self.state_dir)
+        except auth.TokenError:
+            token = None
+        return url_of(held), token
 
 
 def local_client(state_dir: Path) -> tuple[RemoteClient, list[str]]:
     url, token, said = local(state_dir, port())
-    client = RemoteClient(url, token, revive=Reviver(state_dir, port()))
+    client = RemoteClient(url, token, revive=Reviver(state_dir, port()),
+                          why_refused=lambda: refused_trouble(auth.path(state_dir), holder(state_dir)))
     return client, said
 
 

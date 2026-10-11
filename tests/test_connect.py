@@ -94,7 +94,7 @@ def test_a_daemon_from_another_package_is_joined_if_its_api_matches(state, monke
 
 def test_a_daemon_that_holds_its_lock_and_never_answers_is_left_alone(state, monkeypatch):
     state_dir, port = state
-    monkeypatch.setattr(connect, "HELLO_WAIT", 0.3)
+    monkeypatch.setattr(connect, "START_WAIT", 0.3)
     auth.ensure(state_dir)
     with open(state_dir / connect.LOCK, "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -119,7 +119,8 @@ def test_a_daemon_gone_under_a_running_tui_is_started_again_a_few_times(state, m
     state_dir, port = state
     connect.local(state_dir, port)
     revive = connect.Reviver(state_dir, port)
-    assert revive() == f"http://127.0.0.1:{port}", "running: nothing to do"
+    token = auth.read(auth.path(state_dir))
+    assert revive() == (f"http://127.0.0.1:{port}", token), "running: nothing to do"
     monkeypatch.setattr(connect, "REVIVES", 1)
     for n in range(2):
         pid = daemon_pid(state_dir)
@@ -129,7 +130,7 @@ def test_a_daemon_gone_under_a_running_tui_is_started_again_a_few_times(state, m
             time.sleep(0.05)
         url = revive()
         if n == 0:
-            assert url == f"http://127.0.0.1:{port}" and daemon_pid(state_dir) != pid, "started again"
+            assert url == (f"http://127.0.0.1:{port}", token) and daemon_pid(state_dir) != pid, "started again"
         else:
             assert url is None and connect.holder(state_dir) is None, "past its limit: left to the person"
 
@@ -257,3 +258,78 @@ def test_the_daemon_never_sees_the_apps_token_in_its_environment(state, monkeypa
     connect.local(state_dir, port)
     environ = open(f"/proc/{daemon_pid(state_dir)}/environ", "rb").read().split(b"\0")
     assert not [e for e in environ if e.startswith(b"WHEELHOUSE_TOKEN=")]
+
+
+def cli(*args) -> subprocess.CompletedProcess:
+    """claude-wheelhouse, as the person runs it, on the test's state dir (WHEELHOUSE_DB)."""
+    env = dict(os.environ, PYTHONPATH=str(fingerprint.PACKAGE.parent))
+    return subprocess.run([sys.executable, "-m", "claude_wheelhouse", *args], env=env, capture_output=True, text=True,
+                          timeout=30)
+
+
+@pytest.mark.parametrize("change, said, desc", [
+    (lambda f: f.unlink(), "has gone, but the daemon (pid {pid}) still runs on the token it read",
+     "deleted: no wait, and not that the daemon makes it on its first start"),
+    (lambda f: f.chmod(0), "Permission denied. If it's yours, chmod 600", "unreadable: no wait either"),
+    (lambda f: f.write_text("another-token\n"), "the daemon (pid {pid}) refuses the token in",
+     "replaced or restored: not that the token command prints the one it takes"),
+    (lambda f: f.write_text("\n"), "holds no token: delete it and stop the daemon (pid {pid})", "emptied"),
+])
+def test_a_token_file_that_no_longer_matches_the_daemon_says_what_to_do(state, change, said, desc):
+    if os.geteuid() == 0 and "Permission" in said:
+        pytest.skip("root reads any file")
+    state_dir, port = state
+    connect.local(state_dir, port)
+    pid = daemon_pid(state_dir)
+    change(auth.path(state_dir))
+    started = time.monotonic()
+    with pytest.raises(connect.NoDaemon) as e:
+        connect.local(state_dir, port)
+    assert time.monotonic() - started < 3, f"{desc}: not waited for, as it runs already"
+    assert said.format(pid=pid) in str(e.value) and connect.STOP in str(e.value), f"{desc}: {e.value}"
+    assert "first time it starts" not in str(e.value), desc
+
+
+def test_daemon_stop_stops_it_by_its_pid_and_the_next_start_makes_a_new_token(state):
+    state_dir, port = state
+    _, old, _ = connect.local(state_dir, port)
+    pid = daemon_pid(state_dir)
+    auth.path(state_dir).unlink()
+    token = cli("token")
+    assert f"the daemon (pid {pid}) still runs" in token.stderr and connect.STOP in token.stderr, token.stderr
+    assert "first time it starts" not in token.stderr, "one runs already"
+    stopped = cli("daemon", "--stop")
+    assert stopped.stdout.strip() == f"stopped the daemon (pid {pid})", stopped
+    assert connect.holder(state_dir) is None
+    assert cli("daemon", "--stop").stdout.strip() == "no wheelhouse daemon is running"
+    _, new, _ = connect.local(state_dir, port)
+    assert new != old and new == auth.read(auth.path(state_dir))
+
+
+@pytest.mark.parametrize("stopped, said, desc", [
+    (True, ["the daemon ran older code: restarted it on this code"], "this app stopped it"),
+    (False, [], "another app's request stopped it first: not this one's doing"),
+])
+def test_only_the_app_that_stopped_a_daemon_on_older_code_says_it_restarted_it(tmp_path, monkeypatch, stopped, said,
+                                                                               desc):
+    url = "http://127.0.0.1:1"
+    auth.ensure(tmp_path)
+    codes = iter(["old", fingerprint.code()])
+    monkeypatch.setattr(connect, "holder", lambda d: f"pid 999999 at {url}")
+    monkeypatch.setattr(connect, "hello", lambda u, token, wait, state_dir=None: {
+        "code": next(codes), "package": str(fingerprint.PACKAGE), "api": fingerprint.API, "pid": 999999})
+    monkeypatch.setattr(connect, "stop", lambda *a: stopped)
+    assert connect.local(tmp_path, 1) == (url, auth.read(auth.path(tmp_path)), said), desc
+
+
+def test_a_daemon_running_has_as_long_to_answer_as_one_just_started(tmp_path, monkeypatch):
+    auth.ensure(tmp_path)
+    waits = []
+
+    def hello(u, token, wait, state_dir=None):
+        waits.append(wait)
+        return {"code": fingerprint.code(), "package": "p", "api": fingerprint.API, "pid": 2}
+    monkeypatch.setattr(connect, "holder", lambda d: "pid 2 at http://127.0.0.1:1")
+    monkeypatch.setattr(connect, "hello", hello)
+    connect.local(tmp_path, 1)
+    assert waits == [connect.START_WAIT]
