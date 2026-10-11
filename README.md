@@ -309,17 +309,18 @@ daemon.
 
 ## The usage gauges
 
-The session and weekly gauges come from Claude Code itself: every 5 minutes the wheelhouse
-runs a short `claude -p "/usage"` in the background and reads what it prints. That spends
-no tokens, and the wheelhouse never reads your Claude Code login. When a reading is late,
-the gauges say how old their numbers are.
+The session and weekly gauges come from Claude Code itself. By default (`oneshot`) the
+wheelhouse runs a short `claude -p "/usage"` every 5 minutes in the background and reads
+what it prints. That spends no tokens, and the wheelhouse never reads your Claude Code
+login. When a reading is late, the gauges say how old their numbers are.
 
 `--usage-mode persistent` keeps one Claude Code running and asks it instead: quicker per
 reading, but it stays in memory. `usage-mode=persistent` in a `.env` file does the same;
 the `.env` goes in the directory you start the app from (the clone, with `make run`) or in
 `~/.config/claude-wheelhouse/.env`. The daemon does the asking, so a change takes effect
 when the daemon restarts (quit the app, `claude-wheelhouse daemon --stop`, then open the
-app again).
+app again). If the app is given a mode and joins a daemon already running the other, it
+says so once.
 
 ## Where state lives
 
@@ -354,7 +355,8 @@ which the wheelhouse reads.
 - The wheelhouse reads files Claude Code keeps for itself and doesn't document (its
   transcripts in `~/.claude/projects`, and `~/.claude/sessions`), so a Claude Code update
   can break the stats, the conversations, subagent items or whether a session shows as
-  alive. Only Claude Code 2.1.287 to 2.1.296 have been checked.
+  alive. The usage gauges parse the wording `/usage` prints, so a change to it can break
+  them too. Only Claude Code 2.1.287 to 2.1.296 have been checked.
 - Each user's daemon listens on `127.0.0.1:7428`: a second WSL user on the same machine
   needs another `WHEELHOUSE_PORT`.
 - Nothing restarts after a reboot: Restore brings the sessions back.
