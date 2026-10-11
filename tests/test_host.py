@@ -409,10 +409,16 @@ class StreamClient(FakeClient):
             yield m
 
 
-def result(text="", error=False):
+def result(text="", error=False, origin=None, terminal_reason=None):
     from claude_agent_sdk import ResultMessage
-    return ResultMessage(subtype="error" if error else "success", duration_ms=1, duration_api_ms=1,
-                         is_error=error, num_turns=1, session_id="x", result=text)
+    return ResultMessage(subtype="error_during_execution" if error else "success", duration_ms=1, duration_api_ms=1,
+                         is_error=error, num_turns=1, session_id="x", result=text, origin=origin,
+                         terminal_reason=terminal_reason)
+
+
+def own(text=""):
+    """The end of a turn Claude Code started itself, as it says so (a background task's notification)."""
+    return result(text, origin={"kind": "task-notification"})
 
 
 def test_read(store, sid, monkeypatch):
@@ -553,7 +559,7 @@ REPLAY = "replay"   # in a stream: Claude Code taking up the turn last sent
 
 @pytest.mark.parametrize("stream, sent, activity, desc", [
     ([REPLAY, text(NOTES), result()], COMPACTED, "compacting", "the ask's reply carries the notes"),
-    ([result("background task done"), REPLAY, text(NOTES), result()], COMPACTED, "compacting",
+    ([own("background task done"), REPLAY, text(NOTES), result()], COMPACTED, "compacting",
      "a turn Claude Code started itself ends first"),
     ([result("overloaded", error=True), REPLAY, text(NOTES), result()], COMPACTED, "compacting",
      "an error in a turn queued ahead doesn't cancel it"),
@@ -634,8 +640,8 @@ def test_compact_waits_out_a_long_turn(streamed, store, sid, monkeypatch, runnin
             await h.poll()
             assert h.compact_nonce == nonce, desc
             assert store.session(sid)["activity"] == "running Bash: sleep 900", desc
-        await feed(h, result(), *([h.client.replay(1)] if running else []), text(NOTES.format(nonce=nonce)),
-                   result())
+        await feed(h, result() if running else own(), *([h.client.replay(1)] if running else []),
+                   text(NOTES.format(nonce=nonce)), result() if running else own())
         await feed(h, None)
         await reader
     run(go())
@@ -1331,7 +1337,7 @@ def subagent_text(t):
      {"Q1": ["Main answer."]}, "a subagent's text isn't the session's answer"),
     ([("yes", "Q1")], [REPLAY, text("half"), result(error=True)], {"Q1": []}, "an error: not answered, still awaited"),
     ([("yes", "Q1")], [REPLAY, tool("ls"), result()], {"Q1": []}, "no text after its tool calls: nothing to post"),
-    ([("yes", "Q1")], [text("A background task finished."), result(), REPLAY, text("Q1 settled."), result()],
+    ([("yes", "Q1")], [text("A background task finished."), own(), REPLAY, text("Q1 settled."), result()],
      {"Q1": ["Q1 settled."]}, "a turn Claude Code started itself, ahead of ours: it answers nothing"),
     ([("yes", "Q1")], [REPLAY, session_replies, text("Q1 settled."), result()], {"Q1": ["Replied myself."]},
      "the session replied itself (copying its history): not posted twice"),
@@ -1395,3 +1401,51 @@ def test_each_turn_end_answers_the_turns_it_took_up(streamed, store, sid, stream
 
 def test_the_host_asks_claude_code_to_replay_its_turns(host):
     assert "replay-user-messages" in host.options(resume=True).extra_args
+
+
+@pytest.mark.parametrize("interrupt, end, activity, desc", [
+    (True, result(error=True, terminal_reason="aborted_tools"), "interrupted",
+     "interrupted: its end is no error, and the line says so"),
+    (True, result("x", error=True), "interrupted", "interrupted, however Claude Code ends it"),
+    (False, result(error=True, terminal_reason="aborted_streaming"), "interrupted",
+     "stopped by an interrupt from elsewhere: Claude Code says aborted"),
+    (False, result("overloaded", error=True), "error: overloaded", "a real error still says so"),
+])
+def test_an_interrupted_turn_ends_as_interrupted(streamed, store, sid, interrupt, end, activity, desc):
+    h = streamed
+
+    async def go():
+        reader = asyncio.create_task(h.read())
+        await h.turn("a long one")
+        await feed(h, h.client.replay(), tool("sleep 900"))
+        if interrupt:
+            store.command(sid, "interrupt")
+            await h.poll()
+        await feed(h, end, None)
+        await reader
+    run(go())
+    s = store.session(sid)
+    assert s["activity"] == activity, desc
+    assert (s["interrupted_at"] is not None) == interrupt, f"{desc}: kept for the hub, whatever the line says"
+    assert h.pending == 0 and not h.interrupted, desc
+
+
+def test_an_interrupted_keepalive_leaves_the_line_it_found(streamed, store, sid):
+    h = streamed
+    store.post_item(sid, "question", "which?")
+    finish_at(h, 200_000)
+    store.set_activity(sid, "idle · compacted 300k → 160k tokens")
+    h.last_turn -= host_mod.KEEPALIVE_AFTER
+
+    async def go():
+        reader = asyncio.create_task(h.read())
+        await h.poll()
+        await feed(h, h.client.replay())
+        store.command(sid, "interrupt")
+        await h.poll()
+        await feed(h, result(error=True, terminal_reason="aborted_streaming"), None)
+        await reader
+    run(go())
+    assert h.client.queries == [host_mod.KEEPALIVE_TEXT]
+    assert store.session(sid)["activity"] == "idle · compacted 300k → 160k tokens"
+

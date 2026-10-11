@@ -232,6 +232,7 @@ class Host:
         self.final_text: list[str] = []
         # the activity line a keepalive turn found, shown again once it ends: it is no news
         self.kept_line: str | None = None
+        self.interrupted = False   # Interrupt sent, until the turns it stopped have ended
         self.compacted_from = None   # tokens before the last compaction, until its turn ends
         # the model and effort in force, as Claude Code last confirmed them (or as launched)
         self.applied: tuple[str | None, str | None] = (None, None)
@@ -547,6 +548,8 @@ class Host:
         if command == "interrupt":
             await self.client.interrupt()
             self.end_compact()
+            self.interrupted = True
+            self.store.set_interrupted(self.sid)   # durable: the line below is the next turn's to change
             self.store.set_activity(self.sid, "interrupted")
         elif command == "compact":
             nonce = secrets.token_hex(4)
@@ -671,7 +674,12 @@ class Host:
         """A turn ended. Once a reply has carried Compact's notes, they go to /compact,
         whichever turn they came in: one queued ahead of the ask, an error in another turn
         or a turn Claude Code started itself doesn't lose them. A keepalive's end shows the
-        activity line it found again, unless it failed."""
+        activity line it found again, unless it failed; an interrupted turn ends as
+        "interrupted", not as an error."""
+        interrupted = m.is_error and (self.interrupted or str(getattr(m, "terminal_reason", "") or "")
+                                      .startswith("aborted"))
+        if not self.pending:
+            self.interrupted = False
         if self.compact_nonce:
             notes = self.compact_notes
             if notes is None and not m.is_error:
@@ -691,10 +699,12 @@ class Host:
                 self.quiet_since = self.last_turn
             if self.compact_nonce:   # quiet from here: Compact's wait for its notes counts down
                 self.compact_idle = time.monotonic()
-            if m.is_error:
-                activity = f"error: {(m.result or m.subtype)[:80]}"
-            elif keepalive and self.kept_line is not None:
+            if keepalive and self.kept_line is not None and (interrupted or not m.is_error):
                 activity = self.kept_line
+            elif interrupted:
+                activity = "interrupted"
+            elif m.is_error:
+                activity = f"error: {(m.result or m.subtype)[:80]}"
             elif self.compacted_from is not None:
                 activity = f"{COMPACTED} {self.compacted_from // 1000}k → {(tokens or 0) // 1000}k tokens"
             elif self.compact_nonce:

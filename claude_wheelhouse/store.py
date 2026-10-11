@@ -187,7 +187,8 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("items", "answer", "TEXT"), ("sessions", "context_at", "TEXT"),
                  ("items", "dismissed", "TEXT"), ("sessions", "relaunch", "TEXT"),
                  ("sessions", "model", "TEXT"), ("sessions", "effort", "TEXT"),
-                 ("sessions", "applied_model", "TEXT"), ("sessions", "applied_effort", "TEXT")]
+                 ("sessions", "applied_model", "TEXT"), ("sessions", "applied_effort", "TEXT"),
+                 ("sessions", "interrupted_at", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -419,13 +420,22 @@ class Store:
             self._require(db, sid)
             db.execute("UPDATE sessions SET host_command = ? WHERE id = ?", (what, sid))
 
-    def take_command(self, sid: str) -> str | None:
-        """The host takes the pending command, once."""
+    def take_command(self, sid: str, only: str | None = None) -> str | None:
+        """The host takes the pending command, once. With `only`, it is taken only if it is
+        that one: another, pressed meanwhile, stays for the host."""
         with self.tx() as db:   # read and clear in one write transaction
             row = db.execute("SELECT host_command FROM sessions WHERE id = ?", (sid,)).fetchone()
-            if row and row[0]:
+            if row and row[0] and only in (None, row[0]):
                 db.execute("UPDATE sessions SET host_command = NULL WHERE id = ?", (sid,))
-        return row[0] if row else None
+            else:
+                return None
+        return row[0]
+
+    def set_interrupted(self, sid: str) -> None:
+        """The host has interrupted the session, now: kept, as its activity line isn't (the
+        interrupted turn's end, or the next turn, writes over that)."""
+        with self.tx() as db:
+            db.execute("UPDATE sessions SET interrupted_at = ? WHERE id = ?", (stamp(), sid))
 
     def set_answer(self, sid: str, ref: str, answer: str) -> None:
         """An item's answer column: a permission's decision, or the host marking a question
@@ -442,7 +452,9 @@ class Store:
         """A Relaunch under way: the host it stopped (or, compacting first, will stop once
         the session is compacted, the epoch second Compact was asked for in `asked`), (pid,
         start time), and the epoch second it gives up by, so a wheelhouse started again
-        carries it on; None once it's done."""
+        carries it on; None once it's done. Compacting first, the row has five values: the
+        Hub of older code (from before #16's token savings) unpacks three, and would fail to
+        start on one if the code were rolled back while it is under way."""
         relaunch = [*host, deadline] + ([True, asked] if asked is not None else []) if host else None
         with self.tx() as db:
             db.execute("UPDATE sessions SET relaunch = ? WHERE id = ?",

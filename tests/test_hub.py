@@ -541,6 +541,8 @@ def compacted_to(store, sid, tokens, activity):
      "interrupted: given up, and said so"),
     (lambda st, sid: st.set_activity(sid, host_mod.NO_NOTES), False, "Compact got no notes back",
      "no notes: given up, and said so"),
+    (lambda st, sid: (st.set_interrupted(sid), st.set_activity(sid, "error: error_during_execution")), False,
+     "Compact was interrupted", "interrupted by an older wheelhouse, its line since written over: given up all the same"),
     ("timeout", False, "wasn't compacted within 30 minutes", "too long: given up, and said so"),
     ("late", False, "wasn't compacted within 30 minutes",
      "compacted, but only seen past the deadline: given up, never a restart hours later"),
@@ -641,3 +643,14 @@ def test_a_compacting_relaunch_is_carried_on_by_a_hub_started_again(store, sid, 
     assert first.compact_then_relaunch(sid, (4242, 1)).ok
     again = Hub(store)
     assert sid in again.relaunching and sid in again.compacting
+
+
+def test_a_command_pressed_as_compact_first_stops_the_host_stays_for_the_next(hub, store, sid, monkeypatch):
+    """Only the Compact it asked for is taken back: a Shell pressed meanwhile is the new host's."""
+    alive = {4242}
+    killed, _ = compacting(hub, store, sid, monkeypatch, alive)
+    compacted_to(store, sid, 40_000, "idle")
+    store.command(sid, "shell")
+    hub.refresh()
+    hub.finish_relaunches()
+    assert killed == [4242] and store.session(sid)["host_command"] == "shell"

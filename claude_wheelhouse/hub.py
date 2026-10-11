@@ -74,6 +74,12 @@ def host_context(s) -> api.HostContext | None:
     return api.HostContext(s["context_tokens"], s["context_max"], at)
 
 
+def since(at: str | None, asked: float) -> bool:
+    """Whether a stored timestamp is at or after the epoch second `asked`."""
+    epoch = stats.epoch(at or "")
+    return epoch is not None and epoch >= asked
+
+
 def compacted_since(s, asked: float) -> bool:
     """Whether the session's host has recorded a context under COMPACT_FIRST_TOKENS since
     the epoch second `asked`: a compaction's end, which no later activity line hides."""
@@ -337,8 +343,10 @@ class Hub:
         elif not alive:   # died: relaunched as any stopped host, from the next tick
             self.relaunch_under_way(sid, host)
             return
+        elif since(s["interrupted_at"], self.compacting[sid]):   # by any wheelhouse, older ones too
+            why = "Compact was interrupted"
         elif compacted_since(s, self.compacting[sid]) and activity.startswith(IDLE_LINES):
-            self.store.take_command(sid)   # a Compact the host never took would run again after
+            self.store.take_command(sid, "compact")   # one the host never took would run again after
             done = self.stop_host(sid, host)
             for notice in done.notices:
                 self.emit(notice)

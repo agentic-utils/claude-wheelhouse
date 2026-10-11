@@ -580,3 +580,22 @@ def test_relaunches_read_every_version(store, sid, stored, expected, desc):
 def test_set_relaunch(store, sid, asked, stored, desc):
     store.set_relaunch(sid, (4242, 1), 99.0, asked)
     assert json.loads(store.session(sid)["relaunch"]) == stored, desc
+
+
+@pytest.mark.parametrize("pending, only, taken, left, desc", [
+    ("compact", None, "compact", None, "any: taken"),
+    ("compact", "compact", "compact", None, "the one asked for: taken"),
+    ("shell", "compact", None, "shell", "another: left for the host"),
+    (None, "compact", None, None, "none: nothing"),
+])
+def test_take_command(store, sid, pending, only, taken, left, desc):
+    if pending:
+        store.command(sid, pending)
+    assert store.take_command(sid, only) == taken, desc
+    assert store.session(sid)["host_command"] == left, desc
+
+
+def test_set_interrupted(store, sid):
+    assert store.session(sid)["interrupted_at"] is None
+    store.set_interrupted(sid)
+    assert store.session(sid)["interrupted_at"] is not None
