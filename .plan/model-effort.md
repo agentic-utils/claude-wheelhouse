@@ -238,8 +238,10 @@ they are what its transcript says it runs (the latest response's `requestedModel
 are NULL, the transcript's.
 
 Where the pane is too narrow for every level, the slider shows the current one between
-arrows (`effort  ◂  high  ▸`, or `eff ◂ …` narrower still): a click on an arrow steps it,
-and the keys work as before. The title gives up the window, then the name, then the effort
+arrows (`effort  ◂  high  ▸`, then `eff ◂ …`, then no label, then the level shortened,
+`◂ med  ▸`, so both arrows always show): a click on an arrow steps it, and the keys work as
+before. Focused, the full slider shows its keys (`←/→`) after the levels, or in the label's
+place (`eff ←/→`) where the line has no room after them. The title gives up the window, then the name, then the effort
 before the model; a tab's effort the title can't hold goes on a line of its own.
 
 The window is 1M for every model in the table (Haiku 5.5 and Fable 5.1 included), 200k for

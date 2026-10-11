@@ -662,7 +662,18 @@ def test_the_effort_slider_shows_for_a_hosted_session(setting, slider, pending, 
 
 @pytest.mark.parametrize("focused, keys, desc", [(True, True, "focused: the keys say how"), (False, False, "not")])
 def test_the_slider_shows_its_keys_when_focused(focused, keys, desc):
-    assert stats.slider("high", focused).plain.endswith("←/→") == keys, desc
+    assert ("←/→" in stats.slider("high", focused).plain) == keys, desc
+
+
+@pytest.mark.parametrize("width, drawn, desc", [
+    (38, "effort  low medium high xhigh max  ←/→", "room: the keys after the levels"),
+    (33, "eff ←/→ low medium high xhigh max", "a pane about 35 wide (160 columns): the keys in the label's place"),
+])
+def test_a_focused_slider_says_its_keys_wherever_it_shows_every_level(width, drawn, desc):
+    line = stats.slider("high", True, width)
+    assert line.plain == drawn and line.cell_len <= width, desc
+    assert [(line.plain[a:b], level) for a, b, level in stats.slider_spans("high", width)] == \
+        [(level, level) for level in models.EFFORTS], f"{desc}: the levels where a click picks them"
 
 
 def test_the_title_reads_the_requested_model_before_the_served_one():
@@ -683,6 +694,10 @@ def test_the_title_reads_the_requested_model_before_the_served_one():
     (15, "low", "eff ◂  low   ▸", [("low", "low"), ("▸", "medium")], "the lowest: no step down"),
     (15, "max", "eff ◂  max   ▸", [("◂", "xhigh"), ("max", "max")], "the highest: no step up"),
     (15, None, "eff ◂   ?    ▸", [("◂", "medium"), ("▸", "xhigh")], "nothing known: the keys start from high"),
+    (13, "medium", "◂ medium ▸", [("◂", "low"), ("medium", "medium"), ("▸", "high")], "narrower: the label goes"),
+    (9, "medium", "◂ med  ▸", [("◂", "low"), ("med", "medium"), ("▸", "high")],
+     "an 80x24 pane: the level shortened, both arrows kept"),
+    (9, "xhigh", "◂ xhi  ▸", [("◂", "high"), ("xhi", "xhigh"), ("▸", "max")], "xhigh shortened too"),
 ])
 def test_the_slider_fits_its_line(width, current, drawn, picks, desc):
     line = stats.slider(current, False, width)
@@ -690,7 +705,8 @@ def test_the_slider_fits_its_line(width, current, drawn, picks, desc):
     spans = stats.slider_spans(current, width)
     assert [(line.plain[a:b], level) for a, b, level in spans] == picks, f"{desc}: where a click picks what"
     lit = [line.plain[s.start:s.end] for s in line.spans if "on " in str(s.style)]
-    assert lit == ([current] if current else []), f"{desc}: the current level lit"
+    assert lit == ([stats.SHORT.get(current, current) if width < stats.WIDEST + 4 else current] if current else []), \
+        f"{desc}: the current level lit"
 
 
 @pytest.mark.parametrize("pending, width, shown, desc", [

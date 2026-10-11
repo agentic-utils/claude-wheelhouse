@@ -597,13 +597,17 @@ PENDING = {"applying": "applying…", "on relaunch": "on relaunch: old host"}   
 PENDING_SHORT = {"applying": "applying…", "on relaunch": "on relaunch"}       # where the line has less room
 LEVELS = " ".join(models.EFFORTS)   # the slider in full
 WIDEST = max(map(len, models.EFFORTS))
+SHORT = {"medium": "med", "xhigh": "xhi"}   # the levels where a pane has no room for them whole
+SHORTEST = max(len(SHORT.get(level, level)) for level in models.EFFORTS)
+KEYS, KEYS_LABEL = "  ←/→", "eff ←/→ "   # the slider's keys, after the levels or, short of room, in the label's place
 
 
 def slider_parts(current: str | None, width: int) -> list[tuple[str, str | None]]:
     """The slider's line, as (text, the level a click on it picks): every level where the
     line has room for them all, else the current one between arrows that step it (◂ high ▸),
-    padded to the widest level so the arrows stay put. Starting from high where nothing is
-    known, as the keys do."""
+    padded to the widest level so the arrows stay put, the label shortened, then dropped,
+    then the level shortened (SHORT), so both arrows always show. Starting from high where
+    nothing is known, as the keys do."""
     levels = models.EFFORTS
     if width >= LABEL + len(LEVELS):
         out = [("effort".ljust(LABEL), None)]
@@ -612,22 +616,29 @@ def slider_parts(current: str | None, width: int) -> list[tuple[str, str | None]
         return out
     at = levels.index(current if current in levels else "high")
     shown = current if current in levels else "?"
-    left = (WIDEST - len(shown)) // 2
-    right = WIDEST - len(shown) - left
-    head = "effort".ljust(LABEL) if width >= LABEL + WIDEST + 4 else "eff "
-    return [(head, None), ("◂", levels[at - 1] if at else None), (" " * (left + 1), None),
-            (shown, current if current in levels else None), (" " * (right + 1), None),
-            ("▸", levels[at + 1] if at + 1 < len(levels) else None)]
+    widest, head = WIDEST, ("effort".ljust(LABEL) if width >= LABEL + WIDEST + 4 else
+                            "eff " if width >= 4 + WIDEST + 4 else "")
+    if width < WIDEST + 4:
+        shown, widest = SHORT.get(shown, shown), SHORTEST
+    left = (widest - len(shown)) // 2
+    right = widest - len(shown) - left
+    return [(head, None)] * bool(head) + [
+        ("◂", levels[at - 1] if at else None), (" " * (left + 1), None),
+        (shown, current if current in levels else None), (" " * (right + 1), None),
+        ("▸", levels[at + 1] if at + 1 < len(levels) else None)]
 
 
 def slider(current: str | None, focused: bool, width: int = LABEL + len(LEVELS)) -> Text:
     """The effort slider (slider_parts) at a width, the current level lit (brighter while
     the pane has focus); an arrow with nowhere to go dim. In full, with focus, the keys
-    too, where there's room."""
+    too: after the levels where there's room, else in the label's place."""
     lit = f"bold #000000 on {hexc(ACCENT if focused else DIM)}"
+    full = width >= LABEL + len(LEVELS)
+    keys = focused and full and width >= LABEL + len(LEVELS) + len(KEYS)
     out = Text()
     for i, (text, level) in enumerate(slider_parts(current, width)):
-        if i == 0:
+        if i == 0 and level is None and text.strip() in ("effort", "eff"):
+            text = KEYS_LABEL if focused and full and not keys else text   # the keys where the label was
             style = hexc(DIM)
         elif text in ("◂", "▸"):
             style = hexc(TEXT if level else DIM2)
@@ -636,8 +647,7 @@ def slider(current: str | None, focused: bool, width: int = LABEL + len(LEVELS))
         else:
             style = hexc(TEXT) if text.strip() else ""
         out += Text(text, style=style)
-    full = width >= LABEL + len(LEVELS)
-    return out + Text("  ←/→" if focused and full else "", style=hexc(DIM))
+    return out + Text(KEYS if keys else "", style=hexc(DIM))
 
 
 def slider_spans(current: str | None = None, width: int = LABEL + len(LEVELS)) -> list[tuple[int, int, str]]:
