@@ -347,7 +347,10 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
 
   Active items rank as above. Settled ones stay in the inbox, dimmed, after every active
   one, oldest first, so the latest to settle is lowest (a decision just seen, whose
-  `updated_at` is fresh, sinks rather than jumps up). A settled item with a word of the
+  `updated_at` is fresh, sinks rather than jumps up). `updated_at` is to the second, so
+  items an agent posts or settles together tie on it: `items.seq`, the order it was
+  written in (numbered by a trigger, so older code's writes are too), breaks the tie, and
+  no two items share a rank (#70). A settled item with a word of the
   person's queued or awaiting a reply is active, dismissed or not: it shows queued or
   processing. Delete
   closes a question or decision and dismisses a settled task or subagent

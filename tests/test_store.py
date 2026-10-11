@@ -1,5 +1,7 @@
 import contextlib
 import threading
+from datetime import datetime, timezone
+from unittest import mock
 
 import pytest
 
@@ -366,9 +368,9 @@ def test_an_older_database_gains_the_marks_on_open(db_file, sid, store):
         store.db.execute(f"DROP TRIGGER {trigger[0]}")
     store.db.execute("DROP TABLE marks")
     again = Store(db_file)
-    assert len(again.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'trigger'").fetchall()) == 6
+    assert len(again.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'trigger'").fetchall()) == len(TRIGGER_NAMES)
     store.post_item(sid, "task", "after")   # by the connection opened before: it sees the triggers too
-    assert marks(again) == {"items": 1, "messages": 0}
+    assert marks(again) == {"items": 2, "messages": 0}, "the insert, and its seq's own write"
 
 
 def test_an_older_versions_marks_triggers_are_replaced_and_a_repeat_open_changes_nothing(db_file, sid, store):
@@ -382,7 +384,7 @@ def test_an_older_versions_marks_triggers_are_replaced_and_a_repeat_open_changes
     assert store.db.execute("PRAGMA schema_version").fetchone()[0] == cookie
     before = marks(store)["items"]
     store.post_item(sid, "task", "after")
-    assert marks(store)["items"] == before + 1, "the item counted once, by the current trigger alone"
+    assert marks(store)["items"] == before + 2, "the insert and its seq's write, each counted once, by the current triggers alone"
 
 
 @pytest.mark.parametrize("name, kept, desc", [
@@ -420,3 +422,61 @@ def test_a_transaction_rolled_back_is_not_written(store, sid):
         db.execute("UPDATE sessions SET name = 'x'")
         raise RuntimeError
     assert store.written() == before and store.session(sid)["name"] == "demo"
+
+
+def seqs(store, sid) -> dict:
+    return {r["ref"]: r["seq"] for r in store.items(sid)}
+
+
+OLDER_INSERT = ("INSERT INTO items (session_id, ref, kind, title, status, created_at, updated_at) "
+                "VALUES (?, 'T9', 'task', 'old', 'todo', '2026-10-08T10:00:00+00:00', '2026-10-08T10:00:00+00:00')")
+
+
+@pytest.mark.parametrize("ref, write, renumbered, desc", [
+    ("T2", lambda s, sid: s.post_item(sid, "task", "two"), True, "an item posted"),
+    ("T1", lambda s, sid: s.update_item(sid, "T1", status="done"), True, "a status the session sets"),
+    ("T1", lambda s, sid: s.update_item(sid, "T1", title="again"), True, "any write of updated_at"),
+    ("Q1", lambda s, sid: s.reply(sid, "Q1", "x", status="answered"), True, "a question answered"),
+    ("D1", lambda s, sid: s.mark_seen(sid, "D1"), True, "a decision seen"),
+    ("D1", lambda s, sid: s.close_decision(sid, "D1"), True, "a decision closed"),
+    ("P1", lambda s, sid: s.answer_permission(sid, "P1", "allow"), True, "a permission answered"),
+    ("A1", lambda s, sid: s.track_agent(sid, "a1", "agent", "", datetime.now(timezone.utc), "done"), True,
+     "a subagent finished"),
+    ("T9", lambda s, sid: s.db.execute(OLDER_INSERT, (sid,)), True, "an item posted by older code, which knows nothing of seq"),
+    ("T1", lambda s, sid: s.db.execute("UPDATE items SET status = 'done', updated_at = '2026-10-08T10:00:00+00:00' "
+                                       "WHERE ref = 'T1'"), True, "a status set by older code"),
+    ("T1", lambda s, sid: s.dismiss(sid, "T1"), False, "dismissed: updated_at as it was, so it keeps its place"),
+    ("T1", lambda s, sid: s.set_answer(sid, "T1", "yes"), False, "an answer column: updated_at as it was"),
+])
+def test_seq_numbers_every_write_of_updated_at_and_only_those(store, sid, db_file, ref, write, renumbered, desc):
+    """#70: updated_at is to the second, so items written in one second tie on it; seq, the
+    order it was written in, breaks the tie (inbox_rank). By the triggers, so a write by
+    another connection, or by code that knows nothing of seq, is numbered too."""
+    for kind in ("task", "question", "decision", "permission", "agent"):
+        store.post_item(sid, kind, kind, **(DECIDED if kind == "decision" else {}))
+    before = seqs(store, sid)
+    write(Store(db_file), sid)
+    after = seqs(store, sid)
+    assert after[ref] == (max(before.values()) + 1 if renumbered else before[ref]), desc
+    assert {k: v for k, v in after.items() if k != ref} == {k: v for k, v in before.items() if k != ref}, \
+        f"{desc}: the rest as they were"
+
+
+def test_an_older_database_numbers_its_items_in_the_order_they_showed(db_file, store, sid):
+    """Opening a database from before seq numbers its items by updated_at, ties by row, as
+    store.items ordered them: the inbox shows as it did, and from then on nothing ties."""
+    from claude_wheelhouse.store import inbox_rank
+    for at, status in (("02", "running"), ("01", "running"), ("02", "done"), ("01", "done"), ("02", "running"),
+                       ("03", "done")):   # out of order, and ties
+        with mock.patch("claude_wheelhouse.store.now", lambda: f"2026-10-08T10:00:{at}+00:00"):
+            store.post_item(sid, "task", "t", status=status)
+    for name in ("items_seq_insert_v1", "items_seq_update_v1"):
+        store.db.execute(f"DROP TRIGGER {name}")
+    store.db.execute("DROP INDEX items_seq")
+    store.db.execute("ALTER TABLE items DROP COLUMN seq")
+    rows = store.db.execute("SELECT * FROM items ORDER BY id").fetchall()
+    shown = [r["ref"] for r in sorted(rows, key=lambda r: inbox_rank({**dict(r), "seq": 0}))]   # ties: by row
+    store = Store(db_file)
+    assert [r["ref"] for r in store.items(sid)] == shown, "the inbox as it showed"
+    assert sorted(seqs(store, sid).values()) == list(range(1, 7)), "numbered once each"
+    assert store.item(sid, store.post_item(sid, "task", "after"))["seq"] == 7, "and on from there"

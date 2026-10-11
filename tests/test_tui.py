@@ -2712,64 +2712,96 @@ async def test_a_lapse_as_an_arrow_acts_marks_nothing_new(store, sid, clock, mon
         assert store.item(sid, landed)["status"] == "unseen", "the row Down landed on, seen at once"
 
 
+# Each case's items, posted in one second, so their stamps tie: refs number from 1 per kind
+TIE_POSTS = {
+    "Q1 open, T1-T3 running": [("question", "open")] + [("task", "running")] * 3,
+    "D1-D3 unseen": [("decision", None)] * 3,
+    "T1-T3 done": [("task", "done")] * 3,
+    "Q1-Q3 open": [("question", "open")] * 3,
+    "Q1-Q3 answered": [("question", "answered")] * 3,
+}
+TIE_SECOND = "2026-10-08T10:00:05+00:00"   # every write a case makes, after its posts, lands in this one
+
+
 @pytest.mark.anyio
-@pytest.mark.parametrize("order, desc", [
-    ("lapse-then-key", "seen by the dwell, then Down: held in its place, and Down goes to the row below"),
-    ("key-then-lapse", "Down typed as the dwell lapses: Down goes to the row below"),
-    ("settled-tie", "T1 then T2 done in one second, unselected: the later to settle sinks lowest"),
+@pytest.mark.parametrize("typing", ["slow", "raw"])
+@pytest.mark.parametrize("posts, selected, acts, held, leave, after, lands, desc", [
+    ("Q1 open, T1-T3 running", "T1", "T1 done, T2 done", "Q1 T1 T3 T2", "up", "Q1 T3 T1 T2", "Q1",
+     "review 50: the selected settles first, the other next: the later, T2, sinks lowest"),
+    ("Q1 open, T1-T3 running", "T2", "T1 done, T2 done", "Q1 T2 T3 T1", "up", "Q1 T3 T1 T2", "Q1",
+     "review 50: the other settles first, the selected next"),
+    ("Q1 open, T1-T3 running", "T1", "T2 done, T1 done", "Q1 T1 T3 T2", "up", "Q1 T3 T2 T1", "Q1",
+     "review 50: the other first, the selected next"),
+    ("Q1 open, T1-T3 running", "T2", "T2 done, T1 done", "Q1 T2 T3 T1", "up", "Q1 T3 T2 T1", "Q1",
+     "review 50: the selected first, the other next"),
+    ("Q1 open, T1-T3 running", "Q1", "T1 done, T2 done", "Q1 T3 T1 T2", "", "Q1 T3 T1 T2", "Q1",
+     "review 49: two settle in one second, unselected, a refresh apart: the later sinks lowest"),
+    ("Q1 open, T1-T3 running", "Q1", "T2+T1 done", "Q1 T3 T2 T1", "", "Q1 T3 T2 T1", "Q1",
+     "review 50: two settle between refreshes, against the store's row order: still in the order they settled"),
+    ("D1-D3 unseen", "D2", "lapse", "D1 D2 D3", "down", "D1 D3 D2", "D3",
+     "review 47: seen by the dwell while selected: held, then Down goes to the row below"),
+    ("D1-D3 unseen", "D2", "", "D1 D2 D3", "down+lapse", "D1 D3 D2", "D3",
+     "review 47: Down typed as the dwell lapses: Down goes to the row below"),
+    ("T1-T3 done", "T2", "f delete ctrl+r", "T1 T2 T3", "up", "T1 T2 T3", "T1",
+     "Delete then Ctrl+R in one second: a task dismissed and brought back returns to where it settled"),
+    ("Q1-Q3 answered", "Q2", "f delete ctrl+r", "Q1 Q3 Q2", "up", "Q1 Q3 Q2", "Q3",
+     "Delete then Ctrl+R in one second: a question closed and reopened, answered again, settles last"),
+    ("Q1-Q3 open", "Q2", "Q2 answered, Q3 answered", "Q1 Q2 Q3", "up", "Q1 Q2 Q3", "Q1",
+     "a question answered while selected, then another: held, then the first answered stays above"),
+    ("Q1-Q3 open", "Q2", "Q3 answered, Q2 answered", "Q1 Q2 Q3", "up", "Q1 Q3 Q2", "Q1",
+     "another answered, then the selected: held, then it sinks below the first"),
 ])
-async def test_a_decision_seen_while_selected_keeps_its_place_among_ties(store, sid, clock, order, desc):
-    """Review 47: now() stamps whole seconds, so decisions an agent posts together tie. One
-    seen by the dwell while selected is pinned at the rank it was shown with (ranked), and ties
-    with its neighbours there: it keeps its place among them as shown, not the store's order,
-    which its new status changed. It moved below them, and the next Down did nothing. Review 49:
-    only an unchanged rank keeps its shown place, so of two settled in one second the later
-    still sinks lowest (inbox_rank)."""
-    if order == "settled-tie":
-        with one_second():
-            for t in ("A", "B", "C"):
-                store.post_item(sid, "task", t, status="running")
-            store.post_item(sid, "question", "Q")
-        app = WheelhouseApp(store)
-        async with app.run_test(size=(160, 40)) as pilot:
-            await pilot.pause()
-            app.items_table.focus()
-            app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|Q1"))
-            await pilot.pause()
-            with mock.patch("claude_wheelhouse.store.now", lambda: "2026-10-08T10:00:05+00:00"):
-                for ref in ("T1", "T2"):
-                    store.update_item(sid, ref, status="done")
-                    app.refresh_data()
-                    await clock.finish_moves(pilot, app)
-            assert [k.split("|")[1] for k in app.items_table.keys()] == ["Q1", "T3", "T1", "T2"], desc
-            assert app.items_table.cursor_key() == f"{sid}|Q1", desc
-        return
+async def test_items_that_tie_to_the_second_keep_one_order(store, sid, clock, posts, selected, acts, held, leave,
+                                                           after, lands, desc, typing):
+    """#70: now() stamps whole seconds, so items an agent posts or settles together tie on
+    updated_at. Whatever the order of the writes and refreshes, and typed slowly or as a raw
+    burst: the selected item stays put under the cursor (held) and moves once the selection
+    leaves it (after); the latest to settle sinks lowest; Delete and Ctrl+R move it at once
+    (D33); and one session is current. Acts and leave are steps: "T1 done" or "Q2 answered" a
+    write (two joined by + share one refresh), "lapse" the dwell lapsing, "down+lapse" Down
+    typed as it lapses, else keys."""
     with one_second():
-        for t in ("D", "E", "F"):
-            store.post_item(sid, "decision", t, **DECIDED)
+        for kind, status in TIE_POSTS[posts]:
+            store.post_item(sid, kind, kind, status=status, **(DECIDED if kind == "decision" else {}))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
         table = app.items_table
-        table.focus()
-        table.move_cursor(row=1)   # the middle row
+        order = lambda: " ".join(k.split("|")[1] for k in table.keys())
+
+        async def steps(text):
+            for step in filter(None, text.split(", ")):
+                if step.endswith((" done", " answered")):
+                    refs, what = step.split(" ")
+                    for ref in refs.split("+"):
+                        if what == "done":
+                            store.update_item(sid, ref, status="done")
+                        else:
+                            store.reply(sid, ref, "yes", status="answered")
+                    app.refresh_data()
+                elif step == "lapse":
+                    clock.advance(REST)
+                    await pilot.pause()
+                    clock.tick(app)
+                elif step == "down+lapse":   # the lapse fires before Down lands, either way
+                    raw_keys(app, "down")
+                    clock.advance(REST)
+                elif typing == "raw":
+                    raw_keys(app, *step.split(" "))
+                else:
+                    for key in step.split(" "):
+                        await pilot.press(key)
+                for _ in range(4):
+                    await pilot.pause()
+                await clock.finish_moves(pilot, app)
         await pilot.pause()
-        before = table.keys()
-        middle, below = before[1], before[2]
-        if order == "lapse-then-key":
-            clock.advance(REST)
-            await pilot.pause()
-            clock.tick(app)
-            await pilot.pause()
-            assert store.item(*middle.split("|"))["status"] == "seen", f"{desc}: seen by the dwell"
-            assert table.keys() == before and table.cursor_key() == middle, f"{desc}: held, {table.keys()}"
-            raw_keys(app, "down")
-        else:
-            raw_keys(app, "down")
-            clock.advance(REST)
-        for _ in range(4):
-            await pilot.pause()
-        assert "|".join(app.selected) == below, f"{desc}: Down landed on {app.selected}, not {below}"
+        table.focus()
+        table.move_cursor(row=table.get_row_index(f"{sid}|{selected}"))
+        await pilot.pause()
+        with mock.patch("claude_wheelhouse.store.now", lambda: TIE_SECOND):
+            await steps(acts)
+            assert (order(), table.cursor_key()) == (held, f"{sid}|{selected}"), f"{desc}: held"
+            await steps(leave)
+            assert (order(), table.cursor_key()) == (after, f"{sid}|{lands}"), f"{desc}: after"
         assert_one_current(app, desc)
 
 
@@ -2967,10 +2999,10 @@ async def test_ctrl_r_reopens_only_from_the_item_list(tmp_path, follow, focus, a
     (("question", "task"), "delete", "closed Q1; dismissed T1: F shows finished items",
      "Delete on mixed marks says which it closed and which it dismissed"),
     (("task", "agent"), "delete", "dismissed T1, A1: F shows finished items", "all dismissed: said so"),
-    (("question", "task"), "ctrl+r", "reopened Q1, T1", "Ctrl+R brings either back"),
+    (("question", "task"), "ctrl+r", "reopened T1, Q1", "Ctrl+R brings either back"),
 ])
 async def test_the_word_after_acting_on_marks_names_each_act(store, sid, kinds, key, said, desc):
-    with one_second():   # and closed in it below, so the finished keep the order they're named in
+    with one_second():   # so the settled keep the order they're named in
         refs = [store.post_item(sid, k, k, status={"question": "open", "task": "done", "agent": "done"}[k])
                 for k in kinds]
     app = WheelhouseApp(store)
@@ -2979,11 +3011,10 @@ async def test_the_word_after_acting_on_marks_names_each_act(store, sid, kinds, 
         items = app.items_table
         items.focus()
         if key == "ctrl+r":   # finished first, shown with F
-            # closing stamps Q1 and dismissing leaves T1's stamp: a second passing between post
-            # and close would put T1, the older, first among the finished, and in the notice
-            with one_second():
-                for k, r in zip(kinds, refs):
-                    app.close(store.item(sid, r), True)
+            # closing stamps Q1 and dismissing leaves T1's stamp: T1, the older, is first among
+            # the finished, and in the notice, in the same second too (seq)
+            for k, r in zip(kinds, refs):
+                app.close(store.item(sid, r), True)
             await pilot.press("f")
         await pilot.pause()
         items.set_marks({f"{sid}|{r}" for r in refs})
