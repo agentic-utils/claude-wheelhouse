@@ -1422,11 +1422,14 @@ MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Wi
          "kept for next time, and a double-click on a line puts its default back.")
 # the SDK-only buttons' keys, and those buttons, which the ? overlay leaves out unless SDK
 # mode is on (features.py, EXPERIMENTAL: the author's alone until Anthropic's terms are
-# confirmed). Out of it, a key of one that doesn't show does nothing, and says nothing
+# confirmed) or the screen shows them (a host's session, which runs on with it off). Out of
+# it, a key of one that doesn't show says it doesn't apply, as any other button's does
 SDK_BUTTONS = ("interrupt", "compact", "shell", "model", "allow", "always", "deny")
 SDK_WHOSE = (", Model on one run in the wheelhouse; then Mode, Send on one that isn't dead, "
              "and on one run in the wheelhouse Interrupt, Compact and Shell. Its effort is the slider at the top of "
              "the stats pane.")
+HOSTED_WHOSE = ("; then Mode, Send on one that isn't dead, and on one run in the wheelhouse Interrupt, Compact "
+                "and Shell.")   # SDK mode off, with a host's session in context (SDK_WHOSE without Model or the slider)
 WHOSE = ("The buttons under the session list act on the session highlighted there, and only those that "
          "apply show: Rename, Relaunch and Park on a running one, Restore on a dead one, End on either, "
          "Unpark on a parked one{sdk} Hover over one for what it does, and its key is in brackets below. New, Adopt and Restore all are keys in the footer. An item "
@@ -1434,12 +1437,19 @@ WHOSE = ("The buttons under the session list act on the session highlighted ther
          "act on the same session: highlighting an item highlights its session there.")
 
 
-def keys_help(sdk: bool = False) -> str:
+def showing(button) -> bool:
+    """Whether a button shows: it, and the bar it sits in."""
+    return bool(button and button.display and button.parent.display)
+
+
+def keys_help(sdk: bool = False, shown=()) -> str:
     """The ? overlay: every key, from the bindings themselves, and every button. Those of SDK
-    mode (SDK_BUTTONS, the effort slider) only with it on (sdk)."""
+    mode (SDK_BUTTONS, the effort slider) only with it on (sdk), or those of SDK_BUTTONS the
+    screen shows (shown: a host's session's, which run on with it off)."""
     everywhere = [b for b in WheelhouseApp.BINDINGS if b not in BUTTON_KEYS]
-    sdk_keys = {f"press('{b}')" for b in SDK_BUTTONS}
-    button_keys = [b for b in BUTTON_KEYS if sdk or b.action not in sdk_keys]
+    offered = set(SDK_BUTTONS) if sdk else set(shown)
+    hidden_keys = {f"press('{b}')" for b in SDK_BUTTONS if b not in offered}
+    button_keys = [b for b in BUTTON_KEYS if b.action not in hidden_keys]
     sections = [("Everywhere", everywhere), ("Outside a text box", button_keys),
                 ("Moving between panes", TAB_KEYS), ("Either list", LIST_KEYS),
                 ("The session list", SessionList.BINDINGS),
@@ -1458,8 +1468,9 @@ def keys_help(sdk: bool = False) -> str:
                 keys.append(key_name(b.key))
         # dict.fromkeys: one line for a key bound twice, as F is (its footer label changes)
         out += dict.fromkeys(f"- **{' or '.join(keys)}**: {DESCRIBE[action]}" for action, keys in actions.items())
-    whose = WHOSE.format(sdk=SDK_WHOSE if sdk else "; then Mode, and Send on one that isn't dead.")
-    buttons = [text for id_, text in BUTTONS.items() if sdk or id_ not in SDK_BUTTONS]
+    whose = WHOSE.format(sdk=SDK_WHOSE if sdk else HOSTED_WHOSE if offered & {"interrupt", "compact", "shell"}
+                         else "; then Mode, and Send on one that isn't dead.")
+    buttons = [text for id_, text in BUTTONS.items() if id_ not in SDK_BUTTONS or id_ in offered]
     out += ["## Tab order", TABS.format(slider=SLIDER_TAB if sdk else ""), "## Mouse", MOUSE, "## Buttons", whose,
             *[f"- {text}" for text in buttons],
             "## Sending", SEND_RULES,
@@ -1468,12 +1479,17 @@ def keys_help(sdk: bool = False) -> str:
 
 
 class KeysHelp(Dialog):
-    """? : every key and button, and how sending works."""
+    """? : every key and button, and how sending works. shown: the SDK_BUTTONS the screen
+    behind it shows (keys_help)."""
     BINDINGS = [Binding("escape,question_mark,q", "answer", show=False)]
+
+    def __init__(self, shown=()):
+        super().__init__()
+        self.shown = shown
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="keys-dialog"):
-            yield Static(RichMarkdown(keys_help(self.app.client.sdk)), id="keys")
+            yield Static(RichMarkdown(keys_help(self.app.client.sdk, self.shown)), id="keys")
 
 
 
@@ -2684,7 +2700,8 @@ class WheelhouseApp(App):
 
     def action_help(self) -> None:
         if not isinstance(self.focused, (TextArea, Input)):
-            self.push_screen(KeysHelp())
+            self.push_screen(KeysHelp([b for b in SDK_BUTTONS
+                                       if any(showing(x) for x in self.screen.query(f"#{b}"))]))
 
     def offer_answered(self, take: bool) -> None:
         """The first-run offer, answered either way: it never comes back."""
@@ -2929,15 +2946,13 @@ class WheelhouseApp(App):
         if isinstance(self.focused, (TextArea, Input)) or self.composing()[0] is None:
             return
         button = next(iter(self.screen.query(f"#{button_id}")), None)
-        if not self.client.sdk and button_id in SDK_BUTTONS and not (button and button.display and button.parent.display):
-            return   # out of SDK mode its buttons go unmentioned (a host's session still shows its own)
         if button is None:   # not on this screen (Model, in a full-screen item's bar): said all the same
             name = next((b.description for b in BUTTON_KEYS if b.action == f"press('{button_id}')"),
                         button_id.capitalize())
             where = ": it's with the session list's buttons" if button_id in dict(LIFECYCLE).values() else ""
             self.notify(f"{name} doesn't apply here{where}", severity="warning")
             return
-        if not (button.display and button.parent.display):
+        if not showing(button):
             whose = "the item in context" if button_id in ("allow", "always", "deny") else "this session"
             self.notify(f"{button.label} doesn't apply to {whose}", severity="warning")
         elif button.disabled:

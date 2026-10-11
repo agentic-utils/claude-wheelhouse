@@ -4553,9 +4553,9 @@ async def test_the_button_keys(store, keyed, key, button, where, pressed):
 @pytest.mark.parametrize("on, key, setup, said, desc", [
     (True, "i", "tab", "Interrupt doesn't apply to this session", "Interrupt on a tab session"),
     (True, "1", "question", "Allow doesn't apply to the item in context", "Allow on a question"),
-    (False, "i", "tab", None, "SDK mode off: Interrupt on a tab session goes unmentioned"),
-    (False, "1", "question", None, "and so does Allow on a question"),
-    (False, "m", "tab", None, "and Model"),
+    (False, "i", "tab", "Interrupt doesn't apply to this session", "SDK mode off: Interrupt on a tab session says so too"),
+    (False, "1", "question", "Allow doesn't apply to the item in context", "and so does Allow on a question"),
+    (False, "m", "tab", "Model doesn't apply to this session", "and Model"),
     (False, "A", "nothing queued", "Send all (0): nothing to do", "Send all with nothing queued"),
     (False, "r", "dead", "Rename doesn't apply to this session", "the session list's R on a dead session"),
 ])
@@ -4575,6 +4575,30 @@ async def test_a_button_key_that_does_not_apply_says_so(store, tmp_path, monkeyp
         await pilot.press(key)
         await pilot.pause()
         assert (got, notes) == ([], [said] if said else []), desc
+        assert not any("SDK" in n or "wheelhouse" in n for n in notes), f"{desc}: SDK mode goes unmentioned"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("runner_, shown, desc", [
+    ("sdk", ["interrupt", "compact", "shell"], "a host's session, SDK mode off: the buttons it shows"),
+    ("tab", [], "a tab's: none of SDK mode's"),
+])
+async def test_the_overlay_lists_the_buttons_the_screen_shows(store, tmp_path, monkeypatch, runner_, shown, desc):
+    from claude_wheelhouse.tui import KeysHelp, keys_help
+    sid, app = await hosted_app(store, tmp_path, monkeypatch, runner_)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)
+        await pilot.pause()
+        app.session_list.focus()
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert isinstance(app.screen, KeysHelp) and app.screen.shown == shown, desc
+    text = keys_help(False, shown)
+    for word in ("Interrupt", "Compact", "Shell"):
+        assert (word in text) is bool(shown), f"{desc}: {word}"
+    for word in ("Model", "Allow", "effort"):
+        assert word not in text, f"{desc}: {word} isn't showing"
 
 
 def subagent_file(tmp_path, sid, aid, n):
@@ -5002,6 +5026,7 @@ async def test_a_shell_tabs_model_shows_while_it_runs(store, tmp_path, monkeypat
         assert "demo · Haiku 5.5 · high" in await shown_stats(app, pilot)
 
 
+@pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
 async def test_model_in_a_full_screen_item_says_so(store, tmp_path, monkeypatch):
     sid, app = await hosted_app(store, tmp_path, monkeypatch)
