@@ -33,7 +33,7 @@ def setup_items(store, sid):
     store.post_item(sid, "task", "Draft the welcome message", status="running")
     q1 = store.post_item(sid, "question", "Tone?")
     q2 = store.post_item(sid, "question", "Sign-off?")
-    store.post_item(sid, "decision", "British English", alternative="American", why="house style", reverse="say so")
+    store.post_item(sid, "decision", "British English", why="over American: house style; undo: say so")
     return q1, q2
 
 

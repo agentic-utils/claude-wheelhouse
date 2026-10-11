@@ -19,7 +19,7 @@ def test_refuses_windows_mount(monkeypatch):
         Store()
 
 
-DECIDED = {"alternative": "Postgres", "why": "no server to run", "reverse": "swap the DSN"}
+DECIDED = {"why": "over Postgres: no server to run; undo: swap the DSN"}
 
 
 @pytest.mark.parametrize("posts, expected, desc", [
@@ -46,8 +46,9 @@ def test_post_item_refs_and_statuses(store, sid, posts, expected, desc):
      "closing is the person's call"),
     (lambda s, sid: s.reply(sid, s.post_item(sid, "task", "x"), "ok", "answered"), ValueError,
      "a question status on a task"),
-    (lambda s, sid: s.post_item(sid, "decision", "used SQLite", alternative="Postgres", why="local"),
-     ValueError, "a decision needs how to reverse it"),
+    (lambda s, sid: s.post_item(sid, "decision", "used SQLite"), ValueError, "a decision needs its why line"),
+    (lambda s, sid: s.post_item(sid, "decision", "used SQLite", why="local", reverse="migrate"), ValueError,
+     "the three fields are one line now: reverse isn't one"),
     (lambda s, sid: s.post_item(sid, "decision", "x", status="seen", **DECIDED), ValueError,
      "a decision's status is the person's"),
     (lambda s, sid: s.post_item(sid, "task", "x", why="because"), ValueError, "only a decision takes why"),
@@ -199,7 +200,7 @@ def test_the_session_declares_where_a_question_stands(store, sid, steps, status,
     ("agent", "running", ["send"], True, "a subagent the person spoke on last"),
 ])
 def test_any_unfinished_item_can_be_processing(store, sid, kind, status, steps, processing, desc):
-    extra = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"} if kind == "decision" else {}
+    extra = {"why": "over Postgres: no server; undo: swap the DSN"} if kind == "decision" else {}
     ref = store.post_item(sid, kind, "x", status=status, **extra)
     act = {"send": lambda: store.send(sid, "and?", ref), "queue": lambda: store.queue(sid, "more", ref),
            "reply": lambda: store.reply(sid, ref, "done that")}
@@ -264,8 +265,7 @@ def test_decision_records_its_fields_and_stays_until_closed(store, sid):
     d = store.post_item(sid, "decision", "cache in SQLite", "Picked for the prototype.", **DECIDED)
     item = store.item(sid, d)
     assert (d, item["status"]) == ("D1", "unseen")
-    assert item["body"] == ("Picked for the prototype.\n\n**Alternative:** Postgres\n\n"
-                            "**Why:** no server to run\n\n**To reverse:** swap the DSN")
+    assert item["body"] == "Picked for the prototype.\n\n**Why:** over Postgres: no server to run; undo: swap the DSN"
     assert store.sessions()[0]["unseen_decisions"] == 1
     assert store.sessions()[0]["open_questions"] == 0, "a decision doesn't ask for attention"
     assert store.mark_seen(sid, d) and not store.mark_seen(sid, d), "seen once"

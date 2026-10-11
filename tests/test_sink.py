@@ -7,7 +7,7 @@ from claude_wheelhouse.store import Store, standing
 from claude_wheelhouse.tui import BLANK, Sink, WheelhouseApp
 from test_tui import assert_one_current, dwell, one_second, raw_keys
 
-DECIDED = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"}
+DECIDED = {"why": "over Postgres: no server; undo: swap the DSN"}
 
 
 @pytest.fixture

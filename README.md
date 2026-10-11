@@ -49,9 +49,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   following it at the end as it works unless you've scrolled up to read. `Enter` shows
   the same full screen. If its transcript can't be found, the pane says so.
 - **Decisions.** If your own instructions let a session decide some things without asking
-  you, it reports each one as a decision (`D1`): what it decided, the alternative, why, and
-  how to reverse it. Decisions block nothing. Each session counts its unseen ones (the `D`
-  column); one becomes seen once it has been in sight for a second without moving on
+  you, it reports each one as a decision (`D1`): what it decided, and one short line with
+  the alternative, why, and how to reverse it. Decisions block nothing. Each session
+  counts its unseen ones (the `D` column); one becomes seen once it has been in sight for a second without moving on
   (highlighted, or open full screen), whether you highlighted it or the wheelhouse did (at
   startup, or once an item goes), so arrowing past it leaves it unseen, as does a second
   spent in another window, where your terminal reports focus. Answering it

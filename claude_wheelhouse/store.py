@@ -41,8 +41,9 @@ SETTLED = {"task": {"done", "dropped"}, "question": {"answered"}, "decision": {"
 # kinds whose settled items the person dismisses (Delete), recorded in items.dismissed; a
 # question or a decision is closed instead
 DISMISSABLE = ("task", "agent")
-# what a decision records besides its title (what was decided): post_item's keyword name, label
-DECISION_FIELDS = (("alternative", "Alternative"), ("why", "Why"), ("reverse", "To reverse"))
+# what a decision records besides its title (what was decided): post_item's keyword name, label.
+# One short line: the option passed over, the reason and how to undo it (#16: once three fields)
+DECISION_FIELDS = (("why", "Why"),)
 # Bump when a session still running older code (its MCP server and monitor keep the code
 # they started with) would mishandle the store or miss new behaviour: the wheelhouse then
 # shows it as needing a relaunch. 2: queued answers (draft messages) that older code would deliver.
@@ -50,8 +51,8 @@ DECISION_FIELDS = (("alternative", "Alternative"), ("why", "Why"), ("reverse", "
 # 6: decisions listed in a report are posted as items. 7: the wheelhouse tracks subagents
 # itself (subagents.py), so the protocol no longer asks a session to post them. 8: a hosted
 # session's host posts its chat as the reply on the ref answered, so the protocol asks it
-# for the status alone.
-PROTOCOL_VERSION = 8
+# for the status alone. 9: a decision's alternative, why and reverse are one short line, `why`.
+PROTOCOL_VERSION = 9
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.
@@ -589,8 +590,9 @@ class Store:
 
     def post_item(self, sid: str, kind: str, title: str, body: str = "", status: str | None = None,
                   **decision: str) -> str:
-        """A decision also takes alternative, why and reverse (DECISION_FIELDS), all required,
-        which join its body; its status is the person's (unseen until they view it)."""
+        """A decision also takes why (DECISION_FIELDS), required: one short line with the
+        option passed over, the reason and how to undo it, which joins its body; its status
+        is the person's (unseen until they view it)."""
         if kind not in KINDS:
             raise ValueError(f"kind must be one of {sorted(KINDS)}")
         if kind == "decision":
@@ -998,7 +1000,8 @@ def decision_body(body: str, status, fields: dict) -> str:
     missing = [k for k, _ in DECISION_FIELDS if not (fields.get(k) or "").strip()]
     if missing:
         raise ValueError(f"a decision needs {', '.join(missing)}: what you decided goes in title "
-                         "(and body), plus the alternative, why, and how to reverse it")
+                         "(and body), and why is one short line with the option you passed over, your "
+                         "reason and how to undo it")
     parts = [body.strip()] if body.strip() else []
     parts += [f"**{label}:** {fields[k].strip()}" for k, label in DECISION_FIELDS]
     return "\n\n".join(parts)
