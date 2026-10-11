@@ -27,7 +27,9 @@ by users other than the author until we can confirm Anthropic T&Cs".
   the daemon refuses one (403). Whatever the mode, the daemon refuses another machine
   anything that would open a tab, where nobody there sees it (403, `Daemon.no_remote_tab`):
   New session, Restore, Restore all, Relaunch of a dead session, Adopt, the tutorial and
-  Shell. Out of SDK mode every session starts in a tab, so another machine starts none. Restore and
+  Shell. Out of SDK mode every session starts in a tab, so another machine starts none.
+  Restore all brings back the rest and names those held back; a Relaunch whose host has
+  gone meanwhile, and would come back as a tab, says to relaunch it from the daemon's machine. Restore and
   Adopt bring any session back the way new sessions run now (Q27, option A), so as a tab;
   the tutorial is always a tab. The `?` overlay, README and
   `claude-wheelhouse protocol` leave SDK mode out, and the tutorial runs in a tab.
