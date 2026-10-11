@@ -733,7 +733,7 @@ class Daemon:
                 "drafts": [{"id": m["id"], "session_id": m["session_id"], "item_ref": m["item_ref"]}
                            for m in self.store.drafts()],
                 "tutorial": {"sid": sid, "steps": steps, "offer": tutorial.should_offer(self.store)},
-                "sdk": self.hub.sdk}
+                "sdk": self.hub.sdk, "usage_mode": self.hub.usage_probe.mode}
 
     def usage(self, request: Request) -> dict:
         """The account's plan usage, as the hub last read it: {kind: [percent, resets at]}

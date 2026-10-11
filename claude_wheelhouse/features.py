@@ -88,16 +88,22 @@ def usage_mode() -> str:
     """How plan usage is read: --usage-mode, else usage-mode in the starting directory's
     .env, else the user's, else oneshot. A value that is neither mode is said once, on
     stderr, and taken as oneshot."""
+    return usage_mode_given() or USAGE_MODES[0]
+
+
+def usage_mode_given() -> str | None:
+    """The usage mode the person chose, by --usage-mode or a .env; None if neither chose
+    one, or the .env's value is neither mode (said once, on stderr)."""
     given, where = _usage_mode, USAGE_FLAG
     if given is None:
         given, where = next(((env[name], f"{name} in {path}") for path in env_files()
                              for env in [read_env(path)] for name in USAGE_KEYS if name in env), (None, None))
     if given is None:
-        return USAGE_MODES[0]
+        return None
     if given.lower() in USAGE_MODES:
         return given.lower()
     said = f"claude-wheelhouse: {where} is {given!r}, not oneshot or persistent: plan usage runs oneshot"
     if said not in _warned:
         _warned.add(said)
         print(said, file=sys.stderr, flush=True)
-    return USAGE_MODES[0]
+    return None

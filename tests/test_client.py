@@ -302,6 +302,45 @@ def test_an_app_in_sdk_mode_joining_a_tab_mode_daemon_says_so_once(store, served
         c.disconnect()
 
 
+@pytest.mark.parametrize("app, daemon, said, desc", [
+    ("persistent", "oneshot", True, "chosen, but the daemon joined reads oneshot: said once"),
+    ("oneshot", "persistent", True, "oneshot chosen, the daemon persistent: said too"),
+    ("persistent", "persistent", False, "the daemon reads it so too"),
+    (None, "persistent", False, "none chosen: the default isn't a choice to warn of"),
+])
+def test_an_app_choosing_a_usage_mode_the_daemon_doesnt_run_says_so_once(store, served, monkeypatch, app, daemon,
+                                                                         said, desc):
+    monkeypatch.setattr(features, "_usage_mode", daemon)
+    d = served(store.path)
+    monkeypatch.setattr(features, "_usage_mode", app)
+    c = d.client(synchronous=True, before_fetch=d.tick)
+    heard = []
+    c.listen(lambda e: heard.append(e.text))
+    try:
+        c.refresh()
+        c.forced = True   # fetched again: still said only once
+        c.refresh()
+        expected = client_mod.USAGE_MODE_DAEMON.format(mode=daemon)
+        assert heard.count(expected) == (1 if said else 0), f"{desc}: {heard}"
+    finally:
+        c.disconnect()
+
+
+def test_a_connect_client_never_says_the_daemons_usage_mode(store, served, monkeypatch):
+    """Another machine's daemon is not this one's to restart."""
+    d = served(store.path)
+    monkeypatch.setattr(features, "_usage_mode", "persistent")
+    c = d.client(synchronous=True, before_fetch=d.tick)
+    c.elsewhere = True
+    heard = []
+    c.listen(lambda e: heard.append(e.text))
+    try:
+        c.refresh()
+        assert not [h for h in heard if "plan usage" in h], heard
+    finally:
+        c.disconnect()
+
+
 def test_the_stream_and_fetching_stop_with_the_client(store, served):
     d = served(store.path)
     c = d.client()

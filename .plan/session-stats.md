@@ -24,8 +24,11 @@ highlighted item.
   (Doug's Q69: the default). Its "persistent" mode (`--usage-mode persistent`, or
   `usage-mode=persistent` in either `.env` that `features.py` reads; the flag wins, a bad
   value is said once and taken as oneshot, and `connect.start` passes the mode to the
-  daemon) keeps one `claude -p --input-format stream-json` running and sends it `/usage` instead: 2 to 3 s a call, but about 230 MB
-  resident and 2% of a core at idle, about twice the CPU overall. Either way it reads
+  daemon) keeps one `claude -p --input-format stream-json` running and sends it `/usage` instead: 2 to 3 s a call, but averaged
+  over the 5 minutes about 3% of a core and 250 MB resident, against oneshot's 1.6% and
+  nothing resident. A daemon already running keeps the mode it started with: an app that
+  chose another (flag or `.env`, not the default) says so once, with `daemon --stop` as
+  the way to change it. Either way it reads
   the answer's "Current session" and "Current week" lines. Their reset times are local
   wall-clock to the minute with a zone and no year, converted to UTC with the year
   nearest the reading. In SDK mode only (experimental, `features.py`), an SDK session's
