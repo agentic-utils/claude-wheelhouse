@@ -59,7 +59,7 @@ async def test_answer_reaches_the_session(store, sid, live):
 @pytest.mark.anyio
 async def test_subagents_sit_under_their_session(store, sid, tmp_path):
     other = store.create_session(str(tmp_path), name="other")
-    with one_second():   # A1 before A2 in demo's group
+    with one_second():   # active, so the last posted first: A2 before A1 in demo's group
         store.post_item(sid, "agent", "fork one", status="running")
         store.post_item(other, "agent", "fork two", status="running")
         store.post_item(sid, "agent", "fork three", status="running")
@@ -70,7 +70,7 @@ async def test_subagents_sit_under_their_session(store, sid, tmp_path):
         items = app.query_one("#items", DataTable)
         rows = [[str(c) for c in items.get_row_at(i)][:2] for i in range(items.row_count)]
     assert rows[0] == ["demo", q], "tasks and questions first, in inbox order"
-    assert [r[1] for r in rows[1:]] == ["└ A1", "└ A2", "└ A1"]
+    assert [r[1] for r in rows[1:]] == ["└ A2", "└ A1", "└ A1"]
     assert [r[0] for r in rows[1:]] == ["demo", "", "other"], "each session's agents grouped under its name"
 
 
@@ -1022,9 +1022,9 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
     perm = store.post_item(sid, "permission", "Bash: rm -rf build")
     theirs = store.post_item(other, "question", "B's")
     mine = store.post_item(sid, "question", "A's")
-    for ref, at in ((perm, "10:03"), (theirs, "10:02"), (mine, "10:01")):   # in this order, newest first
-        store.db.execute("UPDATE items SET updated_at = ? WHERE ref = ? AND session_id IN (?, ?)",
-                         (f"2026-10-09T{at}:00+00:00", ref, sid, other))
+    for s, ref, at in ((sid, perm, "10:03"), (other, theirs, "10:02"), (sid, mine, "10:01")):   # newest first
+        store.db.execute("UPDATE items SET updated_at = ? WHERE ref = ? AND session_id = ?",
+                         (f"2026-10-09T{at}:00+00:00", ref, s))
     store.queue(sid, "A's answer", mine)
     store.queue(other, "B's draft")
     store.queue(other, "B's answer", theirs)
@@ -1114,9 +1114,10 @@ async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp
     rested on it (the dwell)."""
     extra = {"alternative": "x", "why": "y", "reverse": "z"}
     other = store.create_session(str(tmp_path), name="other")
-    for s in (sid, other):
-        for title in ("one", "two"):
-            store.post_item(s, "decision", title, **extra)
+    with one_second():   # the last posted first: one above two
+        for s in (sid, other):
+            for title in ("two", "one"):
+                store.post_item(s, "decision", title, **extra)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -1145,9 +1146,10 @@ async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp
 
 
 def one_second():
-    """Items posted inside it share one timestamp, so they keep their order in the inbox: now()
-    stamps whole seconds, and posts that straddle one would put the later ones above the earlier
-    in the newest-first list, under a click or cursor row a test picks by position."""
+    """Items posted inside it share one timestamp, so their order in the inbox is fixed: now()
+    stamps whole seconds, so posts that straddle one could land either side of it. A tie goes
+    by id in its band's direction (inbox_rank): active ones show the last posted first,
+    settled ones the first posted first."""
     return mock.patch("claude_wheelhouse.store.now", lambda: "2026-10-08T10:00:00+00:00")
 
 
@@ -2625,9 +2627,9 @@ async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_p
     own selection counts too. The person's explicit acts, Delete and answering, act at once."""
     other = store.create_session(str(tmp_path), name="other")
     with one_second():
+        b = store.post_item(other, "decision", "B's", **DECIDED)   # first, so D, of its rank and second, is above it
         d = store.post_item(sid, "decision", "D", **DECIDED)
         e = store.post_item(sid, "question", "E")
-        b = store.post_item(other, "decision", "B's", **DECIDED)
     keys = {"D": f"{sid}|{d}", "E": f"{sid}|{e}", "A": sid, "B": other, "B's": f"{other}|{b}"}
     if "gone E" in steps:
         store.update_item(sid, e, status="closed")
@@ -2726,40 +2728,42 @@ TIE_SECOND = "2026-10-08T10:00:05+00:00"   # every write a case makes, after its
 @pytest.mark.anyio
 @pytest.mark.parametrize("typing", ["slow", "raw"])
 @pytest.mark.parametrize("posts, selected, acts, held, leave, after, lands, desc", [
-    ("Q1 open, T1-T3 running", "T1", "T1 done, T2 done", "Q1 T1 T3 T2", "up", "Q1 T3 T1 T2", "Q1",
-     "review 50: the selected settles first, the other next: the later, T2, sinks lowest"),
-    ("Q1 open, T1-T3 running", "T2", "T1 done, T2 done", "Q1 T2 T3 T1", "up", "Q1 T3 T1 T2", "Q1",
-     "review 50: the other settles first, the selected next"),
-    ("Q1 open, T1-T3 running", "T1", "T2 done, T1 done", "Q1 T1 T3 T2", "up", "Q1 T3 T2 T1", "Q1",
-     "review 50: the other first, the selected next"),
-    ("Q1 open, T1-T3 running", "T2", "T2 done, T1 done", "Q1 T2 T3 T1", "up", "Q1 T3 T2 T1", "Q1",
-     "review 50: the selected first, the other next"),
+    ("Q1 open, T1-T3 running", "T1", "T1 done, T2 done", "Q1 T3 T1 T2", "up", "Q1 T3 T1 T2", "T3",
+     "review 50: the selected settles first, the other next: held, then the two by id, T1 above T2"),
+    ("Q1 open, T1-T3 running", "T2", "T1 done, T2 done", "Q1 T3 T2 T1", "up", "Q1 T3 T1 T2", "T3",
+     "review 50: the other settles first, the selected next: held, then by id, so T2 sinks below T1"),
+    ("Q1 open, T1-T3 running", "T1", "T2 done, T1 done", "Q1 T3 T1 T2", "up", "Q1 T3 T1 T2", "T3",
+     "review 50: the other first, the selected next: by id, as when the selected settled first"),
+    ("Q1 open, T1-T3 running", "T2", "T2 done, T1 done", "Q1 T3 T2 T1", "up", "Q1 T3 T1 T2", "T3",
+     "review 50: the selected first, the other next: by id, as when the other settled first"),
     ("Q1 open, T1-T3 running", "Q1", "T1 done, T2 done", "Q1 T3 T1 T2", "", "Q1 T3 T1 T2", "Q1",
-     "review 49: two settle in one second, unselected, a refresh apart: the later sinks lowest"),
-    ("Q1 open, T1-T3 running", "Q1", "T2+T1 done", "Q1 T3 T2 T1", "", "Q1 T3 T2 T1", "Q1",
-     "review 50: two settle between refreshes, against the store's row order: still in the order they settled"),
-    ("D1-D3 unseen", "D2", "lapse", "D1 D2 D3", "down", "D1 D3 D2", "D3",
+     "review 49: two settle in one second, unselected, a refresh apart: by id"),
+    ("Q1 open, T1-T3 running", "Q1", "T2+T1 done", "Q1 T3 T1 T2", "", "Q1 T3 T1 T2", "Q1",
+     "review 50: two settle between refreshes: by id, whatever order they settled in"),
+    ("D1-D3 unseen", "D2", "lapse", "D3 D2 D1", "down", "D3 D1 D2", "D1",
      "review 47: seen by the dwell while selected: held, then Down goes to the row below"),
-    ("D1-D3 unseen", "D2", "", "D1 D2 D3", "down+lapse", "D1 D3 D2", "D3",
+    ("D1-D3 unseen", "D2", "", "D3 D2 D1", "down+lapse", "D3 D1 D2", "D1",
      "review 47: Down typed as the dwell lapses: Down goes to the row below"),
     ("T1-T3 done", "T2", "f delete ctrl+r", "T1 T2 T3", "up", "T1 T2 T3", "T1",
      "Delete then Ctrl+R in one second: a task dismissed and brought back returns to where it settled"),
     ("Q1-Q3 answered", "Q2", "f delete ctrl+r", "Q1 Q3 Q2", "up", "Q1 Q3 Q2", "Q3",
      "Delete then Ctrl+R in one second: a question closed and reopened, answered again, settles last"),
-    ("Q1-Q3 open", "Q2", "Q2 answered, Q3 answered", "Q1 Q2 Q3", "up", "Q1 Q2 Q3", "Q1",
-     "a question answered while selected, then another: held, then the first answered stays above"),
-    ("Q1-Q3 open", "Q2", "Q3 answered, Q2 answered", "Q1 Q2 Q3", "up", "Q1 Q3 Q2", "Q1",
-     "another answered, then the selected: held, then it sinks below the first"),
+    ("Q1-Q3 open", "Q2", "Q2 answered, Q3 answered", "Q2 Q1 Q3", "down", "Q1 Q2 Q3", "Q1",
+     "a question answered while selected, then another: held, then the two by id, Q2 above Q3"),
+    ("Q1-Q3 open", "Q2", "Q3 answered, Q2 answered", "Q2 Q1 Q3", "down", "Q1 Q2 Q3", "Q1",
+     "another answered, then the selected: held, then by id, as when the selected was answered first"),
 ])
 async def test_items_that_tie_to_the_second_keep_one_order(store, sid, clock, posts, selected, acts, held, leave,
                                                            after, lands, desc, typing):
     """#70: now() stamps whole seconds, so items an agent posts or settles together tie on
-    updated_at. Whatever the order of the writes and refreshes, and typed slowly or as a raw
-    burst: the selected item stays put under the cursor (held) and moves once the selection
-    leaves it (after); the latest to settle sinks lowest; Delete and Ctrl+R move it at once
-    (D33); and one session is current. Acts and leave are steps: "T1 done" or "Q2 answered" a
-    write (two joined by + share one refresh), "lapse" the dwell lapsing, "down+lapse" Down
-    typed as it lapses, else keys."""
+    updated_at. Doug: "Sort on time first, id second, to ensure stable ordering even when items
+    are updated in the same second bucket." So a tie goes by id in its band's direction (active,
+    the higher id first; settled, the lower), whatever the order of the writes and refreshes,
+    and typed slowly or as a raw burst: the selected item stays put under the cursor (held) and
+    moves once the selection leaves it (after); Delete and Ctrl+R move it at once (D33); and
+    one session is current. Acts and leave are steps: "T1 done" or "Q2 answered" a write (two
+    joined by + share one refresh), "lapse" the dwell lapsing, "down+lapse" Down typed as it
+    lapses, else keys."""
     with one_second():
         for kind, status in TIE_POSTS[posts]:
             store.post_item(sid, kind, kind, status=status, **(DECIDED if kind == "decision" else {}))
@@ -2872,8 +2876,8 @@ async def test_delete_closes_and_ctrl_r_reopens_decisions(store, sid, start, key
 ])
 @pytest.mark.anyio
 async def test_marking_rows(store, sid, steps, marked, desc):
-    with one_second():   # Q1-Q4 in order, under the rows clicked
-        for title in "abcd":
+    for at, title in zip("4321", "abcd"):   # Q1-Q4 in order, newest first, under the rows clicked
+        with mock.patch("claude_wheelhouse.store.now", lambda: f"2026-10-08T10:00:0{at}+00:00"):
             store.post_item(sid, "question", title)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -3012,7 +3016,7 @@ async def test_the_word_after_acting_on_marks_names_each_act(store, sid, kinds, 
         items.focus()
         if key == "ctrl+r":   # finished first, shown with F
             # closing stamps Q1 and dismissing leaves T1's stamp: T1, the older, is first among
-            # the finished, and in the notice, in the same second too (seq)
+            # the finished, and in the notice
             for k, r in zip(kinds, refs):
                 app.close(store.item(sid, r), True)
             await pilot.press("f")

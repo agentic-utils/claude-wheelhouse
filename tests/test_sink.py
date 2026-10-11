@@ -352,9 +352,9 @@ async def moving(clock, tmp_path, where, keys, typed, count=3, start=None) -> di
     store = Store(tmp_path / "w.db")
     ids = {store.create_session(str(tmp_path), name=n): n for n in ("alpha", "bravo", "charlie")}
     alpha, bravo, _ = ids
-    with one_second():
-        refs_ = {store.post_item(alpha, "question", t): t for t in ("one", "two", "three", "four")[:count]}
-    one = list(refs_)[0]
+    with one_second():   # the last posted first: one at the top
+        refs_ = {store.post_item(alpha, "question", t): t for t in reversed(("one", "two", "three", "four")[:count])}
+    one = next(r for r, t in refs_.items() if t == "one")
     # the move stands still until the clock moves on, so the keys land inside it however slowly they're typed
     with mock.patch.object(liveness, "status", lambda s, waking=False: "live"):
         app = WheelhouseApp(store)

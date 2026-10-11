@@ -1961,7 +1961,7 @@ class WheelhouseApp(App):
         selection moves on, and a settled item then sinks (Sink). The exceptions are the person's
         own explicit acts, Delete closing or Ctrl+R reopening (close) and a permission answered
         (answer_permission): it goes at once (D33), and is pinned where it went. self.ranks keeps each item's rank as shown: the next pin's, and what has
-        somewhere to go (paint_items). No two items share a rank (store.inbox_rank, by seq), so
+        somewhere to go (paint_items). No two items share a rank (store.inbox_rank, ties by id), so
         the order needs no tie-break of its own (#70)."""
         key = self.selected and self.selected[1] and f"{self.selected[0]}|{self.selected[1]}"
         if self.pin is None or self.pin[0] != key:

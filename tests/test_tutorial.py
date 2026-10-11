@@ -333,9 +333,9 @@ def test_an_earlier_host_that_exits_as_its_told_is_no_error(store, monkeypatch):
 
 @pytest.mark.anyio
 async def test_closing_the_decision_ticks_it(store, sid, tut):
-    with one_second():   # P1 just above D1 (inbox order): a second's boundary between them put P1 first
-        setup_items(store, tut)
+    with one_second():   # P1 just above D1: posted first, so the last of its rank's ties, the open ones
         store.post_item(tut, "permission", "Bash: touch tutorial-ok")
+        setup_items(store, tut)
     app = WheelhouseApp(store)
     step = "✔ Read and close the decision"
     async with app.run_test(size=(160, 40)) as pilot:

@@ -495,7 +495,8 @@ class Daemon:
         for it in sorted(self.store.items(sid), key=lambda it: inbox_rank(it, processing, busy)):
             key, where = (it["session_id"], it["ref"]), standing(it, busy)
             if finished or where != "finished":
-                out.append({**dict(it), "standing": where, "queued": key in queued,
+                row = {k: v for k, v in dict(it).items() if k != "seq"}   # retired, unused (store.RETIRED_TRIGGER)
+                out.append({**row, "standing": where, "queued": key in queued,
                             "processing": key in processing, "awaiting": key in awaiting})
         return out
 

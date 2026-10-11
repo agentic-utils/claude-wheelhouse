@@ -142,7 +142,7 @@ INDEXES = """
 DROP INDEX IF EXISTS messages_pending;
 CREATE INDEX IF NOT EXISTS messages_unsent
     ON messages (session_id) WHERE delivered_at IS NULL AND draft = 0;
-CREATE UNIQUE INDEX IF NOT EXISTS items_seq ON items (seq);
+DROP INDEX IF EXISTS items_seq;
 """
 # Triggers fire for any connection: in the schema, so a writer running older code fires
 # them too once any newer one has opened the database. Each is one statement of its own, as
@@ -154,17 +154,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS items_seq ON items (seq);
 # deleted. The daemon compares marks only for equality, so a write may bump one twice
 MARKED = ("items", "messages")
 TRIGGERS_VERSION = 1
-# items.seq: the order the store wrote each item's updated_at in, one more than any item's
-# before, on every insert and every write of updated_at. now() stamps whole seconds, so
-# updated_at ties; seq never does, and breaks its ties (inbox_rank). Its own write moves the
-# items' mark again
-SEQ_NEXT = "UPDATE items SET seq = (SELECT coalesce(max(seq), 0) + 1 FROM items) WHERE id = NEW.id"
-TRIGGER_BODIES = {**{f"{table}_marked_{op.lower()}": f"AFTER {op} ON {table} "
-                     f"BEGIN UPDATE marks SET n = n + 1 WHERE kind = '{table}'; END"
-                     for table in MARKED for op in ("INSERT", "UPDATE", "DELETE")},
-                  "items_seq_insert": f"AFTER INSERT ON items BEGIN {SEQ_NEXT}; END",
-                  "items_seq_update": f"AFTER UPDATE OF updated_at ON items BEGIN {SEQ_NEXT}; END"}
+TRIGGER_BODIES = {f"{table}_marked_{op.lower()}": f"AFTER {op} ON {table} "
+                  f"BEGIN UPDATE marks SET n = n + 1 WHERE kind = '{table}'; END"
+                  for table in MARKED for op in ("INSERT", "UPDATE", "DELETE")}
 OUR_TRIGGER = re.compile(rf"^(?:{'|'.join(TRIGGER_BODIES)})(?:_v(\d+))?$")
+# retired, every version dropped on open: items_seq_* numbered each write of updated_at in
+# items.seq (#70, 2bbb99a), with the unique index items_seq (INDEXES drops it). Ties now go
+# by id (inbox_rank), so nothing reads seq. A process still running 2bbb99a recreates them
+# when it opens, which is harmless: they only write seq, and bump the items' mark once more.
+# The column stays, unused: dropping it rewrites the table, and that code still reads it
+RETIRED_TRIGGER = re.compile(r"^items_seq_(?:insert|update)(?:_v\d+)?$")
 TRIGGER_NAMES = {f"{name}_v{TRIGGERS_VERSION}": body for name, body in TRIGGER_BODIES.items()}
 TRIGGERS = [f"CREATE TRIGGER IF NOT EXISTS {name} {body}" for name, body in TRIGGER_NAMES.items()]
 
@@ -179,9 +178,9 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "host_command", "TEXT"), ("sessions", "shell", "TEXT"),
                  ("sessions", "context_tokens", "INTEGER"), ("sessions", "context_max", "INTEGER"),
                  ("items", "answer", "TEXT"), ("sessions", "context_at", "TEXT"),
-                 ("items", "dismissed", "TEXT"), ("sessions", "relaunch", "TEXT"), ("items", "seq", "INTEGER")]
+                 ("items", "dismissed", "TEXT"), ("sessions", "relaunch", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
-# from a /rename pickup since dropped: unused, and left in place
+# from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
 # settings: when this database was first opened by code that tracks subagents. Subagents
 # that had finished by then (or by when their session joined) get no item (#69)
@@ -278,15 +277,13 @@ class Store:
                 for kind in DISMISSABLE:
                     db.execute(f"UPDATE items SET dismissed = status WHERE kind = ? AND status IN "
                                f"({','.join('?' * len(SETTLED[kind]))})", (kind, *SETTLED[kind]))
-            if ("items", "seq") in added:   # numbered as store.items ordered them: by updated_at, ties by row
-                db.execute("UPDATE items SET seq = o.n FROM (SELECT id, row_number() OVER "
-                           "(ORDER BY updated_at, id) AS n FROM items) AS o WHERE o.id = items.id")
             for statement in INDEXES.split(";"):
                 if statement.strip():
                     db.execute(statement)
             db.executemany("INSERT OR IGNORE INTO marks (kind) VALUES (?)", [(t,) for t in MARKED])
             for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'").fetchall():
-                if (match := OUR_TRIGGER.match(name)) and int(match[1] or 0) < TRIGGERS_VERSION:
+                if RETIRED_TRIGGER.match(name) or ((match := OUR_TRIGGER.match(name))
+                                                   and int(match[1] or 0) < TRIGGERS_VERSION):
                     db.execute(f'DROP TRIGGER "{name}"')
             for trigger in TRIGGERS:
                 db.execute(trigger)
@@ -970,15 +967,16 @@ def standing(item, busy=frozenset()) -> str:
 def inbox_rank(item, processing=frozenset(), busy=frozenset()) -> tuple:
     """Questions waiting on the person first, then blocked, running, the rest; newest first within a rank.
     An open question in `processing` (D28) waits on the session, so it ranks as answered does.
-    Then the settled (standing), oldest first, so the latest to settle sinks lowest; then the finished.
-    Newest and oldest by updated_at, which is to the second, then by seq, the order it was written in,
-    so items of one second keep the order they were posted or settled in and no two share a rank."""
+    Then the settled (standing), oldest first, so the latest to settle sinks lowest; then the finished,
+    oldest first too. Newest and oldest by updated_at, which is to the second, then by id in the same
+    direction (newest first: the higher id first; oldest first: the lower), so items of one second
+    keep one order however they were written, and no two share a rank (#70)."""
     where = standing(item, busy)
     if where != "active":
-        return (SETTLED_RANK if where == "settled" else FINISHED_RANK, -_neg_time(item["updated_at"]), item["seq"])
+        return (SETTLED_RANK if where == "settled" else FINISHED_RANK, -_neg_time(item["updated_at"]), item["id"])
     status = "processing" if item["status"] == "open" and (item["session_id"], item["ref"]) in processing \
         else item["status"]
-    return (RANK.get(status, 9), _neg_time(item["updated_at"]), item["seq"])
+    return (RANK.get(status, 9), _neg_time(item["updated_at"]), -item["id"])
 
 
 def _neg_time(iso: str) -> float:
