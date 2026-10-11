@@ -796,15 +796,41 @@ def bar_label(c: Chart, row: int) -> Text:
 def bar(c: Chart, row: int, frame: int) -> list[tuple[str, Style | None]]:
     """A row of a chart's bars at animation frame `frame`, from the bottom, each column's
     character and its style. The shimmer and gradient are the dashboard's."""
-    f = 0.5 + 0.5 * row / (c.height - 1) if c.height > 1 else 1.0
-    out: list[tuple[str, Style | None]] = []
-    for i, col in enumerate(c.columns):
-        base, ch = col[row]
-        if base:
-            wave = 1.0 + 0.18 * math.sin(0.20 * i + 0.45 * row - 0.11 * frame)
-            out.append((ch, shade(base, max(0.12, min(1.0, f * wave)))))
-        else:
-            out.append((" ", None))
+    out: list[tuple[str, Style | None]] = [(" ", None)] * len(c.columns)
+    cells = bar_cells(c, row)
+    for (i, _, _, ch), rgb in zip(cells, tints(cells, row_shade(c, row), frame)):
+        out[i] = (ch, style_of(rgb))
+    return out
+
+
+def bar_cells(c: Chart, row: int) -> list[tuple[int, float, tuple, str]]:
+    """A row of a chart's bars' filled cells, those a shimmer frame recolours: each as its
+    column, its place in the wave, its colour and its character."""
+    return [(i, 0.20 * i + 0.45 * row, col[row][0], col[row][1]) for i, col in enumerate(c.columns) if col[row][0]]
+
+
+def row_shade(c: Chart, row: int) -> float:
+    """A row of bars' gradient: dimmer towards the bottom."""
+    return 0.5 + 0.5 * row / (c.height - 1) if c.height > 1 else 1.0
+
+
+# the shimmer's wave: the dashboard's 0.11 radians a frame, a cycle of 57.1 frames, rounded to a
+# whole 57 so each frame of a cycle comes round again the same, and is drawn once (SessionStats.cycles)
+PERIOD = round(2 * math.pi / 0.11)
+
+
+def phase(frame: int) -> float:
+    """Where the shimmer's wave is at animation frame `frame`."""
+    return 2 * math.pi * (frame % PERIOD) / PERIOD
+
+
+def tints(cells: list[tuple[int, float, tuple, str]], f: float, frame: int) -> list[tuple[int, int, int]]:
+    """The colour of each of bar_cells at animation frame `frame`, in a row whose gradient is
+    `f`: its own colour shaded by the gradient and the wave (shade)."""
+    out, at_frame, sin = [], phase(frame), math.sin
+    for _, at, (r, g, b), _ in cells:
+        k = max(0.12, min(1.0, f * (1.0 + 0.18 * sin(at - at_frame))))
+        out.append((int(r * k), int(g * k), int(b * k)))
     return out
 
 

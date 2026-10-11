@@ -59,7 +59,9 @@ class SessionStats(Widget):
         self.bars: dict[int, tuple[stats.Chart, int, int]] = {}   # the charts' bars' lines (bars_at)
         self.bar_runs: list[tuple[int, int]] = []   # those lines, each chart's as (first, how many)
         self.drawn_frame = 0
-        self.cell_styles: dict[tuple, Style] = {}   # a bar cell's style as drawn, by its line's and its own
+        self.cell_styles: dict[str, dict] = {}   # a bar line's cell's style as drawn, by its line's and its colour
+        self.plans: dict[int, tuple] = {}   # each bar line's frames, its last bar and what follows (plan)
+        self.cycles: dict[int, tuple] = {}   # each bar line's frames for a cycle but its last bar, kept through a tick
         self.offsets: dict[tuple[int, int], Style] = {}   # where a cell is in render's Text, for a selection
 
     # the hub's calls (api.py)
@@ -211,42 +213,109 @@ class SessionStats(Widget):
 
     def render_line(self, y: int) -> Strip:
         """Every line drawn from render, as Widget's are, only for a new panel, size or look;
-        a shimmer frame (animate) draws again the charts' bars alone, a line at a time from
-        their cells' styles, not the whole panel's Text: that was a fifth of a core at 5 Hz."""
+        a shimmer frame (animate) draws again the charts' bars alone, a line at a time, not the
+        whole panel's Text: that was a fifth of a core at 5 Hz. Each line's frames come round
+        each cycle of the wave (stats.PERIOD), so they're drawn once and recalled (plan)."""
         width, height = self.size
         key = (self.size, self.visual_style, self.text_selection, self.text_selection and self.frame)
         if self.drawn_for != key:
-            self.drawn_for, self.cell_styles = key, {}
+            self.drawn_for, self.cell_styles, self.plans = key, {}, {}
             self.drawn = Visual.to_strips(self, visualize(self, self.render()), width, height, self.visual_style)
             self.drawn_frame = self.frame
             self.bars = {} if self.text_selection else self.bars_at(width)
+            self.cycles = {y: cycle for y, cycle in self.cycles.items() if y in self.bars}
             self.bar_runs = [(min(ys), len(ys)) for ys in ([y for y, bar in self.bars.items() if bar[0] is chart]
                                                          for chart in self.charts) if ys]
         if y >= len(self.drawn):
             return Strip.blank(width, self.visual_style.rich_style)
         if y not in self.bars or self.frame == self.drawn_frame:
             return self.drawn[y]
+        cycle, last, tail, length = self.plans.get(y) or self.plan(y)
+        k = self.frame % stats.PERIOD
+        segments = cycle[k] or self.draw(y, k)
+        if last:
+            (ch, at), cells, f, label = last
+            rgb = stats.tints(cells, f, self.frame)[0]
+            segments = segments + [Segment(ch, (self.cell_styles[label].get(rgb) or self.look(label, rgb)) + at)]
+        return Strip(segments + tail, length)
+
+    def look(self, label: str, rgb: tuple | None) -> Style:
+        """A bar line's cell's style as Textual draws it: the pane's, its line's (the label's)
+        and its colour's, if any."""
+        looks = self.cell_styles.setdefault(label, {})
+        look = self.visual_style + TextualStyle.from_rich_style(self.app.console.get_style(label))
+        if rgb is not None:
+            look += TextualStyle.from_rich_style(stats.style_of(rgb))
+        look = looks[rgb] = look.rich_style
+        return look
+
+    def offset(self, x: int, n: int) -> Style:
+        """Where a cell is in render's Text, (x, n), which a selection by mouse goes by."""
+        return self.offsets.get((x, n)) or self.offsets.setdefault((x, n), Style.from_meta({"offset": (x, n)}))
+
+    def plan(self, y: int) -> tuple:
+        """A bar line's frames, as Textual draws its Text but for where its segments split
+        (draw). Its frames for a cycle of the shimmer (stats.PERIOD) are kept, each drawn once,
+        but for its last bar's: the current one, which a turn changes, is drawn every frame.
+        They're kept through a tick and drawn again only for a new look of the line but its
+        last bar: the bars move on a column, the scale changes or the pane's look does."""
         c, row, n = self.bars[y]
         label = stats.bar_label(c, row)
-        # as Textual draws the line's Text: a segment for each styled character and one for
-        # each run of plain ones, each with where it starts in the Text (x, n), which a
-        # selection by mouse goes by
-        segments, plain, x = [], None, 0
-        for ch, style in [(ch, None) for ch in label.plain] + stats.bar(c, row, self.frame):
-            if style is None and plain is not None:
-                plain[0] += ch
-            else:
-                look = self.cell_styles.get((label.style, style))
-                if look is None:
-                    look = self.visual_style + TextualStyle.from_rich_style(self.app.console.get_style(label.style))
-                    if style is not None:
-                        look += TextualStyle.from_rich_style(style)
-                    look = self.cell_styles[label.style, style] = look.rich_style
-                at = self.offsets.get((x, n)) or self.offsets.setdefault((x, n), Style.from_meta({"offset": (x, n)}))
-                plain = [ch, look + at] if style is None else None
-                segments.append(plain or Segment(ch, look + at))
-            x += 1
-        return Strip.join([Strip([Segment(*s) if isinstance(s, list) else s for s in segments]), self.drawn[y].crop(x)])
+        cells = stats.bar_cells(c, row)
+        styles = self.cell_styles.setdefault(label.style, {})
+        plain = styles.get(None) or self.look(label.style, None)
+        f = stats.row_shade(c, row)
+        x = len(label.plain) + len(c.columns)   # where the line's bars end
+        before, end = [col[row] for col in c.columns[:-1]], (c.columns[-1][row] if c.columns else None)
+        key = (n, label.plain, label.style, tuple(before), f, self.visual_style)
+        if self.cycles.get(y, (None,))[0] != key:
+            # the line but its last bar, as runs of plain characters, each a segment, and
+            # runs of bars' cells, each cell as its place and character
+            parts, run = [], None
+            for at, (ch, bar) in enumerate([(ch, False) for ch in label.plain] +
+                                           [(ch, True) if base else (" ", False) for base, ch in before]):
+                if not run or run[0] != bar:
+                    run = [bar, []]
+                    parts.append(run)
+                run[1].append((at, ch))
+            parts = [[(ch, self.offset(at, n)) for at, ch in run] if bar
+                     else Segment("".join(ch for _, ch in run), plain + self.offset(run[0][0], n)) for bar, run in parts]
+            self.cycles[y] = (key, [None] * stats.PERIOD, (parts, cells[:-1] if end and end[0] else cells, f, label.style))
+        rest = self.drawn[y].crop(x)
+        last, tail = None, list(rest)
+        if end and end[0]:
+            last = (end[1], self.offset(x - 1, n)), cells[-1:], f, label.style
+        elif end:
+            tail.insert(0, Segment(" ", plain + self.offset(x - 1, n)))
+        plan = self.plans[y] = (self.cycles[y][1], last, tail, x + rest.cell_length)
+        return plan
+
+    def draw(self, y: int, k: int) -> list[Segment]:
+        """Frame `k` of a bar line's cycle (plan), but for its last bar: a segment for each run
+        of plain characters, as Textual draws them, and one for each run of bars' cells of one
+        colour, with where it starts in render's Text. Textual draws a segment a cell of those,
+        but a selection by mouse finds the same place in the Text either way."""
+        _, frame, (parts, cells, f, label) = self.cycles[y]
+        rgbs = iter(stats.tints(cells, f, k))
+        styles = self.cell_styles.setdefault(label, {})
+        segments = []
+        for part in parts:
+            if isinstance(part, Segment):
+                segments.append(part)
+                continue
+            text, look, start = "", None, None
+            for ch, at in part:
+                rgb = next(rgbs)
+                was, look = look, styles.get(rgb) or self.look(label, rgb)
+                if look is not was and text:
+                    segments.append(Segment(text, was + start))
+                    text = ""
+                if not text:
+                    start = at
+                text += ch
+            segments.append(Segment(text, look + start))
+        frame[k] = segments
+        return segments
 
 module = api.Module(
     id="stats", title="Stats", version=importlib.metadata.version("claude-wheelhouse"), api=api.WHEELHOUSE_API,

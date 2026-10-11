@@ -4620,6 +4620,20 @@ async def test_a_subagent_item_whose_transcript_is_missing_says_so(store, sid, t
         assert "A `general-purpose` subagent." in app._detail_text and transcript.NO_AGENT_FILE in app._detail_text
 
 
+def placed(strip) -> list[tuple]:
+    """A drawn line, character by character with its style and where it is in the widget's
+    Text, as a selection by mouse finds it: the same whatever its segments."""
+    out = []
+    for seg in strip:
+        meta = seg.style.meta if seg.style else {}
+        for j, ch in enumerate(seg.text):
+            x, n = meta.get("offset") or (None, None)
+            out.append((ch, seg.style and seg.style.without_color, seg.style and seg.style.color,
+                        seg.style and seg.style.bgcolor, None if n is None else (x + j, n),
+                        sorted((k, v) for k, v in meta.items() if k != "offset")))
+    return out
+
+
 def busy_snapshot(now: float) -> stats.Snapshot:
     """A session with turns all across the charts' span, of every kind: bars of every colour."""
     turns = [stats.Turn(now - 7000 + 37 * i, 1000 * (i % 50), 500 * (i % 7), 300 * (i % 3), 90_000 + 100 * i, "1h",
@@ -4640,13 +4654,43 @@ async def test_a_shimmer_frame_draws_the_charts_as_the_whole_panel_did(store, si
         await pilot.pause()
         assert pane.charts and pane.bars, "the charts show, and their bars are known"
         height = pane.size.height
-        for frame in (0, 1, 7, 40, 123):
+        for frame in (0, 1, 7, 40, 123, 1 + stats.PERIOD, 7 + 2 * stats.PERIOD):   # the last two recalled
             pane.frame = frame
-            got = [cells(pane.render_line(y)) for y in range(height)]
+            got = [placed(pane.render_line(y)) for y in range(height)]
             whole = Visual.to_strips(pane, visualize(pane, pane.render()), *pane.size, pane.visual_style)
             whole += [Strip.blank(pane.size.width, pane.visual_style.rich_style)] * (height - len(whole))   # as Widget's
-            want = [cells(s) for s in whole]
+            want = [placed(s) for s in whole]
             assert got == want, f"frame {frame}"
+
+
+@pytest.mark.anyio
+async def test_a_shimmer_cycle_is_drawn_once_and_kept_through_a_turn_into_the_last_bar(store, sid, monkeypatch):
+    import time
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 45)) as pilot:
+        await pilot.pause()
+        pane = app.query_one("#stats")
+        monkeypatch.setattr(pane, "tick", lambda: None)   # the made-up session stays shown
+        now = time.time()
+        snap = busy_snapshot(now)
+        pane.show(snap, "demo", now)
+        await pilot.pause()
+        for frame in range(1, stats.PERIOD + 1):   # a whole cycle drawn
+            pane.frame = frame
+            for y in pane.bars:
+                pane.render_line(y)
+        drawn, was = [], [c.columns for c in pane.charts]
+        monkeypatch.setattr(pane, "draw", lambda y, k: drawn.append((y, k)))
+        snap.turns.append(stats.Turn(now - 1, 2000, 100, 100, 99_000, "1h", "claude-opus-5-5", True, output=100))
+        pane.show(snap, "demo", now)   # a turn: into the last bar, on the same scale
+        assert all(c.columns[:-1] == w[:-1] for c, w in zip(pane.charts, was)), "the bars but the last as they were"
+        assert any(c.columns[-1] != w[-1] for c, w in zip(pane.charts, was)), "the last bar grown"
+        for frame in (stats.PERIOD + 3, 2 * stats.PERIOD + 40):
+            pane.frame = frame
+            got = [placed(pane.render_line(y)) for y in range(pane.size.height)]
+            whole = Visual.to_strips(pane, visualize(pane, pane.render()), *pane.size, pane.visual_style)
+            assert got[:len(whole)] == [placed(s) for s in whole], f"frame {frame}"
+        assert not drawn, "every frame recalled, the last bar drawn on its own"
 
 
 @pytest.mark.anyio
