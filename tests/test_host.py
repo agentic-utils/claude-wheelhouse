@@ -1115,3 +1115,49 @@ def test_the_sdks_control_request_path_is_where_the_host_expects_it():
     assert "set_model" in vars(ClaudeSDKClient)
     fields = ClaudeAgentOptions.__dataclass_fields__
     assert "model" in fields and "effort" in fields
+
+
+def finish_at(h, tokens):
+    """A turn ends with the context at tokens."""
+    async def usage():
+        return {"totalTokens": tokens, "maxTokens": 1_000_000}
+    h.client.get_context_usage = usage
+    run(h.finished(SimpleNamespace(result="", is_error=False, subtype="success")))
+
+
+def nudges(store, sid):
+    return [(i["status"], i["title"]) for i in store.items(sid) if i["answer"] in (host_mod.NUDGE, host_mod.NUDGE_DONE)]
+
+
+@pytest.mark.parametrize("steps, expected, desc", [
+    ([150_000], [], "under the line: no nudge"),
+    ([220_000], [("open", "context 220k: compact?")], "past it: one question suggesting Compact"),
+    ([220_000, 240_000, 260_000], [("open", "context 220k: compact?")], "one per crossing, not one per turn"),
+    ([220_000, 40_000], [("closed", "context 220k: compact?")], "compacted: it closes by itself"),
+    ([220_000, 40_000, 210_000], [("open", "context 210k: compact?"), ("closed", "context 220k: compact?")],
+     "a second crossing nudges again"),
+    ([220_000, "close", 240_000], [("closed", "context 220k: compact?")],
+     "closed by the person: not asked again until it has been under"),
+    ([220_000, "restart", 240_000], [("open", "context 220k: compact?")],
+     "a host started again remembers the crossing"),
+])
+def test_compact_nudge(host, store, sid, steps, expected, desc):
+    h = host
+    for step in steps:
+        if step == "close":
+            ref = next(i["ref"] for i in store.items(sid) if i["answer"] == host_mod.NUDGE)
+            store.update_item(sid, ref, status="closed")
+        elif step == "restart":
+            h = Host(store, sid, client_factory=FakeClient, person="doug")
+            run(h.connect())
+        else:
+            finish_at(h, step)
+    assert nudges(store, sid) == expected, desc
+
+
+def test_compact_nudge_closes_saying_so(host, store, sid):
+    finish_at(host, 220_000)
+    finish_at(host, 40_000)
+    ref = store.items(sid)[0]["ref"]
+    assert [m["body"] for m in store.thread(sid, ref)] == ["Compacted: the context is 40k now."]
+    assert host_mod.HOST_QUESTION != store.item(sid, ref)["answer"], "a restart's deny_stale leaves it be"

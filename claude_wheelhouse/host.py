@@ -26,7 +26,7 @@ import time
 from . import liveness, models
 from .launch import PROTOCOL_SDK, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT
-from .store import SessionGone, Store, db_path, now
+from .store import CLOSED, SessionGone, Store, db_path, now
 
 POLL_SECONDS = 1.0
 SHELL_POLL_SECONDS = 2.0
@@ -48,6 +48,13 @@ HOST_QUESTION = '{"from": "AskUserQuestion"}'   # an item's answer column marks 
 NO_NOTES = (f"idle · Compact got no notes back in {COMPACT_TIMEOUT // 60} quiet minutes, "
             "so nothing was compacted")
 AWAITING_NOTES = "idle · Compact is waiting for the session's notes (Interrupt cancels it)"
+# A context past this many tokens gets one question item suggesting Compact, per crossing:
+# every turn re-reads the whole context from the prompt cache
+NUDGE_TOKENS = 200_000
+# an item's answer column marks the host's Compact nudge, until the context is back under
+# NUDGE_TOKENS; then it is marked done, and the next crossing nudges again
+NUDGE = '{"from": "context nudge"}'
+NUDGE_DONE = '{"from": "context nudge", "done": true}'
 # an answer's `n:` or `Qn:` markers: at the start, or after a comma, semicolon or line
 # break, and never a time (`1:30`)
 ANSWER_MARK = re.compile(r"(?:^|[,;\n])\s*[Qq]?(\d+)\s*:(?!\d)")
@@ -83,6 +90,17 @@ def keep_notes(text: str | None, nonce: str) -> str | None:
     tag = rf"<keep\s+id=[\"']?{re.escape(nonce)}[\"']?\s*>"
     blocks = re.findall(rf"^[ \t]*{tag}[ \t]*\n(.*?)^[ \t]*</keep>[ \t]*$", text or "", re.DOTALL | re.MULTILINE)
     return blocks[-1].strip() if blocks else None
+
+
+def nudge_item(tokens: int) -> tuple[str, str]:
+    """The Compact nudge's title and body."""
+    k = tokens // 1000
+    return (f"context {k}k: compact?",
+            f"This session's context is {k}k tokens, and every turn re-reads all of it. Compact "
+            "(C, or the Compact button) asks the session what to keep, then compacts it with that. "
+            "This closes by itself once the session is compacted; close it (Delete) to leave the "
+            "session as it is. It isn't asked again until the context has been under "
+            f"{NUDGE_TOKENS // 1000}k and passes it once more.")
 
 
 def tool_summary(name: str, inp: dict) -> str:
@@ -530,6 +548,8 @@ class Host:
                 self.store.set_activity(self.sid, "compacting")
                 return
         tokens = await self.context()
+        if tokens is not None:
+            self.nudge(tokens)
         if not self.pending:
             if self.compact_nonce:   # quiet from here: Compact's wait for its notes counts down
                 self.compact_idle = time.monotonic()
@@ -555,6 +575,23 @@ class Host:
             self.store.set_context(self.sid, tokens, top)
             return tokens
         return None
+
+    def nudge(self, tokens: int) -> None:
+        """Past NUDGE_TOKENS, one question item suggesting Compact, for this crossing: the
+        store remembers it (NUDGE), so a host started again, or the person closing it, never
+        brings a second. Back under (compacted), it closes, saying so, and the next crossing
+        nudges again."""
+        nudges = [i for i in self.store.items(self.sid) if i["answer"] == NUDGE]
+        if tokens >= NUDGE_TOKENS:
+            if not nudges:
+                ref = self.store.post_item(self.sid, "question", *nudge_item(tokens))
+                self.store.set_answer(self.sid, ref, NUDGE)
+            return
+        for item in nudges:
+            self.store.set_answer(self.sid, item["ref"], NUDGE_DONE)
+            if item["status"] not in CLOSED:
+                self.store.update_item(self.sid, item["ref"], status="closed",
+                                       note=f"Compacted: the context is {tokens // 1000}k now.")
 
     # hand-over to an interactive tab
 

@@ -155,7 +155,10 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   with the old model; the effort slider in the stats pane changes its effort. A tab
   session's model and effort are set when it's created; change them in the tab itself
   with `/model` and `/effort`; the
-  bar above the footer has a line saying what the session in context is doing. Closing the wheelhouse leaves the hosts
+  bar above the footer has a line saying what the session in context is doing. A session whose
+  context passes 200k tokens posts one question item, `context 220k: compact?`, with Compact a key
+  away (`C`): it closes by itself once the session is compacted, and comes back only when the
+  context passes 200k again. Closing the wheelhouse leaves the hosts
   running. `WHEELHOUSE_RUNNER=tab` makes tabs the default again. Restore and Adopt bring a
   session back the way new sessions run, so a tab from before hosts existed comes back as
   a host once you `/exit` it; Shell is the way back to a tab. Host logs are under `~/.local/state/claude-wheelhouse/hosts/`.

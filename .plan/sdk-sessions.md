@@ -254,3 +254,18 @@ experimentation is low".
   `context_at`). The stats read it only between a compaction and the next response (#54);
   otherwise the transcript's size is exact and they read that.
 - Live partial-text streaming, a key for Interrupt, and a model picker are left for later.
+
+## 9. Token savings (#16)
+
+Measured on one long-running hosted session (T81): the main thread averaged 233k tokens of
+context per call, about $80 a day in cache reads; four cold cache rewrites after more than
+an hour idle waiting on the person cost $10.60, and one host restart rewrote 429k ($5).
+The hosts' cache writes are the 1 h kind (the transcripts' `ephemeral_1h_input_tokens`),
+so an hour's quiet is what turns the cache cold.
+
+- **Compact nudge.** When a turn ends with the context at `NUDGE_TOKENS` (200k) or more,
+  the host posts one question item, `context 220k: compact?`, with Compact a key away (`C`
+  with it selected). It is one per crossing: the item's answer column (`NUDGE`) remembers
+  it, so neither a restarted host nor the person closing it brings a second. Once a turn
+  ends under the line again (compacted), the item closes with a note, and the next
+  crossing nudges afresh.
