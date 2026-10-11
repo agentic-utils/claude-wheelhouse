@@ -234,8 +234,8 @@ highlighted question or decision or dismiss a done task or subagent, `N` new ses
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue (not a dead one's: Restore it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
-as answered, a decision as seen), `?` list every key and button, `Q` quit (it asks first
-while a relaunch is waiting for a host to stop). Outside a text box, the buttons that have no other key:
+as answered, a decision as seen), `?` list every key and button, `Q` quit (with `--local`, it asks first
+while a relaunch is waiting for a host to stop: through the daemon there's nothing to ask). Outside a text box, the buttons that have no other key:
 `I` Interrupt, `C` Compact, `H` Shell, `M` Model, `1` Allow, `2` Always and `3` Deny on a permission item (numbered
 as in Claude Code's own prompt), and `Shift+A` Send all (every running session's queue). A key whose button doesn't apply says so.
 
@@ -278,10 +278,22 @@ on a thin teal track. Drag the thumb, or click the track to page. The thumb brig
 under the pointer and turns white while you drag it. Text boxes and the footer, one row
 high, have none.
 
-`claude-wheelhouse daemon` serves the wheelhouse over HTTP, for the remote clients to come
-(`.plan/remote.md`). Nothing uses it yet: the app still runs its own. It listens on
-`127.0.0.1:7428` (`--address` and `--port` change that, never to `0.0.0.0`), and runs once
-per user.
+The app goes through the wheelhouse daemon (`.plan/remote.md`): `claude-wheelhouse` starts
+it if none is running, or joins the one that is, and the daemon carries on when the app
+closes (a Relaunch under way too). It runs once per user, on `127.0.0.1:7428`
+(`WHEELHOUSE_PORT` changes the port; `claude-wheelhouse daemon --address` and `--port` run
+one by hand, never on `0.0.0.0`), its output in `daemon.log` beside the database. If the
+daemon stops under the app, the title bar says so in red and the app starts it again;
+nothing you do is sent meanwhile, and what you'd typed stays in the box. An app started on
+newer code restarts a daemon running older code from the same checkout.
+
+Every request needs the daemon's token, from `daemon.token` beside the database (readable by
+you alone). `claude-wheelhouse token` prints it, to give to another machine, and
+`claude-wheelhouse token --rotate` replaces it. `claude-wheelhouse --connect host:7428` runs
+the app on another machine against a daemon listening on an address that machine reaches
+(a VPN's): the token comes from `--token-file`, else `WHEELHOUSE_TOKEN`, else it asks for
+it, never from the command line. `claude-wheelhouse --local` runs the app with a hub of its
+own, without the daemon, as it ran before.
 
 ## Test
 

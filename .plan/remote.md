@@ -2,7 +2,7 @@
 
 Status: design agreed. Phase 1 built: `hub.py` is the service, owned by the TUI in
 process. Phase 2 under way: the hub is ready for remote clients, and the daemon serves it
-over HTTP and SSE; 2c, the TUI as its client with a bearer token, is designed below.
+over HTTP and SSE, and the TUI is its client (2c), with a bearer token on every request.
 
 **Phase 1 as built.** `hub.Hub` holds the hub logic `tui.py` had: liveness and wake
 detection, Relaunch from the stop to the start again, launch, restore and adopt, the
@@ -114,7 +114,7 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
   take back a queued answer, mark seen, the tutorial offer, the account usage), the module
   routes and `WHEELHOUSE_API` 2 (phase 3), a systemd unit and the TUI starting the daemon.
 
-**Phase 2c: the TUI a client of the daemon (design, Q48 option A).** `claude-wheelhouse`
+**Phase 2c: the TUI a client of the daemon (built, Q48 option A).** `claude-wheelhouse`
 starts the daemon on `127.0.0.1:7428`, or joins the one running, and reads and acts
 through it over HTTP and SSE rather than owning a hub. `claude-wheelhouse --connect
 host:port` joins a daemon on another machine. `claude-wheelhouse --local` is the TUI as it
@@ -218,6 +218,19 @@ was before 2c, its hub in process: the way back, at once.
   running too it says two hubs are acting (as two TUIs did). Hosts and MCP servers never
   talk to the daemon, so 2c changes nothing for them: no schema change, no new table, and
   sessions on code from before the daemon carry on as they are.
+- **As built, beyond the design:**
+  - In process, the item list read the store at every repaint, so a host's write could show
+    at a key's repaint; through the daemon it shows at the tick, or after the person's own
+    command, whose change is fetched before anything is read again. The tests that hold
+    the rules above run both ways (`@pytest.mark.both`), the daemon's way through a real
+    socket with a client that fetches at each refresh after the daemon's tick.
+  - The daemon follows the last two subagent conversations any client asked for, as the
+    hub did for its one surface; a client that no longer shows one stops fetching it.
+  - New session, from this machine (a loopback peer) only, may still open a tab. Under
+    `--connect` it offers no tab and no Browse (the directories are the daemon's), and the
+    daemon checks the directory.
+  - The text typed but not sent is still in memory, per client: the file per target, and
+    the outbox, are still to come.
 
 ## Intent
 
