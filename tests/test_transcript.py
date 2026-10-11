@@ -171,6 +171,7 @@ ONE, TWO = lines(user("one")), lines(user("two"))
     (ONE + TWO, len(TWO) + 1, ["two"], "one starting a byte into a record drops it"),
     (ONE + TWO, len(TWO) - 1, [transcript.OVERSIZE], "a newest record larger than the window: a stand-in for it"),
     (ONE + TWO[:-1], len(TWO) - 2, [transcript.OVERSIZE], "one still being written, too"),
+    (ONE + TWO[:10], 12, [], "one still being written that starts in the window: not too large, just not whole yet"),
     (ONE + TWO, 10_000, ["one", "two"], "a short transcript, whole"),
 ])
 def test_the_tail_window(tmp_path, text, limit, expected, desc):
@@ -178,6 +179,32 @@ def test_the_tail_window(tmp_path, text, limit, expected, desc):
     path.write_text(text)
     got = transcript.tail_records(path, limit=limit)
     assert [r["type"] if r["type"] == transcript.OVERSIZE else r["message"]["content"] for r in got] == expected, desc
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_the_tail_window_fuzzed(tmp_path, seed):
+    """Against a plain reference: the records whose first byte is in the last limit bytes, the
+    newest perhaps still being written (cut anywhere, so unparseable), and the stand-in only
+    when no record starts in the window at all."""
+    import random
+    rnd, path = random.Random(seed), tmp_path / "s.jsonl"
+    for _ in range(500):
+        recs = [user("x" * rnd.randint(0, 40)) for _ in range(rnd.randint(0, 6))]
+        data = lines(*recs).encode()
+        if recs and rnd.random() < 0.5:   # the newest mid-write
+            data = data[:rnd.randint(len(data) - len(lines(recs[-1])) + 1, len(data))]
+        path.write_bytes(data)
+        limit = rnd.randint(1, len(data) + 5)
+        start, at, want, begun = max(0, len(data) - limit), 0, [], False
+        for rec in recs:
+            end = at + len(lines(rec)) - 1   # its newline's offset: whole without it
+            begun |= start <= at < len(data)
+            if start <= at and end <= len(data):
+                want.append(rec)
+            at = end + 1
+        if start and not begun:
+            want.append({"type": transcript.OVERSIZE})
+        assert transcript.tail_records(path, limit=limit) == want, (data, limit)
 
 
 def test_a_record_too_large_to_show_is_said_so():

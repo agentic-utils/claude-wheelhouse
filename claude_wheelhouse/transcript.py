@@ -80,6 +80,9 @@ def tail_records(path: Path, limit: int | None = None, sidechain: bool = False) 
         start = max(0, size - limit)
         f.seek(max(0, start - 1))   # a byte early, to see whether the window starts a record
         data = f.read()
+    # the newest record is larger than the window if none starts in it: no newline before its
+    # last byte. Decided before the trim, so one still being written that does start in it isn't
+    oversize = start and b"\n" not in data[:-1]
     if start:   # drop the record the window starts inside; one starting exactly at it is whole
         data = data[data.find(b"\n") + 1:] if b"\n" in data else b""
     recs = []
@@ -90,7 +93,7 @@ def tail_records(path: Path, limit: int | None = None, sidechain: bool = False) 
             continue
         if isinstance(rec, dict) and (sidechain or not rec.get("isSidechain")):
             recs.append(rec)
-    if start and b"\n" not in data:   # the newest record is larger than the window: said so
+    if oversize:   # said so
         recs.append({"type": OVERSIZE})
     return recs
 
