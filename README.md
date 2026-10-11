@@ -305,18 +305,21 @@ To stop the daemon, quit the app (`Q`) first, since an open app starts it again,
 `claude-wheelhouse daemon --stop`. It stops the daemon by the pid in `daemon.lock`, with no
 token needed, and says what it did ("no wheelhouse daemon is running" if there was none).
 Running sessions carry on in their tabs, and the next `claude-wheelhouse` starts a fresh
-daemon. To reset the token, stop the daemon and delete `daemon.token`: the next start makes
-a new one, which each `--connect` machine then needs.
+daemon.
 
 ## The usage gauges
 
-<!-- T85 -->
-The session and weekly gauges come from Claude Code itself: every 5 minutes by default,
-the wheelhouse runs a short `claude -p "/usage"` and reads what it prints. It reads no
-credentials. `--usage-mode persistent`, or `usage-mode=persistent` in a `.env` file,
-keeps one Claude Code running for the gauges instead of starting one each time. The `.env`
-goes in the directory you start the app from (the clone, with `make run`) or in
-`~/.config/claude-wheelhouse/.env`.
+The session and weekly gauges come from Claude Code itself: every 5 minutes the wheelhouse
+runs a short `claude -p "/usage"` in the background and reads what it prints. That spends
+no tokens, and the wheelhouse never reads your Claude Code login. When a reading is late,
+the gauges say how old their numbers are.
+
+`--usage-mode persistent` keeps one Claude Code running and asks it instead: quicker per
+reading, but it stays in memory. `usage-mode=persistent` in a `.env` file does the same;
+the `.env` goes in the directory you start the app from (the clone, with `make run`) or in
+`~/.config/claude-wheelhouse/.env`. The daemon does the asking, so a change takes effect
+when the daemon restarts (quit the app, `claude-wheelhouse daemon --stop`, then open the
+app again).
 
 ## Where state lives
 
