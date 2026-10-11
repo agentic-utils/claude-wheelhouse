@@ -123,3 +123,180 @@ really use.
   the checklist shows it, with `make tutorial` to start afresh.
 - `?` opens every key, generated from the bindings themselves (a test fails if a binding
   has no description), the mouse, every button and the send-mode rules.
+
+# Top-up tutorials (design)
+
+Issue #16. Status: for review. Doug: "I want the tutorial to be invoked on first ever run,
+then I want the ability to run "top-up" tutorials each time we add a new feature... Also
+would be good if the first step in the tutorial allows the user to skip it, and, if that
+table in the DB records the features that the user has actually seen, so that a user never
+misses the opportunity to see a tutorial step even if they don't have time to look when
+they first start up after a version upgrade."
+
+Chosen (option A): "Give each step a stable id and a 'new in' version, and keep a
+tutorial_steps table (step_id, done_at, dismissed_at). Pending steps are then just: all
+steps minus the done or dismissed ones. A new user and an upgrader follow the same rule...
+The version is only a label. Skip on the first screen gives three choices: Start (run it
+now); Later (nothing is marked, offered again at the next start); Never (dismisses all
+current steps, so only future steps get offered). Keep the offer non-modal after first run:
+a '2 new tutorial steps' badge."
+
+## Where it stands
+
+- `STEPS` in `tutorial.py` is one fixed list of eight `(key, what, how)` tuples, all
+  taught by one scripted demo session (`BRIEF`).
+- Nothing records a step as done. `steps()` works each one out from the store on every
+  refresh, so the checklist exists only while the tutorial session does: once it ends, its
+  items go with it and there is nothing left to work from. `end` is never done for that
+  reason.
+- Two steps only the screen sees (`open`, `follow`) are kept in the `tutorial_seen`
+  setting, a JSON blob tied to one tutorial session id.
+- `tutorial_offer` (unset, `taken`, `dismissed`) gates the one-line modal offer
+  (`TutorialOffer`), shown only when it is unset and there are no sessions. Esc dismisses
+  it for good.
+
+## The model
+
+A step is the unit that's recorded; the pending rule needs nothing else.
+
+```
+tutorial_steps (step_id TEXT PRIMARY KEY, done_at TEXT, dismissed_at TEXT)
+pending = [s for s in STEPS if no row for s.id has done_at or dismissed_at]
+```
+
+- `done_at` is written the moment a step's check first passes, and never cleared. That
+  makes done sticky, so the checklist no longer depends on the demo session's items
+  surviving, and `tutorial_seen` retires: a screen-only step writes `done_at` directly.
+- `dismissed_at` is written only by Never.
+- A step id never changes once released. Renaming one would offer it again; a retired
+  step's row is ignored.
+- `new_in` is shown in the checklist ("new in 0.2.0") and in release notes. The pending
+  rule never reads it.
+- `make tutorial` still starts afresh: it runs every step, done or not, and records any
+  it ticks. Nothing is cleared.
+
+## A step
+
+`STEPS` becomes a tuple of `Step` records. Adding a feature's step is one entry plus its
+check:
+
+```python
+Step(id="effort", new_in="0.2.0",
+     what="Change a session's effort",
+     how="highlight a session, then ←/→ on the effort slider in the stats pane",
+     needs=("session",),
+     check=lambda t: t.effort_changed())
+```
+
+- `check` takes a small view (`t`) over the store, the demo session's id if one is
+  running, and the screen events `saw()` records. It returns whether the step is done now.
+  The current eight checks move over as they are.
+- `brief`, only for steps that need the demo session: the lines added to the demo's brief
+  to set the step up (post a decision, run a command that asks permission). The current
+  `BRIEF` splits into a shared preamble plus one fragment per step.
+
+### Prerequisites
+
+`needs` names what must hold before the step can be done, from a short fixed list plus
+other step ids:
+
+| Need | Means |
+|---|---|
+| `demo` | the tutorial's demo session is running; Start launches one |
+| `session` | any running session of the person's, hosted in the wheelhouse |
+| a step id | that step is done first (`send` needs `queue`) |
+
+A step whose needs aren't met stays pending and shows in the checklist greyed, with what
+it waits for ("needs a running session"). It is never marked anything because of it.
+A test checks every need is known and the step graph has no cycles.
+
+## How a top-up gets its demo
+
+Start collects the pending steps and looks at their needs.
+
+- **Screen-only** (no `demo` need). No session is launched and no tokens are spent. The
+  checklist opens in the right pane and ticks as the person does each step. The effort
+  slider is the example: it needs a running session, and the step is about the slider, so
+  the person's own session will do. The `how` text says to move it and put it back.
+- **Needs the demo.** One demo session is launched, as today (scratch directory, its
+  `.claude/settings.json`, the default model and effort), with a brief built from the
+  preamble and the fragments of the pending demo steps, in `STEPS` order. Several top-ups
+  pending at once share one session, so one launch covers them. The offer line says when a
+  demo will run: "starts a short demo session (a few cents of tokens)".
+- Mixed: both happen; the screen-only steps can be done while the demo runs.
+
+The checklist shows while a run is under way and any of its steps remain. It goes once
+they are all done, or when the demo session is ended. Steps still not done stay pending:
+the badge offers them again.
+
+`end` becomes checkable: ending the demo session from the wheelhouse records it before the
+session's rows go.
+
+## The offer
+
+**First run** (`tutorial_offer` unset and no sessions, as today): the one-line modal, with
+three choices.
+
+| Key | Choice | Writes |
+|---|---|---|
+| Enter | Start | `tutorial_offer = taken`; launches the run |
+| L or Esc | Later | `tutorial_offer = later`; no step rows |
+| N | Never | `tutorial_offer = never`; `dismissed_at` on every current step |
+
+Esc becomes Later rather than a permanent dismissal: the safe default marks nothing. That
+is a change from today's Esc.
+
+**After first run**, never modal. While any step is pending, a badge sits at the right-hand
+end of the title row: "2 new tutorial steps · L". The footer carries the same binding
+(`L Tutorial (2)`), shown only while there are pending steps, and `?` lists it. `L` opens
+the same three-choice line, naming the steps, so Never is always one key away.
+
+The title row is the only line every screen of the inbox keeps, and its right-hand end is
+free. The update notice (`.plan/release.md`) shares it: one slot for notices, the badge
+first.
+
+## Existing installs
+
+A one-off migration on first open by the new code, recorded by a settings marker like
+`migrated_decisions_close`. It writes rows for the eight steps that exist today, named in
+the migration, not picked by `new_in`:
+
+| Today | Becomes |
+|---|---|
+| `tutorial_offer = taken`, no tutorial session left | the eight steps done |
+| `tutorial_offer = taken`, tutorial session still running | nothing: its checks record steps as the person goes |
+| `tutorial_offer = dismissed` | the eight steps dismissed |
+| unset, sessions exist (installed before the tutorial) | the eight steps dismissed |
+| unset, no sessions | nothing: a fresh install, gets the first-run offer |
+
+So an install that has done the tutorial sees nothing new until a release adds a step,
+then sees the badge for that step alone. `tutorial_seen` is deleted by the migration.
+
+## Tests
+
+Table-driven, one case a line, as `test_tutorial.py` does now:
+
+- **The pending rule**: rows in, pending ids out (none, done, dismissed, a retired id, a
+  new step after the rest are done).
+- **Migration**: the five rows of the table above, plus running it twice changes nothing.
+- **The offer**: Start, Later, Never and Esc against the rows and settings they write;
+  Never leaves a step added later pending.
+- **Each step's check**: the existing `test_checklist_steps_come_from_the_store` cases,
+  now asserting `done_at` is written and survives the demo session ending.
+- **The step table**: ids unique; `new_in` parses as a version and is no later than the
+  package's; every `needs` entry is known; no cycles; every demo step has a brief fragment.
+- **The demo brief**: built from the pending demo steps only; no demo launched when none
+  are pending.
+- **TUI**: the badge and the `L` binding show only while steps are pending and give the
+  count; the modal shows on first run only.
+
+## Open questions
+
+1. **Later on first run.** Read here as: the modal never shows again, and the badge carries
+   the offer from then on. The other reading is the modal returning at each start until
+   Start or Never. Which?
+2. **Screen-only steps on a real session.** The effort step asks the person to move their
+   own session's slider and put it back. Acceptable, or should screen-only steps that need
+   a session wait for (and launch) the demo instead, at a few cents?
+3. **Installs from before the tutorial** (sessions, no `tutorial_offer`, which is your own)
+   get the eight core steps dismissed. Or should they be offered once, through the badge?
