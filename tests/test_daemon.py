@@ -749,9 +749,9 @@ async def test_relaunch_can_compact_first(daemon, store, sid, monkeypatch, body,
 
 @pytest.mark.parametrize("address, peer, status, desc", [
     ("127.0.0.1", "127.0.0.1", 200, "from this machine: the TUI's New session, with its tab box ticked"),
-    ("127.0.0.1", "100.64.0.7", 400, "from another machine: a tab would open on a screen nobody there sees"),
+    ("127.0.0.1", "100.64.0.7", 403, "from another machine: a tab would open on a screen nobody there sees"),
     ("100.64.0.1", "100.64.0.1", 200, "a daemon on a VPN address, joined by an app on this machine at that address"),
-    ("100.64.0.1", "100.64.0.7", 400, "a daemon on a VPN address, from another machine on the VPN"),
+    ("100.64.0.1", "100.64.0.7", 403, "a daemon on a VPN address, from another machine on the VPN"),
 ])
 async def test_a_tab_session_only_from_this_machine(daemon, store, tmp_path, address, peer, status, desc):
     daemon.allowed = hosts(address, 7428)
@@ -1064,3 +1064,55 @@ async def test_sdk_mode_off_refuses_hosted_sessions(store, monkeypatch, body, pe
     if status == 403:
         assert "SDK mode is off" in r.json()["error"], desc
     assert [s["runner"] for s in store.sessions()] == (["tab"] if status == 200 else []), desc
+
+
+REMOTE = "100.64.0.7"
+
+
+@pytest.mark.parametrize("sdk, path, body, tut, peer, refused, desc", [
+    (False, "/sessions/{sid}/relaunch", {}, False, REMOTE, True, "Relaunch of a dead session: back as a tab"),
+    (False, "/sessions/{sid}/restore", {}, False, REMOTE, True, "Restore: back as a tab"),
+    (False, "/restore-all", {"sids": ["{sid}"]}, False, REMOTE, True, "Restore all: back as tabs"),
+    (False, "/adopt", {"id": "adoptee"}, False, REMOTE, True, "Adopt: opened as a tab"),
+    (False, "/tutorial/offer", {"take": True}, False, REMOTE, True, "the tutorial: a tab"),
+    (False, "/sessions/{sid}/shell", {}, False, REMOTE, True, "Shell: the host hands over to a tab"),
+    (True, "/sessions/{sid}/relaunch", {}, True, REMOTE, True, "SDK mode on: the tutorial is a tab all the same"),
+    (True, "/tutorial/offer", {"take": True}, False, REMOTE, True, "SDK mode on: the tutorial still"),
+    (True, "/sessions/{sid}/relaunch", {}, False, REMOTE, False, "SDK mode on: back by a host, which may"),
+    (True, "/adopt", {"id": "adoptee"}, False, REMOTE, False, "SDK mode on: adopted by a host"),
+    (False, "/tutorial/offer", {"take": False}, False, REMOTE, False, "the offer dismissed: nothing opens"),
+    (False, "/sessions/{sid}/relaunch", {}, False, "127.0.0.1", False, "from this machine, a tab may"),
+    (False, "/restore-all", {"sids": ["{sid}"]}, False, "127.0.0.1", False, "Restore all from this machine"),
+    (False, "/adopt", {"id": "adoptee"}, False, "127.0.0.1", False, "Adopt from this machine"),
+])
+async def test_another_machine_opens_no_tab(store, tmp_path, monkeypatch, sdk, path, body, tut, peer, refused, desc):
+    """A tab opens on this machine's screen, where nobody on another machine sees it: so no
+    route opens one for another machine's request (Daemon.no_remote_tab)."""
+    from claude_wheelhouse import adopt, tutorial
+    monkeypatch.setenv("WHEELHOUSE_RUNNER", "sdk" if sdk else "tab")   # SDK mode's own default (launch is stubbed)
+    opened = []
+    monkeypatch.setattr(launch, "open_session", lambda store, sid: opened.append("open"))
+    monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None: opened.append("restore"))
+    monkeypatch.setattr(adopt, "adopt", lambda *a, **k: opened.append("adopt"))
+    monkeypatch.setattr(tutorial, "start", lambda store: opened.append("tutorial"))
+    monkeypatch.setattr(hub_mod.Hub, "host_command", lambda self, sid, what: opened.append(what) or hub_mod.Done())
+    cwd = tutorial.tutorial_dir(store) if tut else tmp_path
+    cwd.mkdir(exist_ok=True)
+    sid = store.create_session(str(cwd), name="demo")
+    d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True, sdk=sdk)
+    monkeypatch.setattr(d.hub, "adoptable", lambda: [adopt.Candidate("adoptee", str(tmp_path), "t", 0.0, None)])
+    try:
+        d.tick()
+        body = json.loads(json.dumps(body).replace("{sid}", sid))
+        async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=d.app, client=(peer, 50000)),
+                                      base_url=URL, headers={"Authorization": f"Bearer {TOKEN}"}) as c:
+            r = await c.post(path.format(sid=sid), json=body, headers={"Idempotency-Key": str(uuid.uuid4())})
+    finally:
+        d.pool.shutdown()
+        d.worker.shutdown()
+        d.watch.close()
+    if refused:
+        assert r.status_code == 403 and "doesn't start sessions remotely" in r.json()["error"], f"{desc}: {r.text}"
+        assert opened == [], desc
+    else:
+        assert r.status_code == 200 and (opened or body.get("take") is False), f"{desc}: {r.text} {opened}"

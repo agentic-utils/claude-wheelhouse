@@ -51,7 +51,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import auth, fingerprint, liveness, models, stats, tutorial
+from . import auth, fingerprint, launch, liveness, models, stats, tutorial
 from .hub import Done, Event, Hub, host_context
 from .store import SessionGone, Store, inbox_rank, mode, runner, standing
 
@@ -766,6 +766,18 @@ class Daemon:
             self.store.set_setting(key, value)
         return Done()
 
+    def no_remote_tab(self, request: Request, runner: str) -> None:
+        """A tab opens on this machine's screen, where nobody on another machine sees it: so
+        another machine's request that would open one is refused. Out of SDK mode every
+        session starts in a tab, so another machine starts none; the tutorial is always one."""
+        if runner == "tab" and not this_machine(request):
+            why = "SDK mode is off" if not self.hub.sdk else "it would open in a tab"
+            raise Refused(403, f"{why}: this wheelhouse doesn't start sessions remotely")
+
+    def restore_runner(self, sid: str) -> str:
+        """How Restore, Relaunch of a dead session and Restore all bring it back."""
+        return launch.restore_runner(self.store, self.hub.row(sid)["cwd"], self.hub.sdk)
+
     def adopt(self, request: Request, body: dict) -> Done:
         """A session on disk brought in, by its id, as Adopt offered it: one gone from the
         offer meanwhile (adopted elsewhere, or too old) isn't there."""
@@ -773,6 +785,7 @@ class Daemon:
         found = next((c for c in self.hub.adoptable() if c.id == want), None)
         if found is None:
             raise KeyError(f"no session {want} to adopt")
+        self.no_remote_tab(request, launch.restore_runner(self.store, found.cwd, self.hub.sdk))
         return self.hub.adopt(found, text(body, "name", False) or "")
 
     def restore_all(self, request: Request, body: dict) -> Done:
@@ -780,12 +793,16 @@ class Daemon:
         sids = body.get("sids")
         if not (isinstance(sids, list) and all(isinstance(sid, str) for sid in sids)):
             raise Refused(400, "sids must be a list of session ids")
+        for sid in sids:
+            self.no_remote_tab(request, self.restore_runner(sid))
         return self.hub.restore_all(sids)
 
     def answer_offer(self, request: Request, body: dict) -> Done:
         take = body.get("take")
         if not isinstance(take, bool):
             raise Refused(400, "take must be true or false")
+        if take:
+            self.no_remote_tab(request, "tab")   # the tutorial is always a tab
         return self.hub.answer_offer(take)
 
     def tutorial_seen(self, request: Request, body: dict) -> Done:
@@ -806,23 +823,19 @@ class Daemon:
         return Done().say("the daemon is stopping")
 
     def new_session(self, request: Request, body: dict) -> Done:
-        """A session in an existing directory, by its absolute path, run by a host. In a tab
-        only for a client on this machine (this_machine): a tab opens on this machine's
-        screen, where nobody remote is. By a host only in SDK mode (features.py:
-        EXPERIMENTAL, the author's alone until Anthropic's terms are confirmed): out of it, a
-        remote client can't start a session at all."""
+        """A session in an existing directory, by its absolute path, run by a host or in a
+        tab. In a tab only for a client on this machine (no_remote_tab). By a host only in SDK
+        mode (features.py: EXPERIMENTAL, the author's alone until Anthropic's terms are
+        confirmed)."""
         cwd = text(body, "cwd")
         if not os.path.isabs(cwd) or not os.path.isdir(cwd):
             raise Refused(400, f"cwd must be an existing directory's absolute path: {cwd!r} isn't")
         how = text(body, "runner", False) or "sdk"
         if how not in ("sdk", "tab"):
             raise Refused(400, "runner must be sdk or tab")
-        if not self.hub.sdk and not this_machine(request):
-            raise Refused(403, "SDK mode is off: this wheelhouse doesn't start sessions remotely")
         if how == "sdk" and not self.hub.sdk:
             raise Refused(403, "SDK mode is off: this wheelhouse doesn't host sessions")
-        if how == "tab" and not this_machine(request):
-            raise Refused(400, "a session started remotely runs by a host: runner can only be sdk")
+        self.no_remote_tab(request, how)
         return self.hub.new_session(cwd, text(body, "name", False) or "", text(body, "ticket", False) or "",
                                     text(body, "brief", False) or "", how, text(body, "model", False),
                                     text(body, "effort", False))
@@ -841,6 +854,7 @@ class Daemon:
         if action == "relaunch":
             host = body.get("host")
             if host is None:
+                self.no_remote_tab(request, self.restore_runner(sid))
                 return hub.relaunch(sid)
             if not (isinstance(host, list) and len(host) == 2 and all(isinstance(n, int) for n in host)):
                 raise Refused(400, "host must be [pid, start time]")
@@ -862,8 +876,12 @@ class Daemon:
             return hub.set_model(sid, models.check_model(text(body, "model")))
         if action == "effort":
             return hub.set_effort(sid, models.check_effort(text(body, "effort")))
+        if action == "shell":   # the host hands the session to a tab
+            self.no_remote_tab(request, "tab")
         if action in ("interrupt", "compact", "shell"):
             return hub.host_command(sid, action)
+        if action == "restore":
+            self.no_remote_tab(request, self.restore_runner(sid))
         commands = {"restore": hub.restore, "unpark": hub.unpark, "dispatch": hub.send_queue}
         if action not in commands:
             raise Refused(404, f"no command {action}")
