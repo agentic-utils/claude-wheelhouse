@@ -12,7 +12,7 @@ import httpx2
 import pytest
 from sse_starlette.sse import AppStatus
 
-from claude_wheelhouse import daemon as daemon_mod, hub as hub_mod, launch, liveness, store as store_mod
+from claude_wheelhouse import daemon as daemon_mod, hub as hub_mod, launch, liveness, store as store_mod, transcript
 from claude_wheelhouse.daemon import AlreadyRunning, Daemon, Feed, checked_address, hosts, take_lock
 from claude_wheelhouse.hub import Event
 from claude_wheelhouse.store import SessionGone, Store
@@ -560,30 +560,57 @@ async def test_a_signal_to_stop_ends_the_streams_first(daemon, monkeypatch):
     assert daemon.feed.closed and server.should_exit
 
 
-@pytest.mark.parametrize("read_before, status, desc", [
-    (True, 200, "a read under way: the blocks last read, at once"),
-    (False, 503, "a read under way and none before it: try again shortly"),
+@pytest.mark.parametrize("read_for, end, status, desc", [
+    (0.3, False, 200, "a read under way: waited for, then read again for itself"),
+    (0.3, True, 404, "a read under way of a session that ends meanwhile: gone, not its last blocks"),
+    (0.6, False, 503, "a read under way past READ_WAIT: try again shortly"),
 ])
-async def test_a_conversation_never_waits_on_a_read_under_way(daemon, sid, monkeypatch, read_before, status, desc):
+async def test_a_conversation_waits_on_a_read_under_way_for_a_while(daemon, store, sid, monkeypatch,
+                                                                     read_for, end, status, desc):
     read = daemon_mod.Hub.conversation
-    if read_before:
-        assert (await call(daemon, "GET", f"/sessions/{sid}/conversation")).status_code == 200
+    assert (await call(daemon, "GET", f"/sessions/{sid}/conversation")).status_code == 200
 
     def slow(hub, sid):
-        time.sleep(0.5)   # a transcript on a mount gone slow
+        time.sleep(read_for)   # a transcript on a mount gone slow
         return read(hub, sid)
     monkeypatch.setattr(daemon_mod.Hub, "conversation", slow)
+    monkeypatch.setattr(daemon_mod, "READ_WAIT", 0.4)
     async with client(daemon) as c:
         reading = asyncio.create_task(c.get(f"/sessions/{sid}/conversation"))
         await asyncio.sleep(0.05)
+        if end:
+            store.end(sid)
         started = time.monotonic()
         r = await c.get(f"/sessions/{sid}/conversation")
-        assert r.status_code == status and time.monotonic() - started < 0.25, desc
+        assert r.status_code == status and time.monotonic() - started < 0.4 + read_for, desc
         if status == 503:
             assert r.headers["retry-after"] == "1" and r.json()["error"], desc
-        else:
-            assert r.json() == (await reading).json(), desc
-        assert (await reading).status_code == 200, desc
+        await reading
+
+
+async def test_two_refetches_overlapping_a_transcript_change_both_get_it(daemon, sid, tmp_path, monkeypatch):
+    path = tmp_path / "t.jsonl"
+
+    def say(text):
+        with path.open("a") as f:
+            f.write(json.dumps({"type": "user", "timestamp": "2026-10-07T21:30:00.000Z",
+                                "message": {"role": "user", "content": text}}) + "\n")
+    say("before")
+    monkeypatch.setattr(transcript.Follower, "find", lambda self: path)
+    load = transcript.Follower.load
+    assert "before" in (await call(daemon, "GET", f"/sessions/{sid}/conversation")).text
+    say("the final reply")   # the change a conversation event says: both clients refetch on it
+
+    def slow(self, path):
+        time.sleep(0.3)
+        return load(self, path)
+    monkeypatch.setattr(transcript.Follower, "load", slow)
+    async with client(daemon) as c:
+        first = asyncio.create_task(c.get(f"/sessions/{sid}/conversation"))
+        await asyncio.sleep(0.05)
+        second = await c.get(f"/sessions/{sid}/conversation")
+        for r in (await first, second):
+            assert r.status_code == 200 and "the final reply" in r.text
 
 
 async def test_a_client_gone_before_its_body_is_let_go_quietly(daemon, store, sid, capsys):
@@ -611,6 +638,14 @@ async def test_a_session_gone_is_no_longer_followed(daemon, store, sid, db_file)
     Store(db_file).end(other)
     daemon.tick()
     assert (set(daemon.hub.followers), set(daemon.reading)) == ({sid}, {sid})
+
+
+async def test_a_session_created_since_the_last_refresh_is_still_followed(daemon, store, sid):
+    daemon.tick()
+    late = store.create_session("/", name="late")
+    assert (await call(daemon, "GET", f"/sessions/{late}/conversation")).status_code == 200
+    daemon.forget_gone()
+    assert late in daemon.hub.followers and late in daemon.reading
 @pytest.mark.parametrize("body, command, said, desc", [
     ({"host": [4242, 1], "compact": True}, "compact", "compacting first", "compact first: the host is asked to Compact"),
     ({"host": [4242, 1]}, None, "stopping its host", "without: its host is stopped now"),

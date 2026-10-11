@@ -51,6 +51,7 @@ ADDRESS, PORT = "127.0.0.1", 7428
 TICK = 1.0           # seconds between the hub's refreshes, as the TUI's tick
 RING = 1024          # events kept for a client that reconnects
 PING = 15            # seconds between keep-alive comments on a quiet stream
+READ_WAIT = 1.0      # seconds a conversation waits on a read of it under way before 503
 LOCK = "daemon.lock"
 # what a change in the database may have moved: every session's row, the inbox, the threads,
 # and the conversations, which show what's queued
@@ -316,11 +317,12 @@ class Daemon:
         self.shown = shown
 
     def forget_gone(self) -> None:
-        """The transcripts followed for sessions the last refresh no longer found, let go.
+        """The transcripts followed for sessions gone, let go: those the last refresh no
+        longer found and the store hasn't either, so not one created since that refresh.
         A conversation asked for one again finds it gone before following it again."""
-        for sid in self.hub.followers.keys() - self.hub.by_id.keys():
+        missing = (self.hub.followers.keys() | self.reading.keys()) - self.hub.by_id.keys()
+        for sid in [sid for sid in missing if self.hub.store.session(sid) is None]:
             self.hub.followers.pop(sid, None)
-        for sid in self.reading.keys() - self.hub.by_id.keys():
             self.reading.pop(sid, None)
 
     async def ticking(self) -> None:
@@ -459,19 +461,17 @@ class Daemon:
     def conversation(self, request: Request) -> list[dict]:
         """On starlette's threads, as it reads the transcript: the hub's followers are only
         this query's, each session's read by one request at a time. One that finds a read
-        under way never waits on it, so a hung transcript can't drain starlette's threads:
-        it answers the blocks last read, or 503 if there are none yet."""
+        under way waits for it up to READ_WAIT, then reads for itself, so a client refetching
+        on an event never gets the blocks from before it; past that, 503, so a hung
+        transcript holds each of starlette's threads for READ_WAIT at most."""
         sid = request.path_params["sid"]
         lock = self.reading.setdefault(sid, threading.Lock())
-        if lock.acquire(blocking=False):
-            try:
-                blocks = self.hub.conversation(sid)
-            finally:
-                lock.release()
-        elif (follower := self.hub.followers.get(sid)) is not None and follower.blocks is not None:
-            blocks = follower.blocks
-        else:
+        if not lock.acquire(timeout=READ_WAIT):
             raise Refused(503, "this conversation is being read: try again shortly", {"Retry-After": "1"})
+        try:
+            blocks = self.hub.conversation(sid)
+        finally:
+            lock.release()
         if blocks is None:
             raise SessionGone(sid)
         return [{"who": who, "text": markdown} for who, markdown in blocks]
