@@ -12,6 +12,7 @@ earlier tutorial session is ended (its items go with it) and its directory recre
 
 import json
 import os
+import shlex
 import shutil
 import signal
 import time
@@ -70,10 +71,14 @@ SOURCE = Path(__file__).resolve().parent.parent   # a source checkout's root, ru
 
 
 def command(source: Path | None = None) -> str:
-    """The command that starts the tutorial for how the app was installed: run from a source
-    checkout (the README's make install, an editable install), claude-wheelhouse isn't on
-    PATH, so make tutorial; installed as a package, claude-wheelhouse tutorial."""
-    return "make tutorial" if ((source or SOURCE) / "Makefile").is_file() else "claude-wheelhouse tutorial"
+    """The command that starts the tutorial for how the app was installed: claude-wheelhouse
+    tutorial whenever claude-wheelhouse is on PATH (a package, uv tool install -e), else from
+    a source checkout (the README's make install) make -C <its directory> tutorial, which
+    works from any directory."""
+    source = source or SOURCE
+    if shutil.which("claude-wheelhouse") or not (source / "Makefile").is_file():
+        return "claude-wheelhouse tutorial"
+    return f"make -C {shlex.quote(str(source))} tutorial"
 
 
 MARKER = ".wheelhouse-tutorial"   # written into the directory: only a directory carrying it is ever deleted

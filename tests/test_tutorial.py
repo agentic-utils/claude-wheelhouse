@@ -451,20 +451,30 @@ def test_the_tutorial_comes_back_as_a_tab(store, tut, monkeypatch, on, how, stor
     assert store.session(tut)["runner"] == "tab", f"{how}, SDK mode {on}: {desc}"
 
 
-@pytest.mark.parametrize("makefile, said, desc", [
-    (True, "make tutorial", "run from a source checkout (make install): claude-wheelhouse isn't on PATH"),
-    (False, "claude-wheelhouse tutorial", "installed as a package"),
+@pytest.mark.parametrize("on_path, makefile, said, desc", [
+    (False, True, "make -C {source} tutorial", "a source checkout (make install), not on PATH: works from anywhere"),
+    (True, True, "claude-wheelhouse tutorial", "on PATH from a checkout (uv tool install -e)"),
+    (True, False, "claude-wheelhouse tutorial", "installed as a package"),
+    (False, False, "claude-wheelhouse tutorial", "neither: the command a package installs"),
 ])
 @pytest.mark.anyio
-async def test_every_hint_names_the_command_that_works(store, tmp_path, monkeypatch, fake_claude, makefile, said, desc):
+async def test_every_hint_names_the_command_that_works(store, tmp_path, monkeypatch, fake_claude, on_path, makefile,
+                                                       said, desc):
     """Review 68: the offer, the ? overlay, the dismiss notice and a stopped tutorial's
-    checklist all name the command that starts the tutorial for how the app was installed."""
+    checklist all name the command that starts the tutorial for how the app was installed.
+    Review 69: make tutorial worked only from the checkout, and not at all for an editable
+    install on PATH."""
     from claude_wheelhouse.hub import Hub
     source = tmp_path / "source"
     source.mkdir()
     if makefile:
         (source / "Makefile").write_text("tutorial:\n")
     monkeypatch.setattr(tutorial, "SOURCE", source)
+    real_which = tutorial.shutil.which
+    monkeypatch.setattr(tutorial.shutil, "which", lambda cmd, *a, **k:
+                        ("/bin/claude-wheelhouse" if on_path else None) if cmd == "claude-wheelhouse"
+                        else real_which(cmd, *a, **k))
+    said = said.format(source=source)
     assert tutorial.command() == said, desc
     assert f"`{said}` starts it afresh" in keys_help(), f"? overlay: {desc}"
     monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
