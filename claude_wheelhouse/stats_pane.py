@@ -230,9 +230,11 @@ class SessionStats(Widget):
             return Strip.blank(width, self.visual_style.rich_style)
         if y not in self.bars or self.frame == self.drawn_frame:
             return self.drawn[y]
-        cycle, last, tail, length = self.plans.get(y) or self.plan(y)
+        cycle, last, join, tail, length = self.plans.get(y) or self.plan(y)
         k = self.frame % stats.PERIOD
         segments = cycle[k] or self.draw(y, k)
+        if join:   # the frames' last plain run, which tail carries with the blank after it
+            segments = segments[:-1]
         if last:
             (ch, at), cells, f, label = last
             rgb = stats.tints(cells, f, self.frame)[0]
@@ -267,7 +269,7 @@ class SessionStats(Widget):
         f = stats.row_shade(c, row)
         x = len(label.plain) + len(c.columns)   # where the line's bars end
         before, end = [col[row] for col in c.columns[:-1]], (c.columns[-1][row] if c.columns else None)
-        key = (n, label.plain, label.style, tuple(before), f, self.visual_style)
+        key = (n, row, label.plain, label.style, tuple(before), f, self.visual_style)
         if self.cycles.get(y, (None,))[0] != key:
             # the line but its last bar, as runs of plain characters, each a segment, and
             # runs of bars' cells, each cell as its place and character
@@ -282,19 +284,20 @@ class SessionStats(Widget):
                      else Segment("".join(ch for _, ch in run), plain + self.offset(run[0][0], n)) for bar, run in parts]
             self.cycles[y] = (key, [None] * stats.PERIOD, (parts, cells[:-1] if end and end[0] else cells, f, label.style))
         rest = self.drawn[y].crop(x)
-        last, tail = None, list(rest)
+        last, tail, join = None, list(rest), False
         if end and end[0]:
             last = (end[1], self.offset(x - 1, n)), cells[-1:], f, label.style
-        elif end:
-            tail.insert(0, Segment(" ", plain + self.offset(x - 1, n)))
-        plan = self.plans[y] = (self.cycles[y][1], last, tail, x + rest.cell_length)
+        elif end:   # no last bar on this line: its blank joins the plain run before it, if one ends the frames
+            run = self.cycles[y][2][0][-1] if self.cycles[y][2][0] else None
+            join = isinstance(run, Segment)
+            tail.insert(0, Segment(run.text + " ", run.style) if join else Segment(" ", plain + self.offset(x - 1, n)))
+        plan = self.plans[y] = (self.cycles[y][1], last, join, tail, x + rest.cell_length)
         return plan
 
     def draw(self, y: int, k: int) -> list[Segment]:
         """Frame `k` of a bar line's cycle (plan), but for its last bar: a segment for each run
-        of plain characters, as Textual draws them, and one for each run of bars' cells of one
-        colour, with where it starts in render's Text. Textual draws a segment a cell of those,
-        but a selection by mouse finds the same place in the Text either way."""
+        of plain characters, as Textual draws them, and one for each bar's cell, with where it
+        is in render's Text."""
         _, frame, (parts, cells, f, label) = self.cycles[y]
         rgbs = iter(stats.tints(cells, f, k))
         styles = self.cell_styles.setdefault(label, {})
@@ -303,17 +306,9 @@ class SessionStats(Widget):
             if isinstance(part, Segment):
                 segments.append(part)
                 continue
-            text, look, start = "", None, None
             for ch, at in part:
                 rgb = next(rgbs)
-                was, look = look, styles.get(rgb) or self.look(label, rgb)
-                if look is not was and text:
-                    segments.append(Segment(text, was + start))
-                    text = ""
-                if not text:
-                    start = at
-                text += ch
-            segments.append(Segment(text, look + start))
+                segments.append(Segment(ch, (styles.get(rgb) or self.look(label, rgb)) + at))
         frame[k] = segments
         return segments
 
