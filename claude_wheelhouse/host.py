@@ -570,7 +570,9 @@ class Host:
 
     def waits_on_person(self) -> bool:
         """Whether the session waits on the person: an open question (not the host's Compact
-        nudge), an unseen decision or an open permission of its own."""
+        nudge), an unseen decision or an open permission. A permission or AskUserQuestion
+        waits inside a running turn, where no keepalive is sent (keepalive_due), so in
+        practice it is the questions and decisions the session posts itself that bring one."""
         return any((i["kind"] == "question" and i["status"] == "open" and i["answer"] not in (NUDGE, NUDGE_DONE))
                    or (i["kind"] == "decision" and i["status"] == "unseen")
                    or (i["kind"] == "permission" and i["status"] == "open")

@@ -46,19 +46,20 @@ the right sign-off depends on the tone, so they're best answered together.
 wheelhouse's own text is British; undo: say so and it's rewritten.
 5. Say in one line of chat that you're waiting on the two questions, then stop.
 
-When the answers arrive, mark each question answered as the wheelhouse protocol says, then write the \
-two-line message in chat. Then run `{TOUCH}` to record that the tutorial ran (it asks the \
-person's permission: that's expected). Once it has run, mark the task done and say in one \
-line that you're finished and the session can be ended. If they ask for changes, make them."""
+When the answers arrive, mark each question answered as the wheelhouse protocol says, then run \
+`{TOUCH}` to record that the tutorial ran (it asks the person's permission: that's expected). \
+Once it has run, mark the task done. Then end your turn with the two-line message in chat, \
+which is your answer to both questions, and one last line saying you're finished and the \
+session can be ended. If they ask for changes, make them."""
 
 # (key, what to do, how): in the order the tutorial's session makes them possible
 STEPS = (
     ("open", "Open a question", "highlight Q1 in the item list, or press Enter on it"),
     ("queue", "Answer both questions", "type in the box, Ctrl+Enter queues each answer"),
     ("send", "Send them together", "Ctrl+S, or the Send button under the session list"),
-    ("reply", "See the session's reply", "processing turns to answered as it replies"),
-    ("decision", "Read and close the decision", "highlight D1 to read it, then Delete (or Backspace) in the item list closes it, as it does a question"),
     ("permission", "Allow the permission prompt", "highlight P1, then the Allow button"),
+    ("reply", "See the session's reply", "its message shows in each question's thread as it finishes"),
+    ("decision", "Read and close the decision", "highlight D1 to read it, then Delete (or Backspace) in the item list closes it, as it does a question"),
     ("follow", "Follow the conversation", "the 💬 Conversation row, or the session on the left"),
     ("end", "End the session", "highlight it in the session list, then End below: its items go with it"),
 )

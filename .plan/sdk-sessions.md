@@ -272,11 +272,12 @@ so an hour's quiet is what turns the cache cold.
   per crossing. A message the person sends on it goes to the session as a general one
   (the session never posted it), and the host answers it there itself.
 - **Keepalive.** A session whose last turn ended over `KEEPALIVE_TOKENS` (150k), with
-  nothing running and waiting on the person (an open question other than the nudge, an
-  unseen decision or an open permission of its own), gets a tiny turn from the host
+  nothing running and waiting on the person (an open question other than the nudge, or an
+  unseen decision, of its own: a permission or AskUserQuestion waits inside a running turn,
+  so never brings one), gets a tiny turn from the host
   `KEEPALIVE_AFTER` (55 min) after its last one, telling it to reply with one word and do
   nothing else. It leaves the activity line as it found it (an error's, Interrupt's or a
-  compaction's), unless it fails itself. That keeps the hour's
+  compaction's), unless it fails itself; an interrupted keepalive leaves it too. That keeps the hour's
   cache warm for a few thousand tokens of reads instead of a cold rewrite of the whole
   context. The keepalive's own end restarts the 55 minutes but not the quiet time, so they
   stop once the session has been quiet `KEEPALIVE_FOR` (8 h): an abandoned session doesn't
@@ -294,8 +295,10 @@ so an hour's quiet is what turns the cache cold.
   (`context_at`, which no later activity line hides) and its activity line is idle again
   (never mid-turn, as a turn queued behind /compact would be), the host is stopped and
   started again as any Relaunch. The deadline (30 minutes) is checked first, so a
-  wheelhouse started hours later never restarts it. Interrupt (from any wheelhouse: it
-  clears the store's row), Compact getting no notes, the session going to a shell tab or
+  wheelhouse started hours later never restarts it. Interrupt (from any wheelhouse: a
+  new hub clears the store's row, and the host records `interrupted_at` as it interrupts,
+  which every hub reads, since the interrupted turn's end writes over its activity line),
+  Compact getting no notes, the session going to a shell tab or
   another host give it up, saying so, with the host left running; a host that died is
   relaunched as any stopped one.
 - **The host posts the reply.** One session made about 87 `reply` calls a day, each
@@ -309,13 +312,17 @@ so an hour's quiet is what turns the cache cold.
   status call settles the item all the same (a `status` message, which AWAITING counts as
   a reply). Nor is it posted where the session has replied itself since the person's
   message (a relaunched session copying its history).
+  An interrupted turn ends as `interrupted`, not as an error.
   Each turn goes with a uuid, and the host asks Claude Code to replay user messages
   (`replay-user-messages`), which it does as it takes each turn up: a turn's end answers
   the turns replayed in it. As probed on claude 2.1.296: a turn Claude Code starts itself
   (a background task's notification) replays none of ours; a turn sent while one runs is
   taken up into it at the next tool call, and one end answers both; an interrupted turn's
   end lists it alone, and the turns queued behind it still run. (The result message's own
-  `user_message_uuids` say the same, but the SDK drops that field.)
+  `user_message_uuids` say the same, but the SDK drops that field.) Should Claude Code
+  stop replaying, a turn's end with no origin (Claude Code's own turns carry one) that
+  replayed none of ours takes the oldest sent as ended, unanswered, and says so on stderr,
+  so the host never wedges.
 - **Slimmer decisions.** A decision's alternative, why and reverse were three required
   fields, each its own labelled paragraph. They are one short line now, `why` ("over
   Postgres: no server to run; undo: swap the DSN"), shown as **Why:** under the detail:
