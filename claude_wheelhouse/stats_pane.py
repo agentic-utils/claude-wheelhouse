@@ -79,8 +79,8 @@ class SessionStats(Widget):
         if self.charts and self.display and self.text_selection:   # drawn whole, the selection with it
             self.refresh()
         elif self.charts and self.display:
-            top = self.gutter.top   # the bars' lines are the content's, under the border
-            self.refresh(*(Region(0, top + y, self.size.width, n) for y, n in self.bar_runs))
+            # the bars' lines are the content's: refresh puts them under the border itself
+            self.refresh(*(Region(0, y, self.size.width, n) for y, n in self.bar_runs))
 
     # reading
 

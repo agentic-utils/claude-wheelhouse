@@ -3145,6 +3145,17 @@ async def test_a_cursor_move_draws_only_the_rows_it_leaves_and_lands_on(store, s
         for y in lines:
             t.render_line(y)
         assert drawn and not any(k and k.startswith(BLANK) for k in drawn), "a change to the data leaves the blank rows be"
+        drawn.clear()
+        rows = [(r.key.value, t.get_row_at(i)) for i, r in enumerate(t.ordered_rows)]
+        assert fill(t, [rows[1], rows[0], *rows[2:]]), "rebuilt, through clear()"
+        for y in lines:
+            t.render_line(y)
+        assert drawn and not any(k and k.startswith(BLANK) for k in drawn), "a rebuild leaves the blank rows be"
+        drawn.clear()
+        t.zebra_stripes = True
+        for y in lines:
+            t.render_line(y)
+        assert any(k and k.startswith(BLANK) for k in drawn), "a new look draws the blank rows again"
 
 
 @pytest.mark.anyio
@@ -4505,9 +4516,36 @@ async def test_a_shimmer_frame_redraws_only_the_charts_bars(store, sid, monkeypa
         monkeypatch.setattr(pane, "refresh", lambda *regions, **k: dirty.extend(regions))
         pane.animate(pane.frame + 1)
         lines = {y for r in dirty for y in range(r.y, r.bottom)}
-        assert lines == {y + pane.gutter.top for y in pane.bars}, "the bars' lines alone"
+        assert lines == set(pane.bars), "the bars' lines alone, in the content's place"
         for y in range(pane.size.height):
             pane.render_line(y)
         assert not built, "the panel's Text isn't built again for a frame"
         pane.rebuild()   # a tick with nothing new: nothing drawn again
         assert not built and not dirty[len(lines):]
+
+
+@pytest.mark.anyio
+async def test_a_shimmer_frame_moves_the_bars_on_screen_under_a_border(store, sid, monkeypatch):
+    import time
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 45)) as pilot:
+        await pilot.pause()
+        pane = app.query_one("#stats")
+        monkeypatch.setattr(pane, "tick", lambda: None)   # the made-up session stays shown
+        pane.remove_class("-split")   # its own top border back: the content one line down
+        pane.styles.padding = (1, 0, 0, 0)   # and a line more
+        pane.show(busy_snapshot(time.time()), "demo", time.time())
+        await pilot.pause()
+        assert pane.gutter.top == 2 and pane.bars
+        region, tops = pane.content_region, []
+        for frame in (1, 7, 40):
+            pane.animate(frame)
+            await pilot.pause()
+            screen = app.screen._compositor.render_update(full=True).strips
+            for y in sorted(pane.bars):
+                shown = Strip.join(screen[region.y + y]).crop(region.x, region.right)
+                looks = [[(ch, style.color, style.bgcolor) for ch, style in cells(line)]
+                         for line in (shown, pane.render_line(y))]
+                assert looks[0] == looks[1], f"frame {frame}: bar line {y} on screen as drawn"
+            tops.append(str([(ch, style.color) for ch, style in cells(Strip.join(screen[region.y + min(pane.bars)]))]))
+        assert len(set(tops)) == 3, "the top bar line moves on screen each frame"

@@ -11,7 +11,7 @@ import shutil
 import sqlite3
 import subprocess
 import time
-from typing import Callable
+from typing import Callable, Self
 
 from rich.markdown import Markdown as RichMarkdown
 from rich.segment import Segment
@@ -517,6 +517,21 @@ class SinkList(DataTable):
     def notify_style_update(self) -> None:
         self.blank_lines.clear()
         super().notify_style_update()
+
+    def _clear_caches(self) -> None:
+        """DataTable's caches and the blank rows' with them, for a look their key leaves out
+        (zebra stripes, fixed rows)."""
+        self.blank_lines.clear()
+        super()._clear_caches()
+
+    def clear(self, columns: bool = False) -> Self:
+        """The blank rows' lines are kept: they go by their place and the columns' widths, not
+        the rows, so a rebuild (fill) draws again the real rows alone. The session list is
+        rebuilt at a cursor move to a session whose info is another height (on_resize)."""
+        kept, self.blank_lines = self.blank_lines, LRUCache(1000)   # what _clear_caches clears
+        super().clear(columns)
+        self.blank_lines = kept
+        return self
 
     def validate_cursor_coordinate(self, value: Coordinate) -> Coordinate:
         value = super().validate_cursor_coordinate(value)
