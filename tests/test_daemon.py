@@ -12,7 +12,7 @@ import httpx2
 import pytest
 from sse_starlette.sse import AppStatus
 
-from claude_wheelhouse import daemon as daemon_mod, hub as hub_mod, launch, liveness, store as store_mod, transcript
+from claude_wheelhouse import daemon as daemon_mod, launch, liveness, store as store_mod, transcript
 from claude_wheelhouse.daemon import AlreadyRunning, Daemon, Feed, checked_address, hosts, take_lock
 from claude_wheelhouse.hub import Event
 from claude_wheelhouse.store import SessionGone, Store
@@ -232,7 +232,7 @@ def fails_once(real, after: bool):
 ])
 async def test_a_command_that_fails_is_kept_if_and_only_if_it_wrote(daemon, store, sid, monkeypatch, capsys, path,
                                                                     body, breaks, after, status, replayed, done, desc):
-    store.post_item(sid, "decision", "pick one", why="over the other: simpler; undo: pick again")
+    store.post_item(sid, "decision", "pick one", alternative="the other", why="simpler", reverse="pick again")
     store.post_item(sid, "permission", "Bash: ls")
     monkeypatch.setattr(store, breaks, fails_once(getattr(store, breaks), after))
     url = f"/sessions/{sid}/send" if path == "send" else f"/items/{sid}/{path}"
@@ -646,19 +646,3 @@ async def test_a_session_created_since_the_last_refresh_is_still_followed(daemon
     assert (await call(daemon, "GET", f"/sessions/{late}/conversation")).status_code == 200
     daemon.forget_gone()
     assert late in daemon.hub.followers and late in daemon.reading
-@pytest.mark.parametrize("body, command, said, desc", [
-    ({"host": [4242, 1], "compact": True}, "compact", "compacting first", "compact first: the host is asked to Compact"),
-    ({"host": [4242, 1]}, None, "stopping its host", "without: its host is stopped now"),
-])
-async def test_relaunch_can_compact_first(daemon, store, sid, monkeypatch, body, command, said, desc):
-    store.set_runner(sid, "sdk")
-    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b', context_tokens = 200000")
-    monkeypatch.setattr(liveness, "is_alive", lambda *a: True)
-    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
-    monkeypatch.setattr(hub_mod.os, "kill", lambda *a: None)
-    daemon.tick()
-    shown = await call(daemon, "GET", "/sessions")
-    assert shown.json()[0]["compact_first"] is True, f"{desc}: the client is told to offer it"
-    r = await call(daemon, "POST", f"/sessions/{sid}/relaunch", body)
-    assert r.status_code == 200 and any(said in t for t in told(r)), f"{desc}: {r.text}"
-    assert store.session(sid)["host_command"] == command, desc

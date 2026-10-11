@@ -42,23 +42,23 @@ def wheelhouse_tool(fn):
 
 
 @wheelhouse_tool
-def post_item(kind: str, title: str, body: str = "", status: str | None = None, why: str = "") -> str:
+def post_item(kind: str, title: str, body: str = "", status: str | None = None,
+              alternative: str = "", why: str = "", reverse: str = "") -> str:
     """Create a task, question, agent or decision item in the wheelhouse. kind: task |
     question | agent | decision. Returns the item's ref (T1, Q1, A1, D1...). Write the full
-    detail in body, once. A decision (see the protocol) also needs why, one short line: the
-    option passed over, the reason, how to undo it. It takes no status. The wheelhouse posts
-    agent items for your subagents itself: don't post those."""
+    detail in body, once. A decision (see the protocol) also needs alternative, why and
+    reverse (how to undo it), and takes no status. The wheelhouse posts agent items for
+    your subagents itself: don't post those."""
     if kind == "permission":   # the host posts these from Claude Code's own permission check
         raise ValueError("kind must be task, question, agent or decision")
-    return _store.post_item(_sid, kind, title, body, status, why=why)
+    return _store.post_item(_sid, kind, title, body, status,
+                            alternative=alternative, why=why, reverse=reverse)
 
 
 @wheelhouse_tool
 def update_item(ref: str, status: str | None = None, title: str | None = None,
                 body: str | None = None, note: str | None = None) -> str:
-    """Change an item's status, title or body, and/or append a progress note to its thread.
-    In a session the wheelhouse runs itself, this is how you declare a question open or
-    answered after the person's message on it (the wheelhouse posts your chat as the reply)."""
+    """Change an item's status, title or body, and/or append a progress note to its thread."""
     _store.update_item(_sid, ref, status=status, title=title, body=body, note=note)
     return f"{ref} updated"
 
@@ -69,9 +69,7 @@ def reply(ref: str, text: str, status: str | None = None) -> str:
     ref (a note records progress; a reply is part of the conversation). On a question,
     status is required: "open" if you are still waiting on the person (you answered their
     clarification, or need more), "answered" once their input lets you proceed. On a task
-    or agent it is optional. In a session the wheelhouse runs itself (no tab), the wheelhouse
-    posts your turn's chat as the reply on the ref the person's message was on: don't repeat
-    it here, set the status with update_item instead."""
+    or agent it is optional."""
     _store.reply(_sid, ref, text, status)
     return f"replied on {ref}" + (f", now {status}" if status else "")
 

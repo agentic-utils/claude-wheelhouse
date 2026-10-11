@@ -39,18 +39,15 @@ SETTLED = {"task": {"done", "dropped"}, "question": {"answered"}, "decision": {"
 # kinds whose settled items the person dismisses (Delete), recorded in items.dismissed; a
 # question or a decision is closed instead
 DISMISSABLE = ("task", "agent")
-# what a decision records besides its title (what was decided): post_item's keyword name, label.
-# One short line: the option passed over, the reason and how to undo it (#16: once three fields)
-DECISION_FIELDS = (("why", "Why"),)
+# what a decision records besides its title (what was decided): post_item's keyword name, label
+DECISION_FIELDS = (("alternative", "Alternative"), ("why", "Why"), ("reverse", "To reverse"))
 # Bump when a session still running older code (its MCP server and monitor keep the code
 # they started with) would mishandle the store or miss new behaviour: the wheelhouse then
 # shows it as needing a relaunch. 2: queued answers (draft messages) that older code would deliver.
 # 3: reply declares a question's status. 4: decisions. 5: SDK-hosted sessions and permission items.
 # 6: decisions listed in a report are posted as items. 7: the wheelhouse tracks subagents
-# itself (subagents.py), so the protocol no longer asks a session to post them. 8: a hosted
-# session's host posts its chat as the reply on the ref answered, so the protocol asks it
-# for the status alone. 9: a decision's alternative, why and reverse are one short line, `why`.
-PROTOCOL_VERSION = 9
+# itself (subagents.py), so the protocol no longer asks a session to post them.
+PROTOCOL_VERSION = 7
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.
@@ -387,20 +384,18 @@ class Store:
         with self.tx() as db:
             db.execute("UPDATE sessions SET shell = ? WHERE id = ?", (state, sid))
 
-    def set_relaunch(self, sid: str, host: tuple | None, deadline: float = 0.0, compacting: bool = False) -> None:
-        """A Relaunch under way: the host it stopped (or, compacting, will stop once the
-        session is compacted), (pid, start time), and the epoch second it gives up by, so a
-        wheelhouse started again carries it on; None once it's done."""
+    def set_relaunch(self, sid: str, host: tuple | None, deadline: float = 0.0) -> None:
+        """A Relaunch under way: the host it stopped, (pid, start time), and the epoch second
+        it gives up by, so a wheelhouse started again carries it on; None once it's done."""
         with self.tx() as db:
             db.execute("UPDATE sessions SET relaunch = ? WHERE id = ?",
-                       (json.dumps([*host, deadline, compacting]) if host else None, sid))
+                       (json.dumps([*host, deadline]) if host else None, sid))
 
-    def relaunches(self) -> dict[str, tuple[float, tuple, bool]]:
-        """Each Relaunch under way, by session: (its epoch deadline, the host it stopped,
-        whether it is compacting first)."""
-        return {r["id"]: (deadline, (pid, start), bool(rest and rest[0])) for r in self._all(
+    def relaunches(self) -> dict[str, tuple[float, tuple]]:
+        """Each Relaunch under way, by session: (its epoch deadline, the host it stopped)."""
+        return {r["id"]: (deadline, (pid, start)) for r in self._all(
             "SELECT id, relaunch FROM sessions WHERE relaunch IS NOT NULL")
-            for pid, start, deadline, *rest in [json.loads(r["relaunch"])]}
+            for pid, start, deadline in [json.loads(r["relaunch"])]}
 
     def unregister(self, sid: str) -> None:
         """The registered process is letting go of the session (a host handing over to a tab):
@@ -540,9 +535,8 @@ class Store:
 
     def post_item(self, sid: str, kind: str, title: str, body: str = "", status: str | None = None,
                   **decision: str) -> str:
-        """A decision also takes why (DECISION_FIELDS), required: one short line with the
-        option passed over, the reason and how to undo it, which joins its body; its status
-        is the person's (unseen until they view it)."""
+        """A decision also takes alternative, why and reverse (DECISION_FIELDS), all required,
+        which join its body; its status is the person's (unseen until they view it)."""
         if kind not in KINDS:
             raise ValueError(f"kind must be one of {sorted(KINDS)}")
         if kind == "decision":
@@ -655,15 +649,6 @@ class Store:
             self._said(db, sid, ref, text, "reply")
             db.execute(f"UPDATE items SET status = coalesce(?, status), updated_at = ?, {UNDISMISS} "
                        "WHERE session_id = ? AND ref = ?", (status, now(), status, sid, ref))
-
-    def host_reply(self, sid: str, ref: str, text: str) -> None:
-        """A hosted session's chat, posted by its host as the reply on an item the person's
-        message was on. It declares nothing: the session sets the status itself."""
-        with self.tx() as db:
-            self._require(db, sid)
-            if db.execute("UPDATE items SET updated_at = ? WHERE session_id = ? AND ref = ?",
-                          (now(), sid, ref)).rowcount:
-                self._said(db, sid, ref, text, "reply")
 
     @staticmethod
     def _said(db, sid, ref, text, kind) -> int:
@@ -950,8 +935,7 @@ def decision_body(body: str, status, fields: dict) -> str:
     missing = [k for k, _ in DECISION_FIELDS if not (fields.get(k) or "").strip()]
     if missing:
         raise ValueError(f"a decision needs {', '.join(missing)}: what you decided goes in title "
-                         "(and body), and why is one short line with the option you passed over, your "
-                         "reason and how to undo it")
+                         "(and body), plus the alternative, why, and how to reverse it")
     parts = [body.strip()] if body.strip() else []
     parts += [f"**{label}:** {fields[k].strip()}" for k, label in DECISION_FIELDS]
     return "\n\n".join(parts)

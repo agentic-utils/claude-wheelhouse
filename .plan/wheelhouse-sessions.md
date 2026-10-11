@@ -488,9 +488,7 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   `launch.open_session` (so it stays a host) once the process has gone, and gives up,
   saying so, after 30 s. A tab, or a host's session in a shell tab, relaunches only once
   it has exited. A signal rather than a new host command: every host since the first
-  handles SIGTERM, including the stale ones a relaunch is for. One whose host last
-  recorded a context over 150k (`hub.COMPACT_FIRST_TOKENS`) is offered Compact first,
-  Relaunch now or Cancel (#16, `.plan/sdk-sessions.md` section 9).
+  handles SIGTERM, including the stale ones a relaunch is for.
 - **Look.** Matrix green inside panels; colour and a shimmering title bar on the chrome.
 
 ## Relationship to the cache dashboard

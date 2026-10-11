@@ -42,11 +42,11 @@ Your job: draft a two-line welcome message for new wheelhouse users. Do this now
    - "Tone for the welcome message?": friendly, formal, or pirate.
    - "Sign it off as whom?": the wheelhouse, the team, or no sign-off. Say in the body that \
 the right sign-off depends on the tone, so they're best answered together.
-4. Post a decision: "Writing it in British English", why: over American English: the \
-wheelhouse's own text is British; undo: say so and it's rewritten.
+4. Post a decision: "Writing it in British English". Alternative: American English. Why: \
+the wheelhouse's own text is British. To reverse: say so and it's rewritten.
 5. Say in one line of chat that you're waiting on the two questions, then stop.
 
-When the answers arrive, mark each question answered as the wheelhouse protocol says, then write the \
+When the answers arrive, reply on each question with status answered, then write the \
 two-line message in chat. Then run `{TOUCH}` to record that the tutorial ran (it asks the \
 person's permission: that's expected). Once it has run, mark the task done and say in one \
 line that you're finished and the session can be ended. If they ask for changes, make them."""

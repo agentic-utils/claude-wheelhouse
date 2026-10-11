@@ -23,9 +23,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   you type `:gri` the hint line suggests matches (Tab or Enter takes the first). Text you haven't sent stays with the item (or session) you typed it
   for: moving to another clears the box, and coming back restores it. Each session shows
   its queued count (`✉ 3`). Sending doesn't change a question's status: the session's
-  reply declares it, `open` while it still needs you or `answered`. A session run in the
-  wheelhouse doesn't write its reply twice: its host posts the turn's chat in the item's
-  thread as the reply, and the session sets the status alone. Until it replies the
+  reply declares it, `open` while it still needs you or `answered`. Until it replies the
   question shows as `processing` (dimmed), awaiting the session, and the session list's
   question count leaves it out: it counts only questions awaiting you, a queued answer
   not yet sent included. Tasks, decisions and subagents you answer show `queued` and
@@ -49,9 +47,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   following it at the end as it works unless you've scrolled up to read. `Enter` shows
   the same full screen. If its transcript can't be found, the pane says so.
 - **Decisions.** If your own instructions let a session decide some things without asking
-  you, it reports each one as a decision (`D1`): what it decided, and one short line with
-  the alternative, why, and how to reverse it. Decisions block nothing. Each session
-  counts its unseen ones (the `D` column); one becomes seen once it has been in sight for a second without moving on
+  you, it reports each one as a decision (`D1`): what it decided, the alternative, why, and
+  how to reverse it. Decisions block nothing. Each session counts its unseen ones (the `D`
+  column); one becomes seen once it has been in sight for a second without moving on
   (highlighted, or open full screen), whether you highlighted it or the wheelhouse did (at
   startup, or once an item goes), so arrowing past it leaves it unseen, as does a second
   spent in another window, where your terminal reports focus. Answering it
@@ -127,9 +125,6 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   wheelhouse too: its host stops (interrupting any turn under way; an open permission or
   question closes, since nothing is left to answer it) and starts again on the same
   conversation once the old process has gone, to pick up new wheelhouse code or settings.
-  A restart writes the session's whole context to the prompt cache again, so for one over
-  150k tokens Relaunch offers Compact first (`C`: it's asked what to keep, compacted, then
-  relaunched), Relaunch now (`R`) or Cancel.
   A tab session relaunches once you've `/exit`ed it. Nothing restarts on its own, and a resumed session is asked to
   post the questions and tasks it already had open. Park
   drops a session's items off the inbox until you unpark or restore it. End deletes its wheelhouse data. On a running
@@ -149,12 +144,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   question item. Its buttons include Interrupt, Compact (the session is asked what to keep,
   then compacted with that, and the bar reports the token drop) and Shell, which hands the
   session to the real Claude Code in a tab and takes it back when you `/exit` there; the
-  bar above the footer has a line saying what the session in context is doing. A session whose
-  context passes 200k tokens posts one question item, `context 220k: compact?`, with Compact a key
-  away (`C`): it closes by itself once the session is compacted, and comes back only when the
-  context passes 200k again. One over 150k that sits idle waiting on you gets a one-word
-  keepalive turn every 55 minutes, for up to 8 hours, so its prompt cache (an hour's) doesn't go
-  cold and get written again whole. Closing the wheelhouse leaves the hosts
+  bar above the footer has a line saying what the session in context is doing. Closing the wheelhouse leaves the hosts
   running. `WHEELHOUSE_RUNNER=tab` makes tabs the default again. Restore and Adopt bring a
   session back the way new sessions run, so a tab from before hosts existed comes back as
   a host once you `/exit` it; Shell is the way back to a tab. Host logs are under `~/.local/state/claude-wheelhouse/hosts/`.

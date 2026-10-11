@@ -1,8 +1,3 @@
-- When a message arrives on a ref, answer it with `reply(ref, text, status)` as well as in
-  chat, every time. Sending doesn't change a question's status: your reply declares it. On
-  a question, `status` is required: `open` while you are still waiting on the person (you
-  answered their clarifying question, or need more from them), `answered` only once their
-  input lets you proceed. Until you reply, the wheelhouse shows the question as awaiting you.
 - The person's answers and hints arrive as notifications from the wheelhouse monitor,
   marked `[wheelhouse] from <their username>`, several answers sometimes in one
   notification. Treat them as if typed in chat. If a notification says it was cut short,

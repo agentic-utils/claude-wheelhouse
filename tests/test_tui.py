@@ -26,7 +26,7 @@ from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
 from claude_wheelhouse.store import Store, mode
 from claude_wheelhouse.tui import (BLANK, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice, Confirm,
-                                   Folders, Hint, PermissionButtons, RelaunchChoice, RenameSession, SendBar, ThreadView, Transcript, hint,
+                                   Folders, Hint, PermissionButtons, RenameSession, SendBar, ThreadView, Transcript, hint,
                                    render)
 
 
@@ -1112,7 +1112,7 @@ async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp
     items or B's in the list following B rebuilt, as it would be typed slowly. A pass over a
     decision marks nothing: only the one the burst ends on is seen, once the person has
     rested on it (the dwell)."""
-    extra = {"why": "over x: y; undo: z"}
+    extra = {"alternative": "x", "why": "y", "reverse": "z"}
     other = store.create_session(str(tmp_path), name="other")
     for s in (sid, other):
         for title in ("one", "two"):
@@ -1176,7 +1176,7 @@ async def two_lists(tmp_path, where, steps, slow, counts=(2, 2)) -> dict:
     with one_second():
         for s, count in zip((a, b), counts):
             for title in ("one", "two", "three", "four")[:count]:
-                store.post_item(s, "decision", title, why="over x: y; undo: z")
+                store.post_item(s, "decision", title, alternative="x", why="y", reverse="z")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -2131,8 +2131,6 @@ async def test_one_click_on_a_dead_session_opens_one_prompt_and_yes_closes_it(st
 @pytest.mark.parametrize("screen, labels, desc", [
     (lambda: Confirm("ok?"), ["[Y]es", "[N]o"], "the relaunch and destructive confirms"),
     (lambda: Choice("hm?"), ["[C]ancel request", "[F]orce", "Leave it [Esc]"], "a pending request's choice"),
-    (lambda: RelaunchChoice("big?"), ["[C]ompact first", "[R]elaunch now", "Cancel [Esc]"],
-     "Relaunch of a big session"),
 ])
 @pytest.mark.anyio
 async def test_button_labels_keep_their_key_hints(store, screen, labels, desc):
@@ -2370,7 +2368,7 @@ async def test_delete_closes_and_ctrl_r_reopens_questions(store, sid, key, kind,
     ("decision", ["queue", "dispatch"], "processing", "", "a decision's answer sent with Ctrl+S"),
 ])
 async def test_the_item_list_shows_a_question_awaiting_the_session(store, sid, kind, steps, shown, count, desc):
-    extra = {"why": "over Postgres: no server; undo: swap the DSN"} if kind == "decision" else {}
+    extra = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"} if kind == "decision" else {}
     q = store.post_item(sid, kind, "which db?", **extra)
     act = {"send": lambda: store.send(sid, "what's it for?", q), "queue": lambda: store.queue(sid, "the cache", q),
            "dispatch": lambda: store.dispatch(sid),
@@ -2393,7 +2391,7 @@ async def test_the_item_list_shows_a_question_awaiting_the_session(store, sid, k
 async def test_the_selected_item_keeps_its_place(store, sid, kind, pick, answer, after, desc):
     """Doug: "only move items when not selected". The selected row keeps its place while
     it's selected, however its status changes; it re-sorts once the selection moves on."""
-    extra = {"why": "over Postgres: no server; undo: swap the DSN"} if kind == "decision" else {}
+    extra = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"} if kind == "decision" else {}
     refs = {age: store.post_item(sid, kind, f"{age} one", **extra) for age in ("old", "new")}
     for age, at in (("old", "10:00"), ("new", "10:01")):
         store.db.execute("UPDATE items SET updated_at = ? WHERE ref = ?", (f"2026-10-09T{at}:00+00:00", refs[age]))
@@ -2429,7 +2427,7 @@ def pin_target(store, sid, start):
             store.dismiss(sid, ref)
         return ref
     kind = start.split()[0]
-    extra = {"why": "over a: b; undo: c"} if kind == "decision" else {}
+    extra = {"alternative": "a", "why": "b", "reverse": "c"} if kind == "decision" else {}
     ref = store.post_item(sid, kind, "TARGET", **extra)
     if start in ("task done", "task dismissed", "task dismissed awaiting"):
         store.update_item(sid, ref, status="done")
@@ -2526,7 +2524,7 @@ async def test_a_selected_item_moves_only_on_delete(store, sid, live, start, act
             assert app.selected == (sid, ref) and table.cursor_key() == f"{sid}|{ref}", f"{desc}: still selected"
 
 
-DECIDED = {"why": "over Postgres: no server; undo: swap the DSN"}
+DECIDED = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"}
 
 
 class DwellClock:
@@ -2679,7 +2677,8 @@ async def test_a_decision_seen_by_the_dwell_sinks_only_once_left(store, sid, dwe
 @pytest.mark.anyio
 async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid):
     q = store.post_item(sid, "question", "which db?")
-    d = store.post_item(sid, "decision", "cache in SQLite", why="over Postgres: no server to run; undo: swap the DSN")
+    d = store.post_item(sid, "decision", "cache in SQLite", alternative="Postgres",
+                        why="no server to run", reverse="swap the DSN")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -2714,7 +2713,7 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
     ("closed", "ctrl+r", True, "seen", "Ctrl+R reopens it as seen"),
 ])
 async def test_delete_closes_and_ctrl_r_reopens_decisions(store, sid, start, key, finished, expected, desc):
-    d = store.post_item(sid, "decision", "cache in SQLite", why="over Postgres: local; undo: swap")
+    d = store.post_item(sid, "decision", "cache in SQLite", alternative="Postgres", why="local", reverse="swap")
     if start == "closed":
         store.close_decision(sid, d)
     app = WheelhouseApp(store)
@@ -4375,34 +4374,3 @@ async def test_a_subagent_item_whose_transcript_is_missing_says_so(store, sid, t
         items.move_cursor(row=items.get_row_index(f"{sid}|{ref}"))
         await pilot.pause()
         assert "A `general-purpose` subagent." in app._detail_text and transcript.NO_AGENT_FILE in app._detail_text
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("tokens, keys, dialog, stopped, desc", [
-    (200_000, ("c",), "RelaunchChoice", ("compact", (4242, 1)), "past 150k: C compacts first"),
-    (200_000, ("r",), "RelaunchChoice", ("now", (4242, 1)), "past 150k: R relaunches now"),
-    (200_000, ("escape",), "RelaunchChoice", None, "Esc cancels"),
-    (200_000, ("enter",), "RelaunchChoice", None, "it opens on Cancel: a reflex Enter relaunches nothing"),
-    (100_000, ("y",), "Confirm", ("now", (4242, 1)), "a small one: the plain confirm"),
-])
-async def test_relaunch_offers_to_compact_a_big_session_first(store, sid, monkeypatch, tokens, keys, dialog,
-                                                              stopped, desc):
-    from claude_wheelhouse import hub as hub_mod, liveness
-    store.set_runner(sid, "sdk")
-    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b', context_tokens = ?",
-                     (tokens,))
-    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
-    calls = []
-    monkeypatch.setattr(hub_mod.Hub, "stop_host", lambda self, sid, host: calls.append(("now", host)) or hub_mod.Done())
-    monkeypatch.setattr(hub_mod.Hub, "compact_then_relaunch",
-                        lambda self, sid, host: calls.append(("compact", host)) or hub_mod.Done())
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        app.session_list.focus()
-        await pilot.press("l")
-        await pilot.pause()
-        assert type(app.screen).__name__ == dialog, desc
-        await pilot.press(*keys)
-        await pilot.pause()
-        assert calls == ([stopped] if stopped else []), desc

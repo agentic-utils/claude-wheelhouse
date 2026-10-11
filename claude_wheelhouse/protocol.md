@@ -28,5 +28,10 @@ anything here seems to conflict with them, follow yours.
   sets these for you). Add a `note` for progress worth keeping.
 - Don't close a question yourself. Closing is the person's call (they press Delete in the
   wheelhouse's item list), unless the work it unblocked is done.
+- When a message arrives on a ref, answer it with `reply(ref, text, status)` as well as in
+  chat, every time. Sending doesn't change a question's status: your reply declares it. On
+  a question, `status` is required: `open` while you are still waiting on the person (you
+  answered their clarifying question, or need more from them), `answered` only once their
+  input lets you proceed. Until you reply, the wheelhouse shows the question as awaiting you.
 - Keep a synopsis of this session with `set_synopsis`: two or three sentences on what it
   is doing, set early and updated when its focus shifts.
