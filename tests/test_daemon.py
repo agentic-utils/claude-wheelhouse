@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import signal
 import sqlite3
 import time
@@ -19,13 +20,14 @@ from claude_wheelhouse.store import SessionGone, Store
 
 pytestmark = pytest.mark.anyio
 URL = "http://127.0.0.1:7428"
+TOKEN = "the-test-token"
 
 
 @pytest.fixture
 def daemon(store, monkeypatch):
     monkeypatch.setattr(launch, "open_session", lambda store, sid: None)
     monkeypatch.setattr(launch, "restore_session", lambda store, sid: None)
-    d = Daemon(store, hosts("127.0.0.1", 7428), inline=True)
+    d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True)
     d.feed = Feed(start=100)
     yield d
     d.pool.shutdown()
@@ -34,7 +36,9 @@ def daemon(store, monkeypatch):
 
 
 def client(daemon, **headers):
-    return httpx2.AsyncClient(transport=httpx2.ASGITransport(app=daemon.app), base_url=URL, headers=headers)
+    """Through the ASGI transport, with the token unless the headers say otherwise."""
+    return httpx2.AsyncClient(transport=httpx2.ASGITransport(app=daemon.app), base_url=URL,
+                              headers={"Authorization": f"Bearer {TOKEN}", **headers})
 
 
 async def call(daemon, method, path, body=None, key=None, **headers):
@@ -161,7 +165,6 @@ async def test_the_inbox_and_a_thread_carry_no_seq_from_a_database_that_had_it(d
     ("GET", "/fs?path=/no/such/dir", None, 404, "a directory that isn't there"),
     ("POST", "/sessions", {"cwd": "/no/such/dir"}, 400, "a new session where there's no directory"),
     ("POST", "/sessions", {"cwd": "."}, 400, "nor a relative path, which would be the daemon's"),
-    ("POST", "/sessions", {"cwd": "/", "runner": "tab"}, 400, "a tab, on a screen nobody remote sees"),
     ("POST", "/items/{sid}/T1/permission", {"decision": "allow"}, 400, "a permission's answer to a task"),
     ("POST", "/sessions", {"cwd": "/", "model": "opus[1m]"}, 400, "a model that isn't offered"),
     ("POST", "/sessions", {"cwd": "/", "effort": "turbo"}, 400, "an effort that isn't one"),
@@ -656,7 +659,8 @@ async def test_a_client_gone_before_its_body_is_let_go_quietly(daemon, store, si
     scope = {"type": "http", "method": "POST", "path": f"/sessions/{sid}/rename", "raw_path": b"",
              "query_string": b"", "root_path": "", "scheme": "http", "http_version": "1.1",
              "server": ("127.0.0.1", 7428), "client": ("127.0.0.1", 50000),
-             "headers": [(b"host", b"127.0.0.1:7428"), (b"idempotency-key", b"k1")]}
+             "headers": [(b"host", b"127.0.0.1:7428"), (b"idempotency-key", b"k1"),
+                         (b"authorization", f"Bearer {TOKEN}".encode())]}
     sent = []
 
     async def receive():
@@ -732,3 +736,166 @@ async def test_relaunch_can_compact_first(daemon, store, sid, monkeypatch, body,
     r = await call(daemon, "POST", f"/sessions/{sid}/relaunch", body)
     assert r.status_code == 200 and any(said in t for t in told(r)), f"{desc}: {r.text}"
     assert store.session(sid)["host_command"] == command, desc
+
+
+@pytest.mark.parametrize("peer, status, desc", [
+    ("127.0.0.1", 200, "from this machine: the TUI's New session, with its tab box ticked"),
+    ("100.64.0.7", 400, "from another machine: a tab would open on a screen nobody there sees"),
+])
+async def test_a_tab_session_only_from_this_machine(daemon, store, tmp_path, peer, status, desc):
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=daemon.app, client=(peer, 50000)), base_url=URL,
+                                  headers={"Authorization": f"Bearer {TOKEN}"}) as c:
+        r = await c.post("/sessions", json={"cwd": str(tmp_path), "runner": "tab"},
+                         headers={"Idempotency-Key": str(uuid.uuid4())})
+    assert r.status_code == status, desc
+    assert [s["runner"] for s in store.sessions()] == (["tab"] if status == 200 else []), desc
+
+
+# the token (phase 2c): every route, the stream's too
+
+def every_route(daemon):
+    """(method, path) for each route the daemon serves, its parameters filled in."""
+    params = {"sid": "nosuch", "ref": "T1", "action": "rename", "id": "1", "id:int": "1"}
+    out = []
+    for route in daemon.app.routes:
+        path = route.path
+        for name, value in params.items():
+            path = path.replace("{" + name + "}", value)
+        out += [(method, path) for method in sorted(route.methods - {"HEAD"})]
+    return out
+
+
+def test_every_route_is_covered_by_the_token_tests(daemon):
+    routes = every_route(daemon)
+    assert len(routes) == len(set(routes)) == 27 and not [p for _, p in routes if "{" in p], routes
+    assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
+
+
+@pytest.mark.parametrize("given, desc", [
+    (None, "no token"),
+    ("Bearer not-the-token", "a wrong one"),
+    (f"Bearer {TOKEN}x", "one with a character more"),
+    (f"Basic {TOKEN}", "the token under another scheme"),
+    ("Bearer ", "an empty one"),
+])
+async def test_every_route_refuses_a_request_without_the_token(daemon, sid, given, desc):
+    headers = {} if given is None else {"Authorization": given}
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=daemon.app), base_url=URL, headers=headers) as c:
+        for method, path in every_route(daemon):
+            r = await c.request(method, path, headers={"Idempotency-Key": str(uuid.uuid4())}, json={})
+            assert (r.status_code, r.headers.get("www-authenticate")) == (401, "Bearer"), f"{desc}: {method} {path}"
+            assert r.json()["error"].startswith("this daemon needs its token"), f"{desc}: {method} {path}"
+    assert store_mod.Store(daemon.store.path).session(sid)["name"] == "demo", f"{desc}: nothing done"
+
+
+async def test_every_route_takes_the_right_token(daemon, sid):
+    """Answered by the route itself, whatever it says (a session that isn't there, a bad
+    body): never 401, nor 421. The stream's own test is below."""
+    daemon.feed.close()   # the stream ends once it has sent what it has
+    async with client(daemon) as c:
+        for method, path in every_route(daemon):
+            r = await c.request(method, path, headers={"Idempotency-Key": str(uuid.uuid4())}, json={})
+            assert r.status_code not in (401, 421), f"{method} {path}: {r.status_code} {r.text}"
+
+
+@pytest.mark.parametrize("given, status, desc", [
+    (None, 401, "the stream without the token"),
+    ("Bearer wrong", 401, "with a wrong one"),
+    (f"Bearer {TOKEN}", 200, "with the token: its events"),
+])
+async def test_the_event_stream_needs_the_token(daemon, given, status, desc):
+    headers = {} if given is None else {"Authorization": given}
+    daemon.feed.close()
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=daemon.app), base_url=URL, headers=headers) as c:
+        r = await c.get("/events")
+    assert r.status_code == status, desc
+    assert (received(r.text) if status == 200 else r.json()["error"][:4]) == (
+        [{"seq": 100, "kind": "refetch"}] if status == 200 else "this"), desc
+
+
+async def test_the_host_is_checked_before_the_token(daemon):
+    """D47 first: a page rebound by DNS learns nothing, not even that a token is wanted."""
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=daemon.app), base_url="http://evil.example:7428") as c:
+        r = await c.get("/sessions")
+    assert r.status_code == 421 and "www-authenticate" not in r.headers
+
+
+async def test_a_rotated_token_is_taken_at_the_next_tick(store, tmp_path, monkeypatch):
+    from claude_wheelhouse import auth
+    auth.write(tmp_path)
+    old = auth.read(auth.path(tmp_path))
+    d = Daemon(store, hosts("127.0.0.1", 7428), auth.TokenFile(auth.path(tmp_path)), inline=True)
+    try:
+        def get(token):
+            return httpx2.AsyncClient(transport=httpx2.ASGITransport(app=d.app), base_url=URL,
+                                      headers={"Authorization": f"Bearer {token}"})
+        async with get(old) as c:
+            assert (await c.get("/sessions")).status_code == 200, "the token as made"
+        new = auth.write(tmp_path)   # claude-wheelhouse token --rotate
+        async with get(old) as c:
+            assert (await c.get("/sessions")).status_code == 200, "the old one, till the daemon reads the file again"
+        await d.on_hub(d.tick)
+        async with get(old) as c:
+            assert (await c.get("/sessions")).status_code == 401, "then refused"
+        async with get(new) as c:
+            assert (await c.get("/sessions")).status_code == 200, "and the new one taken"
+    finally:
+        d.pool.shutdown()
+        d.worker.shutdown()
+        d.watch.close()
+
+
+# what 2c adds for the TUI
+
+NEW_ROUTES = [
+    ("GET", "/hello", None, lambda store, sid, r: (r.json()["api"], r.json()["ready"], r.json()["pid"]) == (1, False, os.getpid()),
+     "which daemon: its API, its code, not ready before its first tick"),
+    ("GET", "/inbox", None, lambda store, sid, r: (sorted(i["ref"] for i in r.json()["items"]),
+                                                   "body" in r.json()["items"][0], r.json()["tutorial"]["sid"])
+     == (["P1", "T1"], False, None), "every item, without its body, and the tutorial's state"),
+    ("GET", "/usage", None, lambda store, sid, r: r.json() == {"limits": {}, "failed": False}, "the account's usage"),
+    ("POST", "/settings", {"key": "layout.x", "value": "0.5"}, lambda store, sid, r: store.setting("layout.x") == "0.5",
+     "a splitter's size kept"),
+    ("GET", "/settings", None, lambda store, sid, r: r.json() == {}, "the kept sizes"),
+    ("POST", "/settings", {"key": "agents_since", "value": "x"}, lambda store, sid, r: r.status_code == 400,
+     "no other setting"),
+    ("GET", "/adoptable", None, lambda store, sid, r: isinstance(r.json(), list), "what Adopt offers"),
+    ("GET", "/adoptable/{sid}/running", None, lambda store, sid, r: r.json() == {"pid": None}, "whether it runs"),
+    ("POST", "/adopt", {"id": "nosuch"}, lambda store, sid, r: r.status_code == 404, "one Adopt doesn't offer"),
+    ("POST", "/restore-all", {"sids": ["{sid}"]}, lambda store, sid, r: told(r) == ["restoring 1 session(s)"],
+     "Restore all, of those the client showed"),
+    ("POST", "/restore-all", {"sids": "x"}, lambda store, sid, r: r.status_code == 400, "a list of them"),
+    ("GET", "/items/{sid}/{ref}/conversation", None, lambda store, sid, r: r.json() is None,
+     "a subagent's conversation: none for a task"),
+    ("POST", "/items/{sid}/{ref}/seen", None, lambda store, sid, r: r.json()["ok"] is False,
+     "seen: a no-op but for an unseen decision"),
+    ("POST", "/messages/1/unqueue", None, lambda store, sid, r: r.json() == {"text": None}, "a draft taken back: gone"),
+    ("POST", "/tutorial/offer", {"take": False}, lambda store, sid, r: store.setting("tutorial_offer") == "dismissed",
+     "the tutorial offer turned down"),
+    ("POST", "/tutorial/seen", {"sid": "{sid}", "step": "open"},
+     lambda store, sid, r: json.loads(store.setting("tutorial_seen"))["seen"] == ["open"], "a tutorial step seen"),
+    ("POST", "/shutdown", None, lambda store, sid, r: not r.json()["ok"], "stop: a test's daemon can't"),
+]
+
+
+@pytest.mark.parametrize("method, path, body, did, desc", NEW_ROUTES)
+async def test_each_new_route(daemon, store, sid, tmp_path, method, path, body, did, desc):
+    store.post_item(sid, "task", "do it")
+    store.post_item(sid, "permission", "Bash: ls")
+    r = await call(daemon, method, fill(path, sid, tmp_path), fill(body, sid, tmp_path))
+    assert r.status_code < 500 and did(store, sid, r), f"{desc}: {r.status_code} {r.text}"
+
+
+async def test_sessions_carry_their_liveness_and_model_state(daemon, sid):
+    await daemon.on_hub(daemon.tick)
+    view = (await call(daemon, "GET", "/sessions")).json()[0]
+    assert (view["liveness"], view["model_state"]["hosted"]) == ("dead", False)
+
+
+@pytest.mark.parametrize("path, body, kind, desc", [
+    ("/sessions/nosuch/rename", {"name": "x"}, "SessionGone", "a session gone, as the hub raised it"),
+    ("/items/{sid}/T9/close", {"closed": True}, "KeyError", "an item that isn't there"),
+])
+async def test_an_error_says_its_type(daemon, sid, tmp_path, path, body, kind, desc):
+    r = await call(daemon, "POST", fill(path, sid, tmp_path), body)
+    assert (r.status_code, r.json()["type"]) == (404, kind), desc

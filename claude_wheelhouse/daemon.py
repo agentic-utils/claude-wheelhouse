@@ -1,6 +1,7 @@
 """The daemon: the wheelhouse's one hub, served over HTTP to its clients (.plan/remote.md,
 phase 2). `claude-wheelhouse daemon` runs it, one per user, held by a lock file in the
-state dir. No client uses it yet: the TUI still owns a hub of its own.
+state dir. The TUI starts it, or joins it, and acts through it (phase 2c); `--local`
+still runs a hub of the TUI's own.
 
 Queries are GETs answering JSON: the store's rows as they are, with what the hub works out
 beside them. Commands are POSTs, each with an Idempotency-Key, answering what the hub's
@@ -14,10 +15,12 @@ sync failing) go out the same way, as "notice".
 It never binds 0.0.0.0: 127.0.0.1 by default, or the address given (the VPN interface's;
 a LAN address would open it to everyone on that LAN). Every request must name the daemon in
 its Host, and a POST from a browser page must come from the daemon's own origin, so a
-hostile page can't drive it or read it by DNS rebinding. The Idempotency-Key every command
-needs is the guard against cross-site requests too: a custom header makes a page's request
-a CORS preflight, which the daemon never grants, so a page can't send a command without
-it. It must never become optional."""
+hostile page can't drive it or read it by DNS rebinding. Every request, the event stream's
+too, must carry the token in the state dir (auth.py), so neither another user on the
+machine nor another machine on the VPN can read or drive it without being given it. The
+Idempotency-Key every command needs is the guard against cross-site requests too: a custom
+header makes a page's request a CORS preflight, which the daemon never grants, so a page
+can't send a command without it. It must never become optional."""
 
 import asyncio
 import contextlib
@@ -27,6 +30,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import signal
 import sqlite3
 import sys
 import threading
@@ -43,7 +47,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import models, stats
+from . import auth, fingerprint, liveness, models, stats, tutorial
 from .hub import Done, Event, Hub, host_context
 from .store import SessionGone, Store, inbox_rank, mode, runner, standing
 
@@ -53,6 +57,7 @@ RING = 1024          # events kept for a client that reconnects
 PING = 15            # seconds between keep-alive comments on a quiet stream
 READ_WAIT = 1.0      # seconds a conversation waits on a read of it under way before 503
 LOCK = "daemon.lock"
+LOCK_WAIT = 0.5      # seconds it waits on the lock: a client's glance at it is shorter
 # what a change in the database may have moved: every session's row, the inbox, the threads,
 # and the conversations, which show what's queued
 STORE_KINDS = ("sessions", "items", "thread", "conversation")
@@ -68,6 +73,10 @@ STORE_KINDS = ("sessions", "items", "thread", "conversation")
 MOVES = {"sessions": {"sessions"}, "listed": {"items"}, "named": {"conversation"}, "items": {"items", "thread"},
          "messages": {"items", "thread", "conversation"}}
 HOW = {"ask": Hub.ask, "now": Hub.act_on_dead, "cancel": Hub.cancel_request, "force": Hub.force}
+LAYOUT = "layout."   # the only settings a client reads and writes: the TUI's splitter sizes
+# what the inbox leaves out of each item, as the item list shows none of it: the body and
+# answer come with its thread, and seq is retired (store.RETIRED_TRIGGER)
+UNLISTED = ("body", "answer", "seq")
 
 
 class AlreadyRunning(RuntimeError):
@@ -106,13 +115,19 @@ def take_lock(state_dir, url: str):
     """The lock that makes this the user's one daemon, held while the returned file is open;
     AlreadyRunning, naming the one that holds it, if another does."""
     f = open(state_dir / LOCK, "a+")
-    try:
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        f.seek(0)
-        held = f.read().strip()
-        f.close()
-        raise AlreadyRunning(f"a wheelhouse daemon is already running: {held or 'pid unknown'}") from None
+    deadline = time.monotonic() + LOCK_WAIT
+    while True:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic() < deadline:   # a client looking at it (connect.holder) lets go at once
+                time.sleep(0.02)
+                continue
+            f.seek(0)
+            held = f.read().strip()
+            f.close()
+            raise AlreadyRunning(f"a wheelhouse daemon is already running: {held or 'pid unknown'}") from None
     f.seek(0)
     f.truncate()
     f.write(f"pid {os.getpid()} at {url}\n")
@@ -169,6 +184,14 @@ class Feed:
         self.moved.set()
 
 
+def loopback(request: Request) -> bool:
+    """Whether the request came from this machine."""
+    try:
+        return request.client is not None and ipaddress.ip_address(request.client.host).is_loopback
+    except ValueError:
+        return False
+
+
 def done_json(done: Done) -> dict:
     return {"ok": done.ok, "notices": [{"text": e.text, "severity": e.severity} for e in done.notices],
             "denied": done.denied, **({"sid": done.sid} if done.sid else {})}
@@ -192,9 +215,18 @@ class Daemon:
     inline: the hub's own background work runs in the call that starts it, as in a test;
     otherwise on worker threads, its callbacks back on the hub's thread."""
 
-    def __init__(self, store: Store, allowed: set[str], inline: bool = False):
+    def __init__(self, store: Store, allowed: set[str], token: "str | auth.TokenFile", inline: bool = False,
+                 ticks: bool = True):
+        fingerprint.code()   # the code as loaded, for /hello: asked before anything can change it
         self.hub = Hub(store, **({} if inline else {"spawn": self.spawn, "post": self.post}))
         self.store, self.allowed = store, allowed
+        # the token every request must carry: the token file's, read again when it changes
+        # (rotated), or one given (a test's)
+        self.tokens = token if isinstance(token, auth.TokenFile) else None
+        self.token = token.token if isinstance(token, auth.TokenFile) else token
+        self.stop = None   # how /shutdown stops it: the server's, once serving
+        self.ticks = ticks   # whether it ticks by itself: not when a test ticks it
+        self.agent_lock = threading.Lock()   # the subagent conversations followed, by one request at a time
         self.feed = Feed()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="wheelhouse")
@@ -222,6 +254,26 @@ class Daemon:
             Route("/fs", self.query(self.folders)),
             Route("/models", self.query(lambda request: models.catalogue(), run=None)),
             Route("/events", self.events),
+            # what the TUI needs beyond the sketch (phase 2c)
+            Route("/hello", self.query(self.hello, run=None)),
+            Route("/inbox", self.query(self.inbox)),
+            Route("/usage", self.query(self.usage, run=None)),
+            Route("/settings", self.query(self.settings)),
+            Route("/settings", self.command(self.set_setting), methods=["POST"]),
+            Route("/adoptable", self.query(lambda request: [vars(c) for c in self.hub.adoptable()])),
+            Route("/adoptable/{id}/running", self.query(
+                lambda request: {"pid": liveness.running_pid(request.path_params["id"])})),
+            Route("/adopt", self.command(self.adopt), methods=["POST"]),
+            Route("/restore-all", self.command(self.restore_all), methods=["POST"]),
+            Route("/items/{sid}/{ref}/conversation", self.query(self.agent_conversation)),
+            Route("/items/{sid}/{ref}/seen", self.command(
+                lambda request, body: Done(self.hub.mark_seen(request.path_params["sid"], request.path_params["ref"]))),
+                methods=["POST"]),
+            Route("/messages/{id:int}/unqueue", self.command(
+                lambda request, body: {"text": self.hub.unqueue(request.path_params["id"])}), methods=["POST"]),
+            Route("/tutorial/offer", self.command(self.answer_offer), methods=["POST"]),
+            Route("/tutorial/seen", self.command(self.tutorial_seen), methods=["POST"]),
+            Route("/shutdown", self.command(self.shutdown_requested), methods=["POST"]),
         ], lifespan=self.lifespan)
 
     # the hub's work and what it says
@@ -270,6 +322,9 @@ class Daemon:
 
     def tick(self) -> None:
         """The hub's refresh, as the TUI's tick has it, then what moved."""
+        if self.tokens is not None and self.tokens.check():   # rotated: the old one is refused from now
+            self.token = self.tokens.token
+            print("wheelhouse daemon: the token has changed: clients need the new one", file=sys.stderr, flush=True)
         self.keep_answers()
         hub, seen = self.hub, self.marks()   # before the refresh: see publish_moved
         hub.refresh()
@@ -349,12 +404,14 @@ class Daemon:
     @contextlib.asynccontextmanager
     async def lifespan(self, app):
         self.loop, self.loop_thread = asyncio.get_running_loop(), threading.get_ident()
-        task = asyncio.create_task(self.ticking())
+        task = asyncio.create_task(self.ticking() if self.ticks else asyncio.sleep(0))
         try:
             yield
         finally:
             self.feed.close()
             task.cancel()
+            with contextlib.suppress(Exception):   # the answers the store couldn't keep, kept now if it can
+                self.worker.submit(self.keep_answers).result(timeout=2)
             self.shutdown()
 
     def shutdown(self) -> None:
@@ -364,8 +421,13 @@ class Daemon:
     # requests
 
     def check_host(self, request: Request) -> None:
+        """Every request, before anything else: it names the daemon (D47), so a page rebound
+        by DNS learns nothing, then it carries the token."""
         if request.headers.get("host") not in self.allowed:
             raise Refused(421, "this daemon isn't reached by that name")
+        if not auth.matches(request.headers.get("authorization"), self.token):
+            raise Refused(401, "this daemon needs its token: claude-wheelhouse token prints it",
+                          {"WWW-Authenticate": auth.SCHEME})
 
     def query(self, handler, run=run_in_threadpool):
         """A GET: handler(request), run on starlette's threads by default (it reads the store
@@ -416,7 +478,8 @@ class Daemon:
             body = json.loads(raw) if raw else {}
             if not isinstance(body, dict):
                 raise Refused(400, "the body must be a JSON object")
-            response = JSONResponse(done_json(handler(request, body)))
+            done = handler(request, body)
+            response = JSONResponse(done_json(done) if isinstance(done, Done) else done)
         except json.JSONDecodeError:
             response = refusal(Refused(400, "the body isn't JSON"))
         except ANSWERED as e:
@@ -452,7 +515,8 @@ class Daemon:
         follower = self.hub.contexts.get(sid)
         snap = stats.current(follower.snap, host_context(s)) if follower and follower.ready else None
         running = follower.snap if follower and follower.ready else None
-        return {**dict(s), "status": self.hub.shown_status(sid), "mode": mode(s), "busy": self.hub.busy(sid),
+        return {**dict(s), "status": self.hub.shown_status(sid), "liveness": self.hub.statuses.get(sid, "dead"),
+                "model_state": self.hub.model_state(s), "mode": mode(s), "busy": self.hub.busy(sid),
                 "running_model": running and running.model, "running_effort": running and running.effort,
                 "stale": self.hub.stale(sid), "sends_now": self.hub.sends_now(sid),
                 "compact_first": self.hub.compact_first(sid),
@@ -530,18 +594,110 @@ class Daemon:
             raise Refused(403, f"can't list {path}: {e.strerror}") from None
         return {"path": path, "parent": os.path.dirname(path), "dirs": names}
 
+    def hello(self, request: Request) -> dict:
+        """Which daemon this is, for a client deciding whether to join it: its API, its code
+        as loaded (another from the same package path is older code: restart it), and its pid."""
+        return {"api": fingerprint.API, "code": fingerprint.code(), "package": str(fingerprint.PACKAGE),
+                "pid": os.getpid(), "ready": bool(self.marked)}   # ready: its first tick has made /sessions
+
+    def inbox(self, request: Request) -> dict:
+        """What the TUI's item list is painted from, all at once so it agrees with itself:
+        every item (but its body, which its thread brings), with its session's name and
+        whether it's parked, so a client filters it as the store would (store.items); what's
+        processing, awaiting and drafted, by session and ref (a draft's ref None for a
+        general message); and the tutorial's steps. The ranking is the client's own."""
+        rows = self.store._all("SELECT i.*, s.name AS session_name, s.parked AS session_parked FROM items i "
+                               "JOIN sessions s ON s.id = i.session_id")
+        sid = tutorial.session_id(self.store)
+        steps = tutorial.steps(self.store, sid, tutorial.seen(self.store, sid)) if sid else []
+        return {"items": [{k: v for k, v in dict(r).items() if k not in UNLISTED} for r in rows],
+                "processing": sorted(self.store.processing()), "awaiting": sorted(self.store.awaiting()),
+                "drafts": [{"id": m["id"], "session_id": m["session_id"], "item_ref": m["item_ref"]}
+                           for m in self.store.drafts()],
+                "tutorial": {"sid": sid, "steps": steps, "offer": tutorial.should_offer(self.store)}}
+
+    def usage(self, request: Request) -> dict:
+        """The account's usage, as the hub last fetched it: {kind: [percent, resets at]}."""
+        return {"limits": {k: list(v) for k, v in self.hub.usage.limits.items()}, "failed": self.hub.usage.failed}
+
+    def settings(self, request: Request) -> dict:
+        """The TUI's kept splitter sizes, each a share of its parent: no other setting."""
+        return dict(self.store._all("SELECT key, value FROM settings WHERE substr(key, 1, ?) = ?",
+                                    (len(LAYOUT), LAYOUT)))
+
+    def agent_conversation(self, request: Request) -> list[dict] | None:
+        """A subagent item's own conversation, read now (Hub.agent_conversation), on
+        starlette's threads, its followers by one request at a time: None if the item isn't
+        a subagent's."""
+        sid, ref = request.path_params["sid"], request.path_params["ref"]
+        self.item(sid, ref)
+        with self.agent_lock:
+            blocks = self.hub.agent_conversation(sid, ref)
+        return None if blocks is None else [{"who": who, "text": markdown} for who, markdown in blocks]
+
     # commands
 
+    def set_setting(self, request: Request, body: dict) -> Done:
+        """A splitter size kept, or with value null its default put back."""
+        key, value = text(body, "key"), text(body, "value", False)
+        if not key.startswith(LAYOUT):
+            raise Refused(400, f"only {LAYOUT} settings are a client's")
+        if value is None:
+            self.store.clear_setting(key)
+        else:
+            self.store.set_setting(key, value)
+        return Done()
+
+    def adopt(self, request: Request, body: dict) -> Done:
+        """A session on disk brought in, by its id, as Adopt offered it: one gone from the
+        offer meanwhile (adopted elsewhere, or too old) isn't there."""
+        want = text(body, "id")
+        found = next((c for c in self.hub.adoptable() if c.id == want), None)
+        if found is None:
+            raise KeyError(f"no session {want} to adopt")
+        return self.hub.adopt(found, text(body, "name", False) or "")
+
+    def restore_all(self, request: Request, body: dict) -> Done:
+        """The dead sessions the client showed the person, brought back: what it confirmed."""
+        sids = body.get("sids")
+        if not (isinstance(sids, list) and all(isinstance(sid, str) for sid in sids)):
+            raise Refused(400, "sids must be a list of session ids")
+        return self.hub.restore_all(sids)
+
+    def answer_offer(self, request: Request, body: dict) -> Done:
+        take = body.get("take")
+        if not isinstance(take, bool):
+            raise Refused(400, "take must be true or false")
+        return self.hub.answer_offer(take)
+
+    def tutorial_seen(self, request: Request, body: dict) -> Done:
+        """A tutorial step only the screen sees (a question opened, the conversation followed)."""
+        sid, step = text(body, "sid"), text(body, "step")
+        self.hub.row(sid)
+        tutorial.see(self.store, sid, step)
+        return Done()
+
+    def shutdown_requested(self, request: Request, body: dict) -> Done:
+        """Stop, once this answer has gone: a client found it running older code."""
+        if self.stop is None:
+            return Done(False).say("this daemon can't be stopped from here", "warning")
+        self.loop.call_soon_threadsafe(self.stop)
+        return Done().say("the daemon is stopping")
+
     def new_session(self, request: Request, body: dict) -> Done:
-        """A session in an existing directory, by its absolute path, run by a host: a tab
-        would open on the home machine's screen, where nobody remote is."""
+        """A session in an existing directory, by its absolute path, run by a host. In a tab
+        only for a client on this machine (the loopback): a tab opens on this machine's
+        screen, where nobody remote is."""
         cwd = text(body, "cwd")
         if not os.path.isabs(cwd) or not os.path.isdir(cwd):
             raise Refused(400, f"cwd must be an existing directory's absolute path: {cwd!r} isn't")
-        if (text(body, "runner", False) or "sdk") != "sdk":
+        how = text(body, "runner", False) or "sdk"
+        if how not in ("sdk", "tab"):
+            raise Refused(400, "runner must be sdk or tab")
+        if how == "tab" and not loopback(request):
             raise Refused(400, "a session started remotely runs by a host: runner can only be sdk")
         return self.hub.new_session(cwd, text(body, "name", False) or "", text(body, "ticket", False) or "",
-                                    text(body, "brief", False) or "", "sdk", text(body, "model", False),
+                                    text(body, "brief", False) or "", how, text(body, "model", False),
                                     text(body, "effort", False))
 
     def session_command(self, request: Request, body: dict) -> Done:
@@ -624,7 +780,8 @@ def refusal(e: Exception) -> JSONResponse:
         status, error = 500, f"the daemon failed: {type(e).__name__}: {e}"
         print(f"wheelhouse daemon: {error}", file=sys.stderr, flush=True)
         traceback.print_exception(e)
-    return JSONResponse({"error": error}, status, headers)
+    # its type too, so a client says what the hub in process said (a session gone, an item)
+    return JSONResponse({"error": error, "type": type(e).__name__}, status, headers)
 
 
 class Server(uvicorn.Server):
@@ -643,15 +800,21 @@ class Server(uvicorn.Server):
 
 
 def main(address: str = ADDRESS, port: int = PORT, names=()) -> None:
-    """Serve until stopped (Ctrl+C, or SIGTERM from systemd): one per user, or AlreadyRunning."""
+    """Serve until stopped (Ctrl+C, SIGTERM from systemd, or POST /shutdown): one per user,
+    or AlreadyRunning. Its token is made, under the lock, the first time."""
     address = checked_address(address)
     allowed = hosts(address, port, names)
     store = Store()
     url = f"http://{address if ipaddress.ip_address(address).version == 4 else f'[{address}]'}:{port}"
     lock = take_lock(store.path.parent, url)
     try:
-        daemon = Daemon(store, allowed)
+        _, said = auth.ensure(store.path.parent)
+        if said:
+            print(f"wheelhouse daemon: {said}", flush=True)
+        daemon = Daemon(store, allowed, auth.TokenFile(auth.path(store.path.parent)))
+        server = Server(daemon, uvicorn.Config(daemon.app, host=address, port=port, log_level="warning"))
+        daemon.stop = functools.partial(server.handle_exit, signal.SIGTERM, None)
         print(f"wheelhouse daemon on {url}, state in {store.path.parent}", flush=True)
-        Server(daemon, uvicorn.Config(daemon.app, host=address, port=port, log_level="warning")).run()
+        server.run()
     finally:
         lock.close()
