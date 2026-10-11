@@ -59,9 +59,16 @@ class Clock:
     one-shot timer (WheelhouseApp.dwell_after), and the refresh tick and animation, which
     run only when a test calls tick or animate. Time moves only by advance. A key's land
     keeps to real time: it bounds a wait on the app's own queues."""
+    HELD = {"tick", "animate"}   # the app's own intervals, which run only when a test calls them
 
     def __init__(self):
-        self.t, self.timers, self.app = 0.0, [], None
+        self.t, self.timers, self.app, self.held = 0.0, [], None, set()
+
+    def bind(self, app) -> None:
+        """The app the test is running, whose lists advance draws. A new one starts with none
+        of the last one's timers."""
+        if app is not self.app:
+            self.app, self.timers, self.held = app, [], set()
 
     def now(self) -> float:
         return self.t
@@ -74,7 +81,8 @@ class Clock:
 
     def advance(self, by: float) -> None:
         """by seconds on: the timers due by then fire, and both lists draw the frame for then."""
-        self.t += by
+        assert self.app is None or self.held == self.HELD, f"the app's intervals held: {self.held}"
+        self.t = round(self.t + by, 9)   # whole nanoseconds: 0.05 s steps add up to 0.40 s exactly
         for timer in [t for t in self.timers if t.due <= self.t and not t.stopped]:
             timer.stop()
             timer.callback()
@@ -110,12 +118,22 @@ def clock(monkeypatch):
     monkeypatch.setattr(tui.Sink, "now", staticmethod(clock.now))
     monkeypatch.setattr(tui.WheelhouseApp, "dwell_after", lambda self, delay, callback: clock.after(delay, callback))
     monkeypatch.setattr(tui, "DWELL", SHIPPED_DWELL)
-    every = tui.WheelhouseApp.set_interval
+    every, once = tui.WheelhouseApp.set_interval, tui.WheelhouseApp.set_timer
 
     def interval(app, delay, callback, **kw):
-        if getattr(callback, "__self__", None) is app and callback.__name__ in ("tick", "animate"):
-            clock.app = app   # the app the test is running, whose lists advance draws
+        # fail closed: an app timer this fixture doesn't know would run on real time
+        if getattr(callback, "__self__", None) is app:
+            if callback.__name__ not in Clock.HELD:
+                raise AssertionError(f"the clock fixture doesn't know the app's interval {callback.__name__}")
+            clock.bind(app)
+            clock.held.add(callback.__name__)
             return SimpleNamespace(stop=lambda: None)
         return every(app, delay, callback, **kw)
+
+    def timer(app, delay, callback=None, **kw):
+        if getattr(callback, "__self__", None) is app:
+            raise AssertionError(f"the clock fixture doesn't know the app's timer {callback.__name__}")
+        return once(app, delay, callback, **kw)
     monkeypatch.setattr(tui.WheelhouseApp, "set_interval", interval)
+    monkeypatch.setattr(tui.WheelhouseApp, "set_timer", timer)
     return clock

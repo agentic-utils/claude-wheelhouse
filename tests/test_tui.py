@@ -1161,7 +1161,7 @@ def raw_click(app, widget, offset, times=1) -> None:
         app._driver.send_message(event)
 
 
-async def two_lists(clock, tmp_path, where, steps, slow, counts=(2, 2)) -> dict:
+async def two_lists(clock, tmp_path, where, steps, slow, counts=(2, 2), tick=False) -> dict:
     """Sessions A, followed, and B, each with decisions one and two (or as many of one, two,
     three and four as counts gives), all unseen; then the steps
     from the items or the session list, typed slowly or sent as one raw burst. A step is a key,
@@ -1169,7 +1169,8 @@ async def two_lists(clock, tmp_path, where, steps, slow, counts=(2, 2)) -> dict:
     "click 1" or "double 1" on the items' row 1 (row 0 is the conversation). What they left, by
     name: the thread open, the current session, the selection, the text in the box, what was
     marked seen once the person rested at the end (the dwell: a pass marks nothing) and the
-    focus. D22 holds either way."""
+    focus. D22 holds either way. With tick, a raw burst has the refresh tick fall due as each
+    key's binding acts, behind what it set in motion, so it fires as the next key lands."""
     store = Store(tmp_path / f"{'slow' if slow else 'raw'}.db")
     a, b = (store.create_session(str(tmp_path), name=n) for n in ("alpha", "bravo"))
     with one_second():
@@ -1186,6 +1187,16 @@ async def two_lists(clock, tmp_path, where, steps, slow, counts=(2, 2)) -> dict:
         await clock.finish_moves(pilot, app)
         (app.items_table if where == "items" else app.session_list).focus()
         await pilot.pause()
+        if tick and not slow:
+            check = app._check_bindings
+
+            async def acting(key, priority=False):
+                had = app.focused or app.screen
+                done = await check(key, priority)
+                if done:   # queued behind what the key set in motion, which the next key's land waits for
+                    had.call_later(clock.tick, app)
+                return done
+            app._check_bindings = acting
         for step in steps:
             how, _, at = step.partition(" ")
             if how in ("click", "double"):   # below the header row
@@ -1235,6 +1246,8 @@ async def test_a_raw_burst_across_both_lists_ends_as_typed_slowly(tmp_path, cloc
     raw = await two_lists(clock, tmp_path / "raw", where, keys, slow=False)
     slow = await two_lists(clock, tmp_path / "slow", where, keys, slow=True)
     assert raw == slow, f"{desc}: raw {raw}, slow {slow}"
+    ticked = await two_lists(clock, tmp_path / "ticked", where, keys, slow=False, tick=True)
+    assert ticked == slow, f"{desc}: the refresh tick falling due as the keys land (tick), {ticked}"
 
 
 @pytest.mark.anyio
@@ -1340,6 +1353,7 @@ async def test_the_refresh_tick_lets_the_app_shut_down(store, sid, monkeypatch, 
         if ticks:   # the rest of the app closing, the tick falling due meanwhile
             clock.tick(self)
             clock.animate(self)
+            clock.animate(self)   # two frames: one of them even, where the guarded branch runs
     monkeypatch.setattr(App, "_close_all", slow_close)
     app = WheelhouseApp(store)
     try:

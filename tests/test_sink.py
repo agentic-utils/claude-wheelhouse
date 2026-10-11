@@ -148,6 +148,30 @@ async def test_a_settled_item_holds_while_selected_and_sinks_after(store, sid, c
 
 
 @pytest.mark.anyio
+async def test_a_move_takes_the_shipped_time(store, sid, clock):
+    """A move lasts Sink.SECONDS, 0.4 s, by the clock rather than by frames: stepped a fixed
+    0.05 s at a time, it is under way at 0.35 s and over at 0.40 s."""
+    with one_second():
+        task = store.post_item(sid, "task", "subject", status="running")
+        q = store.post_item(sid, "question", "another")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        table.move_cursor(row=table.get_row_index(f"{sid}|{q}"))
+        await pilot.pause()
+        SETTLE["task"](store, sid, task)
+        app.refresh_data()
+        await pilot.pause()
+        assert app.item_sink.move is not None and app.item_sink.move[1] == clock.t, "the task sinks from now"
+        for step in range(1, 9):
+            clock.advance(0.05)
+            await pilot.pause()
+            assert (app.item_sink.move is not None) == (step < 8), f"at {step * 0.05:.2f} s: under way until 0.40 s"
+        assert refs(app)[-1] == task, "at the foot"
+
+
+@pytest.mark.anyio
 async def test_delete_moves_at_once(store, sid, clock):
     """D33: closing with Delete is an explicit act, so it moves at once, unanimated."""
     with one_second():
