@@ -221,6 +221,23 @@ def test_a_token_still_refused_once_its_file_is_read_again_is_said_as_that(store
         c.disconnect()
 
 
+@pytest.mark.parametrize("ask, desc", [
+    (lambda c, sid: c.refresh(), "a refresh's fetch"),
+    (lambda c, sid: setattr(c, "forced", False) or c.shown(("conversation", sid)), "a conversation's fetch"),
+])
+def test_a_token_refused_on_a_fetch_is_said_as_the_stream_says_it(store, sid, served, ask, desc):
+    """Not started, so no stream says it first: said in the same words as the stream's."""
+    d = served(store.path)
+    said = []
+    c = RemoteClient(d.url, "not-the-token", why_refused=lambda: "stop it (pid 7)")
+    c.listen(lambda e: said.append((e.kind, e.text)))
+    try:
+        ask(c, sid)
+        assert said == [("notice", "the daemon refused this client: stop it (pid 7)")], f"{desc}: {said}"
+    finally:
+        c.disconnect()
+
+
 def test_the_account_usage_comes_from_the_daemon(store, served, monkeypatch):
     d = served(store.path)
     d.daemon.hub.usage.limits = {"five_hour": (12.0, 1700000000.0)}

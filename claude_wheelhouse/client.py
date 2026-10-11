@@ -336,7 +336,7 @@ class RemoteClient:
                 with self.lock:
                     self.forced = True
                 if e.status != 503:
-                    self.refused(e.error)
+                    self.refused(self.refusal_of(e))
 
     def next_seq(self) -> int:
         with self.lock:
@@ -410,7 +410,7 @@ class RemoteClient:
                     self.dirty.add(key)   # being read: the background fetches it once it's free
                     self.lock.notify_all()
             else:
-                self.refused(e.error)
+                self.refused(self.refusal_of(e))
             return [] if key[0] != "thread" else None
         with self.lock:
             if seq > self.shown_seq.get(key, -1):
@@ -670,6 +670,13 @@ class RemoteClient:
         if self.refusal is None:
             self.refusal = error
             self.post(lambda: self.emit(Event("notice", f"the daemon refused this client: {error}", "error")))
+
+    def refusal_of(self, e: Refused) -> str:
+        """What to say of a request refused: the token (401) as the stream says it, else
+        what the daemon said."""
+        if e.status == 401:
+            return self.why_refused() if self.why_refused else REFUSED
+        return e.error
 
     def stream(self) -> None:
         """The daemon's events, from its stream, for as long as the client runs: each
