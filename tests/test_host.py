@@ -21,7 +21,7 @@ class FakeClient:
 
     def __init__(self, options=None):
         self.options = options
-        self.queries, self.interrupts, self.connected = [], 0, False
+        self.queries, self.keys, self.interrupts, self.connected = [], [], 0, False
 
     async def connect(self):
         self.connected = True
@@ -29,8 +29,15 @@ class FakeClient:
     async def disconnect(self):
         self.connected = False
 
-    async def query(self, text):
-        self.queries.append(text)
+    async def query(self, prompt):
+        async for m in prompt:   # as the host sends a turn: one user message, with its uuid
+            self.queries.append(m["message"]["content"])
+            self.keys.append(m["uuid"])
+
+    def replay(self, i=-1):
+        """Claude Code taking up the i-th turn sent: its user message, replayed under its uuid."""
+        from claude_agent_sdk import UserMessage
+        return UserMessage(content=self.queries[i], uuid=self.keys[i])
 
     async def interrupt(self):
         self.interrupts += 1
@@ -426,11 +433,14 @@ def test_read(store, sid, monkeypatch):
 
     async def go():
         await h.connect()
-        h.pending = 2
-        for m in (AssistantMessage(content=[ToolUseBlock(id="1", name="Bash", input={"command": "ls"})], model="m"),
+        await h.turn("one")
+        await h.turn("two")
+        for m in (h.client.replay(0),
+                  AssistantMessage(content=[ToolUseBlock(id="1", name="Bash", input={"command": "ls"})], model="m"),
                   SystemMessage(subtype="compact_boundary", data={"compact_metadata": {"pre_tokens": 48000}}),
-                  result(), AssistantMessage(content=[ToolUseBlock(id="2", name="Bash", input={"command": "pwd"})],
-                                             model="m"), result(), None):
+                  result(), h.client.replay(1),
+                  AssistantMessage(content=[ToolUseBlock(id="2", name="Bash", input={"command": "pwd"})],
+                                   model="m"), result(), None):
             h.client.feed.put_nowait(m)
         await h.read()
     run(go())
@@ -538,21 +548,24 @@ NOTES = 'Saved.\n<keep id="{nonce}">\n- Q3 open\n- PR 17\n</keep>'
 COMPACTED = ["/compact - Q3 open\n- PR 17"]
 
 
+REPLAY = "replay"   # in a stream: Claude Code taking up the turn last sent
+
+
 @pytest.mark.parametrize("stream, sent, activity, desc", [
-    ([text(NOTES), result()], COMPACTED, "compacting", "the ask's reply carries the notes"),
-    ([result("background task done"), text(NOTES), result()], COMPACTED, "compacting",
+    ([REPLAY, text(NOTES), result()], COMPACTED, "compacting", "the ask's reply carries the notes"),
+    ([result("background task done"), REPLAY, text(NOTES), result()], COMPACTED, "compacting",
      "a turn Claude Code started itself ends first"),
-    ([result("overloaded", error=True), text(NOTES), result()], COMPACTED, "compacting",
+    ([result("overloaded", error=True), REPLAY, text(NOTES), result()], COMPACTED, "compacting",
      "an error in a turn queued ahead doesn't cancel it"),
-    ([result(NOTES)], COMPACTED, "compacting", "notes only in the turn's result"),
-    ([text('Saved.\n<keep id="{nonce}">\n- Q3 open'), text("- PR 17\n</keep>"), result()], COMPACTED, "compacting",
-     "a block split across text blocks"),
-    ([text('<keep id="{nonce}">\n</keep>'), result()], ["/compact"], "compacting",
+    ([REPLAY, result(NOTES)], COMPACTED, "compacting", "notes only in the turn's result"),
+    ([REPLAY, text('Saved.\n<keep id="{nonce}">\n- Q3 open'), text("- PR 17\n</keep>"), result()], COMPACTED,
+     "compacting", "a block split across text blocks"),
+    ([REPLAY, text('<keep id="{nonce}">\n</keep>'), result()], ["/compact"], "compacting",
      "an empty block: compact with no instructions"),
-    ([text('I\'ll put them between <keep id="{nonce}"> and </keep>.'), result()], [], AWAITING_NOTES,
+    ([REPLAY, text('I\'ll put them between <keep id="{nonce}"> and </keep>.'), result()], [], AWAITING_NOTES,
      "the instruction quoted in prose isn't the notes"),
-    ([text("<keep>\n- Q3\n</keep>"), result()], [], AWAITING_NOTES, "a block without the id isn't the notes"),
-    ([text("I'll save first."), result()], [], AWAITING_NOTES, "no notes yet: it keeps waiting"),
+    ([REPLAY, text("<keep>\n- Q3\n</keep>"), result()], [], AWAITING_NOTES, "a block without the id isn't the notes"),
+    ([REPLAY, text("I'll save first."), result()], [], AWAITING_NOTES, "no notes yet: it keeps waiting"),
 ])
 def test_compact_by_id(streamed, store, sid, stream, sent, activity, desc):
     """Through the real read(): the notes go to /compact whichever turn they arrive in."""
@@ -563,9 +576,11 @@ def test_compact_by_id(streamed, store, sid, stream, sent, activity, desc):
         await h.poll()
         nonce = h.compact_nonce
         for m in stream:
-            if hasattr(m, "result") and m.result:
+            if m == REPLAY:
+                m = h.client.replay()
+            elif hasattr(m, "result") and m.result:
                 m.result = m.result.format(nonce=nonce)
-            if hasattr(m, "content"):
+            elif hasattr(m, "content"):
                 for b in m.content:
                     b.text = b.text.format(nonce=nonce)
             h.client.feed.put_nowait(m)
@@ -602,23 +617,25 @@ def test_compact_waits_out_a_long_turn(streamed, store, sid, monkeypatch, runnin
     it out, and never has its activity overwritten; the notes, when they come, compact."""
     monkeypatch.setattr(host_mod, "COMPACT_TIMEOUT", 0)   # any quiet moment would time it out
     h = streamed
-    h.pending = running
 
     async def go():
         reader = asyncio.create_task(h.read())
+        if running:
+            await h.turn("a long one")
         store.command(sid, "compact")
         await h.poll()
         nonce = h.compact_nonce
         if not running:   # the ask's turn ends without notes, then a turn Claude Code started itself
-            await feed(h, result())
+            await feed(h, h.client.replay(), result())
             await feed(h, tool("sleep 900"))
         else:
-            await feed(h, tool("sleep 900"))
+            await feed(h, h.client.replay(0), tool("sleep 900"))
         for _ in range(3):   # time passes while that turn runs
             await h.poll()
             assert h.compact_nonce == nonce, desc
             assert store.session(sid)["activity"] == "running Bash: sleep 900", desc
-        await feed(h, result(), text(NOTES.format(nonce=nonce)), result())
+        await feed(h, result(), *([h.client.replay(1)] if running else []), text(NOTES.format(nonce=nonce)),
+                   result())
         await feed(h, None)
         await reader
     run(go())
@@ -636,7 +653,7 @@ def test_compact_abandoned(streamed, store, sid, ending, activity, desc):
         reader = asyncio.create_task(h.read())
         store.command(sid, "compact")
         await h.poll()
-        await feed(h, text("Nothing to keep."), result())   # the ask's turn ends without notes
+        await feed(h, h.client.replay(), text("Nothing to keep."), result())   # the ask's turn ends without notes
         if ending == "interrupt":
             store.command(sid, "interrupt")
         else:
@@ -1085,7 +1102,7 @@ def test_a_change_is_applied_live(hosted, store, change, client, sent, columns, 
 
 
 def test_a_change_made_while_a_turn_runs_leaves_the_activity_line_to_the_turn(hosted, store):
-    hosted.pending = 1
+    hosted.sent = {"k": host_mod.Sent({})}   # a turn of ours running
     store.set_activity(hosted.sid, "running Bash: ls")
     store.set_effort(hosted.sid, "low")
     run(hosted.poll())
@@ -1120,13 +1137,16 @@ def test_the_sdks_control_request_path_is_where_the_host_expects_it():
     assert "model" in fields and "effort" in fields
 
 
-def finish_at(h, tokens):
-    """A turn ends with the context at tokens, as read() ends one."""
+def finish_at(h, tokens, compacted=False):
+    """A turn ends with the context at tokens, as read() ends one: every turn sent taken up."""
     async def usage():
         return {"totalTokens": tokens, "maxTokens": 1_000_000}
     h.client.get_context_usage = usage
-    h.pending = max(0, h.pending - 1)
-    run(h.finished(SimpleNamespace(result="", is_error=False, subtype="success")))
+    ended = list(h.sent.values())
+    h.sent.clear()
+    h.compacted_from = 300_000 if compacted else None
+    run(h.finished(SimpleNamespace(result="", is_error=False, subtype="success"),
+                   bool(ended) and all(t.keepalive for t in ended)))
 
 
 def nudges(store, sid):
@@ -1137,8 +1157,15 @@ def nudges(store, sid):
     ([150_000], [], "under the line: no nudge"),
     ([220_000], [("open", "context 220k: compact?")], "past it: one question suggesting Compact"),
     ([220_000, 240_000, 260_000], [("open", "context 220k: compact?")], "one per crossing, not one per turn"),
-    ([220_000, 40_000], [("closed", "context 220k: compact?")], "compacted: it closes by itself"),
-    ([220_000, 40_000, 210_000], [("open", "context 210k: compact?"), ("closed", "context 220k: compact?")],
+    ([220_000, ("compacted", 40_000)], [("closed", "context 220k: compact?")], "compacted: it closes by itself"),
+    ([220_000, ("compacted", 180_000)], [("closed", "context 220k: compact?")],
+     "compacted, if still past 150k: it closes too"),
+    ([220_000, 180_000], [("open", "context 220k: compact?")], "under 200k but not compacted: it stays"),
+    ([220_000, 180_000, 230_000], [("open", "context 220k: compact?")],
+     "hovering about 200k: one nudge, not one per crossing"),
+    ([220_000, 140_000], [("closed", "context 220k: compact?")], "back under 150k by itself: it closes"),
+    ([220_000, ("compacted", 40_000), 210_000], [("open", "context 210k: compact?"),
+                                                 ("closed", "context 220k: compact?")],
      "a second crossing nudges again"),
     ([220_000, "close", 240_000], [("closed", "context 220k: compact?")],
      "closed by the person: not asked again until it has been under"),
@@ -1154,24 +1181,49 @@ def test_compact_nudge(host, store, sid, steps, expected, desc):
         elif step == "restart":
             h = Host(store, sid, client_factory=FakeClient, person="doug")
             run(h.connect())
+        elif isinstance(step, tuple):
+            finish_at(h, step[1], compacted=True)
         else:
             finish_at(h, step)
     assert nudges(store, sid) == expected, desc
 
 
-def test_compact_nudge_closes_saying_so(host, store, sid):
+@pytest.mark.parametrize("compacted, note, desc", [
+    (True, "Compacted: the context is 40k now.", "compacted"),
+    (False, "The context is 40k now.", "back under by itself"),
+])
+def test_compact_nudge_closes_saying_so(host, store, sid, compacted, note, desc):
     finish_at(host, 220_000)
-    finish_at(host, 40_000)
+    finish_at(host, 40_000, compacted=compacted)
     ref = store.items(sid)[0]["ref"]
-    assert [m["body"] for m in store.thread(sid, ref)] == ["Compacted: the context is 40k now."]
+    assert [m["body"] for m in store.thread(sid, ref)] == [note], desc
     assert host_mod.HOST_QUESTION != store.item(sid, ref)["answer"], "a restart's deny_stale leaves it be"
+
+
+def test_a_message_on_the_nudge_goes_as_a_general_one(streamed, store, sid):
+    """The session never posted the nudge: a message on it is an ordinary message, and the
+    host answers it there itself, so it never waits on the session."""
+    h = streamed
+    finish_at(h, 220_000)
+    ref = store.items(sid)[0]["ref"]
+    store.send(sid, "not now", ref)
+
+    async def go():
+        reader = asyncio.create_task(h.read())
+        await h.poll()
+        await feed(h, h.client.replay(), text("Fine, carrying on."), result(), None)
+        await reader
+    run(go())
+    assert h.client.queries == ["[wheelhouse] from doug (general):\nnot now"]
+    assert [m["body"] for m in store.thread(sid, ref) if m["author"] == "claude"] == [host_mod.NUDGE_PASSED]
+    assert (sid, ref) not in store.awaiting()
 
 
 H = 3600
 
 
 @pytest.mark.parametrize("state, due, desc", [
-    ({}, True, "big, quiet and 55 minutes on: keep it warm"),
+    ({}, True, "big, quiet, waiting on an open question and 55 minutes on: keep it warm"),
     ({"tokens": 150_000}, False, "at the line, not past it: not worth it"),
     ({"tokens": None}, False, "no turn has ended under this host: its cache may be cold already"),
     ({"last": 54 * 60}, False, "not 55 minutes since the last turn"),
@@ -1180,14 +1232,30 @@ H = 3600
     ({"quiet": None}, False, "a turn Claude Code started itself is running"),
     ({"quiet": 8 * H}, False, "quiet for 8 hours: abandoned, stop paying"),
     ({"quiet": 8 * H - 60}, True, "just inside the 8 hours"),
+    ({"waits": None}, False, "nothing waits on the person: the session is done, not waiting"),
+    ({"waits": "answered"}, False, "its question answered: nothing waits on the person"),
+    ({"waits": "nudge"}, False, "only the host's own Compact nudge: not the session waiting"),
+    ({"waits": "decision"}, True, "an unseen decision waits on the person"),
+    ({"waits": "permission"}, True, "an open permission waits on the person"),
 ])
-def test_keepalive_due(host, state, due, desc):
+def test_keepalive_due(host, store, sid, state, due, desc):
     at = 100 * H
+    waits = state.get("waits", "question")
+    if waits in ("question", "answered"):
+        ref = store.post_item(sid, "question", "which?")
+        if waits == "answered":
+            store.update_item(sid, ref, status="answered")
+    elif waits == "decision":
+        store.post_item(sid, "decision", "used SQLite", why="over Postgres: no server; undo: swap the DSN")
+    elif waits == "permission":
+        store.post_item(sid, "permission", "Bash: ls")
+    elif waits == "nudge":
+        store.set_answer(sid, store.post_item(sid, "question", "context 220k: compact?"), host_mod.NUDGE)
     host.tokens = state.get("tokens", 200_000)
     host.last_turn = at - state.get("last", 55 * 60)
     quiet = state.get("quiet", 2 * H)
     host.quiet_since = None if quiet is None else at - quiet
-    host.pending = state.get("pending", 0)
+    host.sent = {"k": host_mod.Sent({})} if state.get("pending") else {}
     host.compact_nonce = state.get("compact_nonce")
     assert host.keepalive_due(at) is due, desc
 
@@ -1195,6 +1263,7 @@ def test_keepalive_due(host, state, due, desc):
 def test_keepalive_turn(host, store, sid, monkeypatch):
     """Sent once, as a keepalive: its end restarts the 55 minutes but not the quiet time,
     so the 8 hours run out; a real turn starts them both again."""
+    store.post_item(sid, "question", "which?")
     finish_at(host, 200_000)
     quiet = host.quiet_since
     host.last_turn -= host_mod.KEEPALIVE_AFTER
@@ -1210,18 +1279,64 @@ def test_keepalive_turn(host, store, sid, monkeypatch):
     assert host.quiet_since > quiet
 
 
-@pytest.mark.parametrize("sent, stream, replies, desc", [
-    ([("yes", "Q1")], [text("Done: Q1 settled."), result()], {"Q1": ["Done: Q1 settled."]},
-     "the turn's chat is the reply on the ref answered"),
-    ([("go", None)], [text("On it."), result()], {"Q1": [], "Q2": []}, "a general message: no item to reply on"),
-    ([("a", "Q1"), ("b", "Q2")], [text("Both done."), result()], {"Q1": ["Both done."], "Q2": ["Both done."]},
-     "a batch: the same chat on each"),
-    ([("yes", "Q1")], [text("Checking."), tool("ls"), text("All good."), result()],
-     {"Q1": ["Checking.\n\nAll good."]}, "every text block of the turn, as the pane shows it"),
-    ([("yes", "Q1")], [text("half"), result(error=True)], {"Q1": []}, "an error: not answered, still awaited"),
-    ([("yes", "Q1")], [tool("ls"), result()], {"Q1": []}, "no chat: nothing to post"),
+@pytest.mark.parametrize("line, error, after, desc", [
+    ("error: overloaded", False, "error: overloaded", "an error's line"),
+    ("interrupted", False, "interrupted", "Interrupt's line"),
+    ("idle · compacted 300k → 160k tokens", False, "idle · compacted 300k → 160k tokens", "a compaction's line"),
+    ("idle", True, "error: failed", "the keepalive itself failing says so"),
 ])
-def test_host_posts_the_chat_as_the_reply(streamed, store, sid, sent, stream, replies, desc):
+def test_a_keepalive_leaves_the_activity_line_as_it_was(streamed, store, sid, line, error, after, desc):
+    h = streamed
+    store.post_item(sid, "question", "which?")
+    finish_at(h, 200_000)
+    store.set_activity(sid, line)
+    h.last_turn -= host_mod.KEEPALIVE_AFTER
+    seen = []
+
+    async def go():
+        reader = asyncio.create_task(h.read())
+        await h.poll()
+        seen.append(store.session(sid)["activity"])
+        await feed(h, h.client.replay(), text("ok"))
+        seen.append(store.session(sid)["activity"])
+        await feed(h, result("failed", error=error), None)
+        await reader
+    run(go())
+    assert h.client.queries == [host_mod.KEEPALIVE_TEXT], desc
+    assert seen == [line, line], f"{desc}: untouched while it runs"
+    assert store.session(sid)["activity"] == after, desc
+
+
+def session_replies(store, sid, ref):
+    store.reply(sid, ref, "Replied myself.", "answered")
+
+
+def subagent_text(t):
+    from claude_agent_sdk import AssistantMessage
+    from claude_agent_sdk.types import TextBlock
+    return AssistantMessage(content=[TextBlock(text=t)], model="m", parent_tool_use_id="toolu_1")
+
+
+@pytest.mark.parametrize("sent, stream, replies, desc", [
+    ([("yes", "Q1")], [REPLAY, text("Done: Q1 settled."), result()], {"Q1": ["Done: Q1 settled."]},
+     "what the turn ends by saying is the reply on the ref answered"),
+    ([("go", None)], [REPLAY, text("On it."), result()], {"Q1": [], "Q2": []}, "a general message: no item to reply on"),
+    ([("a", "Q1"), ("b", "Q2")], [REPLAY, text("Both done."), result()], {"Q1": ["Both done."], "Q2": ["Both done."]},
+     "a batch: the same text on each"),
+    ([("yes", "Q1")], [REPLAY, text("Checking."), tool("ls"), text("All good."), result()],
+     {"Q1": ["All good."]}, "only the text after its last tool call: not the narration"),
+    ([("a", "Q1"), ("b", "Q2")], [REPLAY, text("Looking."), tool("ls"), text("Q1: yes. Q2: no."), result()],
+     {"Q1": ["Q1: yes. Q2: no."], "Q2": ["Q1: yes. Q2: no."]}, "a batch: the final text on each, no narration"),
+    ([("yes", "Q1")], [REPLAY, text("Main answer."), subagent_text("A subagent's words."), result()],
+     {"Q1": ["Main answer."]}, "a subagent's text isn't the session's answer"),
+    ([("yes", "Q1")], [REPLAY, text("half"), result(error=True)], {"Q1": []}, "an error: not answered, still awaited"),
+    ([("yes", "Q1")], [REPLAY, tool("ls"), result()], {"Q1": []}, "no text after its tool calls: nothing to post"),
+    ([("yes", "Q1")], [text("A background task finished."), result(), REPLAY, text("Q1 settled."), result()],
+     {"Q1": ["Q1 settled."]}, "a turn Claude Code started itself, ahead of ours: it answers nothing"),
+    ([("yes", "Q1")], [REPLAY, session_replies, text("Q1 settled."), result()], {"Q1": ["Replied myself."]},
+     "the session replied itself (copying its history): not posted twice"),
+])
+def test_host_posts_the_final_text_as_the_reply(streamed, store, sid, sent, stream, replies, desc):
     h = streamed
     for title in ("one", "two"):
         store.post_item(sid, "question", title)
@@ -1231,9 +1346,52 @@ def test_host_posts_the_chat_as_the_reply(streamed, store, sid, sent, stream, re
     async def go():
         reader = asyncio.create_task(h.read())
         await h.poll()
-        await feed(h, *stream, None)
+        for m in stream:
+            if callable(m):
+                m(store, sid, "Q1")
+            else:
+                await feed(h, h.client.replay() if m == REPLAY else m)
+        await feed(h, None)
         await reader
     run(go())
     got = {ref: [m["body"] for m in store.thread(sid, ref) if m["author"] == "claude"] for ref in replies}
     assert got == replies, desc
-    assert all(store.item(sid, ref)["status"] == "open" for ref in replies), f"{desc}: the status is the session's"
+    assert h.pending == 0, f"{desc}: every turn sent has ended"
+    assert all(store.item(sid, ref)["status"] == ("answered" if session_replies in stream else "open")
+               for ref in replies), f"{desc}: the status is the session's"
+
+
+@pytest.mark.parametrize("stream, replies, desc", [
+    (["A", tool("sleep 9"), "B", text("Both settled."), result()], {"Q1": ["Both settled."], "Q2": ["Both settled."]},
+     "the second taken up into the turn running: one end answers both"),
+    (["A", tool("sleep 9"), result(error=True), "B", text("Q2 settled."), result()], {"Q1": [], "Q2": ["Q2 settled."]},
+     "the first interrupted: the second, still queued, runs and answers its own"),
+    (["A", text("Q1 settled."), result(), "B", text("Q2 settled."), result()],
+     {"Q1": ["Q1 settled."], "Q2": ["Q2 settled."]}, "one after the other: each its own"),
+])
+def test_each_turn_end_answers_the_turns_it_took_up(streamed, store, sid, stream, replies, desc):
+    """As claude --input-format stream-json was seen to do (#16, round 43): a turn sent while
+    one runs is replayed when taken up, into the running turn or after it; an interrupted
+    turn's end lists it alone, and the turns queued behind it still run."""
+    h = streamed
+    for title in ("one", "two"):
+        store.post_item(sid, "question", title)
+
+    async def go():
+        reader = asyncio.create_task(h.read())
+        store.send(sid, "first", "Q1")
+        await h.poll()
+        store.send(sid, "second", "Q2")
+        await h.poll()
+        for m in stream:
+            await feed(h, h.client.replay("AB".index(m)) if m in ("A", "B") else m)
+        await feed(h, None)
+        await reader
+    run(go())
+    got = {ref: [m["body"] for m in store.thread(sid, ref) if m["author"] == "claude"] for ref in replies}
+    assert got == replies, desc
+    assert h.pending == 0 and store.session(sid)["activity"] == "idle", desc
+
+
+def test_the_host_asks_claude_code_to_replay_its_turns(host):
+    assert "replay-user-messages" in host.options(resume=True).extra_args

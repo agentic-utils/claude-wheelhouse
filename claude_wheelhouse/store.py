@@ -708,11 +708,15 @@ class Store:
             db.execute(f"UPDATE items SET status = coalesce(?, status), updated_at = ?, {UNDISMISS} "
                        "WHERE session_id = ? AND ref = ?", (status, now(), status, sid, ref))
 
-    def host_reply(self, sid: str, ref: str, text: str) -> None:
+    def host_reply(self, sid: str, ref: str, text: str, after: int = 0) -> None:
         """A hosted session's chat, posted by its host as the reply on an item the person's
-        message was on. It declares nothing: the session sets the status itself."""
+        message (id `after`) was on, unless the session has replied there itself since. It
+        declares nothing: the session sets the status itself."""
         with self.tx() as db:
             self._require(db, sid)
+            if db.execute("SELECT 1 FROM messages WHERE session_id = ? AND item_ref = ? AND author = 'claude' "
+                          "AND kind = 'reply' AND id > ?", (sid, ref, after)).fetchone():
+                return
             if db.execute("UPDATE items SET updated_at = ? WHERE session_id = ? AND ref = ?",
                           (now(), sid, ref)).rowcount:
                 self._said(db, sid, ref, text, "reply")

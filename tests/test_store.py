@@ -536,6 +536,22 @@ def test_older_code_still_writes_a_database_with_the_model_columns(store, tmp_pa
     assert (s["model"], s["effort"], s["applied_model"], s["applied_effort"]) == (None, None, None, None)
 
 
+@pytest.mark.parametrize("before, posted, desc", [
+    ([], True, "nothing said since the person's message: posted"),
+    (["reply"], False, "the session replied itself since: not posted twice"),
+    (["note"], True, "a progress note isn't a reply"),
+])
+def test_the_host_posts_a_reply_once(store, sid, before, posted, desc):
+    q = store.post_item(sid, "question", "db?")
+    store.send(sid, "postgres?", q)
+    last = store.thread(sid, q)[-1]["id"]
+    for step in before:
+        {"reply": lambda: store.reply(sid, q, "Replied myself.", "open"),
+         "note": lambda: store.update_item(sid, q, note="looking")}[step]()
+    store.host_reply(sid, q, "The host's text.", after=last)
+    assert ("The host's text." in [m["body"] for m in store.thread(sid, q)]) == posted, desc
+
+
 @pytest.mark.parametrize("stored, expected, desc", [
     ([4242, 1, 99.0], (99.0, (4242, 1), None), "a plain relaunch: older code wrote this too"),
     ([4242, 1, 99.0, True, 50.0], (99.0, (4242, 1), 50.0), "compacting first, asked at 50"),

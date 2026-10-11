@@ -12,7 +12,6 @@ hand-over to a tab it gives up the session, waits for the tab to exit, then take
 """
 
 import asyncio
-import collections
 import getpass
 import json
 import os
@@ -23,6 +22,8 @@ import signal
 import sqlite3
 import sys
 import time
+import uuid
+from dataclasses import dataclass
 
 from . import liveness, models
 from .launch import PROTOCOL_SDK, opening_prompt, transcript_exists
@@ -53,6 +54,9 @@ COMPACTED = "idle · compacted"   # how the activity line starts once a compacti
 # A context past this many tokens gets one question item suggesting Compact, per crossing:
 # every turn re-reads the whole context from the prompt cache
 NUDGE_TOKENS = 200_000
+# once nudged, the context must be compacted, or fall back under this, before the nudge
+# closes: a context hovering about NUDGE_TOKENS never brings one nudge after another
+NUDGE_RESET_TOKENS = 150_000
 # an item's answer column marks the host's Compact nudge, until the context is back under
 # NUDGE_TOKENS; then it is marked done, and the next crossing nudges again
 NUDGE = '{"from": "context nudge"}'
@@ -64,6 +68,9 @@ NUDGE_DONE = '{"from": "context nudge", "done": true}'
 KEEPALIVE_TOKENS = 150_000
 KEEPALIVE_AFTER = 55 * 60
 KEEPALIVE_FOR = 8 * 3600
+# the reply on a message the person sent on the Compact nudge, which the session never
+# posted: it goes to the session as a general message
+NUDGE_PASSED = "Passed to the session as a general message: this question is the wheelhouse's, not the session's."
 KEEPALIVE_TEXT = ("[wheelhouse] Keepalive: the person is away, and this turn only keeps your prompt cache "
                   "warm. Reply with the one word ok and do nothing else: no tools, no wheelhouse calls.")
 # an answer's `n:` or `Qn:` markers: at the start, or after a comma, semicolon or line
@@ -176,6 +183,20 @@ def question_answers(inp: dict, reply: str) -> dict:
     return {q.get("question", ""): parts.get(i, reply.strip()) for i, q in enumerate(qs, 1)}
 
 
+@dataclass
+class Sent:
+    """A turn sent: the refs it answers (ref: the person's newest message on it), and
+    whether it is a keepalive."""
+    refs: dict[str, int]
+    keepalive: bool = False
+
+
+async def user_message(text: str, key: str):
+    """A user turn as the SDK client sends one, with the uuid Claude Code replays it under."""
+    yield {"type": "user", "message": {"role": "user", "content": text}, "parent_tool_use_id": None,
+           "session_id": "default", "uuid": key}
+
+
 class Host:
     """One session's host. `client_factory` builds the SDK client from options (tests pass
     a fake); `open_tab` opens the shell tab (tests pass a stub)."""
@@ -192,18 +213,25 @@ class Host:
         # confirmed once the call takes it, released (so it goes out as a turn) if withdrawn
         self.handed: dict[str, sqlite3.Row] = {}
         self.delivered: set[int] = set()   # passed on, but not yet marked delivered (a locked database)
-        # turns sent and not yet finished. Claude Code also starts turns by itself (a
-        # background task finishing), so a finished turn never takes this below zero.
-        self.pending = 0
+        # the turns sent and not yet ended, by the uuid each was sent with: Claude Code
+        # replays each as it takes it up (replay-user-messages), so a turn's end is matched to
+        # the turns it took up, never counted. A turn Claude Code starts itself (a background
+        # task finishing) takes up none of ours; a turn sent while one runs may be taken up
+        # by that one, and then ends with it. Each has the refs the person's messages were on,
+        # with the newest message's id on each, and whether it is a keepalive.
+        self.sent: dict[str, Sent] = {}
+        self.taken_up: list[str] = []   # the turns sent that the running turn has taken up so far
         # Compact's request: the id its notes come back under, and since when nothing has
         # been running (None while a turn runs: only quiet time counts towards the timeout)
         self.compact_nonce: str | None = None
         self.compact_idle: float | None = None
         self.compact_notes: str | None = None   # seen in a reply, sent as /compact once the turn ends
-        self.turn_text: list[str] = []   # this turn's text so far: its chat, where Compact's block may straddle blocks
-        # the refs each turn sent and not yet finished answers, in order: its chat is posted
-        # as the reply on each (the protocol asks the session for the status alone)
-        self.answering: collections.deque[list[str]] = collections.deque()
+        self.turn_text: list[str] = []   # this turn's text so far, where Compact's block may straddle blocks
+        # this turn's text since its last tool call: what it ends by saying, posted as the
+        # reply on the refs it answered (the protocol asks the session for the status alone)
+        self.final_text: list[str] = []
+        # the activity line a keepalive turn found, shown again once it ends: it is no news
+        self.kept_line: str | None = None
         self.compacted_from = None   # tokens before the last compaction, until its turn ends
         # the model and effort in force, as Claude Code last confirmed them (or as launched)
         self.applied: tuple[str | None, str | None] = (None, None)
@@ -241,7 +269,9 @@ class Host:
             can_use_tool=self.can_use_tool,
             # the snapshot would replay whichever protocol the conversation first ran with
             # (a tab's, or an older version's): render it fresh each request
-            extra_args={"system-prompt-snapshot": "off"},
+            # replay-user-messages: each turn sent is replayed, by its uuid, as Claude Code takes
+            # it up, so a turn's end is matched to the turns it answered (read)
+            extra_args={"system-prompt-snapshot": "off", "replay-user-messages": None},
             env={"WHEELHOUSE_SESSION_ID": self.sid, "WHEELHOUSE_DB": str(self.store.path)},
             stderr=lambda line: print(f"[claude] {line}", file=sys.stderr, flush=True),
         )
@@ -262,15 +292,25 @@ class Host:
         else:
             self.store.set_activity(self.sid, "idle")
 
-    async def turn(self, text: str, keepalive: bool = False, refs: list[str] | None = None) -> None:
-        """Send a user turn; Claude Code queues it behind any turn still running. Only a
-        keepalive leaves the session quiet. Its chat is posted as the reply on refs."""
-        await self.client.query(text)
-        self.pending += 1
-        self.answering.append(refs or [])
+    @property
+    def pending(self) -> int:
+        """Turns sent and not yet ended."""
+        return len(self.sent)
+
+    async def turn(self, text: str, keepalive: bool = False, refs: dict[str, int] | None = None) -> None:
+        """Send a user turn; Claude Code queues it behind any turn still running, or takes
+        it up into that one. Only a keepalive leaves the session quiet, and the activity line
+        as it was. What it ends by saying is posted as the reply on refs (ref: the id of the
+        person's newest message on it)."""
+        key = str(uuid.uuid4())
+        if keepalive:
+            self.kept_line = self.store.session(self.sid)["activity"]
+        await self.client.query(user_message(text, key))
+        self.sent[key] = Sent(refs or {}, keepalive)
         self.compact_idle = None
-        if not keepalive:
-            self.quiet_since = None
+        if keepalive:
+            return
+        self.quiet_since = None
         try:   # sent: a locked database mustn't make the caller think otherwise
             self.store.set_activity(self.sid, "thinking")
         except sqlite3.OperationalError:
@@ -477,13 +517,21 @@ class Host:
             if (item is None or item["status"] == "closed") and not fut.done():
                 fut.set_result(None)
         if turn:
+            # a message on the Compact nudge goes as a general one: the session never posted it
+            nudged = {m["item_ref"] for m in turn if m["item_ref"] and self.is_nudge(m["item_ref"])}
+            refs = {}
+            for m in turn:
+                if m["item_ref"] and m["item_ref"] not in nudged:
+                    refs[m["item_ref"]] = max(refs.get(m["item_ref"], 0), m["id"])
+            shown = [{**dict(m), "item_ref": None} if m["item_ref"] in nudged else m for m in turn]
             try:
-                refs = list(dict.fromkeys(m["item_ref"] for m in turn if m["item_ref"]))
-                await self.turn(format_turn(turn, self.person), refs=refs)
+                await self.turn(format_turn(shown, self.person), refs=refs)
             except BaseException:   # not sent: left for the next host to deliver
                 self.store.release(turn)
                 raise
             await self.confirm(turn)
+            for ref in nudged:
+                self.store.host_reply(self.sid, ref, NUDGE_PASSED)
         for what, text in REQUEST_TEXT.items():
             asked = session[f"{what}_requested_at"]
             if asked and session[f"{what}_told_at"] != asked and self.store.tell_request(self.sid, what, asked):
@@ -510,12 +558,24 @@ class Host:
         return not self.stopping
 
     def keepalive_due(self, at: float) -> bool:
-        """Whether a keepalive turn is due: nothing running (only the person can move the
-        session on), no Compact under way, the context past KEEPALIVE_TOKENS, the last turn
-        KEEPALIVE_AFTER ago, and quiet for less than KEEPALIVE_FOR."""
+        """Whether a keepalive turn is due: nothing running, no Compact under way, the
+        context past KEEPALIVE_TOKENS, the last turn KEEPALIVE_AFTER ago, quiet for less than
+        KEEPALIVE_FOR, and the session waiting on the person (waits_on_person)."""
         return (not self.pending and self.compact_nonce is None and self.quiet_since is not None
                 and (self.tokens or 0) > KEEPALIVE_TOKENS and at - self.last_turn >= KEEPALIVE_AFTER
-                and at - self.quiet_since < KEEPALIVE_FOR)
+                and at - self.quiet_since < KEEPALIVE_FOR and self.waits_on_person())
+
+    def waits_on_person(self) -> bool:
+        """Whether the session waits on the person: an open question (not the host's Compact
+        nudge), an unseen decision or an open permission of its own."""
+        return any((i["kind"] == "question" and i["status"] == "open" and i["answer"] not in (NUDGE, NUDGE_DONE))
+                   or (i["kind"] == "decision" and i["status"] == "unseen")
+                   or (i["kind"] == "permission" and i["status"] == "open")
+                   for i in self.store.items(self.sid, include_closed=False))
+
+    def is_nudge(self, ref: str) -> bool:
+        item = self.store.item(self.sid, ref)
+        return item is not None and item["answer"] in (NUDGE, NUDGE_DONE)
 
     def forget_delivered(self) -> None:
         """Drop remembered ids someone else has since recorded as delivered (a shell tab's
@@ -544,6 +604,8 @@ class Host:
         from claude_agent_sdk.types import TextBlock, ThinkingBlock, ToolUseBlock
         async for m in self.client.receive_messages():
             try:
+                if isinstance(m, UserMessage) and m.uuid in self.sent and m.uuid not in self.taken_up:
+                    self.taken_up.append(m.uuid)   # one of ours, replayed as Claude Code takes it up
                 if isinstance(m, (AssistantMessage, UserMessage)):
                     self.compact_idle = None   # a turn is running, maybe one Claude Code started itself
                     if not self.pending:   # one it started itself: the session isn't quiet
@@ -552,48 +614,64 @@ class Host:
                     for b in m.content:
                         if isinstance(b, TextBlock):
                             self.turn_text.append(b.text)
+                            if m.parent_tool_use_id is None:   # the session's own, not a subagent's
+                                self.final_text.append(b.text)
                         if isinstance(b, TextBlock) and self.compact_nonce:   # the turn's text, whole: the last block wins
                             notes = keep_notes("\n".join(self.turn_text), self.compact_nonce)
                             self.compact_notes = notes if notes is not None else self.compact_notes
                         if isinstance(b, ToolUseBlock):
-                            self.store.set_activity(self.sid, f"running {tool_summary(b.name, b.input or {})}")
+                            if m.parent_tool_use_id is None:   # what it says after this is its answer
+                                self.final_text = []
+                            self.show(f"running {tool_summary(b.name, b.input or {})}")
                         elif isinstance(b, ThinkingBlock):
-                            self.store.set_activity(self.sid, "thinking")
+                            self.show("thinking")
                         elif isinstance(b, TextBlock):
-                            self.store.set_activity(self.sid, "writing")
+                            self.show("writing")
                 elif isinstance(m, UserMessage):
-                    self.store.set_activity(self.sid, "thinking")
+                    self.show("thinking")
                 elif isinstance(m, SystemMessage) and m.subtype == "compact_boundary":
                     meta = m.data.get("compact_metadata") or m.data.get("compactMetadata") or {}
                     self.compacted_from = meta.get("pre_tokens") or meta.get("preTokens") or 0
                 elif isinstance(m, ResultMessage):
-                    if self.pending and self.answering:   # one of ours, not one Claude Code started itself
-                        self.answer(self.answering.popleft(), m)
-                    self.pending = max(0, self.pending - 1)
-                    if not self.pending:   # every turn sent has ended (an interrupt may drop some unanswered)
-                        self.answering.clear()
-                    self.turn_text = []
-                    await self.finished(m)
+                    ended = [self.sent.pop(k) for k in self.taken_up if k in self.sent]
+                    self.taken_up = []
+                    refs = {}
+                    for turn in ended:
+                        for ref, after in turn.refs.items():
+                            refs[ref] = max(refs.get(ref, 0), after)
+                    self.answer(refs, m)
+                    keepalive = bool(ended) and all(t.keepalive for t in ended)
+                    self.turn_text, self.final_text = [], []
+                    await self.finished(m, keepalive)
             except sqlite3.OperationalError as e:   # database is locked: the activity line can wait
                 print(f"{now()} {e}: activity not recorded", file=sys.stderr, flush=True)
 
-    def answer(self, refs: list[str], m) -> None:
-        """A turn that answered the person's messages on refs has ended: its chat (every text
-        block, as the conversation pane shows it) goes on each as the session's reply. Not
-        an error's: the session hasn't answered, and the item still awaits it."""
-        text = "\n\n".join(t.strip() for t in self.turn_text if t.strip())
+    def show(self, activity: str) -> None:
+        """What the running turn is doing, on the activity line: not a keepalive's, which
+        leaves the line as it found it."""
+        if not (self.taken_up and all(k in self.sent and self.sent[k].keepalive for k in self.taken_up)):
+            self.store.set_activity(self.sid, activity)
+
+    def answer(self, refs: dict[str, int], m) -> None:
+        """A turn that took up the person's messages on refs has ended: what it ended by
+        saying (its text after its last tool call) goes on each as the session's reply, once.
+        Not on a ref the session has replied on itself since the person's message (a
+        session copying the reply calls in its history), nor an error's: the session hasn't
+        answered, and the item still awaits it."""
+        text = "\n\n".join(t.strip() for t in self.final_text if t.strip())
         if m.is_error or not text:
             return
-        for ref in refs:
+        for ref, after in refs.items():
             try:
-                self.store.host_reply(self.sid, ref, text)
+                self.store.host_reply(self.sid, ref, text, after=after)
             except SessionGone:
                 return
 
-    async def finished(self, m) -> None:
+    async def finished(self, m, keepalive: bool = False) -> None:
         """A turn ended. Once a reply has carried Compact's notes, they go to /compact,
         whichever turn they came in: one queued ahead of the ask, an error in another turn
-        or a turn Claude Code started itself doesn't lose them."""
+        or a turn Claude Code started itself doesn't lose them. A keepalive's end shows the
+        activity line it found again, unless it failed."""
         if self.compact_nonce:
             notes = self.compact_notes
             if notes is None and not m.is_error:
@@ -606,7 +684,7 @@ class Host:
         tokens = await self.context()
         if tokens is not None:
             self.tokens = tokens
-            self.nudge(tokens)
+            self.nudge(tokens, compacted=self.compacted_from is not None)
         if not self.pending:
             self.last_turn = time.monotonic()
             if self.quiet_since is None:
@@ -615,6 +693,8 @@ class Host:
                 self.compact_idle = time.monotonic()
             if m.is_error:
                 activity = f"error: {(m.result or m.subtype)[:80]}"
+            elif keepalive and self.kept_line is not None:
+                activity = self.kept_line
             elif self.compacted_from is not None:
                 activity = f"{COMPACTED} {self.compacted_from // 1000}k → {(tokens or 0) // 1000}k tokens"
             elif self.compact_nonce:
@@ -636,22 +716,24 @@ class Host:
             return tokens
         return None
 
-    def nudge(self, tokens: int) -> None:
+    def nudge(self, tokens: int, compacted: bool = False) -> None:
         """Past NUDGE_TOKENS, one question item suggesting Compact, for this crossing: the
         store remembers it (NUDGE), so a host started again, or the person closing it, never
-        brings a second. Back under (compacted), it closes, saying so, and the next crossing
-        nudges again."""
+        brings a second. It closes, saying so, once the session is compacted or back under
+        NUDGE_RESET_TOKENS, and the next crossing nudges again."""
         nudges = [i for i in self.store.items(self.sid) if i["answer"] == NUDGE]
         if tokens >= NUDGE_TOKENS:
             if not nudges:
                 ref = self.store.post_item(self.sid, "question", *nudge_item(tokens))
                 self.store.set_answer(self.sid, ref, NUDGE)
             return
+        if not (compacted or tokens < NUDGE_RESET_TOKENS):
+            return
         for item in nudges:
             self.store.set_answer(self.sid, item["ref"], NUDGE_DONE)
             if item["status"] not in CLOSED:
                 self.store.update_item(self.sid, item["ref"], status="closed",
-                                       note=f"Compacted: the context is {tokens // 1000}k now.")
+                                       note=f"{'Compacted: t' if compacted else 'T'}he context is {tokens // 1000}k now.")
 
     # hand-over to an interactive tab
 
@@ -690,8 +772,7 @@ class Host:
             self.stopping = True
             return
         await self.steady(self.store.set_shell, self.sid, None)
-        self.pending, self.turn_text = 0, []
-        self.answering.clear()
+        self.sent, self.taken_up, self.turn_text, self.final_text = {}, [], [], []
         self.end_compact()
         self.tokens = None   # the tab ran turns this host never saw: its cache is the tab's
         self.reader.cancel()
