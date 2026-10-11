@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from claude_wheelhouse import host as host_mod, hub as hub_mod, launch, liveness, stats, subagents, transcript, tutorial
+from claude_wheelhouse import host as host_mod, hub as hub_mod, launch, liveness, models, stats, subagents, transcript, tutorial
 from claude_wheelhouse.hub import Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone
 
@@ -694,3 +694,47 @@ def test_a_tabs_model_state_is_what_its_transcript_says(hub, store, tmp_path, mo
         hub.contexts[sid] = follower
     got = hub.model_state(hub.row(sid))
     assert (got["model"], got["effort"], got["pending"], got["hosted"]) == (*state, None, False), desc
+
+
+def ran_in(hub, sid, model, effort):
+    """The hub reads the session's transcript, which shows it ran on model at effort."""
+    follower = stats.follower(sid)
+    hub.contexts[sid] = follower
+    follower.read = lambda now=None: True
+    follower.ready = True
+    follower.snap.model, follower.snap.requested, follower.snap.effort = (model or "").split("[")[0] or None, model, effort
+    hub.post = lambda work: None
+    hub.read_context(follower)
+
+
+@pytest.mark.parametrize("runner_, shell, steps, columns, desc", [
+    ("tab", None, [("claude-opus-5-5[1m]", "max")], ("claude-opus-5-5", "max"),
+     "a tab's /model opus[1m] and /effort max: stored as the pinned id a launch passes"),
+    ("tab", None, [(None, None)], ("claude-sonnet-5-5", "high"), "nothing in the transcript yet: the columns stand"),
+    ("tab", None, [("claude-legacy-4", "low")], ("claude-legacy-4", "low"), "an id off the table: kept as it ran"),
+    ("sdk", None, [("claude-opus-5-5", "max")], ("claude-sonnet-5-5", "high"),
+     "a hosted session: its host applies the columns, nothing copied"),
+    ("sdk", "tab", [("claude-sonnet-5-5", "high"), ("claude-opus-5-5", "high")], ("claude-opus-5-5", "high"),
+     "its shell tab's /model, seen happening: copied"),
+    ("sdk", "tab", [("claude-opus-5-5", "low")], ("claude-sonnet-5-5", "high"),
+     "its shell tab's older values, first seen: a choice made meanwhile stands"),
+])
+def test_a_tabs_model_and_effort_are_copied_back(hub, store, tmp_path, monkeypatch, runner_, shell, steps, columns, desc):
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), runner=runner_, model="claude-sonnet-5-5", effort="high")
+    if shell:
+        store.set_shell(sid, shell)
+    hub.refresh()
+    for model, effort in steps:
+        ran_in(hub, sid, model, effort)
+    s = store.session(sid)
+    assert (s["model"], s["effort"]) == columns, desc
+
+
+def test_a_copied_back_model_launches(store, tmp_path):
+    """What copy_back stores is what a launch passes, and a pinned id the store accepts."""
+    sid = store.create_session(str(tmp_path), runner="tab", model="claude-sonnet-5-5", effort="high")
+    store.put_back(sid, {"model": "claude-sonnet-5-5"}, model=models.pinned("claude-opus-5-5[1m]"))
+    argv = launch.claude_argv(store.session(sid), python="py", resume=True)
+    assert argv[argv.index("--model") + 1] == "claude-opus-5-5"
+    store.set_model(sid, store.session(sid)["model"])

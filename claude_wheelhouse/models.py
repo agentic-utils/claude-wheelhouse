@@ -45,6 +45,14 @@ def name(model: str | None) -> str | None:
     return BY_ID[base].name if base in BY_ID else None
 
 
+def pinned(model: str) -> str:
+    """A model id as a launch passes it: a table model's suffixed id (claude-opus-5-5[1m],
+    as a transcript records a /model opus[1m]) as its pinned id, which is the same model with
+    the same 1M window; any other id as it is."""
+    base = model.split("[")[0]
+    return base if base in BY_ID else model
+
+
 def chosen(model: str | None, effort: str | None) -> tuple[str, str]:
     """A new session's model and effort: as given, else the default model and that model's
     default effort. Either given is checked against the table."""

@@ -212,9 +212,13 @@ still gets `--model` and `--effort` at launch from the New session dialog, and t
 can type `/model` or `/effort` in it. The stats header shows what the transcript says it
 runs (each assistant record carries `requestedModel` and `effort`).
 
-Not carried: a `/model` or `/effort` typed in a tab (or in a host's shell hand-over) is not
-copied back to the columns, so the next launch returns to the columns' values. Copying the
-transcript's latest values into the columns would fix that; it is left for a follow-up.
+Carried (Q56, option A): a `/model` or `/effort` typed in a tab is copied back to the
+columns (`Hub.copy_back`, on each read of the transcript), so the next Relaunch, Restore or
+return from a shell tab launches with it. A tab session's columns take whatever its
+transcript's latest values are. In a host's shell hand-over, only a change the transcript
+shows while the wheelhouse watches is copied, so a choice made in the wheelhouse meanwhile
+stands. A suffixed id (`claude-opus-5-5[1m]`) is stored as its pinned id, the same model
+with the same 1M window (`models.pinned`).
 
 ## What the stats pane shows
 

@@ -377,8 +377,9 @@ class Store:
             db.execute("UPDATE sessions SET effort = ? WHERE id = ?", (effort, sid))
 
     def put_back(self, sid: str, sent: dict, **values) -> None:
-        """A host putting the model or effort column back to what Claude Code has in force,
-        having refused the change: unchecked, as it is what runs. Only where the column
+        """The model or effort column put back to what Claude Code has in force: by a host
+        Claude Code refused the change, or by the hub for a tab its transcript shows the
+        person changed (Hub.copy_back). Unchecked, as it is what runs. Only where the column
         still holds what was sent (sent): a newer choice made meanwhile stands, and is the
         host's to apply next."""
         with self.tx() as db:

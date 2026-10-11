@@ -17,6 +17,7 @@ a surface reports; the dialogs that ask first, and their wording, are the surfac
 import functools
 import os
 import signal
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -147,6 +148,8 @@ class Hub:
         # each session's context size for the session list: read on workers, by a follower
         # shared with the stats pane (stats.follower), so each transcript is read once
         self.contexts: dict[str, stats.UsageFollower] = {}
+        # each session's model and effort as its transcript last showed them (copy_back)
+        self.ran: dict[str, tuple[str | None, str | None]] = {}
         # each session's subagents, tracked as A items (#69): read on workers, as contexts are
         self.agent_watchers: dict[str, subagents.AgentWatcher] = {}
         self.agent_errors: dict[str, str] = {}   # each session's watcher error last said
@@ -686,8 +689,38 @@ class Hub:
         if it shows that session: the follower is its as well, and it started no read of its
         own while this one was under way."""
         first = not follower.ready
-        if stats.read_safely(follower) or first:
+        changed = stats.read_safely(follower)
+        if follower.ready and not follower.error:
+            try:
+                self.copy_back(follower)
+            except sqlite3.OperationalError:   # a locked database: the next read tries again
+                self.ran.pop(follower.sid, None)
+        if changed or first:
             self.post(functools.partial(self.emit, Event("landed", sid=follower.sid)))
+
+    def copy_back(self, follower: stats.UsageFollower) -> None:
+        """A /model or /effort typed in a tab, copied to the session's columns, so its next
+        Relaunch, Restore or return from a shell tab launches with it (Q56). A tab session's
+        columns take whatever its transcript shows: nothing else changes them. A hosted
+        session's shell tab only a change its transcript shows while the hub watches, so a
+        choice made in the wheelhouse meanwhile isn't undone by the tab's older one. A
+        hosted session's host applies the columns itself: nothing is copied."""
+        snap = follower.snap
+        model = snap.requested or snap.model
+        ran = (models.pinned(model) if model else None, snap.effort)
+        seen = self.ran.get(follower.sid)
+        self.ran[follower.sid] = ran
+        s = self.store.session(follower.sid)
+        if s is None:
+            return
+        columns = {"model": models.field(s, "model"), "effort": models.field(s, "effort")}
+        if runner(s) == "tab":
+            seen = tuple(columns.values())
+        elif not s["shell"] or seen is None:
+            return
+        changed = {k: v for k, v, was in zip(columns, ran, seen) if v and v != was and v != columns[k]}
+        if changed:
+            self.store.put_back(follower.sid, columns, **changed)
 
     def watch_agents(self) -> None:
         """Each session's subagents brought up to date as A items, on a worker thread: every

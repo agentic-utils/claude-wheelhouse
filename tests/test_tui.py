@@ -4915,7 +4915,8 @@ async def test_relaunch_offers_to_compact_a_big_session_first(store, sid, monkey
 
 @pytest.mark.anyio
 async def test_a_tabs_header_shows_what_its_transcript_says_it_runs(store, tmp_path, monkeypatch):
-    """Created on Sonnet, then a /model in the tab: its transcript records Opus, and so does the header."""
+    """Created on Sonnet, then a /model in the tab: its transcript records Opus, and so do the
+    header and the columns, so a relaunch keeps it (Q56)."""
     sid, app = await hosted_app(store, tmp_path, monkeypatch, "tab")
     path = tmp_path / f"projects/-home-u-repo/{sid}.jsonl"
     rec = json.loads(path.read_text())
@@ -4924,7 +4925,8 @@ async def test_a_tabs_header_shows_what_its_transcript_says_it_runs(store, tmp_p
     path.write_text(path.read_text() + json.dumps(rec) + "\n")
     async with app.run_test(size=(160, 40)) as pilot:
         assert "demo · Opus 5.5 · max · 1M ─" in await shown_stats(app, pilot)
-    assert store.session(sid)["model"] == "claude-sonnet-5-5", "the columns as they were (M2 is separate)"
+    s = store.session(sid)
+    assert (s["model"], s["effort"]) == ("claude-opus-5-5", "max"), "copied back, as the pinned id"
 
 
 @pytest.mark.anyio
