@@ -1118,3 +1118,50 @@ async def test_another_machine_opens_no_tab(store, tmp_path, monkeypatch, sdk, p
         assert opened == [], desc
     else:
         assert r.status_code == 200 and (opened or body.get("take") is False), f"{desc}: {r.text} {opened}"
+
+
+GONE_HOST = {"host": [999999, 1]}   # the host the client was shown, gone meanwhile
+
+
+@pytest.mark.parametrize("sdk, runner_env, path, body, live, peer, said, opened_want, desc", [
+    (False, "tab", "/sessions/{sid}/relaunch", GONE_HOST, False, REMOTE, "host has stopped: Relaunch it from the "
+     "daemon's machine", [], "a host gone meanwhile would come back as a tab"),
+    (False, "tab", "/sessions/{sid}/relaunch", {**GONE_HOST, "compact": True}, False, REMOTE, "host has stopped",
+     [], "compacting first, the same"),
+    (True, "tab", "/sessions/{sid}/relaunch", GONE_HOST, False, REMOTE, "host has stopped", [],
+     "SDK mode on, but new sessions run in tabs"),
+    (False, "tab", "/sessions/{sid}/relaunch", GONE_HOST, False, "127.0.0.1", "relaunching", ["restore"],
+     "from this machine it comes back, as a tab"),
+    (True, "sdk", "/restore-all", {"sids": ["{sid}", "{tut}"]}, False, REMOTE, "tut opens in a tab: restore it from "
+     "the daemon's machine", ["restore"], "the rest still restored, the tutorial held back"),
+    (False, "tab", "/sessions/{sid}/restore", {}, True, REMOTE, "only a dead session can be restored", [],
+     "a running session: the hub's own answer, not a refusal"),
+    (False, "tab", "/restore-all", {"sids": ["{sid}"]}, True, REMOTE, "restoring", ["restore"],
+     "a running one is the hub's to refuse"),
+])
+async def test_another_machine_is_told_rather_than_opening_a_tab(store, tmp_path, monkeypatch, sdk, runner_env, path,
+                                                                 body, live, peer, said, opened_want, desc):
+    from claude_wheelhouse import tutorial
+    monkeypatch.setenv("WHEELHOUSE_RUNNER", runner_env)
+    opened = []
+    monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None: opened.append("restore"))
+    monkeypatch.setattr(launch, "open_session", lambda store, sid: opened.append("open"))
+    sid = store.create_session(str(tmp_path), name="demo", runner="sdk")
+    tut_dir = tutorial.tutorial_dir(store)
+    tut_dir.mkdir(exist_ok=True)
+    tut = store.create_session(str(tut_dir), name="tut", runner="tab")
+    d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True, sdk=sdk)
+    try:
+        d.tick()
+        if live:
+            d.hub.statuses[sid] = "live"
+        body = json.loads(json.dumps(body).replace("{sid}", sid).replace("{tut}", tut))
+        async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=d.app, client=(peer, 50000)),
+                                      base_url=URL, headers={"Authorization": f"Bearer {TOKEN}"}) as c:
+            r = await c.post(path.format(sid=sid), json=body, headers={"Idempotency-Key": str(uuid.uuid4())})
+    finally:
+        d.pool.shutdown()
+        d.worker.shutdown()
+        d.watch.close()
+    assert r.status_code == 200 and any(said in t for t in told(r)), f"{desc}: {r.status_code} {r.text}"
+    assert opened == opened_want, desc

@@ -52,7 +52,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from . import auth, fingerprint, launch, liveness, models, stats, tutorial
-from .hub import Done, Event, Hub, host_context
+from .hub import Done, Event, Hub, display_name, host_context
 from .store import SessionGone, Store, inbox_rank, mode, runner, standing
 
 ADDRESS, PORT = "127.0.0.1", 7428
@@ -774,9 +774,9 @@ class Daemon:
             why = "SDK mode is off" if not self.hub.sdk else "it would open in a tab"
             raise Refused(403, f"{why}: this wheelhouse doesn't start sessions remotely")
 
-    def restore_runner(self, sid: str) -> str:
-        """How Restore, Relaunch of a dead session and Restore all bring it back."""
-        return launch.restore_runner(self.store, self.hub.row(sid)["cwd"], self.hub.sdk)
+    def restore_runner(self, s) -> str:
+        """How Restore, Relaunch of a dead session and Restore all bring a session (its row) back."""
+        return launch.restore_runner(self.store, s["cwd"], self.hub.sdk)
 
     def adopt(self, request: Request, body: dict) -> Done:
         """A session on disk brought in, by its id, as Adopt offered it: one gone from the
@@ -793,10 +793,20 @@ class Daemon:
         sids = body.get("sids")
         if not (isinstance(sids, list) and all(isinstance(sid, str) for sid in sids)):
             raise Refused(400, "sids must be a list of session ids")
-        for sid in sids:   # one ended meanwhile is the hub's to say
-            if self.store.session(sid) is not None:
-                self.no_remote_tab(request, self.restore_runner(sid))
-        return self.hub.restore_all(sids)
+        here, kept, held = this_machine(request), [], []
+        for sid in sids:   # one ended meanwhile, or not dead, is the hub's to say
+            s = self.store.session(sid)
+            dead = s is not None and self.hub.statuses.get(sid) == "dead"
+            if not here and dead and self.restore_runner(s) == "tab":
+                held.append(s)
+            else:
+                kept.append(sid)
+        if held and not kept:
+            self.no_remote_tab(request, "tab")
+        done = self.hub.restore_all(kept)
+        for s in held:
+            done.say(f"{display_name(s)} opens in a tab: restore it from the daemon's machine", "warning")
+        return done
 
     def answer_offer(self, request: Request, body: dict) -> Done:
         take = body.get("take")
@@ -855,13 +865,14 @@ class Daemon:
         if action == "relaunch":
             host = body.get("host")
             if host is None:
-                self.no_remote_tab(request, self.restore_runner(sid))
+                self.no_remote_tab(request, self.restore_runner(hub.row(sid)))
                 return hub.relaunch(sid)
             if not (isinstance(host, list) and len(host) == 2 and all(isinstance(n, int) for n in host)):
                 raise Refused(400, "host must be [pid, start time]")
+            may_tab = this_machine(request)   # its host gone meanwhile, it may come back as a tab
             if body.get("compact"):
-                return hub.compact_then_relaunch(sid, tuple(host))
-            return hub.stop_host(sid, tuple(host))
+                return hub.compact_then_relaunch(sid, tuple(host), may_tab)
+            return hub.stop_host(sid, tuple(host), may_tab)
         if action == "mode":
             want = text(body, "mode", False)
             if want is not None and want not in ("queued", "immediate"):
@@ -881,8 +892,8 @@ class Daemon:
             self.no_remote_tab(request, "tab")
         if action in ("interrupt", "compact", "shell"):
             return hub.host_command(sid, action)
-        if action == "restore":
-            self.no_remote_tab(request, self.restore_runner(sid))
+        if action == "restore" and hub.statuses.get(sid) == "dead":   # else the hub says it isn't
+            self.no_remote_tab(request, self.restore_runner(hub.row(sid)))
         commands = {"restore": hub.restore, "unpark": hub.unpark, "dispatch": hub.send_queue}
         if action not in commands:
             raise Refused(404, f"no command {action}")

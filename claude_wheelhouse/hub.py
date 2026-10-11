@@ -259,7 +259,16 @@ class Hub:
             done.say("relaunching")
         return done
 
-    def stop_host(self, sid: str, host: tuple) -> Done:
+    def host_gone(self, sid: str, s, may_tab: bool) -> Done:
+        """Relaunch of a host that has gone meanwhile: it comes back as a dead session does
+        (relaunch), unless that is a tab and may_tab is false (a request from another
+        machine, where a tab here would go unseen)."""
+        if not may_tab and launch.restore_runner(self.store, s["cwd"], self.sdk) == "tab":
+            return Done(False).say(f"{display_name(s)}'s host has stopped: Relaunch it from the daemon's machine",
+                                   "warning")
+        return self.relaunch(sid)
+
+    def stop_host(self, sid: str, host: tuple, may_tab: bool = True) -> Done:
         """Stop a session's host, as SIGTERM does (its own clean stop: Claude Code is
         disconnected, and an open permission or question closes as withdrawn, or as lost
         when the new host starts). The confirm may have sat open meanwhile, so only the
@@ -270,7 +279,7 @@ class Hub:
         if runner(s) != "sdk" or s["shell"]:
             return Done(False).say(TAB_RELAUNCH, "warning")
         if not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
-            return self.relaunch(sid)   # gone meanwhile: nothing to stop
+            return self.host_gone(sid, s, may_tab)   # gone meanwhile: nothing to stop
         if (s["claude_pid"], s["claude_start"]) != host:
             return Done(False).say(f"{display_name(s)} started again meanwhile: Relaunch again to stop this host",
                                    "warning")
@@ -291,7 +300,7 @@ class Hub:
         return (runner(s) == "sdk" and not s["shell"] and self.running(sid)
                 and (s["context_tokens"] or 0) > COMPACT_FIRST_TOKENS)
 
-    def compact_then_relaunch(self, sid: str, host: tuple) -> Done:
+    def compact_then_relaunch(self, sid: str, host: tuple, may_tab: bool = True) -> Done:
         """Relaunch, compacting first: the host is asked to Compact (unless a Compact is
         under way already), and once the session is compacted and idle, finish_relaunches
         stops it (stop_host), and starts it again once gone. Only the host the confirm was
@@ -300,7 +309,7 @@ class Hub:
         if runner(s) != "sdk" or s["shell"]:
             return Done(False).say(TAB_RELAUNCH, "warning")
         if not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
-            return self.relaunch(sid)   # gone meanwhile: nothing to compact
+            return self.host_gone(sid, s, may_tab)   # gone meanwhile: nothing to compact
         if (s["claude_pid"], s["claude_start"]) != host:
             return Done(False).say(f"{display_name(s)} started again meanwhile: Relaunch again to stop this host",
                                    "warning")
