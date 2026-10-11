@@ -105,6 +105,8 @@ def test_newest_wins(first, second, expected, desc):
 
 
 class FakeProbe:
+    stopped = False
+
     def __init__(self, answer):
         self.answer = answer
 
@@ -130,6 +132,22 @@ def test_a_poll(answer, kept, desc, capsys):
         assert u.limits["session"][0] == 10.0, desc
     else:
         assert capsys.readouterr().err.count("plan usage") == 1, f"{desc}: said once"
+
+
+def test_an_unreadable_answer_keeps_an_sdk_sessions_reading():
+    u = plan_usage.AccountUsage()
+    u.take({"session": (10.0, None), "weekly_fable": (3.0, None)}, 100)
+    u.take({"session": (30.0, None)}, 200, sdk=True)
+    REAL_POLL(u, FakeProbe("Your usage: plenty"))
+    assert u.limits == {"session": (30.0, None)} and u.read == {"session": 200} and u.failed
+
+
+def test_a_poll_is_quiet_once_the_probe_has_stopped(tmp_path, capsys):
+    p = plan_usage.Probe(tmp_path)
+    p.stop()
+    u = plan_usage.AccountUsage()
+    REAL_POLL(u, p)
+    assert capsys.readouterr().err == "" and not u.failed, "the hub is stopping: nothing said, nothing run"
 
 
 def test_the_hub_takes_an_sdk_sessions_newer_reading(store):
@@ -161,6 +179,12 @@ FAKE = textwrap.dedent('''
     said = {"pid": os.getpid(), "cwd": os.getcwd(), "env": sorted(k for k in os.environ if k.startswith("WHEELHOUSE_"))}
     result = {"type": "result", "subtype": "success", "is_error": False, "result": json.dumps(said)}
     if mode.startswith("oneshot"):
+        if mode == "oneshot-stubborn":   # a child that ignores SIGTERM, in its group: SIGKILL ends it
+            import subprocess
+            child = subprocess.Popen([sys.executable, "-c",
+                                      "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"])
+            open("child.pid", "w").write(str(child.pid))
+            time.sleep(60)
         if mode == "oneshot-hang":
             time.sleep(60)
         if mode == "oneshot-silent":
@@ -215,7 +239,7 @@ def gone(pid: int) -> bool:
                     "--no-session-persistence"], ["/usage"], "a session reading stream-json"),
 ])
 def test_each_modes_command(mode, has, lacks, desc, monkeypatch):
-    monkeypatch.setattr(plan_usage, "CLAUDE", "claude")
+    monkeypatch.delenv(plan_usage.CLAUDE_ENV)
     argv = plan_usage.command(mode)
     assert argv[0] == "claude" and all(a in argv for a in has) and not any(a in argv for a in lacks), desc
     assert "--bare" not in argv, f"{desc}: --bare loses the login"
@@ -249,6 +273,13 @@ def test_oneshot_failures(fake, how, match, desc):
         assert p.deaths == 1 and p.not_before > time.time(), f"{desc}: backed off"
         with pytest.raises(plan_usage.Unavailable, match="after a pause"):
             p.ask()
+
+
+def test_a_kill_reaches_a_child_that_ignores_sigterm(fake, tmp_path):
+    p = fake("oneshot-stubborn", timeout=1)
+    with pytest.raises(plan_usage.Unavailable, match="no answer"):
+        p.ask()
+    assert gone(int((tmp_path / "child.pid").read_text())), "SIGKILL followed, though the leader went at SIGTERM"
 
 
 def test_stop_kills_a_oneshot_under_way(fake):

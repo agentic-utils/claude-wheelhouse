@@ -196,7 +196,7 @@ def test_usage_is_asked_every_five_minutes(hub, monkeypatch):
     now, groups = [1000.0], []
     monkeypatch.setattr(hub_mod.time, "time", lambda: now[0])
     hub.spawn = lambda work, group: groups.append(group)
-    for at in (1000.0, 1061.0, 1000.0 + plan_usage.EVERY + 1):
+    for at in (1000.0, 1001.0, 1030.0, 1001.0 + plan_usage.EVERY):   # the first tick only sets the clock
         now[0] = at
         hub.fetch_usage()
     assert groups == ["usage", "usage"]

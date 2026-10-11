@@ -171,7 +171,10 @@ class Hub:
         # plan_usage.EVERY seconds, and taken from SDK sessions' readings in the store
         self.usage = plan_usage.AccountUsage()
         self.usage_probe = plan_usage.Probe(self.store.path.parent)
-        self.usage_due = 0.0       # when /usage is next asked
+        # when /usage is next asked: None until the first tick, which only sets it, so the
+        # first ask is a tick later, once a daemon is serving (its lifespan ticks before it
+        # binds: one that can't bind never runs Claude Code)
+        self.usage_due: float | None = None
         self.sdk_usage_due = 0.0   # when the SDK sessions' reading is next looked at
         self.sdk_usage = None      # the last it took, as stored
 
@@ -801,7 +804,9 @@ class Hub:
         clients that come and go); and an SDK session's newer reading, which its host keeps
         in the store, looked for every SDK_USAGE_EVERY seconds."""
         now = time.time()
-        if now >= self.usage_due:
+        if self.usage_due is None:
+            self.usage_due = now
+        elif now >= self.usage_due:
             self.usage_due = now + plan_usage.EVERY   # claimed here, so one ask is in flight at a time
             self.spawn(functools.partial(self.usage.poll, self.usage_probe), "usage")
         if now >= self.sdk_usage_due:
@@ -816,7 +821,7 @@ class Hub:
         self.sdk_usage = stored
         try:
             reading = json.loads(stored)
-            self.usage.take({k: tuple(v) for k, v in reading["limits"].items()}, float(reading["at"]))
+            self.usage.take({k: tuple(v) for k, v in reading["limits"].items()}, float(reading["at"]), sdk=True)
         except (ValueError, TypeError, KeyError, AttributeError) as e:
             plan_usage.say_once(f"an SDK session's reading couldn't be read: {e}")
 

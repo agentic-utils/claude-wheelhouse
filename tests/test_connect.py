@@ -14,6 +14,7 @@ import time
 import pytest
 
 from claude_wheelhouse import auth, connect, features, fingerprint
+import conftest
 
 
 def free_port() -> int:
@@ -287,6 +288,18 @@ def test_a_lock_let_go_while_joining_is_gone_round_again(tmp_path, monkeypatch):
     monkeypatch.setattr(connect, "holder", lambda d: now["held"])
     monkeypatch.setattr(connect, "start", lambda d, p: pytest.fail("started one while one ran"))
     assert connect.local(state_dir, port)[0] == url
+
+
+def test_a_daemon_the_tests_start_cant_run_claude(state):
+    """conftest's WHEELHOUSE_CLAUDE reaches a daemon started in its own process, past the
+    monkeypatches: its /usage poll runs a claude that isn't there, and says so."""
+    state_dir, port = state
+    connect.local(state_dir, port)
+    log, deadline = "", time.monotonic() + 15
+    while "/usage didn't answer" not in log and time.monotonic() < deadline:
+        time.sleep(0.1)
+        log = (state_dir / connect.LOG).read_text()
+    assert f"couldn't start Claude Code: [Errno 2] No such file or directory: '{conftest.NO_CLAUDE}'" in log, log
 
 
 def test_the_daemon_never_sees_the_apps_token_in_its_environment(state, monkeypatch):

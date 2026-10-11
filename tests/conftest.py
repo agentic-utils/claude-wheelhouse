@@ -9,6 +9,7 @@ from claude_wheelhouse import features, launch, store as store_module, tui
 from claude_wheelhouse.store import Store
 
 SHIPPED_DWELL = tui.DWELL   # before no_dwell_timer puts it out of reach
+NO_CLAUDE = "/nonexistent/claude-is-never-run-in-tests"
 NO_DEFAULT_DB = Path("/nonexistent-wheelhouse-test-state/wheelhouse.db")   # unwritable: a reach for it fails
 
 
@@ -64,10 +65,10 @@ def tab_runner(monkeypatch):
 @pytest.fixture(autouse=True)
 def no_usage_fetch(monkeypatch):
     """The stats pane's plan usage comes from a real Claude Code: never run in tests. The
-    hub's polls do nothing, and a Probe made without a command of its own runs a claude that
-    isn't there (test_plan_usage gives it a fake)."""
+    hub's polls in this process do nothing, and a Probe made without a command of its own,
+    here or in a daemon a test starts, runs a claude that isn't there (test_plan_usage gives it a fake)."""
     monkeypatch.setattr("claude_wheelhouse.plan_usage.AccountUsage.poll", lambda self, probe: None)
-    monkeypatch.setattr("claude_wheelhouse.plan_usage.CLAUDE", "/nonexistent/claude-is-never-run-in-tests")
+    monkeypatch.setenv("WHEELHOUSE_CLAUDE", NO_CLAUDE)   # in the environment: a daemon a test starts has it too
 
 
 @pytest.fixture(autouse=True)

@@ -59,7 +59,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - The autouse `isolated_db` fixture gives every test its own database. Other autouse
   fixtures turn SDK mode off (`sdk_off`; a test of it takes `sdk_on`), run sessions as
   tabs, stub the plan usage poll (no test runs the real `claude`: `test_plan_usage.py`
-  uses a fake), the tutorial offer and the dwell timer. A test that needs a real host or the shipped behaviour opts in explicitly.
+  uses a fake, and `WHEELHOUSE_CLAUDE` points every other probe, a test-started daemon's
+  too, at one that isn't there), the tutorial offer and the dwell timer. A test that needs a real host or the shipped behaviour opts in explicitly.
 - A test that depends on the app's timers (Sink moves, the dwell, `tick`, `animate`)
   uses the `clock` fixture and moves time with `clock.advance`. Never sleep on wall-clock
   time. The fixture fails on any app timer it doesn't know: add it to the fixture.
