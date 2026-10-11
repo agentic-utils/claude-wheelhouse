@@ -82,9 +82,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   transcripts, in claude-dashboard's colours. A bordered panel, titled with the session,
   model, effort and window, holds three gauges: context size against its window (green under
   150k, yellow under 300k, amber under 600k, then red), and the account's session and weekly usage with their reset times, as
-  `/usage` shows them: the wheelhouse keeps a Claude Code running in the background and
-  runs `/usage` in it every 5 minutes (no tokens are spent), and says how old the numbers
-  are when a reading is late. Under them, whether the prompt cache is warm
+  `/usage` shows them: every 5 minutes the wheelhouse runs a short `claude -p "/usage"`
+  in the background (no tokens are spent), and says how old the numbers are when a
+  reading is late. Under them, whether the prompt cache is warm
   and when it goes cold (once cold, what the next turn re-pays), and its compactions.
   Straight after a compaction a session keeps its pre-compaction size until the next
   response sizes it. Below the panel, two charts of the last two hours, subagents included: how each turn's

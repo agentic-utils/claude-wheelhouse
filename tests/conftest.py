@@ -64,10 +64,10 @@ def tab_runner(monkeypatch):
 @pytest.fixture(autouse=True)
 def no_usage_fetch(monkeypatch):
     """The stats pane's plan usage comes from a real Claude Code: never run in tests. The
-    hub's polls do nothing, and a Probe made without a command of its own runs one that
+    hub's polls do nothing, and a Probe made without a command of its own runs a claude that
     isn't there (test_plan_usage gives it a fake)."""
     monkeypatch.setattr("claude_wheelhouse.plan_usage.AccountUsage.poll", lambda self, probe: None)
-    monkeypatch.setattr("claude_wheelhouse.plan_usage.COMMAND", ("/nonexistent/claude-is-never-run-in-tests",))
+    monkeypatch.setattr("claude_wheelhouse.plan_usage.CLAUDE", "/nonexistent/claude-is-never-run-in-tests")
 
 
 @pytest.fixture(autouse=True)

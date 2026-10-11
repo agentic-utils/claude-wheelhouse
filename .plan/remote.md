@@ -228,8 +228,8 @@ was before 2c, its hub in process: the way back, at once.
   A conversation or thread shown for the first time is fetched while the person waits,
   as the hub read it; after that the thread keeps it up to date. The stats pane still
   reads the transcripts itself, so on the home machine it's as it was; its account usage
-  comes from the daemon's (`GET /usage`, each minute; the daemon asks `/usage` of its
-  background Claude Code every 5 minutes, `plan_usage.py`). Over `--connect` from another
+  comes from the daemon's (`GET /usage`, each minute; the daemon asks `/usage` of
+  Claude Code every 5 minutes, `plan_usage.py`). Over `--connect` from another
   machine it has no transcripts to read until phase 3's module routes.
 - **The routes 2c adds,** each with the token and the rest of the guards: `GET /hello`,
   `GET /inbox`, `GET /usage`, `GET /settings` (the splitter sizes, `layout.` keys only),

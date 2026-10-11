@@ -28,8 +28,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `subagents.py`: A items for subagents, from the files Claude Code writes.
 - `transcript.py`: a session's conversation, read from its Claude Code transcript.
 - `stats.py`, `stats_pane.py`: token stats and charts; the pane is a module (`api.py`).
-- `plan_usage.py`: the account's session and weekly usage, from `/usage` asked of a
-  background Claude Code the hub keeps, and from SDK sessions' rate_limit_events.
+- `plan_usage.py`: the account's session and weekly usage, from `/usage` asked of
+  Claude Code every 5 minutes (a one-shot `claude -p` by default, or one kept running), and from SDK sessions' rate_limit_events.
 - `api.py`: the module protocol (entry point group `claude_wheelhouse.modules`). Bump
   `WHEELHOUSE_API` on any breaking change to it.
 - `models.py`: the models and effort levels offered. A new model is a row here.

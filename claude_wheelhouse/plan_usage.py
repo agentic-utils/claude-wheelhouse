@@ -2,11 +2,13 @@
 percentages and when each resets. The wheelhouse never reads Claude Code's login nor calls
 its endpoints: it asks Claude Code itself (#16).
 
-The hub holds one Claude Code in the background (Probe), `claude -p` reading stream-json on
-stdin, with no settings, hooks, MCP servers or transcript, and sends it `/usage` every
-EVERY seconds: a local command, answered in a few seconds with no tokens spent. Its answer
-is prose (parse). A session run through the Agent SDK says the same numbers as it goes, in
-its rate_limit_event (from_rate_limit): its host keeps the latest in the store (SDK_SETTING)
+Every EVERY seconds the hub asks /usage of Claude Code (Probe), with no settings, hooks,
+MCP servers or transcript: a local command, answered in a few seconds with no tokens
+spent. By default ("oneshot") each ask is a `claude -p "/usage"` of its own, nothing left
+running between; "persistent" keeps one `claude -p` reading stream-json on stdin and sends
+/usage to it, faster per ask but resident and busier at idle. Its answer is prose (parse).
+A session run through the Agent SDK says the same numbers as it goes, in its
+rate_limit_event (from_rate_limit): its host keeps the latest in the store (SDK_SETTING)
 and the hub takes it too. Whichever reading of a limit is newest is shown (AccountUsage)."""
 
 import json
@@ -27,8 +29,10 @@ TIMEOUT = 60         # seconds a call may take: the first, starting Claude Code,
 BACKOFF = 10         # seconds before a Claude Code that died is started again, doubled per death
 BACKOFF_MAX = 1800
 SDK_SETTING = "plan_usage.sdk"   # settings: an SDK session's latest reading, {"at", "limits"}
-COMMAND = ("claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-           "--setting-sources=", "--strict-mcp-config", "--no-session-persistence")
+CLAUDE = "claude"
+FLAGS = ("--verbose", "--setting-sources=", "--strict-mcp-config", "--no-session-persistence")
+MODES = ("oneshot", "persistent")
+MODE = "oneshot"     # how the hub's Probe asks, by default
 ASK = json.dumps({"type": "user", "message": {"role": "user", "content": "/usage"}}) + "\n"
 # the probe isn't one of the wheelhouse's sessions
 UNSET = ("WHEELHOUSE_DB", "WHEELHOUSE_SESSION_ID", "WHEELHOUSE_TOKEN")
@@ -173,15 +177,26 @@ class Unavailable(RuntimeError):
     """/usage couldn't be asked, or didn't answer."""
 
 
-class Probe:
-    """The Claude Code that answers /usage: started when first asked, never through a
-    shell, in its own process group (so stop takes any children too), with cwd the state
-    dir. One that dies is started again on the next ask, BACKOFF seconds after, doubling
-    with each death in a row; one that doesn't answer within TIMEOUT is killed. It reads
-    its stdin, so it exits by itself when its owner dies."""
+def command(mode: str) -> list[str]:
+    """The Claude Code run for a mode: one /usage, or a session reading stream-json."""
+    if mode == "persistent":
+        return [CLAUDE, "-p", "--input-format", "stream-json", "--output-format", "stream-json", *FLAGS]
+    return [CLAUDE, "-p", "/usage", "--output-format", "json", *FLAGS]
 
-    def __init__(self, cwd: Path, command=None, timeout: float = TIMEOUT):
-        self.cwd, self.command, self.timeout = cwd, list(command or COMMAND), timeout
+
+class Probe:
+    """Claude Code, asked /usage: never through a shell, in its own process group (so a
+    kill takes any children too), with cwd the state dir. In "oneshot" mode each ask runs
+    a Claude Code that answers and exits; in "persistent" mode one is started when first
+    asked and kept, reading its stdin, so it exits by itself when its owner dies. Either
+    way an ask that fails (a Claude Code that can't start, dies, or says nothing usable)
+    holds off the next run for BACKOFF seconds, doubling with each failure in a row, and
+    one that doesn't answer within TIMEOUT is killed."""
+
+    def __init__(self, cwd: Path, mode: str | None = None, command=None, timeout: float = TIMEOUT):
+        self.cwd, self.timeout = cwd, timeout
+        self.mode = mode or MODE
+        self.command = list(command) if command else None   # a test's fake, else command(mode)
         self.proc: subprocess.Popen | None = None
         self.answers: queue.Queue = queue.Queue()
         self.lock = threading.Lock()   # one ask at a time
@@ -194,49 +209,85 @@ class Probe:
         with self.lock:
             if self.stopped:
                 raise Unavailable("stopped")
-            proc = self.proc
-            if proc is None or proc.poll() is not None:
-                if proc is not None:
-                    self.died(proc)
-                if time.time() < self.not_before:
-                    raise Unavailable("Claude Code exited: started again after a pause")
-                proc = self.start()
-            while not self.answers.empty():   # a late answer to an ask that timed out
-                self.answers.get_nowait()
-            try:
-                proc.stdin.write(ASK)
-                proc.stdin.flush()
-                answer = self.answers.get(timeout=self.timeout)
-            except (OSError, ValueError) as e:
-                self.died(proc)
-                raise Unavailable(f"Claude Code's stdin: {e}") from e
-            except queue.Empty:
-                self.died(proc)
-                raise Unavailable(f"no answer in {self.timeout:.0f}s") from None
+            answer = self.ask_persistent() if self.mode == "persistent" else self.ask_oneshot()
             if answer is None:
-                self.died(proc)
-                raise Unavailable("Claude Code exited")
+                self.failed()
+                raise Unavailable("Claude Code exited without an answer")
             self.deaths = 0
             if answer.get("is_error") or answer.get("subtype") != "success":
                 raise Unavailable(f"Claude Code said: {str(answer.get('result') or answer.get('subtype'))[:120]}")
             return answer.get("result") or ""
 
-    def start(self) -> subprocess.Popen:
+    def ask_oneshot(self) -> dict | None:
+        """A Claude Code that runs /usage and exits: its result, None if it gave none."""
+        if time.time() < self.not_before:
+            raise Unavailable("Claude Code failed: run again after a pause")
+        proc = self.spawn(stdin=subprocess.DEVNULL)
+        try:
+            out, _ = proc.communicate(timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            self.died(proc)
+            raise Unavailable(f"no answer in {self.timeout:.0f}s") from None
+        finally:
+            self.proc = None
+        if self.stopped:
+            raise Unavailable("stopped")
+        try:
+            said = json.loads(out)
+        except ValueError:
+            return None
+        results = [m for m in (said if isinstance(said, list) else [said])   # a list with --verbose
+                   if isinstance(m, dict) and m.get("type") == "result"]
+        return results[-1] if results else None
+
+    def ask_persistent(self) -> dict | None:
+        """/usage sent to the Claude Code kept running, started first if it isn't: its
+        result, None if it exited first."""
+        proc = self.proc
+        if proc is None or proc.poll() is not None:
+            if proc is not None:
+                self.died(proc)
+            if time.time() < self.not_before:
+                raise Unavailable("Claude Code exited: started again after a pause")
+            proc = self.start()
+        while not self.answers.empty():   # a late answer to an ask that timed out
+            self.answers.get_nowait()
+        try:
+            proc.stdin.write(ASK)
+            proc.stdin.flush()
+            answer = self.answers.get(timeout=self.timeout)
+        except (OSError, ValueError) as e:
+            self.died(proc)
+            raise Unavailable(f"Claude Code's stdin: {e}") from e
+        except queue.Empty:
+            self.died(proc)
+            raise Unavailable(f"no answer in {self.timeout:.0f}s") from None
+        if answer is None:
+            kill(proc)
+            self.proc = None
+        return answer
+
+    def spawn(self, stdin) -> subprocess.Popen:
+        """Claude Code started, as self.proc, so stop can kill it."""
         env = {k: v for k, v in os.environ.items() if k not in UNSET}
         try:
-            proc = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            proc = subprocess.Popen(self.command or command(self.mode), stdin=stdin, stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, cwd=self.cwd, env=env, text=True,
                                     close_fds=True, start_new_session=True)
         except OSError as e:
-            self.deaths += 1
-            self.not_before = time.time() + self.backoff()
+            self.failed()
             raise Unavailable(f"couldn't start Claude Code: {e}") from e
         if self.stopped:   # stopped while it started: not left behind
             kill(proc)
             raise Unavailable("stopped")
+        self.proc = proc
+        return proc
+
+    def start(self) -> subprocess.Popen:
+        """The persistent Claude Code started, with a thread reading its answers."""
+        proc = self.spawn(stdin=subprocess.PIPE)
         self.answers = queue.Queue()
         threading.Thread(target=self.read, args=(proc, self.answers), daemon=True, name="plan-usage").start()
-        self.proc = proc
         return proc
 
     @staticmethod
@@ -259,15 +310,19 @@ class Probe:
     def backoff(self) -> float:
         return min(BACKOFF_MAX, BACKOFF * 2 ** max(self.deaths - 1, 0))
 
-    def died(self, proc: subprocess.Popen) -> None:
-        """Called under the lock: it's gone, or made to go, and not started again for a while."""
-        kill(proc)
-        self.proc = None
+    def failed(self) -> None:
+        """Under the lock: no run again for a while."""
         self.deaths += 1
         self.not_before = time.time() + self.backoff()
 
+    def died(self, proc: subprocess.Popen) -> None:
+        """Under the lock: it's gone, or made to go, and not run again for a while."""
+        kill(proc)
+        self.proc = None
+        self.failed()
+
     def stop(self) -> None:
-        """Killed, its children too, and never started again: the hub is stopping. Not under
+        """Killed, its children too, and never run again: the hub is stopping. Not under
         the lock, which an ask can hold for TIMEOUT."""
         self.stopped = True
         proc = self.proc
@@ -289,6 +344,7 @@ def kill(proc: subprocess.Popen) -> None:
         except subprocess.TimeoutExpired:
             continue
     try:
-        proc.stdin.close()
+        if proc.stdin is not None:
+            proc.stdin.close()
     except (OSError, ValueError):   # its pipe already broken
         pass

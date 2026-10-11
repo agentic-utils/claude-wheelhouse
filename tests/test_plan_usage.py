@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import textwrap
+import threading
 import time
 from datetime import datetime
 from types import SimpleNamespace
@@ -151,19 +152,30 @@ def test_an_unreadable_sdk_reading_is_said_not_raised(store, capsys):
     assert hub.usage.limits == {} and "SDK session" in capsys.readouterr().err
 
 
-# the background Claude Code, faked
+# Claude Code, faked: argv[1] says how it behaves. "oneshot..." runs once and exits, as
+# claude -p "/usage" does; the others read stream-json on stdin, as the persistent one does
 
 FAKE = textwrap.dedent('''
     import json, os, sys, time
     mode = sys.argv[1]
+    said = {"pid": os.getpid(), "cwd": os.getcwd(), "env": sorted(k for k in os.environ if k.startswith("WHEELHOUSE_"))}
+    result = {"type": "result", "subtype": "success", "is_error": False, "result": json.dumps(said)}
+    if mode.startswith("oneshot"):
+        if mode == "oneshot-hang":
+            time.sleep(60)
+        if mode == "oneshot-silent":
+            sys.exit(1)
+        if mode == "oneshot-error":
+            result |= {"is_error": True, "result": "Not logged in"}
+        print(json.dumps([{"type": "system", "subtype": "init"}, result]))
+        sys.exit(0)
     for n, line in enumerate(sys.stdin):
         assert json.loads(line)["message"]["content"] == "/usage"
         if mode == "hang":
             time.sleep(60)
         print(json.dumps({"type": "system", "subtype": "init"}))
         print(json.dumps({"type": "assistant", "message": {"content": []}}))
-        said = {"pid": os.getpid(), "cwd": os.getcwd(), "env": sorted(k for k in os.environ if k.startswith("WHEELHOUSE_"))}
-        print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": json.dumps(said)}), flush=True)
+        print(json.dumps(result), flush=True)
         if mode == "once":
             sys.exit(0)
 ''')
@@ -175,8 +187,9 @@ def fake(tmp_path):
     path.write_text(FAKE)
     probes = []
 
-    def make(mode="serve", timeout=10):
-        p = plan_usage.Probe(tmp_path, command=[sys.executable, str(path), mode], timeout=timeout)
+    def make(how="serve", timeout=10):
+        mode = "oneshot" if how.startswith("oneshot") else "persistent"
+        p = plan_usage.Probe(tmp_path, mode=mode, command=[sys.executable, str(path), how], timeout=timeout)
         probes.append(p)
         return p
     yield make
@@ -185,11 +198,71 @@ def fake(tmp_path):
 
 
 def gone(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
     return False
+
+
+@pytest.mark.parametrize("mode, has, lacks, desc", [
+    ("oneshot", ["-p", "/usage", "json", "--setting-sources=", "--strict-mcp-config", "--no-session-persistence"],
+     ["--input-format"], "one /usage, as its argument"),
+    ("persistent", ["--input-format", "stream-json", "--setting-sources=", "--strict-mcp-config",
+                    "--no-session-persistence"], ["/usage"], "a session reading stream-json"),
+])
+def test_each_modes_command(mode, has, lacks, desc, monkeypatch):
+    monkeypatch.setattr(plan_usage, "CLAUDE", "claude")
+    argv = plan_usage.command(mode)
+    assert argv[0] == "claude" and all(a in argv for a in has) and not any(a in argv for a in lacks), desc
+    assert "--bare" not in argv, f"{desc}: --bare loses the login"
+
+
+def test_oneshot_is_the_default(tmp_path):
+    assert plan_usage.Probe(tmp_path).mode == "oneshot"
+
+
+def test_oneshot_runs_a_claude_per_ask_and_leaves_none(fake, tmp_path):
+    p = fake("oneshot")
+    first = json.loads(p.ask())
+    assert p.proc is None and gone(first["pid"]), "nothing left running between asks"
+    second = json.loads(p.ask())
+    assert second["pid"] != first["pid"], "a Claude Code of its own each time"
+    assert first["cwd"] == str(tmp_path), "run in the state dir"
+    assert not set(first["env"]) & set(plan_usage.UNSET), "not taken for one of the wheelhouse's sessions"
+
+
+@pytest.mark.parametrize("how, match, desc", [
+    ("oneshot-silent", "without an answer", "it exits saying nothing"),
+    ("oneshot-hang", "no answer", "it doesn't answer in time: killed"),
+    ("oneshot-error", "Not logged in", "it answers with an error"),
+])
+def test_oneshot_failures(fake, how, match, desc):
+    p = fake(how, timeout=0.5)
+    with pytest.raises(plan_usage.Unavailable, match=match):
+        p.ask()
+    assert p.proc is None, f"{desc}: nothing left running"
+    if how != "oneshot-error":   # an answer, if not a good one: Claude Code works
+        assert p.deaths == 1 and p.not_before > time.time(), f"{desc}: backed off"
+        with pytest.raises(plan_usage.Unavailable, match="after a pause"):
+            p.ask()
+
+
+def test_stop_kills_a_oneshot_under_way(fake):
+    p = fake("oneshot-hang", timeout=30)
+    failed = []
+    t = threading.Thread(target=lambda: failed.append(pytest.raises(plan_usage.Unavailable, p.ask)))
+    t.start()
+    deadline = time.time() + 5
+    while p.proc is None and time.time() < deadline:
+        time.sleep(0.02)
+    pid = p.proc.pid
+    p.stop()
+    t.join(10)
+    assert not t.is_alive() and failed and gone(pid), "the run under way killed, the ask ended"
 
 
 def test_the_probe_starts_when_asked_and_stays(fake, tmp_path):
@@ -233,16 +306,14 @@ def test_the_probe_is_killed_when_the_hub_stops(fake, store):
     hub.usage_probe = p = fake()
     pid = json.loads(p.ask())["pid"]
     hub.stop_usage()
-    deadline = time.time() + 5
-    while not gone(pid) and time.time() < deadline:
-        time.sleep(0.05)
-    assert gone(pid) or p.proc.poll() is not None, "killed"
+    assert gone(pid), "killed"
     with pytest.raises(plan_usage.Unavailable, match="stopped"):
         p.ask()
 
 
-def test_a_claude_that_isnt_there_is_unavailable(tmp_path):
-    p = plan_usage.Probe(tmp_path, command=[str(tmp_path / "no-such-claude")])
+@pytest.mark.parametrize("mode", plan_usage.MODES)
+def test_a_claude_that_isnt_there_is_unavailable(tmp_path, mode):
+    p = plan_usage.Probe(tmp_path, mode=mode, command=[str(tmp_path / "no-such-claude")])
     with pytest.raises(plan_usage.Unavailable, match="couldn't start"):
         p.ask()
     assert p.not_before > time.time(), "backed off"

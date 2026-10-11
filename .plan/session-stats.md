@@ -18,10 +18,12 @@ highlighted item.
   (#51: Doug's thresholds, shared with the session list's context bar; they replaced
   claude-dashboard's window-relative `ctx_grade` and its flashing red).
 - **Plan usage.** The account's session and weekly percentages, as gauges with their
-  reset times, and Fable's week once it's above 0%. Not from the transcripts: the hub
-  (`plan_usage.py`, #16) keeps one Claude Code running in the background
-  (`claude -p --input-format stream-json` with no settings, MCP servers or transcript)
-  and sends it `/usage` every 5 minutes, about 2 to 3 s and no tokens a call, then reads
+  reset times, and Fable's week once it's above 0%. Not from the transcripts: every 5 minutes the hub
+  (`plan_usage.py`, #16) runs `claude -p "/usage"` with no settings, MCP servers or
+  transcript, about 4 s and 4.7 CPU-seconds with no tokens, nothing left running between
+  (Doug's Q69: the default). Its "persistent" mode keeps one `claude -p --input-format
+  stream-json` running and sends it `/usage` instead: 2 to 3 s a call, but about 230 MB
+  resident and 2% of a core at idle, about twice the CPU overall. Either way it reads
   the answer's "Current session" and "Current week" lines. Their reset times are local
   wall-clock to the minute with a zone and no year, converted to UTC with the year
   nearest the reading. An SDK session's rate_limit_event (`unifiedWindows`) is a reading
