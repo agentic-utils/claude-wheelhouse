@@ -276,14 +276,16 @@ so an hour's quiet is what turns the cache cold.
   unseen decision, of its own: a permission or AskUserQuestion waits inside a running turn,
   so never brings one), gets a tiny turn from the host
   `KEEPALIVE_AFTER` (55 min) after its last one, telling it to reply with one word and do
-  nothing else. It leaves the activity line as it found it (an error's, Interrupt's or a
-  compaction's), unless it fails itself; an interrupted keepalive leaves it too. That keeps the hour's
+  nothing else. It leaves the activity line as it found it (an error's or Interrupt's),
+  unless it fails itself; an interrupted keepalive leaves it too. That keeps the hour's
   cache warm for a few thousand tokens of reads instead of a cold rewrite of the whole
   context. The keepalive's own end restarts the 55 minutes but not the quiet time, so they
   stop once the session has been quiet `KEEPALIVE_FOR` (8 h): an abandoned session doesn't
   pay for ever. A host just started (or just back from a shell tab) sends none until a
   turn of its own has ended, since it can't know the cache is warm. Compact under way, a
-  pending permission and a turn Claude Code started itself all hold it off.
+  pending permission and a turn Claude Code started itself all hold it off, and so does a
+  last turn that compacted the context: there is no cache to preserve, until a turn ends
+  without one.
 - **Relaunch, compacting first.** A host's restart is what forces the cold rewrite
   (quitting the TUI leaves detached hosts alone). Relaunch of a running host whose last
   recorded context is over `COMPACT_FIRST_TOKENS` (150k) offers Compact first, Relaunch

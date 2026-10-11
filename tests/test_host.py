@@ -1266,6 +1266,16 @@ def test_keepalive_due(host, store, sid, state, due, desc):
     assert host.keepalive_due(at) is due, desc
 
 
+def test_no_keepalive_after_a_compaction(host, store, sid):
+    """A compaction leaves no cache to preserve: no keepalive until a turn ends without one."""
+    store.post_item(sid, "question", "which?")
+    finish_at(host, 200_000, compacted=True)
+    at = host.last_turn + host_mod.KEEPALIVE_AFTER
+    assert not host.keepalive_due(at), "the last turn compacted: nothing to keep warm"
+    finish_at(host, 200_000)
+    assert host.keepalive_due(host.last_turn + host_mod.KEEPALIVE_AFTER), "a turn since: its cache is worth keeping"
+
+
 def test_keepalive_turn(host, store, sid, monkeypatch):
     """Sent once, as a keepalive: its end restarts the 55 minutes but not the quiet time,
     so the 8 hours run out; a real turn starts them both again."""
@@ -1288,7 +1298,6 @@ def test_keepalive_turn(host, store, sid, monkeypatch):
 @pytest.mark.parametrize("line, error, after, desc", [
     ("error: overloaded", False, "error: overloaded", "an error's line"),
     ("interrupted", False, "interrupted", "Interrupt's line"),
-    ("idle · compacted 300k → 160k tokens", False, "idle · compacted 300k → 160k tokens", "a compaction's line"),
     ("idle", True, "error: failed", "the keepalive itself failing says so"),
 ])
 def test_a_keepalive_leaves_the_activity_line_as_it_was(streamed, store, sid, line, error, after, desc):

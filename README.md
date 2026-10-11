@@ -167,8 +167,8 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   back only when the context passes 200k again. One over 150k that sits idle with a question
   or decision of its own waiting on you gets a one-word
   keepalive turn every 55 minutes, for up to 8 hours, so its prompt cache (an hour's) doesn't go
-  cold and get written again whole. Closing the wheelhouse leaves the hosts
-  running. `WHEELHOUSE_RUNNER=tab` makes tabs the default again. Restore and Adopt bring a
+  cold and get written again whole. None follows a compaction, which leaves no cache to
+  keep. Closing the wheelhouse leaves the hosts running. `WHEELHOUSE_RUNNER=tab` makes tabs the default again. Restore and Adopt bring a
   session back the way new sessions run, so a tab from before hosts existed comes back as
   a host once you `/exit` it; Shell is the way back to a tab. Host logs are under `~/.local/state/claude-wheelhouse/hosts/`.
   This runs on your own Claude login, which Anthropic's terms allow for individual use;

@@ -234,6 +234,9 @@ class Host:
         # the activity line a keepalive turn found, shown again once it ends: it is no news
         self.kept_line: str | None = None
         self.compacted_from = None   # tokens before the last compaction, until its turn ends
+        # whether the last turn to end compacted the context: no keepalive then, as the
+        # compaction left no cache worth keeping warm
+        self.compacted_last = False
         # the model and effort in force, as Claude Code last confirmed them (or as launched)
         self.applied: tuple[str | None, str | None] = (None, None)
         # keepalive: the context size the last turn ended at (None until one has, so a host
@@ -573,10 +576,11 @@ class Host:
         return not self.stopping
 
     def keepalive_due(self, at: float) -> bool:
-        """Whether a keepalive turn is due: nothing running, no Compact under way, the
-        context past KEEPALIVE_TOKENS, the last turn KEEPALIVE_AFTER ago, quiet for less than
+        """Whether a keepalive turn is due: nothing running, no Compact under way, the last
+        turn not a compaction (there is no cache to preserve), the context past KEEPALIVE_TOKENS, the last turn KEEPALIVE_AFTER ago, quiet for less than
         KEEPALIVE_FOR, and the session waiting on the person (waits_on_person)."""
-        return (not self.pending and self.compact_nonce is None and self.quiet_since is not None
+        return (not self.pending and self.compact_nonce is None and not self.compacted_last
+                and self.quiet_since is not None
                 and (self.tokens or 0) > KEEPALIVE_TOKENS and at - self.last_turn >= KEEPALIVE_AFTER
                 and at - self.quiet_since < KEEPALIVE_FOR and self.waits_on_person())
 
@@ -710,6 +714,7 @@ class Host:
                 await self.turn(f"/compact {notes}".rstrip())
                 self.store.set_activity(self.sid, "compacting")
                 return
+        self.compacted_last = self.compacted_from is not None
         tokens = await self.context()
         if tokens is not None:
             self.tokens = tokens
