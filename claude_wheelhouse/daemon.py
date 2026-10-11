@@ -319,11 +319,16 @@ class Daemon:
     def forget_gone(self) -> None:
         """The transcripts followed for sessions gone, let go: those the last refresh no
         longer found and the store hasn't either, so not one created since that refresh.
-        A conversation asked for one again finds it gone before following it again."""
+        A conversation asked for one again finds it gone before following it again. One
+        being read is left to the next refresh, its lock held while it is let go."""
         missing = (self.hub.followers.keys() | self.reading.keys()) - self.hub.by_id.keys()
         for sid in [sid for sid in missing if self.hub.store.session(sid) is None]:
-            self.hub.followers.pop(sid, None)
-            self.reading.pop(sid, None)
+            lock = self.reading.get(sid)
+            if lock is None or lock.acquire(blocking=False):
+                self.hub.followers.pop(sid, None)
+                self.reading.pop(sid, None)
+                if lock is not None:
+                    lock.release()
 
     async def ticking(self) -> None:
         """A tick every TICK seconds. One that fails (the database locked, a session ending

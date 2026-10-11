@@ -560,13 +560,13 @@ async def test_a_signal_to_stop_ends_the_streams_first(daemon, monkeypatch):
     assert daemon.feed.closed and server.should_exit
 
 
-@pytest.mark.parametrize("read_for, end, status, desc", [
-    (0.3, False, 200, "a read under way: waited for, then read again for itself"),
-    (0.3, True, 404, "a read under way of a session that ends meanwhile: gone, not its last blocks"),
-    (0.6, False, 503, "a read under way past READ_WAIT: try again shortly"),
+@pytest.mark.parametrize("read_for, end, status, at_least, under, desc", [
+    (0.3, False, 200, 0, 2.0, "a read under way: waited for, then read again for itself"),
+    (0.3, True, 404, 0, 0.7, "a read under way of a session that ends meanwhile: gone, not its last blocks"),
+    (0.6, False, 503, 0.4, 1.0, "a read under way past READ_WAIT: try again shortly, not at once"),
 ])
-async def test_a_conversation_waits_on_a_read_under_way_for_a_while(daemon, store, sid, monkeypatch,
-                                                                     read_for, end, status, desc):
+async def test_a_conversation_waits_on_a_read_under_way_for_a_while(daemon, store, sid, monkeypatch, read_for,
+                                                                     end, status, at_least, under, desc):
     read = daemon_mod.Hub.conversation
     assert (await call(daemon, "GET", f"/sessions/{sid}/conversation")).status_code == 200
 
@@ -582,7 +582,7 @@ async def test_a_conversation_waits_on_a_read_under_way_for_a_while(daemon, stor
             store.end(sid)
         started = time.monotonic()
         r = await c.get(f"/sessions/{sid}/conversation")
-        assert r.status_code == status and time.monotonic() - started < 0.4 + read_for, desc
+        assert r.status_code == status and at_least <= time.monotonic() - started < under, desc
         if status == 503:
             assert r.headers["retry-after"] == "1" and r.json()["error"], desc
         await reading

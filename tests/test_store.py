@@ -385,6 +385,20 @@ def test_an_older_versions_marks_triggers_are_replaced_and_a_repeat_open_changes
     assert marks(store)["items"] == before + 1, "the item counted once, by the current trigger alone"
 
 
+@pytest.mark.parametrize("name, kept, desc", [
+    ("items_marked_insert_v2", True, "a newer version's, made by newer code: kept"),
+    ("messages_marked_delete_v0", False, "an older version's: dropped"),
+    ("items_marked_update", False, "one with no version, as before versions: dropped"),
+    ("items_marked_seen", True, "a trigger not a marks one: kept"),
+])
+def test_opening_drops_only_an_older_versions_marks_triggers(db_file, store, name, kept, desc):
+    table = name.split("_")[0]
+    store.db.execute(f"CREATE TRIGGER {name} AFTER INSERT ON {table} BEGIN SELECT 1; END")
+    Store(db_file)
+    names = {r[0] for r in store.db.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")}
+    assert (name in names) == kept and set(TRIGGER_NAMES) <= names, desc
+
+
 @pytest.mark.parametrize("write, counted, desc", [
     (lambda s, sid: s.rename(sid, "x"), 1, "a write on this thread"),
     (lambda s, sid: s.rename(sid, s.session(sid)["name"]), 1, "a row rewritten as it was is still written"),

@@ -148,9 +148,12 @@ CREATE INDEX IF NOT EXISTS messages_unsent
 # bumps them too once any newer one has opened the database. Each trigger is one statement
 # of its own, as its body holds a ";". Their names carry TRIGGERS_VERSION, as CREATE
 # TRIGGER IF NOT EXISTS never replaces one: a changed body takes the next version, and
-# opening drops any marks trigger of another name (TRIGGER_NAMES)
+# opening drops any marks trigger of an older version (none counts as 0). A newer
+# version's stay, so older code reopening never drops them: the two sets then bump a
+# mark twice a write, which is harmless, as the daemon compares marks only for equality
 MARKED = ("items", "messages")
 TRIGGERS_VERSION = 1
+MARKS_TRIGGER = re.compile(rf"^(?:{'|'.join(MARKED)})_marked_(?:insert|update|delete)(?:_v(\d+))?$")
 TRIGGER_NAMES = {f"{table}_marked_{op.lower()}_v{TRIGGERS_VERSION}": (table, op)
                  for table in MARKED for op in ("INSERT", "UPDATE", "DELETE")}
 TRIGGERS = [f"CREATE TRIGGER IF NOT EXISTS {name} AFTER {op} ON {table} "
@@ -272,7 +275,7 @@ class Store:
                     db.execute(statement)
             db.executemany("INSERT OR IGNORE INTO marks (kind) VALUES (?)", [(t,) for t in MARKED])
             for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'").fetchall():
-                if "_marked_" in name and name not in TRIGGER_NAMES:   # an older version's
+                if (match := MARKS_TRIGGER.match(name)) and int(match[1] or 0) < TRIGGERS_VERSION:
                     db.execute(f'DROP TRIGGER "{name}"')
             for trigger in TRIGGERS:
                 db.execute(trigger)
