@@ -25,11 +25,14 @@ by users other than the author until we can confirm Anthropic T&Cs".
 - Off (the default): `DEFAULT_RUNNER` is `tab`, and `WHEELHOUSE_RUNNER=sdk` doesn't turn
   SDK mode on. New session has no runner box; the hub refuses a new hosted session and
   the daemon refuses one (403). Whatever the mode, the daemon refuses another machine
-  anything that would open a tab, where nobody there sees it (403, `Daemon.no_remote_tab`):
-  New session, Restore, Restore all, Relaunch of a dead session, Adopt, the tutorial and
-  Shell. Out of SDK mode every session starts in a tab, so another machine starts none.
-  Restore all brings back the rest and names those held back; a Relaunch whose host has
-  gone meanwhile, and would come back as a tab, says to relaunch it from the daemon's machine. Restore and
+  anything that would open a tab, where nobody there sees it. One rule, where the runner
+  resolves: `launch.open_session` (and `restore_session`) refuse a tab with `may_tab` false
+  (`launch.NotHere`), which the daemon passes for another machine's request, through
+  Restore, Restore all, Relaunch, Adopt and a Relaunch carried on later (stored with it:
+  `store.relaunch_may_tab`); the hub says it as a warning. The daemon answers 403 at once
+  only where nothing at all could be done: New session's tab, the tutorial, Shell, and, out
+  of SDK mode (where every session comes back in a tab), Restore all, Relaunch of a dead
+  session and Adopt. Restore and
   Adopt bring any session back the way new sessions run now (Q27, option A), so as a tab;
   the tutorial is always a tab. The `?` overlay, README and
   `claude-wheelhouse protocol` leave SDK mode out, and the tutorial runs in a tab.
