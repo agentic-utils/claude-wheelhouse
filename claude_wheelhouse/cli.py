@@ -86,10 +86,11 @@ def main() -> None:
         from .mcp_server import main as mcp_main
         mcp_main()
     elif args.cmd == "daemon":
+        from .auth import TokenError
         from .daemon import ADDRESS, PORT, AlreadyRunning, main as daemon_main
         try:
             daemon_main(args.address or ADDRESS, args.port or PORT, args.name)
-        except (AlreadyRunning, ValueError) as e:
+        except (AlreadyRunning, TokenError, ValueError) as e:
             sys.exit(str(e))
     elif args.cmd == "protocol":
         from .launch import injected
@@ -99,6 +100,7 @@ def main() -> None:
         from .store import db_path
         state_dir = db_path().parent
         try:
+            auth.check_dir(state_dir)
             print(auth.write(state_dir) if args.rotate else auth.read(auth.path(state_dir)))
         except (auth.TokenError, OSError) as e:
             sys.exit(f"claude-wheelhouse: {e} (the daemon makes it the first time it starts)")

@@ -349,11 +349,11 @@ def test_main_refuses_every_interface_before_anything_else(monkeypatch):
 
 
 def test_one_daemon_per_user(tmp_path):
-    first = take_lock(tmp_path, "http://127.0.0.1:7428")
-    with pytest.raises(AlreadyRunning, match="127.0.0.1:7428"):
-        take_lock(tmp_path, "http://127.0.0.1:7429")
+    first = take_lock(tmp_path)
+    with pytest.raises(AlreadyRunning, match=f"pid {os.getpid()}"):
+        take_lock(tmp_path)
     first.close()
-    take_lock(tmp_path, "http://127.0.0.1:7429").close()
+    take_lock(tmp_path).close()
 
 
 def received(body: str) -> list[dict]:
@@ -782,6 +782,8 @@ async def test_every_route_refuses_a_request_without_the_token(daemon, sid, give
     headers = {} if given is None else {"Authorization": given}
     async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=daemon.app), base_url=URL, headers=headers) as c:
         for method, path in every_route(daemon):
+            if path == "/hello":   # the one without the token: below
+                continue
             r = await c.request(method, path, headers={"Idempotency-Key": str(uuid.uuid4())}, json={})
             assert (r.status_code, r.headers.get("www-authenticate")) == (401, "Bearer"), f"{desc}: {method} {path}"
             assert r.json()["error"].startswith("this daemon needs its token"), f"{desc}: {method} {path}"
@@ -848,8 +850,8 @@ async def test_a_rotated_token_is_taken_at_the_next_tick(store, tmp_path, monkey
 # what 2c adds for the TUI
 
 NEW_ROUTES = [
-    ("GET", "/hello", None, lambda store, sid, r: (r.json()["api"], r.json()["ready"], r.json()["pid"]) == (1, False, os.getpid()),
-     "which daemon: its API, its code, not ready before its first tick"),
+    ("GET", "/hello?nonce=0123456789abcdef", None, lambda store, sid, r: (r.json()["api"], r.json()["ready"], r.json()["pid"])
+     == (1, False, os.getpid()), "with the token, which daemon: its API, its code, not ready before its first tick"),
     ("GET", "/inbox", None, lambda store, sid, r: (sorted(i["ref"] for i in r.json()["items"]),
                                                    "body" in r.json()["items"][0], r.json()["tutorial"]["sid"])
      == (["P1", "T1"], False, None), "every item, without its body, and the tutorial's state"),
@@ -899,3 +901,40 @@ async def test_sessions_carry_their_liveness_and_model_state(daemon, sid):
 async def test_an_error_says_its_type(daemon, sid, tmp_path, path, body, kind, desc):
     r = await call(daemon, "POST", fill(path, sid, tmp_path), body)
     assert (r.status_code, r.json()["type"]) == (404, kind), desc
+
+
+@pytest.mark.parametrize("given, nonce, status, keys, desc", [
+    (None, "0123456789abcdef", 200, {"proof"}, "without the token: the proof alone, nothing about the daemon"),
+    ("Bearer wrong", "0123456789abcdef", 200, {"proof"}, "a wrong token: the same"),
+    (f"Bearer {TOKEN}", "0123456789abcdef", 200, {"proof", "api", "code", "package", "pid", "ready"}, "the token: who"),
+    (None, "", 400, {"error", "type"}, "no nonce"),
+    (None, "short", 400, {"error", "type"}, "a nonce too short to be one"),
+])
+async def test_hello_proves_the_daemon_holds_the_token(daemon, given, nonce, status, keys, desc):
+    from claude_wheelhouse import auth
+    headers = {} if given is None else {"Authorization": given}
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=daemon.app), base_url=URL, headers=headers) as c:
+        r = await c.get("/hello", params={"nonce": nonce})
+    assert (r.status_code, set(r.json())) == (status, keys), desc
+    if status == 200:
+        assert auth.proven(r.json()["proof"], TOKEN, nonce, "127.0.0.1:7428"), f"{desc}: over the Host it named"
+        assert not auth.proven(r.json()["proof"], TOKEN, nonce, "127.0.0.1:9999"), f"{desc}: and no other"
+
+
+async def test_hello_answers_no_other_host(daemon):
+    """A listener relaying a client's nonce here must name this daemon's own address, so the
+    proof it gets back is for that address, never the one the client reached it at."""
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=daemon.app), base_url="http://127.0.0.1:9999") as c:
+        r = await c.get("/hello", params={"nonce": "0123456789abcdef"})
+    assert r.status_code == 421 and "proof" not in r.json()
+
+
+def test_the_lock_is_the_users_alone_and_names_an_address_only_once_listening(tmp_path):
+    lock = take_lock(tmp_path)
+    try:
+        assert oct((tmp_path / daemon_mod.LOCK).stat().st_mode)[-3:] == "600"
+        assert (tmp_path / daemon_mod.LOCK).read_text() == f"pid {os.getpid()}\n", "no address before it listens"
+        daemon_mod.announce(lock, "http://127.0.0.1:7428")
+        assert (tmp_path / daemon_mod.LOCK).read_text() == f"pid {os.getpid()} at http://127.0.0.1:7428\n"
+    finally:
+        lock.close()

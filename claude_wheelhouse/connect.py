@@ -7,15 +7,18 @@ runs, with "pid N at URL" in it. The kernel lets go of a flock when its holder d
 lock file left by a daemon that crashed is only text: not held, none runs."""
 
 import fcntl
+import ipaddress
 import os
 import re
+import secrets
 import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import auth, fingerprint
-from .client import RemoteClient
+from .client import Impostor, RemoteClient, Unreachable, prove
 
 PORT = 7428
 START_WAIT = 10   # seconds a daemon started has to take its lock and answer
@@ -47,8 +50,17 @@ def holder(state_dir: Path) -> str | None:
 
 
 def url_of(held: str) -> str | None:
+    """The address a lock names, once its daemon is listening: on this machine (the
+    loopback) only. A daemon run by hand on another address (a VPN's) is reached with
+    --connect, where the person says where it is."""
     match = re.search(r"at (http://\S+)", held)
-    return match and match[1]
+    if not match:
+        return None
+    try:
+        host = urlsplit(match[1]).hostname
+        return match[1] if host and ipaddress.ip_address(host).is_loopback else None
+    except ValueError:
+        return None
 
 
 def port() -> int:
@@ -57,16 +69,19 @@ def port() -> int:
 
 def start(state_dir: Path, port: int) -> None:
     """A daemon, on this interpreter and environment (WHEELHOUSE_DB and the rest go with
-    it), init's child rather than ours (setsid --fork, as hosts are), its output appended to
-    daemon.log. On the package this process runs: its folder first on the path, and the
-    current directory (the state dir) left off it, so `-m claude_wheelhouse` never finds
-    another checkout's, nor the installed one when this one is a copy run from its folder."""
+    it, but for WHEELHOUSE_TOKEN, which nothing it starts should see), init's child rather
+    than ours (setsid --fork, as hosts are), its output appended to daemon.log. On the
+    package this process runs: its folder first on the path, and the current directory
+    (the state dir) left off it, so `-m claude_wheelhouse` never finds another checkout's,
+    nor the installed one when this one is a copy run from its folder. One that finds
+    another holding the lock stops at once, and says so in the log."""
     path = os.pathsep.join(filter(None, [str(fingerprint.PACKAGE.parent), os.environ.get("PYTHONPATH")]))
+    env = {k: v for k, v in os.environ.items() if k != "WHEELHOUSE_TOKEN"}
     with open(Path(state_dir) / LOG, "a") as log:
-        print(time.strftime("%Y-%m-%dT%H:%M:%S%z"), f"started by pid {os.getpid()}", file=log, flush=True)
+        print(time.strftime("%Y-%m-%dT%H:%M:%S%z"), f"pid {os.getpid()} asked for a daemon", file=log, flush=True)
         subprocess.run(["setsid", "--fork", sys.executable, "-m", "claude_wheelhouse", "daemon", "--port", str(port)],
                        cwd=state_dir, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                       env=dict(os.environ, PYTHONSAFEPATH="1", PYTHONPATH=path), check=True)
+                       env=dict(env, PYTHONSAFEPATH="1", PYTHONPATH=path), check=True)
 
 
 def last_line(state_dir: Path) -> str:
@@ -77,40 +92,55 @@ def last_line(state_dir: Path) -> str:
     return lines[-1] if lines else ""
 
 
-def hello(url: str, token: str, wait: float, state_dir: Path | None = None) -> dict | None:
-    """The daemon's /hello, once it answers ready, within wait seconds; None if it doesn't.
-    With state_dir, NoDaemon as soon as the local one has let go of its lock: it stopped
-    (it couldn't bind its port, say), and its log's last line says why."""
+class Gone(Exception):
+    """The local daemon let go of its lock while it was being asked: stopped, or restarted
+    by another app. Gone round again, never fatal on its own."""
+
+
+def hello(url: str, token: str, wait: float, state_dir: Path | None = None, reread=None) -> tuple[dict | None, str]:
+    """The daemon's /hello, once it answers ready, within wait seconds, and the token it
+    took: (None, token) if it doesn't. Proven first each time (client.prove): the token goes
+    nowhere that hasn't shown it holds it, and something else at the address is NoDaemon.
+    A 401 reads the token again once (rotated). With state_dir, Gone as soon as the local
+    one has let go of its lock."""
     import httpx2
     deadline = time.monotonic() + wait
-    with httpx2.Client(base_url=url, timeout=httpx2.Timeout(2, connect=1),
-                       headers={"Authorization": auth.header(token)}) as http:
+    reread_once = reread
+    with httpx2.Client(timeout=httpx2.Timeout(2, connect=1)) as http:
         while True:
             try:
-                r = http.get("/hello")
+                token = prove(http, url, token, reread)
+                r = http.get(f"{url}/hello", params={"nonce": secrets.token_hex(16)},
+                             headers={"Authorization": auth.header(token)})
+                if r.status_code == 401 and reread_once is not None:
+                    token, reread_once = reread_once(), None
+                    continue
                 if r.status_code == 401:
-                    raise NoDaemon(f"the daemon at {url} refuses this state dir's token: is it another wheelhouse's?")
+                    raise NoDaemon(f"the daemon at {url} refuses this token")
                 if r.status_code == 200 and r.json().get("ready"):
-                    return r.json()
-            except httpx2.TransportError:
+                    return r.json(), token
+            except Impostor as e:
+                raise NoDaemon(f"{e}: is another program on its port?") from None
+            except (Unreachable, httpx2.TransportError, ValueError):
                 pass
             if state_dir is not None and holder(state_dir) is None:
-                raise NoDaemon(f"the daemon stopped: {last_line(state_dir) or 'see ' + LOG} (in {state_dir}). "
-                               "claude-wheelhouse --local runs without it")
+                raise Gone()
             if time.monotonic() >= deadline:
-                return None
+                return None, token
             time.sleep(0.1)
 
 
 def stop(url: str, token: str, state_dir: Path) -> None:
-    """Ask the daemon to stop, and wait for its lock to go."""
+    """Ask the daemon to stop, once it has proven itself again, and wait for its lock to go."""
     import uuid
 
     import httpx2
-    with httpx2.Client(base_url=url, timeout=5, headers={"Authorization": auth.header(token)}) as http:
+    with httpx2.Client(timeout=5) as http:
         try:
-            http.post("/shutdown", json={}, headers={"Idempotency-Key": str(uuid.uuid4())})
-        except httpx2.TransportError:
+            token = prove(http, url, token)
+            http.post(f"{url}/shutdown", json={}, headers={"Idempotency-Key": str(uuid.uuid4()),
+                                                           "Authorization": auth.header(token)})
+        except (Unreachable, httpx2.TransportError):
             pass
     deadline = time.monotonic() + STOP_WAIT
     while holder(state_dir) is not None:
@@ -131,37 +161,69 @@ def token_of(state_dir: Path, wait: float = 0) -> str:
             time.sleep(0.1)
 
 
+def listening(state_dir: Path, wait: float) -> str | None:
+    """What the lock says once its daemon is listening (it names its address only then),
+    within wait seconds; None if none does by then, or the one that took the lock let go
+    of it without listening (it couldn't bind its port, say)."""
+    deadline, seen = time.monotonic() + wait, False
+    while time.monotonic() < deadline:
+        held = holder(state_dir)
+        if held is not None and "at http" in held:
+            return held
+        if held is None and seen:
+            return None
+        seen = seen or held is not None
+        time.sleep(0.05)
+    return None
+
+
 def local(state_dir: Path, port: int) -> tuple[str, str, list[str]]:
     """The local daemon, joined or started: its URL, its token and what to say about it.
     One from the same package on other code runs older code (the checkout changed under it),
     so it's stopped and one started on this code; one from another package is joined if it
-    serves the same API."""
-    said = []
-    for attempt in range(2):
-        held = found = holder(state_dir)   # found: one already running
+    serves the same API. A lock let go meanwhile (another app restarting it, or its own
+    Reviver) is gone round again: only a daemon this app started that never listens, or one
+    that holds its lock and never answers, is fatal."""
+    auth.check_dir(state_dir)
+    said, restarted, failed = [], False, 0
+    deadline = time.monotonic() + 3 * START_WAIT
+    while True:
+        if time.monotonic() >= deadline:
+            raise NoDaemon(f"no daemon would stay up long enough to join: see {LOG} (in {state_dir}). "
+                           "claude-wheelhouse --local runs without it")
+        held = holder(state_dir)
+        found = held is not None
         if held is None:
             try:
                 start(state_dir, port)
             except (OSError, subprocess.CalledProcessError) as e:
                 raise NoDaemon(f"couldn't start the daemon: {e}") from None
-            deadline = time.monotonic() + START_WAIT
-            while (held := holder(state_dir)) is None:
-                if time.monotonic() >= deadline:
-                    raise NoDaemon(f"the daemon didn't start: {last_line(state_dir) or 'see ' + LOG} "
-                                   f"(in {state_dir}). claude-wheelhouse --local runs without it")
-                time.sleep(0.1)
+        held = listening(state_dir, START_WAIT)
+        if held is None:
+            if holder(state_dir) is not None:
+                continue   # another app's daemon took the lock and is still starting
+            failed += 1
+            if failed >= 2 or not found:
+                raise NoDaemon(f"the daemon didn't start: {last_line(state_dir) or 'see ' + LOG} "
+                               f"(in {state_dir}). claude-wheelhouse --local runs without it")
+            continue
         url = url_of(held)
         if url is None:
-            raise NoDaemon(f"the daemon lock says {held!r}, with no address: claude-wheelhouse --local runs without it")
-        token = token_of(state_dir, START_WAIT)
-        info = hello(url, token, HELLO_WAIT if found else START_WAIT, state_dir)
+            raise NoDaemon(f"the daemon lock says {held!r}: not an address on this machine. A daemon on "
+                           "another address is reached with --connect")
+        try:
+            info, token = hello(url, token_of(state_dir, START_WAIT), HELLO_WAIT if found else START_WAIT,
+                                state_dir, reread=lambda: token_of(state_dir))
+        except Gone:
+            continue
         if info is None:
             raise NoDaemon(f"the daemon ({held}) holds its lock but doesn't answer. It's left running: stop it, "
                            "or run claude-wheelhouse --local without it")
         if info["code"] == fingerprint.code():
             return url, token, said
-        if info["package"] == str(fingerprint.PACKAGE) and attempt == 0:
+        if info["package"] == str(fingerprint.PACKAGE) and not restarted:
             stop(url, token, state_dir)
+            restarted = True
             said.append("the daemon ran older code: restarted it on this code")
             continue
         if info["api"] != fingerprint.API:
@@ -169,12 +231,12 @@ def local(state_dir: Path, port: int) -> tuple[str, str, list[str]]:
                            f"wheelhouse {fingerprint.API}: stop it, or run claude-wheelhouse --local")
         said.append(f"the daemon (pid {info['pid']}) runs other code, from {info['package']}")
         return url, token, said
-    raise NoDaemon("the daemon restarted on this code still runs other code: claude-wheelhouse --local runs without it")
 
 
 class Reviver:
     """The local daemon, started again when it has gone (its lock free) under a running
-    TUI: up to REVIVES times in REVIVE_SPAN, then left to the person."""
+    TUI: up to REVIVES times in REVIVE_SPAN, then left to the person. Its address once it's
+    listening; the client proves it before sending it anything."""
 
     def __init__(self, state_dir: Path, port: int):
         self.state_dir, self.port = state_dir, port
@@ -182,20 +244,17 @@ class Reviver:
 
     def __call__(self) -> str | None:
         held = holder(self.state_dir)
-        if held is not None:
-            return url_of(held)
-        now = time.monotonic()
-        self.started = [t for t in self.started if now - t < REVIVE_SPAN]
-        if len(self.started) >= REVIVES:
-            return None
-        self.started.append(now)
-        try:
-            start(self.state_dir, self.port)
-        except (OSError, subprocess.CalledProcessError):
-            return None
-        deadline = time.monotonic() + START_WAIT
-        while (held := holder(self.state_dir)) is None and time.monotonic() < deadline:
-            time.sleep(0.1)
+        if held is None:
+            now = time.monotonic()
+            self.started = [t for t in self.started if now - t < REVIVE_SPAN]
+            if len(self.started) >= REVIVES:
+                return None
+            self.started.append(now)
+            try:
+                start(self.state_dir, self.port)
+            except (OSError, subprocess.CalledProcessError):
+                return None
+        held = listening(self.state_dir, START_WAIT)
         return held and url_of(held)
 
 
@@ -209,7 +268,7 @@ def remote_client(address: str, token: str) -> tuple[RemoteClient, list[str]]:
     """Another machine's daemon (--connect host:port): never started or stopped from here.
     Another API won't do; other code is only said."""
     url = address if address.startswith("http://") else f"http://{address}"
-    info = hello(url, token, HELLO_WAIT)
+    info, token = hello(url, token, HELLO_WAIT)
     if info is None:
         raise NoDaemon(f"no daemon answers at {url}")
     if info["api"] != fingerprint.API:
@@ -223,11 +282,8 @@ def remote_client(address: str, token: str) -> tuple[RemoteClient, list[str]]:
 def given_token(file: str | None, environ=os.environ, ask=None) -> str:
     """The token for --connect: from a file, else WHEELHOUSE_TOKEN, else asked for without
     echo. Never a flag's value, which ps and the shell's history would show."""
-    if file:
-        path = Path(file).expanduser()
-        if path.exists() and path.stat().st_mode & 0o077:
-            print(f"warning: {path} is readable by others: chmod 600 it", file=sys.stderr)
-        return auth.read(path)
+    if file:   # the user's, readable by them alone, as the daemon's own (auth.read)
+        return auth.read(Path(file).expanduser())
     if environ.get("WHEELHOUSE_TOKEN"):
         return environ["WHEELHOUSE_TOKEN"].strip()
     if ask is None and sys.stdin.isatty():

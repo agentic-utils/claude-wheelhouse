@@ -111,10 +111,14 @@ def hosts(address: str, port: int, names=()) -> set[str]:
     return {f"{h}:{port}" for h in (shown, *names, *(["localhost"] if ip.is_loopback else []))}
 
 
-def take_lock(state_dir, url: str):
+def take_lock(state_dir):
     """The lock that makes this the user's one daemon, held while the returned file is open;
-    AlreadyRunning, naming the one that holds it, if another does."""
-    f = open(state_dir / LOCK, "a+")
+    AlreadyRunning, naming the one that holds it, if another does. It says only its pid
+    until it's listening (announce): a client never goes to an address this daemon hasn't
+    bound, where something else may be. The user's alone (0600)."""
+    fd = os.open(state_dir / LOCK, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    os.fchmod(fd, 0o600)
+    f = os.fdopen(fd, "r+")
     deadline = time.monotonic() + LOCK_WAIT
     while True:
         try:
@@ -128,11 +132,20 @@ def take_lock(state_dir, url: str):
             held = f.read().strip()
             f.close()
             raise AlreadyRunning(f"a wheelhouse daemon is already running: {held or 'pid unknown'}") from None
-    f.seek(0)
-    f.truncate()
-    f.write(f"pid {os.getpid()} at {url}\n")
-    f.flush()
+    say(f, f"pid {os.getpid()}")
     return f
+
+
+def say(lock, text: str) -> None:
+    lock.seek(0)
+    lock.truncate()
+    lock.write(f"{text}\n")
+    lock.flush()
+
+
+def announce(lock, url: str) -> None:
+    """The address, in the lock, once the daemon is listening there."""
+    say(lock, f"pid {os.getpid()} at {url}")
 
 
 class Feed:
@@ -255,7 +268,7 @@ class Daemon:
             Route("/models", self.query(lambda request: models.catalogue(), run=None)),
             Route("/events", self.events),
             # what the TUI needs beyond the sketch (phase 2c)
-            Route("/hello", self.query(self.hello, run=None)),
+            Route("/hello", self.hello),
             Route("/inbox", self.query(self.inbox)),
             Route("/usage", self.query(self.usage, run=None)),
             Route("/settings", self.query(self.settings)),
@@ -594,11 +607,25 @@ class Daemon:
             raise Refused(403, f"can't list {path}: {e.strerror}") from None
         return {"path": path, "parent": os.path.dirname(path), "dirs": names}
 
-    def hello(self, request: Request) -> dict:
-        """Which daemon this is, for a client deciding whether to join it: its API, its code
-        as loaded (another from the same package path is older code: restart it), and its pid."""
-        return {"api": fingerprint.API, "code": fingerprint.code(), "package": str(fingerprint.PACKAGE),
-                "pid": os.getpid(), "ready": bool(self.marked)}   # ready: its first tick has made /sessions
+    async def hello(self, request: Request) -> Response:
+        """The one route without the token: a client proves the listener is this daemon before
+        it sends the token anywhere. It sends a nonce, and gets the proof (auth.proof), an
+        HMAC of it with the token over the Host it named, which must be this daemon's (D47):
+        a listener elsewhere relaying the nonce here gets a proof for this daemon's address,
+        not its own. With the token as well, which daemon this is, for a client deciding
+        whether to join it: its API, its code as loaded (another from the same package path
+        is older code: restart it), its pid, and whether its first tick has made /sessions."""
+        host = request.headers.get("host")
+        if host not in self.allowed:
+            return refusal(Refused(421, "this daemon isn't reached by that name"))
+        nonce = request.query_params.get("nonce", "")
+        if not 16 <= len(nonce) <= 128 or not nonce.isalnum():
+            return refusal(Refused(400, "hello needs a nonce: 16 to 128 letters and digits"))
+        out = {"proof": auth.proof(self.token, nonce, host)}
+        if auth.matches(request.headers.get("authorization"), self.token):
+            out |= {"api": fingerprint.API, "code": fingerprint.code(), "package": str(fingerprint.PACKAGE),
+                    "pid": os.getpid(), "ready": bool(self.marked)}
+        return JSONResponse(out)
 
     def inbox(self, request: Request) -> dict:
         """What the TUI's item list is painted from, all at once so it agrees with itself:
@@ -786,11 +813,17 @@ def refusal(e: Exception) -> JSONResponse:
 
 class Server(uvicorn.Server):
     """uvicorn's, but a signal to stop ends the event streams first, each once it has sent
-    what it has, so a client sees its stream end cleanly rather than cut off."""
+    what it has, so a client sees its stream end cleanly rather than cut off; and once it's
+    listening, it says where (listening), as in the lock (announce)."""
 
-    def __init__(self, daemon: Daemon, config: uvicorn.Config):
+    def __init__(self, daemon: Daemon, config: uvicorn.Config, listening=None):
         super().__init__(config)
-        self.daemon = daemon
+        self.daemon, self.listening = daemon, listening
+
+    async def startup(self, sockets=None) -> None:
+        await super().startup(sockets)
+        if self.started and self.listening is not None:
+            self.listening()
 
     def handle_exit(self, sig, frame) -> None:
         if self.daemon.loop is not None:
@@ -806,15 +839,16 @@ def main(address: str = ADDRESS, port: int = PORT, names=()) -> None:
     allowed = hosts(address, port, names)
     store = Store()
     url = f"http://{address if ipaddress.ip_address(address).version == 4 else f'[{address}]'}:{port}"
-    lock = take_lock(store.path.parent, url)
+    lock = take_lock(store.path.parent)
     try:
         _, said = auth.ensure(store.path.parent)
         if said:
             print(f"wheelhouse daemon: {said}", flush=True)
         daemon = Daemon(store, allowed, auth.TokenFile(auth.path(store.path.parent)))
-        server = Server(daemon, uvicorn.Config(daemon.app, host=address, port=port, log_level="warning"))
+        server = Server(daemon, uvicorn.Config(daemon.app, host=address, port=port, log_level="warning"),
+                        listening=functools.partial(announce, lock, url))
         daemon.stop = functools.partial(server.handle_exit, signal.SIGTERM, None)
-        print(f"wheelhouse daemon on {url}, state in {store.path.parent}", flush=True)
+        print(f"wheelhouse daemon (pid {os.getpid()}) on {url}, state in {store.path.parent}", flush=True)
         server.run()
     finally:
         lock.close()

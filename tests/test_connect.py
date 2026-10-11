@@ -2,6 +2,7 @@
 runs, joined when one does, restarted when it runs older code from this package, and a
 lock left by one that died, one that hangs, or a port taken, each said as it is."""
 
+import contextlib
 import fcntl
 import os
 import signal
@@ -28,12 +29,16 @@ def state(db_file, monkeypatch):
     port = free_port()
     monkeypatch.setenv("WHEELHOUSE_PORT", str(port))
     yield state_dir, port
-    held = connect.holder(state_dir)
-    if held and (pid := held.split()[1]).isdigit():
-        os.kill(int(pid), signal.SIGTERM)
-        deadline = time.monotonic() + 10
-        while connect.holder(state_dir) is not None and time.monotonic() < deadline:
-            time.sleep(0.05)
+    # every daemon it started stopped: one asked for late, on a loaded machine, can take the
+    # lock after the first has gone, so until none has held it for a while
+    deadline, free_since = time.monotonic() + 20, time.monotonic()
+    while time.monotonic() < deadline and time.monotonic() - free_since < 3:
+        held = connect.holder(state_dir)
+        if held and (pid := held.split()[1]).isdigit():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pid), signal.SIGTERM)
+            free_since = time.monotonic()
+        time.sleep(0.05)
 
 
 def daemon_pid(state_dir) -> int:
@@ -49,7 +54,8 @@ def test_none_running_starts_one_and_the_next_joins_it(state):
     pid = daemon_pid(state_dir)
     assert connect.local(state_dir, port) == (url, token, []), "the next joins it"
     assert daemon_pid(state_dir) == pid
-    assert "started by pid" in (state_dir / connect.LOG).read_text()
+    log = (state_dir / connect.LOG).read_text()
+    assert f"pid {os.getpid()} asked for a daemon" in log and f"wheelhouse daemon (pid {pid}) on {url}" in log
 
 
 def test_a_lock_file_left_by_a_daemon_that_died_is_only_text(state):
@@ -157,3 +163,95 @@ def test_the_token_command_prints_and_rotates(db_file):
     assert first == auth.read(auth.path(db_file.parent))
     second = run("--rotate").stdout.strip()
     assert second != first and auth.read(auth.path(db_file.parent)) == second
+
+
+def test_the_lock_naming_a_listener_that_isnt_the_daemon_gets_no_token(state):
+    """Something on the lock's port that can't prove it holds the token: said, never sent it."""
+    from test_client import Squatter
+    state_dir, port = state
+    auth.ensure(state_dir)
+    squat = Squatter()
+    try:
+        with open(state_dir / connect.LOCK, "a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock.write(f"pid {os.getpid()} at {squat.url}\n")
+            lock.flush()
+            with pytest.raises(connect.NoDaemon, match="not the wheelhouse daemon: it was never sent the token"):
+                connect.local(state_dir, port)
+        assert squat.seen and squat.tokens() == []
+    finally:
+        squat.close()
+
+
+@pytest.mark.parametrize("held, url, desc", [
+    ("pid 1 at http://127.0.0.1:7428", "http://127.0.0.1:7428", "the loopback"),
+    ("pid 1 at http://[::1]:7428", "http://[::1]:7428", "IPv6's"),
+    ("pid 1 at http://100.64.0.7:7428", None, "a VPN's: reached with --connect"),
+    ("pid 1 at http://evil.example:7428", None, "a name"),
+    ("pid 1", None, "not listening yet"),
+])
+def test_a_lock_names_only_an_address_on_this_machine(held, url, desc):
+    assert connect.url_of(held) == url, desc
+
+
+def test_two_apps_starting_at_once_join_one_daemon(state):
+    import threading
+    state_dir, port = state
+    got = []
+    threads = [threading.Thread(target=lambda: got.append(connect.local(state_dir, port))) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    assert len(got) == 2 and got[0][0] == got[1][0] == f"http://127.0.0.1:{port}", got
+
+
+def test_a_lock_let_go_while_joining_is_gone_round_again(tmp_path, monkeypatch):
+    """Another app restarting the daemon (it ran older code) as this one joins: its lock goes
+    while this one says hello, then comes back on the new daemon. Joined, not fatal. Scripted,
+    with no daemon at all (the real race is above)."""
+    state_dir, port = tmp_path, 1
+    url = f"http://127.0.0.1:{port}"
+    auth.ensure(state_dir)
+    script = iter(["old", "gone", "new"])
+    now = {"held": f"pid 999999 at {url}"}
+
+    def hello(u, token, wait, state_dir=None, reread=None):
+        step = next(script)
+        if step == "gone":
+            raise connect.Gone()
+        return {"code": fingerprint.code() if step == "new" else "old", "package": "elsewhere", "api": fingerprint.API,
+                "pid": 2}, token
+    first = {"done": False}
+
+    def hello_once(*a, **k):
+        if not first["done"]:
+            first["done"] = True
+            next(script)
+            raise connect.Gone()
+        return hello(*a, **k)
+    monkeypatch.setattr(connect, "hello", hello_once)
+    monkeypatch.setattr(connect, "holder", lambda d: now["held"])
+    monkeypatch.setattr(connect, "start", lambda d, p: pytest.fail("started one while one ran"))
+    assert connect.local(state_dir, port)[0] == url
+
+
+def test_the_daemon_never_sees_the_apps_token_in_its_environment(state, monkeypatch):
+    state_dir, port = state
+    monkeypatch.setenv("WHEELHOUSE_TOKEN", "a-connect-token")
+    connect.local(state_dir, port)
+    environ = open(f"/proc/{daemon_pid(state_dir)}/environ", "rb").read().split(b"\0")
+    assert not [e for e in environ if e.startswith(b"WHEELHOUSE_TOKEN=")]
+
+
+def test_hello_reads_a_rotated_token_again(state):
+    state_dir, port = state
+    url, token, _ = connect.local(state_dir, port)
+    new = auth.write(state_dir)   # rotated: the daemon takes it at its next tick
+    deadline = time.monotonic() + 5
+    while True:   # until the daemon has it
+        info, took = connect.hello(url, token, 2, state_dir, reread=lambda: connect.token_of(state_dir))
+        if took == new or time.monotonic() > deadline:
+            break
+        time.sleep(0.2)
+    assert info["ready"] and took == new
