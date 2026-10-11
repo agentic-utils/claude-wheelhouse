@@ -29,7 +29,8 @@ by users other than the author until we can confirm Anthropic T&Cs".
   resolves: `launch.open_session` (and `restore_session`) refuse a tab with `may_tab` false
   (`launch.NotHere`), which the daemon passes for another machine's request, through
   Restore, Restore all, Relaunch, Adopt and a Relaunch carried on later (stored with it:
-  `store.relaunch_may_tab`); the hub says it as a warning. The daemon answers 403 at once
+  `store.relaunch_may_tab`); the hub says it as a warning. Adopt checks first (once it knows
+  the session isn't still running), so a tracked session's rename isn't kept on a refusal. The daemon answers 403 at once
   only where nothing at all could be done: New session's tab, the tutorial, Shell, and, out
   of SDK mode (where every session comes back in a tab), Restore, Restore all, Relaunch of
   a dead session and Adopt. Restore and
