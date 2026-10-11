@@ -4719,7 +4719,9 @@ async def test_a_shimmer_frame_redraws_only_the_charts_bars(store, sid, monkeypa
 
 
 @pytest.mark.anyio
-async def test_a_shimmer_frame_moves_the_bars_on_screen_under_a_border(store, sid, monkeypatch):
+async def test_a_shimmer_frame_moves_the_bars_on_screen_under_a_border(store, sid, monkeypatch, clock):
+    """Each frame the test's own (clock): the app's animation, on real time, would otherwise
+    move the pane to a frame of its own during a slow pause, the same as one already seen."""
     import time
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 45)) as pilot:

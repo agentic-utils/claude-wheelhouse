@@ -825,7 +825,8 @@ class Host:
             self.stopping = True
             return
         await self.steady(self.store.set_shell, self.sid, None)
-        await self.carry_back()
+        if not await self.carry_back():
+            return
         self.sent, self.taken_up, self.turn_text, self.final_text = {}, [], [], []
         self.end_compact()
         self.tokens = None   # the tab ran turns this host never saw: its cache is the tab's
@@ -834,24 +835,38 @@ class Host:
         await self.connect()
         self.reader = asyncio.create_task(self.read())
 
-    async def carry_back(self) -> None:
+    async def carry_back(self) -> bool:
         """A /model or /effort typed in a shell tab, carried to the session's columns before
         the host launches with them (Q56), by the hub's rule (stats.carry): last write wins,
         all its state in the database, so any host taking the session (this one back from
         its tab, or a Restore's after this one died) carries the same. Retried through a
-        locked database for as long as it lasts: launching first would lose what was typed.
-        A transcript that can't be read carries nothing."""
-        try:
-            typed = stats.typed_in(transcript.locate(self.sid))
+        locked database while the session wants a host, saying so on its activity line:
+        launching first would lose what was typed. A transcript that can't be read carries
+        nothing. False if the host is to stop instead: stopping, or the session parked or
+        gone meanwhile."""
+        try:   # a whole transcript, maybe hundreds of MB: off the event loop
+            typed = await asyncio.to_thread(stats.typed_in, transcript.locate(self.sid))
         except OSError as e:
             print(f"{now()} couldn't read the transcript for a /model or /effort typed: {e}",
                   file=sys.stderr, flush=True)
-            return
-        while True:
+            return True
+        waiting = False
+        while not self.stopping:
             try:
-                return await self.steady(stats.carry, self.store, self.sid, typed)
+                await self.steady(stats.carry, self.store, self.sid, typed)
+                return True
             except sqlite3.OperationalError as e:
                 print(f"{now()} {e}: carrying back a /model or /effort typed, retrying", file=sys.stderr, flush=True)
+            try:
+                session = self.store.session(self.sid)
+            except sqlite3.OperationalError:
+                session = {"parked": 0}   # unread: still wanted, as far as anyone can tell
+            if session is None or session["parked"]:
+                self.stopping = True
+            elif not waiting:
+                waiting = True
+                await self.say("waiting on a locked database")
+        return False
 
     async def shell_wait(self) -> None:
         await asyncio.sleep(SHELL_POLL_SECONDS)
@@ -901,11 +916,14 @@ class Host:
         try:
             try:
                 self.store.set_shell(self.sid, None)   # a host killed while its shell tab was open left this
-                await self.carry_back()   # what was typed in that tab, or any other since the last host
+                # what was typed in that tab, or any other since the last host
+                if not await self.carry_back():
+                    return
                 self.deny_stale()
                 await self.connect()
-            except sqlite3.OperationalError as e:   # the store, not Claude Code: say which
-                self.stop_reason = stopped(f"the wheelhouse database was busy at start: {e}")
+            except sqlite3.DatabaseError as e:   # the store, not Claude Code: say which
+                busy = "was busy" if isinstance(e, sqlite3.OperationalError) else "failed"
+                self.stop_reason = stopped(f"the wheelhouse database {busy} at start: {e}")
                 return
             except Exception as e:   # Claude Code wouldn't start (or resume): say why, not just "dead"
                 self.stop_reason = stopped(f"Claude Code didn't start: {e}")

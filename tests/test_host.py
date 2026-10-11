@@ -334,6 +334,21 @@ def typed(command, out):
             "content": f"<local-command-stdout>{out}</local-command-stdout>"}
 
 
+def picked(out):
+    """A choice made in /model's picker, as Claude Code 2.1.280 writes it (real shapes, text
+    scrubbed): a caveat, the command with no args, then a user record holding only the
+    command's output, no command named."""
+    base = {"parentUuid": "p", "isSidechain": False, "promptId": "q", "type": "user", "userType": "external",
+            "entrypoint": "cli", "cwd": "/repo", "version": "2.1.280", "gitBranch": "HEAD"}
+    return [base | {"message": {"role": "user", "content": "<local-command-caveat>Caveat: ...</local-command-caveat>"},
+                    "isMeta": True, "uuid": "u1"},
+            base | {"message": {"role": "user", "content": "<command-name>/model</command-name>\n            "
+                                "<command-message>model</command-message>\n            <command-args></command-args>"},
+                    "uuid": "u2"},
+            base | {"message": {"role": "user", "content": f"<local-command-stdout>{out}</local-command-stdout>"},
+                    "uuid": "u3"}]
+
+
 @pytest.mark.parametrize("in_tab, chosen, launched, desc", [
     ([turn("t1", "claude-sonnet-5-5")], "claude-haiku-5-5", ("claude-haiku-5-5", "high"),
      "Haiku chosen in the wheelhouse meanwhile, the tab's turn on what it launched with: Haiku stands"),
@@ -415,6 +430,8 @@ def shell_host(store, sid, tmp_path, monkeypatch):
      "/model opus typed in the tab, then Haiku chosen in the wheelhouse: the later, the wheelhouse's, wins"),
     ([("choose", "claude-haiku-5-5"), ("turn", "claude-sonnet-5-5")], "claude-haiku-5-5",
      "Haiku chosen, then a turn in the tab on what it launched with: nothing typed, Haiku stands"),
+    ([("choose", "claude-haiku-5-5"), ("pick", "Opus 5.5 (1M context)")], "claude-opus-5-5",
+     "Haiku chosen, then Opus picked in /model's picker in the tab: the later, the tab's, wins"),
 ])
 def test_the_later_of_a_wheelhouse_choice_and_a_tabs_model_wins(store, sid, tmp_path, monkeypatch, steps, launched,
                                                                  desc):
@@ -431,6 +448,8 @@ def test_the_later_of_a_wheelhouse_choice_and_a_tabs_model_wins(store, sid, tmp_
                 s.set_model(i, value)   # hub.set_model during the shell
             elif what == "type":
                 tab_wrote(path, typed("model", f"Set model to `{value}` for this session only"))
+            elif what == "pick":
+                tab_wrote(path, *picked(f"Set model to `{value}` and saved as your default for new sessions"))
             else:
                 tab_wrote(path, {"type": "user", "message": {"content": "go on"}}, turn("t1", value))
     h.open_tab = open_tab
@@ -497,6 +516,49 @@ def test_a_locked_database_after_connecting_never_stops_the_host(host, store, si
     assert h.client.connected and h.unsaid == "idle"
     run(h.poll())
     assert store.session(sid)["activity"] == "idle" and h.unsaid is None
+
+
+@pytest.mark.parametrize("how, desc", [
+    ("park", "parked while it waits on a locked database: it stops, never launching"),
+    ("stop", "told to stop while it waits: it stops, never launching"),
+    ("malformed", "a database error other than a lock: said as the database's, not Claude Code's"),
+])
+def test_a_host_carrying_back_at_start_stops_when_it_should_and_says_why(store, sid, monkeypatch, how, desc):
+    """Round 64, M3: carry_back's retries through a locked database are visible and end."""
+    monkeypatch.setattr(host_mod, "STEADY_TRIES", (0, 0))
+    said, set_activity = [], store.set_activity
+    monkeypatch.setattr(store, "set_activity", lambda i, a: (said.append(a), set_activity(i, a)))
+
+    def carry(*a):
+        raise (sqlite3.DatabaseError("database disk image is malformed") if how == "malformed"
+               else sqlite3.OperationalError("database is locked"))
+    monkeypatch.setattr(host_mod.stats, "carry", carry)
+    h = Host(store, sid, client_factory=FakeClient, person="doug")
+
+    async def go():
+        task = asyncio.create_task(h.run())
+        await asyncio.sleep(0.05)
+        if how == "park":
+            store.set_parked(sid, True)
+        elif how == "stop":
+            h.stopping = True
+        await asyncio.wait_for(task, 5)
+    run(go())
+    assert h.client is None, desc
+    if how == "malformed":
+        assert said == ["stopped: the wheelhouse database failed at start: database disk image is malformed"], desc
+    else:
+        assert said[0] == "waiting on a locked database" and said.count(said[0]) == 1, desc
+
+
+def test_carry_back_reads_the_transcript_off_the_event_loop(host, monkeypatch):
+    """Round 64, nit 6: a whole transcript, maybe hundreds of MB, read on a worker thread."""
+    import threading
+    threads = []
+    monkeypatch.setattr(host_mod.stats, "typed_in",
+                        lambda path: (threads.append(threading.current_thread()), host_mod.stats.Snapshot())[1])
+    assert run(host.carry_back())
+    assert threads and threads[0] is not threading.main_thread()
 
 
 # review fixes (T29): cancelled calls, ordering, races, lost turns, the shell hand-back
