@@ -11,6 +11,7 @@ import errno
 import fcntl
 import os
 import re
+import select
 import signal
 import subprocess
 import sys
@@ -36,6 +37,10 @@ class NoDaemon(RuntimeError):
 
 class TokenRefused(NoDaemon):
     """The daemon answers, but refuses the token given (401)."""
+
+
+class Older(NoDaemon):
+    """The daemon answers, but has no /hello: it runs code from before 2c, which took no token."""
 
 
 def holder(state_dir: Path) -> str | None:
@@ -69,21 +74,38 @@ def port() -> int:
     return int(os.environ.get("WHEELHOUSE_PORT") or PORT)
 
 
-def start(state_dir: Path, port: int) -> None:
+def start(state_dir: Path, port: int) -> int:
     """A daemon, on this interpreter and environment (WHEELHOUSE_DB and the rest go with
     it, but for WHEELHOUSE_TOKEN, which nothing it starts should see), init's child rather
     than ours (setsid --fork, as hosts are), its output appended to daemon.log. On the
     package this process runs: its folder first on the path, and the current directory
     (the state dir) left off it, so `-m claude_wheelhouse` never finds another checkout's,
     nor the installed one when this one is a copy run from its folder. One that finds
-    another holding the lock stops at once, and says so in the log."""
+    another holding the lock stops at once, and says so in the log.
+
+    Returns the read end of a pipe whose write end only the daemon holds: it reads as ended
+    the moment the daemon exits (listening), so one that stops as it starts (a token file it
+    refuses, say) is said at once, not after START_WAIT. The caller closes it."""
     path = os.pathsep.join(filter(None, [str(fingerprint.PACKAGE.parent), os.environ.get("PYTHONPATH")]))
     env = {k: v for k, v in os.environ.items() if k != "WHEELHOUSE_TOKEN"}
-    with open(Path(state_dir) / LOG, "a") as log:
-        print(time.strftime("%Y-%m-%dT%H:%M:%S%z"), f"pid {os.getpid()} asked for a daemon", file=log, flush=True)
-        subprocess.run(["setsid", "--fork", sys.executable, "-m", "claude_wheelhouse", "daemon", "--port", str(port)],
-                       cwd=state_dir, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                       env=dict(env, PYTHONSAFEPATH="1", PYTHONPATH=path), check=True)
+    ended, held = os.pipe()
+    try:
+        with open(Path(state_dir) / LOG, "a") as log:
+            print(time.strftime("%Y-%m-%dT%H:%M:%S%z"), f"pid {os.getpid()} asked for a daemon", file=log, flush=True)
+            subprocess.run(["setsid", "--fork", sys.executable, "-m", "claude_wheelhouse", "daemon", "--port",
+                            str(port)], cwd=state_dir, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                           env=dict(env, PYTHONSAFEPATH="1", PYTHONPATH=path), pass_fds=(held,), check=True)
+    except BaseException:
+        os.close(ended)
+        raise
+    finally:
+        os.close(held)
+    return ended
+
+
+def exited(ended: int | None) -> bool:
+    """Whether the daemon start() started has exited: its pipe reads as ended."""
+    return ended is not None and bool(select.select([ended], [], [], 0)[0])
 
 
 def last_line(state_dir: Path) -> str:
@@ -109,6 +131,8 @@ def hello(url: str, token: str, wait: float, state_dir: Path | None = None) -> d
         while True:
             try:
                 r = http.get(f"{url}/hello")
+                if r.status_code == 404:   # every path answers 401 without the token since 2c, /hello with it
+                    raise Older(f"the daemon at {url} runs older code, from before the wheelhouse took a token")
                 if r.status_code == 401:
                     raise TokenRefused(f"the daemon at {url} refuses this token: claude-wheelhouse token, on "
                                        "its machine, prints the one it takes")
@@ -180,6 +204,52 @@ def token_trouble(e: auth.TokenError, file: Path, held: str | None) -> str:
     return f"{e}: delete it and stop {daemon} ({STOP}), and the next start makes a new token"
 
 
+def older_trouble(held: str | None) -> str:
+    pid = pid_of(held)
+    daemon = f"the daemon (pid {pid})" if pid else "the daemon"
+    return (f"{daemon} runs older code, from before the wheelhouse took a token: stop it ({STOP}), and the "
+            "next start runs this code")
+
+
+def predates_token(url: str) -> bool:
+    """Whether the daemon at url runs code from before 2c: one since refuses /hello without
+    the token (401); one before had no /hello (404)."""
+    import httpx2
+    try:
+        return httpx2.get(f"{url}/hello", timeout=2).status_code == 404
+    except httpx2.TransportError:
+        return False
+
+
+def trouble(e: auth.TokenError, file: Path, held: str | None) -> str:
+    """token_trouble, unless the daemon runs older code, which never read the file."""
+    url = url_of(held or "")
+    return older_trouble(held) if url and predates_token(url) else token_trouble(e, file, held)
+
+
+def check(state_dir: Path) -> str:
+    """The token file's token, for claude-wheelhouse token: NoDaemon if a daemon runs and
+    refuses it, or runs older code, or the file can't be read while one runs, said as the
+    app says it; TokenError if it can't be read and none runs. One that doesn't answer
+    leaves it printed: its token is still the file's, as far as can be told."""
+    file, held = auth.path(state_dir), holder(state_dir)
+    try:
+        token = auth.read(file)
+    except auth.TokenError as e:
+        if held is None:
+            raise
+        raise NoDaemon(trouble(e, file, held)) from None
+    url = url_of(held or "")
+    if url:
+        try:
+            hello(url, token, 0)
+        except TokenRefused:
+            raise NoDaemon(refused_trouble(file, held)) from None
+        except Older:
+            raise NoDaemon(older_trouble(held)) from None
+    return token
+
+
 def refused_trouble(file: Path, held: str | None) -> str:
     pid = pid_of(held)
     daemon = f"the daemon (pid {pid})" if pid else "the daemon"
@@ -198,16 +268,17 @@ def token_of(state_dir: Path, wait: float = 0) -> str:
             time.sleep(0.1)
 
 
-def listening(state_dir: Path, wait: float) -> str | None:
+def listening(state_dir: Path, wait: float, ended: int | None = None) -> str | None:
     """What the lock says once its daemon is listening (it names its address only then),
     within wait seconds; None if none does by then, or the one that took the lock let go
-    of it without listening (it couldn't bind its port, say)."""
+    of it without listening (it couldn't bind its port, say), or the one started (ended,
+    start's pipe) has exited, which it may have done before its lock was ever seen."""
     deadline, seen = time.monotonic() + wait, False
     while time.monotonic() < deadline:
         held = holder(state_dir)
         if held is not None and "at http" in held:
             return held
-        if held is None and seen:
+        if held is None and (seen or exited(ended)):
             return None
         seen = seen or held is not None
         time.sleep(0.05)
@@ -228,13 +299,17 @@ def local(state_dir: Path, port: int) -> tuple[str, str, list[str]]:
             raise NoDaemon(f"no daemon would stay up long enough to join: see {LOG} (in {state_dir}). "
                            "claude-wheelhouse --local runs without it")
         held = holder(state_dir)
-        found = held is not None
+        found, ended = held is not None, None
         if held is None:
             try:
-                start(state_dir, port)
+                ended = start(state_dir, port)
             except (OSError, subprocess.CalledProcessError) as e:
                 raise NoDaemon(f"couldn't start the daemon: {e}") from None
-        held = listening(state_dir, START_WAIT)
+        try:
+            held = listening(state_dir, START_WAIT, ended)
+        finally:
+            if ended is not None:
+                os.close(ended)
         if held is None:
             if holder(state_dir) is not None:
                 continue   # another app's daemon took the lock and is still starting
@@ -247,13 +322,18 @@ def local(state_dir: Path, port: int) -> tuple[str, str, list[str]]:
         try:   # written before the daemon listens: waited for only from one this app has just started
             token = token_of(state_dir, 0 if found else START_WAIT)
         except auth.TokenError as e:
-            raise NoDaemon(token_trouble(e, file, held)) from None
+            raise NoDaemon(trouble(e, file, held)) from None
         try:
             info = hello(url, token, START_WAIT, state_dir)
         except Gone:
             continue
         except TokenRefused:
             raise NoDaemon(refused_trouble(file, held)) from None
+        except Older:
+            raise NoDaemon(older_trouble(held)) from None
+        exposed = auth.exposed(file) if found else None   # one started on it would have refused it
+        if exposed and f"the daemon runs, but {exposed}" not in said:
+            said.append(f"the daemon runs, but {exposed}")
         if info is None:
             raise NoDaemon(f"the daemon ({held}) holds its lock but doesn't answer. It's left running: stop it, "
                            "or run claude-wheelhouse --local without it")
@@ -290,10 +370,16 @@ class Reviver:
                 return None
             self.started.append(now)
             try:
-                start(self.state_dir, self.port)
+                ended = start(self.state_dir, self.port)
             except (OSError, subprocess.CalledProcessError):
                 return None
-        held = listening(self.state_dir, START_WAIT)
+        else:
+            ended = None
+        try:
+            held = listening(self.state_dir, START_WAIT, ended)
+        finally:
+            if ended is not None:
+                os.close(ended)
         if held is None:
             return None
         try:

@@ -106,15 +106,13 @@ def main() -> None:
         print(injected())
     elif args.cmd == "token":
         from . import auth
-        from .connect import holder, token_trouble
+        from .connect import NoDaemon, check
         from .store import db_path
-        state_dir = db_path().parent
-        try:
-            print(auth.read(auth.path(state_dir)))
+        try:   # what the running daemon takes, said as the app says it when it doesn't
+            print(check(db_path().parent))
+        except NoDaemon as e:
+            sys.exit(f"claude-wheelhouse: {e}")
         except auth.TokenError as e:
-            held = holder(state_dir)
-            if held is not None:
-                sys.exit(f"claude-wheelhouse: {token_trouble(e, auth.path(state_dir), held)}")
             first = " (the daemon makes it the first time it starts)" if e.errno == errno.ENOENT else ""
             sys.exit(f"claude-wheelhouse: {e}{first}")
     elif args.cmd == "tutorial":

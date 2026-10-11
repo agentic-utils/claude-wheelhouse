@@ -50,9 +50,8 @@ def ensure(state_dir: Path) -> tuple[str, str | None]:
         if st.st_uid != os.geteuid():
             raise TokenError(f"{target} isn't yours (it's uid {st.st_uid}'s): remove it, and the daemon makes "
                              "a new token as it starts")
-        if stat.S_IMODE(st.st_mode) & 0o077:
-            raise TokenError(f"{target} can be read or written by other users (mode "
-                             f"{stat.S_IMODE(st.st_mode):04o}): chmod 600 {target}")
+        if exposed := exposed_by(st, target):
+            raise TokenError(exposed)
         return read(target), None
     token = secrets.token_urlsafe(32)
     tmp = target.with_name(f".{TOKEN}.{os.getpid()}.{secrets.token_hex(4)}")
@@ -65,6 +64,20 @@ def ensure(state_dir: Path) -> tuple[str, str | None]:
         os.close(fd)
     os.replace(tmp, target)
     return token, f"made a token for clients in {target}"
+
+
+def exposed_by(st: os.stat_result, file: Path) -> str | None:
+    """What to say if the token file can be read or written by other users; None if not."""
+    mode = stat.S_IMODE(st.st_mode)
+    return f"{file} can be read or written by other users (mode {mode:04o}): chmod 600 {file}" if mode & 0o077 else None
+
+
+def exposed(file: Path) -> str | None:
+    """exposed_by, for the file as it is now: None if it can't be looked at."""
+    try:
+        return exposed_by(Path(file).stat(), file)
+    except OSError:
+        return None
 
 
 def read(file: Path) -> str:

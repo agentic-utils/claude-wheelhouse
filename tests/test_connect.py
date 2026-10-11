@@ -333,3 +333,72 @@ def test_a_daemon_running_has_as_long_to_answer_as_one_just_started(tmp_path, mo
     monkeypatch.setattr(connect, "hello", hello)
     connect.local(tmp_path, 1)
     assert waits == [connect.START_WAIT]
+
+
+def test_the_token_command_says_a_token_file_the_running_daemon_refuses(state):
+    """Replaced under a running daemon: not printed for a --connect machine to be refused with."""
+    state_dir, port = state
+    connect.local(state_dir, port)
+    pid = daemon_pid(state_dir)
+    auth.path(state_dir).write_text("another-token\n")
+    token = cli("token")
+    assert token.returncode != 0 and token.stdout == "", token
+    assert f"the daemon (pid {pid}) refuses the token in" in token.stderr and connect.STOP in token.stderr, token.stderr
+
+
+def test_a_token_file_the_started_daemon_refuses_is_said_at_once(state):
+    state_dir, port = state
+    auth.ensure(state_dir)
+    auth.path(state_dir).chmod(0o644)
+    started = time.monotonic()
+    with pytest.raises(connect.NoDaemon, match="chmod 600") as e:
+        connect.local(state_dir, port)
+    assert time.monotonic() - started < connect.START_WAIT / 2, f"not waited for: {e.value}"
+
+
+def test_joining_a_daemon_whose_token_file_others_can_read_says_so(state):
+    state_dir, port = state
+    connect.local(state_dir, port)
+    auth.path(state_dir).chmod(0o640)
+    said = connect.local(state_dir, port)[2]
+    assert [s for s in said if f"chmod 600 {auth.path(state_dir)}" in s], said
+
+
+@pytest.fixture
+def older(tmp_path):
+    """A daemon from before 2c, as a client finds it: its lock held, naming its address, and
+    no /hello (404), nor any token asked for."""
+    import http.server
+    import threading
+
+    class NoHello(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+    server = http.server.HTTPServer(("127.0.0.1", 0), NoHello)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    lock = open(tmp_path / connect.LOCK, "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    lock.write(f"pid {os.getpid()} at http://127.0.0.1:{server.server_port}\n")
+    lock.flush()
+    yield tmp_path
+    lock.close()
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.mark.parametrize("token_file, desc", [
+    (False, "none: a pre-2c daemon never made one"),
+    (True, "one left by a 2c daemon since stopped"),
+])
+def test_a_daemon_on_code_from_before_the_token_is_said_as_that(older, token_file, desc):
+    if token_file:
+        auth.ensure(older)
+    for ask in (lambda: connect.local(older, 1), lambda: connect.check(older)):
+        with pytest.raises(connect.NoDaemon) as e:
+            ask()
+        assert f"the daemon (pid {os.getpid()}) runs older code" in str(e.value), f"{desc}: {e.value}"
+        assert connect.STOP in str(e.value) and "has gone" not in str(e.value), f"{desc}: {e.value}"
