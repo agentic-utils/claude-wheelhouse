@@ -187,9 +187,10 @@ def test_a_refused_token_is_said_once(store, sid, served, heard):
         c.disconnect()
 
 
-def test_a_token_refused_by_the_local_daemon_is_said_as_that_and_its_file_read_again(store, sid, served, heard):
+def test_a_token_refused_by_the_local_daemon_is_read_again_before_it_is_said(store, sid, served, heard):
     """The token file put right (the daemon stopped and started again on it, say): the
-    Reviver reads it again, and the client takes it. Never said as the daemon lost."""
+    Reviver reads it again, and the client takes it, with nothing said, as it recovers by
+    itself. Never said as the daemon lost."""
     d = served(store.path)
     revived = []
 
@@ -199,9 +200,23 @@ def test_a_token_refused_by_the_local_daemon_is_said_as_that_and_its_file_read_a
     c = heard(RemoteClient(d.url, "not-the-token", revive=revive, why_refused=lambda: "stop it (pid 7)"))
     try:
         until(lambda: c.token == TOKEN and c.last_event is not None, desc="reconnected on the file's token")
-        assert ("notice", "the daemon refused this client: stop it (pid 7)") in heard.said, heard.said
-        assert not [text for _, text in heard.said if "unreachable" in text], heard.said
+        assert not [text for _, text in heard.said if "refused" in text or "unreachable" in text], heard.said
         assert c.connected and revived
+    finally:
+        c.disconnect()
+
+
+@pytest.mark.parametrize("read, desc", [
+    ("not-the-token", "the file's token is the one refused"),
+    (None, "the file can't be read"),
+])
+def test_a_token_still_refused_once_its_file_is_read_again_is_said_as_that(store, sid, served, heard, read, desc):
+    d = served(store.path)
+    c = heard(RemoteClient(d.url, "not-the-token", revive=lambda: (d.url, read),
+                           why_refused=lambda: "stop it (pid 7)"))
+    try:
+        until(lambda: ("notice", "the daemon refused this client: stop it (pid 7)") in heard.said, desc=desc)
+        assert not [text for _, text in heard.said if "unreachable" in text], heard.said
     finally:
         c.disconnect()
 

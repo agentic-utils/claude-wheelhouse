@@ -676,7 +676,8 @@ class RemoteClient:
         marks what it moved to fetch. A stream that ends or can't connect is tried again,
         backing off, from the last event's id; a local daemon gone is started again
         (revive). A token refused is said as that, not as the daemon lost, and the local
-        one's file is read again (revive), as it may have been put right."""
+        one's file is read again (revive) first, as it may have been put right: said only
+        if the file's token is the one refused."""
         tries = 0
         http = self.make_http(STREAM_READ)
         try:
@@ -688,8 +689,7 @@ class RemoteClient:
                         headers["Last-Event-ID"] = self.last_event
                     with http.sse("/events", headers=headers) as events:
                         if events.response.status_code == 401:
-                            refused = True
-                            self.refused(self.why_refused() if self.why_refused else REFUSED)
+                            refused = True   # said once the token file is read again, if it's still this
                             raise self.httpx.TransportError("the token was refused")
                         if events.response.status_code != 200:
                             raise self.httpx.TransportError(f"the stream answered {events.response.status_code}")
@@ -709,6 +709,7 @@ class RemoteClient:
                     return
                 if not refused:
                     self.lost()
+                refused_token = self.token if refused else None
                 if self.revive is not None and (found := self.revive()) is not None:
                     url, token = found[0], found[1] or self.token
                     if (url, token) != (self.url, self.token):
@@ -717,6 +718,8 @@ class RemoteClient:
                         http = self.make_http(STREAM_READ)
                         old, self.http = self.http, self.make_http(TIMEOUT)
                         old.close()
+                if refused and self.token == refused_token:   # not one about to be put right by the file
+                    self.refused(self.why_refused() if self.why_refused else REFUSED)
                 with self.lock:
                     self.lock.wait(BACKOFF[min(tries, len(BACKOFF) - 1)])
                 tries += 1
