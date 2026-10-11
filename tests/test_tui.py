@@ -4971,9 +4971,10 @@ async def test_relaunch_offers_to_compact_a_big_session_first(store, sid, monkey
                      (tokens,))
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     calls = []
-    monkeypatch.setattr(hub_mod.Hub, "stop_host", lambda self, sid, host: calls.append(("now", host)) or hub_mod.Done())
+    monkeypatch.setattr(hub_mod.Hub, "stop_host",
+                        lambda self, sid, host, may_tab=True: calls.append(("now", host)) or hub_mod.Done())
     monkeypatch.setattr(hub_mod.Hub, "compact_then_relaunch",
-                        lambda self, sid, host: calls.append(("compact", host)) or hub_mod.Done())
+                        lambda self, sid, host, may_tab=True: calls.append(("compact", host)) or hub_mod.Done())
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
