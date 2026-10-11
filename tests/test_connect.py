@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-from claude_wheelhouse import auth, connect, fingerprint
+from claude_wheelhouse import auth, connect, features, fingerprint
 
 
 def free_port() -> int:
@@ -70,6 +70,16 @@ def test_the_daemon_keeps_its_start_pipe_from_what_it_starts(state):
     assert os.readlink(f"/proc/{pid}/fd/{fd}").startswith("pipe:"), "kept open"
     flags = next(int(line.split()[1], 8) for line in open(f"/proc/{pid}/fdinfo/{fd}") if line.startswith("flags:"))
     assert flags & os.O_CLOEXEC, f"inheritable: flags {flags:o}"
+
+
+@pytest.mark.parametrize("on", [False, True])
+def test_a_daemon_started_by_an_app_in_sdk_mode_is_in_it_too(tmp_path, monkeypatch, on):
+    """It runs in the state dir, where the starting directory's .env isn't: so it is told."""
+    monkeypatch.setattr(features, "_flag", on)
+    ran = []
+    monkeypatch.setattr(connect.subprocess, "run", lambda argv, **k: ran.append(argv))
+    os.close(connect.start(tmp_path, 7428))
+    assert (features.FLAG in ran[0]) is on, ran
 
 
 def test_a_lock_file_left_by_a_daemon_that_died_is_only_text(state):

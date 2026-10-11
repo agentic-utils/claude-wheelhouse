@@ -8,7 +8,7 @@ import time
 import httpx2
 import pytest
 
-from claude_wheelhouse import client as client_mod, launch
+from claude_wheelhouse import client as client_mod, features, launch
 from claude_wheelhouse.client import LOST, UNREACHABLE, RemoteClient, Unreachable
 from claude_wheelhouse.store import SessionGone
 
@@ -260,6 +260,21 @@ def test_the_account_usage_comes_from_the_daemon(store, served, monkeypatch):
         until(lambda: ("usage",) in c.waiting, desc="fetched")
         c.refresh()
         assert c.usage.limits == {"five_hour": (12.0, 1700000000.0)} and not c.usage.failed
+    finally:
+        c.disconnect()
+
+
+@pytest.mark.parametrize("on", [False, True])
+def test_sdk_mode_is_the_daemons(store, served, monkeypatch, on):
+    """The TUI's SDK-only controls follow SDK mode (features.py) where the hub runs: through
+    the daemon, the daemon's, which its inbox says."""
+    monkeypatch.setattr(features, "_flag", on)
+    d = served(store.path)
+    monkeypatch.setattr(features, "_flag", not on)   # this process's own mode is not the daemon's
+    c = d.client(synchronous=True, before_fetch=d.tick)
+    try:
+        c.refresh()
+        assert c.sdk is on
     finally:
         c.disconnect()
 

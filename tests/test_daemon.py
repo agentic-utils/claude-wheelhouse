@@ -878,7 +878,7 @@ async def test_each_new_route(daemon, store, sid, tmp_path, method, path, body, 
 async def test_sessions_carry_their_liveness_and_model_state(daemon, sid):
     await daemon.on_hub(daemon.tick)
     view = (await call(daemon, "GET", "/sessions")).json()[0]
-    assert (view["liveness"], view["model_state"]["hosted"]) == ("dead", False)
+    assert (view["liveness"], view["model_state"]["effort_live"]) == ("dead", False)
 
 
 @pytest.mark.parametrize("path, body, kind, desc", [

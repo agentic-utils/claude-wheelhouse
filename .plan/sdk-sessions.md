@@ -18,10 +18,14 @@ by users other than the author until we can confirm Anthropic T&Cs".
 - On: `claude-wheelhouse --enable-sdk` (before or after the command, for the app, the
   tutorial and the daemon), or `enable-sdk=true` in `./.env` (where the app starts) or
   `~/.config/claude-wheelhouse/.env`. `features.sdk_enabled()` is the one switch; the
-  flag is left out of `--help`.
+  flag is left out of `--help`. Through the daemon the mode is the daemon's: an app in SDK
+  mode starts it with `--enable-sdk` (it runs in the state dir, away from `./.env`), and
+  its inbox tells each client, whose SDK-only controls follow it. An app joining a daemon
+  already running takes that daemon's mode.
 - Off (the default): `DEFAULT_RUNNER` is `tab`, and `WHEELHOUSE_RUNNER=sdk` doesn't turn
   SDK mode on. New session has no runner box; the hub refuses a new hosted session and
-  the daemon refuses every new session (a remote one could only be hosted). Restore and
+  the daemon refuses one (403), and any new session from another machine (a tab would open
+  where nobody there sees it). Restore and
   Adopt bring any session back the way new sessions run now (Q27, option A), so as a tab;
   the tutorial is always a tab. The `?` overlay, README and
   `claude-wheelhouse protocol` leave SDK mode out, and the tutorial runs in a tab.

@@ -170,6 +170,7 @@ class RemoteClient:
         self.sets = Inbox([], set(), set(), set())
         self.draft_rows: list[dict] = []
         self.tutorial_state: dict = {}
+        self.sdk = False   # SDK mode (features.py), the daemon's: off until its inbox says
         # the threads, conversations and subagents' conversations shown, by key: ("thread",
         # sid, ref), ("conversation", sid), ("agent", sid, ref)
         self.cache: dict[tuple, object] = {}
@@ -384,6 +385,7 @@ class RemoteClient:
                               {(d["session_id"], d["item_ref"]) for d in data["drafts"]},
                               {tuple(k) for k in data["awaiting"]})
             self.tutorial_state = data["tutorial"]
+            self.sdk = data.get("sdk", False)   # a daemon on older code doesn't say: off
         elif kind == "usage":
             self.usage.limits = {k: tuple(v) for k, v in data["limits"].items()}
             self.usage.failed = data["failed"]

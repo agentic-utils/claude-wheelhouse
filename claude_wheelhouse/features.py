@@ -14,7 +14,8 @@ end as before, with the controls that manage them (store.runner says which they 
 Relaunch of a running one starts its host again. Once one has stopped, Restore (and
 Relaunch of a dead session) brings it back as a tab, as it does any session, the way new
 sessions run now (launch.restore_runner, Doug's Q27 option A). The flag gates creating new ones, and the controls that only choose how one
-runs (Model, the effort slider)."""
+runs (Model, the effort slider). Through the daemon the mode is the daemon's (connect.start
+passes the flag on; its inbox tells the app)."""
 
 from pathlib import Path
 

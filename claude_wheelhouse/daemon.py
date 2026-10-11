@@ -721,7 +721,8 @@ class Daemon:
         every item (but its body, which its thread brings), with its session's name and
         whether it's parked, so a client filters it as the store would (store.items); what's
         processing, awaiting and drafted, by session and ref (a draft's ref None for a
-        general message); and the tutorial's steps. The ranking is the client's own."""
+        general message); the tutorial's steps; and whether SDK mode is on (features.py), which
+        the TUI's SDK-only controls follow. The ranking is the client's own."""
         rows = self.store._all("SELECT i.*, s.name AS session_name, s.parked AS session_parked FROM items i "
                                "JOIN sessions s ON s.id = i.session_id")
         sid = tutorial.session_id(self.store)
@@ -730,7 +731,8 @@ class Daemon:
                 "processing": sorted(self.store.processing()), "awaiting": sorted(self.store.awaiting()),
                 "drafts": [{"id": m["id"], "session_id": m["session_id"], "item_ref": m["item_ref"]}
                            for m in self.store.drafts()],
-                "tutorial": {"sid": sid, "steps": steps, "offer": tutorial.should_offer(self.store)}}
+                "tutorial": {"sid": sid, "steps": steps, "offer": tutorial.should_offer(self.store)},
+                "sdk": self.hub.sdk}
 
     def usage(self, request: Request) -> dict:
         """The account's usage, as the hub last fetched it: {kind: [percent, resets at]}."""
