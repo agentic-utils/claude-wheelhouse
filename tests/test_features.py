@@ -13,11 +13,21 @@ REAL_ENV_FILES = features.env_files   # before conftest's sdk_off points them aw
     ('export enable-sdk="true"\n', {"enable-sdk": "true"}, "an export prefix and quotes"),
     ("enable-sdk\nOTHER=a=b\n", {"OTHER": "a=b"}, "a line without = skipped; a value may hold one"),
     ("", {}, "an empty file"),
+    ("\ufeffenable-sdk=true\n", {"enable-sdk": "true"}, "a UTF-8 byte order mark"),
+    ("enable-sdk=true # SDK mode\n", {"enable-sdk": "true"}, "an inline comment"),
+    ('enable-sdk="true" # SDK mode\n', {"enable-sdk": "true"}, "a quoted value and an inline comment"),
+    ("a=x#y\n", {"a": "x#y"}, "a # with no space before it is part of the value"),
 ])
 def test_read_env(tmp_path, text, expected, desc):
     path = tmp_path / ".env"
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     assert features.read_env(path) == expected, desc
+
+
+def test_read_env_of_a_byte_that_isnt_utf8(tmp_path):
+    path = tmp_path / ".env"
+    path.write_bytes(b"NAME=caf\xe9\nenable-sdk=true\n")
+    assert features.read_env(path)["enable-sdk"] == "true"
 
 
 def test_read_env_of_no_file(tmp_path):
@@ -31,7 +41,11 @@ def test_read_env_of_no_file(tmp_path):
     ("enable-sdk=TRUE", None, True, "true in any case"),
     ("enable-sdk=false", None, False, "false"),
     ("enable-sdk=1", None, False, "only true turns it on"),
-    ("ENABLE_SDK=true", None, False, "the key as written, enable-sdk"),
+    ("ENABLE_SDK=true", None, True, "the key in capitals and underscores"),
+    ("enable_sdk=true", None, True, "the key with an underscore"),
+    ("Enable-Sdk=true", None, False, "no other spelling of the key"),
+    ("enable-sdk=yes", None, False, "nor any value but true"),
+    ("\ufeffenable-sdk=true # mine", None, True, "a byte order mark and an inline comment"),
     ("enable-sdk=false", "enable-sdk=true", True, "either file turns it on"),
 ])
 def test_sdk_enabled_from_either_env_file(tmp_path, monkeypatch, cwd_env, config_env, on, desc):
