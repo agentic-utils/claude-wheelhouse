@@ -1338,6 +1338,18 @@ async def test_keys_after_quit_are_dropped(store, sid, keys, desc):
 
 
 @pytest.mark.anyio
+async def test_a_resize_runs_under_the_clock_fixture(store, sid, clock):
+    """Review 49: the clock fixture refuses only the app's own timers it doesn't hold. It also
+    refused Textual's resize timer (App._check_resize), so a resize under it raised."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pilot.resize_terminal(120, 40)
+        await pilot.pause()
+        assert app.size.width == 120
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("ticks, desc", [
     (False, "a shutdown that is over before the next tick"),
     (True, "a shutdown that takes over a second: the tick fires once the screens are gone, and does nothing"),

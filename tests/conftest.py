@@ -121,8 +121,9 @@ def clock(monkeypatch):
     every, once = tui.WheelhouseApp.set_interval, tui.WheelhouseApp.set_timer
 
     def interval(app, delay, callback, **kw):
-        # fail closed: an app timer this fixture doesn't know would run on real time
-        if getattr(callback, "__self__", None) is app:
+        # fail closed on the app's own bound-method timers, which would run on real time unknown to
+        # this fixture; lambdas and Textual's own (App, widget) timers pass through on real time
+        if getattr(callback, "__self__", None) is app and callback.__name__ in vars(tui.WheelhouseApp):
             if callback.__name__ not in Clock.HELD:
                 raise AssertionError(f"the clock fixture doesn't know the app's interval {callback.__name__}")
             clock.bind(app)
@@ -131,7 +132,7 @@ def clock(monkeypatch):
         return every(app, delay, callback, **kw)
 
     def timer(app, delay, callback=None, **kw):
-        if getattr(callback, "__self__", None) is app:
+        if getattr(callback, "__self__", None) is app and callback.__name__ in vars(tui.WheelhouseApp):
             raise AssertionError(f"the clock fixture doesn't know the app's timer {callback.__name__}")
         return once(app, delay, callback, **kw)
     monkeypatch.setattr(tui.WheelhouseApp, "set_interval", interval)
