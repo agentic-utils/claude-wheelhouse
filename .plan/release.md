@@ -79,9 +79,9 @@ Publishing is outward-facing and runs under Doug's PyPI account, so it needs him
 - README: install with `uv tool install claude-wheelhouse`, run with `claude-wheelhouse`,
   and the tutorial with `claude-wheelhouse tutorial`. The `make` targets stay, for a
   checkout.
-- The app's own text says `make tutorial` in four places (`TutorialOffer`, the `?`
-  overlay, the checklist, `answer_offer`). For an installed copy that's wrong: they say
-  `claude-wheelhouse tutorial`.
+- The app's own text named `make tutorial` in four places (`TutorialOffer`, the `?`
+  overlay, the checklist, `answer_offer`), wrong for an installed copy. Done: they say
+  `claude-wheelhouse tutorial`, which works for both.
 
 ## The update check
 
@@ -125,12 +125,13 @@ for a minor release, "sessions will need relaunching". Then:
 4. **Sessions.** Hosts are started with `setsid --fork` (launch.py), so they aren't the
    app's children: the restart doesn't touch them, and they carry on with the code they
    loaded. After a patch, nothing more happens. After a release that bumped
-   `PROTOCOL_VERSION`, every running session shows "needs relaunch", and the app offers
-   once, as a one-key line: "Relaunch 4 sessions on the old code". Hosted sessions go
+   `PROTOCOL_VERSION`, every running session shows "needs relaunch", and the idle ones
+   relaunch automatically as part of Update and restart (Q64 B): none was mid-turn at the
+   gate, so none loses a turn. Hosted sessions (SDK mode, `.plan/sdk-sessions.md`) go
    through the existing Relaunch (`Hub.stop_host`, with compact first past
-   `COMPACT_FIRST_TOKENS`); none was mid-turn at the gate, so none loses a turn. Sessions
-   in a shell tab can't be relaunched from the wheelhouse (`TAB_RELAUNCH`): they're listed
-   with "/exit, then Restore".
+   `COMPACT_FIRST_TOKENS`). A session in a tab, or a host's in a shell tab, can't be
+   relaunched from the wheelhouse while it runs (`TAB_RELAUNCH`), so the app lists those
+   with "/exit, then Relaunch" (inferred: the wheelhouse never closes a tab itself).
 
 ### What the restart does to running sessions
 
@@ -166,17 +167,17 @@ they do them or press Never.
 - The restart: an upgrade that fails leaves the app running; one that succeeds execs the
   entry point with the same arguments (both with the subprocess and exec faked); unsent
   text survives it.
-- After a protocol bump, the relaunch line lists hosted sessions and names tab sessions.
+- After a protocol bump, idle hosted sessions relaunch automatically and tab sessions are
+  listed with "/exit, then Relaunch".
 - The release workflow's version check and wheel smoke test run in CI on every PR, so a
   broken wheel shows before the tag.
 
-## Open questions
+## Resolved
 
-1. **Relaunch after a minor release.** Offered as a one-key line after the restart (as
-   above), or done automatically as part of Update and restart, since the gate already
-   made sure every session is idle? Automatic saves a key; offered lets the person keep a
-   large-context session as it is.
-2. **A required reviewer on the `pypi` environment**, so every publish waits for your
-   approval in GitHub, or tags publish straight through?
-3. **The name.** It's free today, and only an upload holds it. Publish 0.1.0 as soon as
-   the workflow exists, to hold it, or wait for 0.2.0?
+- **Relaunch after a protocol-bumping update** (Q64): B, "after a protocol-bumping update,
+  idle sessions relaunch automatically" (Update and restart, step 4).
+- **A required reviewer on the `pypi` environment, and when to publish** (Q65): "approval
+  yes, but no need to publish yet. Let's do so when we're happy to start beta, and when
+  we've locked down SDK mode." So the `pypi` environment has Doug as a required reviewer,
+  and nothing is published, not even 0.1.0 to hold the name, until the beta starts and SDK
+  mode's terms are settled.

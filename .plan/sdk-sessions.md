@@ -8,6 +8,27 @@ become "start a host with `resume=<id>`".
 Evidence is marked **verified** (spike run on 2026-10-08, scripts and log in the session
 scratchpad under `sdk-spike/`, total cost $0.36) or **inferred**.
 
+**Status: experimental, behind `--enable-sdk` (issue #16, Q62 and Q66).** Doug: "let's
+make SDK mode experimental as you say, in fact make it undocumented via a startup flag
+(also via a flag in a local .env file). No references to it in the readme. If a new user
+downloads the thing, they get tab mode unless I personally tell them about SDK mode." And:
+"add code comments to the SDK stuff to make clear that it's experimental and not for use
+by users other than the author until we can confirm Anthropic T&Cs".
+
+- On: `claude-wheelhouse --enable-sdk` (before or after the command, for the app, the
+  tutorial and the daemon), or `enable-sdk=true` in `./.env` (where the app starts) or
+  `~/.config/claude-wheelhouse/.env`. `features.sdk_enabled()` is the one switch; the
+  flag is left out of `--help`.
+- Off (the default): `DEFAULT_RUNNER` is `tab`, and `WHEELHOUSE_RUNNER=sdk` doesn't turn
+  SDK mode on. New session has no runner box; the hub refuses a new hosted session and
+  the daemon refuses every new session (a remote one could only be hosted). Restore and
+  Adopt keep a session's runner rather than switching it. The `?` overlay, README and
+  `claude-wheelhouse protocol` leave SDK mode out, and the tutorial runs in a tab.
+- A session a host already runs keeps working with the flag off: it shows, relaunches and
+  ends as before, so nobody's work is stranded. Interrupt, Compact (and Relaunch's compact
+  first), Shell and the permission buttons stay, since they manage it; Model and the
+  effort slider hide, so it runs on as it was set.
+
 ## 1. Billing and policy: the deciding question
 
 **Technically it runs on the subscription login. Verified.** With no `ANTHROPIC_API_KEY`
@@ -215,7 +236,7 @@ experimentation is low".
 
 | Decision | Alternative | Why |
 | --- | --- | --- |
-| New sessions run in a host by default (`DEFAULT_RUNNER = "sdk"`); a box in New session opens a tab instead; `WHEELHOUSE_RUNNER=tab` restores the old default | Keep tabs the default behind a flag | The whole point of the change, and it works end to end; one env var reverts it |
+| New sessions run in a host by default (`DEFAULT_RUNNER = "sdk"`, now `SDK_DEFAULT_RUNNER`, in SDK mode only: see Status); a box in New session opens a tab instead; `WHEELHOUSE_RUNNER=tab` restores the old default | Keep tabs the default behind a flag | The whole point of the change, and it works end to end; one env var reverts it |
 | Sessions created before this stay tabs while they run (runner NULL means tab); Restore and Adopt bring any session back with the current default runner (Q27, option A) | Migrate them; or keep each session's stored runner on Restore | A running tab would otherwise be misread; a stored runner left pre-host sessions as tabs for good, and Shell covers wanting a tab |
 | The host passes no permission mode | Pass `auto` explicitly | Never override the user's settings: SDK sessions already start in the user's `defaultMode`, verified |
 | `cli_path` is the user's `claude` | The SDK's bundled CLI | One Claude Code version for tabs and hosts |
