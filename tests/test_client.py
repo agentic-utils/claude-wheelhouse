@@ -10,6 +10,7 @@ import pytest
 
 from claude_wheelhouse import client as client_mod, features, launch
 from claude_wheelhouse.client import LOST, UNREACHABLE, RemoteClient, Unreachable
+from claude_wheelhouse.daemon import Daemon
 from claude_wheelhouse.store import SessionGone
 
 from conftest import TOKEN
@@ -307,10 +308,15 @@ def test_an_app_in_sdk_mode_joining_a_tab_mode_daemon_says_so_once(store, served
     ("oneshot", "persistent", True, "oneshot chosen, the daemon persistent: said too"),
     ("persistent", "persistent", False, "the daemon reads it so too"),
     (None, "persistent", False, "none chosen: the default isn't a choice to warn of"),
+    ("persistent", None, False, "an older daemon, whose inbox doesn't say: nothing said"),
 ])
 def test_an_app_choosing_a_usage_mode_the_daemon_doesnt_run_says_so_once(store, served, monkeypatch, app, daemon,
                                                                          said, desc):
     monkeypatch.setattr(features, "_usage_mode", daemon)
+    if daemon is None:   # as code from before the mode would answer: before the routes take it
+        inbox = Daemon.inbox
+        monkeypatch.setattr(Daemon, "inbox", lambda self, request: {k: v for k, v in inbox(self, request).items()
+                                                                     if k != "usage_mode"})
     d = served(store.path)
     monkeypatch.setattr(features, "_usage_mode", app)
     c = d.client(synchronous=True, before_fetch=d.tick)
@@ -320,8 +326,9 @@ def test_an_app_choosing_a_usage_mode_the_daemon_doesnt_run_says_so_once(store, 
         c.refresh()
         c.forced = True   # fetched again: still said only once
         c.refresh()
-        expected = client_mod.USAGE_MODE_DAEMON.format(mode=daemon)
-        assert heard.count(expected) == (1 if said else 0), f"{desc}: {heard}"
+        told = [h for h in heard if "reads plan usage" in h]
+        expected = [client_mod.USAGE_MODE_DAEMON.format(mode=daemon, chosen=app)] if said else []
+        assert told == expected, f"{desc}: {heard}"
     finally:
         c.disconnect()
 

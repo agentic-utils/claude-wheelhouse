@@ -31,7 +31,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from . import features, liveness, models, plan_usage, stats, transcript
+from . import liveness, models, plan_usage, stats, transcript
 from .launch import PROTOCOL_SDK, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT
 from .store import CLOSED, SessionGone, Store, db_path, now, runner

@@ -134,7 +134,8 @@ def blocks(data) -> list[tuple[str, str]] | None:
 TAB_MODE_DAEMON = ("the running daemon is in tab mode: claude-wheelhouse daemon --stop, then start again "
                    "to use SDK mode")
 # a daemon already running keeps the usage mode it was started with (features.usage_mode)
-USAGE_MODE_DAEMON = "the running daemon reads plan usage {mode}: claude-wheelhouse daemon --stop, then start again"
+USAGE_MODE_DAEMON = ("the running daemon reads plan usage in {mode} mode, not {chosen}: claude-wheelhouse "
+                     "daemon --stop, then start again")
 
 
 class RemoteClient:
@@ -180,6 +181,9 @@ class RemoteClient:
         self.sdk = False   # SDK mode (features.py), the daemon's: off until its inbox says
         self.sdk_said = False   # whether TAB_MODE_DAEMON has been said
         self.usage_mode_said = False   # whether USAGE_MODE_DAEMON has been said
+        # the usage mode this app chose (flag or .env), read once, now, while stderr is still
+        # the terminal's: a bad .env value is said there, not under the TUI
+        self.usage_chosen = features.usage_mode_given()
         # the threads, conversations and subagents' conversations shown, by key: ("thread",
         # sid, ref), ("conversation", sid), ("agent", sid, ref)
         self.cache: dict[tuple, object] = {}
@@ -398,10 +402,10 @@ class RemoteClient:
             if features.sdk_enabled() and not self.sdk and not self.elsewhere and not self.sdk_said:
                 self.sdk_said = True   # this app asked for SDK mode, but joined a daemon running without it
                 self.post(lambda: self.emit(Event("notice", TAB_MODE_DAEMON, "warning")))
-            mode, chosen = data.get("usage_mode"), features.usage_mode_given()   # an older daemon's says none
-            if mode and chosen and mode != chosen and not self.elsewhere and not self.usage_mode_said:
+            mode, chosen = data.get("usage_mode"), self.usage_chosen   # an older daemon's says none
+            if not self.usage_mode_said and not self.elsewhere and mode and chosen and mode != chosen:
                 self.usage_mode_said = True   # this app chose a mode the daemon it joined doesn't run
-                said = USAGE_MODE_DAEMON.format(mode=mode)
+                said = USAGE_MODE_DAEMON.format(mode=mode, chosen=chosen)
                 self.post(lambda: self.emit(Event("notice", said, "warning")))
         elif kind == "usage":
             self.usage.read = data.get("read") or {}   # an older daemon's has none: taken as fresh
