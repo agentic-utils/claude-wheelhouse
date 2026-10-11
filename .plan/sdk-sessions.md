@@ -269,3 +269,13 @@ so an hour's quiet is what turns the cache cold.
   it, so neither a restarted host nor the person closing it brings a second. Once a turn
   ends under the line again (compacted), the item closes with a note, and the next
   crossing nudges afresh.
+- **Keepalive.** A session whose last turn ended over `KEEPALIVE_TOKENS` (150k), with
+  nothing running (so only the person can move it on: its open questions and decisions,
+  or nothing at all), gets a tiny turn from the host `KEEPALIVE_AFTER` (55 min) after its
+  last one, telling it to reply with one word and do nothing else. That keeps the hour's
+  cache warm for a few thousand tokens of reads instead of a cold rewrite of the whole
+  context. The keepalive's own end restarts the 55 minutes but not the quiet time, so they
+  stop once the session has been quiet `KEEPALIVE_FOR` (8 h): an abandoned session doesn't
+  pay for ever. A host just started (or just back from a shell tab) sends none until a
+  turn of its own has ended, since it can't know the cache is warm. Compact under way, a
+  pending permission and a turn Claude Code started itself all hold it off.
