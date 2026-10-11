@@ -75,6 +75,7 @@ def main() -> None:
                         "(a VPN's name for it), so their requests are accepted: repeat for more")
     daemon.add_argument("--stop", action="store_true", help="stop the daemon running, by its pid (no token "
                         "needed): the next start reads the token file again, or makes one if there's none")
+    daemon.add_argument("--start-pipe", type=int, default=None, help=argparse.SUPPRESS)   # connect.start's
     sub.add_parser("token", help="print the daemon's token, for a client on another machine (--connect)")
     args = p.parse_args()
 
@@ -98,7 +99,7 @@ def main() -> None:
         from .auth import TokenError
         from .daemon import ADDRESS, PORT, AlreadyRunning, main as daemon_main
         try:
-            daemon_main(args.address or ADDRESS, args.port or PORT, args.name)
+            daemon_main(args.address or ADDRESS, args.port or PORT, args.name, args.start_pipe)
         except (AlreadyRunning, TokenError, ValueError) as e:
             sys.exit(str(e))
     elif args.cmd == "protocol":

@@ -923,9 +923,15 @@ class Server(uvicorn.Server):
         super().handle_exit(sig, frame)
 
 
-def main(address: str = ADDRESS, port: int = PORT, names=()) -> None:
+def main(address: str = ADDRESS, port: int = PORT, names=(), start_pipe: int | None = None) -> None:
     """Serve until stopped (Ctrl+C, SIGTERM from systemd, or POST /shutdown): one per user,
-    or AlreadyRunning. Its token is made, under the lock, the first time, and reused after."""
+    or AlreadyRunning. Its token is made, under the lock, the first time, and reused after.
+    start_pipe is the write end of the pipe of the app that started it (connect.start),
+    which reads as ended when this process exits: kept open till then, as that is the
+    signal, but kept from every process this one starts (hosts, tabs), which would
+    otherwise hold it open after this one had gone."""
+    if start_pipe is not None:
+        os.set_inheritable(start_pipe, False)
     address = checked_address(address)
     allowed = hosts(address, port, names)
     store = Store()

@@ -58,6 +58,20 @@ def test_none_running_starts_one_and_the_next_joins_it(state):
     assert f"pid {os.getpid()} asked for a daemon" in log and f"wheelhouse daemon (pid {pid}) on {url}" in log
 
 
+def test_the_daemon_keeps_its_start_pipe_from_what_it_starts(state):
+    """The pipe's write end, named on its command line, stays open in the daemon (its
+    closing says it has exited) but is close-on-exec, so no host or tab it starts holds it."""
+    state_dir, port = state
+    connect.local(state_dir, port)
+    pid = daemon_pid(state_dir)
+    argv = open(f"/proc/{pid}/cmdline").read().split("\0")
+    assert "--start-pipe" in argv, argv
+    fd = argv[argv.index("--start-pipe") + 1]
+    assert os.readlink(f"/proc/{pid}/fd/{fd}").startswith("pipe:"), "kept open"
+    flags = next(int(line.split()[1], 8) for line in open(f"/proc/{pid}/fdinfo/{fd}") if line.startswith("flags:"))
+    assert flags & os.O_CLOEXEC, f"inheritable: flags {flags:o}"
+
+
 def test_a_lock_file_left_by_a_daemon_that_died_is_only_text(state):
     state_dir, port = state
     (state_dir / connect.LOCK).write_text("pid 999999 at http://127.0.0.1:1\n")

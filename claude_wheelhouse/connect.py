@@ -83,8 +83,9 @@ def start(state_dir: Path, port: int) -> int:
     nor the installed one when this one is a copy run from its folder. One that finds
     another holding the lock stops at once, and says so in the log.
 
-    Returns the read end of a pipe whose write end only the daemon holds: it reads as ended
-    the moment the daemon exits (listening), so one that stops as it starts (a token file it
+    Returns the read end of a pipe whose write end only the daemon holds (its number given
+    as --start-pipe, which the daemon keeps from anything it starts): it reads as ended the
+    moment the daemon exits (listening), so one that stops as it starts (a token file it
     refuses, say) is said at once, not after START_WAIT. The caller closes it."""
     path = os.pathsep.join(filter(None, [str(fingerprint.PACKAGE.parent), os.environ.get("PYTHONPATH")]))
     env = {k: v for k, v in os.environ.items() if k != "WHEELHOUSE_TOKEN"}
@@ -93,7 +94,7 @@ def start(state_dir: Path, port: int) -> int:
         with open(Path(state_dir) / LOG, "a") as log:
             print(time.strftime("%Y-%m-%dT%H:%M:%S%z"), f"pid {os.getpid()} asked for a daemon", file=log, flush=True)
             subprocess.run(["setsid", "--fork", sys.executable, "-m", "claude_wheelhouse", "daemon", "--port",
-                            str(port)], cwd=state_dir, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                            str(port), "--start-pipe", str(held)], cwd=state_dir, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                            env=dict(env, PYTHONSAFEPATH="1", PYTHONPATH=path), pass_fds=(held,), check=True)
     except BaseException:
         os.close(ended)
