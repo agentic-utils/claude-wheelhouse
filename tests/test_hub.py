@@ -797,6 +797,7 @@ def test_a_choice_made_during_a_shell_tab_is_not_undone_by_the_hub(hub, store, t
     assert store.session(sid)["model"] == "claude-haiku-5-5"
 
 
+@pytest.mark.usefixtures("sdk_on")   # Model and the effort slider are SDK mode's alone
 @pytest.mark.parametrize("what, value, typed", [
     ("model", "claude-opus-5-5", "claude-sonnet-5-5"),
     ("effort", "high", "low"),
