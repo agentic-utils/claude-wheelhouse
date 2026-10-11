@@ -33,11 +33,10 @@ make install
 ```
 
 `make install` runs `uv sync --reinstall-package claude-wheelhouse` (plain `uv sync` does
-for a first install), which builds a `.venv`
-inside the clone: the wheelhouse installs nothing outside it (uv keeps its own cache
-of downloads, and any Python it fetched). To update, `git pull`,
-`make install` again, then quit and reopen the app. Running sessions show "needs
-relaunch" when an update changes what they're told.
+for a first install), which builds a `.venv` inside the clone: the wheelhouse installs
+nothing outside it (uv keeps its own cache of downloads, and any Python it fetched). To
+update, `git pull`, `make install` again, then quit and reopen the app. Running sessions
+show "needs relaunch" when an update changes what they're told.
 
 The `claude-wheelhouse` command lives in that `.venv`, so from the clone run it as
 `uv run claude-wheelhouse …` (this README writes it plain). `make` on its own lists the
@@ -314,9 +313,10 @@ a new one, which each `--connect` machine then needs.
 <!-- T85 -->
 The session and weekly gauges come from Claude Code itself: every 5 minutes by default,
 the wheelhouse runs a short `claude -p "/usage"` and reads what it prints. It reads no
-credentials. `--usage-mode persistent`, or `usage-mode=persistent` in a `.env` file
-(in the directory you start the app from, the clone, or in
-`~/.config/claude-wheelhouse/.env`), keeps one Claude Code running for the gauges instead of starting one each time.
+credentials. `--usage-mode persistent`, or `usage-mode=persistent` in a `.env` file,
+keeps one Claude Code running for the gauges instead of starting one each time. The `.env`
+goes in the directory you start the app from (the clone, with `make run`) or in
+`~/.config/claude-wheelhouse/.env`.
 
 ## Where state lives
 
@@ -352,7 +352,8 @@ which the wheelhouse reads.
   transcripts in `~/.claude/projects`, and `~/.claude/sessions`), so a Claude Code update
   can break the stats, the conversations, subagent items or whether a session shows as
   alive. Only Claude Code 2.1.287 to 2.1.296 have been checked.
-- One wheelhouse per user, its daemon on port 7428 (`WHEELHOUSE_PORT` changes it).
+- Each user's daemon listens on `127.0.0.1:7428`: a second WSL user on the same machine
+  needs another `WHEELHOUSE_PORT`.
 - Nothing restarts after a reboot: Restore brings the sessions back.
 - This is a 0.1 prototype with no releases yet: update with `git pull` and `make install`.
 
@@ -374,7 +375,8 @@ The logs hold your directory paths and session ids: look them over before you at
 
 ## Uninstall
 
-1. End your sessions: End each one in the wheelhouse, or `/exit` it, then close its tab.
+1. End your sessions: End each one in the wheelhouse (or `/exit` it in its tab), then
+   close its tab.
 2. Quit the app (`Q`), then in the clone run `uv run claude-wheelhouse daemon --stop`.
 3. Delete the clone: `make install` put the wheelhouse in the clone's `.venv`, and nowhere
    else.
@@ -391,6 +393,8 @@ sessions' conversations stay in `~/.claude/projects`, as Claude Code's own.
 ```
 make test
 ```
+
+(`make test` is `uv run pytest`.)
 
 The tests run in parallel, a worker a core (pytest-xdist). `uv run pytest -n 0` runs them
 serially, as a single test or a debugger wants.

@@ -59,11 +59,11 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `make tutorial` (`claude-wheelhouse tutorial`). `make` lists the targets. Python 3.12, managed by uv.
 - The install is editable: `.venv` imports this checkout. In another clone or worktree,
   that venv's `pytest` script imports the main checkout, not yours. Run
-  `python -m pytest` from your clone's root, or set `PYTHONPATH=<your clone>`.
+  `uv run python -m pytest` from your clone's root, or set `PYTHONPATH=<your clone>`.
 
 ## Test
 
-- Run `python -m pytest` (or `make test`). `pyproject.toml` adds `-n auto`; `-n 0` runs
+- Run `uv run python -m pytest` (or `make test`). `pyproject.toml` adds `-n auto`; `-n 0` runs
   serially.
 - Inside a wheelhouse session, first `unset WHEELHOUSE_DB WHEELHOUSE_SESSION_ID WHEELHOUSE_TOKEN`.
   `conftest.py` refuses to run (`test isolation: ...`) while the database or its state
