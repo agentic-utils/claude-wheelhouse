@@ -346,7 +346,8 @@ class Hub:
         elif since(s["interrupted_at"], self.compacting[sid]):   # by any wheelhouse, older ones too
             why = "Compact was interrupted"
         elif compacted_since(s, self.compacting[sid]) and activity.startswith(IDLE_LINES):
-            self.store.take_command(sid, "compact")   # one the host never took would run again after
+            for what in ("compact", "interrupt"):   # either, left untaken, would greet the new host
+                self.store.take_command(sid, what)   # (a Shell stays: the person's, for the new host)
             done = self.stop_host(sid, host)
             for notice in done.notices:
                 self.emit(notice)

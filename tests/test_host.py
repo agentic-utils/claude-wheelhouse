@@ -1406,7 +1406,8 @@ def test_the_host_asks_claude_code_to_replay_its_turns(host):
 @pytest.mark.parametrize("interrupt, end, activity, desc", [
     (True, result(error=True, terminal_reason="aborted_tools"), "interrupted",
      "interrupted: its end is no error, and the line says so"),
-    (True, result("x", error=True), "interrupted", "interrupted, however Claude Code ends it"),
+    (True, result("x", error=True), "error: x",
+     "an Interrupt sent, but the turn ended in an error of its own: the result says which"),
     (False, result(error=True, terminal_reason="aborted_streaming"), "interrupted",
      "stopped by an interrupt from elsewhere: Claude Code says aborted"),
     (False, result("overloaded", error=True), "error: overloaded", "a real error still says so"),
@@ -1427,7 +1428,7 @@ def test_an_interrupted_turn_ends_as_interrupted(streamed, store, sid, interrupt
     s = store.session(sid)
     assert s["activity"] == activity, desc
     assert (s["interrupted_at"] is not None) == interrupt, f"{desc}: kept for the hub, whatever the line says"
-    assert h.pending == 0 and not h.interrupted, desc
+    assert h.pending == 0, desc
 
 
 def test_an_interrupted_keepalive_leaves_the_line_it_found(streamed, store, sid):
@@ -1469,3 +1470,53 @@ def test_a_turn_end_with_no_replay_never_wedges_the_host(streamed, store, sid, c
     assert ("none of our turns replayed" in capsys.readouterr().err) == said, desc
     assert [m["body"] for m in store.thread(sid, "Q1") if m["author"] == "claude"] == [], \
         f"{desc}: nothing posted on a guess"
+
+
+async def idle_interrupt(h, store, sid):
+    """An Interrupt taken with nothing running: no turn ends for it."""
+    store.command(sid, "interrupt")
+    await h.poll()
+
+
+@pytest.mark.parametrize("case, desc", [
+    ("idle", "an Interrupt taken while idle, then a turn's genuine error"),
+    ("queued", "a turn queued behind an interrupted one, ending in a genuine error"),
+    ("keepalive", "a keepalive's genuine error, after a stale Interrupt: not the line it kept"),
+    ("compact", "Compact's ask turn ending in an error: not taken for an Interrupt"),
+])
+def test_a_genuine_error_after_an_interrupt_says_error(streamed, store, sid, case, desc):
+    h = streamed
+    error = result("overloaded", error=True, terminal_reason="api_error")
+    if case == "keepalive":   # a big session that has had a turn, waiting on the person
+        store.post_item(sid, "question", "which?")
+        finish_at(h, 200_000)
+
+    async def go():
+        reader = asyncio.create_task(h.read())
+        if case == "idle":
+            await idle_interrupt(h, store, sid)
+            await h.turn("go on")
+            await feed(h, h.client.replay(), error)
+        elif case == "queued":
+            await h.turn("first")
+            await h.turn("second")
+            await feed(h, h.client.replay(0), tool("sleep 900"))
+            store.command(sid, "interrupt")
+            await h.poll()
+            await feed(h, result(error=True, terminal_reason="aborted_tools"), h.client.replay(1), error)
+        elif case == "keepalive":
+            await idle_interrupt(h, store, sid)
+            store.set_activity(sid, "idle")
+            h.last_turn -= host_mod.KEEPALIVE_AFTER
+            await h.poll()
+            assert h.client.queries == [host_mod.KEEPALIVE_TEXT], desc
+            await feed(h, h.client.replay(), error)
+        else:
+            await idle_interrupt(h, store, sid)
+            store.command(sid, "compact")
+            await h.poll()
+            await feed(h, h.client.replay(), error)
+        await feed(h, None)
+        await reader
+    run(go())
+    assert store.session(sid)["activity"] == "error: overloaded", desc

@@ -654,3 +654,19 @@ def test_a_command_pressed_as_compact_first_stops_the_host_stays_for_the_next(hu
     hub.refresh()
     hub.finish_relaunches()
     assert killed == [4242] and store.session(sid)["host_command"] == "shell"
+
+
+@pytest.mark.parametrize("pending, left, desc", [
+    ("interrupt", None, "an Interrupt pressed in the gap: not left to greet the new host as interrupted"),
+    ("compact", None, "the Compact it asked for, untaken: not run again"),
+    ("shell", "shell", "a Shell: the person's, left for the new host"),
+])
+def test_stopping_for_the_relaunch_clears_only_what_would_misgreet_the_new_host(hub, store, sid, monkeypatch,
+                                                                                pending, left, desc):
+    alive = {4242}
+    killed, _ = compacting(hub, store, sid, monkeypatch, alive)
+    compacted_to(store, sid, 40_000, "idle")
+    store.command(sid, pending)
+    hub.refresh()
+    hub.finish_relaunches()
+    assert killed == [4242] and store.session(sid)["host_command"] == left, desc

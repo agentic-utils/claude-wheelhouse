@@ -232,7 +232,6 @@ class Host:
         self.final_text: list[str] = []
         # the activity line a keepalive turn found, shown again once it ends: it is no news
         self.kept_line: str | None = None
-        self.interrupted = False   # Interrupt sent, until the turns it stopped have ended
         self.compacted_from = None   # tokens before the last compaction, until its turn ends
         # the model and effort in force, as Claude Code last confirmed them (or as launched)
         self.applied: tuple[str | None, str | None] = (None, None)
@@ -548,7 +547,6 @@ class Host:
         if command == "interrupt":
             await self.client.interrupt()
             self.end_compact()
-            self.interrupted = True
             self.store.set_interrupted(self.sid)   # durable: the line below is the next turn's to change
             self.store.set_activity(self.sid, "interrupted")
         elif command == "compact":
@@ -685,11 +683,10 @@ class Host:
         whichever turn they came in: one queued ahead of the ask, an error in another turn
         or a turn Claude Code started itself doesn't lose them. A keepalive's end shows the
         activity line it found again, unless it failed; an interrupted turn ends as
-        "interrupted", not as an error."""
-        interrupted = m.is_error and (self.interrupted or str(getattr(m, "terminal_reason", "") or "")
-                                      .startswith("aborted"))
-        if not self.pending:
-            self.interrupted = False
+        "interrupted", not as an error. Interrupted is the result's own word (an aborted
+        terminal reason), never the host's memory of an Interrupt: one taken while idle
+        ends no turn, and a later error is an error."""
+        interrupted = m.is_error and str(getattr(m, "terminal_reason", "") or "").startswith("aborted")
         if self.compact_nonce:
             notes = self.compact_notes
             if notes is None and not m.is_error:
