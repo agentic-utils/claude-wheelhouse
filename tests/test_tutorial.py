@@ -349,7 +349,7 @@ async def test_a_host_that_cant_start_says_why(store, fake_claude):
             await pilot.pause(0.1)
             if why in app._checklist_text:
                 break
-        assert why in app._checklist_text and "claude-wheelhouse tutorial starts it afresh" in app._checklist_text
+        assert why in app._checklist_text and f"{tutorial.command()} starts it afresh" in app._checklist_text
 
 
 def test_an_earlier_host_that_exits_as_its_told_is_no_error(store, monkeypatch):
@@ -413,7 +413,7 @@ async def test_a_stopped_tab_says_why(store, tut, registered, why, desc):
         await pilot.pause()
         assert app.hub.statuses[tut] == "dead", f"{desc}: not running"
         assert why in app._checklist_text, desc
-        assert "claude-wheelhouse tutorial starts it afresh" in app._checklist_text
+        assert f"{tutorial.command()} starts it afresh" in app._checklist_text
         assert "▶ Find the demo in its tab" in app._checklist_text
 
 
@@ -444,3 +444,33 @@ def test_the_tutorial_comes_back_as_a_tab_with_sdk_mode_on(store, tut, monkeypat
         adopt.adopt(store, adopt.Candidate(tut, store.session(tut)["cwd"], "tutorial", 0.0, None), "", sdk=True)
     assert seen == ["tab"], f"{how}: {desc}"
     assert store.session(tut)["runner"] == "tab", f"{how}: {desc}"
+
+
+@pytest.mark.parametrize("makefile, said, desc", [
+    (True, "make tutorial", "run from a source checkout (make install): claude-wheelhouse isn't on PATH"),
+    (False, "claude-wheelhouse tutorial", "installed as a package"),
+])
+@pytest.mark.anyio
+async def test_every_hint_names_the_command_that_works(store, tmp_path, monkeypatch, fake_claude, makefile, said, desc):
+    """Review 68: the offer, the ? overlay, the dismiss notice and a stopped tutorial's
+    checklist all name the command that starts the tutorial for how the app was installed."""
+    from claude_wheelhouse.hub import Hub
+    source = tmp_path / "source"
+    source.mkdir()
+    if makefile:
+        (source / "Makefile").write_text("tutorial:\n")
+    monkeypatch.setattr(tutorial, "SOURCE", source)
+    assert tutorial.command() == said, desc
+    assert f"`{said}` starts it afresh" in keys_help(), f"? overlay: {desc}"
+    monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert f"({said} runs it any time)" in str(app.screen.query_one("#offer").render()), f"offer: {desc}"
+    assert [e.text for e in Hub(store).answer_offer(False).notices] == \
+        [f"{said} runs the tutorial any time; ? lists every key"], f"dismiss notice: {desc}"
+    tutorial.prepare(store)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert f"\n{said} starts it afresh" in app._checklist_text, f"checklist: {desc}"

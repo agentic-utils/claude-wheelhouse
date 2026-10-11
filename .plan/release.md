@@ -80,8 +80,10 @@ Publishing is outward-facing and runs under Doug's PyPI account, so it needs him
   and the tutorial with `claude-wheelhouse tutorial`. The `make` targets stay, for a
   checkout.
 - The app's own text named `make tutorial` in four places (`TutorialOffer`, the `?`
-  overlay, the checklist, `answer_offer`), wrong for an installed copy. Done: they say
-  `claude-wheelhouse tutorial`, which works for both.
+  overlay, the checklist, `answer_offer`), wrong for an installed copy. Done: each takes
+  `tutorial.command()`, `make tutorial` run from a source checkout (a `Makefile` beside the
+  package, where a `make install` copy has no `claude-wheelhouse` on PATH), else
+  `claude-wheelhouse tutorial` (review 68).
 
 ## The update check
 

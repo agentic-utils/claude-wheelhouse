@@ -66,6 +66,16 @@ STEPS = (
 )
 
 
+SOURCE = Path(__file__).resolve().parent.parent   # a source checkout's root, run from it (make run)
+
+
+def command(source: Path | None = None) -> str:
+    """The command that starts the tutorial for how the app was installed: run from a source
+    checkout (the README's make install, an editable install), claude-wheelhouse isn't on
+    PATH, so make tutorial; installed as a package, claude-wheelhouse tutorial."""
+    return "make tutorial" if ((source or SOURCE) / "Makefile").is_file() else "claude-wheelhouse tutorial"
+
+
 MARKER = ".wheelhouse-tutorial"   # written into the directory: only a directory carrying it is ever deleted
 
 
