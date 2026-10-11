@@ -96,13 +96,17 @@ def test_an_invalid_command_doesnt_name_host(monkeypatch, capsys):
     assert "host" not in err, err
 
 
-def test_the_hidden_host_command_still_runs(monkeypatch):
+@pytest.mark.parametrize("argv, on, desc", [
+    (["host", "abc"], False, "alone"),
+    (["--enable-sdk", "host", "abc"], True, "after the flag, which turns SDK mode on as for any command"),
+])
+def test_the_hidden_host_command_still_runs(monkeypatch, argv, on, desc):
     from claude_wheelhouse import host
     seen = []
-    monkeypatch.setattr(host, "main", seen.append)
-    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", "host", "abc"])
+    monkeypatch.setattr(host, "main", lambda sid: seen.append((sid, features.sdk_enabled())))
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", *argv])
     cli.main()
-    assert seen == ["abc"]
+    assert seen == [("abc", on)], desc
 
 
 @pytest.mark.parametrize("argv, on, desc", [
