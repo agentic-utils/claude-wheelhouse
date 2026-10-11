@@ -2687,6 +2687,45 @@ async def test_a_lapse_as_an_arrow_acts_marks_nothing_new(store, sid, clock, mon
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("order, desc", [
+    ("lapse-then-key", "seen by the dwell, then Down: held in its place, and Down goes to the row below"),
+    ("key-then-lapse", "Down typed as the dwell lapses: Down goes to the row below"),
+])
+async def test_a_decision_seen_while_selected_keeps_its_place_among_ties(store, sid, clock, order, desc):
+    """Review 47: now() stamps whole seconds, so decisions an agent posts together tie. One
+    seen by the dwell while selected is pinned at the rank it was shown with (ranked), and ties
+    with its neighbours there: it keeps its place among them as shown, not the store's order,
+    which its new status changed. It moved below them, and the next Down did nothing."""
+    with one_second():
+        for t in ("D", "E", "F"):
+            store.post_item(sid, "decision", t, **DECIDED)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        table.focus()
+        table.move_cursor(row=1)   # the middle row
+        await pilot.pause()
+        before = table.keys()
+        middle, below = before[1], before[2]
+        if order == "lapse-then-key":
+            clock.advance(REST)
+            await pilot.pause()
+            clock.tick(app)
+            await pilot.pause()
+            assert store.item(*middle.split("|"))["status"] == "seen", f"{desc}: seen by the dwell"
+            assert table.keys() == before and table.cursor_key() == middle, f"{desc}: held, {table.keys()}"
+            raw_keys(app, "down")
+        else:
+            raw_keys(app, "down")
+            clock.advance(REST)
+        for _ in range(4):
+            await pilot.pause()
+        assert "|".join(app.selected) == below, f"{desc}: Down landed on {app.selected}, not {below}"
+        assert_one_current(app, desc)
+
+
+@pytest.mark.anyio
 async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid):
     q = store.post_item(sid, "question", "which db?")
     d = store.post_item(sid, "decision", "cache in SQLite", alternative="Postgres",
