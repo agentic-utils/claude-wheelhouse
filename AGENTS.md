@@ -28,6 +28,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `subagents.py`: A items for subagents, from the files Claude Code writes.
 - `transcript.py`: a session's conversation, read from its Claude Code transcript.
 - `stats.py`, `stats_pane.py`: token stats and charts; the pane is a module (`api.py`).
+- `plan_usage.py`: the account's session and weekly usage, from `/usage` asked of a
+  background Claude Code the hub keeps, and from SDK sessions' rate_limit_events.
 - `api.py`: the module protocol (entry point group `claude_wheelhouse.modules`). Bump
   `WHEELHOUSE_API` on any breaking change to it.
 - `models.py`: the models and effort levels offered. A new model is a row here.
@@ -56,7 +58,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   directory resolves under `~/.local/state/claude-wheelhouse`. Don't weaken that guard.
 - The autouse `isolated_db` fixture gives every test its own database. Other autouse
   fixtures turn SDK mode off (`sdk_off`; a test of it takes `sdk_on`), run sessions as
-  tabs, stub the usage fetch, the tutorial offer and the dwell timer. A test that needs a real host or the shipped behaviour opts in explicitly.
+  tabs, stub the plan usage poll (no test runs the real `claude`: `test_plan_usage.py`
+  uses a fake), the tutorial offer and the dwell timer. A test that needs a real host or the shipped behaviour opts in explicitly.
 - A test that depends on the app's timers (Sink moves, the dwell, `tick`, `animate`)
   uses the `clock` fixture and moves time with `clock.advance`. Never sleep on wall-clock
   time. The fixture fails on any app timer it doesn't know: add it to the fixture.

@@ -17,6 +17,18 @@ highlighted item.
   green under 150k, yellow under 300k, amber under 600k, red above, whatever the window
   (#51: Doug's thresholds, shared with the session list's context bar; they replaced
   claude-dashboard's window-relative `ctx_grade` and its flashing red).
+- **Plan usage.** The account's session and weekly percentages, as gauges with their
+  reset times, and Fable's week once it's above 0%. Not from the transcripts: the hub
+  (`plan_usage.py`, #16) keeps one Claude Code running in the background
+  (`claude -p --input-format stream-json` with no settings, MCP servers or transcript)
+  and sends it `/usage` every 5 minutes, about 2 to 3 s and no tokens a call, then reads
+  the answer's "Current session" and "Current week" lines. Their reset times are local
+  wall-clock to the minute with a zone and no year, converted to UTC with the year
+  nearest the reading. An SDK session's rate_limit_event (`unifiedWindows`) is a reading
+  too, kept in the store by its host; the newest reading of each limit wins. A reading
+  more than a poll old says its age under the gauges ("usage read 12m ago"); an answer
+  that can't be read shows "usage unavailable" and is logged once. The wheelhouse never
+  reads Claude Code's login or calls its endpoints itself.
 - **Cache.** The time-to-live (TTL) in use (5m or 1h), warm or cold, and when it goes
   cold, as a clock time and a countdown. Once cold: "cold since 10:12 BST".
 - **Compactions.** Count, time of the last one, and its before and after sizes.
