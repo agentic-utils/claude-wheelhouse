@@ -340,8 +340,7 @@ class Daemon:
         self.watch = sqlite3.connect(store.path, isolation_level=None, check_same_thread=False)
         self.marked: dict = {}                      # the marks as last published
         self.shown: dict[str, str] = {}   # each session's status as last published
-        # each followed transcript's (size, mtime) as last published, by publish_grown or a context read
-        self.grown: dict[str, tuple | None] = {}
+        self.grown: dict[str, tuple | None] = {}   # each followed transcript's (size, mtime) at the last tick
         self.stopping = False   # a /shutdown has been taken: the next is told so
         self.view: list[dict] = []        # /sessions, as the hub's thread last made it
         self.unkept: dict[str, dict] = {}  # answers the store couldn't keep: kept here till a tick can
@@ -418,20 +417,13 @@ class Daemon:
     def heard(self, event: Event) -> None:
         """What the hub says by itself, to every client: a notice as it is, and a transcript
         read that brought something as that session's conversation and stats (its context
-        size) moving. Its conversation is not said again if publish_grown has said it for the
-        transcript as it is now: the read lands after the tick that started it has published
-        what grew (it runs on the pool, and is said on the hub's thread). Both run on the
-        hub's thread, so grown is never changed under either."""
+        size) moving. Said even if the tick has said the conversation for the same change:
+        a client may refetch once more, but none misses one."""
         if event.kind == "notice":
             self.publish("notice", text=event.text, severity=event.severity)
         elif event.kind == "landed":
             self.view = self.session_views()   # its context size
-            follower = self.hub.followers.get(event.sid)
-            stamp = None if follower is None else stamp_of(follower)
-            if stamp is None or stamp != self.grown.get(event.sid):
-                self.publish("conversation", event.sid)
-                if stamp is not None:
-                    self.grown[event.sid] = stamp
+            self.publish("conversation", event.sid)
             self.publish("stats", event.sid)
 
     def tick(self) -> None:
@@ -485,16 +477,16 @@ class Daemon:
         self.shown = shown
 
     def publish_grown(self) -> None:
-        """A conversation a client has asked for, its transcript changed since it was last
-        served: "conversation", once per change, and not again for a change a context read
-        has said already (heard). The context reads say so only for a turn with usage, and a
-        transcript grows with tool results, notices and a reply streamed in place too, which
-        a TUI in process saw at its next read. One asked for before its transcript existed
-        (a new session's) is looked for each time until it does: cheap, one listing of the
-        projects dir and one stat per project in it (stamp_of)."""
+        """A conversation a client has asked for, its transcript changed since the last tick:
+        "conversation", to every client, whichever has fetched it since. The context reads
+        say so only for a turn with usage, and a transcript grows with tool results, notices
+        and a reply streamed in place too, which a TUI in process saw at its next read. One
+        asked for before its transcript existed (a new session's) is looked for each time
+        until it does: cheap, one listing of the projects dir and one stat per project in it
+        (stamp_of)."""
         for sid, follower in list(self.hub.followers.items()):
             stamp = stamp_of(follower)
-            if stamp is not None and stamp != follower.seen and stamp != self.grown.get(sid):
+            if stamp is not None and stamp != self.grown.get(sid):
                 self.publish("conversation", sid)
             self.grown[sid] = stamp
         for sid in self.grown.keys() - self.hub.followers.keys():

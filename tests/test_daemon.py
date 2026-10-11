@@ -988,10 +988,11 @@ async def test_a_conversation_asked_for_before_its_transcript_exists_is_announce
     assert kinds(daemon).count(("conversation", sid)) == 1, kinds(daemon)
 
 
-async def test_a_conversation_is_announced_once_when_its_context_read_lands_after_the_tick(
+async def test_a_conversation_one_client_fetched_before_the_tick_is_still_announced_to_another(
         store, sid, tmp_path, monkeypatch):
-    """As in production: the context read runs on the pool and is said on the hub's thread,
-    after the tick that started it has published what grew. Said once, not twice."""
+    """Two apps show one session: A fetches the grown transcript before the tick, and B still
+    hears of it, from the tick and from the context read that lands after it (as in
+    production: the read runs on the pool and is said on the hub's thread)."""
     monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
     folder = tmp_path / "projects" / transcript.project_folder(str(tmp_path))
     folder.mkdir(parents=True)
@@ -1001,13 +1002,17 @@ async def test_a_conversation_is_announced_once_when_its_context_read_lands_afte
     d.feed = Feed(start=100)
     try:
         assert (await call(d, "GET", f"/sessions/{sid}/conversation")).status_code == 200
+        d.worker.submit(d.publish_grown).result()   # the transcript as it was, checked
         with file.open("a") as f:
             f.write(json.dumps({"type": "user", "message": {"content": "more"}}) + "\n")
+        assert (await call(d, "GET", f"/sessions/{sid}/conversation")).status_code == 200   # A
+        start = len(d.feed.ring)
         d.worker.submit(d.tick).result()
         d.pool.shutdown(wait=True)   # the context read done, and its "landed" posted to the hub's thread
         d.worker.submit(lambda: None).result()   # and heard there
-        assert ("stats", sid) in kinds(d), kinds(d)
-        assert kinds(d).count(("conversation", sid)) == 1, kinds(d)
+        said = kinds(d)[start:]
+        assert ("stats", sid) in said, said
+        assert said.count(("conversation", sid)) == 2, f"B hears it from the tick and the read: {said}"
     finally:
         d.pool.shutdown()
         d.worker.shutdown()

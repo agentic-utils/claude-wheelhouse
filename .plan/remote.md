@@ -250,12 +250,13 @@ was before 2c, its hub in process: the way back, at once.
   - The daemon follows the last two subagent conversations any client asked for, as the
     hub did for its one surface; a client that no longer shows one stops fetching it.
   - A conversation a client has asked for is announced ("conversation") at the tick
-    whenever its transcript has changed since it was last served, not only when a turn with
-    usage lands: tool results, notices and a reply streamed in place grow it too, and the
-    TUI in process saw those at its next read. Once per change: a context read that lands
-    after the tick has announced it (it runs on the pool and is said on the hub's thread)
-    doesn't announce the same transcript again. One asked for before its transcript existed (a new session's) is
-    looked for at each tick until it does.
+    whenever its transcript (size, mtime) has changed since the last tick, not only when a
+    turn with usage lands: tool results, notices and a reply streamed in place grow it too,
+    and the TUI in process saw those at its next read. A context read that lands announces
+    it too. Nothing is held back because some client has fetched that version already: two
+    apps may show the same session, and the other must still hear of it, so a client may
+    refetch once more than it needs. One asked for before its transcript existed (a new
+    session's) is looked for at each tick until it does.
   - New session, from this machine only, may still open a tab: a peer on the loopback, on
     the address the daemon listens on (an app here joins at the lock's address, a VPN's
     say, so its requests come from there), or on any other address of this machine's own
