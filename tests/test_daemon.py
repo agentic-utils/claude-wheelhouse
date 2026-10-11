@@ -929,6 +929,35 @@ async def test_hello_answers_no_other_host(daemon):
     assert r.status_code == 421 and "proof" not in r.json()
 
 
+async def test_a_rotated_token_cuts_the_streams_open_with_the_old_one(store, tmp_path):
+    from claude_wheelhouse import auth
+    auth.write(tmp_path)
+    old = auth.read(auth.path(tmp_path))
+    d = Daemon(store, hosts("127.0.0.1", 7428), auth.TokenFile(auth.path(tmp_path)), inline=True)
+    d.feed = Feed(start=100)
+    try:
+        async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=d.app), base_url=URL,
+                                      headers={"Authorization": f"Bearer {old}"}) as c:
+            got = {}
+            async with anyio.create_task_group() as tg:
+                async def get():
+                    got["r"] = await c.get("/events")
+                tg.start_soon(get)
+                await anyio.sleep(0.05)
+                auth.write(tmp_path)   # claude-wheelhouse token --rotate
+                await d.on_hub(d.tick)   # which sees it, and cuts the stream
+                with anyio.fail_after(5):
+                    while "r" not in got:
+                        await anyio.sleep(0.02)
+            assert got["r"].status_code == 200 and received(got["r"].text)[0]["kind"] == "refetch", "it ended"
+            assert (await c.get("/events")).status_code == 401, "and the old token opens none again"
+        assert not d.feed.closed, "the daemon still serves the new token's"
+    finally:
+        d.pool.shutdown()
+        d.worker.shutdown()
+        d.watch.close()
+
+
 def test_the_lock_is_the_users_alone_and_names_an_address_only_once_listening(tmp_path):
     lock = take_lock(tmp_path)
     try:

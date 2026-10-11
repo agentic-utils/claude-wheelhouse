@@ -158,6 +158,7 @@ class Feed:
         self.ring: deque[dict] = deque(maxlen=ring)
         self.moved = asyncio.Event()   # set, and replaced, at each event
         self.closed = False
+        self.epoch = 0   # moved on to end every stream open now (cut), as when the token is rotated
 
     def publish(self, kind: str, sid: str | None = None, ref: str | None = None, **more) -> None:
         self.seq += 1
@@ -178,7 +179,10 @@ class Feed:
     async def stream(self, last: int | None):
         """A client's events, from after last (its Last-Event-ID). A client that connects
         afresh, or falls behind the ring (reconnecting, or reading slower than events come),
-        is told to refetch, at the latest seq, and carries on from there. Ends once closed."""
+        is told to refetch, at the latest seq, and carries on from there. Ends once closed, or
+        cut: a stream opened before the token was rotated is let go, and asked for again with
+        the new one, or refused."""
+        epoch = self.epoch
         while True:
             moved = self.moved
             events = self.since(last)
@@ -187,9 +191,15 @@ class Feed:
             for e in events:
                 yield {"id": str(e["seq"]), "data": json.dumps(e)}
             last = events[-1]["seq"] if events else last
-            if self.closed:
+            if self.closed or self.epoch != epoch:
                 return
             await moved.wait()
+
+    def cut(self) -> None:
+        """Every stream open now ends, once it has sent what it has; new ones are served."""
+        self.epoch += 1
+        self.moved.set()
+        self.moved = asyncio.Event()
 
     def close(self) -> None:
         """Every stream ends, once it has sent what it has: the daemon is stopping."""
@@ -314,6 +324,14 @@ class Daemon:
             self.loop, self.loop_thread = asyncio.get_running_loop(), threading.get_ident()
         return await self.loop.run_in_executor(self.worker, functools.partial(work, *args))
 
+    def cut_streams(self) -> None:
+        """Every event stream open now ended, from any thread: the feed is the event loop's."""
+        if self.loop is None or threading.get_ident() == self.loop_thread:
+            self.feed.cut()
+        else:
+            with contextlib.suppress(RuntimeError):
+                self.loop.call_soon_threadsafe(self.feed.cut)
+
     def publish(self, kind: str, sid: str | None = None, ref: str | None = None, **more) -> None:
         """An event, from any thread: the feed is the event loop's."""
         if self.loop is None or threading.get_ident() == self.loop_thread:
@@ -337,6 +355,7 @@ class Daemon:
         """The hub's refresh, as the TUI's tick has it, then what moved."""
         if self.tokens is not None and self.tokens.check():   # rotated: the old one is refused from now
             self.token = self.tokens.token
+            self.cut_streams()   # those opened with the old one too
             print("wheelhouse daemon: the token has changed: clients need the new one", file=sys.stderr, flush=True)
         self.keep_answers()
         hub, seen = self.hub, self.marks()   # before the refresh: see publish_moved
