@@ -975,8 +975,9 @@ def default_open_tab(store: Store, sid: str) -> None:
 def main(sid: str) -> None:
     """The `host` subcommand: host a session recorded as an SDK session, and nothing else.
     EXPERIMENTAL (features.py). Only SDK mode records new ones, so with it off this hosts
-    only one that existed already: the app's Relaunch and Restore start it this way
-    (launch.open_host, which passes no --enable-sdk), so that session isn't stranded."""
+    only one that existed already: the app's Relaunch of a running host starts it again this
+    way (launch.open_host, which passes no --enable-sdk), so that session isn't stranded.
+    Restore brings one back the way new sessions run (launch.restore_runner)."""
     store = Store(db_path())
     session = store.session(sid)
     if session is None:

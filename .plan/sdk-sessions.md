@@ -22,10 +22,13 @@ by users other than the author until we can confirm Anthropic T&Cs".
 - Off (the default): `DEFAULT_RUNNER` is `tab`, and `WHEELHOUSE_RUNNER=sdk` doesn't turn
   SDK mode on. New session has no runner box; the hub refuses a new hosted session and
   the daemon refuses every new session (a remote one could only be hosted). Restore and
-  Adopt keep a session's runner rather than switching it. The `?` overlay, README and
+  Adopt bring any session back the way new sessions run now (Q27, option A), so as a tab;
+  the tutorial is always a tab. The `?` overlay, README and
   `claude-wheelhouse protocol` leave SDK mode out, and the tutorial runs in a tab.
-- A session a host already runs keeps working with the flag off: it shows, relaunches and
-  ends as before, so nobody's work is stranded. Interrupt, Compact (and Relaunch's compact
+- A session a host already runs keeps working with the flag off: it shows and ends as
+  before, and Relaunch of a running one starts its host again, so nobody's work is
+  stranded. Once it has stopped, Restore (or Relaunch of the dead session) brings it back
+  as a tab, per Q27 option A. Interrupt, Compact (and Relaunch's compact
   first), Shell and the permission buttons stay, since they manage it; Model and the
   effort slider hide, so it runs on as it was set.
 
@@ -237,7 +240,7 @@ experimentation is low".
 | Decision | Alternative | Why |
 | --- | --- | --- |
 | New sessions run in a host by default (`DEFAULT_RUNNER = "sdk"`, now `SDK_DEFAULT_RUNNER`, in SDK mode only: see Status); a box in New session opens a tab instead; `WHEELHOUSE_RUNNER=tab` restores the old default | Keep tabs the default behind a flag | The whole point of the change, and it works end to end; one env var reverts it |
-| Sessions created before this stay tabs while they run (runner NULL means tab); Restore and Adopt bring any session back with the current default runner (Q27, option A) | Migrate them; or keep each session's stored runner on Restore | A running tab would otherwise be misread; a stored runner left pre-host sessions as tabs for good, and Shell covers wanting a tab |
+| Sessions created before this stay tabs while they run (runner NULL means tab); Restore and Adopt bring any session back with the current default runner (Q27, option A), except the tutorial, always a tab (D66) | Migrate them; or keep each session's stored runner on Restore | A running tab would otherwise be misread; a stored runner left pre-host sessions as tabs for good, and Shell covers wanting a tab |
 | The host passes no permission mode | Pass `auto` explicitly | Never override the user's settings: SDK sessions already start in the user's `defaultMode`, verified |
 | `cli_path` is the user's `claude` | The SDK's bundled CLI | One Claude Code version for tabs and hosts |
 | The host always renders the system prompt fresh (`--system-prompt-snapshot off`), and a hosted session opened in a shell tab does too | Only for adopted sessions | Its recorded prompt would be the other runner's protocol |

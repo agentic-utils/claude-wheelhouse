@@ -263,7 +263,7 @@ def test_open_session(store, tmp_path, monkeypatch, runner, opened, desc):
 
 
 @pytest.mark.parametrize("runner, on, hosted, desc", [
-    ("sdk", False, True, "an existing SDK session with SDK mode off: Relaunch and Restore keep working"),
+    ("sdk", False, True, "an existing SDK session with SDK mode off: Relaunch of a running host keeps working"),
     ("sdk", True, True, "an SDK session with it on"),
     ("tab", False, False, "a tab session, SDK mode off: refused"),
     ("tab", True, False, "a tab session, even with it on: refused"),
@@ -1283,12 +1283,13 @@ def test_steady_rides_out_a_lock(monkeypatch, locks, returns, desc):
 
 @pytest.mark.parametrize("on, stored, env, alive, opened, recorded, desc", [
     (True, None, None, False, "host", "sdk", "SDK mode on: a session from before hosts existed comes back as a host"),
-    (True, None, "tab", False, "tab", "tab", "unless WHEELHOUSE_RUNNER=tab"),
-    (False, None, "sdk", False, "tab", "tab", "SDK mode off: as a tab, whatever WHEELHOUSE_RUNNER says"),
-    (True, "tab", None, False, "tab", "tab", "SDK mode on: a session recorded as a tab stays one (review 68)"),
-    (True, "sdk", "tab", False, "host", "sdk", "and a host's keeps its host, whatever WHEELHOUSE_RUNNER says"),
+    (True, "tab", None, False, "host", "sdk", "and so does a tab: the way new sessions run now (Q27, option A)"),
+    (True, "tab", "tab", False, "tab", "tab", "unless WHEELHOUSE_RUNNER=tab"),
+    (True, "sdk", "tab", False, "tab", "tab", "which brings a host's session back as a tab too"),
+    (True, "sdk", None, False, "host", "sdk", "a host's session keeps its host"),
     (True, None, None, True, None, None, "a running session is refused, and nothing is recorded"),
-    (False, "sdk", None, False, "host", "sdk", "SDK mode off: a host's session keeps its host, not stranded"),
+    (False, None, "sdk", False, "tab", "tab", "SDK mode off: as a tab, whatever WHEELHOUSE_RUNNER says"),
+    (False, "sdk", None, False, "tab", "tab", "a host's session comes back as a tab (Q27, option A)"),
     (False, "tab", "sdk", False, "tab", "tab", "and a tab stays a tab"),
 ])
 def test_restore_session(store, tmp_path, monkeypatch, on, stored, env, alive, opened, recorded, desc):

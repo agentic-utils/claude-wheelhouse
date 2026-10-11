@@ -240,8 +240,8 @@ class Hub:
     # launching and Relaunch
 
     def open_session(self, sid: str, restore: bool = False) -> Done:
-        """Launch a session the way it runs, a host or a tab; a restore too, unless it is from
-        before hosts existed (launch.restore_session)."""
+        """Launch a session the way it runs, a host or a tab; a restore the way new sessions
+        run now (launch.restore_runner)."""
         try:
             if restore:
                 launch.restore_session(self.store, sid, sdk=self.sdk)

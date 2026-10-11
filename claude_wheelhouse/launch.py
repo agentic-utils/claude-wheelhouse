@@ -165,19 +165,23 @@ def open_session(store: Store, sid: str) -> None:
     (open_host if runner(session) == "sdk" else open_tab)(store, sid)
 
 
+def restore_runner(store: Store, cwd: str, sdk: bool | None = None) -> str:
+    """How Restore, Relaunch of a dead session and Adopt bring a session back: the way new
+    sessions run now (store.default_runner, with SDK mode on per sdk, else
+    features.sdk_enabled()), whatever it ran as before (Doug's Q27, option A,
+    .plan/sdk-sessions.md). So with SDK mode off a host's session comes back as a tab. The
+    tutorial is always a tab (tutorial.py)."""
+    return "tab" if cwd == str(tutorial.tutorial_dir(store)) else default_runner(sdk)
+
+
 def restore_session(store: Store, sid: str, sdk: bool | None = None) -> None:
-    """Restore (or adopt) a session that isn't running, the way it ran: a tab stays a tab
-    and a host's session keeps its host, so it isn't stranded with SDK mode off (features.py).
-    Only a session from before hosts existed (no runner recorded) takes the way new sessions
-    run now (store.default_runner, with SDK mode on per sdk, else features.sdk_enabled()),
-    and never the tutorial, which is always a tab. The check comes first, so a running tab
-    is never recorded as hosted."""
+    """Restore (or adopt) a session that isn't running, as restore_runner says. The check
+    comes first, so a running tab is never recorded as hosted."""
     session = store.session(sid)
     if session is None:
         raise KeyError(sid)
     check_free(session)
-    if session["runner"] is None:
-        store.set_runner(sid, "tab" if tutorial.is_tutorial(store, session) else default_runner(sdk))
+    store.set_runner(sid, restore_runner(store, session["cwd"], sdk))
     open_session(store, sid)
 
 

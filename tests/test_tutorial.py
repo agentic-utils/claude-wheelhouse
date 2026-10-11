@@ -417,21 +417,24 @@ async def test_a_stopped_tab_says_why(store, tut, registered, why, desc):
         assert "▶ Find the demo in its tab" in app._checklist_text
 
 
-@pytest.mark.parametrize("how", ["restore", "relaunch", "adopt"])
+@pytest.mark.parametrize("on", [True, False])
+@pytest.mark.parametrize("how", ["restore", "relaunch", "adopt", "adopt ended"])
 @pytest.mark.parametrize("stored, desc", [
     ("tab", "the tutorial, recorded as a tab"),
+    ("sdk", "a tutorial an earlier version hosted"),
     (None, "a tutorial with no runner recorded, as one from before hosts would be"),
 ])
-def test_the_tutorial_comes_back_as_a_tab_with_sdk_mode_on(store, tut, monkeypatch, how, stored, desc):
+def test_the_tutorial_comes_back_as_a_tab(store, tut, monkeypatch, on, how, stored, desc):
     """Review 68: Restore, Relaunch and Adopt with SDK mode on once made every tab, the
-    tutorial's included, an SDK session."""
+    tutorial's included, an SDK session. Review 69: adopting an ended tutorial's transcript
+    did too. Any other session comes back the way new sessions run (test_restore_session)."""
     from claude_wheelhouse import adopt
     from claude_wheelhouse.hub import Hub
-    monkeypatch.setattr(features, "_flag", True)
+    monkeypatch.setattr(features, "_flag", on)
     monkeypatch.delenv("WHEELHOUSE_RUNNER", raising=False)
-    if stored is None:
-        with store.tx() as db:
-            db.execute("UPDATE sessions SET runner = NULL WHERE id = ?", (tut,))
+    with store.tx() as db:
+        db.execute("UPDATE sessions SET runner = ? WHERE id = ?", (stored, tut))
+    cwd = store.session(tut)["cwd"]
     seen = []
     monkeypatch.setattr(launch, "open_host", lambda s, i: seen.append("host"))
     monkeypatch.setattr(launch, "open_tab", lambda s, i: seen.append("tab"))
@@ -439,11 +442,13 @@ def test_the_tutorial_comes_back_as_a_tab_with_sdk_mode_on(store, tut, monkeypat
     if how == "restore":
         launch.restore_session(store, tut)
     elif how == "relaunch":
-        assert Hub(store, sdk=True).relaunch(tut).ok, desc
+        assert Hub(store, sdk=on).relaunch(tut).ok, desc
     else:
-        adopt.adopt(store, adopt.Candidate(tut, store.session(tut)["cwd"], "tutorial", 0.0, None), "", sdk=True)
-    assert seen == ["tab"], f"{how}: {desc}"
-    assert store.session(tut)["runner"] == "tab", f"{how}: {desc}"
+        if how == "adopt ended":   # its row gone, its transcript still offered
+            store.end(tut)
+        adopt.adopt(store, adopt.Candidate(tut, cwd, "tutorial", 0.0, None), "", sdk=on)
+    assert seen == ["tab"], f"{how}, SDK mode {on}: {desc}"
+    assert store.session(tut)["runner"] == "tab", f"{how}, SDK mode {on}: {desc}"
 
 
 @pytest.mark.parametrize("makefile, said, desc", [

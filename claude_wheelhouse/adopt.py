@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import launch, liveness
-from .store import Store, default_runner
+from .store import Store
 from .transcript import project_folder
 
 PROJECTS = Path.home() / ".claude/projects"
@@ -149,8 +149,8 @@ def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = livenes
 
 def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSIONS,
           proc: Path = liveness.PROC, open_tab=None, sdk: bool | None = None) -> str:
-    """Register the session and open it (a new one as store.default_runner says; one the
-    wheelhouse already tracks as it ran: see launch.restore_session). Refuses while it is still
+    """Register the session and open it as launch.restore_runner says (the way new sessions
+    run now; the tutorial's, a tab), tracked already or not. Refuses while it is still
     running. A session the wheelhouse already tracks keeps its row (and its items), renamed
     if asked. sdk: whether SDK mode is on, else features.sdk_enabled()."""
     open_tab = open_tab or functools.partial(launch.restore_session, sdk=sdk)
@@ -162,7 +162,7 @@ def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSI
             store.rename(c.id, name)
         open_tab(store, c.id)
         return c.id
-    sid = store.create_session(c.cwd, name=name, sid=c.id, runner=default_runner(sdk))
+    sid = store.create_session(c.cwd, name=name, sid=c.id, runner=launch.restore_runner(store, c.cwd, sdk))
     try:
         open_tab(store, sid)
     except BaseException:

@@ -9,9 +9,11 @@ It is off unless the app is started with --enable-sdk, or a .env file holds
 `enable-sdk=true` (ENABLE_SDK or enable_sdk as the key do too): the one in the directory
 the app starts in, or ~/.config/claude-wheelhouse/.env. Off, nothing creates an SDK session (New session, the
 tutorial, Adopt, Restore and the daemon all run tabs) and the SDK-only controls hide.
-Sessions a host already runs keep working, so nobody's work is stranded: they show,
-relaunch and end as before, with the controls that manage them (store.runner says which
-they are). The flag gates creating new ones, and the controls that only choose how one
+Sessions a host already runs keep working, so nobody's work is stranded: they show and
+end as before, with the controls that manage them (store.runner says which they are), and
+Relaunch of a running one starts its host again. Once one has stopped, Restore (and
+Relaunch of a dead session) brings it back as a tab, as it does any session, the way new
+sessions run now (launch.restore_runner, Doug's Q27 option A). The flag gates creating new ones, and the controls that only choose how one
 runs (Model, the effort slider)."""
 
 from pathlib import Path
