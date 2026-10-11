@@ -1074,7 +1074,7 @@ REMOTE = "100.64.0.7"
 HERE = "127.0.0.1"
 GONE_HOST = {"host": [999999, 1]}   # the host the client was shown, gone meanwhile
 OFF = "SDK mode is off: this wheelhouse doesn't start sessions remotely"
-HELD = "opens in a tab: restore it from the daemon's machine"
+HELD = "opens in a tab: open it from the daemon's machine"
 GONE = "host has stopped: Relaunch it from the daemon's machine"
 
 
@@ -1084,10 +1084,11 @@ GONE = "host has stopped: Relaunch it from the daemon's machine"
     (False, "tab", "/adopt", {"id": "adoptee"}, None, REMOTE, 403, OFF, [], "Adopt: a tab"),
     (False, "tab", "/tutorial/offer", {"take": True}, None, REMOTE, 403, OFF, [], "the tutorial: a tab"),
     (False, "tab", "/sessions/{sid}/shell", {}, None, REMOTE, 403, OFF, [], "Shell: the host hands over to a tab"),
-    (False, "tab", "/sessions/{sid}/restore", {}, None, REMOTE, 200, HELD, [], "Restore: held back where it resolves"),
-    (False, "tab", "/sessions/{sid}/restore", {}, "live", REMOTE, 200, "only a dead session can be restored", [],
+    (False, "tab", "/sessions/{sid}/restore", {}, None, REMOTE, 403, OFF, [], "Restore: a tab"),
+    (True, "tab", "/sessions/{sid}/restore", {}, None, REMOTE, 200, HELD, [], "Restore: held back where it resolves"),
+    (True, "tab", "/sessions/{sid}/restore", {}, "live", REMOTE, 200, "only a dead session can be restored", [],
      "Restore of a running session: the hub's own answer"),
-    (False, "tab", "/sessions/{sid}/restore", {}, "stale", REMOTE, 200, "only a dead session can be restored", [],
+    (True, "tab", "/sessions/{sid}/restore", {}, "stale", REMOTE, 200, "only a dead session can be restored", [],
      "live at the last tick, gone since (review 75): not restored, and no tab"),
     (True, "tab", "/restore-all", {"sids": ["{sid}"]}, "stale", REMOTE, 200, "only a dead session can be restored",
      [], "Restore all the same (review 75)"),

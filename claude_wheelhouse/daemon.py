@@ -885,8 +885,9 @@ class Daemon:
         if action in ("interrupt", "compact", "shell"):
             return hub.host_command(sid, action)
         if action == "restore":   # one that isn't dead, the hub says so; another machine's, not in a tab
+            self.remote_needs_sdk(request)
             return hub.restore(sid, this_machine(request))
-        commands = {"restore": hub.restore, "unpark": hub.unpark, "dispatch": hub.send_queue}
+        commands = {"unpark": hub.unpark, "dispatch": hub.send_queue}
         if action not in commands:
             raise Refused(404, f"no command {action}")
         return commands[action](sid)

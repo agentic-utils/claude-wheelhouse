@@ -163,7 +163,7 @@ class NotHere(RuntimeError):
 
     def __init__(self, session):
         self.name = session["name"] or os.path.basename(session["cwd"]) or session["id"][:6]
-        super().__init__(f"{self.name} opens in a tab: restore it from the daemon's machine")
+        super().__init__(f"{self.name} opens in a tab: open it from the daemon's machine")
 
 
 def open_session(store: Store, sid: str, may_tab: bool = True) -> None:

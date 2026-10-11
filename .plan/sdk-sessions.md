@@ -31,8 +31,8 @@ by users other than the author until we can confirm Anthropic T&Cs".
   Restore, Restore all, Relaunch, Adopt and a Relaunch carried on later (stored with it:
   `store.relaunch_may_tab`); the hub says it as a warning. The daemon answers 403 at once
   only where nothing at all could be done: New session's tab, the tutorial, Shell, and, out
-  of SDK mode (where every session comes back in a tab), Restore all, Relaunch of a dead
-  session and Adopt. Restore and
+  of SDK mode (where every session comes back in a tab), Restore, Restore all, Relaunch of
+  a dead session and Adopt. Restore and
   Adopt bring any session back the way new sessions run now (Q27, option A), so as a tab;
   the tutorial is always a tab. The `?` overlay, README and
   `claude-wheelhouse protocol` leave SDK mode out, and the tutorial runs in a tab.

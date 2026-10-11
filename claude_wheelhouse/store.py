@@ -493,7 +493,9 @@ class Store:
         carries it on; None once it's done. Compacting first, the row has five values: the
         Hub of older code (from before #16's token savings) unpacks three, and would fail to
         start on one if the code were rolled back while it is under way. Asked for by another
-        machine (may_tab false: relaunch_may_tab), a sixth, false, which older code ignores."""
+        machine (may_tab false: relaunch_may_tab), a sixth, false: the five-value reader
+        (pid, start, deadline, *rest) ignores it, and the three-value one fails on it as it
+        does on five."""
         if not host:
             relaunch = None
         else:
