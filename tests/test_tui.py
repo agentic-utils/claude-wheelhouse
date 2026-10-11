@@ -1924,7 +1924,7 @@ UP, NEAR_END = ("pageup",) * 3, ("up",) * 3
      "shows below them"),
 ])
 @pytest.mark.parametrize("width", [160, 100])   # the lines each block takes, and so the shift, differ
-@pytest.mark.both(threaded=False)
+@pytest.mark.both
 async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch, change, keys, shape, desc, width):
     """A reader scrolled up keeps their place across a change; one at the end stays there.
     waiting: under the 80 entries shown, so no oldest turn drops off to undo the warning's shift."""
@@ -4596,7 +4596,7 @@ def say(path, text):
 
 
 @pytest.mark.anyio
-@pytest.mark.both(threaded=False)
+@pytest.mark.both
 async def test_a_subagent_items_own_conversation_follows_it_live(store, sid, tmp_path, monkeypatch, via):
     monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
     path = subagent_file(tmp_path, sid, "ag1", 60)

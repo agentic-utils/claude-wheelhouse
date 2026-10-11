@@ -236,24 +236,27 @@ def served():
 
 
 def pytest_generate_tests(metafunc):
-    """A test marked both runs twice: through a hub in process (--local), and through the
-    daemon (via)."""
-    marker = metafunc.definition.get_closest_marker("both")
-    if marker:   # threaded=False: a test whose change is a transcript file a dead session never reads again
-        threaded = marker.kwargs.get("threaded", True)
-        metafunc.parametrize("via", ["local", "daemon", *(["threaded"] if threaded else [])], indirect=True)
+    """A test marked both runs three ways: through a hub in process (--local), and through
+    the daemon, fetching at each refresh or on the client's own threads (via)."""
+    if metafunc.definition.get_closest_marker("both"):
+        metafunc.parametrize("via", ["local", "daemon", "threaded"], indirect=True)
 
 
 def caught_up(client, served, refresh) -> None:
     """The daemon's tick, then the client's threads given time to hear all it published and
-    fetch what it moved, then the refresh that swaps it in: as a refresh tick a second after
-    a change, but on the test's clock."""
+    fetch what it moved, and to poll each subagent's conversation shown (AGENT_POLL) once
+    since, then the refresh that swaps it in: as a refresh tick a second after a change, but
+    on the test's clock."""
     served.tick()
     feed, deadline = served.daemon.feed, time.monotonic() + 15
+    with client.lock:
+        since = client.seq
     while True:
         with client.lock:
+            agents = {k for k in client.wanted | client.asked if k[0] == "agent"}
+            polled = all(k in client.waiting and client.waiting[k][0] > since for k in agents)
             settled = (client.last_event is not None and int(client.last_event) >= feed.seq and not client.dirty
-                       and not client.in_flight)
+                       and not client.in_flight and polled)
         if settled or time.monotonic() > deadline:
             break
         time.sleep(0.005)
@@ -286,6 +289,7 @@ def via(request, monkeypatch):
         if how == "daemon":
             client = served.client(synchronous=True, before_fetch=served.tick)
         else:
+            monkeypatch.setattr("claude_wheelhouse.client.AGENT_POLL", 0.05)   # caught_up waits for one
             client = served.client()
             client.refresh = functools.partial(caught_up, client, served, client.refresh)
             start = client.start

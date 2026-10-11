@@ -255,6 +255,7 @@ class Daemon:
         self.watch = sqlite3.connect(store.path, isolation_level=None, check_same_thread=False)
         self.marked: dict = {}                      # the marks as last published
         self.shown: dict[str, str] = {}   # each session's status as last published
+        self.grown: dict[str, tuple] = {}   # each followed transcript's (size, mtime) as last published (publish_grown)
         self.view: list[dict] = []        # /sessions, as the hub's thread last made it
         self.unkept: dict[str, dict] = {}  # answers the store couldn't keep: kept here till a tick can
         self.reading: dict[str, threading.Lock] = {}   # each session's transcript, read by one request at a time
@@ -348,6 +349,7 @@ class Daemon:
         hub.fetch_usage()
         hub.finish_relaunches()
         self.publish_moved(seen)
+        self.publish_grown()
 
     def keep_answers(self) -> None:
         """The answers the store couldn't keep when given, kept now if it can: until then a
@@ -386,6 +388,23 @@ class Daemon:
             if shown[sid] != self.shown[sid]:
                 self.publish("sessions", sid)
         self.shown = shown
+
+    def publish_grown(self) -> None:
+        """A conversation a client has asked for, its transcript changed since it was last
+        served: "conversation", once per change. The context reads say so only for a turn
+        with usage, and a transcript grows with tool results, notices and a reply streamed
+        in place too, which a TUI in process saw at its next read."""
+        for sid, follower in list(self.hub.followers.items()):
+            try:
+                st = follower.path.stat() if follower.path is not None else None
+            except OSError:
+                st = None
+            stamp = None if st is None else (st.st_size, st.st_mtime_ns)
+            if stamp is not None and stamp != follower.seen and stamp != self.grown.get(sid):
+                self.publish("conversation", sid)
+            self.grown[sid] = stamp
+        for sid in self.grown.keys() - self.hub.followers.keys():
+            del self.grown[sid]
 
     def forget_gone(self) -> None:
         """The transcripts followed for sessions gone, let go: those the last refresh no

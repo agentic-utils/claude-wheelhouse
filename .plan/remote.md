@@ -225,6 +225,10 @@ was before 2c, its hub in process: the way back, at once.
     socket with a client that fetches at each refresh after the daemon's tick.
   - The daemon follows the last two subagent conversations any client asked for, as the
     hub did for its one surface; a client that no longer shows one stops fetching it.
+  - A conversation a client has asked for is announced ("conversation") at the tick
+    whenever its transcript has changed since it was last served, not only when a turn with
+    usage lands: tool results, notices and a reply streamed in place grow it too, and the
+    TUI in process saw those at its next read.
   - New session, from this machine (a loopback peer) only, may still open a tab. Under
     `--connect` it offers no tab and no Browse (the directories are the daemon's), and the
     daemon checks the directory.
