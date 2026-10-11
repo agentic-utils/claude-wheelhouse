@@ -17,7 +17,7 @@ prefix, and one a notification cut short is shown whole, from the wheelhouse's c
 import json
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 PROJECTS = Path.home() / ".claude/projects"
 TAIL_BYTES = 1024 * 1024   # read from the end; older turns are left out
@@ -50,6 +50,8 @@ OPENING = re.compile(r"(?:Ticket: [^\n]*\n\n)?" + re.escape(NO_BRIEF))
 FORK = re.compile(r"<fork-boilerplate>.*?</fork-boilerplate>\s*(?:Your directive:\s*)?", re.S)
 # a skill run as a subagent: its first turn is the skill itself (meta), what it was asked last
 SKILL_ARGS = "\n\nARGUMENTS: "
+# and where it lives, its name the folder's: what it shows as when it was asked nothing
+SKILL_BASE = re.compile(r"^Base directory for this skill: (.+)$", re.M)
 # stands in the tail for a newest record too large to read within it (tail_records)
 OVERSIZE = "wheelhouse-oversize"
 
@@ -110,9 +112,14 @@ def prompt_record(path: Path) -> dict | None:
             except ValueError:
                 continue
             if isinstance(rec, dict) and rec.get("type") == "user" and \
-                    (not rec.get("isMeta") or SKILL_ARGS in _text((rec.get("message") or {}).get("content"))):
+                    (not rec.get("isMeta") or skill_run(rec)):
                 return rec
     return None
+
+
+def skill_run(rec: dict) -> bool:
+    text = _text((rec.get("message") or {}).get("content"))
+    return SKILL_ARGS in text or SKILL_BASE.search(text) is not None
 
 
 def _text(content) -> str:
@@ -262,14 +269,17 @@ NO_AGENT_FILE = "_Its transcript isn't found beside its session's yet, so only w
 
 
 def prompt_entry(rec: dict | None) -> Entry | None:
-    """A subagent's prompt, from its prompt_record: a skill's is what the skill was asked."""
+    """A subagent's prompt, from its prompt_record: a skill's is what the skill was asked, or
+    its name if it was asked nothing."""
     if rec is None:
         return None
     if rec.get("isMeta"):
         text = _text((rec.get("message") or {}).get("content"))
         cut = text.rfind(SKILL_ARGS)
-        return Entry("you", text[cut + len(SKILL_ARGS):].strip(), rec.get("timestamp", "")) \
-            if cut >= 0 and text[cut + len(SKILL_ARGS):].strip() else None
+        asked = text[cut + len(SKILL_ARGS):].strip() if cut >= 0 else ""
+        if not asked and (base := SKILL_BASE.search(text)):   # asked nothing: the skill's name
+            asked = PurePosixPath(base.group(1).strip()).name
+        return Entry("you", asked, rec.get("timestamp", "")) if asked else None
     return next((e for e in entries([rec], agent=True) if e.who == "you"), None)
 
 
