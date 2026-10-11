@@ -2704,12 +2704,34 @@ async def test_a_lapse_as_an_arrow_acts_marks_nothing_new(store, sid, clock, mon
 @pytest.mark.parametrize("order, desc", [
     ("lapse-then-key", "seen by the dwell, then Down: held in its place, and Down goes to the row below"),
     ("key-then-lapse", "Down typed as the dwell lapses: Down goes to the row below"),
+    ("settled-tie", "T1 then T2 done in one second, unselected: the later to settle sinks lowest"),
 ])
 async def test_a_decision_seen_while_selected_keeps_its_place_among_ties(store, sid, clock, order, desc):
     """Review 47: now() stamps whole seconds, so decisions an agent posts together tie. One
     seen by the dwell while selected is pinned at the rank it was shown with (ranked), and ties
     with its neighbours there: it keeps its place among them as shown, not the store's order,
-    which its new status changed. It moved below them, and the next Down did nothing."""
+    which its new status changed. It moved below them, and the next Down did nothing. Review 49:
+    only an unchanged rank keeps its shown place, so of two settled in one second the later
+    still sinks lowest (inbox_rank)."""
+    if order == "settled-tie":
+        with one_second():
+            for t in ("A", "B", "C"):
+                store.post_item(sid, "task", t, status="running")
+            store.post_item(sid, "question", "Q")
+        app = WheelhouseApp(store)
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.pause()
+            app.items_table.focus()
+            app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|Q1"))
+            await pilot.pause()
+            with mock.patch("claude_wheelhouse.store.now", lambda: "2026-10-08T10:00:05+00:00"):
+                for ref in ("T1", "T2"):
+                    store.update_item(sid, ref, status="done")
+                    app.refresh_data()
+                    await clock.finish_moves(pilot, app)
+            assert [k.split("|")[1] for k in app.items_table.keys()] == ["Q1", "T3", "T1", "T2"], desc
+            assert app.items_table.cursor_key() == f"{sid}|Q1", desc
+        return
     with one_second():
         for t in ("D", "E", "F"):
             store.post_item(sid, "decision", t, **DECIDED)

@@ -1961,7 +1961,9 @@ class WheelhouseApp(App):
         selection moves on, and a settled item then sinks (Sink). The exceptions are the person's
         own explicit acts, Delete closing or Ctrl+R reopening (close) and a permission answered
         (answer_permission): it goes at once (D33), and is pinned where it went. self.ranks keeps each item's rank as shown, in the order shown: the next pin's, ties'
-        order, and what has somewhere to go (paint_items)."""
+        order, and what has somewhere to go (paint_items). Ties' order is path dependent: it is
+        kept per view, so two views that reached the same store state differently may tie-break
+        apart; an item whose rank changed since shown goes after its unchanged ties, in store order."""
         key = self.selected and self.selected[1] and f"{self.selected[0]}|{self.selected[1]}"
         if self.pin is None or self.pin[0] != key:
             self.pin = (key, self.ranks[key]) if key in self.ranks else None
@@ -1975,7 +1977,9 @@ class WheelhouseApp(App):
         # ties (now() stamps whole seconds, and an agent posts several at once) keep the order
         # last shown, not the store's, which a pinned item's own change re-sorted: it would move
         shown = {k: i for i, k in enumerate(self.ranks)}
-        out = sorted(items, key=lambda it: (ranks[item_key(it)], shown.get(item_key(it), len(shown))))
+        def place(k):   # as shown, if its rank is as shown; one whose rank changed comes after, in store order
+            return shown[k] if k in shown and self.ranks[k] == ranks[k] else len(shown)
+        out = sorted(items, key=lambda it: (ranks[item_key(it)], place(item_key(it))))
         self.ranks = {item_key(it): ranks[item_key(it)] for it in out}
         return out
 
