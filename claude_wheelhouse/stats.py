@@ -736,6 +736,39 @@ def style_of(rgb: tuple) -> Style:
     return Style(color=Color.from_rgb(*rgb))
 
 
+def bar_label(c: Chart, row: int) -> Text:
+    """A row of bars' Y-axis label, MARGIN wide: every other row's value. Its style is
+    the whole line's, under the bars' own."""
+    value = tokens(round(c.maxt * (row + 1) / c.height)) if row % 2 and c.maxt else ""
+    return Text(value.rjust(MARGIN - 2) + "  ", style=hexc(DIM))
+
+
+def bar(c: Chart, row: int, frame: int) -> list[tuple[str, Style | None]]:
+    """A row of a chart's bars at animation frame `frame`, from the bottom, each column's
+    character and its style. The shimmer and gradient are the dashboard's."""
+    f = 0.5 + 0.5 * row / (c.height - 1) if c.height > 1 else 1.0
+    out: list[tuple[str, Style | None]] = []
+    for i, col in enumerate(c.columns):
+        base, ch = col[row]
+        if base:
+            wave = 1.0 + 0.18 * math.sin(0.20 * i + 0.45 * row - 0.11 * frame)
+            out.append((ch, shade(base, max(0.12, min(1.0, f * wave)))))
+        else:
+            out.append((" ", None))
+    return out
+
+
+def bar_lines(rows: list[Text], shown: list["Chart"]) -> list[tuple["Chart", int] | None]:
+    """For each of render's lines, the chart and row of bars it is, the lines a shimmer frame
+    changes, or None."""
+    out: list[tuple[Chart, int] | None] = [None] * len(rows)
+    for c in shown:
+        out += [None] * (c.gap + 1)   # a blank line above it, then its legend
+        out += [(c, row) for row in range(c.height - 1, -1, -1)]
+        out.append(None)   # its baseline
+    return out + [None] * bool(shown)   # the hour ticks under the last
+
+
 def chart_lines(c: Chart, frame: int, ticks: bool = True) -> list[Text]:
     """A chart's legend, bars and baseline at animation frame `frame`, and with `ticks` the
     hourly ticks under it. The shimmer and gradient are the dashboard's."""
@@ -745,16 +778,9 @@ def chart_lines(c: Chart, frame: int, ticks: bool = True) -> list[Text]:
         head += Text("  ▆", style=hexc(CO[k])) + Text(" " + legend, style=hexc(DIM))
     out = ([Text()] if c.gap else []) + [head]
     for row in range(c.height - 1, -1, -1):
-        f = 0.5 + 0.5 * row / (c.height - 1) if c.height > 1 else 1.0
-        value = tokens(round(c.maxt * (row + 1) / c.height)) if row % 2 and c.maxt else ""
-        line = Text(value.rjust(MARGIN - 2) + "  ", style=hexc(DIM))
-        for i, col in enumerate(c.columns):
-            base, ch = col[row]
-            if base:
-                wave = 1.0 + 0.18 * math.sin(0.20 * i + 0.45 * row - 0.11 * frame)
-                line.append(ch, style=shade(base, max(0.12, min(1.0, f * wave))))
-            else:
-                line.append(" ")
+        line = bar_label(c, row)
+        for ch, style in bar(c, row, frame):
+            line.append(ch, style=style)
         out.append(line)
     n = len(c.columns)
     out.append(Text("0".rjust(MARGIN - 1) + " ", style=hexc(DIM)) + Text("└" + "─" * max(n - 1, 0), style=hexc(DIM2)))

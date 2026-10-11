@@ -6,10 +6,21 @@ import functools
 import importlib.metadata
 import time
 
+from rich.segment import Segment
+from rich.style import Style
 from rich.text import Text
+from textual.geometry import Region
+from textual.strip import Strip
+from textual.style import Style as TextualStyle
+from textual.visual import Visual, visualize
 from textual.widget import Widget
 
 from . import api, stats
+
+
+def looks(rows: list[Text]) -> list[tuple]:
+    """Rows to compare: Rich's Text equality leaves out the base style."""
+    return [(t.plain, t.style, t.spans) for t in rows]
 
 
 class SessionStats(Widget):
@@ -33,6 +44,13 @@ class SessionStats(Widget):
         self.rows: list[Text] = []
         self.charts: list[stats.Chart] = []
         self.frame = 0
+        self.drawn: list[Strip] = []   # the lines as last drawn whole (render_line), and what for
+        self.drawn_for: tuple | None = None
+        self.bars: dict[int, tuple[stats.Chart, int, int]] = {}   # the charts' bars' lines (bars_at)
+        self.bar_runs: list[tuple[int, int]] = []   # those lines, each chart's as (first, how many)
+        self.drawn_frame = 0
+        self.cell_styles: dict[tuple, Style] = {}   # a bar cell's style as drawn, by its line's and its own
+        self.offsets: dict[tuple[int, int], Style] = {}   # where a cell is in render's Text, for a selection
 
     # the hub's calls (api.py)
 
@@ -58,8 +76,11 @@ class SessionStats(Widget):
 
     def animate(self, frame: int) -> None:
         self.frame = frame
-        if self.charts and self.display:
+        if self.charts and self.display and self.text_selection:   # drawn whole, the selection with it
             self.refresh()
+        elif self.charts and self.display:
+            top = self.gutter.top   # the bars' lines are the content's, under the border
+            self.refresh(*(Region(0, top + y, self.size.width, n) for y, n in self.bar_runs))
 
     # reading
 
@@ -106,15 +127,74 @@ class SessionStats(Widget):
         self.rebuild()
 
     def rebuild(self) -> None:
-        self.rows, self.charts = stats.layout(self.view, self.name_, self.note, self.usage, self.now,
-                                              self.size.width, self.size.height)
-        self.refresh()
+        rows, charts = stats.layout(self.view, self.name_, self.note, self.usage, self.now,
+                                    self.size.width, self.size.height)
+        if (looks(rows), charts) != (looks(self.rows), self.charts):   # each tick builds them again, mostly the same
+            self.rows, self.charts = rows, charts
+            self.drawn_for = None
+            self.refresh()
 
     def on_resize(self) -> None:
         self.rebuild()
 
     def render(self) -> Text:
         return stats.render(self.rows, self.charts, self.frame)
+
+    def selection_updated(self, selection) -> None:
+        self.drawn_for = None
+        super().selection_updated(selection)
+
+    def bars_at(self, width: int) -> dict[int, tuple[stats.Chart, int, int]]:
+        """Where the charts' bars are drawn, by line: (chart, row, render's line).
+        Textual wraps a line too long for the pane onto the next (a legend, in a narrow pane);
+        the bars just fit."""
+        lines = stats.render(self.rows, self.charts, self.frame).split("\n")
+        out, y = {}, 0
+        for n, (line, bar) in enumerate(zip(lines, stats.bar_lines(self.rows, self.charts))):
+            if bar:
+                out[y] = (*bar, n)
+            y += 1 if bar or line.cell_len <= width else len(
+                Visual.to_strips(self, visualize(self, line), width, None, self.visual_style))
+        return out
+
+    def render_line(self, y: int) -> Strip:
+        """Every line drawn from render, as Widget's are, only for a new panel, size or look;
+        a shimmer frame (animate) draws again the charts' bars alone, a line at a time from
+        their cells' styles, not the whole panel's Text: that was a fifth of a core at 5 Hz."""
+        width, height = self.size
+        key = (self.size, self.visual_style, self.text_selection, self.text_selection and self.frame)
+        if self.drawn_for != key:
+            self.drawn_for, self.cell_styles = key, {}
+            self.drawn = Visual.to_strips(self, visualize(self, self.render()), width, height, self.visual_style)
+            self.drawn_frame = self.frame
+            self.bars = {} if self.text_selection else self.bars_at(width)
+            self.bar_runs = [(min(ys), len(ys)) for ys in ([y for y, bar in self.bars.items() if bar[0] is chart]
+                                                         for chart in self.charts) if ys]
+        if y >= len(self.drawn):
+            return Strip.blank(width, self.visual_style.rich_style)
+        if y not in self.bars or self.frame == self.drawn_frame:
+            return self.drawn[y]
+        c, row, n = self.bars[y]
+        label = stats.bar_label(c, row)
+        # as Textual draws the line's Text: a segment for each styled character and one for
+        # each run of plain ones, each with where it starts in the Text (x, n), which a
+        # selection by mouse goes by
+        segments, plain, x = [], None, 0
+        for ch, style in [(ch, None) for ch in label.plain] + stats.bar(c, row, self.frame):
+            if style is None and plain is not None:
+                plain[0] += ch
+            else:
+                look = self.cell_styles.get((label.style, style))
+                if look is None:
+                    look = self.visual_style + TextualStyle.from_rich_style(self.app.console.get_style(label.style))
+                    if style is not None:
+                        look += TextualStyle.from_rich_style(style)
+                    look = self.cell_styles[label.style, style] = look.rich_style
+                at = self.offsets.get((x, n)) or self.offsets.setdefault((x, n), Style.from_meta({"offset": (x, n)}))
+                plain = [ch, look + at] if style is None else None
+                segments.append(plain or Segment(ch, look + at))
+            x += 1
+        return Strip.join([Strip([Segment(*s) if isinstance(s, list) else s for s in segments]), self.drawn[y].crop(x)])
 
 
 module = api.Module(

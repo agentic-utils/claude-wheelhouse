@@ -18,6 +18,8 @@ from textual import events
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 from textual.pilot import _get_mouse_message_arguments
+from textual.strip import Strip
+from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, TextArea
 
 from claude_wheelhouse import launch, stats, transcript, tui
@@ -4423,3 +4425,56 @@ async def test_a_subagent_item_whose_transcript_is_missing_says_so(store, sid, t
         items.move_cursor(row=items.get_row_index(f"{sid}|{ref}"))
         await pilot.pause()
         assert "A `general-purpose` subagent." in app._detail_text and transcript.NO_AGENT_FILE in app._detail_text
+
+
+def busy_snapshot(now: float) -> stats.Snapshot:
+    """A session with turns all across the charts' span, of every kind: bars of every colour."""
+    turns = [stats.Turn(now - 7000 + 37 * i, 1000 * (i % 50), 500 * (i % 7), 300 * (i % 3), 90_000 + 100 * i, "1h",
+                        "claude-opus-5-5", i % 4 > 0, output=200 * (i % 11)) for i in range(180)]
+    return stats.Snapshot(model="claude-opus-5-5", context=110_000, peak=120_000, last_at=now - 30, ttl="1h", turns=turns)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size", [(160, 45), (315, 98)])
+async def test_a_shimmer_frame_draws_the_charts_as_the_whole_panel_did(store, sid, size, monkeypatch):
+    import time
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        pane = app.query_one("#stats")
+        monkeypatch.setattr(pane, "tick", lambda: None)   # the made-up session stays shown
+        pane.show(busy_snapshot(time.time()), "demo", time.time())
+        await pilot.pause()
+        assert pane.charts and pane.bars, "the charts show, and their bars are known"
+        height = pane.size.height
+        for frame in (0, 1, 7, 40, 123):
+            pane.frame = frame
+            got = [cells(pane.render_line(y)) for y in range(height)]
+            whole = Visual.to_strips(pane, visualize(pane, pane.render()), *pane.size, pane.visual_style)
+            whole += [Strip.blank(pane.size.width, pane.visual_style.rich_style)] * (height - len(whole))   # as Widget's
+            want = [cells(s) for s in whole]
+            assert got == want, f"frame {frame}"
+
+
+@pytest.mark.anyio
+async def test_a_shimmer_frame_redraws_only_the_charts_bars(store, sid, monkeypatch):
+    import time
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 45)) as pilot:
+        await pilot.pause()
+        pane = app.query_one("#stats")
+        monkeypatch.setattr(pane, "tick", lambda: None)   # the made-up session stays shown
+        pane.show(busy_snapshot(time.time()), "demo", time.time())
+        await pilot.pause()
+        built = []
+        monkeypatch.setattr(stats, "render", lambda *a, _r=stats.render: (built.append(1), _r(*a))[1])
+        dirty = []
+        monkeypatch.setattr(pane, "refresh", lambda *regions, **k: dirty.extend(regions))
+        pane.animate(pane.frame + 1)
+        lines = {y for r in dirty for y in range(r.y, r.bottom)}
+        assert lines == {y + pane.gutter.top for y in pane.bars}, "the bars' lines alone"
+        for y in range(pane.size.height):
+            pane.render_line(y)
+        assert not built, "the panel's Text isn't built again for a frame"
+        pane.rebuild()   # a tick with nothing new: nothing drawn again
+        assert not built and not dirty[len(lines):]
