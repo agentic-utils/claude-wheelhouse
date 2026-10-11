@@ -13,11 +13,52 @@ def truecolour(environ=os.environ) -> None:
         environ["TEXTUAL_COLOR_SYSTEM"] = "truecolor"
 
 
+def client_args(p: argparse.ArgumentParser, sub: bool = False) -> None:
+    """How the app reaches the hub: the local daemon by default, started if none runs. Given
+    before or after tui or tutorial: a subcommand's defaults are left out (SUPPRESS), so it
+    never undoes what was given before it."""
+    unset = {"default": argparse.SUPPRESS} if sub else {}
+    how = p.add_mutually_exclusive_group()
+    how.add_argument("--local", action="store_true", **unset, help="run the hub in this process, without the "
+                     "daemon (the wheelhouse as it was before the daemon)")
+    how.add_argument("--connect", metavar="HOST:PORT", **unset, help="use the daemon on another machine (never "
+                     "started or stopped from here); its token from --token-file, else WHEELHOUSE_TOKEN, else asked for")
+    p.add_argument("--token-file", metavar="PATH", **unset, help="with --connect: a file holding the daemon's token")
+
+
+def run_app(args, store=None) -> None:
+    """The app, through the client asked for: the local daemon's (started, or joined), another
+    machine's (--connect), or a hub of its own (--local)."""
+    truecolour()
+    from .tui import WheelhouseApp
+    if args.local:
+        app = WheelhouseApp(store)
+        from .connect import holder
+        if holder(app.store.path.parent) is not None:   # as two apps did
+            app.said.append(("a wheelhouse daemon is running too: two hubs are acting on the sessions", "warning"))
+        app.run()
+        return
+    from .auth import TokenError
+    from .connect import NoDaemon, given_token, local_client, remote_client
+    from .store import db_path
+    try:
+        if args.connect:
+            client, said = remote_client(args.connect, given_token(args.token_file))
+        else:
+            client, said = local_client(db_path().parent)
+    except (NoDaemon, TokenError, OSError) as e:
+        sys.exit(f"claude-wheelhouse: {e}")
+    app = WheelhouseApp(client=client)   # which lets go of the client as it closes
+    app.said += [(text, "information") for text in said]
+    app.run()
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="claude-wheelhouse", description="Sidecar for parallel Claude Code sessions")
+    client_args(p)
     sub = p.add_subparsers(dest="cmd")
-    sub.add_parser("tui", help="the wheelhouse app (default)")
-    sub.add_parser("tutorial", help="start the tutorial afresh, then open the wheelhouse app")
+    client_args(sub.add_parser("tui", help="the wheelhouse app (default)"), sub=True)
+    client_args(sub.add_parser("tutorial", help="start the tutorial afresh, then open the wheelhouse app"), sub=True)
     run = sub.add_parser("run", help="inside a launched tab: exec Claude for a session")
     run.add_argument("session_id")
     host = sub.add_parser("host", help="run a session through the Agent SDK (started by the wheelhouse)")
@@ -25,12 +66,14 @@ def main() -> None:
     sub.add_parser("mcp", help="the per-session MCP server (stdio)")
     sub.add_parser("monitor", help="the per-session plugin monitor")
     sub.add_parser("protocol", help="print everything wheelhouse puts into a launched session")
-    daemon = sub.add_parser("daemon", help="serve the wheelhouse over HTTP for remote clients (no client uses it yet)")
+    daemon = sub.add_parser("daemon", help="serve the wheelhouse over HTTP (the app starts it, or joins it)")
     daemon.add_argument("--address", default=None, help="the IP address to listen on (default 127.0.0.1; "
                         "never 0.0.0.0): the VPN interface's, to reach it from another machine")
     daemon.add_argument("--port", type=int, default=None, help="the port to listen on (default 7428)")
     daemon.add_argument("--name", action="append", default=[], help="another name clients reach this machine by "
                         "(a VPN's name for it), so their requests are accepted: repeat for more")
+    token = sub.add_parser("token", help="print the daemon's token, for a remote client (--connect)")
+    token.add_argument("--rotate", action="store_true", help="replace it: every client with the old one is refused")
     args = p.parse_args()
 
     if args.cmd == "run":
@@ -51,21 +94,25 @@ def main() -> None:
     elif args.cmd == "protocol":
         from .launch import injected
         print(injected())
+    elif args.cmd == "token":
+        from . import auth
+        from .store import db_path
+        state_dir = db_path().parent
+        try:
+            print(auth.write(state_dir) if args.rotate else auth.read(auth.path(state_dir)))
+        except (auth.TokenError, OSError) as e:
+            sys.exit(f"claude-wheelhouse: {e} (the daemon makes it the first time it starts)")
     elif args.cmd == "tutorial":
-        truecolour()
         from .store import Store
-        from .tui import WheelhouseApp
         from .tutorial import start
         store = Store()
         try:
             start(store)
         except Exception as e:
             sys.exit(f"couldn't start the tutorial: {e}")
-        WheelhouseApp(store).run()
+        run_app(args, store)
     elif args.cmd == "monitor":
         from .monitor import main as monitor_main
         monitor_main()
     else:
-        truecolour()
-        from .tui import WheelhouseApp
-        WheelhouseApp().run()
+        run_app(args)
