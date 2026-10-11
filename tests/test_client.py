@@ -323,3 +323,30 @@ def test_a_listener_taking_the_daemons_port_after_it_dies_is_never_sent_the_toke
         squat.close()
     finally:
         c.disconnect()
+
+
+def test_a_command_sent_then_unreachable_says_it_may_have_been_done(store, sid, served, monkeypatch):
+    """The first try reaches the daemon and its answer is lost; the second can't connect.
+    Not "nothing was sent": the person would send it again, and the session get it twice."""
+    d = served(store.path)
+    real = httpx2.HTTPTransport()
+    posts = []
+
+    class SentThenGone(httpx2.BaseTransport):
+        def handle_request(self, request):
+            if request.method == "POST":
+                posts.append(request.headers["idempotency-key"])
+                if len(posts) == 1:
+                    real.handle_request(request).read()
+                    raise httpx2.ReadError("the link dropped")
+            if posts:
+                raise httpx2.ConnectError("the daemon has gone")
+            return real.handle_request(request)
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: None)
+    c = RemoteClient(d.url, TOKEN, transport=SentThenGone())
+    try:
+        done = c.submit((sid, None), "once")
+        assert (done.ok, [n.text for n in done.notices]) == (False, [LOST])
+        assert [m["body"] for m in store.drafts(sid)] == ["once"], "it was done"
+    finally:
+        c.disconnect()

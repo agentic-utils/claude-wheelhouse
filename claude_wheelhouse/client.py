@@ -312,13 +312,17 @@ class RemoteClient:
         key if its answer was lost, so it's done once. Raises what the hub would (SessionGone,
         KeyError, ValueError); otherwise the daemon's JSON. The next refresh fetches at once."""
         key = str(uuid.uuid4())
+        sent = False   # once it may have reached the daemon, a failure is LOST, never "nothing was sent"
         try:
             for attempt in range(2):
                 try:
                     return self.request("POST", path, {} if body is None else body, key)
                 except Unreachable:
+                    if sent:
+                        raise Unreachable(LOST) from None
                     raise
                 except self.httpx.TransportError:
+                    sent = True
                     if attempt:
                         raise Unreachable(LOST) from None
                     time.sleep(0.5)
