@@ -21,6 +21,7 @@ from rich.text import Text
 from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.cache import LRUCache
 from textual.message import Message
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
@@ -422,6 +423,7 @@ class SinkList(DataTable):
     the cursor steps off a blank row the way it was going. Home and End scroll sideways."""
 
     def __init__(self, **kwargs):
+        self.blank_lines: LRUCache[tuple, Strip] = LRUCache(1000)   # _render_line
         super().__init__(**kwargs)
         self.sink: Sink | None = None
 
@@ -486,6 +488,35 @@ class SinkList(DataTable):
 
     def blank(self, row: int) -> bool:
         return 0 <= row < self.row_count and self.ordered_rows[row].key.value.startswith(BLANK)
+
+    def _render_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
+        """DataTable's line, kept by whether the cursor and the mouse are on its row, not by
+        where they are, as DataTable keeps it: a cursor move draws again the two rows it
+        leaves and lands on, not every row. In DataTable's own line cache, which it clears
+        whenever its looks or its data change. A blank row (Sink), most of the session
+        list's, is kept apart, by its place and the columns' widths, as a change to the
+        data leaves it as it was: a rebuild draws again the real rows alone."""
+        try:
+            row_key, _ = self._get_offsets(y)
+        except LookupError:
+            return super()._render_line(y, x1, x2, base_style)
+        if self.cursor_type != "row":
+            return super()._render_line(y, x1, x2, base_style)
+        row = -1 if row_key is self._header_row_key else self._row_locations.get(row_key)
+        state = (x1, x2, self.size.width, self.cursor_coordinate.row == row, self.hover_coordinate.row == row,
+                 base_style, self.show_cursor, self._show_hover_cursor, self._pseudo_class_state)
+        if row >= 0 and row_key.value.startswith(BLANK):
+            cache, key = self.blank_lines, (row, tuple(c.get_render_width(self) for c in self.ordered_columns), *state)
+        else:
+            cache, key = self._line_cache, ("row", y, self._update_count, *state)
+        strip = cache.get(key)
+        if strip is None:
+            strip = cache[key] = super()._render_line(y, x1, x2, base_style)
+        return strip
+
+    def notify_style_update(self) -> None:
+        self.blank_lines.clear()
+        super().notify_style_update()
 
     def validate_cursor_coordinate(self, value: Coordinate) -> Coordinate:
         value = super().validate_cursor_coordinate(value)

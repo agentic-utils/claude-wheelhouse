@@ -29,7 +29,7 @@ from claude_wheelhouse.splitter import Splitter
 from claude_wheelhouse.store import Store, mode
 from claude_wheelhouse.tui import (BLANK, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice, Confirm,
                                    Folders, Hint, PermissionButtons, RenameSession, SendBar, SessionList, ThreadView,
-                                   Transcript, cylon, hint, render)
+                                   Transcript, cylon, fill, hint, render)
 
 
 @pytest.mark.anyio
@@ -3112,6 +3112,39 @@ async def test_an_eye_frame_draws_the_busy_rows_alone(store, sid, tmp_path, monk
         app.sweep_eyes()
         assert t._update_count == count, "the table's data is as it was: its caches stand"
         assert drawn == [t.get_row_index(sid)], "the busy row alone is drawn again"
+
+
+@pytest.mark.anyio
+async def test_a_cursor_move_draws_only_the_rows_it_leaves_and_lands_on(store, sid, tmp_path):
+    for n in range(3):
+        store.create_session(str(tmp_path), name=f"s{n}")
+    store.set_parked(sid, True)   # at the foot of the list's room, below blank rows
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        t = app.session_list
+        assert any(t.blank(row) for row in range(t.row_count))
+        t.focus()
+        t.move_cursor(row=0)
+        await pilot.pause()
+        lines = range(t.size.height)
+        for y in lines:
+            t.render_line(y)
+        drawn = []
+        draw = t._render_line_in_row
+        t._render_line_in_row = lambda key, *a, **k: (drawn.append(key.value), draw(key, *a, **k))[1]
+        await pilot.press("down")
+        await pilot.pause()
+        assert t.cursor_row == 1
+        for y in lines:
+            t.render_line(y)
+        assert set(drawn) == {t.ordered_rows[0].key.value, t.ordered_rows[1].key.value}, \
+            "the rows the cursor left and landed on, not the blank ones or the rest"
+        drawn.clear()
+        fill(t, [(r.key.value, ("" if t.blank(i) else "x",) * len(t.columns)) for i, r in enumerate(t.ordered_rows)])
+        for y in lines:
+            t.render_line(y)
+        assert drawn and not any(k and k.startswith(BLANK) for k in drawn), "a change to the data leaves the blank rows be"
 
 
 @pytest.mark.anyio
