@@ -245,7 +245,7 @@ by time, with all its state in the database:
   (`stats.before`), so a `/model` then `/exit` long before the wheelhouse opened counts. Every host applies it once more as it starts and as it
   takes a session back from its shell tab, before reading the columns to launch, retrying
   through a locked database (its activity line says it waits on one) until the session is
-  parked or ended. A host that died with its tab open, or a Restore's host taking the
+  parked or ended (a Park or End pressed meanwhile is passed on once the lock clears). A host that died with its tab open, or a Restore's host taking the
   session, carries the same.
 - Columns set before choices were dated count as chosen when code that dates them first
   opened the database (the migration adding `model_chosen_at` and `effort_chosen_at`), so a

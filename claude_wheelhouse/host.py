@@ -842,8 +842,8 @@ class Host:
         its tab, or a Restore's after this one died) carries the same. Retried through a
         locked database while the session wants a host, saying so on its activity line:
         launching first would lose what was typed. A transcript that can't be read carries
-        nothing. False if the host is to stop instead: stopping, or the session parked, gone,
-        or asked to park or end meanwhile."""
+        nothing. False if the host is to stop instead: stopping, or the session parked or
+        gone meanwhile. A Park or End pressed meanwhile is acted on by poll once the lock clears."""
         try:   # a whole transcript, maybe hundreds of MB: off the event loop
             typed = await asyncio.to_thread(stats.typed_in, transcript.locate(self.sid))
         except OSError as e:
@@ -860,10 +860,9 @@ class Host:
             try:
                 session = self.store.session(self.sid)
             except sqlite3.OperationalError:
-                # unread: still wanted, as far as anyone can tell
-                session = {"parked": 0, "park_requested_at": None, "end_requested_at": None}
-            if session is None or session["parked"] or session["park_requested_at"] or session["end_requested_at"]:
-                self.stopping = True   # Park or End pressed meanwhile: poll, which acts on those, never runs
+                session = {"parked": 0}   # unread: still wanted, as far as anyone can tell
+            if session is None or session["parked"]:
+                self.stopping = True
             elif not waiting:
                 waiting = True
                 await self.say("waiting on a locked database")

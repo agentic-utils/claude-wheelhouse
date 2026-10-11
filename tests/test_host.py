@@ -521,33 +521,50 @@ def test_a_locked_database_after_connecting_never_stops_the_host(host, store, si
 @pytest.mark.parametrize("how, desc", [
     ("park", "parked while it waits on a locked database: it stops, never launching"),
     ("stop", "told to stop while it waits: it stops, never launching"),
-    ("park_request", "Park pressed while it waits: it stops, never launching"),
-    ("end_request", "End pressed while it waits: it stops, never launching"),
+    ("park_request", "Park pressed while it waits: it keeps waiting, then passes it on once the lock clears"),
+    ("end_request", "End pressed while it waits: it keeps waiting, then passes it on once the lock clears"),
     ("malformed", "a database error other than a lock: said as the database's, not Claude Code's"),
 ])
 def test_a_host_carrying_back_at_start_stops_when_it_should_and_says_why(store, sid, monkeypatch, how, desc):
-    """Round 64, M3: carry_back's retries through a locked database are visible and end."""
+    """Round 64, M3: carry_back's retries through a locked database are visible and end.
+    Round 71: a Park or End pressed meanwhile is honoured by poll, not dropped by stopping."""
     monkeypatch.setattr(host_mod, "STEADY_TRIES", (0, 0))
+    monkeypatch.setattr(host_mod, "POLL_SECONDS", 0.01)
+    monkeypatch.setattr(host_mod, "transcript_exists", lambda sid: True)
     said, set_activity = [], store.set_activity
     monkeypatch.setattr(store, "set_activity", lambda i, a: (said.append(a), set_activity(i, a)))
+    locked, carry = {"on": True}, host_mod.stats.carry
 
-    def carry(*a):
-        raise (sqlite3.DatabaseError("database disk image is malformed") if how == "malformed"
-               else sqlite3.OperationalError("database is locked"))
-    monkeypatch.setattr(host_mod.stats, "carry", carry)
-    h = Host(store, sid, client_factory=FakeClient, person="doug")
+    def flaky(*a):
+        if how == "malformed":
+            raise sqlite3.DatabaseError("database disk image is malformed")
+        if locked["on"]:
+            raise sqlite3.OperationalError("database is locked")
+        return carry(*a)
+    monkeypatch.setattr(host_mod.stats, "carry", flaky)
+    h = Host(store, sid, client_factory=StreamClient, person="doug")
+
+    async def until(done):
+        while not done():
+            await asyncio.sleep(0.01)
 
     async def go():
         task = asyncio.create_task(h.run())
         await asyncio.sleep(0.05)
-        while how != "malformed" and not said and not task.done():   # under load: waiting before it's asked to stop
-            await asyncio.sleep(0.01)
+        if how != "malformed":   # under load: waiting before it's asked to stop
+            await asyncio.wait_for(until(lambda: said or task.done()), 5)
         if how == "park":
             store.set_parked(sid, True)
         elif how == "stop":
             h.stopping = True
         elif how.endswith("_request"):
-            store.request(sid, how.split("_")[0])
+            what = how.split("_")[0]
+            store.request(sid, what)
+            await asyncio.sleep(0.1)
+            assert not task.done() and h.client is None, f"{desc}: still waiting, not launched"
+            locked["on"] = False
+            await asyncio.wait_for(until(lambda: h.client and REQUEST_TEXT[what] in h.client.queries), 5)
+            h.stopping = True
         await asyncio.wait_for(task, 5)
     run(go())
     assert h.client is None, desc
