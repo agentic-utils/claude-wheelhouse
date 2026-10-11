@@ -181,6 +181,22 @@ def test_adopting_a_tracked_session_reuses_its_row(store, sessions, proc, name, 
     assert store.session(SID)["name"] == expected, desc
 
 
+@pytest.mark.parametrize("tracked, desc", [
+    (True, "a tracked session keeps its name (review 76: the rename stayed)"),
+    (False, "no row is made"),
+])
+def test_a_tab_another_machine_asked_for_changes_nothing(store, sessions, proc, monkeypatch, tracked, desc):
+    """may_tab false (another machine) and a tab to open: refused before anything changes."""
+    tabs = []
+    monkeypatch.setattr(launch, "open_tab", lambda store, sid, notice=True: tabs.append(sid))
+    if tracked:
+        store.create_session(REPO, name="Rare caper", sid=SID)
+    with pytest.raises(launch.NotHere):
+        adopt.adopt(store, candidate(), "LG", sessions, proc, sdk=False, may_tab=False)
+    assert tabs == [], desc
+    assert [s["name"] for s in store.sessions()] == (["Rare caper"] if tracked else []), desc
+
+
 def test_a_failed_launch_leaves_no_row(store, sessions, proc):
     def boom(s, sid):
         raise RuntimeError("wt.exe missing")

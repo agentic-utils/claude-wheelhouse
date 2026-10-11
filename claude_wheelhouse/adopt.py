@@ -153,7 +153,9 @@ def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSI
     run now; the tutorial's, a tab), tracked already or not. Refuses while it is still
     running. A session the wheelhouse already tracks keeps its row (and its items), renamed
     if asked. sdk: whether SDK mode is on, else features.sdk_enabled(). may_tab false (a
-    request from another machine): a tab is refused (launch.NotHere), and a new row goes."""
+    request from another machine): a tab is refused (launch.NotHere) before anything changes."""
+    if not may_tab and launch.restore_runner(store, c.cwd, sdk) == "tab":   # before any rename or row
+        raise launch.NotHere({"name": name or c.name, "cwd": c.cwd, "id": c.id})
     open_tab = open_tab or functools.partial(launch.restore_session, sdk=sdk, may_tab=may_tab)
     pid = liveness.running_pid(c.id, sessions, proc)
     if pid:
