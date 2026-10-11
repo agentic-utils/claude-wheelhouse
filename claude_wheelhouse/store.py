@@ -149,11 +149,16 @@ CREATE INDEX IF NOT EXISTS messages_unsent
 # the tables the daemon marks (marks), each bumped by a trigger on every row inserted,
 # updated or deleted, by any connection: in the schema, so a writer running older code
 # bumps them too once any newer one has opened the database. Each trigger is one statement
-# of its own, as its body holds a ";"
+# of its own, as its body holds a ";". Their names carry TRIGGERS_VERSION, as CREATE
+# TRIGGER IF NOT EXISTS never replaces one: a changed body takes the next version, and
+# opening drops any marks trigger of another name (TRIGGER_NAMES)
 MARKED = ("items", "messages")
-TRIGGERS = [f"CREATE TRIGGER IF NOT EXISTS {table}_marked_{op.lower()} AFTER {op} ON {table} "
+TRIGGERS_VERSION = 1
+TRIGGER_NAMES = {f"{table}_marked_{op.lower()}_v{TRIGGERS_VERSION}": (table, op)
+                 for table in MARKED for op in ("INSERT", "UPDATE", "DELETE")}
+TRIGGERS = [f"CREATE TRIGGER IF NOT EXISTS {name} AFTER {op} ON {table} "
             f"BEGIN UPDATE marks SET n = n + 1 WHERE kind = '{table}'; END"
-            for table in MARKED for op in ("INSERT", "UPDATE", "DELETE")]
+            for name, (table, op) in TRIGGER_NAMES.items()]
 
 # columns added after the first release: (table, column, type)
 ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_requested_at", "TEXT"),
@@ -269,6 +274,9 @@ class Store:
                 if statement.strip():
                     db.execute(statement)
             db.executemany("INSERT OR IGNORE INTO marks (kind) VALUES (?)", [(t,) for t in MARKED])
+            for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'").fetchall():
+                if "_marked_" in name and name not in TRIGGER_NAMES:   # an older version's
+                    db.execute(f'DROP TRIGGER "{name}"')
             for trigger in TRIGGERS:
                 db.execute(trigger)
             # a decision used to be finished once seen, and now stays until closed: those

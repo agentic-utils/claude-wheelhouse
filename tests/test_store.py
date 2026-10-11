@@ -3,7 +3,7 @@ import threading
 
 import pytest
 
-from claude_wheelhouse.store import SessionGone, Store
+from claude_wheelhouse.store import TRIGGER_NAMES, SessionGone, Store
 
 
 def test_pragmas_make_every_commit_durable(store):
@@ -369,6 +369,20 @@ def test_an_older_database_gains_the_marks_on_open(db_file, sid, store):
     assert len(again.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'trigger'").fetchall()) == 6
     store.post_item(sid, "task", "after")   # by the connection opened before: it sees the triggers too
     assert marks(again) == {"items": 1, "messages": 0}
+
+
+def test_an_older_versions_marks_triggers_are_replaced_and_a_repeat_open_changes_nothing(db_file, sid, store):
+    store.db.execute("DROP TRIGGER items_marked_insert_v1")
+    store.db.execute("CREATE TRIGGER items_marked_insert AFTER INSERT ON items BEGIN SELECT 1; END")
+    Store(db_file)
+    names = {r[0] for r in store.db.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")}
+    assert names == set(TRIGGER_NAMES)
+    cookie = store.db.execute("PRAGMA schema_version").fetchone()[0]
+    Store(db_file)
+    assert store.db.execute("PRAGMA schema_version").fetchone()[0] == cookie
+    before = marks(store)["items"]
+    store.post_item(sid, "task", "after")
+    assert marks(store)["items"] == before + 1, "the item counted once, by the current trigger alone"
 
 
 @pytest.mark.parametrize("write, counted, desc", [
