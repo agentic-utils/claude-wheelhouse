@@ -267,12 +267,16 @@ so an hour's quiet is what turns the cache cold.
   the host posts one question item, `context 220k: compact?`, with Compact a key away (`C`
   with it selected). It is one per crossing: the item's answer column (`NUDGE`) remembers
   it, so neither a restarted host nor the person closing it brings a second. Once a turn
-  ends under the line again (compacted), the item closes with a note, and the next
-  crossing nudges afresh.
+  ends compacted, or under `NUDGE_RESET_TOKENS` (150k), the item closes with a note, and
+  the next crossing nudges afresh: a context hovering about 200k brings one nudge, not one
+  per crossing. A message the person sends on it goes to the session as a general one
+  (the session never posted it), and the host answers it there itself.
 - **Keepalive.** A session whose last turn ended over `KEEPALIVE_TOKENS` (150k), with
-  nothing running (so only the person can move it on: its open questions and decisions,
-  or nothing at all), gets a tiny turn from the host `KEEPALIVE_AFTER` (55 min) after its
-  last one, telling it to reply with one word and do nothing else. That keeps the hour's
+  nothing running and waiting on the person (an open question other than the nudge, an
+  unseen decision or an open permission of its own), gets a tiny turn from the host
+  `KEEPALIVE_AFTER` (55 min) after its last one, telling it to reply with one word and do
+  nothing else. It leaves the activity line as it found it (an error's, Interrupt's or a
+  compaction's), unless it fails itself. That keeps the hour's
   cache warm for a few thousand tokens of reads instead of a cold rewrite of the whole
   context. The keepalive's own end restarts the 55 minutes but not the quiet time, so they
   stop once the session has been quiet `KEEPALIVE_FOR` (8 h): an abandoned session doesn't
@@ -284,24 +288,38 @@ so an hour's quiet is what turns the cache cold.
   recorded context is over `COMPACT_FIRST_TOKENS` (150k) offers Compact first, Relaunch
   now or Cancel. Compact first is the hub's (`Hub.compact_then_relaunch`, and the daemon's
   relaunch with `compact: true`): it gives the host the ordinary `compact` command, so a
-  stale host understands it too, and marks the activity line so an earlier compaction's
-  line can't be taken for this one's. The relaunch is kept in `sessions.relaunch` as
-  compacting; each tick, once the activity line reads `idle · compacted`, the host is
-  stopped and started again as any Relaunch. Interrupt, Compact getting no notes, or 30
-  minutes without a compaction give it up, saying so, with the host left running.
+  stale host understands it too, unless a Compact is under way already. The relaunch is
+  kept in `sessions.relaunch` with the time Compact was asked for, after the three values
+  older code reads. Each tick, once the host has recorded a context under 150k since then
+  (`context_at`, which no later activity line hides) and its activity line is idle again
+  (never mid-turn, as a turn queued behind /compact would be), the host is stopped and
+  started again as any Relaunch. The deadline (30 minutes) is checked first, so a
+  wheelhouse started hours later never restarts it. Interrupt (from any wheelhouse: it
+  clears the store's row), Compact getting no notes, the session going to a shell tab or
+  another host give it up, saying so, with the host left running; a host that died is
+  relaunched as any stopped one.
 - **The host posts the reply.** One session made about 87 `reply` calls a day, each
-  repeating its chat as the reply's text. Now the host, which knows which refs the person's messages in
-  a turn were on, posts that turn's chat (every text block, as the pane shows it) as the
-  reply on each when the turn ends (`Store.host_reply`), and `protocol_sdk.md` asks the
-  session for a short `update_item(ref, status=...)` alone; tab sessions keep `reply` as
-  before (`protocol_tab.md`). PROTOCOL_VERSION 8. An errored turn posts nothing, so the
-  item still awaits the session. The turns sent are matched to their ends in order, so a
-  turn Claude Code starts itself, ending while one of ours waits behind it, would take
-  our turn's refs, as it already takes its place in `pending`; once every turn sent has
-  ended, the matching starts clean.
+  repeating its chat as the reply's text. Now the host, which knows which refs the
+  person's messages in a turn were on, posts what that turn ends by saying (its text after
+  its last tool call, not a subagent's) as the reply on each when the turn ends
+  (`Store.host_reply`), and `protocol_sdk.md` asks the session to end its turn with the
+  answer and declare the status with a short `update_item(ref, status=...)` alone; tab
+  sessions keep `reply` as before (`protocol_tab.md`). PROTOCOL_VERSION 8, and 10 for the
+  final text. An errored turn, or one with no closing text, posts nothing; the session's
+  status call settles the item all the same (a `status` message, which AWAITING counts as
+  a reply). Nor is it posted where the session has replied itself since the person's
+  message (a relaunched session copying its history).
+  Each turn goes with a uuid, and the host asks Claude Code to replay user messages
+  (`replay-user-messages`), which it does as it takes each turn up: a turn's end answers
+  the turns replayed in it. As probed on claude 2.1.296: a turn Claude Code starts itself
+  (a background task's notification) replays none of ours; a turn sent while one runs is
+  taken up into it at the next tool call, and one end answers both; an interrupted turn's
+  end lists it alone, and the turns queued behind it still run. (The result message's own
+  `user_message_uuids` say the same, but the SDK drops that field.)
 - **Slimmer decisions.** A decision's alternative, why and reverse were three required
   fields, each its own labelled paragraph. They are one short line now, `why` ("over
   Postgres: no server to run; undo: swap the DSN"), shown as **Why:** under the detail:
   the same information in fewer words, for the session to write and the person to read.
-  PROTOCOL_VERSION 9. Question bodies are left as they are, uncapped: a cap could cut what
+  PROTOCOL_VERSION 9. A session still on the older protocol may send `alternative` and
+  `reverse`: post_item folds them into `why`. Question bodies are left as they are, uncapped: a cap could cut what
   a question needs to stand on its own.

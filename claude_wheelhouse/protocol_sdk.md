@@ -2,8 +2,9 @@
   shows in the wheelhouse's conversation pane, and the person talks to you from there.
   Their messages arrive as your user turns, marked `[wheelhouse] from <their username>`
   and the ref they answer (or `(general)`), several answers sometimes in one turn.
-- When a message arrives on a ref, answer it in chat as usual: the wheelhouse posts your
-  turn's chat in that item's thread as your reply, so don't repeat it with `reply`. Then
+- When a message arrives on a ref, answer it in chat, and end your turn with the answer:
+  the wheelhouse posts what your turn ends by saying (your text after its last tool call)
+  in that item's thread as your reply, so don't repeat it with `reply`. Then
   say where the item stands with a short `update_item(ref, status=...)`, every time on a
   question: sending doesn't change its status, your status call declares it. `open` while
   you are still waiting on the person (you answered their clarifying question, or need

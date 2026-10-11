@@ -24,7 +24,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   for: moving to another clears the box, and coming back restores it. Each session shows
   its queued count (`✉ 3`). Sending doesn't change a question's status: the session's
   reply declares it, `open` while it still needs you or `answered`. A session run in the
-  wheelhouse doesn't write its reply twice: its host posts the turn's chat in the item's
+  wheelhouse doesn't write its reply twice: its host posts what the turn ends by saying in the item's
   thread as the reply, and the session sets the status alone. Until it replies the
   question shows as `processing` (dimmed), awaiting the session, and the session list's
   question count leaves it out: it counts only questions awaiting you, a queued answer
@@ -162,8 +162,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   with `/model` and `/effort`; the
   bar above the footer has a line saying what the session in context is doing. A session whose
   context passes 200k tokens posts one question item, `context 220k: compact?`, with Compact a key
-  away (`C`): it closes by itself once the session is compacted, and comes back only when the
-  context passes 200k again. One over 150k that sits idle waiting on you gets a one-word
+  away (`C`): it closes by itself once the session is compacted (or back under 150k), and comes
+  back only when the context passes 200k again. One over 150k that sits idle with a question,
+  decision or permission waiting on you gets a one-word
   keepalive turn every 55 minutes, for up to 8 hours, so its prompt cache (an hour's) doesn't go
   cold and get written again whole. Closing the wheelhouse leaves the hosts
   running. `WHEELHOUSE_RUNNER=tab` makes tabs the default again. Restore and Adopt bring a

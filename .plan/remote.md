@@ -106,7 +106,7 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
   a Relaunch) publishes `sessions` for it, and a transcript read that brought something
   `conversation` and `stats` for it.
 - **Relaunch in progress** is kept in a `sessions.relaunch` column (the stopped host, the
-  deadline, and whether it is compacting first), so any hub started again in time, the daemon's or the TUI's, carries it
+  deadline, and, compacting first, when Compact was asked for), so any hub started again in time, the daemon's or the TUI's, carries it
   on. One found past its deadline (the wheelhouse was down, the machine off) is let go
   with "<name> wasn't relaunched: Restore it", its host not started: the wheelhouse never
   restores a dead host by itself.

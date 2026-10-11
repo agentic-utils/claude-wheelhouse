@@ -52,7 +52,8 @@ DECISION_FIELDS = (("why", "Why"),)
 # itself (subagents.py), so the protocol no longer asks a session to post them. 8: a hosted
 # session's host posts its chat as the reply on the ref answered, so the protocol asks it
 # for the status alone. 9: a decision's alternative, why and reverse are one short line, `why`.
-PROTOCOL_VERSION = 9
+# 10: the host posts only what a turn ends by saying, so the protocol asks it to end with the answer.
+PROTOCOL_VERSION = 10
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.
