@@ -124,6 +124,16 @@ async def test_each_route(daemon, store, sid, tmp_path, method, path, body, did,
     assert did(store, sid, r), f"{desc}: {r.text}"
 
 
+async def test_a_change_during_a_shell_hand_over_says_it_applies_on_taking_it_back(daemon, store, sid):
+    store.set_runner(sid, "sdk")
+    store.set_shell(sid, "tab")
+    daemon.tick()
+    r = await call(daemon, "POST", f"/sessions/{sid}/effort", {"effort": "low"})
+    assert r.json()["ok"] and store.session(sid)["effort"] == "low", r.text
+    assert told(r) == [f"{store.session(sid)['name'] or sid[:8]}: effort low once the wheelhouse takes it back "
+                       "from its shell tab"], r.text
+
+
 async def test_the_inbox_and_a_thread_carry_no_seq_from_a_database_that_had_it(daemon, store, sid):
     """#70: items.seq is retired, but a database 2bbb99a opened keeps the column, unused."""
     store.db.execute("ALTER TABLE items ADD COLUMN seq INTEGER")

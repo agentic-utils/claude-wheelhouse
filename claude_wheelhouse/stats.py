@@ -67,6 +67,7 @@ class Turn:
     main: bool
     output: int = 0
     effort: str | None = None   # the effort it ran at, as Claude Code recorded it
+    requested: str | None = None   # the model asked for (a /model's, say), as Claude Code recorded it
 
 
 @dataclass
@@ -115,7 +116,8 @@ def parse(lines, seen: set, main: bool) -> tuple[list[Turn], list[Compaction]]:
         fresh = inp + made
         turns.append(Turn(at, read, fresh if read else 0, 0 if read else fresh, inp + made + read, ttl,
                           msg.get("model"), main and not rec.get("isSidechain"), usage.get("output_tokens", 0) or 0,
-                          rec.get("effort") if isinstance(rec.get("effort"), str) else None))
+                          rec.get("effort") if isinstance(rec.get("effort"), str) else None,
+                          rec.get("requestedModel") if isinstance(rec.get("requestedModel"), str) else None))
     return turns, compactions
 
 
@@ -164,6 +166,7 @@ class Snapshot:
     estimate: bool = False         # the context is the host's count since a compaction (current)
     max: int | None = None         # the host's window, with it
     effort: str | None = None      # the main thread's latest response's
+    requested: str | None = None   # the model the main thread's latest response asked for
 
     @property
     def window(self) -> int:
@@ -279,7 +282,8 @@ class UsageFollower:
         """Takes in what's been appended since the last read. True if anything was."""
         now = time.time() if now is None else now
         snap = Snapshot(self.snap.model, self.snap.context, self.snap.peak, self.snap.last_at, self.snap.ttl,
-                        list(self.snap.compactions), list(self.snap.turns), effort=self.snap.effort)
+                        list(self.snap.compactions), list(self.snap.turns), effort=self.snap.effort,
+                        requested=self.snap.requested)
         changed = False
         for path in self.paths(now):
             try:
@@ -350,7 +354,7 @@ def take(s: Snapshot, turns: list[Turn], compactions: list[Compaction]) -> None:
         s.turns.append(t)
         if t.main:
             s.model, s.context, s.peak, s.last_at = t.model or s.model, t.context, max(s.peak, t.context), t.at
-            s.effort = t.effort or s.effort
+            s.effort, s.requested = t.effort or s.effort, t.requested or s.requested
             s.ttl = t.ttl or s.ttl
             c = s.compactions[-1] if s.compactions else None
             if c and c.after is None and c.at <= t.at:
@@ -497,42 +501,106 @@ def stat_rows(view, now: float) -> list[Text]:
     return out + [label("compact") + Text(compact, style=hexc(TEXT if view.compactions else DIM))]
 
 
-def title(view, name: str, setting: dict | None = None, room: int = 0) -> str:
-    """The panel's title. For one session: its name, model, effort and window, the model
-    and effort what it is set to (setting: Hub.model_state) where known, else what its
-    transcript last ran. The window loses its word where the title has no room for it."""
+def titled(view, name: str, setting: dict | None = None, room: int = 0) -> tuple[str, bool]:
+    """The panel's title, and whether it says the effort. For one session: its name, model,
+    effort and window, the model and effort as the stats pane has them (effort_of). Where
+    the title has no room, it gives up the window's word, then the window, then the name,
+    then the effort: the model is the last to go."""
     if isinstance(view, Totals):
-        return f"all running sessions · {view.sessions}"
+        return f"all running sessions · {view.sessions}", False
     setting = setting or {}
-    model = setting.get("model") or view.model
-    effort = setting.get("effort") or view.effort
+    model = setting.get("model") or view.requested or view.model
+    effort = effort_of(view, setting)
     window = tokens(view.max or window_for(model, view.peak))
-    parts = [name, models.name(model) or model_name(model), effort]
-    full = " · ".join(p for p in [*parts, f"{window} window"] if p)
-    return full if not room or len(full) <= room else " · ".join(p for p in [*parts, window] if p)
+    shown = models.name(model) or model_name(model)
+    for parts in ([name, shown, effort, f"{window} window"], [name, shown, effort, window], [name, shown, effort],
+                  [shown, effort], [shown]):
+        text = " · ".join(p for p in parts if p)
+        if not room or len(text) <= room:
+            break
+    return text, bool(effort) and effort in parts
+
+
+def title(view, name: str, setting: dict | None = None, room: int = 0) -> str:
+    return titled(view, name, setting, room)[0]
+
+
+def effort_of(view, setting: dict | None) -> str | None:
+    """The effort the pane shows, the slider's lit level: what the session is set to
+    (setting: Hub.model_state), else what its transcript last ran (a host on older code
+    that never recorded either)."""
+    return (setting or {}).get("effort") or getattr(view, "effort", None)
 
 
 SLIDER_ROW = 2   # the effort slider's line in the pane: under the panel's top border and a blank line
 PENDING = {"applying": "applying…", "on relaunch": "on relaunch: old host"}   # Hub.model_state's
+PENDING_SHORT = {"applying": "applying…", "on relaunch": "on relaunch"}       # where the line has less room
+LEVELS = " ".join(models.EFFORTS)   # the slider in full
+WIDEST = max(map(len, models.EFFORTS))
 
 
-def slider(current: str | None, focused: bool) -> Text:
-    """The effort slider: every level, a space apart to fit the pane, the current one lit
-    (brighter while the pane has focus); with focus, the keys too, where there's room."""
-    out = label("effort")
-    for i, level in enumerate(models.EFFORTS):
-        lit = f"bold #000000 on {hexc(ACCENT if focused else DIM)}"
-        out += Text(" " if i else "") + Text(level, style=lit if level == current else hexc(TEXT))
-    return out + Text("  ←/→" if focused else "", style=hexc(DIM))
+def slider_parts(current: str | None, width: int) -> list[tuple[str, str | None]]:
+    """The slider's line, as (text, the level a click on it picks): every level where the
+    line has room for them all, else the current one between arrows that step it (◂ high ▸),
+    padded to the widest level so the arrows stay put. Starting from high where nothing is
+    known, as the keys do."""
+    levels = models.EFFORTS
+    if width >= LABEL + len(LEVELS):
+        out = [("effort".ljust(LABEL), None)]
+        for i, level in enumerate(levels):
+            out += [(" ", None)] * bool(i) + [(level, level)]
+        return out
+    at = levels.index(current if current in levels else "high")
+    shown = current if current in levels else "?"
+    left = (WIDEST - len(shown)) // 2
+    right = WIDEST - len(shown) - left
+    head = "effort".ljust(LABEL) if width >= LABEL + WIDEST + 4 else "eff "
+    return [(head, None), ("◂", levels[at - 1] if at else None), (" " * (left + 1), None),
+            (shown, current if current in levels else None), (" " * (right + 1), None),
+            ("▸", levels[at + 1] if at + 1 < len(levels) else None)]
 
 
-def slider_spans() -> list[tuple[int, int, str]]:
-    """Where each level is on the slider's line, from the line's start: (first cell, past the last, level)."""
-    out, x = [], LABEL
-    for level in models.EFFORTS:
-        out.append((x, x + len(level), level))
-        x += len(level) + 1
+def slider(current: str | None, focused: bool, width: int = LABEL + len(LEVELS)) -> Text:
+    """The effort slider (slider_parts) at a width, the current level lit (brighter while
+    the pane has focus); an arrow with nowhere to go dim. In full, with focus, the keys
+    too, where there's room."""
+    lit = f"bold #000000 on {hexc(ACCENT if focused else DIM)}"
+    out = Text()
+    for i, (text, level) in enumerate(slider_parts(current, width)):
+        if i == 0:
+            style = hexc(DIM)
+        elif text in ("◂", "▸"):
+            style = hexc(TEXT if level else DIM2)
+        elif level is not None and level == current:
+            style = lit
+        else:
+            style = hexc(TEXT) if text.strip() else ""
+        out += Text(text, style=style)
+    full = width >= LABEL + len(LEVELS)
+    return out + Text("  ←/→" if focused and full else "", style=hexc(DIM))
+
+
+def slider_spans(current: str | None = None, width: int = LABEL + len(LEVELS)) -> list[tuple[int, int, str]]:
+    """Where a click on the slider's line picks a level, from the line's start: (first
+    cell, past the last, the level), for the form slider draws at that width."""
+    out, x = [], 0
+    for text, level in slider_parts(current, width):
+        if level is not None:
+            out.append((x, x + len(text), level))
+        x += len(text)
     return out
+
+
+def pending_line(pending: str | None, width: int) -> Text:
+    """The line under the slider while a change is pending: under the levels where it fits,
+    else from the line's start, else shorter."""
+    full = PENDING.get(pending)
+    if full is None:
+        return Text()
+    for text in (" " * LABEL + full, full):
+        if len(text) <= width:
+            return Text(text, style=hexc(WARN))
+    return Text(PENDING_SHORT[pending], style=hexc(WARN))
 
 
 def panel(head: str, rows: list[Text], width: int) -> list[Text]:
@@ -570,16 +638,18 @@ def layout(view, name: str, note: str | None, usage: "AccountUsage", now: float,
     if view is None:
         body = said(note or "no sessions running", width - 2) + [Text()] + spaced(gauges(None, usage, now, width - 2))
         return panel("stats", body, width), []
-    top = []
+    head, says_effort = titled(view, name, setting, width - 6)
+    effort = effort_of(view, setting)
     if has_slider(view, setting):   # the line under it says while a change is pending: no jump when it's done
-        top = [Text(), slider(setting.get("effort"), focused),
-               label("") + Text(PENDING.get(setting.get("pending"), ""), style=hexc(WARN))]
+        top = [Text(), slider(effort, focused, width - 2), pending_line(setting.get("pending"), width - 2)]
+    elif effort and not says_effort and isinstance(view, Snapshot):   # a narrow pane: the effort, under the title
+        top = [Text(), label("effort") + Text(effort, style=hexc(TEXT))]
     else:
         top = [Text()]
     body = top + spaced(gauges(view, usage, now, width - 2)) + stat_rows(view, now)
     if note:   # beside a view: something went wrong reading it
         body += said(note, width - 2)
-    rows = panel(title(view, name, setting, width - 6), body, width)
+    rows = panel(head, body, width)
     return rows, charts(view.turns, now, width, height - len(rows), height)
 
 

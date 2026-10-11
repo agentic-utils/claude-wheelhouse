@@ -1520,3 +1520,96 @@ def test_a_genuine_error_after_an_interrupt_says_error(streamed, store, sid, cas
         await reader
     run(go())
     assert store.session(sid)["activity"] == "error: overloaded", desc
+
+
+class WatchedClient(SettingsClient):
+    """SettingsClient whose connect records the applied columns as it starts, and can fail."""
+    fail = False
+
+    async def connect(self):
+        s = self.store.session(self.sid)
+        self.seen = (s["applied_model"], s["applied_effort"])
+        if self.fail:
+            raise ConnectionError("Claude Code didn't start")
+        await super().connect()
+
+
+@pytest.mark.parametrize("fail, applied, desc", [
+    (False, ("claude-haiku-5-5", "low"), "written as launched before connecting: never shown as pending meanwhile"),
+    (True, ("claude-opus-5-5", "max"), "a failed connect leaves them as they were"),
+])
+def test_connect_writes_the_launched_values_first(store, tmp_path, monkeypatch, fail, applied, desc):
+    monkeypatch.setattr(host_mod, "transcript_exists", lambda sid: True)
+    sid = store.create_session(str(tmp_path), runner="sdk", model="claude-haiku-5-5", effort="low")
+    store.set_applied(sid, "claude-opus-5-5", "max")   # the last process's
+
+    def factory(options):
+        client = WatchedClient(options, model="claude-haiku-5-5", effort="low")
+        client.store, client.sid, client.fail = store, sid, fail
+        return client
+
+    h = Host(store, sid, client_factory=factory)
+    if fail:
+        with pytest.raises(ConnectionError):
+            run(h.connect())
+    else:
+        run(h.connect())
+    assert h.client.seen == ("claude-haiku-5-5", "low"), desc
+    s = store.session(sid)
+    assert (s["applied_model"], s["applied_effort"]) == applied, desc
+
+
+class LockedApplied:
+    """Wraps the store: set_applied (or put_back) fails with a locked database while `locked` is set."""
+
+    def __init__(self, store, method):
+        self._store, self.method, self.locked = store, method, True
+
+    def __getattr__(self, name):
+        if name == self.method and self.locked:
+            def locked(*args, **kwargs):
+                raise sqlite3.OperationalError("database is locked")
+            return locked
+        return getattr(self._store, name)
+
+
+@pytest.mark.parametrize("method, client, change, columns, desc", [
+    ("set_applied", {}, {"effort": "xhigh"}, ("claude-sonnet-5-5", "xhigh"), "applied, then the write locked"),
+    ("put_back", {"refuse": "claude-fable-5-1"}, {"model": "claude-fable-5-1"}, ("claude-sonnet-5-5", "high"),
+     "refused, then the put-back locked"),
+])
+def test_a_locked_write_is_tried_again_not_left_pending(hosted, store, method, client, change, columns, desc):
+    for k, v in client.items():
+        setattr(hosted.client, k, v)
+    for column, value in change.items():
+        getattr(store, f"set_{column}")(hosted.sid, value)
+    locking = LockedApplied(store, method)
+    hosted.store = locking
+    with pytest.raises(sqlite3.OperationalError):
+        run(hosted.poll())
+    assert hosted.applied == ("claude-sonnet-5-5", "high"), f"{desc}: not taken as in force"
+    locking.locked = False
+    run(hosted.poll())
+    s = store.session(hosted.sid)
+    assert (s["model"], s["effort"]) == columns, desc
+    assert (s["applied_model"], s["applied_effort"]) == (hosted.client.model, hosted.client.effort), desc
+    assert hosted.applied == (hosted.client.model, hosted.client.effort), desc
+
+
+def test_a_put_back_leaves_a_newer_choice_made_meanwhile(hosted, store):
+    """Refused while the person chose again: the newer choice stands, and is applied next."""
+    hosted.client.refuse = "claude-fable-5-1"
+    store.set_model(hosted.sid, "claude-fable-5-1")
+    set_model = hosted.client.set_model
+
+    async def chosen_again_meanwhile(model):
+        store.set_model(hosted.sid, "claude-opus-5-5")
+        await set_model(model)
+
+    hosted.client.set_model = chosen_again_meanwhile
+    run(hosted.poll())
+    assert store.session(hosted.sid)["model"] == "claude-opus-5-5", "not put back over the newer choice"
+    hosted.client.set_model = set_model
+    run(hosted.poll())
+    s = store.session(hosted.sid)
+    assert (s["model"], s["applied_model"]) == ("claude-opus-5-5", "claude-opus-5-5")

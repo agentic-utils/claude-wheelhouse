@@ -39,8 +39,10 @@ def default_effort(model: str) -> str:
 
 
 def name(model: str | None) -> str | None:
-    """A model's display name: the table's, else None (an id from elsewhere)."""
-    return BY_ID[model].name if model in BY_ID else None
+    """A model's display name: the table's, else None (an id from elsewhere). A transcript's
+    requested model may carry a suffix (claude-opus-5-5[1m]): it is the same model."""
+    base = (model or "").split("[")[0]
+    return BY_ID[base].name if base in BY_ID else None
 
 
 def chosen(model: str | None, effort: str | None) -> tuple[str, str]:

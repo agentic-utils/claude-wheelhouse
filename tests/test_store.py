@@ -525,14 +525,20 @@ def test_setting_one_on_a_session_gone_says_so(store):
         store.set_effort("gone", "high")
 
 
-def test_a_host_puts_back_what_claude_code_refused_and_records_what_it_has(store, sid):
+@pytest.mark.parametrize("meanwhile, model, desc", [
+    (None, "claude-haiku-5-5", "the column still what was sent: back to what runs, only the column named"),
+    ("claude-sonnet-5-5", "claude-sonnet-5-5", "a newer choice made while the request was out: it stands"),
+])
+def test_a_host_puts_back_what_claude_code_refused_and_records_what_it_has(store, sid, meanwhile, model, desc):
     store.set_model(sid, "claude-opus-5-5")
     store.set_effort(sid, "max")
-    store.put_back(sid, model="claude-haiku-5-5")
+    if meanwhile:
+        store.set_model(sid, meanwhile)
+    store.put_back(sid, {"model": "claude-opus-5-5", "effort": "max"}, model="claude-haiku-5-5")
     store.set_applied(sid, "claude-haiku-5-5", "max")
     s = store.session(sid)
     assert (s["model"], s["effort"], s["applied_model"], s["applied_effort"]) == (
-        "claude-haiku-5-5", "max", "claude-haiku-5-5", "max"), "only the column named goes back"
+        model, "max", "claude-haiku-5-5", "max"), desc
 
 
 def test_older_code_still_writes_a_database_with_the_model_columns(store, tmp_path):

@@ -12,6 +12,7 @@ hand-over to a tab it gives up the session, waits for the tab to exit, then take
 """
 
 import asyncio
+import contextlib
 import getpass
 import json
 import os
@@ -279,8 +280,17 @@ class Host:
     async def connect(self) -> None:
         resume = transcript_exists(self.sid)
         self.client = self.client_factory(self.options(resume))
-        await self.client.connect()
-        self.store.set_applied(self.sid, *self.applied)   # as launched, until Claude Code says
+        # as launched, until Claude Code says: written first, so the pane never shows the
+        # last process's (or none) as pending while this one starts
+        before = self.store.session(self.sid)
+        before = (models.field(before, "applied_model"), models.field(before, "applied_effort"))
+        self.store.set_applied(self.sid, *self.applied)
+        try:
+            await self.client.connect()
+        except BaseException:   # nothing launched: the columns as they were
+            with contextlib.suppress(sqlite3.OperationalError):
+                self.store.set_applied(self.sid, *before)
+            raise
         try:
             self.applied = await self.settings()
             self.store.set_applied(self.sid, *self.applied)
@@ -350,23 +360,27 @@ class Host:
         except Exception as e:
             why = " ".join(str(e).split())[:120] or type(e).__name__
         try:
-            self.applied = await self.settings()
+            applied = await self.settings()
         except Exception as e:   # unconfirmed: taken as asked, unless it was refused
-            if not why:
-                self.applied = (model or self.applied[0], effort or self.applied[1])
+            applied = self.applied if why else (model or self.applied[0], effort or self.applied[1])
             print(f"{now()} get_settings failed: {e}", file=sys.stderr, flush=True)
-        self.store.set_applied(self.sid, *self.applied)
-        asked = {"model": (model, self.applied[0]), "effort": (effort, self.applied[1])}
+        asked = {"model": (model, applied[0]), "effort": (effort, applied[1])}
         refused = {k: got for k, (v, got) in asked.items() if v and v != got}
+        # written before it is taken as in force: a locked database raises here, and the next
+        # poll, still seeing the change, applies and writes it again
+        self.store.set_applied(self.sid, *applied)
+        if refused:   # only where the column still holds what was sent: not a newer choice
+            self.store.put_back(self.sid, {"model": model, "effort": effort}, **refused)
+        self.applied = applied
         if refused:
-            self.store.put_back(self.sid, **refused)
-            kept = ", ".join(str(g) for g in self.applied)
+            kept = ", ".join(str(g) for g in applied)
             text = f"{' and '.join(refused)} change refused: {why or f'Claude Code kept {kept}'}"
         else:
-            text = f"now {models.name(self.applied[0]) or self.applied[0]} at {self.applied[1]}"
+            text = f"now {models.name(applied[0]) or applied[0]} at {applied[1]}"
         print(f"{now()} {text}", file=sys.stderr, flush=True)
         if not self.pending:   # the activity line is the turn's while one runs
-            self.store.set_activity(self.sid, f"idle · {text}")
+            with contextlib.suppress(sqlite3.OperationalError):   # applied: only the line is lost
+                self.store.set_activity(self.sid, f"idle · {text}")
 
     # Claude Code's permission check
 

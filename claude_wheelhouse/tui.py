@@ -1095,8 +1095,9 @@ class RenameSession(Dialog):
 
 
 
-MODEL_WARNING = ("Changing model drops the prompt cache: the next turn re-reads the whole conversation at "
-                 "the full input price. Effort stays as it is.")
+MODEL_WARNING = ("Changing model drops the prompt cache: the session's next request re-reads the whole "
+                 "conversation at the full input price (a change made mid-turn applies inside the running "
+                 "turn). Effort stays as it is.")
 
 
 class ChooseModel(Dialog):
@@ -2889,7 +2890,11 @@ class WheelhouseApp(App):
         if isinstance(self.focused, (TextArea, Input)) or self.composing()[0] is None:
             return
         button = next(iter(self.screen.query(f"#{button_id}")), None)
-        if button is None:
+        if button is None:   # not on this screen (Model, in a full-screen item's bar): said all the same
+            name = next((b.description for b in BUTTON_KEYS if b.action == f"press('{button_id}')"),
+                        button_id.capitalize())
+            where = ": it's with the session list's buttons" if button_id in dict(LIFECYCLE).values() else ""
+            self.notify(f"{name} doesn't apply here{where}", severity="warning")
             return
         if not (button.display and button.parent.display):
             whose = "the item in context" if button_id in ("allow", "always", "deny") else "this session"

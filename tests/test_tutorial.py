@@ -110,6 +110,7 @@ def test_prepare_starts_afresh(store, tmp_path):
     assert json.loads((path / ".claude/settings.json").read_text()) == tutorial.SETTINGS
     s = store.session(new)
     assert (s["cwd"], s["name"], s["runner"], s["brief"]) == (str(path), "tutorial", "sdk", tutorial.BRIEF)
+    assert (s["model"], s["effort"]) == ("claude-sonnet-5-5", "high"), "New session's defaults"
     assert tutorial.session_id(store) == new
 
 

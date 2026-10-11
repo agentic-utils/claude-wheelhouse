@@ -90,8 +90,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   reports, marked `~` as an estimate until the next response sizes it exactly; a tab
   session keeps its pre-compaction size until then. For a session run in the wheelhouse,
   an effort slider sits over the gauges: Tab reaches it, Left and Right (or Home and End)
-  change the effort live, and a click on a level picks it. No warning: effort has no side
-  effects.
+  change the effort live, and a click on a level picks it. Where the pane is too narrow for
+  every level, it shows the current one between arrows, and a click on an arrow steps it.
+  No warning: effort has no side effects.
   Below the panel, two charts of the last two hours, subagents included: how each turn's
   context was assembled (read from cache, new, cache miss) and the output tokens it made.
   Each bar covers a fixed stretch of clock (about 2 minutes at 60 columns), the rightmost

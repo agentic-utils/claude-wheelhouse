@@ -169,7 +169,8 @@ class SessionStats(Widget):
         if self.slider() is None:
             return
         levels = models.EFFORTS
-        at = levels.index(self.setting["effort"]) if self.setting["effort"] in levels else levels.index("high")
+        current = stats.effort_of(self.view, self.setting)   # what the slider lights
+        at = levels.index(current) if current in levels else levels.index("high")
         self.pick(levels[max(0, min(len(levels) - 1, at + step))])
 
     def action_effort_end(self, end: int) -> None:
@@ -178,16 +179,18 @@ class SessionStats(Widget):
 
     def pick(self, level: str) -> None:
         sid = self.slider()
-        if sid is not None and level != self.setting["effort"] and self.ctx.set_effort is not None:
+        if sid is not None and level != stats.effort_of(self.view, self.setting) and self.ctx.set_effort is not None:
             self.ctx.set_effort(sid, level)
 
     def on_click(self, event: events.Click) -> None:
-        """A click on a level picks it."""
+        """A click on a level picks it, or on an arrow the level it steps to: whichever form
+        the slider is drawn in at this width (stats.slider_spans)."""
         content = self.content_region
         x, y = event.screen_x - content.x - 1, event.screen_y - content.y   # 1: the panel's left border
         if self.slider() is None or y != stats.SLIDER_ROW:
             return
-        level = next((level for start, end, level in stats.slider_spans() if start <= x < end), None)
+        spans = stats.slider_spans(stats.effort_of(self.view, self.setting), self.size.width - 2)
+        level = next((level for start, end, level in spans if start <= x < end), None)
         if level is not None:
             self.pick(level)
 

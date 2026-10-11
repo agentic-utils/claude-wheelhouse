@@ -615,19 +615,28 @@ class Hub:
             return Done(False)   # last write wins: it's that already
         (self.store.set_model if what == "model" else self.store.set_effort)(sid, value)
         shown = models.name(value) or value
+        if s["shell"]:   # its host gave it to a shell tab: it launches with the column on taking it back
+            return Done().say(f"{display_name(s)}: {what} {shown} once the wheelhouse takes it back from its shell tab")
         return Done().say(f"{display_name(s)}: {what} {shown}")
 
     def model_state(self, s) -> dict:
-        """What a session is set to run on, for the stats pane: its columns, else what its
-        host confirmed, and whether its host has yet to apply them (pending: "applying",
-        or "on relaunch" for a host on older code that never will). None where unknown:
-        the stats pane falls back on the transcript."""
+        """What a session runs on, for the stats pane. A hosted session's is what it is set
+        to: its columns, else what its host confirmed, and whether its host has yet to apply
+        them (pending: "applying", or "on relaunch" for a host on older code that never
+        will). A tab's is what its transcript says it runs (the latest response's requested
+        model and effort: a /model typed there counts), else its columns until the
+        transcript has any. None where unknown: the stats pane falls back on the transcript."""
         want = (models.field(s, "model"), models.field(s, "effort"))
         got = (models.field(s, "applied_model"), models.field(s, "applied_effort"))
         hosted = runner(s) == "sdk" and self.running(s["id"]) and not s["shell"]
         pending = None
         if hosted and any(w and w != g for w, g in zip(want, got)):
             pending = "applying" if any(got) else "on relaunch"
+        if runner(s) == "tab":
+            follower = self.contexts.get(s["id"])
+            snap = follower.snap if follower and follower.ready else None
+            ran = (snap.requested or snap.model, snap.effort) if snap else (None, None)
+            return {"model": ran[0] or want[0], "effort": ran[1] or want[1], "pending": None, "hosted": False}
         return {"model": want[0] or (got[0] if hosted else None), "effort": want[1] or (got[1] if hosted else None),
                 "pending": pending, "hosted": hosted}
 

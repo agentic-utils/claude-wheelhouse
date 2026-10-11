@@ -4911,3 +4911,70 @@ async def test_relaunch_offers_to_compact_a_big_session_first(store, sid, monkey
         assert calls == ([stopped] if stopped else []), desc
         assert type(app.screen).__name__ != dialog, f"{desc}: answered"
         assert app.store.session(sid)["host_command"] is None, f"{desc}: no Compact, Interrupt or Shell sent besides"
+
+
+@pytest.mark.anyio
+async def test_a_tabs_header_shows_what_its_transcript_says_it_runs(store, tmp_path, monkeypatch):
+    """Created on Sonnet, then a /model in the tab: its transcript records Opus, and so does the header."""
+    sid, app = await hosted_app(store, tmp_path, monkeypatch, "tab")
+    path = tmp_path / f"projects/-home-u-repo/{sid}.jsonl"
+    rec = json.loads(path.read_text())
+    rec |= {"requestedModel": "claude-opus-5-5[1m]", "effort": "max"}
+    rec["message"] |= {"id": "m2", "model": "claude-opus-5-5"}
+    path.write_text(path.read_text() + json.dumps(rec) + "\n")
+    async with app.run_test(size=(160, 40)) as pilot:
+        assert "demo · Opus 5.5 · max · 1M ─" in await shown_stats(app, pilot)
+    assert store.session(sid)["model"] == "claude-sonnet-5-5", "the columns as they were (M2 is separate)"
+
+
+@pytest.mark.anyio
+async def test_model_in_a_full_screen_item_says_so(store, tmp_path, monkeypatch):
+    sid, app = await hosted_app(store, tmp_path, monkeypatch)
+    ref = store.post_item(sid, "question", "q?")
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(ThreadView(sid, ref))
+        await pilot.pause()
+        await pilot.press("tab")   # to its thread: out of the answer box, where M is typing
+        await pilot.pause()
+        assert not isinstance(app.focused, TextArea)
+        got, notes = presses(app), []
+        monkeypatch.setattr(app, "notify", lambda text, **kw: notes.append(text))
+        await pilot.press("m")
+        await pilot.pause()
+        assert (got, notes) == ([], ["Model doesn't apply here: it's with the session list's buttons"])
+        assert [type(s).__name__ for s in app.screen_stack] == ["Screen", "ThreadView"]
+
+
+@pytest.mark.anyio
+async def test_the_arrows_start_from_the_transcripts_effort_with_nothing_set(store, tmp_path, monkeypatch):
+    """An old host: NULL columns, nothing applied. The slider lights the transcript's level,
+    and Right goes on from there."""
+    sid, app = await hosted_app(store, tmp_path, monkeypatch)
+    store.db.execute("UPDATE sessions SET model = NULL, effort = NULL, applied_model = NULL, applied_effort = NULL")
+    async with app.run_test(size=(160, 40)) as pilot:
+        await shown_stats(app, pilot)
+        app.query_one("#stats").focus()
+        await pilot.press("right")
+        await pilot.pause()
+        assert store.session(sid)["effort"] == "xhigh", "high, from the transcript, then a level up"
+        assert_one_current(app, "after the arrow")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("arrow, level", [("◂", "medium"), ("▸", "xhigh")])
+async def test_a_click_on_an_arrow_steps_the_narrow_slider(store, tmp_path, monkeypatch, arrow, level):
+    sid, app = await hosted_app(store, tmp_path, monkeypatch)
+    async with app.run_test(size=(100, 30)) as pilot:
+        shown = await shown_stats(app, pilot)
+        pane = app.query_one("#stats")
+        width = pane.size.width - 2
+        assert width < stats.LABEL + len(stats.LEVELS), "the pane too narrow for every level"
+        assert "◂  high  ▸" in shown and "Sonnet 5.5" in shown, "the effort and model readable"
+        start = next(start for start, end, name in stats.slider_spans("high", width)
+                     if stats.slider("high", False, width).plain[start:end] == arrow)
+        top = pane.content_region.offset - pane.region.offset
+        await pilot.click("#stats", offset=(top.x + 1 + start, top.y + stats.SLIDER_ROW))
+        await pilot.pause()
+        assert store.session(sid)["effort"] == level
+        assert_one_current(app, "after a click on an arrow")

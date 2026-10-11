@@ -14,7 +14,7 @@ import signal
 import time
 from pathlib import Path
 
-from . import liveness
+from . import liveness, models
 from .store import Store
 
 NAME = "tutorial"
@@ -161,7 +161,8 @@ def prepare(store: Store) -> str:
     (path / ".claude").mkdir(parents=True)
     (path / MARKER).write_text("The wheelhouse tutorial's scratch directory: recreated each time it starts.\n")
     (path / ".claude/settings.json").write_text(json.dumps(SETTINGS, indent=2) + "\n")
-    return store.create_session(str(path), name=NAME, brief=BRIEF, runner="sdk")
+    model, effort = models.chosen(None, None)   # New session's defaults: Sonnet 5.5 at high
+    return store.create_session(str(path), name=NAME, brief=BRIEF, runner="sdk", model=model, effort=effort)
 
 
 def start(store: Store) -> str:

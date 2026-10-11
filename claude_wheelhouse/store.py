@@ -376,13 +376,16 @@ class Store:
             self._require(db, sid)
             db.execute("UPDATE sessions SET effort = ? WHERE id = ?", (effort, sid))
 
-    def put_back(self, sid: str, **values) -> None:
+    def put_back(self, sid: str, sent: dict, **values) -> None:
         """A host putting the model or effort column back to what Claude Code has in force,
-        having refused the change: unchecked, as it is what runs."""
+        having refused the change: unchecked, as it is what runs. Only where the column
+        still holds what was sent (sent): a newer choice made meanwhile stands, and is the
+        host's to apply next."""
         with self.tx() as db:
             for column in ("model", "effort"):
                 if column in values:
-                    db.execute(f"UPDATE sessions SET {column} = ? WHERE id = ?", (values[column], sid))
+                    db.execute(f"UPDATE sessions SET {column} = ? WHERE id = ? AND {column} IS ?",
+                               (values[column], sid, sent.get(column)))
 
     def set_applied(self, sid: str, model: str | None, effort: str | None) -> None:
         """What the session's host has in force, as Claude Code last confirmed it."""

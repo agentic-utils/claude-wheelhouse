@@ -8,7 +8,7 @@ import time
 import pytest
 from rich.style import Style
 
-from claude_wheelhouse import api, stats, transcript
+from claude_wheelhouse import api, models, stats, transcript
 from claude_wheelhouse.stats import Snapshot, Turn
 
 REAL_FETCH = stats.AccountUsage.fetch   # before conftest stubs it
@@ -558,6 +558,16 @@ def test_max_window(model, window, desc):
     assert stats.max_window(model) == window, desc
 
 
+def test_the_transcript_says_what_model_each_turn_asked_for():
+    recs = [response("m1", ago=90, read=5) | {"requestedModel": "claude-opus-5-5[1m]"},
+            response("m2", ago=60, read=5)]
+    turns, _ = stats.parse(lines(*recs), set(), True)
+    assert [t.requested for t in turns] == ["claude-opus-5-5[1m]", None]
+    s = Snapshot()
+    stats.take(s, turns, [])
+    assert s.requested == "claude-opus-5-5[1m]", "the latest turn that says, a turn that doesn't leaves it"
+
+
 def test_the_transcript_says_what_effort_each_turn_ran_at():
     recs = [response("m1", ago=90, read=5) | {"effort": "low"}, response("m2", ago=60, read=5) | {"effort": "xhigh"},
             response("m3", ago=30, read=5)]
@@ -576,6 +586,10 @@ def test_the_transcript_says_what_effort_each_turn_ran_at():
     ({"model": None, "effort": None}, "medium", 0, "holly · Opus 5.5 · medium · 1M window", "no columns: the transcript's"),
     (None, "xhigh", 31, "holly · Opus 5.5 · xhigh · 1M", "no room for the word window"),
     (None, "low", 40, "holly · Opus 5.5 · low · 1M window", "room enough"),
+    (None, "low", 24, "holly · Opus 5.5 · low", "less: the window goes"),
+    (None, "low", 14, "Opus 5.5 · low", "less still: the name goes"),
+    (None, "low", 11, "Opus 5.5", "the model is the last to go"),
+    (None, None, 0, "holly · Opus 5.5 · 1M window", "no effort recorded yet"),
 ])
 def test_the_title_says_model_and_effort(setting, effort, room, expected, desc):
     s = snap(83_000, 600)
@@ -614,3 +628,68 @@ def test_the_effort_slider_shows_for_a_hosted_session(setting, slider, pending, 
 @pytest.mark.parametrize("focused, keys, desc", [(True, True, "focused: the keys say how"), (False, False, "not")])
 def test_the_slider_shows_its_keys_when_focused(focused, keys, desc):
     assert stats.slider("high", focused).plain.endswith("←/→") == keys, desc
+
+
+def test_the_title_reads_the_requested_model_before_the_served_one():
+    s = snap(83_000, 600)
+    s.model, s.requested = "claude-sonnet-5-5", "claude-opus-5-5[1m]"
+    assert stats.title(s, "holly") == "holly · Opus 5.5 · 1M window"
+
+
+@pytest.mark.parametrize("width, current, drawn, picks, desc", [
+    (33, "high", "effort  low medium high xhigh max", [(level, level) for level in models.EFFORTS],
+     "room for every level: each is where a click picks it"),
+    (32, "high", "effort  ◂  high  ▸", [("◂", "medium"), ("high", "high"), ("▸", "xhigh")],
+     "too narrow: the current level between arrows that step it"),
+    (18, "medium", "effort  ◂ medium ▸", [("◂", "low"), ("medium", "medium"), ("▸", "high")],
+     "the arrows stay put for the widest level"),
+    (15, "xhigh", "eff ◂ xhigh  ▸", [("◂", "high"), ("xhigh", "xhigh"), ("▸", "max")],
+     "narrower still: the label shortens"),
+    (15, "low", "eff ◂  low   ▸", [("low", "low"), ("▸", "medium")], "the lowest: no step down"),
+    (15, "max", "eff ◂  max   ▸", [("◂", "xhigh"), ("max", "max")], "the highest: no step up"),
+    (15, None, "eff ◂   ?    ▸", [("◂", "medium"), ("▸", "xhigh")], "nothing known: the keys start from high"),
+])
+def test_the_slider_fits_its_line(width, current, drawn, picks, desc):
+    line = stats.slider(current, False, width)
+    assert line.plain == drawn and line.cell_len <= width, desc
+    spans = stats.slider_spans(current, width)
+    assert [(line.plain[a:b], level) for a, b, level in spans] == picks, f"{desc}: where a click picks what"
+    lit = [line.plain[s.start:s.end] for s in line.spans if "on " in str(s.style)]
+    assert lit == ([current] if current else []), f"{desc}: the current level lit"
+
+
+@pytest.mark.parametrize("pending, width, shown, desc", [
+    ("on relaunch", 35, "        on relaunch: old host", "room: under the levels"),
+    ("on relaunch", 22, "on relaunch: old host", "less: from the line's start"),
+    ("on relaunch", 15, "on relaunch", "narrow: shorter"),
+    ("applying", 15, "applying…", "applying fits under the label"),
+    (None, 15, "", "nothing pending"),
+])
+def test_the_pending_line_fits(pending, width, shown, desc):
+    assert stats.pending_line(pending, width).plain.rstrip() == shown.rstrip(), desc
+
+
+@pytest.mark.parametrize("setting, rows, desc", [
+    ({"model": "claude-sonnet-5-5", "effort": "high", "pending": "on relaunch", "hosted": True},
+     ["╭─ Sonnet 5.5 ─╮", "│eff ◂  high  ▸│", "│on relaunch   │"], "hosted: the model in the title, the effort lit"),
+    ({"model": "claude-sonnet-5-5", "effort": "high", "pending": None, "hosted": False},
+     ["╭─ Sonnet 5.5 ─╮", "│effort  high  │"], "a tab: the effort the title can't hold on a line of its own"),
+])
+def test_model_and_effort_are_readable_in_a_narrow_pane(setting, rows, desc):
+    got, _ = stats.layout(snap(83_000, 600), "demo", None, usage(), NOW, 16, 40, setting)
+    shown = [r.plain for r in got]
+    assert [shown[0]] + [r for r in shown[1:len(rows) + 1] if r.strip("│ ")] == rows, desc
+
+
+@pytest.mark.parametrize("setting, view_effort, lit, desc", [
+    ({"model": None, "effort": None, "pending": None, "hosted": True}, "medium", "medium",
+     "NULL columns and nothing applied (an old host): the transcript's"),
+    ({"model": None, "effort": "xhigh", "pending": None, "hosted": True}, "medium", "xhigh", "set: what it's set to"),
+])
+def test_the_slider_falls_back_on_the_transcript(setting, view_effort, lit, desc):
+    s = snap(83_000, 600)
+    s.effort = view_effort
+    assert stats.effort_of(s, setting) == lit, desc
+    rows, _ = stats.layout(s, "holly", None, usage(), NOW, 64, 40, setting)
+    line = rows[stats.SLIDER_ROW]
+    assert [line.plain[x.start:x.end] for x in line.spans if "on " in str(x.style)] == [lit], desc

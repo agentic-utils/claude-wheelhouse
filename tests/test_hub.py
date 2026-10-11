@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from claude_wheelhouse import host as host_mod, hub as hub_mod, launch, liveness, subagents, transcript, tutorial
+from claude_wheelhouse import host as host_mod, hub as hub_mod, launch, liveness, stats, subagents, transcript, tutorial
 from claude_wheelhouse.hub import Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone
 
@@ -450,10 +450,16 @@ def test_a_new_session_stores_its_model_and_effort(hub, store, tmp_path, monkeyp
     ("tab", "set_model", "claude-opus-5-5", False, "claude-sonnet-5-5", "demo runs in a tab: type /model there",
      "never a tab's (Q52): it changes its own"),
     ("tab", "set_effort", "low", False, "high", "demo runs in a tab: type /effort there", "nor its effort"),
+    ("shell", "set_model", "claude-opus-5-5", True, "claude-opus-5-5",
+     "demo: model Opus 5.5 once the wheelhouse takes it back from its shell tab",
+     "handed to a shell tab: stored, and said to apply on taking it back, not live"),
 ])
 def test_model_and_effort_change_only_for_a_hosted_session(hub, store, tmp_path, runner, command, value, ok, column,
                                                              said, desc):
-    sid = store.create_session(str(tmp_path), name="demo", runner=runner, model="claude-sonnet-5-5", effort="high")
+    sid = store.create_session(str(tmp_path), name="demo", runner="sdk" if runner == "shell" else runner,
+                               model="claude-sonnet-5-5", effort="high")
+    if runner == "shell":
+        store.set_shell(sid, "tab")
     done = getattr(hub, command)(sid, value)
     assert done.ok == ok, desc
     assert store.session(sid)["model" if command == "set_model" else "effort"] == column, desc
@@ -670,3 +676,21 @@ def test_stopping_for_the_relaunch_clears_only_what_would_misgreet_the_new_host(
     hub.refresh()
     hub.finish_relaunches()
     assert killed == [4242] and store.session(sid)["host_command"] == left, desc
+
+
+@pytest.mark.parametrize("ran, state, desc", [
+    (("claude-opus-5-5[1m]", "max"), ("claude-opus-5-5[1m]", "max"),
+     "created on Sonnet, its transcript says Opus (a /model typed there): what runs"),
+    ((None, None), ("claude-sonnet-5-5", "high"), "the transcript has nothing yet: its columns"),
+])
+def test_a_tabs_model_state_is_what_its_transcript_says(hub, store, tmp_path, monkeypatch, ran, state, desc):
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), runner="tab", model="claude-sonnet-5-5", effort="high")
+    hub.refresh()
+    if ran[0]:
+        follower = stats.follower(sid)
+        follower.ready = True
+        follower.snap.model, follower.snap.requested, follower.snap.effort = "claude-opus-5-5", *ran
+        hub.contexts[sid] = follower
+    got = hub.model_state(hub.row(sid))
+    assert (got["model"], got["effort"], got["pending"], got["hosted"]) == (*state, None, False), desc

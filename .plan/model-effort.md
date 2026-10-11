@@ -184,14 +184,19 @@ columns; the host, which polls the session's row each second, reconciles:
 
 If Claude Code refuses (an unknown model, say) or confirms something else, the columns go
 back to what is in force and the activity line says why. At connect the host writes the
-values it launched with to the applied columns, then confirms them with `get_settings`.
+values it launched with to the applied columns before it connects (so a starting session
+never shows as pending), puts back what was there if the connect fails, then confirms them
+with `get_settings`. It takes a change as in force only once those writes have landed: a
+locked database leaves it to apply and write the change again on the next poll. A
+put-back only replaces the value it sent, never a newer choice made while it was out.
 A model change made while a turn runs is left to Claude Code's own handling.
 
-**Model: a "Model" action**, a button with Interrupt, Compact and Shell (key M), shown for
-a session running in a host. It opens a list of the four models with the current one
-highlighted and a warning: changing model drops the prompt cache, so the next turn re-reads
-the whole conversation at the full input price. Effort carries over a model switch (probed
-above), so the action leaves it as it is.
+**Model: a "Model" action**, a lifecycle button beside End (key M), shown for a session
+running in a host; an item opened full screen has none, and M there says so. It opens a
+list of the four models with the current one highlighted and a warning: changing model
+drops the prompt cache, so the session's next request (inside the running turn, if one
+runs) re-reads the whole conversation at the full input price. Effort carries over a
+model switch (probed above), so the action leaves it as it is.
 
 **Effort: a slider in the stats pane**, on the session in context when it runs in a host:
 a row "effort  low · medium · high · xhigh · max" with the current level lit. It applies
@@ -215,8 +220,16 @@ transcript's latest values into the columns would fix that; it is left for a fol
 
 The header gains the effort: "wheelhouse · Sonnet 5.5 · high · 1M window". For a hosted
 session the model and effort are the columns' (what it is set to), and while the host has
-not confirmed them yet the header adds "applying"; with an older host that never will,
-"on relaunch". For a tab, and where the columns are NULL, they are the transcript's.
+not confirmed them yet the line under the slider says "applying…"; with an older host that
+never will, "on relaunch: old host" (or "on relaunch", where the pane is narrow). For a tab
+they are what its transcript says it runs (the latest response's `requestedModel` and
+`effort`), else its columns until the transcript has any; where a hosted session's columns
+are NULL, the transcript's.
+
+Where the pane is too narrow for every level, the slider shows the current one between
+arrows (`effort  ◂  high  ▸`, or `eff ◂ …` narrower still): a click on an arrow steps it,
+and the keys work as before. The title gives up the window, then the name, then the effort
+before the model; a tab's effort the title can't hold goes on a line of its own.
 
 The window is 1M for every model in the table (Haiku 5.5 and Fable 5.1 included), 200k for
 older models such as Haiku 4.5.
