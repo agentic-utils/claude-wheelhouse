@@ -3,9 +3,9 @@
 The wheelhouse lists recent transcripts from ~/.claude/projects, plus sessions it already
 tracks whose process has gone (e.g. an adoption whose tab failed). If the chosen session is
 still running, the person types /exit in its tab first; the wheelhouse never kills it. Then
-the wheelhouse registers the session under its own id and opens it like any restore (a tab,
-or with SDK mode on a host unless WHEELHOUSE_RUNNER=tab), resuming it by id with the wheelhouse's MCP server,
-protocol and /wheelhouse commands.
+the wheelhouse registers the session under its own id and opens it like any restore
+(launch.restore_runner: the way new sessions run now, and the tutorial's always in a tab),
+resuming it by id with the wheelhouse's MCP server, protocol and /wheelhouse commands.
 """
 
 import functools
