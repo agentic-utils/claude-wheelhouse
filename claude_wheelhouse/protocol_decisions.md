@@ -16,4 +16,4 @@ otherwise would have asked about.
 - Provisional work while a question is open isn't a decision: carry on as you would without
   this section.
 - A decision takes no status: whether the person has seen it is theirs. If they reply on
-  its ref (for example "reverse that"), act on it and answer with `reply(ref, text)`.
+  its ref (for example "reverse that"), act on it and answer as you would any message on a ref.

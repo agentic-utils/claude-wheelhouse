@@ -12,6 +12,7 @@ hand-over to a tab it gives up the session, waits for the tab to exit, then take
 """
 
 import asyncio
+import collections
 import getpass
 import json
 import os
@@ -199,7 +200,10 @@ class Host:
         self.compact_nonce: str | None = None
         self.compact_idle: float | None = None
         self.compact_notes: str | None = None   # seen in a reply, sent as /compact once the turn ends
-        self.turn_text: list[str] = []   # this turn's text so far, where Compact's block may straddle blocks
+        self.turn_text: list[str] = []   # this turn's text so far: its chat, where Compact's block may straddle blocks
+        # the refs each turn sent and not yet finished answers, in order: its chat is posted
+        # as the reply on each (the protocol asks the session for the status alone)
+        self.answering: collections.deque[list[str]] = collections.deque()
         self.compacted_from = None   # tokens before the last compaction, until its turn ends
         # the model and effort in force, as Claude Code last confirmed them (or as launched)
         self.applied: tuple[str | None, str | None] = (None, None)
@@ -258,11 +262,12 @@ class Host:
         else:
             self.store.set_activity(self.sid, "idle")
 
-    async def turn(self, text: str, keepalive: bool = False) -> None:
+    async def turn(self, text: str, keepalive: bool = False, refs: list[str] | None = None) -> None:
         """Send a user turn; Claude Code queues it behind any turn still running. Only a
-        keepalive leaves the session quiet."""
+        keepalive leaves the session quiet. Its chat is posted as the reply on refs."""
         await self.client.query(text)
         self.pending += 1
+        self.answering.append(refs or [])
         self.compact_idle = None
         if not keepalive:
             self.quiet_since = None
@@ -473,7 +478,8 @@ class Host:
                 fut.set_result(None)
         if turn:
             try:
-                await self.turn(format_turn(turn, self.person))
+                refs = list(dict.fromkeys(m["item_ref"] for m in turn if m["item_ref"]))
+                await self.turn(format_turn(turn, self.person), refs=refs)
             except BaseException:   # not sent: left for the next host to deliver
                 self.store.release(turn)
                 raise
@@ -544,8 +550,9 @@ class Host:
                         self.quiet_since = None
                 if isinstance(m, AssistantMessage):
                     for b in m.content:
-                        if isinstance(b, TextBlock) and self.compact_nonce:   # the turn's text, whole: the last block wins
+                        if isinstance(b, TextBlock):
                             self.turn_text.append(b.text)
+                        if isinstance(b, TextBlock) and self.compact_nonce:   # the turn's text, whole: the last block wins
                             notes = keep_notes("\n".join(self.turn_text), self.compact_nonce)
                             self.compact_notes = notes if notes is not None else self.compact_notes
                         if isinstance(b, ToolUseBlock):
@@ -560,11 +567,28 @@ class Host:
                     meta = m.data.get("compact_metadata") or m.data.get("compactMetadata") or {}
                     self.compacted_from = meta.get("pre_tokens") or meta.get("preTokens") or 0
                 elif isinstance(m, ResultMessage):
+                    if self.pending and self.answering:   # one of ours, not one Claude Code started itself
+                        self.answer(self.answering.popleft(), m)
                     self.pending = max(0, self.pending - 1)
+                    if not self.pending:   # every turn sent has ended (an interrupt may drop some unanswered)
+                        self.answering.clear()
                     self.turn_text = []
                     await self.finished(m)
             except sqlite3.OperationalError as e:   # database is locked: the activity line can wait
                 print(f"{now()} {e}: activity not recorded", file=sys.stderr, flush=True)
+
+    def answer(self, refs: list[str], m) -> None:
+        """A turn that answered the person's messages on refs has ended: its chat (every text
+        block, as the conversation pane shows it) goes on each as the session's reply. Not
+        an error's: the session hasn't answered, and the item still awaits it."""
+        text = "\n\n".join(t.strip() for t in self.turn_text if t.strip())
+        if m.is_error or not text:
+            return
+        for ref in refs:
+            try:
+                self.store.host_reply(self.sid, ref, text)
+            except SessionGone:
+                return
 
     async def finished(self, m) -> None:
         """A turn ended. Once a reply has carried Compact's notes, they go to /compact,
@@ -667,6 +691,7 @@ class Host:
             return
         await self.steady(self.store.set_shell, self.sid, None)
         self.pending, self.turn_text = 0, []
+        self.answering.clear()
         self.end_compact()
         self.tokens = None   # the tab ran turns this host never saw: its cache is the tab's
         self.reader.cancel()

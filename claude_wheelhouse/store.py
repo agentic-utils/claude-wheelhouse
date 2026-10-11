@@ -48,8 +48,10 @@ DECISION_FIELDS = (("alternative", "Alternative"), ("why", "Why"), ("reverse", "
 # shows it as needing a relaunch. 2: queued answers (draft messages) that older code would deliver.
 # 3: reply declares a question's status. 4: decisions. 5: SDK-hosted sessions and permission items.
 # 6: decisions listed in a report are posted as items. 7: the wheelhouse tracks subagents
-# itself (subagents.py), so the protocol no longer asks a session to post them.
-PROTOCOL_VERSION = 7
+# itself (subagents.py), so the protocol no longer asks a session to post them. 8: a hosted
+# session's host posts its chat as the reply on the ref answered, so the protocol asks it
+# for the status alone.
+PROTOCOL_VERSION = 8
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.
@@ -701,6 +703,15 @@ class Store:
             self._said(db, sid, ref, text, "reply")
             db.execute(f"UPDATE items SET status = coalesce(?, status), updated_at = ?, {UNDISMISS} "
                        "WHERE session_id = ? AND ref = ?", (status, now(), status, sid, ref))
+
+    def host_reply(self, sid: str, ref: str, text: str) -> None:
+        """A hosted session's chat, posted by its host as the reply on an item the person's
+        message was on. It declares nothing: the session sets the status itself."""
+        with self.tx() as db:
+            self._require(db, sid)
+            if db.execute("UPDATE items SET updated_at = ? WHERE session_id = ? AND ref = ?",
+                          (now(), sid, ref)).rowcount:
+                self._said(db, sid, ref, text, "reply")
 
     @staticmethod
     def _said(db, sid, ref, text, kind) -> int:

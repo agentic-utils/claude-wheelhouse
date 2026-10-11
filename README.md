@@ -23,7 +23,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   you type `:gri` the hint line suggests matches (Tab or Enter takes the first). Text you haven't sent stays with the item (or session) you typed it
   for: moving to another clears the box, and coming back restores it. Each session shows
   its queued count (`✉ 3`). Sending doesn't change a question's status: the session's
-  reply declares it, `open` while it still needs you or `answered`. Until it replies the
+  reply declares it, `open` while it still needs you or `answered`. A session run in the
+  wheelhouse doesn't write its reply twice: its host posts the turn's chat in the item's
+  thread as the reply, and the session sets the status alone. Until it replies the
   question shows as `processing` (dimmed), awaiting the session, and the session list's
   question count leaves it out: it counts only questions awaiting you, a queued answer
   not yet sent included. Tasks, decisions and subagents you answer show `queued` and

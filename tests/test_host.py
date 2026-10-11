@@ -268,6 +268,9 @@ def test_default_runner(store, tmp_path, monkeypatch, env, expected, desc):
 @pytest.mark.parametrize("protocol, has, lacks, desc", [
     (launch.PROTOCOL_SDK, "your user turns", "get_input", "the SDK protocol has no monitor"),
     (launch.PROTOCOL, "get_input", "your user turns", "the tab protocol keeps it"),
+    (launch.PROTOCOL_SDK, "update_item(ref, status=...)", "reply(ref, text, status)",
+     "the SDK protocol asks for the status alone: the host posts the chat"),
+    (launch.PROTOCOL, "reply(ref, text, status)", "update_item(ref, status=...)", "the tab protocol replies as before"),
 ])
 def test_protocol_variants(protocol, has, lacks, desc):
     assert has in protocol and lacks not in protocol, desc
@@ -1205,3 +1208,32 @@ def test_keepalive_turn(host, store, sid, monkeypatch):
     assert host.quiet_since is None, "the person's turn ends the quiet"
     finish_at(host, 200_000)
     assert host.quiet_since > quiet
+
+
+@pytest.mark.parametrize("sent, stream, replies, desc", [
+    ([("yes", "Q1")], [text("Done: Q1 settled."), result()], {"Q1": ["Done: Q1 settled."]},
+     "the turn's chat is the reply on the ref answered"),
+    ([("go", None)], [text("On it."), result()], {"Q1": [], "Q2": []}, "a general message: no item to reply on"),
+    ([("a", "Q1"), ("b", "Q2")], [text("Both done."), result()], {"Q1": ["Both done."], "Q2": ["Both done."]},
+     "a batch: the same chat on each"),
+    ([("yes", "Q1")], [text("Checking."), tool("ls"), text("All good."), result()],
+     {"Q1": ["Checking.\n\nAll good."]}, "every text block of the turn, as the pane shows it"),
+    ([("yes", "Q1")], [text("half"), result(error=True)], {"Q1": []}, "an error: not answered, still awaited"),
+    ([("yes", "Q1")], [tool("ls"), result()], {"Q1": []}, "no chat: nothing to post"),
+])
+def test_host_posts_the_chat_as_the_reply(streamed, store, sid, sent, stream, replies, desc):
+    h = streamed
+    for title in ("one", "two"):
+        store.post_item(sid, "question", title)
+    for body, ref in sent:
+        store.send(sid, body, ref)
+
+    async def go():
+        reader = asyncio.create_task(h.read())
+        await h.poll()
+        await feed(h, *stream, None)
+        await reader
+    run(go())
+    got = {ref: [m["body"] for m in store.thread(sid, ref) if m["author"] == "claude"] for ref in replies}
+    assert got == replies, desc
+    assert all(store.item(sid, ref)["status"] == "open" for ref in replies), f"{desc}: the status is the session's"

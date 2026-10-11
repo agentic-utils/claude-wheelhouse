@@ -289,3 +289,13 @@ so an hour's quiet is what turns the cache cold.
   compacting; each tick, once the activity line reads `idle · compacted`, the host is
   stopped and started again as any Relaunch. Interrupt, Compact getting no notes, or 30
   minutes without a compaction give it up, saying so, with the host left running.
+- **The host posts the reply.** One session made about 87 `reply` calls a day, each
+  repeating its chat as the reply's text. Now the host, which knows which refs the person's messages in
+  a turn were on, posts that turn's chat (every text block, as the pane shows it) as the
+  reply on each when the turn ends (`Store.host_reply`), and `protocol_sdk.md` asks the
+  session for a short `update_item(ref, status=...)` alone; tab sessions keep `reply` as
+  before (`protocol_tab.md`). PROTOCOL_VERSION 8. An errored turn posts nothing, so the
+  item still awaits the session. The turns sent are matched to their ends in order, so a
+  turn Claude Code starts itself, ending while one of ours waits behind it, would take
+  our turn's refs, as it already takes its place in `pending`; once every turn sent has
+  ended, the matching starts clean.
