@@ -38,14 +38,17 @@ from textual.widgets import (
     Footer,
     Input,
     Label,
+    OptionList,
+    Select,
     Static,
     TextArea,
 )
 
-from . import api, emoji, stats, subagents, transcript, tutorial
+from . import api, emoji, models, stats, subagents, transcript, tutorial
 from .hub import TAB_RELAUNCH, Done, Event, Hub, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
+from .stats_pane import SessionStats
 from .store import (DISMISSABLE, FINISHED_RANK, SETTLED, SETTLED_RANK, SessionGone, Store, default_runner,
                     inbox_rank, mode, runner, standing)
 from .unsent import Unsent
@@ -768,7 +771,8 @@ class Compose(TextArea):
 
 # the current session's lifecycle buttons, (caption, id), under the session list: each
 # shown only where it applies (#62)
-LIFECYCLE = (("Rename", "rename"), ("Relaunch", "relaunch"), ("Restore", "restore"), ("Park", "park"), ("End", "end"))
+LIFECYCLE = (("Rename", "rename"), ("Relaunch", "relaunch"), ("Restore", "restore"), ("Park", "park"), ("End", "end"),
+             ("Model", "model"))
 # a session's conversation buttons, (caption, id, variant): under those, for the current
 # session, highlighted there (D20); in a full-screen item's bar, for its session
 CONVERSATION = (("Mode", "mode", "default"), ("Send", "send", "primary"), ("Interrupt", "interrupt", "error"),
@@ -949,7 +953,8 @@ class Dialog(ModalScreen):
 
 
 class NewSession(Dialog):
-    """Name and ticket are optional; the brief becomes the first prompt."""
+    """Name and ticket are optional; the brief becomes the first prompt. Model and effort
+    start at the defaults (models.py), and go to every launch of the session."""
     BINDINGS = [Binding("escape", "answer", show=False)]
 
     def compose(self) -> ComposeResult:
@@ -961,6 +966,11 @@ class NewSession(Dialog):
             yield Input(placeholder="name (optional)", id="name")
             yield Input(placeholder="ticket: #42, owner/repo#42 or ABC-123 (optional)", id="ticket")
             yield TextArea(id="brief")
+            with Horizontal(id="model-row"):   # Sonnet 5.5 at high unless changed (Q50)
+                yield Select([(m.name, m.id) for m in models.MODELS], value=models.DEFAULT_MODEL,
+                             allow_blank=False, id="model")
+                yield Select([(e, e) for e in models.EFFORTS], value=models.default_effort(models.DEFAULT_MODEL),
+                             allow_blank=False, id="effort")
             yield Checkbox("Open in a terminal tab instead of the wheelhouse", default_runner() == "tab", id="tab")
             with Horizontal(classes="buttons"):
                 yield Button("Launch", variant="success", id="launch")
@@ -975,7 +985,14 @@ class NewSession(Dialog):
         self.action_answer({"cwd": cwd, "name": self.query_one("#name", Input).value.strip(),
                             "ticket": self.query_one("#ticket", Input).value.strip(),
                             "brief": self.query_one("#brief", TextArea).text.strip(),
-                            "runner": "tab" if self.query_one("#tab", Checkbox).value else "sdk"})
+                            "runner": "tab" if self.query_one("#tab", Checkbox).value else "sdk",
+                            "model": self.query_one("#model", Select).value,
+                            "effort": self.query_one("#effort", Select).value})
+
+    @on(Select.Changed, "#model")
+    def model_picked(self, event: Select.Changed) -> None:
+        """Another model: Effort goes to that model's default (Q54), and can be set again."""
+        self.query_one("#effort", Select).value = models.default_effort(event.value)
 
     @on(Button.Pressed, "#cancel")
     def cancel(self) -> None:
@@ -1076,6 +1093,46 @@ class RenameSession(Dialog):
     def cancel(self) -> None:
         self.action_answer(None)
 
+
+
+MODEL_WARNING = ("Changing model drops the prompt cache: the next turn re-reads the whole conversation at "
+                 "the full input price. Effort stays as it is.")
+
+
+class ChooseModel(Dialog):
+    """A hosted session's model, changed live: Enter takes the highlighted one, Esc leaves it
+    as it was. Says first that the cache goes with the old model (Q52)."""
+    BINDINGS = [Binding("escape", "answer", show=False)]
+
+    def __init__(self, name: str, current: str | None):
+        super().__init__()
+        self.name_, self.current = name, current
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(f"MODEL · {self.name_}", classes="dialog-title")
+            yield Label(MODEL_WARNING, classes="dialog-prompt", id="model-warning")
+            yield OptionList(*[f"{m.name}{' (now)' if m.id == self.current else ''}" for m in models.MODELS],
+                             id="models")
+            with Horizontal(classes="buttons"):
+                yield Button("Change", variant="warning", id="ok")
+                yield Button("Cancel", id="cancel")
+
+    def on_mount(self) -> None:
+        options = self.query_one("#models", OptionList)
+        ids = [m.id for m in models.MODELS]
+        options.highlighted = ids.index(self.current) if self.current in ids else 0
+        self.set_focus(options)
+
+    @on(OptionList.OptionSelected, "#models")
+    @on(Button.Pressed, "#ok")
+    def ok(self) -> None:
+        at = self.query_one("#models", OptionList).highlighted
+        self.action_answer(None if at is None else models.MODELS[at].id)
+
+    @on(Button.Pressed, "#cancel")
+    def cancel(self) -> None:
+        self.action_answer(None)
 
 
 def ago(epoch: float, now: float | None = None) -> str:
@@ -1240,6 +1297,11 @@ DESCRIBE = {
     "press('interrupt')": "Interrupt the session's current turn",
     "press('compact')": "Compact the session",
     "press('shell')": "Shell: open the session in a Claude Code tab",
+    "press('model')": "Model: change the model of a session run in the wheelhouse (its cache goes)",
+    "effort(-1)": "A lower effort, applied live",
+    "effort(1)": "A higher effort, applied live",
+    "effort_end(0)": "The lowest effort",
+    "effort_end(-1)": "The highest effort",
     "press('allow')": "Allow the permission item in context",
     "press('always')": "Always: allow it, and keep the rule",
     "press('deny')": "Deny it, with what's typed in its box as what to do instead",
@@ -1264,6 +1326,7 @@ BUTTONS = {
     "interrupt": "Interrupt (I): stop the session's current turn, like Esc in Claude Code",
     "compact": "Compact (C): the session says what to keep, then is compacted with that",
     "shell": "Shell (H): open the session in a real Claude Code tab; it comes back when you /exit",
+    "model": "Model (M): change the model a session run in the wheelhouse runs on, live; its prompt cache goes with the old one",
     "relaunch": "Relaunch (L in the session list): stop the session and start it again where it left off (a tab session once it has exited)",
     "restore": "Restore (S in the session list): bring back a dead session where it left off",
     "rename": "Rename (R in the session list): the session's name in the wheelhouse",
@@ -1277,6 +1340,7 @@ BUTTON_KEYS = [
     Binding("i", "press('interrupt')", "Interrupt", show=False),
     Binding("c", "press('compact')", "Compact", show=False),
     Binding("h", "press('shell')", "Shell", show=False),
+    Binding("m", "press('model')", "Model", show=False),
     Binding("1", "press('allow')", "Allow", show=False),
     Binding("2", "press('always')", "Always", show=False),
     Binding("3", "press('deny')", "Deny", show=False),
@@ -1294,7 +1358,7 @@ LIST_KEYS = [Binding(key, action) for key, action in (
     ("up", "cursor_up"), ("down", "cursor_down"), ("pageup", "page_up"), ("pagedown", "page_down"),
     ("ctrl+home", "scroll_top"), ("ctrl+end", "scroll_bottom"))]
 TABS = ("Tab goes round the panes: the session list, the items, the answer box, then the "
-        "conversation, and Shift+Tab back. Ctrl+Enter in the answer box goes back to the items with "
+        "conversation, then the stats pane's effort slider while it shows, and Shift+Tab back. Ctrl+Enter in the answer box goes back to the items with "
         "the cursor where it was, so Down then Tab answers the next one. An item opened full screen "
         "has two stops, its answer box and its thread. In the conversation or a thread, Up, Down, PgUp, "
         "PgDn, Home and End scroll it. The buttons never take focus: each has a key.")
@@ -1312,8 +1376,9 @@ MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Wi
          "kept for next time, and a double-click on a line puts its default back.")
 WHOSE = ("The buttons under the session list act on the session highlighted there, and only those that "
          "apply show: Rename, Relaunch and Park on a running one, Restore on a dead one, End on either, "
-         "Unpark on a parked one; then Mode, Send on one that isn't dead, and on one run in the wheelhouse "
-         "Interrupt, Compact and Shell. Hover over one for what it does, and its key is in brackets below. New, Adopt and Restore all are keys in the footer. An item "
+         "Unpark on a parked one, Model on one run in the wheelhouse; then Mode, Send on one that isn't dead, "
+         "and on one run in the wheelhouse Interrupt, Compact and Shell. Its effort is the slider at the top of "
+         "the stats pane. Hover over one for what it does, and its key is in brackets below. New, Adopt and Restore all are keys in the footer. An item "
          "opened full screen has Mode, Send and the rest in its bar, for its own session. Ctrl+S and Ctrl+T "
          "act on the same session: highlighting an item highlights its session there.")
 
@@ -1326,7 +1391,8 @@ def keys_help() -> str:
                 ("The session list", SessionList.BINDINGS),
                 ("The item list", ItemList.BINDINGS),
                 ("An answer box", Compose.BINDINGS), ("The conversation pane", Transcript.BINDINGS),
-                ("An item opened full screen", ThreadView.BINDINGS)]
+                ("An item opened full screen", ThreadView.BINDINGS),
+                ("The stats pane, with a session run in the wheelhouse in context", SessionStats.BINDINGS)]
     out = ["# Keys"]
     for title, bindings in sections:
         out.append(f"## {title}")
@@ -1404,7 +1470,10 @@ class WheelhouseApp(App):
     #dialog.wide {{ width: 120; }}
     #adopt-list {{ height: 16; }}
     #adopt-hint {{ color: #ffd300; }}
-    NewSession, PickDirectory, Confirm, Choice, AdoptSession, KeysHelp {{ align: center middle; }}
+    NewSession, PickDirectory, Confirm, Choice, AdoptSession, KeysHelp, ChooseModel {{ align: center middle; }}
+    #model-row {{ height: auto; }}
+    #model-row Select {{ width: 1fr; }}
+    #models {{ height: auto; max-height: 8; background: #000000; }}
     #cwd-row {{ height: auto; }}
     #cwd {{ width: 1fr; }}
     #folders {{ height: 20; background: #000000; }}
@@ -1488,7 +1557,8 @@ class WheelhouseApp(App):
         self.selected: tuple[str, str | None] | None = None   # its setter restarts the dwell (look)
         self.detail_follows = False   # the detail pane shows a conversation: it follows its newest turn
         self.modules = api.load()
-        self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid, usage=self.hub.usage)
+        self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid, usage=self.hub.usage,
+                               set_effort=self.set_effort)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
         self.module_ids: dict[str, str] = {}   # each pane's widget id: the module that has it
         self.box_target: tuple | None = None
@@ -2097,18 +2167,33 @@ class WheelhouseApp(App):
 
     def module_sessions(self) -> list[dict]:
         return [{"id": s["id"], "name": s["name"] or short(s["id"]), "running": self.running(s["id"]),
-                 "context": host_context(s)} for s in self.sessions]
+                 "context": host_context(s), **self.hub.model_state(s)} for s in self.sessions]
+
+    def set_effort(self, sid: str, effort: str) -> None:
+        """The stats pane's slider moved: written now, and the panes painted from it, so the
+        next key of a burst moves on from there. Said only if it didn't take."""
+        try:
+            done = self.hub.set_effort(sid, effort)
+        except (SessionGone, ValueError) as e:
+            self.notify(str(e), severity="warning")
+            return
+        if done.notices and not done.ok:
+            self.told(done)
+        self.refresh_data()
 
     def lifecycle_buttons(self, s) -> list[tuple[str, str, bool, bool]]:
         """A session's lifecycle buttons (LIFECYCLE), as show_button takes them, each shown
         only where it applies (#62, D26): Rename, Relaunch and Park on a live session,
-        Restore on a dead one, Unpark on a parked one live or dead, End on either."""
+        Restore on a dead one, Unpark on a parked one live or dead, End on either, and Model
+        on one running in a wheelhouse host (Q52: never a tab's)."""
         dead = s is not None and self.statuses.get(s["id"]) == "dead"
         live = s is not None and not dead
         parked = s is not None and bool(s["parked"])
+        hosted = live and runner(s) == "sdk" and self.running(s["id"]) and not s["shell"]
         return [("rename", "Rename", False, live), ("relaunch", "Relaunch", False, live),
                 ("restore", "Restore", False, dead),
-                ("park", "Unpark" if parked else "Park", False, live or parked), ("end", "End", False, s is not None)]
+                ("park", "Unpark" if parked else "Park", False, live or parked), ("end", "End", False, s is not None),
+                ("model", "Model", False, hosted)]
 
     def controls(self, s) -> list[tuple[str, str, bool, bool]]:
         """A session's conversation buttons (CONVERSATION), as show_button takes them: (id,
@@ -2695,6 +2780,22 @@ class WheelhouseApp(App):
 
     def host_command(self, sid: str, what: str) -> None:
         self.told(self.hub.host_command(sid, what))
+
+    @on(Button.Pressed, "#model")
+    @session_action
+    def model_pressed(self) -> None:
+        """Model, on the current session: a list of the models, warning that the cache goes."""
+        self.settle()
+        sid = self.current_session()
+        if sid:
+            s = self.row(sid)
+            current = models.field(s, "model") or models.field(s, "applied_model")
+            self.push_screen(ChooseModel(display_name(s), current), lambda model: self.change_model(sid, model))
+
+    @session_action
+    def change_model(self, sid: str, model: str | None) -> None:
+        if model and self.told(self.hub.set_model(sid, model)).ok:   # not if cancelled, or unchanged
+            self.refresh_data()
 
     @on(Splitter.Resized)
     def keep_layout(self, event: Splitter.Resized) -> None:

@@ -429,3 +429,58 @@ def test_a_subagents_conversation_follows_it_live_and_two_at_most(hub, store, si
     assert list(hub.agent_followers) == [(sid, ref), (sid, third)], "a third stops following the one asked for longest ago"
     hub.unfollow_agent()
     assert hub.agent_followers == {}
+
+
+@pytest.mark.parametrize("model, effort, stored, desc", [
+    (None, None, ("claude-sonnet-5-5", "high"), "the defaults, stored on the session (Q50)"),
+    ("claude-haiku-5-5", None, ("claude-haiku-5-5", "xhigh"), "a model alone takes its tier's effort (Q54)"),
+    ("claude-opus-5-5", "max", ("claude-opus-5-5", "max"), "as chosen"),
+])
+def test_a_new_session_stores_its_model_and_effort(hub, store, tmp_path, monkeypatch, model, effort, stored, desc):
+    monkeypatch.setattr(launch, "open_session", lambda store, sid: None)
+    done = hub.new_session(str(tmp_path), "n", "", "", "sdk", model, effort)
+    s = store.session(done.sid)
+    assert (s["model"], s["effort"]) == stored, desc
+
+
+@pytest.mark.parametrize("runner, command, value, ok, column, said, desc", [
+    ("sdk", "set_model", "claude-opus-5-5", True, "claude-opus-5-5", "demo: model Opus 5.5", "a hosted session's model"),
+    ("sdk", "set_effort", "xhigh", True, "xhigh", "demo: effort xhigh", "its effort"),
+    ("sdk", "set_effort", "high", False, "high", None, "already that: nothing done"),
+    ("tab", "set_model", "claude-opus-5-5", False, "claude-sonnet-5-5", "demo runs in a tab: type /model there",
+     "never a tab's (Q52): it changes its own"),
+    ("tab", "set_effort", "low", False, "high", "demo runs in a tab: type /effort there", "nor its effort"),
+])
+def test_model_and_effort_change_only_for_a_hosted_session(hub, store, tmp_path, runner, command, value, ok, column,
+                                                             said, desc):
+    sid = store.create_session(str(tmp_path), name="demo", runner=runner, model="claude-sonnet-5-5", effort="high")
+    done = getattr(hub, command)(sid, value)
+    assert done.ok == ok, desc
+    assert store.session(sid)["model" if command == "set_model" else "effort"] == column, desc
+    assert [e.text for e in done.notices] == ([said] if said else []), desc
+
+
+@pytest.mark.parametrize("runner, status, shell, columns, applied, state, desc", [
+    ("sdk", "live", None, ("claude-opus-5-5", "high"), ("claude-opus-5-5", "high"),
+     ("claude-opus-5-5", "high", None, True), "applied: nothing pending"),
+    ("sdk", "live", None, ("claude-opus-5-5", "xhigh"), ("claude-opus-5-5", "high"),
+     ("claude-opus-5-5", "xhigh", "applying", True), "its host has yet to apply the change"),
+    ("sdk", "live", None, ("claude-opus-5-5", "xhigh"), (None, None),
+     ("claude-opus-5-5", "xhigh", "on relaunch", True), "a host on older code never will"),
+    ("sdk", "live", None, (None, None), ("claude-opus-5-5", "medium"),
+     ("claude-opus-5-5", "medium", None, True), "no columns (from before): what its host confirmed"),
+    ("sdk", "dead", None, ("claude-opus-5-5", "xhigh"), ("claude-opus-5-5", "high"),
+     ("claude-opus-5-5", "xhigh", None, False), "dead: it launches with the columns, nothing pending"),
+    ("sdk", "live", "tab", ("claude-opus-5-5", "xhigh"), ("claude-opus-5-5", "high"),
+     ("claude-opus-5-5", "xhigh", None, False), "handed to a shell tab: no live change"),
+    ("tab", "live", None, (None, None), (None, None), (None, None, None, False),
+     "a tab with no columns: the stats pane reads its transcript"),
+])
+def test_model_state(hub, store, tmp_path, monkeypatch, runner, status, shell, columns, applied, state, desc):
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: status)
+    sid = store.create_session(str(tmp_path), runner=runner, model=columns[0], effort=columns[1])
+    store.set_applied(sid, *applied)
+    store.set_shell(sid, shell)
+    hub.refresh()
+    got = hub.model_state(hub.row(sid))
+    assert (got["model"], got["effort"], got["pending"], got["hosted"]) == state, desc

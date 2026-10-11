@@ -191,3 +191,26 @@ def test_decisions_section_is_separable(monkeypatch, env, has_decisions, desc):
     assert text.startswith("# Wheelhouse protocol"), desc
     assert ("## Decisions" in text) == has_decisions, desc
     assert "This section is about reporting, not deciding" in launch.DECISIONS
+
+
+@pytest.mark.parametrize("over, resume, flags, desc", [
+    ({"model": "claude-haiku-5-5", "effort": "low"}, False, ["--model", "claude-haiku-5-5", "--effort", "low"],
+     "a new session launches as chosen"),
+    ({"model": "claude-haiku-5-5", "effort": "low"}, True, ["--model", "claude-haiku-5-5", "--effort", "low"],
+     "a resume passes both again: it would drop a live effort change"),
+    ({"model": None, "effort": "xhigh"}, True, ["--effort", "xhigh"], "only what is set"),
+    ({"model": None, "effort": None}, True, [], "an adopted session with neither runs as it did"),
+    ({}, True, [], "a row with no such columns (older code's, or a dict)"),
+])
+def test_claude_argv_passes_model_and_effort(over, resume, flags, desc):
+    argv = launch.claude_argv(row(**over), python="/py", resume=resume)
+    given = [a for i, a in enumerate(argv) if a in ("--model", "--effort") or argv[i - 1] in ("--model", "--effort")]
+    assert given == flags, desc
+
+
+def test_the_shell_hand_over_and_restore_take_the_columns(store, monkeypatch):
+    """open_tab, which Restore, Relaunch, Adopt and a host's shell hand-over all use, builds
+    its claude command from the row: the run in the tab reads it again."""
+    sid = store.create_session("/tmp", runner="sdk", model="claude-opus-5-5", effort="max")
+    argv = launch.claude_argv(store.session(sid), python="/py", resume=True)
+    assert argv[argv.index("--model") + 1] == "claude-opus-5-5" and argv[argv.index("--effort") + 1] == "max"

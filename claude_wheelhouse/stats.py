@@ -26,7 +26,7 @@ from rich.color import Color
 from rich.style import Style
 from rich.text import Text
 
-from . import transcript
+from . import models, transcript
 
 SPAN = 2 * 3600                    # the charts' last two hours
 TTL = {"1h": 3600, "5m": 300}
@@ -66,6 +66,7 @@ class Turn:
     model: str | None
     main: bool
     output: int = 0
+    effort: str | None = None   # the effort it ran at, as Claude Code recorded it
 
 
 @dataclass
@@ -113,17 +114,19 @@ def parse(lines, seen: set, main: bool) -> tuple[list[Turn], list[Compaction]]:
         ttl = "1h" if cc.get("ephemeral_1h_input_tokens") else "5m" if cc.get("ephemeral_5m_input_tokens") else None
         fresh = inp + made
         turns.append(Turn(at, read, fresh if read else 0, 0 if read else fresh, inp + made + read, ttl,
-                          msg.get("model"), main and not rec.get("isSidechain"), usage.get("output_tokens", 0) or 0))
+                          msg.get("model"), main and not rec.get("isSidechain"), usage.get("output_tokens", 0) or 0,
+                          rec.get("effort") if isinstance(rec.get("effort"), str) else None))
     return turns, compactions
 
 
 # context windows and grades
 
 def max_window(model: str | None) -> int:
-    """The 1M context is a request header, stripped from the logged model id: Opus and
-    Sonnet can have it, so they're graded against 1M."""
+    """Opus and Sonnet are graded against 1M: on older ones the 1M context was a request
+    header, stripped from the logged model id. Fable, Mythos and Haiku 5.5 have it by
+    default; older Haiku has 200k."""
     m = (model or "").lower()
-    return 1_000_000 if "opus" in m or "sonnet" in m else 200_000
+    return 1_000_000 if any(k in m for k in ("opus", "sonnet", "fable", "mythos", "haiku-5")) else 200_000
 
 
 def window_for(model: str | None, peak: int) -> int:
@@ -160,6 +163,7 @@ class Snapshot:
     turns: list[Turn] = field(default_factory=list)   # the span's, main thread and subagents
     estimate: bool = False         # the context is the host's count since a compaction (current)
     max: int | None = None         # the host's window, with it
+    effort: str | None = None      # the main thread's latest response's
 
     @property
     def window(self) -> int:
@@ -275,7 +279,7 @@ class UsageFollower:
         """Takes in what's been appended since the last read. True if anything was."""
         now = time.time() if now is None else now
         snap = Snapshot(self.snap.model, self.snap.context, self.snap.peak, self.snap.last_at, self.snap.ttl,
-                        list(self.snap.compactions), list(self.snap.turns))
+                        list(self.snap.compactions), list(self.snap.turns), effort=self.snap.effort)
         changed = False
         for path in self.paths(now):
             try:
@@ -346,6 +350,7 @@ def take(s: Snapshot, turns: list[Turn], compactions: list[Compaction]) -> None:
         s.turns.append(t)
         if t.main:
             s.model, s.context, s.peak, s.last_at = t.model or s.model, t.context, max(s.peak, t.context), t.at
+            s.effort = t.effort or s.effort
             s.ttl = t.ttl or s.ttl
             c = s.compactions[-1] if s.compactions else None
             if c and c.after is None and c.at <= t.at:
@@ -492,10 +497,42 @@ def stat_rows(view, now: float) -> list[Text]:
     return out + [label("compact") + Text(compact, style=hexc(TEXT if view.compactions else DIM))]
 
 
-def title(view, name: str) -> str:
+def title(view, name: str, setting: dict | None = None, room: int = 0) -> str:
+    """The panel's title. For one session: its name, model, effort and window, the model
+    and effort what it is set to (setting: Hub.model_state) where known, else what its
+    transcript last ran. The window loses its word where the title has no room for it."""
     if isinstance(view, Totals):
         return f"all running sessions · {view.sessions}"
-    return f"{name} · {model_name(view.model)} · {tokens(view.window)} window"
+    setting = setting or {}
+    model = setting.get("model") or view.model
+    effort = setting.get("effort") or view.effort
+    window = tokens(view.max or window_for(model, view.peak))
+    parts = [name, models.name(model) or model_name(model), effort]
+    full = " · ".join(p for p in [*parts, f"{window} window"] if p)
+    return full if not room or len(full) <= room else " · ".join(p for p in [*parts, window] if p)
+
+
+SLIDER_ROW = 2   # the effort slider's line in the pane: under the panel's top border and a blank line
+PENDING = {"applying": "applying…", "on relaunch": "on relaunch: old host"}   # Hub.model_state's
+
+
+def slider(current: str | None, focused: bool) -> Text:
+    """The effort slider: every level, a space apart to fit the pane, the current one lit
+    (brighter while the pane has focus); with focus, the keys too, where there's room."""
+    out = label("effort")
+    for i, level in enumerate(models.EFFORTS):
+        lit = f"bold #000000 on {hexc(ACCENT if focused else DIM)}"
+        out += Text(" " if i else "") + Text(level, style=lit if level == current else hexc(TEXT))
+    return out + Text("  ←/→" if focused else "", style=hexc(DIM))
+
+
+def slider_spans() -> list[tuple[int, int, str]]:
+    """Where each level is on the slider's line, from the line's start: (first cell, past the last, level)."""
+    out, x = [], LABEL
+    for level in models.EFFORTS:
+        out.append((x, x + len(level), level))
+        x += len(level) + 1
+    return out
 
 
 def panel(head: str, rows: list[Text], width: int) -> list[Text]:
@@ -525,17 +562,30 @@ def spaced(rows: list[Text]) -> list[Text]:
 
 
 def layout(view, name: str, note: str | None, usage: "AccountUsage", now: float, width: int,
-           height: int) -> tuple[list[Text], list["Chart"]]:
+           height: int, setting: dict | None = None, focused: bool = False) -> tuple[list[Text], list["Chart"]]:
     """The pane at a size: a bordered panel of the gauges (a blank line above them and
-    under each) and the cache and compaction rows, then as many of the charts as fit under it."""
+    under each) and the cache and compaction rows, then as many of the charts as fit under it.
+    A session run by a host (setting: Hub.model_state) has the effort slider above the
+    gauges, on SLIDER_ROW."""
     if view is None:
         body = said(note or "no sessions running", width - 2) + [Text()] + spaced(gauges(None, usage, now, width - 2))
         return panel("stats", body, width), []
-    body = [Text()] + spaced(gauges(view, usage, now, width - 2)) + stat_rows(view, now)
+    top = []
+    if has_slider(view, setting):   # the line under it says while a change is pending: no jump when it's done
+        top = [Text(), slider(setting.get("effort"), focused),
+               label("") + Text(PENDING.get(setting.get("pending"), ""), style=hexc(WARN))]
+    else:
+        top = [Text()]
+    body = top + spaced(gauges(view, usage, now, width - 2)) + stat_rows(view, now)
     if note:   # beside a view: something went wrong reading it
         body += said(note, width - 2)
-    rows = panel(title(view, name), body, width)
+    rows = panel(title(view, name, setting, width - 6), body, width)
     return rows, charts(view.turns, now, width, height - len(rows), height)
+
+
+def has_slider(view, setting: dict | None) -> bool:
+    """Whether the pane shows the effort slider: for one session, run by a host."""
+    return isinstance(view, Snapshot) and bool(setting and setting.get("hosted"))
 
 
 def render(rows: list[Text], shown: list["Chart"], frame: int) -> Text:

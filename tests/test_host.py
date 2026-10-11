@@ -980,3 +980,138 @@ def test_restore_session(store, tmp_path, monkeypatch, stored, env, alive, opene
         launch.restore_session(store, sid)
     assert seen == ([opened] if opened else []), desc
     assert store.session(sid)["runner"] == recorded, desc
+
+
+# model and effort, changed live (.plan/model-effort.md)
+
+class SettingsClient(FakeClient):
+    """FakeClient with Claude Code's model and effort: set_model, and the control requests
+    the host sends through the SDK's own path (client._query._send_control_request).
+    `refuse` names a model set_model refuses, as an unknown one is; `ignore` an effort
+    level apply_flag_settings accepts but never applies, as Claude Code does a bogus one."""
+
+    def __init__(self, options=None, model="claude-sonnet-5-5", effort="high", refuse=None, ignore=None):
+        super().__init__(options)
+        self.model, self.effort, self.refuse, self.ignore, self.sent = model, effort, refuse, ignore, []
+        self._query = SimpleNamespace(_send_control_request=self.control)
+
+    async def set_model(self, model):
+        self.sent.append(("set_model", model))
+        if model == self.refuse:
+            raise Exception(f"Model '{model}' not found")
+        self.model = model
+
+    async def control(self, request, timeout=60.0):
+        self.sent.append((request["subtype"], request.get("settings")))
+        if request["subtype"] == "apply_flag_settings":
+            level = request["settings"]["effortLevel"]
+            self.effort = self.effort if level == self.ignore else level
+            return {}
+        if request["subtype"] == "get_settings":
+            return {"applied": {"model": self.model, "effort": self.effort}}
+        raise AssertionError(request)
+
+
+@pytest.fixture
+def hosted(store, tmp_path, monkeypatch):
+    """A hosted session on Sonnet 5.5 at high, connected (resumed) to a SettingsClient."""
+    monkeypatch.setattr(host_mod, "transcript_exists", lambda sid: True)
+    sid = store.create_session(str(tmp_path), runner="sdk", model="claude-sonnet-5-5", effort="high")
+    h = Host(store, sid, client_factory=SettingsClient, person="doug")
+    run(h.connect())
+    h.client.sent.clear()
+    return h
+
+
+@pytest.mark.parametrize("model, effort, launched, desc", [
+    ("claude-haiku-5-5", "low", ("claude-haiku-5-5", "low"), "launched as chosen, resumed or not"),
+    (None, None, (None, None), "neither set (from before): Claude Code's own"),
+])
+def test_options_launch_with_the_columns(store, tmp_path, model, effort, launched, desc):
+    sid = store.create_session(str(tmp_path), runner="sdk", model=model, effort=effort)
+    h = Host(store, sid, client_factory=FakeClient)
+    for resume in (False, True):
+        opts = h.options(resume=resume)
+        assert (opts.model, opts.effort) == launched, f"{desc}, resume={resume}"
+
+
+@pytest.mark.parametrize("client, applied, desc", [
+    (SettingsClient, ("claude-sonnet-5-5", "high"), "confirmed by get_settings"),
+    (FakeClient, ("claude-sonnet-5-5", "high"), "get_settings failing: as launched, and the session starts"),
+])
+def test_connect_records_what_is_in_force(store, tmp_path, monkeypatch, client, applied, desc):
+    monkeypatch.setattr(host_mod, "transcript_exists", lambda sid: True)
+    sid = store.create_session(str(tmp_path), runner="sdk", model="claude-sonnet-5-5", effort="high")
+    h = Host(store, sid, client_factory=client)
+    run(h.connect())
+    s = store.session(sid)
+    assert (s["applied_model"], s["applied_effort"]) == applied and h.applied == applied, desc
+    assert s["activity"] == "idle", desc
+
+
+@pytest.mark.parametrize("change, client, sent, columns, activity, desc", [
+    ({"effort": "xhigh"}, {}, [("apply_flag_settings", {"effortLevel": "xhigh"}), ("get_settings", None)],
+     ("claude-sonnet-5-5", "xhigh"), "idle · now Sonnet 5.5 at xhigh", "effort: applied, then confirmed"),
+    ({"model": "claude-opus-5-5"}, {}, [("set_model", "claude-opus-5-5"), ("get_settings", None)],
+     ("claude-opus-5-5", "high"), "idle · now Opus 5.5 at high", "model: set_model, effort left as it is"),
+    ({"model": "claude-haiku-5-5", "effort": "low"}, {},
+     [("set_model", "claude-haiku-5-5"), ("apply_flag_settings", {"effortLevel": "low"}), ("get_settings", None)],
+     ("claude-haiku-5-5", "low"), "idle · now Haiku 5.5 at low", "both"),
+    ({"model": "claude-fable-5-1"}, {"refuse": "claude-fable-5-1"},
+     [("set_model", "claude-fable-5-1"), ("get_settings", None)], ("claude-sonnet-5-5", "high"),
+     "idle · model change refused: Model 'claude-fable-5-1' not found", "refused: the column goes back, and says why"),
+    ({"effort": "max"}, {"ignore": "max"}, [("apply_flag_settings", {"effortLevel": "max"}), ("get_settings", None)],
+     ("claude-sonnet-5-5", "high"), "idle · effort change refused: Claude Code kept claude-sonnet-5-5, high",
+     "not confirmed: put back, as what runs"),
+    ({}, {}, [], ("claude-sonnet-5-5", "high"), "idle", "nothing changed: nothing sent"),
+])
+def test_a_change_is_applied_live(hosted, store, change, client, sent, columns, activity, desc):
+    for k, v in client.items():
+        setattr(hosted.client, k, v)
+    for column, value in change.items():
+        getattr(store, f"set_{column}")(hosted.sid, value)
+    assert run(hosted.poll()) is True, desc
+    s = store.session(hosted.sid)
+    assert hosted.client.sent == sent, desc
+    assert (s["model"], s["effort"]) == columns, f"{desc}: the columns"
+    assert (s["applied_model"], s["applied_effort"]) == (hosted.client.model, hosted.client.effort), f"{desc}: in force"
+    assert s["activity"] == activity, desc
+    hosted.client.sent.clear()
+    run(hosted.poll())
+    assert hosted.client.sent == [], f"{desc}: once, not again each poll"
+
+
+def test_a_change_made_while_a_turn_runs_leaves_the_activity_line_to_the_turn(hosted, store):
+    hosted.pending = 1
+    store.set_activity(hosted.sid, "running Bash: ls")
+    store.set_effort(hosted.sid, "low")
+    run(hosted.poll())
+    s = store.session(hosted.sid)
+    assert (s["applied_effort"], s["activity"]) == ("low", "running Bash: ls")
+
+
+def test_a_refused_value_can_be_asked_for_again(hosted, store):
+    """Put back, the columns match what's in force: asking again for the same is a change,
+    tried again (Claude Code may know the model by then)."""
+    hosted.client.refuse = "claude-fable-5-1"
+    store.set_model(hosted.sid, "claude-fable-5-1")
+    run(hosted.poll())
+    hosted.client.refuse = None
+    store.set_model(hosted.sid, "claude-fable-5-1")
+    run(hosted.poll())
+    assert store.session(hosted.sid)["applied_model"] == "claude-fable-5-1"
+
+
+def test_the_sdks_control_request_path_is_where_the_host_expects_it():
+    """The host reaches Claude Code's apply_flag_settings and get_settings through the SDK's
+    internals (Host.control), as the SDK has no method for them: an SDK upgrade that moves
+    them fails here, not in a live session."""
+    import inspect
+    from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+    from claude_agent_sdk._internal.query import Query
+    assert "self._query" in inspect.getsource(ClaudeSDKClient), "the client keeps its Query as _query"
+    params = inspect.signature(Query._send_control_request).parameters
+    assert list(params)[:2] == ["self", "request"] and inspect.iscoroutinefunction(Query._send_control_request)
+    assert "set_model" in vars(ClaudeSDKClient)
+    fields = ClaudeAgentOptions.__dataclass_fields__
+    assert "model" in fields and "effort" in fields

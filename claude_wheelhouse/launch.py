@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import liveness
+from . import liveness, models
 from .transcript import NO_BRIEF
 from .store import Store, db_path, default_runner, now, runner
 
@@ -97,6 +97,11 @@ def claude_argv(session, *, python: str, resume: bool) -> list[str]:
         # it fresh each request; it has to stay off, since the old record outlives one launch.
         # A host's session opened in a shell tab is the same case: it first ran the SDK protocol.
         argv += ["--system-prompt-snapshot", "off"]
+    # every launch passes both when set: a resume keeps neither a live effort change nor,
+    # reliably, the model (.plan/model-effort.md)
+    for flag in ("model", "effort"):
+        if value := models.field(session, flag):
+            argv += [f"--{flag}", value]
     if session["name"]:
         argv += ["-n", session["name"]]
     if not resume:
@@ -121,7 +126,7 @@ def injected() -> str:
     from .store import GONE_TEXT
     skill = (PLUGIN_DIR / "skills/wheelhouse/SKILL.md").read_text()
     session = {"id": "<session-id>", "cwd": "<directory>", "name": "<name>", "ticket": None,
-               "brief": "<opening brief>", "adopted": False}
+               "brief": "<opening brief>", "adopted": False, "model": "<model>", "effort": "<effort>"}
     argv = claude_argv(session, python="<python>", resume=False)
     argv[argv.index(PROTOCOL)] = "<protocol.md, above>"
     tools = "\n\n".join(f"{t.__name__}\n    {t.__doc__.strip()}" for t in mcp_server.TOOLS)

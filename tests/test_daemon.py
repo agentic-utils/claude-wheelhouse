@@ -91,6 +91,19 @@ ROUTES = [
      lambda store, sid, r: store.item(sid, "P1")["status"] == "allowed", "a permission allowed"),
     ("POST", "/items/{sid}/{ref}/close", {"closed": True},
      lambda store, sid, r: store.item(sid, "T1")["dismissed"] == "todo", "an item closed"),
+    ("GET", "/models", None, lambda store, sid, r: [m["id"] for m in r.json()["models"]] == [
+        "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"], "the models offered"),
+    ("POST", "/sessions", {"cwd": "{tmp}", "model": "claude-haiku-5-5", "effort": "low"},
+     lambda store, sid, r: (store.session(r.json()["sid"])["model"], store.session(r.json()["sid"])["effort"])
+     == ("claude-haiku-5-5", "low"), "a new session on a model and effort"),
+    ("POST", "/sessions", {"cwd": "{tmp}"},
+     lambda store, sid, r: (store.session(r.json()["sid"])["model"], store.session(r.json()["sid"])["effort"])
+     == ("claude-sonnet-5-5", "high"), "with neither: the defaults (Q50)"),
+    ("POST", "/sessions/{sid}/effort", {"effort": "xhigh"},
+     lambda store, sid, r: not r.json()["ok"] and "type /effort there" in told(r)[0] and store.session(sid)["effort"]
+     is None, "a tab's effort isn't changed from here (Q52)"),
+    ("POST", "/sessions/{sid}/model", {"model": "claude-opus-5-5"},
+     lambda store, sid, r: not r.json()["ok"] and store.session(sid)["model"] is None, "nor its model"),
 ]
 
 
@@ -140,6 +153,12 @@ async def test_the_inbox_and_a_thread_carry_no_seq_from_a_database_that_had_it(d
     ("POST", "/sessions", {"cwd": "."}, 400, "nor a relative path, which would be the daemon's"),
     ("POST", "/sessions", {"cwd": "/", "runner": "tab"}, 400, "a tab, on a screen nobody remote sees"),
     ("POST", "/items/{sid}/T1/permission", {"decision": "allow"}, 400, "a permission's answer to a task"),
+    ("POST", "/sessions", {"cwd": "/", "model": "opus[1m]"}, 400, "a model that isn't offered"),
+    ("POST", "/sessions", {"cwd": "/", "effort": "turbo"}, 400, "an effort that isn't one"),
+    ("POST", "/sessions/{sid}/model", {"model": "claude-nonsense-9"}, 400, "a model change to one not offered"),
+    ("POST", "/sessions/{sid}/model", {}, 400, "a model change naming none"),
+    ("POST", "/sessions/{sid}/effort", {"effort": "bogus"}, 400, "an effort change to a level that isn't one"),
+    ("POST", "/sessions/gone/effort", {"effort": "high"}, 404, "an effort change on a session gone"),
 ])
 async def test_errors_map_to_statuses(daemon, store, sid, method, path, body, status, desc):
     store.post_item(sid, "task", "do it")
@@ -656,3 +675,32 @@ async def test_a_session_created_since_the_last_refresh_is_still_followed(daemon
     assert (await call(daemon, "GET", f"/sessions/{late}/conversation")).status_code == 200
     daemon.forget_gone()
     assert late in daemon.hub.followers and late in daemon.reading
+
+
+@pytest.mark.parametrize("path, body, desc", [
+    ("/sessions/{sid}/model", {"model": "claude-opus-5-5"}, "a model change"),
+    ("/sessions/{sid}/effort", {"effort": "max"}, "an effort change"),
+    ("/sessions", {"cwd": "/", "model": "claude-opus-5-5", "effort": "max"}, "a new session on a model"),
+])
+@pytest.mark.parametrize("headers, status, guard", [
+    ({"idempotency_key": ""}, 400, "Idempotency-Key"),
+    ({"host": "evil.example:7428"}, 421, "isn't reached by that name"),
+    ({"origin": "http://evil.example"}, 403, "another site's page"),
+])
+async def test_the_model_routes_keep_the_guards(daemon, store, tmp_path, path, body, desc, headers, status, guard):
+    sid = store.create_session(str(tmp_path), runner="sdk", model="claude-sonnet-5-5", effort="high")
+    r = await call(daemon, "POST", path.format(sid=sid), body, **headers)
+    assert r.status_code == status and guard in r.json()["error"], f"{desc}: {r.text}"
+    s = store.session(sid)
+    assert (s["model"], s["effort"], len(store.sessions())) == ("claude-sonnet-5-5", "high", 1), f"{desc}: nothing done"
+
+
+async def test_a_hosted_sessions_model_and_effort_are_set_and_served(daemon, store, tmp_path):
+    sid = store.create_session(str(tmp_path), name="h", runner="sdk", model="claude-sonnet-5-5", effort="high")
+    for path, body in ((f"/sessions/{sid}/model", {"model": "claude-opus-5-5"}),
+                       (f"/sessions/{sid}/effort", {"effort": "max"})):
+        r = await call(daemon, "POST", path, body)
+        assert r.status_code == 200 and r.json()["ok"], r.text
+    row = next(s for s in (await call(daemon, "GET", "/sessions")).json() if s["id"] == sid)
+    assert (row["model"], row["effort"]) == ("claude-opus-5-5", "max")
+    assert {"applied_model", "applied_effort", "running_model", "running_effort"} <= row.keys()

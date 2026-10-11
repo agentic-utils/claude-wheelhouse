@@ -60,15 +60,21 @@ class HostContext:
 
 @dataclass
 class Context:
-    """All a module gets from the hub. Read-only: a module never writes the hub's data."""
+    """All a module gets from the hub. Read-only: a module never writes the hub's data but
+    through the commands given here (set_effort)."""
     state_dir: Path
-    # the hub's sessions: id, name, whether it's running, and "context", a HostContext for an
-    # SDK-hosted session whose host has recorded one, else None
+    # the hub's sessions: id, name, whether it's running, "context", a HostContext for an
+    # SDK-hosted session whose host has recorded one, else None, and what it is set to run
+    # on (Hub.model_state): "model" and "effort" (None where unknown), "pending" (the host
+    # has yet to apply them: "applying" or "on relaunch") and "hosted" (run by a host, so
+    # its effort can be changed live)
     sessions: Callable[[], list[dict]]
     focus: Callable[[], str | None]      # the session in context (highlighted or followed), if any
     config: dict = field(default_factory=dict)
     # the account's session and weekly usage, which the hub fetches
     usage: "AccountUsage | None" = None
+    # a hosted session's effort, set live: (session id, level); None where the surface has none
+    set_effort: Callable[[str, str], None] | None = None
 
 
 @dataclass

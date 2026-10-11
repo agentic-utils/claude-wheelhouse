@@ -475,3 +475,61 @@ def test_items_that_tie_to_the_second_go_by_id_in_their_bands_direction(store, s
         with mock.patch("claude_wheelhouse.store.now", lambda: at[0] if at else TIE):
             store.post_item(sid, kind, kind, status=status)
     assert " ".join(r["ref"] for r in store.items(sid)) == order, desc
+
+
+@pytest.mark.parametrize("model, effort, error, desc", [
+    ("claude-sonnet-5-5", "high", None, "the table's"),
+    (None, None, None, "neither, as an adopted session"),
+    ("sonnet", "high", "model must be one of", "an alias isn't stored: a pinned id is (Q49)"),
+    ("claude-sonnet-5-5", "turbo", "effort must be one of", "nor a level Claude Code would ignore"),
+])
+def test_a_session_keeps_its_model_and_effort(store, tmp_path, model, effort, error, desc):
+    if error:
+        with pytest.raises(ValueError, match=error):
+            store.create_session(str(tmp_path), model=model, effort=effort)
+        assert store.sessions() == [], desc
+        return
+    sid = store.create_session(str(tmp_path), model=model, effort=effort)
+    s = store.session(sid)
+    assert (s["model"], s["effort"], s["applied_model"], s["applied_effort"]) == (model, effort, None, None), desc
+
+
+@pytest.mark.parametrize("setter, value, column, error, desc", [
+    ("set_model", "claude-fable-5-1", "model", None, "a model from the table"),
+    ("set_effort", "max", "effort", None, "any level"),
+    ("set_model", "claude-nonsense-9", "model", "model must be one of", "a model that isn't offered"),
+    ("set_effort", "bogus", "effort", "effort must be one of", "a level that isn't one"),
+])
+def test_setting_model_and_effort(store, sid, setter, value, column, error, desc):
+    before = store.session(sid)[column]
+    if error:
+        with pytest.raises(ValueError, match=error):
+            getattr(store, setter)(sid, value)
+        assert store.session(sid)[column] == before, desc
+    else:
+        getattr(store, setter)(sid, value)
+        assert store.session(sid)[column] == value, desc
+
+
+def test_setting_one_on_a_session_gone_says_so(store):
+    with pytest.raises(SessionGone):
+        store.set_effort("gone", "high")
+
+
+def test_a_host_puts_back_what_claude_code_refused_and_records_what_it_has(store, sid):
+    store.set_model(sid, "claude-opus-5-5")
+    store.set_effort(sid, "max")
+    store.put_back(sid, model="claude-haiku-5-5")
+    store.set_applied(sid, "claude-haiku-5-5", "max")
+    s = store.session(sid)
+    assert (s["model"], s["effort"], s["applied_model"], s["applied_effort"]) == (
+        "claude-haiku-5-5", "max", "claude-haiku-5-5", "max"), "only the column named goes back"
+
+
+def test_older_code_still_writes_a_database_with_the_model_columns(store, tmp_path):
+    """Older code (the editable install's other copies) never names the new columns: its
+    insert, as it was, still works, and leaves them NULL."""
+    store.db.execute("INSERT INTO sessions (id, name, ticket, brief, cwd, created_at, adopted, runner) "
+                     "VALUES ('old', '', '', '', ?, '2026-10-01T00:00:00+00:00', 0, 'sdk')", (str(tmp_path),))
+    s = store.session("old")
+    assert (s["model"], s["effort"], s["applied_model"], s["applied_effort"]) == (None, None, None, None)

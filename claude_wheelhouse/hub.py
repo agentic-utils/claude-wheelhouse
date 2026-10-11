@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import adopt, api, launch, liveness, stats, subagents, transcript, tutorial
+from . import adopt, api, launch, liveness, models, stats, subagents, transcript, tutorial
 from .store import DISMISSABLE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
 
 RUNNING = ("live", "stalled", "starting")
@@ -310,8 +310,13 @@ class Hub:
             n += one.ok
         return done.say(f"restoring {n} session(s)")
 
-    def new_session(self, cwd: str, name: str, ticket: str, brief: str, runner: str) -> Done:
-        sid = self.store.create_session(cwd, name=name, ticket=ticket, brief=brief, runner=runner)
+    def new_session(self, cwd: str, name: str, ticket: str, brief: str, runner: str, model: str | None = None,
+                    effort: str | None = None) -> Done:
+        """A new session, launched. Its model and effort as given, else the defaults
+        (models.chosen): stored either way, so every launch of it passes them."""
+        model, effort = models.chosen(model, effort)
+        sid = self.store.create_session(cwd, name=name, ticket=ticket, brief=brief, runner=runner, model=model,
+                                        effort=effort)
         done = self.open_session(sid)
         done.sid = sid
         return done
@@ -474,6 +479,41 @@ class Hub:
             return Done(False)
         return Done().say({"interrupt": "interrupting", "compact": "compacting: asking what to keep",
                            "shell": "opening a terminal tab"}[what])
+
+    # model and effort (.plan/model-effort.md)
+
+    def set_model(self, sid: str, model: str) -> Done:
+        """A hosted session's model: its host applies it live, and every launch passes it.
+        Not a tab's: the wheelhouse can't change one (Q52), it says so. Whether it changed."""
+        return self.choose(sid, "model", model)
+
+    def set_effort(self, sid: str, effort: str) -> Done:
+        """A hosted session's effort, as set_model: live, with no side effects to warn of."""
+        return self.choose(sid, "effort", effort)
+
+    def choose(self, sid: str, what: str, value: str) -> Done:
+        s = self.row(sid)
+        if runner(s) != "sdk":
+            return Done(False).say(f"{display_name(s)} runs in a tab: type /{what} there", "warning")
+        if models.field(s, what) == value:
+            return Done(False)   # last write wins: it's that already
+        (self.store.set_model if what == "model" else self.store.set_effort)(sid, value)
+        shown = models.name(value) or value
+        return Done().say(f"{display_name(s)}: {what} {shown}")
+
+    def model_state(self, s) -> dict:
+        """What a session is set to run on, for the stats pane: its columns, else what its
+        host confirmed, and whether its host has yet to apply them (pending: "applying",
+        or "on relaunch" for a host on older code that never will). None where unknown:
+        the stats pane falls back on the transcript."""
+        want = (models.field(s, "model"), models.field(s, "effort"))
+        got = (models.field(s, "applied_model"), models.field(s, "applied_effort"))
+        hosted = runner(s) == "sdk" and self.running(s["id"]) and not s["shell"]
+        pending = None
+        if hosted and any(w and w != g for w, g in zip(want, got)):
+            pending = "applying" if any(got) else "on relaunch"
+        return {"model": want[0] or (got[0] if hosted else None), "effort": want[1] or (got[1] if hosted else None),
+                "pending": pending, "hosted": hosted}
 
     # items
 

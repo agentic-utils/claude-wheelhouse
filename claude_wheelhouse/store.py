@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from . import models
+
 DEFAULT_DB = Path.home() / ".local/state/claude-wheelhouse/wheelhouse.db"
 
 # permission: a tool call waiting for the person's approval, posted by a session's SDK host
@@ -179,7 +181,9 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "host_command", "TEXT"), ("sessions", "shell", "TEXT"),
                  ("sessions", "context_tokens", "INTEGER"), ("sessions", "context_max", "INTEGER"),
                  ("items", "answer", "TEXT"), ("sessions", "context_at", "TEXT"),
-                 ("items", "dismissed", "TEXT"), ("sessions", "relaunch", "TEXT")]
+                 ("items", "dismissed", "TEXT"), ("sessions", "relaunch", "TEXT"),
+                 ("sessions", "model", "TEXT"), ("sessions", "effort", "TEXT"),
+                 ("sessions", "applied_model", "TEXT"), ("sessions", "applied_effort", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -332,20 +336,54 @@ class Store:
     # sessions
 
     def create_session(self, cwd: str, name: str = "", ticket: str = "", brief: str = "",
-                       sid: str | None = None, runner: str | None = None) -> str:
-        """A new session, or (with sid) an adopted one keeping its Claude session id."""
+                       sid: str | None = None, runner: str | None = None, model: str | None = None,
+                       effort: str | None = None) -> str:
+        """A new session, or (with sid) an adopted one keeping its Claude session id. Its
+        model and effort, if given, are launched with; unset (adopted), Claude Code's own."""
         adopted = sid is not None
         sid = sid or str(uuid.uuid4())
         runner = runner or default_runner()
         if runner not in RUNNERS:
             raise ValueError(f"runner must be one of {', '.join(RUNNERS)}, not {runner!r}")
+        if model is not None:
+            models.check_model(model)
+        if effort is not None:
+            models.check_effort(effort)
         with self.tx() as db:
             db.execute(
-                "INSERT INTO sessions (id, name, ticket, brief, cwd, created_at, adopted, runner) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (sid, name, ticket, brief, cwd, now(), int(adopted), runner),
+                "INSERT INTO sessions (id, name, ticket, brief, cwd, created_at, adopted, runner, model, effort) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (sid, name, ticket, brief, cwd, now(), int(adopted), runner, model, effort),
             )
         return sid
+
+    def set_model(self, sid: str, model: str) -> None:
+        """The model the session runs on: its host applies it live, every launch passes it."""
+        models.check_model(model)
+        with self.tx() as db:
+            self._require(db, sid)
+            db.execute("UPDATE sessions SET model = ? WHERE id = ?", (model, sid))
+
+    def set_effort(self, sid: str, effort: str) -> None:
+        """The effort the session runs at: its host applies it live, every launch passes it."""
+        models.check_effort(effort)
+        with self.tx() as db:
+            self._require(db, sid)
+            db.execute("UPDATE sessions SET effort = ? WHERE id = ?", (effort, sid))
+
+    def put_back(self, sid: str, **values) -> None:
+        """A host putting the model or effort column back to what Claude Code has in force,
+        having refused the change: unchecked, as it is what runs."""
+        with self.tx() as db:
+            for column in ("model", "effort"):
+                if column in values:
+                    db.execute(f"UPDATE sessions SET {column} = ? WHERE id = ?", (values[column], sid))
+
+    def set_applied(self, sid: str, model: str | None, effort: str | None) -> None:
+        """What the session's host has in force, as Claude Code last confirmed it."""
+        with self.tx() as db:
+            db.execute("UPDATE sessions SET applied_model = ?, applied_effort = ? WHERE id = ?",
+                       (model, effort, sid))
 
     def set_runner(self, sid: str, runner: str) -> None:
         if runner not in RUNNERS:

@@ -43,7 +43,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import stats
+from . import models, stats
 from .hub import Done, Event, Hub, host_context
 from .store import SessionGone, Store, inbox_rank, mode, runner, standing
 
@@ -220,6 +220,7 @@ class Daemon:
             Route("/items/{sid}/{ref}/permission", self.command(self.permission), methods=["POST"]),
             Route("/items/{sid}/{ref}/close", self.command(self.close), methods=["POST"]),
             Route("/fs", self.query(self.folders)),
+            Route("/models", self.query(lambda request: models.catalogue(), run=None)),
             Route("/events", self.events),
         ], lifespan=self.lifespan)
 
@@ -450,7 +451,9 @@ class Daemon:
         sid = s["id"]
         follower = self.hub.contexts.get(sid)
         snap = stats.current(follower.snap, host_context(s)) if follower and follower.ready else None
+        running = follower.snap if follower and follower.ready else None
         return {**dict(s), "status": self.hub.shown_status(sid), "mode": mode(s), "busy": self.hub.busy(sid),
+                "running_model": running and running.model, "running_effort": running and running.effort,
                 "stale": self.hub.stale(sid), "sends_now": self.hub.sends_now(sid),
                 "context": {"tokens": snap.context, "window": snap.window, "estimate": snap.estimate}
                 if snap and snap.context else None}
@@ -537,7 +540,8 @@ class Daemon:
         if (text(body, "runner", False) or "sdk") != "sdk":
             raise Refused(400, "a session started remotely runs by a host: runner can only be sdk")
         return self.hub.new_session(cwd, text(body, "name", False) or "", text(body, "ticket", False) or "",
-                                    text(body, "brief", False) or "", "sdk")
+                                    text(body, "brief", False) or "", "sdk", text(body, "model", False),
+                                    text(body, "effort", False))
 
     def session_command(self, request: Request, body: dict) -> Done:
         """Relaunch with the host a client was shown, (pid, start time), stops that host and
@@ -567,6 +571,10 @@ class Daemon:
             return hub.submit((sid, text(body, "ref", False)), text(body, "text"))
         if action == "rename":
             return hub.rename(sid, text(body, "name"))
+        if action == "model":
+            return hub.set_model(sid, models.check_model(text(body, "model")))
+        if action == "effort":
+            return hub.set_effort(sid, models.check_effort(text(body, "effort")))
         if action in ("interrupt", "compact", "shell"):
             return hub.host_command(sid, action)
         commands = {"restore": hub.restore, "unpark": hub.unpark, "dispatch": hub.send_queue}

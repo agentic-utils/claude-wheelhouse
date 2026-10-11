@@ -542,3 +542,75 @@ def test_followers_are_shared(held, shared, desc):
         del first
         gc.collect()
     assert getattr(stats.follower("shared-sid"), "marker", False) == shared, desc
+
+
+# model and effort (.plan/model-effort.md)
+
+@pytest.mark.parametrize("model, window, desc", [
+    ("claude-opus-5-5", 1_000_000, "Opus"),
+    ("claude-sonnet-5-5", 1_000_000, "Sonnet"),
+    ("claude-haiku-5-5", 1_000_000, "Haiku 5.5 has 1M by default"),
+    ("claude-fable-5-1", 1_000_000, "as has Fable 5.1"),
+    ("claude-haiku-4-5", 200_000, "older Haiku: 200k"),
+    (None, 200_000, "none logged yet"),
+])
+def test_max_window(model, window, desc):
+    assert stats.max_window(model) == window, desc
+
+
+def test_the_transcript_says_what_effort_each_turn_ran_at():
+    recs = [response("m1", ago=90, read=5) | {"effort": "low"}, response("m2", ago=60, read=5) | {"effort": "xhigh"},
+            response("m3", ago=30, read=5)]
+    turns, _ = stats.parse(lines(*recs), set(), True)
+    assert [t.effort for t in turns] == ["low", "xhigh", None]
+    s = Snapshot()
+    stats.take(s, turns, [])
+    assert s.effort == "xhigh", "the latest turn that says, a turn that doesn't leaves it"
+
+
+@pytest.mark.parametrize("setting, effort, room, expected, desc", [
+    (None, "low", 0, "holly · Opus 5.5 · low · 1M window", "a tab's: what its transcript ran"),
+    (None, None, 0, "holly · Opus 5.5 · 1M window", "no effort recorded yet"),
+    ({"model": "claude-haiku-5-5", "effort": "xhigh"}, "low", 0, "holly · Haiku 5.5 · xhigh · 1M window",
+     "a hosted session's: what it is set to"),
+    ({"model": None, "effort": None}, "medium", 0, "holly · Opus 5.5 · medium · 1M window", "no columns: the transcript's"),
+    (None, "xhigh", 31, "holly · Opus 5.5 · xhigh · 1M", "no room for the word window"),
+    (None, "low", 40, "holly · Opus 5.5 · low · 1M window", "room enough"),
+])
+def test_the_title_says_model_and_effort(setting, effort, room, expected, desc):
+    s = snap(83_000, 600)
+    s.model, s.effort = "claude-opus-5-5", effort
+    assert stats.title(s, "holly", setting, room) == expected, desc
+
+
+@pytest.mark.parametrize("setting, slider, pending, desc", [
+    ({"model": "claude-opus-5-5", "effort": "xhigh", "pending": None, "hosted": True}, True, "",
+     "a session run by a host: the slider, over the gauges"),
+    ({"model": "claude-opus-5-5", "effort": "xhigh", "pending": "applying", "hosted": True}, True, "applying…",
+     "a change its host has yet to confirm, said under it"),
+    ({"model": "claude-opus-5-5", "effort": "xhigh", "pending": "on relaunch", "hosted": True}, True,
+     "on relaunch: old host", "a host on older code never will"),
+    ({"model": "claude-opus-5-5", "effort": "xhigh", "pending": None, "hosted": False}, False, None,
+     "a tab's: none (Q52)"),
+    (None, False, None, "nothing known: none"),
+])
+@pytest.mark.parametrize("width", [37, 64])
+def test_the_effort_slider_shows_for_a_hosted_session(setting, slider, pending, desc, width):
+    rows, _ = stats.layout(snap(83_000, 600), "holly", None, usage(session=23, weekly_all=5), NOW, width, 40, setting)
+    inside = [r.plain[1:-1].split(" ")[0] or "-" for r in rows[1:-1]]
+    gauges = ["context", "-", "session", "-", "weekly", "-", "cache"]
+    expect = ["-", "effort", "-"] + gauges if slider else ["-"] + gauges   # the pending line is under the label
+    assert inside[:len(expect)] == expect, desc
+    if slider:
+        line = rows[stats.SLIDER_ROW]
+        assert line.plain[1:].startswith("effort  low medium high xhigh max"), f"{desc}: whole at {width}"
+        for start, end, level in stats.slider_spans():   # where a click finds each level
+            assert line.plain[1 + start:1 + end] == level, f"{desc}: {level}"
+        lit = [line.plain[s.start:s.end] for s in line.spans if "on " in str(s.style)]
+        assert lit == ["xhigh"], f"{desc}: the current level lit"
+        assert rows[stats.SLIDER_ROW + 1].plain[1:-1].strip() == pending, desc
+
+
+@pytest.mark.parametrize("focused, keys, desc", [(True, True, "focused: the keys say how"), (False, False, "not")])
+def test_the_slider_shows_its_keys_when_focused(focused, keys, desc):
+    assert stats.slider("high", focused).plain.endswith("←/→") == keys, desc

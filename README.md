@@ -80,13 +80,16 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   the pane back to the highlighted item.
 - **Stats.** Under the item list, the session in context's numbers, read from its
   transcripts, in claude-dashboard's colours. A bordered panel, titled with the session,
-  model and window, holds three gauges: context size against its window (green under
+  model, effort and window, holds three gauges: context size against its window (green under
   150k, yellow under 300k, amber under 600k, then red), and the account's session and weekly usage with their reset times, as
   `/usage` shows them, fetched once a minute. Under them, whether the prompt cache is warm
   and when it goes cold (once cold, what the next turn re-pays), and its compactions.
   Straight after a compaction a wheelhouse-hosted session shows the size its Claude Code
   reports, marked `~` as an estimate until the next response sizes it exactly; a tab
-  session keeps its pre-compaction size until then.
+  session keeps its pre-compaction size until then. For a session run in the wheelhouse,
+  an effort slider sits over the gauges: Tab reaches it, Left and Right (or Home and End)
+  change the effort live, and a click on a level picks it. No warning: effort has no side
+  effects.
   Below the panel, two charts of the last two hours, subagents included: how each turn's
   context was assembled (read from cache, new, cache miss) and the output tokens it made.
   Each bar covers a fixed stretch of clock (about 2 minutes at 60 columns), the rightmost
@@ -108,13 +111,17 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   highlight to the item's session, and moving the list's highlight follows that session.
   The buttons under the description act on it, and only those that apply show, each with
   a tooltip saying what it does: its lifecycle (Rename, Relaunch and Park on a running
-  session, Restore on a dead one, Unpark on a parked one, End on either), then its
+  session, Restore on a dead one, Unpark on a parked one, End on either, Model on one run in
+  the wheelhouse), then its
   conversation (Mode, Send on one that isn't dead, and Interrupt, Compact and Shell while it runs in the
   wheelhouse). New (`N`), Adopt (`A`, a list of the sessions on disk you can adopt) and
   Restore all (`Shift+S`) act on no one session, so they're keys in the footer. Ctrl+S and Ctrl+T, the
   hint under the answer box and the activity line act on or describe the same session.
-  An item opened full screen has Mode, Send and the rest in its bar, for its own session. New session (directory, optional name, optional ticket, opening brief)
-  runs Claude in the wheelhouse (below), or in a Windows Terminal tab if you tick the box.
+  An item opened full screen has Mode, Send and the rest in its bar, for its own session. New session (directory, optional name, optional ticket, opening brief,
+  model and effort) runs Claude in the wheelhouse (below), or in a Windows Terminal tab if you tick the box.
+  The model is Sonnet 5.5, Opus 5.5, Haiku 5.5 or Fable 5.1 (Sonnet 5.5 unless changed), and the effort
+  any level from low to max, starting at the model's default (high; xhigh for Haiku). Every launch of the
+  session passes both, Restore and Relaunch included.
   Browse… picks the directory from a tree (Enter opens a folder, Backspace goes up,
   Ctrl+Enter or Choose takes the highlighted one). Rename changes a session's name, and
   is the only way to: a `/rename` in Claude Code isn't picked up, and the next launch
@@ -143,7 +150,11 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   do instead, also at once. A question Claude asks with its question dialog becomes a
   question item. Its buttons include Interrupt, Compact (the session is asked what to keep,
   then compacted with that, and the bar reports the token drop) and Shell, which hands the
-  session to the real Claude Code in a tab and takes it back when you `/exit` there; the
+  session to the real Claude Code in a tab and takes it back when you `/exit` there.
+  Model (`M`) changes the model it runs on, live, after warning that the prompt cache goes
+  with the old model; the effort slider in the stats pane changes its effort. A tab
+  session's model and effort are set when it's created; change them in the tab itself
+  with `/model` and `/effort`; the
   bar above the footer has a line saying what the session in context is doing. Closing the wheelhouse leaves the hosts
   running. `WHEELHOUSE_RUNNER=tab` makes tabs the default again. Restore and Adopt bring a
   session back the way new sessions run, so a tab from before hosts existed comes back as
@@ -213,11 +224,12 @@ selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued o
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
 as answered, a decision as seen), `?` list every key and button, `Q` quit (it asks first
 while a relaunch is waiting for a host to stop). Outside a text box, the buttons that have no other key:
-`I` Interrupt, `C` Compact, `H` Shell, `1` Allow, `2` Always and `3` Deny on a permission item (numbered
+`I` Interrupt, `C` Compact, `H` Shell, `M` Model, `1` Allow, `2` Always and `3` Deny on a permission item (numbered
 as in Claude Code's own prompt), and `Shift+A` Send all (every running session's queue). A key whose button doesn't apply says so.
 
 `Tab` goes round the panes: the session list, the items, the answer box, then the conversation (one
-stop, where the arrows, `PgUp`, `PgDn`, `Home` and `End` scroll it), and `Shift+Tab` goes back.
+stop, where the arrows, `PgUp`, `PgDn`, `Home` and `End` scroll it), then the stats pane's effort slider
+while it shows, and `Shift+Tab` goes back.
 `Ctrl+Enter` in the answer box goes back to the items with the cursor where it was, so answering a run
 of items is: type, `Ctrl+Enter`, `Down`, `Tab`, type, `Ctrl+Enter`. An item opened full screen has two
 stops, its answer box and its thread. Keys typed ahead of the screen end as if typed slowly: each acts once the one

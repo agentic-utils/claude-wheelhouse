@@ -9,13 +9,15 @@ import time
 from rich.segment import Segment
 from rich.style import Style
 from rich.text import Text
+from textual import events
+from textual.binding import Binding
 from textual.geometry import Region
 from textual.strip import Strip
 from textual.style import Style as TextualStyle
 from textual.visual import Visual, visualize
 from textual.widget import Widget
 
-from . import api, stats
+from . import api, models, stats
 
 
 def looks(rows: list[Text]) -> list[tuple]:
@@ -33,6 +35,12 @@ class SessionStats(Widget):
     each tick; animate only recolours the columns."""
 
     DEFAULT_CSS = "SessionStats { height: 1fr; background: #000000; border-top: solid #7b61ff; }"
+    # the effort slider's, while it shows (a session run by a host in context): only then does
+    # the pane take focus, after the inbox's own stops (TAB_ORDER)
+    BINDINGS = [Binding("left", "effort(-1)", "Lower effort", show=False),
+                Binding("right", "effort(1)", "Higher effort", show=False),
+                Binding("home", "effort_end(0)", "Lowest effort", show=False),
+                Binding("end", "effort_end(-1)", "Highest effort", show=False)]
 
     def __init__(self, ctx: api.Context, **kwargs):
         super().__init__(**kwargs)
@@ -41,6 +49,8 @@ class SessionStats(Widget):
         self.usage = ctx.usage   # the hub's, fetched once for the whole wheelhouse
         self.view, self.name_, self.now = None, "", 0.0
         self.note: str | None = None   # what shows with nothing to show
+        self.setting: dict | None = None   # the session shown's model and effort (Hub.model_state)
+        self.can_focus = False
         self.rows: list[Text] = []
         self.charts: list[stats.Chart] = []
         self.frame = 0
@@ -108,6 +118,7 @@ class SessionStats(Widget):
         host = {s["id"]: s.get("context") for s in sessions}
         sid = self.ctx.focus()
         if sid in names:
+            self.setting = next(s for s in sessions if s["id"] == sid)
             follower = self.followers.get(sid)
             if follower and follower.ready:
                 self.show(stats.current(follower.snap, host[sid]), names[sid], now, follower.error)
@@ -115,6 +126,7 @@ class SessionStats(Widget):
                 self.show(None, names[sid], now, (follower and follower.error)
                           or f"reading {names[sid]}'s transcript…")
             return
+        self.setting = None
         sids = [sid for sid in self.shown(sessions) if sid in self.followers]
         snaps = {sid: stats.current(self.followers[sid].snap, host[sid]) for sid in sids if self.followers[sid].ready}
         self.show(stats.combine(snaps, names, now) if snaps else None, "", now,
@@ -127,8 +139,9 @@ class SessionStats(Widget):
         self.rebuild()
 
     def rebuild(self) -> None:
+        self.can_focus = self.slider() is not None and self.ctx.set_effort is not None
         rows, charts = stats.layout(self.view, self.name_, self.note, self.usage, self.now,
-                                    self.size.width, self.size.height)
+                                    self.size.width, self.size.height, self.setting, self.has_focus)
         if (looks(rows), charts) != (looks(self.rows), self.charts):   # each tick builds them again, mostly the same
             self.rows, self.charts = rows, charts
             self.drawn_for = None
@@ -136,6 +149,45 @@ class SessionStats(Widget):
 
     def on_resize(self) -> None:
         self.rebuild()
+
+    # the effort slider
+
+    def slider(self) -> str | None:
+        """The session whose effort the slider shows, if it shows."""
+        return self.setting["id"] if stats.has_slider(self.view, self.setting) else None
+
+    def on_focus(self) -> None:
+        self.rebuild()   # the slider shows its keys
+
+    def on_blur(self) -> None:
+        self.rebuild()
+
+    def action_effort(self, step: int) -> None:
+        """A level lower or higher, applied live: no warning, as effort has no side effects (Q52)."""
+        if self.slider() is None:
+            return
+        levels = models.EFFORTS
+        at = levels.index(self.setting["effort"]) if self.setting["effort"] in levels else levels.index("high")
+        self.pick(levels[max(0, min(len(levels) - 1, at + step))])
+
+    def action_effort_end(self, end: int) -> None:
+        if self.slider() is not None:
+            self.pick(models.EFFORTS[end])
+
+    def pick(self, level: str) -> None:
+        sid = self.slider()
+        if sid is not None and level != self.setting["effort"] and self.ctx.set_effort is not None:
+            self.ctx.set_effort(sid, level)
+
+    def on_click(self, event: events.Click) -> None:
+        """A click on a level picks it."""
+        content = self.content_region
+        x, y = event.screen_x - content.x - 1, event.screen_y - content.y   # 1: the panel's left border
+        if self.slider() is None or y != stats.SLIDER_ROW:
+            return
+        level = next((level for start, end, level in stats.slider_spans() if start <= x < end), None)
+        if level is not None:
+            self.pick(level)
 
     def render(self) -> Text:
         return stats.render(self.rows, self.charts, self.frame)
@@ -195,7 +247,6 @@ class SessionStats(Widget):
                 segments.append(plain or Segment(ch, look + at))
             x += 1
         return Strip.join([Strip([Segment(*s) if isinstance(s, list) else s for s in segments]), self.drawn[y].crop(x)])
-
 
 module = api.Module(
     id="stats", title="Stats", version=importlib.metadata.version("claude-wheelhouse"), api=api.WHEELHOUSE_API,

@@ -1556,7 +1556,8 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
                "names": sorted(row["name"] for row in store.sessions()),
                "pending": s and app.pending(alpha), "parked": bool(s and s["parked"]),
                "queued": [m["body"] for m in store.drafts(alpha)] + [m["body"] for m in store.pending(alpha)],
-               "current": current and store.session(current)["name"], "finished": app.show_finished}
+               "current": current and store.session(current)["name"], "finished": app.show_finished,
+               "model": s and s["model"], "effort": s and s["effort"]}
         if isinstance(app.screen, ThreadView) or len(app.screen_stack) == 1:
             assert_one_current(app, desc)
     return out
@@ -1586,6 +1587,15 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
      "F on the Choice asks to confirm Force, and the Y behind it confirms"),
     ("session-list", "alpha", ("p", "c", "p"), {"stack": ("Screen", "Confirm"), "pending": None},
      "C cancels the request before the P behind it, which asks afresh"),
+    ("session-list", "alpha", ("m", "down", "enter"), {"stack": ("Screen",), "model": "claude-sonnet-5-5"},
+     "M opens Model, Down moves to the next model before Enter takes it"),
+    ("items", "qa", ("m", "enter", "q"), {"stack": ("Screen",), "model": "claude-opus-5-5", "quit": True},
+     "Model's Enter takes the highlighted model, then the Q behind it quits"),
+    ("session-list", "alpha", ("m", "escape", "m", "escape"), {"stack": ("Screen",), "model": None},
+     "Esc leaves the model as it was, each time"),
+    ("stats", "alpha", ("right", "right", "left"), {"effort": "xhigh", "focus": "stats"},
+     "the effort slider: each arrow moves on from where the last left it"),
+    ("stats", "alpha", ("end", "left", "home", "right"), {"effort": "medium"}, "Home and End, then arrows"),
 ])
 async def test_a_key_lands_before_the_next_acts(store, tmp_path, monkeypatch, focus, at, burst, want, desc):
     """Review 16: what a key sets in motion lands before the key behind it acts: the press
@@ -1609,6 +1619,8 @@ async def test_a_key_lands_before_the_next_acts(store, tmp_path, monkeypatch, fo
     ("items", "qa", ("enter", "x", "escape", "tab", "y"), "a thread left with Esc, then the inbox's box"),
     ("items", "qa", ("tab", "a", "b", "backspace", "ctrl+enter", "down"), "typing, editing and sending"),
     ("items", "qa", ("question_mark", "q", "q"), "? and Q close the keys, then Q quits"),
+    ("session-list", "alpha", ("m", "down", "down", "enter", "m", "escape"), "Model chosen by keys, opened again"),
+    ("stats", "alpha", ("right", "right", "left", "tab", "right"), "the slider's arrows, then Tab on round"),
 ])
 async def test_a_raw_burst_ends_as_the_same_keys_typed_slowly(store, tmp_path, monkeypatch, focus, at, burst, desc):
     """Type-ahead: a burst sent as a terminal sends it ends where the same keys, each landing
@@ -3852,14 +3864,14 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
 @pytest.mark.anyio
 @pytest.mark.parametrize("size, half", [((80, 24), False), ((100, 30), True), ((160, 40), True)])
 @pytest.mark.parametrize("status, parked, shown, desc", [
-    ("live", True, ["rename", "relaunch", "park", "end", "mode", "send", "interrupt", "compact", "shell"],
+    ("live", True, ["rename", "relaunch", "park", "end", "model", "mode", "send", "interrupt", "compact", "shell"],
      "a running hosted session, parked and too old to queue: the longest captions"),
-    ("live", False, ["rename", "relaunch", "park", "end", "mode", "send", "interrupt", "compact", "shell"],
+    ("live", False, ["rename", "relaunch", "park", "end", "model", "mode", "send", "interrupt", "compact", "shell"],
      "a running one: no Restore"),
     ("dead", False, ["restore", "end", "mode"],
      "a dead one: Restore and End, nothing to interrupt, and no Send: it can't receive (D30)"),
     ("dead", True, ["restore", "park", "end", "mode"], "a parked dead one: Unpark too"),
-    ("stalled", False, ["rename", "relaunch", "park", "end", "mode", "send", "interrupt", "compact", "shell"],
+    ("stalled", False, ["rename", "relaunch", "park", "end", "model", "mode", "send", "interrupt", "compact", "shell"],
      "a stalled one still takes what's sent"),
 ])
 async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, half, status, parked, shown, desc):
@@ -4686,3 +4698,129 @@ async def test_a_shimmer_frame_moves_the_bars_on_screen_under_a_border(store, si
                 assert looks[0] == looks[1], f"frame {frame}: bar line {y} on screen as drawn"
             tops.append(str([(ch, style.color) for ch, style in cells(Strip.join(screen[region.y + min(pane.bars)]))]))
         assert len(set(tops)) == 3, "the top bar line moves on screen each frame"
+
+
+# model and effort (.plan/model-effort.md)
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("model, effort, launched, desc", [
+    (None, None, ("claude-sonnet-5-5", "high"), "left as they open: Sonnet 5.5 at high (Q50)"),
+    ("claude-haiku-5-5", None, ("claude-haiku-5-5", "xhigh"), "another model: Effort goes to its tier's (Q54)"),
+    ("claude-opus-5-5", "max", ("claude-opus-5-5", "max"), "then any level"),
+])
+async def test_new_session_model_and_effort(store, tmp_path, monkeypatch, model, effort, launched, desc):
+    from textual.widgets import Select
+    opened = []
+    monkeypatch.setattr(launch, "open_session", lambda s, i: opened.append((s.session(i)["model"], s.session(i)["effort"])))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.press("n")
+        await pilot.pause()
+        app.screen.query_one("#cwd", Input).value = str(tmp_path)
+        models_, efforts = app.screen.query_one("#model", Select), app.screen.query_one("#effort", Select)
+        assert [o[1] for o in models_._options] == ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5",
+                                                     "claude-fable-5-1"], desc
+        assert [o[1] for o in efforts._options] == ["low", "medium", "high", "xhigh", "max"], f"{desc}: every level"
+        if model:
+            models_.value = model
+            await pilot.pause()
+        if effort:
+            efforts.value = effort
+            await pilot.pause()
+        await pilot.click("#launch")
+        await pilot.pause()
+    assert opened == [launched], desc
+
+
+async def hosted_app(store, tmp_path, monkeypatch, runner_="sdk"):
+    """A session run by a host (or a tab), live, on Sonnet 5.5 at high, applied, with a
+    transcript the stats pane reads, highlighted."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="demo", runner=runner_, model="claude-sonnet-5-5", effort="high")
+    store.set_applied(sid, "claude-sonnet-5-5", "high")
+    folder = tmp_path / "projects/-home-u-repo"
+    folder.mkdir(parents=True, exist_ok=True)
+    now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+    rec = {"type": "assistant", "timestamp": now, "effort": "high", "message": {
+        "id": "m1", "model": "claude-sonnet-5-5", "content": [],
+        "usage": {"input_tokens": 2, "cache_creation_input_tokens": 829, "cache_read_input_tokens": 82_000,
+                  "cache_creation": {"ephemeral_1h_input_tokens": 829}}}}
+    folder.joinpath(f"{sid}.jsonl").write_text(json.dumps(rec) + "\n")
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    return sid, WheelhouseApp(store)
+
+
+async def shown_stats(app, pilot) -> str:
+    """The stats pane, on the one session there is (followed), once its transcript is read."""
+    if app.filter_sid is None:
+        app.follow(app.sessions[0]["id"])
+    app.refresh_data()
+    await app.workers.wait_for_complete()
+    await pilot.pause()
+    return app.query_one("#stats").render().plain
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("runner_, slider, desc", [
+    ("sdk", True, "a session run by a host: Model, the slider, and a Tab stop to it"),
+    ("tab", False, "a tab: neither, and no stop (Q52)"),
+])
+async def test_model_and_effort_are_offered_only_for_a_hosted_session(store, tmp_path, monkeypatch, runner_, slider,
+                                                                        desc):
+    sid, app = await hosted_app(store, tmp_path, monkeypatch, runner_)
+    async with app.run_test(size=(160, 40)) as pilot:
+        shown = await shown_stats(app, pilot)
+        assert "demo · Sonnet 5.5 · high · 1M ─" in shown, desc
+        assert ("effort  low medium high xhigh max" in shown) == slider, desc
+        assert app.query_one("#model", Button).display == slider, desc
+        app.query_one("#detail").focus()
+        await pilot.press("tab")
+        await pilot.pause()
+        assert (focused_id(app) == "stats") == slider, f"{desc}: after the inbox's own stops"
+        app.session_list.focus()
+        await pilot.press("m")
+        await pilot.pause()
+        assert [type(s).__name__ for s in app.screen_stack] == (["Screen", "ChooseModel"] if slider else ["Screen"])
+        if slider:
+            assert tui.MODEL_WARNING in str(app.screen.query_one("#model-warning", Label).content), "the cache warning"
+            options = app.screen.query_one("#models")
+            assert options.highlighted == 1 and "Sonnet 5.5 (now)" in str(options.get_option_at_index(1).prompt)
+            await pilot.press("escape")
+            await pilot.pause()
+        assert_one_current(app, desc)
+    assert store.session(sid)["model"] == "claude-sonnet-5-5", desc
+
+
+@pytest.mark.anyio
+async def test_a_model_change_says_so_and_shows_as_applying(store, tmp_path, monkeypatch):
+    sid, app = await hosted_app(store, tmp_path, monkeypatch)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await shown_stats(app, pilot)
+        app.session_list.focus()
+        await pilot.press("m", "up", "enter")
+        await pilot.pause()
+        shown = await shown_stats(app, pilot)
+        assert "demo · Opus 5.5 · high · 1M ─" in shown and "applying…" in shown, "until its host confirms"
+        store.set_applied(sid, "claude-opus-5-5", "high")
+        assert "applying…" not in await shown_stats(app, pilot)
+        assert_one_current(app, "after a model change")
+    assert store.session(sid)["model"] == "claude-opus-5-5"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("level", ["low", "xhigh", "max"])
+async def test_a_click_on_a_level_sets_it(store, tmp_path, monkeypatch, level):
+    sid, app = await hosted_app(store, tmp_path, monkeypatch)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await shown_stats(app, pilot)
+        pane = app.query_one("#stats")
+        start = next(start for start, end, name in stats.slider_spans() if name == level)
+        # from the pane's content: the panel's left border, then a cell into the level
+        top = pane.content_region.offset - pane.region.offset
+        await pilot.click("#stats", offset=(top.x + 1 + start + 1, top.y + stats.SLIDER_ROW))
+        await pilot.pause()
+        assert store.session(sid)["effort"] == level
+        shown = await shown_stats(app, pilot)
+        assert f"demo · Sonnet 5.5 · {level} · 1M" in shown and "applying…" in shown
+        assert pane.has_focus, "a click focuses the slider, so the arrows go on from there"

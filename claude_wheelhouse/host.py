@@ -23,7 +23,7 @@ import sqlite3
 import sys
 import time
 
-from . import liveness
+from . import liveness, models
 from .launch import PROTOCOL_SDK, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT
 from .store import SessionGone, Store, db_path, now
@@ -173,6 +173,8 @@ class Host:
         self.compact_notes: str | None = None   # seen in a reply, sent as /compact once the turn ends
         self.turn_text: list[str] = []   # this turn's text so far, where Compact's block may straddle blocks
         self.compacted_from = None   # tokens before the last compaction, until its turn ends
+        # the model and effort in force, as Claude Code last confirmed them (or as launched)
+        self.applied: tuple[str | None, str | None] = (None, None)
         self.owner = False   # registered as the session's process: only then does it write the activity
         self.stopping = False
         self.stop_reason = ""
@@ -185,8 +187,12 @@ class Host:
         mcp = {"wheelhouse": {"type": "stdio", "command": python, "args": ["-m", "claude_wheelhouse", "mcp"],
                               "env": {"WHEELHOUSE_SESSION_ID": self.sid, "WHEELHOUSE_DB": str(self.store.path)}}}
         session = self.store.session(self.sid)
+        # launched as chosen, every time: a resume would drop a live effort change
+        self.applied = (models.field(session, "model"), models.field(session, "effort"))
         return ClaudeAgentOptions(
             cwd=session["cwd"],
+            model=self.applied[0],
+            effort=self.applied[1],
             cli_path=shutil.which("claude"),   # the user's own Claude Code, not the SDK's bundled copy
             resume=self.sid if resume else None,
             session_id=None if resume else self.sid,
@@ -205,6 +211,12 @@ class Host:
         resume = transcript_exists(self.sid)
         self.client = self.client_factory(self.options(resume))
         await self.client.connect()
+        self.store.set_applied(self.sid, *self.applied)   # as launched, until Claude Code says
+        try:
+            self.applied = await self.settings()
+            self.store.set_applied(self.sid, *self.applied)
+        except Exception as e:   # a nicety at start: never worth the session
+            print(f"{now()} get_settings at start failed: {e}", file=sys.stderr, flush=True)
         self.store.set_activity(self.sid, "starting")
         if not resume:
             await self.turn(opening_prompt(self.store.session(self.sid)))
@@ -220,6 +232,58 @@ class Host:
             self.store.set_activity(self.sid, "thinking")
         except sqlite3.OperationalError:
             pass
+
+    # model and effort, changed live (.plan/model-effort.md)
+
+    async def control(self, request: dict) -> dict:
+        """A control request the SDK has no method for, sent through its own control-request
+        path; a refusal raises. test_host pins these internals to the SDK version."""
+        return await self.client._query._send_control_request(request)
+
+    async def settings(self) -> tuple[str | None, str | None]:
+        """The model and effort in force, as Claude Code reports them."""
+        applied = (await self.control({"subtype": "get_settings"})).get("applied") or {}
+        return applied.get("model"), applied.get("effort")
+
+    async def reconcile(self, session) -> None:
+        """The person changed the session's model or effort (its columns): apply each that
+        differs from what is in force, set_model for the model, apply_flag_settings for the
+        effort (checked first: Claude Code ignores an unknown level silently), then confirm
+        with get_settings. What Claude Code refused or confirmed otherwise is put back in the
+        columns, which then match what is in force, so nothing is tried again until the
+        person changes them; the activity line says why."""
+        want = (models.field(session, "model"), models.field(session, "effort"))
+        model = want[0] if want[0] and want[0] != self.applied[0] else None
+        effort = want[1] if want[1] and want[1] != self.applied[1] else None
+        if not (model or effort):
+            return
+        why = ""
+        try:
+            if model:
+                await self.client.set_model(model)
+            if effort:
+                await self.control({"subtype": "apply_flag_settings",
+                                    "settings": {"effortLevel": models.check_effort(effort)}})
+        except Exception as e:
+            why = " ".join(str(e).split())[:120] or type(e).__name__
+        try:
+            self.applied = await self.settings()
+        except Exception as e:   # unconfirmed: taken as asked, unless it was refused
+            if not why:
+                self.applied = (model or self.applied[0], effort or self.applied[1])
+            print(f"{now()} get_settings failed: {e}", file=sys.stderr, flush=True)
+        self.store.set_applied(self.sid, *self.applied)
+        asked = {"model": (model, self.applied[0]), "effort": (effort, self.applied[1])}
+        refused = {k: got for k, (v, got) in asked.items() if v and v != got}
+        if refused:
+            self.store.put_back(self.sid, **refused)
+            kept = ", ".join(str(g) for g in self.applied)
+            text = f"{' and '.join(refused)} change refused: {why or f'Claude Code kept {kept}'}"
+        else:
+            text = f"now {models.name(self.applied[0]) or self.applied[0]} at {self.applied[1]}"
+        print(f"{now()} {text}", file=sys.stderr, flush=True)
+        if not self.pending:   # the activity line is the turn's while one runs
+            self.store.set_activity(self.sid, f"idle · {text}")
 
     # Claude Code's permission check
 
@@ -384,6 +448,7 @@ class Host:
                 and time.monotonic() - self.compact_idle > COMPACT_TIMEOUT):   # quiet all that time: nothing to overwrite
             self.end_compact()
             self.store.set_activity(self.sid, NO_NOTES)
+        await self.reconcile(session)
         command = self.store.take_command(self.sid)
         if command == "interrupt":
             await self.client.interrupt()
