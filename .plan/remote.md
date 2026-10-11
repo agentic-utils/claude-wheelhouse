@@ -132,9 +132,24 @@ was before 2c, its hub in process: the way back, at once.
   the cross-site guard for a browser that holds the token one day. The token is a
   password, not encryption: inside the VPN it travels in the tunnel's encryption, on a
   LAN address in the clear, and TLS is still phase 5.
+  - **Proven before it's sent (review 56):** whatever listens at the daemon's address may
+    not be the daemon (another program took its port while it was down). So a client never
+    sends the token until the listener proves it holds it: `GET /hello?nonce=N`, the one
+    route without the token, answers HMAC-SHA256(token, label, Host, N), and the client
+    checks it in constant time against the address it connected to before anything carries
+    the token: each request's connection after a failure, and each reconnect of the stream.
+    The proof is over the Host the client named, which must be the daemon's own (D47), so a
+    listener elsewhere that relays the nonce to the real daemon gets a proof for the real
+    daemon's address, which the client refuses. The daemon writes its address into the lock
+    only once it's listening, and a client joins only a loopback address from the lock (a
+    daemon on a VPN's address is reached with `--connect`). The state dir must be the
+    user's and writable by nobody else (group-writable only for the user's private group,
+    as a umask of 002 makes it), the token is read without following a link, and the lock
+    is 0600. Nothing the daemon starts inherits `WHEELHOUSE_TOKEN`.
   - **Rotation:** `claude-wheelhouse token --rotate` writes a new one in its place (a new
     file renamed over the old, 0600). The daemon reads it again at its next tick when the
-    file changes, so from then on the old one gets 401. The local TUI reads the file
+    file changes, so from then on the old one gets 401, and the event streams opened with
+    it are ended, to be opened again with the new one or refused. The local TUI reads the file
     again on a 401 and carries on; a remote client must be given the new one.
     `claude-wheelhouse token` prints it, to give to one.
   - **`--connect`** takes the token from `--token-file PATH`, else `WHEELHOUSE_TOKEN`,
