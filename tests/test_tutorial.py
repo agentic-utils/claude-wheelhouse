@@ -479,11 +479,17 @@ async def test_every_hint_names_the_command_that_works(store, tmp_path, monkeypa
 @pytest.mark.parametrize("how", ["restore", "open"])
 def test_a_relaunched_tab_that_never_starts_says_so(store, tut, monkeypatch, how):
     """Review 68: a restored tutorial whose tab fails to start once carried the last
-    launch's pid, so its checklist said its tab had closed. A launch forgets it."""
+    launch's pid, so its checklist said its tab had closed. It goes by whether anything
+    registered since this launch, as liveness.status does. Review 69: the launch keeps the
+    pid, so register_if_free's compare-and-set still sees the last run's Claude Code."""
     store.register(tut, 4242, 1, "an-old-boot")   # the last launch's Claude Code, gone
+    with store.tx() as db:   # an hour ago, so this launch is plainly later
+        db.execute("UPDATE sessions SET launched_at = ?, heartbeat_at = ? WHERE id = ?",
+                   ("2026-01-01T10:00:00+00:00", "2026-01-01T10:00:05+00:00", tut))
     assert tutorial.stopped(store.session(tut)) == "stopped: its tab has closed"
     opened = []
     monkeypatch.setattr(launch.subprocess, "Popen", lambda argv, **k: opened.append(argv))   # no real tab
     (launch.restore_session if how == "restore" else launch.open_session)(store, tut)
     assert opened, how
     assert tutorial.stopped(store.session(tut)).startswith("stopped: its tab didn't start Claude Code"), how
+    assert store.session(tut)["claude_pid"] == 4242, f"{how}: the launch keeps the last run's pid"

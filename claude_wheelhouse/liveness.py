@@ -40,6 +40,14 @@ def is_alive(pid, start, boot, proc: Path = PROC) -> bool:
     return start_time(pid, proc) == start
 
 
+def registered_this_launch(session) -> bool:
+    """A Claude Code registered (or beat) since the session's last launch. claude_pid alone
+    can be the last launch's: a launch doesn't clear it, so register_if_free still sees a
+    live one."""
+    launched, beat = session["launched_at"], session["heartbeat_at"]
+    return bool(session["claude_pid"] and beat and launched and beat >= launched)
+
+
 def status(session, *, now: datetime | None = None, waking: bool = False, proc: Path = PROC) -> str:
     """One of: live, stalled, starting, dead. Always from the process: being parked is
     a separate flag and never hides whether a session is running."""
@@ -50,9 +58,7 @@ def status(session, *, now: datetime | None = None, waking: bool = False, proc: 
             return "stalled"
         return "live"
     launched = session["launched_at"]
-    registered_this_launch = session["claude_pid"] and session["heartbeat_at"] and launched \
-        and session["heartbeat_at"] >= launched
-    if launched and not registered_this_launch \
+    if launched and not registered_this_launch(session) \
             and (now - datetime.fromisoformat(launched)).total_seconds() < STARTING_GRACE:
         return "starting"
     return "dead"

@@ -135,11 +135,14 @@ def see(store: Store, sid: str, step: str) -> None:
 
 def stopped(session) -> str | None:
     """Why the tutorial's session stopped, once it isn't running, so the checklist can say
-    so rather than wait on a dead session. A tab's: it never registered (wt.exe didn't open
-    the tab, or Claude Code didn't start in it), or its tab has closed. A host's recorded
+    so rather than wait on a dead session. A tab's: it never registered for this launch (wt.exe
+    didn't open the tab, or Claude Code didn't start in it: liveness.registered_this_launch,
+    since a pid can be the last launch's), or its tab has closed. A host's recorded
     reason, for a tutorial an earlier version ran in the wheelhouse."""
     if runner(session) == "tab":
-        if session["claude_pid"] is None:
+        never = session["claude_pid"] is None \
+            or (session["launched_at"] and not liveness.registered_this_launch(session))
+        if never:
             return "stopped: its tab didn't start Claude Code (launch.log, beside the database, may say why)"
         return "stopped: its tab has closed"
     activity = session["activity"] or ""
