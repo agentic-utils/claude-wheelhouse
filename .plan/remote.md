@@ -2,7 +2,7 @@
 
 Status: design agreed. Phase 1 built: `hub.py` is the service, owned by the TUI in
 process. Phase 2 under way: the hub is ready for remote clients, and the daemon serves it
-over HTTP and SSE; no client uses the daemon yet.
+over HTTP and SSE; 2c, the TUI as its client with a bearer token, is designed below.
 
 **Phase 1 as built.** `hub.Hub` holds the hub logic `tui.py` had: liveness and wake
 detection, Relaunch from the stop to the start again, launch, restore and adopt, the
@@ -113,6 +113,111 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
 - **Still to come:** the routes the TUI will need beyond the sketch (adopt, restore all,
   take back a queued answer, mark seen, the tutorial offer, the account usage), the module
   routes and `WHEELHOUSE_API` 2 (phase 3), a systemd unit and the TUI starting the daemon.
+
+**Phase 2c: the TUI a client of the daemon (design, Q48 option A).** `claude-wheelhouse`
+starts the daemon on `127.0.0.1:7428`, or joins the one running, and reads and acts
+through it over HTTP and SSE rather than owning a hub. `claude-wheelhouse --connect
+host:port` joins a daemon on another machine. `claude-wheelhouse --local` is the TUI as it
+was before 2c, its hub in process: the way back, at once.
+
+- **The token.** Every request needs `Authorization: Bearer <token>`, GETs, commands and
+  the event stream alike, else 401 (with `WWW-Authenticate: Bearer`). The token is 32
+  random bytes, URL-safe base64, in `daemon.token` in the state dir (the database's
+  directory, beside `daemon.lock`), mode 0600. The daemon makes it the first time it
+  starts, under its lock, so two starting at once can't make two. One found readable by
+  group or others may have leaked, so the daemon replaces it, and says so; one owned by
+  another user stops it starting. It's compared in constant time (`hmac.compare_digest`).
+  The Host check (D47) comes first, so a page rebound by DNS learns nothing, then the
+  token, then Origin and the Idempotency-Key, which stay as they are: the key is still
+  the cross-site guard for a browser that holds the token one day. The token is a
+  password, not encryption: inside the VPN it travels in the tunnel's encryption, on a
+  LAN address in the clear, and TLS is still phase 5.
+  - **Rotation:** `claude-wheelhouse token --rotate` writes a new one in its place (a new
+    file renamed over the old, 0600). The daemon reads it again at its next tick when the
+    file changes, so from then on the old one gets 401. The local TUI reads the file
+    again on a 401 and carries on; a remote client must be given the new one.
+    `claude-wheelhouse token` prints it, to give to one.
+  - **`--connect`** takes the token from `--token-file PATH`, else `WHEELHOUSE_TOKEN`,
+    else asks for it on the terminal without echo. Never a flag's value, which `ps` and
+    the shell's history would show.
+- **Autostart and join.** The TUI looks at the state dir's lock (`daemon.lock`, held with
+  `flock` by the running daemon, which writes `pid N at URL` in it):
+  - **Held:** a daemon runs. The TUI joins it at the URL the file names, with the token
+    from the token file, once `GET /hello` answers.
+  - **Not held:** none runs, whatever the file says: the kernel lets go of a `flock` when
+    its holder dies, so a lock file left by a daemon that crashed or was killed is only
+    text, and never stale in a way that matters. The TUI starts one: `python -m
+    claude_wheelhouse daemon` on the same interpreter and environment (so `WHEELHOUSE_DB`
+    and the rest go with it), in a session of its own (`setsid`), so it outlives the TUI,
+    its output appended to `daemon.log` in the state dir, on port 7428 or
+    `WHEELHOUSE_PORT`. Then it waits up to 10 s for the lock to be held and `/hello` to
+    answer. Two TUIs starting at once both start one; the second finds the lock held and
+    exits, and both join the first.
+  - **Held, but no answer** within 3 s (a daemon hung): the TUI says so, with its pid, and
+    stops. It never kills a daemon it can't talk to; `--local` runs without it.
+  - **It couldn't start** (the port taken by something else, say): the TUI says so, with
+    the log's last line, and stops.
+  - **A daemon on older code.** `/hello` answers its API version (1), a fingerprint of its
+    code (a hash of its package's source files as it loaded them) and its package's path.
+    The same fingerprint: join. Another, from the same package path: the code on disk has
+    changed under a running daemon (a pull, say), so the TUI asks it to stop (`POST
+    /shutdown`), waits for its lock to go, starts one on the new code and says so. This is
+    safe because the daemon holds nothing that isn't in the database (a Relaunch under way
+    is, in `sessions.relaunch`), but for an answer the database couldn't take, which it writes
+    as it stops if it can. Its other clients see their streams end and reconnect. Another
+    fingerprint from another path (another checkout): joined if the API version matches,
+    else the TUI stops, naming both. Under `--connect` the TUI never starts or stops a
+    daemon: another API version stops it, another fingerprint is only said.
+- **The daemon dying under a running TUI.** The stream ends, or a request can't connect.
+  The TUI keeps showing what it last had, the title bar says "daemon unreachable:
+  reconnecting" in red, and it tries again every half second, backing off to 5 s. A key
+  or button that would act says "not connected to the daemon: nothing was sent", and
+  what's typed stays in the box: there's no outbox yet (offline answers, in the state
+  table below, come later). If the local daemon has gone (its lock free), the TUI starts
+  one, up to 3 times in 5 minutes; past that it stops trying and says to read
+  `daemon.log`, or run `--local`. Reconnected, the stream resumes from its Last-Event-ID;
+  a new daemon's ring doesn't hold it, so the client is told to refetch, and refetches
+  everything; the title clears and a toast says it's back. A command whose answer is lost
+  mid-request is sent again once, with the same Idempotency-Key, so it's done once; if it
+  still can't get an answer, the toast says it may or may not have been done.
+- **The TUI's rules, with its data coming over SSE.** The client keeps what the daemon
+  last served: the sessions (`GET /sessions`), the inbox (`GET /inbox`: every item but
+  their bodies, with what's processing, queued and awaiting, the drafts, and the
+  tutorial's steps), and the conversation, thread or subagent's conversation shown. A
+  thread of its own reads the stream and fetches what an event says moved, into a copy
+  waiting beside the one shown; the TUI swaps it in only where the hub in process used to
+  read the store: at the refresh tick, which a key's land holds off, and right after the
+  person's own command. So nothing that arrives moves a row under a key: a burst of keys
+  acts on the rows it started on and ends as the same keys typed slowly do (take_key,
+  land, settle, unchanged). A command is a request that blocks until it's answered, as
+  the hub's call did, and the refresh after it fetches what it changed at once, so the
+  next key acts on it. From there it's the TUI's own code on the same values:
+  - the 1 s dwell is the TUI's timer, and what it marks seen is a command;
+  - the inbox's order is the TUI's, by `store.inbox_rank` on the rows and sets `/inbox`
+    serves: time, then id, the selected item held where it was until the selection moves
+    on, and only Delete, Ctrl+R (D44) and a permission answered moving it at once;
+  - the Sink moves and keep-place (D46) work on what's painted, from the same rows and
+    the same conversation blocks the hub makes;
+  - the eyes and panes still rest while the answer box has focus (D41): animation is
+    the TUI's alone.
+  A conversation or thread shown for the first time is fetched while the person waits,
+  as the hub read it; after that the thread keeps it up to date. The stats pane still
+  reads the transcripts itself, so on the home machine it's as it was; its account usage
+  comes from the daemon's (`GET /usage`, each minute). Over `--connect` from another
+  machine it has no transcripts to read until phase 3's module routes.
+- **The routes 2c adds,** each with the token and the rest of the guards: `GET /hello`,
+  `GET /inbox`, `GET /usage`, `GET /settings` (the splitter sizes, `layout.` keys only),
+  `GET /adoptable`, `GET /adoptable/{id}/running`, `GET /items/{sid}/{ref}/conversation`;
+  `POST /shutdown`, `POST /settings`, `POST /adopt`, `POST /restore-all`, `POST
+  /items/{sid}/{ref}/seen`, `POST /messages/{id}/unqueue`, `POST /tutorial/offer`, `POST
+  /tutorial/seen`. `/sessions` grows each session's liveness (dead or not, apart from
+  relaunching, ending and parking) and its model state. Errors carry their type
+  (`SessionGone`, `KeyError`), so the TUI says what it said before.
+- **Rollout.** 2c makes the daemon the default. `--local` stays, unchanged, until the
+  daemon path has had a fair run; it runs its own hub as before, and if a daemon is
+  running too it says two hubs are acting (as two TUIs did). Hosts and MCP servers never
+  talk to the daemon, so 2c changes nothing for them: no schema change, no new table, and
+  sessions on code from before the daemon carry on as they are.
 
 ## Intent
 
@@ -334,9 +439,10 @@ it, and both see it go. Unsent box text is per client, by design.
 
 ### Transport and access
 
-- **Network:** a VPN reaching the home machine is the protection. The daemon speaks plain
-  HTTP inside it; TLS and per-client authentication are deferred and can be added later
-  without changing the API.
+- **Network:** a VPN reaching the home machine is the protection, with a bearer token on
+  every request (2c, above) so that being on the VPN, or another user on the home
+  machine, isn't enough. The daemon speaks plain HTTP inside it; TLS and a token per
+  client are deferred and can be added later without changing the API.
 - **Reaching the daemon:** the daemon binds to `127.0.0.1` by default, with a configured
   address for remote use: the VPN interface's address, or localhost behind a proxy such
   as frp. Never `0.0.0.0`.
@@ -377,15 +483,16 @@ it, and both see it go. Unsent box text is per client, by design.
 | 2 | Daemon, API, SSE; TUI as client; tmux Shell | **First remote slice:** laptop TUI over the VPN, lid closed mid-relaunch, reopened, nothing lost |
 | 3 | Web console for the laptop browser: session list, inbox, conversation, answer box, permission buttons, stats over the API (`WHEELHOUSE_API` 2) | The train session runs in a browser with no terminal client |
 | 4 | Phone layout: inbox, thread, answer, permission buttons, Send | Answer a permission from the phone |
-| 5 | Browser terminal for Shell; TLS and per-client auth when wanted | Shell works from the browser |
+| 5 | Browser terminal for Shell; TLS and a token per client when wanted | Shell works from the browser |
 
 ## Open
 
 - **Which VPN.** Any VPN that reaches the home machine works with this design; the choice
   is deferred to phase 0.
-- **frp with no auth.** If frp forwards through a relay on the open internet rather than
-  inside the VPN, the daemon is reachable by anyone who finds the relay's port. Auth (or
-  frp's own access control) has to arrive with that route.
+- **frp with only the token.** If frp forwards through a relay on the open internet rather than
+  inside the VPN, the daemon is reachable by anyone who finds the relay's port, with the
+  token in the clear over plain HTTP. TLS (or frp's own access control) has to arrive
+  with that route.
 - **Telling the person a host died.** Every client shows a dead host as dead. Whether the
   daemon should also post an inbox item when one dies, so it is seen in the inbox rather
   than only in the session list, is not decided.
