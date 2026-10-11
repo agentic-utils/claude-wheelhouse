@@ -26,7 +26,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from . import liveness, models
+from . import liveness, models, stats, transcript
 from .launch import PROTOCOL_SDK, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT
 from .store import CLOSED, SessionGone, Store, db_path, now
@@ -285,9 +285,9 @@ class Host:
         self.client = self.client_factory(self.options(resume))
         # as launched, until Claude Code says: written first, so the pane never shows the
         # last process's (or none) as pending while this one starts
-        before = self.store.session(self.sid)
+        before = await self.steady(self.store.session, self.sid)
         before = (models.field(before, "applied_model"), models.field(before, "applied_effort"))
-        self.store.set_applied(self.sid, *self.applied)
+        await self.steady(self.store.set_applied, self.sid, *self.applied)
         try:
             await self.client.connect()
         except BaseException:   # nothing launched: the columns as they were
@@ -787,6 +787,10 @@ class Host:
         # once the session is let go, a locked database mustn't strand it half handed over
         await self.steady(self.store.unregister, self.sid)
         self.owner = False
+        # what the tab launches with, and where its transcript starts: carry_back's
+        launched = await self.steady(self.store.session, self.sid)
+        launched = {"model": models.field(launched, "model"), "effort": models.field(launched, "effort")}
+        start = transcript_size(self.sid)
         await self.steady(self.store.set_shell, self.sid, "tab")
         try:
             (self.open_tab or default_open_tab)(self.store, self.sid)
@@ -808,6 +812,7 @@ class Host:
             self.stopping = True
             return
         await self.steady(self.store.set_shell, self.sid, None)
+        await self.steady(self.carry_back, launched, start)
         self.sent, self.taken_up, self.turn_text, self.final_text = {}, [], [], []
         self.end_compact()
         self.tokens = None   # the tab ran turns this host never saw: its cache is the tab's
@@ -815,6 +820,24 @@ class Host:
         await self.steady(self.deny_stale)
         await self.connect()
         self.reader = asyncio.create_task(self.read())
+
+    def carry_back(self, launched: dict, start: int | None) -> None:
+        """A /model or /effort typed in the shell tab, copied to the session's columns before
+        the host launches again with them (Q56): what the tab's transcript shows it ran on
+        since it opened (from byte `start`), where that differs from what it launched with.
+        A choice made in the wheelhouse meanwhile stands: the wheelhouse said the session
+        would take it on coming back (Hub.choose). A transcript that can't be read carries
+        nothing, as does one whose start wasn't found (start None)."""
+        if start is None:
+            return
+        try:
+            ran = stats.ran_since(transcript.locate(self.sid), start)
+        except OSError as e:
+            print(f"{now()} couldn't read the shell tab's transcript: {e}", file=sys.stderr, flush=True)
+            return
+        changed = {k: v for k, v in zip(launched, ran) if v and v != launched[k]}
+        if changed:
+            self.store.put_back(self.sid, launched, **changed)
 
     async def shell_wait(self) -> None:
         await asyncio.sleep(SHELL_POLL_SECONDS)
@@ -904,6 +927,15 @@ class Host:
 def default_client(options):
     from claude_agent_sdk import ClaudeSDKClient
     return ClaudeSDKClient(options=options)
+
+
+def transcript_size(sid: str) -> int | None:
+    """The size of a session's transcript: 0 if it has none yet, None if it can't be read."""
+    path = transcript.locate(sid)
+    try:
+        return path.stat().st_size if path else 0
+    except OSError:
+        return None
 
 
 def default_open_tab(store: Store, sid: str) -> None:

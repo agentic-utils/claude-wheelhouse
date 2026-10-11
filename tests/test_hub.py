@@ -1,6 +1,7 @@
 """The hub on its own, with no Textual: what it keeps, decides and says."""
 
 import json
+import sqlite3
 import time
 from datetime import datetime, timezone
 
@@ -696,13 +697,15 @@ def test_a_tabs_model_state_is_what_its_transcript_says(hub, store, tmp_path, mo
     assert (got["model"], got["effort"], got["pending"], got["hosted"]) == (*state, None, False), desc
 
 
-def ran_in(hub, sid, model, effort):
-    """The hub reads the session's transcript, which shows it ran on model at effort."""
+def ran_in(hub, sid, model, effort, served=None):
+    """The hub reads the session's transcript, which shows it ran on model at effort (and
+    was answered by served, where given)."""
     follower = stats.follower(sid)
     hub.contexts[sid] = follower
     follower.read = lambda now=None: True
     follower.ready = True
-    follower.snap.model, follower.snap.requested, follower.snap.effort = (model or "").split("[")[0] or None, model, effort
+    follower.snap.model = served or (model or "").split("[")[0] or None
+    follower.snap.requested, follower.snap.effort = model, effort
     hub.post = lambda work: None
     hub.read_context(follower)
 
@@ -712,12 +715,14 @@ def ran_in(hub, sid, model, effort):
      "a tab's /model opus[1m] and /effort max: stored as the pinned id a launch passes"),
     ("tab", None, [(None, None)], ("claude-sonnet-5-5", "high"), "nothing in the transcript yet: the columns stand"),
     ("tab", None, [("claude-legacy-4", "low")], ("claude-legacy-4", "low"), "an id off the table: kept as it ran"),
+    ("tab", None, [(None, "high", "claude-opus-5-5-20261001")], ("claude-opus-5-5", "high"),
+     "no requested model: the dated id that answered, as the table's pinned id"),
+    ("tab", None, [(None, "high", "claude-legacy-4-20250101")], ("claude-sonnet-5-5", "high"),
+     "no requested model, and one off the table answered: nothing to launch with, not copied"),
     ("sdk", None, [("claude-opus-5-5", "max")], ("claude-sonnet-5-5", "high"),
      "a hosted session: its host applies the columns, nothing copied"),
-    ("sdk", "tab", [("claude-sonnet-5-5", "high"), ("claude-opus-5-5", "high")], ("claude-opus-5-5", "high"),
-     "its shell tab's /model, seen happening: copied"),
     ("sdk", "tab", [("claude-opus-5-5", "low")], ("claude-sonnet-5-5", "high"),
-     "its shell tab's older values, first seen: a choice made meanwhile stands"),
+     "in a shell tab: its host copies back what the tab ran as it takes it back (Host.carry_back), not the hub"),
 ])
 def test_a_tabs_model_and_effort_are_copied_back(hub, store, tmp_path, monkeypatch, runner_, shell, steps, columns, desc):
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
@@ -725,10 +730,56 @@ def test_a_tabs_model_and_effort_are_copied_back(hub, store, tmp_path, monkeypat
     if shell:
         store.set_shell(sid, shell)
     hub.refresh()
-    for model, effort in steps:
-        ran_in(hub, sid, model, effort)
+    for step in steps:
+        ran_in(hub, sid, *step)
     s = store.session(sid)
     assert (s["model"], s["effort"]) == columns, desc
+
+
+def test_a_choice_made_during_a_shell_tab_is_not_undone_by_the_hub(hub, store, tmp_path, monkeypatch):
+    """The review's repro: hosted on Opus, Sonnet chosen, the shell tab launched on Sonnet,
+    Haiku chosen while it runs; the tab's first turn, on Sonnet, leaves Haiku standing."""
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), runner="sdk", model="claude-opus-5-5", effort="high")
+    hub.refresh()
+    ran_in(hub, sid, "claude-opus-5-5", "high")   # hosted, a turn run
+    hub.set_model(sid, "claude-sonnet-5-5")
+    store.set_shell(sid, "tab")
+    hub.refresh()
+    ran_in(hub, sid, "claude-opus-5-5", "high")   # the tab launched on Sonnet, no turn yet
+    assert hub.set_model(sid, "claude-haiku-5-5").ok
+    ran_in(hub, sid, "claude-sonnet-5-5", "high")   # the tab's first turn
+    assert store.session(sid)["model"] == "claude-haiku-5-5"
+
+
+@pytest.mark.parametrize("locked, desc", [
+    (0, "a tab that has exited: its transcript read once more, for what it wrote in its last second"),
+    (1, "the database locked as the hub copies back: the next tick reads, and copies, again"),
+])
+def test_a_tabs_last_model_is_copied_back_after_it_exits(hub, store, tmp_path, monkeypatch, locked, desc):
+    status = {"now": "live"}
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: status["now"])
+    sid = store.create_session(str(tmp_path), runner="tab", model="claude-sonnet-5-5", effort="high")
+    follower = stats.follower(sid)
+    snap = follower.snap
+    shown = iter([None, "claude-haiku-5-5"])
+    follower.read = lambda now=None: setattr(snap, "requested", next(shown, snap.requested)) or setattr(follower, "ready", True) or True
+    hub.spawn = lambda work, group=None: work()
+    hub.post = lambda work: None
+    put_back, fails = store.put_back, iter([sqlite3.OperationalError("database is locked")] * locked)
+
+    def flaky(*a, **k):
+        if (e := next(fails, None)) is not None:
+            raise e
+        put_back(*a, **k)
+    monkeypatch.setattr(store, "put_back", flaky)
+    hub.refresh()
+    hub.read_contexts()   # live: nothing typed yet
+    status["now"] = "dead"   # the /model and /exit land between two reads
+    hub.refresh()
+    for _ in range(3):
+        hub.read_contexts()
+    assert store.session(sid)["model"] == "claude-haiku-5-5", desc
 
 
 def test_a_copied_back_model_launches(store, tmp_path):

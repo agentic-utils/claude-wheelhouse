@@ -213,12 +213,19 @@ can type `/model` or `/effort` in it. The stats header shows what the transcript
 runs (each assistant record carries `requestedModel` and `effort`).
 
 Carried (Q56, option A): a `/model` or `/effort` typed in a tab is copied back to the
-columns (`Hub.copy_back`, on each read of the transcript), so the next Relaunch, Restore or
-return from a shell tab launches with it. A tab session's columns take whatever its
-transcript's latest values are. In a host's shell hand-over, only a change the transcript
-shows while the wheelhouse watches is copied, so a choice made in the wheelhouse meanwhile
-stands. A suffixed id (`claude-opus-5-5[1m]`) is stored as its pinned id, the same model
-with the same 1M window (`models.pinned`).
+columns, so the next Relaunch, Restore or return from a shell tab launches with it. The
+transcript says what was typed twice over: Claude Code 2.1 writes each command it takes as
+a `local_command` record ("Set model to `Haiku 5.5`", "Set effort level to low"), and each
+later response carries `requestedModel` and `effort`; the later of the two counts, so a
+`/model` followed by `/exit` is carried too. A tab session's columns take whatever its
+transcript's latest values are (`Hub.copy_back`, on each read, and once more after the tab
+exits). In a host's shell hand-over the host copies them back itself as it takes the
+session back, before it launches again (`Host.carry_back`): what the transcript shows the
+tab ran since it opened, where it differs from what the tab launched with. A choice made in
+the wheelhouse meanwhile stands, as the wheelhouse said it would. A suffixed id
+(`claude-opus-5-5[1m]`) is stored as its pinned id, the same model with the same 1M window
+(`models.pinned`); a response's dated id as the table's model it is, and one off the table
+not at all (`models.ran_as`).
 
 ## What the stats pane shows
 

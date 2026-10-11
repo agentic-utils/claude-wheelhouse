@@ -79,18 +79,51 @@ class Compaction:
     after: int | None = None   # the next main-thread response's context: the size it left. 0 if unread
 
 
-def parse(lines, seen: set, main: bool) -> tuple[list[Turn], list[Compaction]]:
+@dataclass
+class Setting:
+    """A /model or /effort typed in Claude Code and taken: what it set, the other None."""
+    at: float
+    model: str | None = None   # the table's pinned id
+    effort: str | None = None
+
+
+# what Claude Code 2.1 writes as a local command's output when it takes the change: a
+# model by its display name (Opus 5.5 (1M context), Opus 5.5 (default)), an effort level
+SET_MODEL = re.compile(r"Set model to `([^`(]+?)\s*(?:\([^`]*\))?`")
+SET_EFFORT = re.compile(r"Set effort level to (\w+)")
+
+
+def setting(rec: dict, at: float) -> Setting | None:
+    """A local command's record (type system, subtype local_command) as the change it made,
+    if it was a /model or /effort Claude Code took: one it refused, or a model off the
+    table, is None."""
+    command = (rec.get("commandRun") or {}).get("command")
+    text = rec.get("content") if isinstance(rec.get("content"), str) else ""
+    if command == "model" and (m := SET_MODEL.search(text)):
+        model = next((x.id for x in models.MODELS if x.name == m[1]), None)
+        return Setting(at, model=model) if model else None
+    if command == "effort" and (m := SET_EFFORT.search(text)) and m[1] in models.EFFORTS:
+        return Setting(at, effort=m[1])
+    return None
+
+
+def parse(lines, seen: set, main: bool, settings: list | None = None) -> tuple[list[Turn], list[Compaction]]:
     """The turns and compactions in some transcript lines. One response is written as
-    several lines sharing a message id: `seen` counts each once, across reads."""
+    several lines sharing a message id: `seen` counts each once, across reads. Given a
+    list, the /model and /effort changes in them (setting) are added to it."""
     turns, compactions = [], []
     for line in lines:
-        if b'"usage"' not in line and b"compact_boundary" not in line:
+        if b'"usage"' not in line and b"compact_boundary" not in line and (settings is None or b"local_command" not in line):
             continue   # most lines: no need to parse them
         try:
             rec = json.loads(line)
         except ValueError:
             continue
         if not isinstance(rec, dict) or (at := epoch(rec.get("timestamp", ""))) is None:
+            continue
+        if settings is not None and rec.get("type") == "system" and rec.get("subtype") == "local_command":
+            if main and not rec.get("isSidechain") and (found := setting(rec, at)):
+                settings.append(found)
             continue
         if rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
             meta = rec.get("compactMetadata") or {}
@@ -310,8 +343,10 @@ class UsageFollower:
                 data = f.read(st.st_size - offset)
             end = data.rfind(b"\n") + 1   # a half-written last line waits for the next read
             self.files[path] = (offset + end, (st.st_size, st.st_mtime_ns))
-            turns, compactions = parse(data[:end].splitlines(), self.seen, path == self.main)
+            settings = []
+            turns, compactions = parse(data[:end].splitlines(), self.seen, path == self.main, settings)
             take(snap, turns, compactions)
+            changed = chose(snap, settings) or changed
             changed = changed or bool(turns or compactions)
         snap.turns = [t for t in snap.turns if t.at >= now - SPAN]
         self.snap, self.ready = snap, True
@@ -359,6 +394,31 @@ def take(s: Snapshot, turns: list[Turn], compactions: list[Compaction]) -> None:
             c = s.compactions[-1] if s.compactions else None
             if c and c.after is None and c.at <= t.at:
                 s.compactions[-1] = dataclasses.replace(c, after=t.context)
+
+
+def chose(s: Snapshot, settings: list[Setting]) -> bool:
+    """A /model or /effort typed since the main thread's latest response, taken as what the
+    session now runs, as the next response will say: one typed before it is in it already.
+    Whether any was."""
+    newer = [x for x in settings if x.at >= (s.last_at or 0)]
+    for x in newer:
+        s.requested, s.effort = x.model or s.requested, x.effort or s.effort
+    return bool(newer)
+
+
+def ran_since(path: Path | None, offset: int) -> tuple[str | None, str | None]:
+    """The model (the table's pinned id where it is one) and effort a transcript shows the
+    session last ran on in what was written past `offset`, else None for each."""
+    if path is None:
+        return None, None
+    with open(path, "rb") as f:
+        f.seek(offset)
+        data = f.read()
+    settings, snap = [], Snapshot()
+    turns, _ = parse(data[:data.rfind(b"\n") + 1].splitlines(), set(), True, settings)
+    take(snap, turns, [])
+    chose(snap, settings)
+    return models.ran_as(snap.requested, snap.model), snap.effort
 
 
 def current(snap: Snapshot, host) -> Snapshot:

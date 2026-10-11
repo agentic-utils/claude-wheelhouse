@@ -318,6 +318,79 @@ def test_shell_hands_over_and_takes_back(host, store, sid, monkeypatch):
     assert store.session(sid)["shell"] is None
 
 
+def tab_wrote(path, *recs):
+    with open(path, "a") as f:
+        for rec in recs:
+            f.write(json.dumps({"timestamp": datetime.now().astimezone().isoformat()} | rec) + "\n")
+
+
+def turn(mid, model):
+    return {"type": "assistant", "requestedModel": model, "effort": "high",
+            "message": {"id": mid, "model": model, "usage": {"input_tokens": 5, "output_tokens": 1}}}
+
+
+def typed(command, out):
+    return {"type": "system", "subtype": "local_command", "commandRun": {"command": command, "args": ""},
+            "content": f"<local-command-stdout>{out}</local-command-stdout>"}
+
+
+@pytest.mark.parametrize("in_tab, chosen, launched, desc", [
+    ([turn("t1", "claude-sonnet-5-5")], "claude-haiku-5-5", ("claude-haiku-5-5", "high"),
+     "Haiku chosen in the wheelhouse meanwhile, the tab's turn on what it launched with: Haiku stands"),
+    ([typed("model", "Set model to `Haiku 5.5` for this session only"),
+      typed("effort", "Set effort level to low (this session only)")], None, ("claude-haiku-5-5", "low"),
+     "a /model and /effort typed, then /exit with no turn: the host launches with them"),
+    ([], None, ("claude-sonnet-5-5", "high"), "nothing in the tab: not the hosted turns from before it opened"),
+])
+def test_the_host_takes_back_what_its_shell_tab_ran(store, sid, tmp_path, monkeypatch, in_tab, chosen, launched, desc):
+    """Q56 in a shell hand-over: the tab's transcript since it opened, read as the host takes
+    the session back and before it launches again."""
+    folder = tmp_path / "projects" / "-repo"
+    folder.mkdir(parents=True)
+    path = folder / f"{sid}.jsonl"
+    tab_wrote(path, turn("h1", "claude-opus-5-5"))   # hosted, on Opus
+    monkeypatch.setattr(host_mod.transcript, "PROJECTS", tmp_path / "projects")
+    monkeypatch.setattr(host_mod, "transcript_exists", lambda sid: True)
+    monkeypatch.setattr(host_mod, "SHELL_POLL_SECONDS", 0)
+    monkeypatch.setattr(host_mod.liveness, "status", lambda session: "dead")
+    store.set_model(sid, "claude-sonnet-5-5")
+    store.set_effort(sid, "high")
+    h = Host(store, sid, client_factory=FakeClient, person="doug")
+    run(h.connect())
+    monkeypatch.setattr(h, "register", lambda: True)
+
+    def open_tab(s, i):
+        if chosen:
+            s.set_model(i, chosen)   # hub.set_model during the shell
+        tab_wrote(path, *in_tab)
+    h.open_tab = open_tab
+    store.command(sid, "shell")
+
+    async def go():
+        h.reader = asyncio.create_task(asyncio.sleep(3600))
+        await h.poll()
+        h.reader.cancel()
+    run(go())
+    s = store.session(sid)
+    assert (s["model"], s["effort"]) == launched, desc
+    assert (h.client.options.model, h.client.options.effort) == launched, f"{desc}: what the host launched with"
+
+
+def test_a_locked_database_as_the_host_relaunches_is_waited_out(host, store, sid, monkeypatch):
+    """Taking a session back from its shell tab, the host's first write before launching
+    retries through a locked database, as the hand-over's others do."""
+    monkeypatch.setattr(host_mod, "STEADY_TRIES", (0, 0))
+    set_applied, fails = store.set_applied, iter([sqlite3.OperationalError("database is locked")])
+
+    def flaky(*a):
+        if (e := next(fails, None)) is not None:
+            raise e
+        set_applied(*a)
+    monkeypatch.setattr(store, "set_applied", flaky)
+    run(host.connect())
+    assert host.client.connected
+
+
 # review fixes (T29): cancelled calls, ordering, races, lost turns, the shell hand-back
 
 async def until_open(store, sid):

@@ -53,6 +53,16 @@ def pinned(model: str) -> str:
     return base if base in BY_ID else model
 
 
+def ran_as(requested: str | None, served: str | None) -> str | None:
+    """What a transcript says a session ran on, as a launch would pass it: the model it asked
+    for (pinned), else the table's id for the one that answered (a dated response id,
+    claude-opus-5-5-20261001, is that model), else None: an answering id off the table
+    names no model to launch."""
+    if requested:
+        return pinned(requested)
+    return next((m.id for m in MODELS if served and (served == m.id or served.startswith(m.id + "-"))), None)
+
+
 def chosen(model: str | None, effort: str | None) -> tuple[str, str]:
     """A new session's model and effort: as given, else the default model and that model's
     default effort. Either given is checked against the table."""

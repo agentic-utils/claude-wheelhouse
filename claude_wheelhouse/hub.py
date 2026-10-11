@@ -148,8 +148,9 @@ class Hub:
         # each session's context size for the session list: read on workers, by a follower
         # shared with the stats pane (stats.follower), so each transcript is read once
         self.contexts: dict[str, stats.UsageFollower] = {}
-        # each session's model and effort as its transcript last showed them (copy_back)
-        self.ran: dict[str, tuple[str | None, str | None]] = {}
+        # the sessions not running whose transcript has been read, and copied back, since
+        # they stopped: read_contexts reads each once more after it stops, for its last second
+        self.settled: set[str] = set()
         # each session's subagents, tracked as A items (#69): read on workers, as contexts are
         self.agent_watchers: dict[str, subagents.AgentWatcher] = {}
         self.agent_errors: dict[str, str] = {}   # each session's watcher error last said
@@ -671,15 +672,21 @@ class Hub:
 
     def read_contexts(self) -> None:
         """The context size of each session with a bar, read on a worker thread: every one
-        not parked, read once if it isn't running, and every one running, parked or not. A
-        read the stats pane has under way counts."""
+        not parked, read once if it isn't running (and once more when it stops), and every
+        one running, parked or not. A read the stats pane has under way counts."""
         listed = {s["id"]: s for s in self.sessions if not s["parked"] or self.running(s["id"])}
         for sid in [sid for sid in self.contexts if sid not in listed]:
             del self.contexts[sid]
+        self.settled &= set(listed)
         for sid in listed:
             follower = self.contexts.setdefault(sid, stats.follower(sid))
-            if follower.reading or (follower.ready and not self.running(sid)):
+            alive = self.running(sid)
+            if alive:
+                self.settled.discard(sid)
+            if follower.reading or (follower.ready and sid in self.settled):
                 continue
+            if not alive:   # read once more after it stops: what it wrote in its last second
+                self.settled.add(sid)
             follower.reading = True
             self.spawn(functools.partial(self.read_context, follower), "contexts")
 
@@ -693,32 +700,23 @@ class Hub:
         if follower.ready and not follower.error:
             try:
                 self.copy_back(follower)
-            except sqlite3.OperationalError:   # a locked database: the next read tries again
-                self.ran.pop(follower.sid, None)
+            except sqlite3.OperationalError:   # a locked database: the next tick reads, and copies, again
+                self.settled.discard(follower.sid)
         if changed or first:
             self.post(functools.partial(self.emit, Event("landed", sid=follower.sid)))
 
     def copy_back(self, follower: stats.UsageFollower) -> None:
         """A /model or /effort typed in a tab, copied to the session's columns, so its next
-        Relaunch, Restore or return from a shell tab launches with it (Q56). A tab session's
-        columns take whatever its transcript shows: nothing else changes them. A hosted
-        session's shell tab only a change its transcript shows while the hub watches, so a
-        choice made in the wheelhouse meanwhile isn't undone by the tab's older one. A
-        hosted session's host applies the columns itself: nothing is copied."""
-        snap = follower.snap
-        model = snap.requested or snap.model
-        ran = (models.pinned(model) if model else None, snap.effort)
-        seen = self.ran.get(follower.sid)
-        self.ran[follower.sid] = ran
+        Relaunch or Restore launches with it (Q56): a tab session's columns take whatever its
+        transcript shows, as nothing else changes them. A hosted session's host applies the
+        columns itself, and copies back what its shell tab ran when it takes the session
+        back (Host.carry_back)."""
         s = self.store.session(follower.sid)
-        if s is None:
+        if s is None or runner(s) != "tab":
             return
+        ran = (models.ran_as(follower.snap.requested, follower.snap.model), follower.snap.effort)
         columns = {"model": models.field(s, "model"), "effort": models.field(s, "effort")}
-        if runner(s) == "tab":
-            seen = tuple(columns.values())
-        elif not s["shell"] or seen is None:
-            return
-        changed = {k: v for k, v, was in zip(columns, ran, seen) if v and v != was and v != columns[k]}
+        changed = {k: v for k, v in zip(columns, ran) if v and v != columns[k]}
         if changed:
             self.store.put_back(follower.sid, columns, **changed)
 

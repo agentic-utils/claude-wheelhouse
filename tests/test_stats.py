@@ -578,6 +578,41 @@ def test_the_transcript_says_what_effort_each_turn_ran_at():
     assert s.effort == "xhigh", "the latest turn that says, a turn that doesn't leaves it"
 
 
+def command(name, args, out, ago=30):
+    """A local command's record, as Claude Code 2.1.296 writes /model and /effort."""
+    return {"type": "system", "subtype": "local_command", "timestamp": at(ago), "isMeta": False,
+            "content": f"<local-command-stdout>{out}</local-command-stdout>",
+            "commandRun": {"command": name, "args": args}}
+
+
+@pytest.mark.parametrize("recs, ran, desc", [
+    ([response("m1", ago=90, read=5), command("model", "haiku", "Set model to `Haiku 5.5` for this session only")],
+     ("claude-haiku-5-5", None), "a /model typed with no turn after it: the model it set"),
+    ([command("model", "opus[1m]", "Set model to `Opus 5.5 (1M context)` for this session only")],
+     ("claude-opus-5-5", None), "a display name with its window: the table's id"),
+    ([command("model", "default", "Set model to `Opus 5.5 (default)` for this session only")],
+     ("claude-opus-5-5", None), "the default, by the name it resolved to"),
+    ([command("effort", "medium", "Set effort level to medium (this session only): Balanced approach")],
+     (None, "medium"), "an /effort typed"),
+    ([command("model", "bogus", "Model 'bogus' not found")], (None, None), "one Claude Code refused: nothing"),
+    ([command("effort", "", "Usage: /effort <low|medium|high|xhigh|max|auto>")], (None, None), "a usage line: nothing"),
+    ([command("effort", "auto", "Set effort level to auto (this session only)")], (None, None), "a level off the table"),
+    ([command("model", "haiku", "Set model to `Haiku 5.5` for this session only", ago=90),
+      response("m1", ago=60, read=5) | {"requestedModel": "claude-sonnet-5-5"}],
+     ("claude-sonnet-5-5", None), "a turn after the /model: the turn's"),
+])
+def test_a_model_or_effort_typed_counts_before_the_next_turn(tmp_path, recs, ran, desc):
+    """Material: a /model's reply is Claude Code's own, with no usage, so no turn says it."""
+    (tmp_path / "p").mkdir()
+    (tmp_path / "p" / "s.jsonl").write_bytes(b"\n".join(lines(*recs)) + b"\n")
+    follower = stats.UsageFollower("s", tmp_path)
+    follower.read(NOW)
+    assert (follower.snap.requested, follower.snap.effort) == ran, desc
+    served = "claude-opus-5-5" if any(r["type"] == "assistant" for r in recs) else None
+    assert stats.ran_since(tmp_path / "p" / "s.jsonl", 0) == (ran[0] or served, ran[1]), \
+        f"{desc}: as the host reads it after a shell tab (the served model where nothing asked)"
+
+
 @pytest.mark.parametrize("setting, effort, room, expected, desc", [
     (None, "low", 0, "holly · Opus 5.5 · low · 1M window", "a tab's: what its transcript ran"),
     (None, None, 0, "holly · Opus 5.5 · 1M window", "no effort recorded yet"),
