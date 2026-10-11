@@ -263,3 +263,27 @@ def test_the_monitor_survives_a_locked_start_and_reports_each_error_once(sid, mo
     err = capsys.readouterr().err
     assert err.count("database is locked") == 1, err
     assert err.count("disk I/O error") == 1, err
+
+
+@pytest.mark.parametrize("fields, why, desc", [
+    ({"why": "over Postgres: no server; undo: swap the DSN"}, "over Postgres: no server; undo: swap the DSN",
+     "the one line, as the protocol asks"),
+    ({"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"},
+     "over Postgres: no server; undo: swap the DSN", "an older protocol's three fields: folded into why, none lost"),
+    ({"alternative": "Postgres", "reverse": "swap the DSN"}, "over Postgres; undo: swap the DSN",
+     "no why of its own: what there is"),
+])
+def test_a_decision_keeps_an_older_protocols_fields(store, sid, fields, why, desc):
+    from claude_wheelhouse import mcp_server
+    mcp_server._store, mcp_server._sid = store, sid
+    ref = mcp_server.post_item("decision", "used SQLite", **fields)
+    assert store.item(sid, ref)["body"] == f"**Why:** {why}", desc
+
+
+def test_the_sessions_status_call_settles_an_awaiting_item(store, sid):
+    from claude_wheelhouse import mcp_server
+    mcp_server._store, mcp_server._sid = store, sid
+    q = store.post_item(sid, "question", "db?")
+    store.send(sid, "postgres?", q)
+    mcp_server.update_item(q, status="answered")
+    assert (sid, q) not in store.awaiting() and store.item(sid, q)["status"] == "answered"

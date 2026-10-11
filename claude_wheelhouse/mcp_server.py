@@ -42,15 +42,25 @@ def wheelhouse_tool(fn):
 
 
 @wheelhouse_tool
-def post_item(kind: str, title: str, body: str = "", status: str | None = None, why: str = "") -> str:
+def post_item(kind: str, title: str, body: str = "", status: str | None = None, why: str = "",
+              alternative: str = "", reverse: str = "") -> str:
     """Create a task, question, agent or decision item in the wheelhouse. kind: task |
     question | agent | decision. Returns the item's ref (T1, Q1, A1, D1...). Write the full
     detail in body, once. A decision (see the protocol) also needs why, one short line: the
     option passed over, the reason, how to undo it. It takes no status. The wheelhouse posts
-    agent items for your subagents itself: don't post those."""
+    agent items for your subagents itself: don't post those. (alternative and reverse are
+    an older protocol's: they join why.)"""
     if kind == "permission":   # the host posts these from Claude Code's own permission check
         raise ValueError("kind must be task, question, agent or decision")
-    return _store.post_item(_sid, kind, title, body, status, why=why)
+    return _store.post_item(_sid, kind, title, body, status, why=one_why(why, alternative, reverse))
+
+
+def one_why(why: str, alternative: str = "", reverse: str = "") -> str:
+    """A decision's why, with an older protocol's alternative and reverse folded in, so a
+    session still writing three fields loses neither."""
+    why, alternative, reverse = why.strip(), alternative.strip(), reverse.strip()
+    head = ": ".join(p for p in (f"over {alternative}" if alternative else "", why) if p)
+    return "; ".join(p for p in (head, f"undo: {reverse}" if reverse else "") if p)
 
 
 @wheelhouse_tool
@@ -59,7 +69,7 @@ def update_item(ref: str, status: str | None = None, title: str | None = None,
     """Change an item's status, title or body, and/or append a progress note to its thread.
     In a session the wheelhouse runs itself, this is how you declare a question open or
     answered after the person's message on it (the wheelhouse posts your chat as the reply)."""
-    _store.update_item(_sid, ref, status=status, title=title, body=body, note=note)
+    _store.update_item(_sid, ref, status=status, title=title, body=body, note=note, declares=True)
     return f"{ref} updated"
 
 

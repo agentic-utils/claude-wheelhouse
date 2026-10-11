@@ -175,13 +175,21 @@ def test_a_queued_answer_can_be_taken_back(store, sid):
     (["queue"], "open", False, False, "a queued answer isn't with the session yet"),
     (["queue", "dispatch"], "open", True, True, "until it's sent"),
     (["send", "queue"], "open", True, False, "more queued: back with the person until it's sent"),
+    (["send", "status answered"], "answered", False, False,
+     "a hosted session's status call is its word: no longer awaiting it, even with no reply posted"),
+    (["send", "status open"], "open", False, False, "status open: back with the person"),
+    (["send", "person closes"], "closed", True, False, "the person's own update says nothing for the session"),
+    (["status answered", "send"], "answered", True, True, "a word after the status call awaits a reply again"),
 ])
 def test_the_session_declares_where_a_question_stands(store, sid, steps, status, awaiting, processing, desc):
     q = store.post_item(sid, "question", "db?")
     act = {"send": lambda: store.send(sid, "postgres?", q), "queue": lambda: store.queue(sid, "postgres?", q),
            "dispatch": lambda: store.dispatch(sid),
            "reply open": lambda: store.reply(sid, q, "it means the cache db", "open"),
-           "reply answered": lambda: store.reply(sid, q, "postgres it is", "answered")}
+           "reply answered": lambda: store.reply(sid, q, "postgres it is", "answered"),
+           "status answered": lambda: store.update_item(sid, q, status="answered", declares=True),
+           "status open": lambda: store.update_item(sid, q, status="open", declares=True),
+           "person closes": lambda: store.update_item(sid, q, status="closed")}
     for step in steps:
         act[step]()
     assert store.item(sid, q)["status"] == status, desc
@@ -540,6 +548,7 @@ def test_older_code_still_writes_a_database_with_the_model_columns(store, tmp_pa
     ([], True, "nothing said since the person's message: posted"),
     (["reply"], False, "the session replied itself since: not posted twice"),
     (["note"], True, "a progress note isn't a reply"),
+    (["status"], True, "a status call isn't a reply: the host's text still goes"),
 ])
 def test_the_host_posts_a_reply_once(store, sid, before, posted, desc):
     q = store.post_item(sid, "question", "db?")
@@ -547,7 +556,8 @@ def test_the_host_posts_a_reply_once(store, sid, before, posted, desc):
     last = store.thread(sid, q)[-1]["id"]
     for step in before:
         {"reply": lambda: store.reply(sid, q, "Replied myself.", "open"),
-         "note": lambda: store.update_item(sid, q, note="looking")}[step]()
+         "note": lambda: store.update_item(sid, q, note="looking"),
+         "status": lambda: store.update_item(sid, q, status="answered", declares=True)}[step]()
     store.host_reply(sid, q, "The host's text.", after=last)
     assert ("The host's text." in [m["body"] for m in store.thread(sid, q)]) == posted, desc
 

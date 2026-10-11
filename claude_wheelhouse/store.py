@@ -670,7 +670,11 @@ class Store:
                       "AND status != ?", (status, now(), sid, ref, status)).rowcount and note:
             self._said(db, sid, ref, note, "note")
 
-    def update_item(self, sid: str, ref: str, *, status=None, title=None, body=None, note=None) -> None:
+    def update_item(self, sid: str, ref: str, *, status=None, title=None, body=None, note=None,
+                    declares: bool = False) -> None:
+        """declares: the session's own update (the MCP tool), whose status, on an item the
+        person's word awaits a reply on, is its word on it: the item no longer awaits it
+        (a STATUS message, which AWAITING counts as a reply)."""
         if self.session(sid) is None:
             raise SessionGone(sid)
         item = self.item(sid, ref)
@@ -685,6 +689,9 @@ class Store:
                    body = coalesce(?, body), updated_at = ?, {UNDISMISS} WHERE session_id = ? AND ref = ?""",
                 (status, title, body, now(), status, sid, ref),
             )
+            if declares and status is not None and db.execute(
+                    f"SELECT 1 FROM ({AWAITING}) WHERE session_id = ? AND item_ref = ?", (sid, ref)).fetchone():
+                self._said(db, sid, ref, f"status: {status}", STATUS)
             if note:
                 self._said(db, sid, ref, note, "note")
 
@@ -955,11 +962,15 @@ SETTLED_RANK, FINISHED_RANK = 10, 11   # after every active item's rank
 # of status brings back an item the person dismissed
 UNDISMISS = "dismissed = CASE WHEN coalesce(?, status) = status THEN dismissed END"
 
+# a message's kind for a session's status update on an item awaiting its reply: its word on it
+# (update_item, declares), shown as a note
+STATUS = "status"
 # (session_id, item_ref) of items whose latest word is the person's, sent, with no reply since
-AWAITING = """SELECT session_id, item_ref FROM messages WHERE item_ref IS NOT NULL AND draft = 0
+# (or status update: STATUS)
+AWAITING = f"""SELECT session_id, item_ref FROM messages WHERE item_ref IS NOT NULL AND draft = 0
               GROUP BY session_id, item_ref
               HAVING max(CASE WHEN author = 'person' THEN id END) >
-                     coalesce(max(CASE WHEN author = 'claude' AND kind = 'reply' THEN id END), 0)"""
+                     coalesce(max(CASE WHEN author = 'claude' AND kind IN ('reply', '{STATUS}') THEN id END), 0)"""
 # D28, on items aliased i: answered and sent, not yet replied to, nothing more queued. Shown as
 # processing and not counted as awaiting the person; stored as open, so the protocol is unchanged
 PROCESSING = f"""((i.session_id, i.ref) IN ({AWAITING}) AND (i.session_id, i.ref) NOT IN
