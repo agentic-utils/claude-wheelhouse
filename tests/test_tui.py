@@ -4980,3 +4980,28 @@ async def test_a_click_on_an_arrow_steps_the_narrow_slider(store, tmp_path, monk
         await pilot.pause()
         assert store.session(sid)["effort"] == level
         assert_one_current(app, "after a click on an arrow")
+
+
+
+@pytest.mark.anyio
+async def test_focusing_the_slider_lays_it_out_focused_at_once(store, tmp_path, monkeypatch):
+    """Focus lays the slider out as focused (its ←/→, where there's room) in the same frame,
+    not on the next tick; blur as unfocused."""
+    sid, app = await hosted_app(store, tmp_path, monkeypatch)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await shown_stats(app, pilot)
+        pane = app.query_one("#stats")
+        focused = []
+        real = stats.layout
+
+        def spy(*args):
+            focused.append(args[-1])
+            return real(*args)
+        monkeypatch.setattr(stats, "layout", spy)
+        monkeypatch.setattr(type(pane), "tick", lambda self: None)   # no tick to catch it up
+        pane.focus()
+        await pilot.pause()
+        assert pane.has_focus and focused[-1:] == [True], f"laid out on focus as {focused}"
+        app.session_list.focus()
+        await pilot.pause()
+        assert focused[-1:] == [False], f"laid out on blur as {focused}"

@@ -159,10 +159,12 @@ class SessionStats(Widget):
         return self.setting["id"] if stats.has_slider(self.view, self.setting) else None
 
     def on_focus(self) -> None:
-        self.rebuild()   # the slider shows its keys
+        # the slider shows its keys: once has_focus says so, which Textual sets only after
+        # this handler, so a rebuild now would lay it out unfocused until the next tick
+        self.call_later(self.rebuild)
 
     def on_blur(self) -> None:
-        self.rebuild()
+        self.call_later(self.rebuild)
 
     def action_effort(self, step: int) -> None:
         """A level lower or higher, applied live: no warning, as effort has no side effects (Q52)."""
