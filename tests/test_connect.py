@@ -190,6 +190,25 @@ def test_a_lock_names_the_address_once_listening(held, url, desc):
     assert connect.url_of(held) == url, desc
 
 
+@pytest.mark.parametrize("held, pid, desc", [
+    ("pid 12 at http://127.0.0.1:7428", 12, "listening"),
+    ("pid 12", 12, "not listening yet"),
+    (None, None, "none holds it"),
+])
+def test_pid_of(held, pid, desc):
+    assert connect.pid_of(held) == pid, desc
+
+
+def test_stop_waits_for_its_daemon_not_for_the_lock(tmp_path, monkeypatch):
+    """The daemon asked to stop has gone, and another app's has taken the lock already:
+    stopped, at once, not a wait for a lock that stays held."""
+    monkeypatch.setattr(connect, "holder", lambda d: "pid 2 at http://127.0.0.1:1")
+    monkeypatch.setattr(connect, "STOP_WAIT", 0.3)
+    connect.stop("http://127.0.0.1:1", "t", tmp_path, 1)
+    with pytest.raises(connect.NoDaemon, match="pid 2"):
+        connect.stop("http://127.0.0.1:1", "t", tmp_path, 2)
+
+
 def test_two_apps_starting_at_once_join_one_daemon(state):
     import threading
     state_dir, port = state

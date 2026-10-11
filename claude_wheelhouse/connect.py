@@ -53,6 +53,11 @@ def url_of(held: str) -> str | None:
     return match[1] if match else None
 
 
+def pid_of(held: str | None) -> int | None:
+    match = re.match(r"pid (\d+)", held or "")
+    return int(match[1]) if match else None
+
+
 def port() -> int:
     return int(os.environ.get("WHEELHOUSE_PORT") or PORT)
 
@@ -111,8 +116,10 @@ def hello(url: str, token: str, wait: float, state_dir: Path | None = None) -> d
             time.sleep(0.1)
 
 
-def stop(url: str, token: str, state_dir: Path) -> None:
-    """Ask the daemon to stop, and wait for its lock to go."""
+def stop(url: str, token: str, state_dir: Path, pid: int) -> None:
+    """Ask the daemon (pid) to stop, and wait for it to let go of its lock: until the lock
+    is free or held by another daemon (another app's, started meanwhile), which the caller
+    goes round again to join."""
     import uuid
 
     import httpx2
@@ -120,10 +127,10 @@ def stop(url: str, token: str, state_dir: Path) -> None:
         http.post(f"{url}/shutdown", json={}, headers={"Idempotency-Key": str(uuid.uuid4()),
                                                        "Authorization": auth.header(token)})
     deadline = time.monotonic() + STOP_WAIT
-    while holder(state_dir) is not None:
+    while pid_of(holder(state_dir)) == pid:
         if time.monotonic() >= deadline:
-            raise NoDaemon(f"the daemon at {url} runs older code and didn't stop when asked: stop it, then start "
-                           "the wheelhouse again (claude-wheelhouse --local runs without it)")
+            raise NoDaemon(f"the daemon (pid {pid}) at {url} runs older code and didn't stop when asked: stop "
+                           "it, then start the wheelhouse again (claude-wheelhouse --local runs without it)")
         time.sleep(0.1)
 
 
@@ -194,7 +201,7 @@ def local(state_dir: Path, port: int) -> tuple[str, str, list[str]]:
         if info["code"] == fingerprint.code():
             return url, token, said
         if info["package"] == str(fingerprint.PACKAGE) and not restarted:
-            stop(url, token, state_dir)
+            stop(url, token, state_dir, info["pid"])
             restarted = True
             said.append("the daemon ran older code: restarted it on this code")
             continue

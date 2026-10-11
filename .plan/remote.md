@@ -160,8 +160,8 @@ was before 2c, its hub in process: the way back, at once.
     code (a hash of its package's source files as it loaded them) and its package's path.
     The same fingerprint: join. Another, from the same package path: the code on disk has
     changed under a running daemon (a pull, say), so the TUI asks it to stop (`POST
-    /shutdown`), waits for its lock to go, starts one on the new code and says so. This is
-    safe because the daemon holds nothing that isn't in the database (a Relaunch under way
+    /shutdown`), waits for that daemon (its pid) to let go of the lock, starts one on the
+    new code and says so. This is safe because the daemon holds nothing that isn't in the database (a Relaunch under way
     is, in `sessions.relaunch`), but for an answer the database couldn't take, which it writes
     as it stops if it can. Its other clients see their streams end and reconnect. Another
     fingerprint from another path (another checkout): joined if the API version matches,
