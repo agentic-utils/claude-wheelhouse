@@ -18,10 +18,13 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   shell: each tab starts `claude` through `$SHELL -lic`. The wheelhouse was built and
   checked against Claude Code 2.1 (2.1.287 to 2.1.296).
 - git, to clone the repository.
+- make (`sudo apt install make`). Every `make` target is a one-line `uv` command, given
+  beside it below, if you'd rather do without.
 
 ## Install
 
-In WSL, on the Linux filesystem (the database refuses to live under `/mnt/`):
+In WSL, in your Linux home rather than under `/mnt/c` (a `.venv` on the Windows drive is
+slow):
 
 ```
 git clone https://github.com/agentic-utils/claude-wheelhouse.git
@@ -29,14 +32,19 @@ cd claude-wheelhouse
 make install
 ```
 
-`make install` runs `uv sync --reinstall-package claude-wheelhouse`, which builds a `.venv`
+`make install` runs `uv sync --reinstall-package claude-wheelhouse` (plain `uv sync` does
+for a first install), which builds a `.venv`
 inside the clone: the wheelhouse installs nothing outside it (uv keeps its own cache
-of downloads, and any Python it fetched). To update, `git pull` and
-`make install` again; sessions running older code then show "needs relaunch".
+of downloads, and any Python it fetched). To update, `git pull`,
+`make install` again, then quit and reopen the app. Running sessions show "needs
+relaunch" when an update changes what they're told.
 
 The `claude-wheelhouse` command lives in that `.venv`, so from the clone run it as
 `uv run claude-wheelhouse …` (this README writes it plain). `make` on its own lists the
 `make` targets.
+
+Run the app in a Windows Terminal tab, which draws its colours and carries its copies to
+the clipboard.
 
 ## First run
 
@@ -52,11 +60,12 @@ its tab. It always starts afresh (any earlier tutorial is ended), in its own scr
 directory, `claude-wheelhouse-tutorial/` next to the database. It is a real Claude Code
 session on Sonnet 5.5 at high effort, and costs a few cents' worth of tokens on your
 Claude Code account. The first time the wheelhouse opens with no sessions it offers the
-tutorial in one line: `Enter` takes it, `Esc` dismisses it for good.
+tutorial in one line: `Enter` takes it, `Esc` dismisses it for good. That line, and the
+app's help, name `claude-wheelhouse tutorial (make tutorial in a source checkout)`: in your
+clone, that is `make tutorial`.
 
 After that, `make run` (`uv run claude-wheelhouse`) opens the wheelhouse, and `N` starts a
-session. Run it in a Windows Terminal tab, which draws its colours and carries its copies
-to the clipboard.
+session.
 
 ## What it does
 
@@ -305,8 +314,9 @@ a new one, which each `--connect` machine then needs.
 <!-- T85 -->
 The session and weekly gauges come from Claude Code itself: every 5 minutes by default,
 the wheelhouse runs a short `claude -p "/usage"` and reads what it prints. It reads no
-credentials. `--usage-mode persistent`, or `usage-mode=persistent` in a `.env` file,
-keeps one Claude Code running for the gauges instead of starting one each time.
+credentials. `--usage-mode persistent`, or `usage-mode=persistent` in a `.env` file
+(in the directory you start the app from, the clone, or in
+`~/.config/claude-wheelhouse/.env`), keeps one Claude Code running for the gauges instead of starting one each time.
 
 ## Where state lives
 
@@ -338,6 +348,12 @@ which the wheelhouse reads.
   SQLite's locking is unreliable.
 - An app on another machine (`--connect`) answers and manages sessions but can't start
   them.
+- The wheelhouse reads files Claude Code keeps for itself and doesn't document (its
+  transcripts in `~/.claude/projects`, and `~/.claude/sessions`), so a Claude Code update
+  can break the stats, the conversations, subagent items or whether a session shows as
+  alive. Only Claude Code 2.1.287 to 2.1.296 have been checked.
+- One wheelhouse per user, its daemon on port 7428 (`WHEELHOUSE_PORT` changes it).
+- Nothing restarts after a reboot: Restore brings the sessions back.
 - This is a 0.1 prototype with no releases yet: update with `git pull` and `make install`.
 
 ## Reporting bugs
@@ -345,20 +361,27 @@ which the wheelhouse reads.
 Open an issue at <https://github.com/agentic-utils/claude-wheelhouse/issues>. Say what you
 did, what you expected and what happened, and attach:
 
-- `launch.log` and `daemon.log` from `~/.local/state/claude-wheelhouse/`;
-- the output of `uv run claude-wheelhouse protocol`, run in the clone;
+- if the app crashed, the traceback it printed in the terminal (a crash in the app goes
+  there, not to the logs);
+- `launch.log` and `daemon.log`, which sit next to the database: in
+  `~/.local/state/claude-wheelhouse/`, or the directory of `WHEELHOUSE_DB` if you set it;
+- the output of `uv run claude-wheelhouse protocol`, run in the clone: what your sessions
+  are told and the command they launch with, under the settings in force
+  (`WHEELHOUSE_DECISIONS`, for one);
 - the commit you're on (`git rev-parse --short HEAD` in the clone) and `claude --version`.
 
 The logs hold your directory paths and session ids: look them over before you attach them.
 
 ## Uninstall
 
-1. End your sessions: End each one in the wheelhouse, or `/exit` it in its tab.
+1. End your sessions: End each one in the wheelhouse, or `/exit` it, then close its tab.
 2. Quit the app (`Q`), then in the clone run `uv run claude-wheelhouse daemon --stop`.
 3. Delete the clone: `make install` put the wheelhouse in the clone's `.venv`, and nowhere
    else.
 4. Delete the state directory: `rm -rf ~/.local/state/claude-wheelhouse`. If you made a
    `~/.config/claude-wheelhouse/.env`, delete that too.
+5. Optionally, `uv cache clean` clears uv's download cache (every project's, not only
+   this one's).
 
 Nothing was added to your Claude Code settings, so there is nothing to undo there. The
 sessions' conversations stay in `~/.claude/projects`, as Claude Code's own.
