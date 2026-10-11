@@ -242,7 +242,7 @@ async def test_adopt(store, monkeypatch, alive_on_adopt, launched, stack, desc):
     monkeypatch.setattr(adopt, "candidates", lambda store: [adoptable(pid=4242)])
     monkeypatch.setattr(liveness, "running_pid", lambda sid, *a: alive_on_adopt)
     got = []
-    monkeypatch.setattr(adopt, "adopt", lambda store, c, name, sdk=None: got.append((c.id, name)))
+    monkeypatch.setattr(adopt, "adopt", lambda store, c, name, sdk=None, may_tab=True: got.append((c.id, name)))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.press("a")
