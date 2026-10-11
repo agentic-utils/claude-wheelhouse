@@ -26,8 +26,37 @@ def test_the_first_start_makes_it_readable_by_the_user_alone(tmp_path):
 
 def test_an_empty_file_is_said_not_used(tmp_path):
     auth.path(tmp_path).write_text("\n")
+    auth.path(tmp_path).chmod(0o600)
     with pytest.raises(auth.TokenError, match="holds no token"):
         auth.ensure(tmp_path)
+
+
+@pytest.mark.parametrize("file_mode, uid, said, desc", [
+    (0o644, None, "chmod 600", "readable by others: refused, as ssh refuses a key file"),
+    (0o620, None, "chmod 600", "writable by the group"),
+    (0o600, 12345, "isn't yours", "another user's"),
+    (0o400, None, None, "the user's alone, read-only: used"),
+])
+def test_a_token_file_open_to_others_is_refused_at_the_start(tmp_path, monkeypatch, file_mode, uid, said, desc):
+    token, _ = auth.ensure(tmp_path)
+    auth.path(tmp_path).chmod(file_mode)
+    if uid is not None:
+        monkeypatch.setattr(os, "geteuid", lambda: uid)
+    if said is None:
+        assert auth.ensure(tmp_path) == (token, None), desc
+        return
+    with pytest.raises(auth.TokenError, match=said) as e:
+        auth.ensure(tmp_path)
+    assert str(auth.path(tmp_path)) in str(e.value), desc
+
+
+def test_a_temporary_file_left_by_a_start_that_died_is_removed(tmp_path):
+    (tmp_path / f".{auth.TOKEN}.4242.deadbeef").write_text("half")
+    auth.ensure(tmp_path)
+    assert [p.name for p in tmp_path.iterdir()] == [auth.TOKEN]
+    (tmp_path / f".{auth.TOKEN}.4243.cafef00d").write_text("half")
+    auth.ensure(tmp_path)
+    assert [p.name for p in tmp_path.iterdir()] == [auth.TOKEN], "on a start that finds the token too"
 
 
 @pytest.mark.parametrize("given, token, ok, desc", [
