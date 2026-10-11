@@ -1,7 +1,8 @@
 """SDK mode's switch, sdk_enabled(), and how plan usage is read, usage_mode().
 
 EXPERIMENTAL: SDK mode (sessions run in a wheelhouse host through the Claude Agent SDK:
-host.py, protocol_sdk.md, launch.open_host) is not for use by anyone other than the
+host.py, protocol_sdk.md, launch.open_host, and the plan usage readings SDK sessions give,
+plan_usage.from_rate_limit and SDK_SETTING) is not for use by anyone other than the
 author until Anthropic's terms for it are confirmed. It is deliberately undocumented: the
 README never mentions it, and a new user gets tab mode.
 

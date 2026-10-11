@@ -150,7 +150,7 @@ def test_a_poll_is_quiet_once_the_probe_has_stopped(tmp_path, capsys):
     assert capsys.readouterr().err == "" and not u.failed, "the hub is stopping: nothing said, nothing run"
 
 
-def test_the_hub_takes_an_sdk_sessions_newer_reading(store):
+def test_the_hub_takes_an_sdk_sessions_newer_reading(store, sdk_on):
     hub = Hub(store)
     hub.usage.take({"session": (10.0, None), "weekly_all": (60.0, None)}, time.time() - 120)
     host.Host.rate_limited(SimpleNamespace(store=store), {"unifiedWindows": {"five_hour": {"utilization": 0.3}}})
@@ -163,7 +163,16 @@ def test_the_hub_takes_an_sdk_sessions_newer_reading(store):
     assert hub.usage.limits["session"][0] == 30.0, "an older reading doesn't"
 
 
-def test_an_unreadable_sdk_reading_is_said_not_raised(store, capsys):
+def test_with_sdk_mode_off_no_sdk_reading_is_kept_or_taken(store):
+    hub = Hub(store)
+    host.Host.rate_limited(SimpleNamespace(store=store), {"unifiedWindows": {"five_hour": {"utilization": 0.3}}})
+    assert store.setting(plan_usage.SDK_SETTING) is None, "the host keeps none"
+    store.set_setting(plan_usage.SDK_SETTING, json.dumps({"at": time.time(), "limits": {"session": [30.0, None]}}))
+    hub.fetch_usage()
+    assert hub.usage.limits == {}, "the hub takes none, even one already stored"
+
+
+def test_an_unreadable_sdk_reading_is_said_not_raised(store, capsys, sdk_on):
     hub = Hub(store)
     store.set_setting(plan_usage.SDK_SETTING, "{not json")
     hub.fetch_usage()

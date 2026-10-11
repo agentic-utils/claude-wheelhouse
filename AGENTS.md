@@ -31,7 +31,7 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `stats.py`, `stats_pane.py`: token stats and charts; the pane is a module (`api.py`).
 - `plan_usage.py`: the account's session and weekly usage, from `/usage` asked of
   Claude Code every 5 minutes (a one-shot `claude -p` by default, or one kept running with
-  `--usage-mode persistent`), and from SDK sessions' rate_limit_events.
+  `--usage-mode persistent`), and, in SDK mode only, from SDK sessions' rate_limit_events.
 - `api.py`: the module protocol (entry point group `claude_wheelhouse.modules`). Bump
   `WHEELHOUSE_API` on any breaking change to it.
 - `models.py`: the models and effort levels offered. A new model is a row here.

@@ -31,7 +31,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from . import liveness, models, plan_usage, stats, transcript
+from . import features, liveness, models, plan_usage, stats, transcript
 from .launch import PROTOCOL_SDK, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT
 from .store import CLOSED, SessionGone, Store, db_path, now, runner
@@ -701,7 +701,11 @@ class Host:
 
     def rate_limited(self, raw) -> None:
         """Claude Code's plan usage, as this session's stream says it: kept in the store,
-        where the hub takes it as its newest reading (plan_usage.SDK_SETTING)."""
+        where the hub takes it as its newest reading (plan_usage.SDK_SETTING). Not with SDK
+        mode off: EXPERIMENTAL (features.py): SDK mode is not for use by anyone other than the author until
+        Anthropic's terms are confirmed."""
+        if not features.sdk_enabled():
+            return
         limits = plan_usage.from_rate_limit(raw)
         if limits:
             self.store.set_setting(plan_usage.SDK_SETTING, json.dumps({"at": time.time(), "limits": limits}))

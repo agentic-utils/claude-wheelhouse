@@ -814,7 +814,11 @@ class Hub:
             self.take_sdk_usage()
 
     def take_sdk_usage(self) -> None:
-        """An SDK session's reading (plan_usage.SDK_SETTING), once each time it changes."""
+        """An SDK session's reading (plan_usage.SDK_SETTING), once each time it changes: only
+        in SDK mode (features.py, EXPERIMENTAL: the author's alone until Anthropic's terms are
+        confirmed)."""
+        if not self.sdk:
+            return
         stored = self.store.setting(plan_usage.SDK_SETTING)
         if stored is None or stored == self.sdk_usage:
             return

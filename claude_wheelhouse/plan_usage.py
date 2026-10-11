@@ -29,7 +29,9 @@ EVERY = 300          # seconds between /usage calls
 TIMEOUT = 60         # seconds a call may take: the first, starting Claude Code, takes about 8
 BACKOFF = 10         # seconds before a Claude Code that died is started again, doubled per death
 BACKOFF_MAX = 1800
-SDK_SETTING = "plan_usage.sdk"   # settings: an SDK session's latest reading, {"at", "limits"}
+# settings: an SDK session's latest reading, {"at", "limits"}. EXPERIMENTAL (features.py):
+# SDK mode is not for use by anyone other than the author until Anthropic's terms are confirmed
+SDK_SETTING = "plan_usage.sdk"
 CLAUDE = "claude"
 CLAUDE_ENV = "WHEELHOUSE_CLAUDE"   # the claude to run instead: the tests' one that isn't there, which daemons they start inherit
 FLAGS = ("--verbose", "--setting-sources=", "--strict-mcp-config", "--no-session-persistence")
@@ -118,7 +120,11 @@ def from_rate_limit(raw) -> dict[str, tuple[float, float | None]]:
 
     unifiedWindows is marked @internal in Claude Code 2.1.296's SDK schema, so it may
     change or go without notice, and its 0..1 utilization scale is taken from one observed
-    stream, not from documentation: if the gauges read 100 times too low or high, check here."""
+    stream, not from documentation: if the gauges read 100 times too low or high, check here.
+
+    EXPERIMENTAL (features.py): SDK mode is not for use by anyone other than the author until
+    Anthropic's terms are confirmed. Neither the host
+    keeps nor the hub takes a reading with SDK mode off."""
     out = {}
     windows = raw.get("unifiedWindows") if isinstance(raw, dict) else None
     for name, kind in WINDOWS.items():

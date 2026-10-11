@@ -28,8 +28,8 @@ highlighted item.
   resident and 2% of a core at idle, about twice the CPU overall. Either way it reads
   the answer's "Current session" and "Current week" lines. Their reset times are local
   wall-clock to the minute with a zone and no year, converted to UTC with the year
-  nearest the reading. An SDK session's rate_limit_event (`unifiedWindows`) is a reading
-  too, kept in the store by its host; the newest reading of each limit wins. A reading
+  nearest the reading. In SDK mode only (experimental, `features.py`), an SDK session's
+  rate_limit_event (`unifiedWindows`) is a reading too, kept in the store by its host; the newest reading of each limit wins. A reading
   more than a poll old says its age under the gauges ("usage read 12m ago"); an answer
   that can't be read shows "usage unavailable" and is logged once. The wheelhouse never
   reads Claude Code's login or calls its endpoints itself.
