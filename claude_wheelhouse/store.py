@@ -434,18 +434,20 @@ class Store:
         with self.tx() as db:
             db.execute("UPDATE sessions SET shell = ? WHERE id = ?", (state, sid))
 
-    def set_relaunch(self, sid: str, host: tuple | None, deadline: float = 0.0) -> None:
-        """A Relaunch under way: the host it stopped, (pid, start time), and the epoch second
-        it gives up by, so a wheelhouse started again carries it on; None once it's done."""
+    def set_relaunch(self, sid: str, host: tuple | None, deadline: float = 0.0, compacting: bool = False) -> None:
+        """A Relaunch under way: the host it stopped (or, compacting, will stop once the
+        session is compacted), (pid, start time), and the epoch second it gives up by, so a
+        wheelhouse started again carries it on; None once it's done."""
         with self.tx() as db:
             db.execute("UPDATE sessions SET relaunch = ? WHERE id = ?",
-                       (json.dumps([*host, deadline]) if host else None, sid))
+                       (json.dumps([*host, deadline, compacting]) if host else None, sid))
 
-    def relaunches(self) -> dict[str, tuple[float, tuple]]:
-        """Each Relaunch under way, by session: (its epoch deadline, the host it stopped)."""
-        return {r["id"]: (deadline, (pid, start)) for r in self._all(
+    def relaunches(self) -> dict[str, tuple[float, tuple, bool]]:
+        """Each Relaunch under way, by session: (its epoch deadline, the host it stopped,
+        whether it is compacting first)."""
+        return {r["id"]: (deadline, (pid, start), bool(rest and rest[0])) for r in self._all(
             "SELECT id, relaunch FROM sessions WHERE relaunch IS NOT NULL")
-            for pid, start, deadline in [json.loads(r["relaunch"])]}
+            for pid, start, deadline, *rest in [json.loads(r["relaunch"])]}
 
     def unregister(self, sid: str) -> None:
         """The registered process is letting go of the session (a host handing over to a tab):

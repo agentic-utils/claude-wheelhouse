@@ -48,6 +48,7 @@ HOST_QUESTION = '{"from": "AskUserQuestion"}'   # an item's answer column marks 
 NO_NOTES = (f"idle · Compact got no notes back in {COMPACT_TIMEOUT // 60} quiet minutes, "
             "so nothing was compacted")
 AWAITING_NOTES = "idle · Compact is waiting for the session's notes (Interrupt cancels it)"
+COMPACTED = "idle · compacted"   # how the activity line starts once a compaction's turn has ended
 # A context past this many tokens gets one question item suggesting Compact, per crossing:
 # every turn re-reads the whole context from the prompt cache
 NUDGE_TOKENS = 200_000
@@ -591,7 +592,7 @@ class Host:
             if m.is_error:
                 activity = f"error: {(m.result or m.subtype)[:80]}"
             elif self.compacted_from is not None:
-                activity = f"idle · compacted {self.compacted_from // 1000}k → {(tokens or 0) // 1000}k tokens"
+                activity = f"{COMPACTED} {self.compacted_from // 1000}k → {(tokens or 0) // 1000}k tokens"
             elif self.compact_nonce:
                 activity = AWAITING_NOTES
             else:

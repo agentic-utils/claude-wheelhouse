@@ -1246,6 +1246,31 @@ class Choice(Dialog):
         self.action_answer(event.button.id)
 
 
+class RelaunchChoice(Dialog):
+    """Relaunch of a big session: compact first, relaunch now, or neither."""
+    BINDINGS = [Binding("c", "answer('compact')", show=False), Binding("r", "answer('now')", show=False),
+                Binding("escape", "answer", show=False)]
+
+    def __init__(self, prompt: str):
+        super().__init__()
+        self.prompt = prompt
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(self.prompt, classes="dialog-prompt")
+            with Horizontal(classes="buttons"):
+                yield Button(Text("[C]ompact first"), variant="success", id="compact")
+                yield Button(Text("[R]elaunch now"), variant="error", id="now")
+                yield Button(Text("Cancel [Esc]"), id="cancel")
+
+    def on_mount(self) -> None:
+        self.set_focus(self.query_one("#cancel", Button))   # a reflex Enter must not relaunch
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        self.action_answer(None if event.button.id == "cancel" else event.button.id)
+
+
 class TutorialOffer(Dialog):
     """The first-run offer, one line: Enter takes the tutorial, Esc dismisses it for good."""
     BINDINGS = [Binding("enter", "answer(True)", show=False), Binding("escape", "answer(False)", show=False)]
@@ -2375,13 +2400,22 @@ class WheelhouseApp(App):
             return
         s = self.row(sid)
         if sid in self.relaunching:
-            self.notify("already relaunching: waiting for its host to stop", severity="warning")
+            self.notify("already relaunching: " + ("compacting first" if sid in self.hub.compacting
+                                                   else "waiting for its host to stop"), severity="warning")
         elif self.statuses.get(sid) == "dead":
             self.offer_relaunch(sid)
         elif runner(s) != "sdk" or s["shell"]:
             self.notify(TAB_RELAUNCH, severity="warning")
         elif self.statuses.get(sid) == "starting":
             self.notify("it's still starting: Relaunch once it's running", severity="warning")
+        elif self.hub.compact_first(sid):
+            host = (s["claude_pid"], s["claude_start"])
+            self.push_screen(RelaunchChoice(
+                f"Relaunch {self.label(sid)}? Its context is {s['context_tokens'] // 1000}k tokens, which a "
+                "restart writes to the prompt cache again whole. Compact first: it's asked what to keep, "
+                "compacted with that, then relaunched. Or relaunch now: its host stops, interrupting any "
+                "turn under way, and starts again on the same conversation."),
+                lambda how: how and self.stop_host(sid, host, compact=how == "compact"))
         else:
             host = (s["claude_pid"], s["claude_start"])
             self.push_screen(Confirm(f"Relaunch {self.label(sid)}? Its host stops, interrupting any turn "
@@ -2389,10 +2423,12 @@ class WheelhouseApp(App):
                              lambda yes: yes and self.stop_host(sid, host))
 
     @session_action
-    def stop_host(self, sid: str, host: tuple) -> None:
+    def stop_host(self, sid: str, host: tuple, compact: bool = False) -> None:
         """Stop the session's host, if it is still the one the confirm was about: the hub
-        starts it again once it has gone (hub.Hub.stop_host)."""
-        if self.told(self.hub.stop_host(sid, host)).ok:
+        starts it again once it has gone (hub.Hub.stop_host). Compacting first, the hub
+        stops it once the session is compacted (hub.Hub.compact_then_relaunch)."""
+        stop = self.hub.compact_then_relaunch if compact else self.hub.stop_host
+        if self.told(stop(sid, host)).ok:
             self.refresh_data()
 
     async def action_quit(self) -> None:

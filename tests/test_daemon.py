@@ -12,7 +12,7 @@ import httpx2
 import pytest
 from sse_starlette.sse import AppStatus
 
-from claude_wheelhouse import daemon as daemon_mod, launch, liveness, store as store_mod, transcript
+from claude_wheelhouse import daemon as daemon_mod, hub as hub_mod, launch, liveness, store as store_mod, transcript
 from claude_wheelhouse.daemon import AlreadyRunning, Daemon, Feed, checked_address, hosts, take_lock
 from claude_wheelhouse.hub import Event
 from claude_wheelhouse.store import SessionGone, Store
@@ -704,3 +704,21 @@ async def test_a_hosted_sessions_model_and_effort_are_set_and_served(daemon, sto
     row = next(s for s in (await call(daemon, "GET", "/sessions")).json() if s["id"] == sid)
     assert (row["model"], row["effort"]) == ("claude-opus-5-5", "max")
     assert {"applied_model", "applied_effort", "running_model", "running_effort"} <= row.keys()
+
+
+@pytest.mark.parametrize("body, command, said, desc", [
+    ({"host": [4242, 1], "compact": True}, "compact", "compacting first", "compact first: the host is asked to Compact"),
+    ({"host": [4242, 1]}, None, "stopping its host", "without: its host is stopped now"),
+])
+async def test_relaunch_can_compact_first(daemon, store, sid, monkeypatch, body, command, said, desc):
+    store.set_runner(sid, "sdk")
+    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b', context_tokens = 200000")
+    monkeypatch.setattr(liveness, "is_alive", lambda *a: True)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    monkeypatch.setattr(hub_mod.os, "kill", lambda *a: None)
+    daemon.tick()
+    shown = await call(daemon, "GET", "/sessions")
+    assert shown.json()[0]["compact_first"] is True, f"{desc}: the client is told to offer it"
+    r = await call(daemon, "POST", f"/sessions/{sid}/relaunch", body)
+    assert r.status_code == 200 and any(said in t for t in told(r)), f"{desc}: {r.text}"
+    assert store.session(sid)["host_command"] == command, desc

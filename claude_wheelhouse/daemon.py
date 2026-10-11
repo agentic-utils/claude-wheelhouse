@@ -455,6 +455,7 @@ class Daemon:
         return {**dict(s), "status": self.hub.shown_status(sid), "mode": mode(s), "busy": self.hub.busy(sid),
                 "running_model": running and running.model, "running_effort": running and running.effort,
                 "stale": self.hub.stale(sid), "sends_now": self.hub.sends_now(sid),
+                "compact_first": self.hub.compact_first(sid),
                 "context": {"tokens": snap.context, "window": snap.window, "estimate": snap.estimate}
                 if snap and snap.context else None}
 
@@ -545,7 +546,8 @@ class Daemon:
 
     def session_command(self, request: Request, body: dict) -> Done:
         """Relaunch with the host a client was shown, (pid, start time), stops that host and
-        starts it again; without, it brings back a dead session. Park and End say how (HOW):
+        starts it again, with `compact` true once the session is compacted (the offer
+        compact_first says to make); without, it brings back a dead session. Park and End say how (HOW):
         ask a running session, act now on a dead one, cancel the request, or force it."""
         hub, sid, action = self.hub, request.path_params["sid"], request.path_params["action"]
         if action in ("park", "end"):
@@ -559,6 +561,8 @@ class Daemon:
                 return hub.relaunch(sid)
             if not (isinstance(host, list) and len(host) == 2 and all(isinstance(n, int) for n in host)):
                 raise Refused(400, "host must be [pid, start time]")
+            if body.get("compact"):
+                return hub.compact_then_relaunch(sid, tuple(host))
             return hub.stop_host(sid, tuple(host))
         if action == "mode":
             want = text(body, "mode", False)
