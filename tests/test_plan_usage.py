@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from claude_wheelhouse import host, plan_usage
+from claude_wheelhouse import features, host, plan_usage
 from claude_wheelhouse.hub import Hub
 
 REAL_POLL = plan_usage.AccountUsage.poll   # before conftest stubs it
@@ -163,13 +163,16 @@ def test_the_hub_takes_an_sdk_sessions_newer_reading(store, sdk_on):
     assert hub.usage.limits["session"][0] == 30.0, "an older reading doesn't"
 
 
-def test_with_sdk_mode_off_no_sdk_reading_is_kept_or_taken(store):
-    hub = Hub(store)
+def test_a_host_keeps_its_reading_but_the_hub_takes_none_with_sdk_mode_off(store, tmp_path, monkeypatch):
+    """A host runs without --enable-sdk, in the session's directory, where no .env says SDK
+    mode: it keeps the reading whatever its own mode; the hub's mode decides (review 2)."""
+    monkeypatch.chdir(tmp_path)   # no .env here, nor (conftest's sdk_off) in the config
+    assert not features.sdk_enabled()
     host.Host.rate_limited(SimpleNamespace(store=store), {"unifiedWindows": {"five_hour": {"utilization": 0.3}}})
-    assert store.setting(plan_usage.SDK_SETTING) is None, "the host keeps none"
-    store.set_setting(plan_usage.SDK_SETTING, json.dumps({"at": time.time(), "limits": {"session": [30.0, None]}}))
+    assert json.loads(store.setting(plan_usage.SDK_SETTING))["limits"] == {"session": [30.0, None]}, "kept"
+    hub = Hub(store)
     hub.fetch_usage()
-    assert hub.usage.limits == {}, "the hub takes none, even one already stored"
+    assert hub.usage.limits == {}, "the hub out of SDK mode takes none"
 
 
 def test_an_unreadable_sdk_reading_is_said_not_raised(store, capsys, sdk_on):

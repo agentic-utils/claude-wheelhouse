@@ -123,8 +123,8 @@ def from_rate_limit(raw) -> dict[str, tuple[float, float | None]]:
     stream, not from documentation: if the gauges read 100 times too low or high, check here.
 
     EXPERIMENTAL (features.py): SDK mode is not for use by anyone other than the author until
-    Anthropic's terms are confirmed. Neither the host
-    keeps nor the hub takes a reading with SDK mode off."""
+    Anthropic's terms are confirmed. With SDK mode off
+    the hub takes no reading (Hub.take_sdk_usage), whatever a host has kept."""
     out = {}
     windows = raw.get("unifiedWindows") if isinstance(raw, dict) else None
     for name, kind in WINDOWS.items():

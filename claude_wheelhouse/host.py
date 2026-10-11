@@ -701,11 +701,11 @@ class Host:
 
     def rate_limited(self, raw) -> None:
         """Claude Code's plan usage, as this session's stream says it: kept in the store,
-        where the hub takes it as its newest reading (plan_usage.SDK_SETTING). Not with SDK
-        mode off: EXPERIMENTAL (features.py): SDK mode is not for use by anyone other than the author until
-        Anthropic's terms are confirmed."""
-        if not features.sdk_enabled():
-            return
+        where the hub takes it as its newest reading (plan_usage.SDK_SETTING), in SDK mode
+        alone (Hub.take_sdk_usage). Kept whatever this process's own mode: a host is started
+        without --enable-sdk, in the session's directory, so it never sees the app's .env.
+        EXPERIMENTAL (features.py): SDK mode is not for use by anyone other than the author
+        until Anthropic's terms are confirmed."""
         limits = plan_usage.from_rate_limit(raw)
         if limits:
             self.store.set_setting(plan_usage.SDK_SETTING, json.dumps({"at": time.time(), "limits": limits}))
