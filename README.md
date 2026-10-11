@@ -179,8 +179,8 @@ session.
   The highlighted session is the current one: highlighting an item moves the list's
   highlight to the item's session, and moving the list's highlight follows that session.
   The buttons under the description act on it, and only those that apply show, each with
-  a tooltip saying what it does: its lifecycle (Rename, Relaunch and Park on a running
-  session, Restore on a dead one, Unpark on a parked one, End on either), then its
+  a tooltip saying what it does: its lifecycle (Rename and Relaunch on a running
+  session, Restore on a dead one, Park (Unpark on a parked one) and End on either), then its
   conversation (Mode, and Send on one that isn't dead). New (`N`), Adopt (`A`, a list of the sessions on disk you can adopt) and
   Restore all (`Shift+S`) act on no one session, so they're keys in the footer. Ctrl+S, Ctrl+T and the
   hint under the answer box act on or describe the same session.
@@ -201,7 +201,8 @@ session.
   post the questions and tasks it already had open. Park
   drops a session's items off the inbox until you unpark or restore it. End deletes its wheelhouse data. On a running
   session, Park and End only ask the session to do it (press again to cancel or force);
-  the wheelhouse never deletes anything by itself.
+  on a dead one they act at once, without resuming it. The wheelhouse never deletes
+  anything by itself.
   The buttons stay out of the Tab order, and each has a key: with the list focused, `R` renames, `L` relaunches,
   `S` restores, `Shift+S` restores all, `P` parks or unparks and `E` ends; the rest are under Keys below.
 - **Adopt.** Brings a session the wheelhouse didn't launch into the wheelhouse: pick it

@@ -1433,8 +1433,8 @@ SDK_WHOSE = (", Model on one run in the wheelhouse; then Mode, Send on one that 
 HOSTED_WHOSE = ("; then Mode, Send on one that isn't dead, and on one run in the wheelhouse Interrupt, Compact "
                 "and Shell.")   # SDK mode off, with a host's session in context (SDK_WHOSE without Model or the slider)
 WHOSE = ("The buttons under the session list act on the session highlighted there, and only those that "
-         "apply show: Rename, Relaunch and Park on a running one, Restore on a dead one, End on either, "
-         "Unpark on a parked one{sdk} Hover over one for what it does, and its key is in brackets below. New, Adopt and Restore all are keys in the footer. An item "
+         "apply show: Rename and Relaunch on a running one, Restore on a dead one, Park (Unpark on a "
+         "parked one) and End on either{sdk} Hover over one for what it does, and its key is in brackets below. New, Adopt and Restore all are keys in the footer. An item "
          "opened full screen has Mode, Send and the rest in its bar, for its own session. Ctrl+S and Ctrl+T "
          "act on the same session: highlighting an item highlights its session there.")
 
@@ -2271,8 +2271,9 @@ class WheelhouseApp(App):
 
     def lifecycle_buttons(self, s) -> list[tuple[str, str, bool, bool]]:
         """A session's lifecycle buttons (LIFECYCLE), as show_button takes them, each shown
-        only where it applies (#62, D26): Rename, Relaunch and Park on a live session,
-        Restore on a dead one, Unpark on a parked one live or dead, End on either, and Model
+        only where it applies (#62, D26): Rename and Relaunch on a live session, Restore on
+        a dead one, Park or Unpark and End on either (parking a dead one is only its flag, so
+        nothing needs it running), and Model
         on one running in a wheelhouse host (Q52: never a tab's) while SDK mode is on: out of
         it, a host's session runs on as it was set (features.py)."""
         dead = s is not None and self.statuses.get(s["id"]) == "dead"
@@ -2281,7 +2282,7 @@ class WheelhouseApp(App):
         hosted = live and runner(s) == "sdk" and self.running(s["id"]) and not s["shell"]
         return [("rename", "Rename", False, live), ("relaunch", "Relaunch", False, live),
                 ("restore", "Restore", False, dead),
-                ("park", "Unpark" if parked else "Park", False, live or parked), ("end", "End", False, s is not None),
+                ("park", "Unpark" if parked else "Park", False, s is not None), ("end", "End", False, s is not None),
                 ("model", "Model", False, hosted and self.client.sdk)]
 
     def controls(self, s) -> list[tuple[str, str, bool, bool]]:

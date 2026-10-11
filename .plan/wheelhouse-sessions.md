@@ -422,11 +422,11 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
   The session list, every session with parked ones dimmed at the foot; under it a
   description of the current session (status, runner, mode, ticket, directory,
   open-question, running, unseen-decision and queued counts, activity, synopsis or brief);
-  under that its buttons, only those that apply (#62, D26): Rename, Relaunch and Park on
-  a live session; Restore on a dead one, parked or not (unparks only once the launch goes
-  through); Unpark on a parked one, live or dead; End on either. Park and End follow the
-  lifecycle rules above (a dead session is no longer parked from here: End it, or Restore
-  it and park it). Under those the conversation buttons moved from the send bar (#59):
+  under that its buttons, only those that apply (#62, D26): Rename and Relaunch on a live
+  session; Restore on a dead one, parked or not (unparks only once the launch goes
+  through); Park, or Unpark on a parked one, and End on either, live or dead. Park and End
+  follow the lifecycle rules above: on a dead session they act at once, as parking is only
+  the flag and needs nothing from the session, so it is never resumed to be parked. Under those the conversation buttons moved from the send bar (#59):
   Mode (across two columns, for "Can't queue: relaunch") and Send (n) on any session,
   Interrupt, Compact and Shell while it runs in the wheelhouse. Three to a row with a
   blank row between rows, all 30% grey (#4d4d4d) with white text, lighter under the

@@ -43,15 +43,21 @@ async def press(app, pilot, button, *keys):
     ("#end", "live", 1, True, 1, True, False, "a parked flag doesn't make a running session deletable (round-3 #1)"),
     ("#end", "dead", 1, False, None, None, None, "a dead parked session is deleted"),
     ("#park", "live", 0, True, 0, False, True, "Park on a running session only asks it to park"),
+    ("#park", "stalled", 0, True, 0, False, True, "so does Park on a quiet one"),
+    ("#park", "dead", 0, True, 1, False, False, "Park on a dead session parks it at once, asking it nothing"),
 ])
 async def test_buttons_ask_running_sessions_and_act_on_dead_ones(
         store, sid, monkeypatch, button, state, parked, kept, want_parked, end_flag, park_flag, desc):
     store.set_parked(sid, bool(parked))
     fake_status(monkeypatch, state)
+    launched = []
+    for name in ("open_tab", "open_session", "restore_session"):
+        monkeypatch.setattr(launch, name, lambda *a, name=name, **kw: launched.append(name))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         prompts = await press(app, pilot, button, "y")
     assert "demo" in prompts[0], "the confirm names the session"
+    assert launched == [], f"{desc}: nothing launched"
     s = store.session(sid)
     assert (s is not None) == kept, desc
     if kept:
@@ -141,6 +147,31 @@ async def test_restore_goes_by_liveness_not_the_parked_flag(store, sid, monkeypa
     assert bool(calls) == launched, desc
     if launched:
         assert store.session(sid)["parked"] == 0, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("then, launched, parked, desc", [
+    (None, [], 1, "a dead session parked from its button is parked, nothing launched"),
+    ("#park", [], 0, "and Unpark, there in Park's place, unparks it"),
+    ("#restore", ["restore"], 0, "and Restore brings it back where it left off, unparked"),
+])
+async def test_a_dead_session_parks_then_comes_back(store, sid, monkeypatch, then, launched, parked, desc):
+    fake_status(monkeypatch, "dead")
+    calls = []
+    for name in ("open_tab", "open_session", "restore_session"):
+        monkeypatch.setattr(launch, name, lambda *a, name=name, **kw: calls.append(name.split("_")[0]))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await press(app, pilot, "#park", "y")
+        assert store.session(sid)["parked"] == 1, f"{desc}: parked"
+        assert str(app.query_one("#park").label) == "Unpark" and app.query_one("#restore").display, \
+            f"{desc}: Unpark and Restore show"
+        if then:
+            await press(app, pilot, then)
+    s = store.session(sid)
+    assert (calls, s["parked"]) == (launched, parked), desc
+    assert (s["park_requested_at"], store.pending(sid)) == (None, []), f"{desc}: the session was asked nothing"
 
 
 @pytest.mark.anyio

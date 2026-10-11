@@ -364,7 +364,7 @@ async def refresh(pilot, sid: str) -> None:
 
 @pytest.fixture
 def live(monkeypatch):
-    """Every session running: Rename, Relaunch and Park show only on a live one (#62)."""
+    """Every session running: Rename and Relaunch show only on a live one (#62)."""
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
 
@@ -3907,9 +3907,9 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
      "a running hosted session, parked and too old to queue: the longest captions"),
     ("live", False, ["rename", "relaunch", "park", "end", "model", "mode", "send", "interrupt", "compact", "shell"],
      "a running one: no Restore"),
-    ("dead", False, ["restore", "end", "mode"],
-     "a dead one: Restore and End, nothing to interrupt, and no Send: it can't receive (D30)"),
-    ("dead", True, ["restore", "park", "end", "mode"], "a parked dead one: Unpark too"),
+    ("dead", False, ["restore", "park", "end", "mode"],
+     "a dead one: Restore, Park and End, nothing to interrupt, and no Send: it can't receive (D30)"),
+    ("dead", True, ["restore", "park", "end", "mode"], "a parked dead one: Unpark in Park's place"),
     ("stalled", False, ["rename", "relaunch", "park", "end", "model", "mode", "send", "interrupt", "compact", "shell"],
      "a stalled one still takes what's sent"),
 ])
@@ -4231,6 +4231,7 @@ async def test_tab_goes_from_the_session_list_to_the_items(store, sid):
     ("l", "relaunch", True, "L relaunches"),
     ("s", "restore", False, "S restores"),
     ("p", "park", True, "P parks"),
+    ("p", "park", False, "P parks a dead one too"),
     ("e", "end", True, "E ends"),
 ])
 async def test_the_session_lists_keys_press_its_buttons(store, sid, monkeypatch, key, button, live, desc):
