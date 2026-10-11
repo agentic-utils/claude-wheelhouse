@@ -149,7 +149,9 @@ was before 2c, its hub in process: the way back, at once.
     replaced or restored): the daemon keeps the token it read as it started, so the app
     says what is wrong with the file, names the daemon's pid and says to stop it, at once,
     without waiting; `claude-wheelhouse token` says the same, and checks the file's token
-    against the daemon's `/hello`, so it never prints one the daemon refuses. Under a
+    against the daemon's `/hello`, so it never prints one the daemon refuses. Nor does it
+    print one from a file other users can read or write: it says to `chmod 600` it, on
+    stderr, and exits non-zero, as the daemon refuses that file at start. Under a
     running app, a token refused is said as that, not as the daemon unreachable, and the
     token file is read again whenever the stream reconnects, so stopping and starting the
     daemon is enough: refused is said only if the file's token is the one refused. A daemon

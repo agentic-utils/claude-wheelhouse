@@ -178,6 +178,19 @@ def test_the_token_command_prints_the_one_the_daemon_made(db_file):
     assert run().stdout.strip() == token, "the same each time: no rotation"
 
 
+@pytest.mark.parametrize("mode, desc", [
+    (0o644, "anyone may read it"),
+    (0o640, "the group may"),
+])
+def test_the_token_command_wont_print_a_token_others_can_read(db_file, mode, desc):
+    env = dict(os.environ, PYTHONPATH=str(fingerprint.PACKAGE.parent))
+    token, _ = auth.ensure(db_file.parent)
+    auth.path(db_file.parent).chmod(mode)
+    run = subprocess.run([sys.executable, "-m", "claude_wheelhouse", "token"], env=env, capture_output=True, text=True)
+    assert run.returncode != 0 and token not in run.stdout + run.stderr, f"{desc}: {run}"
+    assert f"chmod 600 {auth.path(db_file.parent)}" in run.stderr, f"{desc}: {run.stderr}"
+
+
 def test_a_daemon_that_refuses_the_token_says_so(state):
     state_dir, port = state
     url, token, _ = connect.local(state_dir, port)

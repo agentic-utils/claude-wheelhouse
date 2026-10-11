@@ -110,7 +110,10 @@ def main() -> None:
         from .connect import NoDaemon, check
         from .store import db_path
         try:   # what the running daemon takes, said as the app says it when it doesn't
-            print(check(db_path().parent))
+            token = check(db_path().parent)
+            if exposed := auth.exposed(auth.path(db_path().parent)):   # as the daemon refuses it at start
+                sys.exit(f"claude-wheelhouse: {exposed}")
+            print(token)
         except NoDaemon as e:
             sys.exit(f"claude-wheelhouse: {e}")
         except auth.TokenError as e:
