@@ -474,3 +474,16 @@ async def test_every_hint_names_the_command_that_works(store, tmp_path, monkeypa
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         assert f"\n{said} starts it afresh" in app._checklist_text, f"checklist: {desc}"
+
+
+@pytest.mark.parametrize("how", ["restore", "open"])
+def test_a_relaunched_tab_that_never_starts_says_so(store, tut, monkeypatch, how):
+    """Review 68: a restored tutorial whose tab fails to start once carried the last
+    launch's pid, so its checklist said its tab had closed. A launch forgets it."""
+    store.register(tut, 4242, 1, "an-old-boot")   # the last launch's Claude Code, gone
+    assert tutorial.stopped(store.session(tut)) == "stopped: its tab has closed"
+    opened = []
+    monkeypatch.setattr(launch.subprocess, "Popen", lambda argv, **k: opened.append(argv))   # no real tab
+    (launch.restore_session if how == "restore" else launch.open_session)(store, tut)
+    assert opened, how
+    assert tutorial.stopped(store.session(tut)).startswith("stopped: its tab didn't start Claude Code"), how

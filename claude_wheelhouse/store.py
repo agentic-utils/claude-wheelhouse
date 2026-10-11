@@ -541,9 +541,12 @@ class Store:
             db.execute("UPDATE sessions SET synopsis = ? WHERE id = ?", (text.strip(), sid))
 
     def mark_launched(self, sid: str) -> None:
-        """A (re)launch also drops any request left over from the last run."""
+        """A (re)launch also drops any request left over from the last run, and the last run's
+        process: launches check first that it isn't running (launch.check_free), and until
+        this one registers, nothing is (tutorial.stopped: a tab that never started)."""
         with self.tx() as db:
-            db.execute("""UPDATE sessions SET launched_at = ?, end_requested_at = NULL,
+            db.execute("""UPDATE sessions SET launched_at = ?, claude_pid = NULL, claude_start = NULL,
+                          end_requested_at = NULL,
                           park_requested_at = NULL, end_told_at = NULL, park_told_at = NULL
                           WHERE id = ?""", (now(), sid))
 
