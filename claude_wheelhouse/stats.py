@@ -91,9 +91,25 @@ class Setting:
 
 
 # what Claude Code 2.1 writes as a local command's output when it takes the change: a
-# model by its display name (Opus 5.5 (1M context), Opus 5.5 (default)), an effort level
-SET_MODEL = re.compile(r"Set model to `([^`(]+?)\s*(?:\([^`]*\))?`")
+# model as it was named (table_model), an effort level
+SET_MODEL = re.compile(r"Set model to `([^`]+)`")
 SET_EFFORT = re.compile(r"Set effort level to (\w+)")
+NAMED = re.compile(r"(.*?)\s*(?:\((.*)\))?")   # a model named, then anything in brackets
+
+
+def table_model(named: str) -> str | None:
+    """A model as Claude Code 2.1 names one it set, as the table's pinned id: by display
+    name (Haiku 5.5, Opus 5.5 (1M context), Opus 5.5 (default), Sonnet 5.5[1m]), by id
+    (claude-sonnet-5-5, claude-opus-5-5[1m]), or by an alias with its id in brackets (haiku
+    (claude-haiku-5-5)). None for one off the table."""
+    m = NAMED.fullmatch(named.strip())
+    for part in (m[1], m[2]) if m else ():
+        part = (part or "").strip()
+        if (pinned := models.pinned(part)) in models.BY_ID:
+            return pinned
+        if found := next((x.id for x in models.MODELS if x.name == part.split("[")[0]), None):
+            return found
+    return None
 
 
 STDOUT = "<local-command-stdout>"   # how a local command's output starts
@@ -124,7 +140,7 @@ def setting(rec: dict, at: float) -> Setting | None:
     else:
         return None
     if command == "model" and (m := SET_MODEL.search(text)):
-        model = next((x.id for x in models.MODELS if x.name == m[1]), None)
+        model = table_model(m[1])
         return Setting(at, model=model) if model else None
     if command == "effort" and (m := SET_EFFORT.search(text)) and m[1] in models.EFFORTS:
         return Setting(at, effort=m[1])
@@ -313,10 +329,33 @@ def window_start(f, size: int, cutoff: float) -> int:
     return 0
 
 
-def before(f, end: int) -> tuple[list[Compaction], list[Setting]]:
+def last_prompt(f, end: int) -> float | None:
+    """When the last main-thread prompt (is_prompt) in the first `end` bytes was typed,
+    scanning back from there: where the turn under way at `end` began."""
+    pos, carry = end, b""
+    while pos > 0:
+        step = min(CHUNK, pos)
+        pos -= step
+        f.seek(pos)
+        lines = (f.read(step) + carry).split(b"\n")
+        carry = lines.pop(0) if pos > 0 else b""   # cut by the chunk boundary: finished with the next chunk
+        for line in reversed(lines):
+            if not (b'"turnPosition"' in line or (USER.search(line) and b"tool_result" not in line)):
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and is_prompt(rec) and (at := epoch(rec.get("timestamp", ""))) is not None:
+                return at
+    return None
+
+
+def before(f, end: int) -> tuple[list[Compaction], list[Setting], float | None]:
     """The compactions, and each /model and /effort Claude Code took (setting), in the first
     `end` bytes, found without parsing the rest: a tab's /model then /exit long before the
-    wheelhouse opened is carried as surely as one typed in the span."""
+    wheelhouse opened is carried as surely as one typed in the span. And when the last
+    prompt among them was typed (last_prompt): a turn begun before the span began then."""
     compactions, settings, pos, carry = [], [], 0, b""
     f.seek(0)
     while pos < end:
@@ -331,7 +370,7 @@ def before(f, end: int) -> tuple[list[Compaction], list[Setting]]:
                 i = buf.find(marker, buf.find(b"\n", i) + 1, cut)
         for a in sorted(starts):
             compactions += parse([buf[a:buf.find(b"\n", a)]], set(), True, settings)[1]
-    return compactions, [x for x in settings if x.model or x.effort]
+    return compactions, [x for x in settings if x.model or x.effort], last_prompt(f, end)
 
 
 class UsageFollower:
@@ -398,7 +437,9 @@ class UsageFollower:
             with open(path, "rb") as f:
                 if path == self.main and offset == 0:
                     offset = window_start(f, st.st_size, now - SPAN)
-                    early, typed = before(f, offset)
+                    early, typed, prompt = before(f, offset)
+                    if prompt is not None:   # the turn under way at the span began then, not at its first response read
+                        snap.begun = max(snap.begun or prompt, prompt)
                     early = [dataclasses.replace(c, after=0) for c in early]
                     snap.compactions += early
                     snap.peak = max([snap.peak, *(c.pre for c in early)])

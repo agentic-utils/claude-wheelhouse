@@ -4,6 +4,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime, timezone
 
 import pytest
 from rich.style import Style
@@ -637,8 +638,22 @@ def picked(out, ago=30, **over):
      "the system record still counts"),
     ([command("effort", "medium", "Set effort level to medium (this session only): Balanced approach")],
      {"effort": "medium"}, "an /effort's system record too"),
+    (picked("Set model to `claude-sonnet-5-5`"), {"model": "claude-sonnet-5-5"}, "/model given an id"),
+    (picked("Set model to `claude-opus-5-5[1m]`"), {"model": "claude-opus-5-5"}, "an id with its window"),
+    (picked("Set model to `haiku (claude-haiku-5-5)`"), {"model": "claude-haiku-5-5"},
+     "an alias, with its id in brackets"),
+    (picked("Set model to `sonnet (claude-sonnet-5-5[1m])`"), {"model": "claude-sonnet-5-5"},
+     "an alias, with its id and window in brackets"),
+    (picked("Set model to `Sonnet 5.5[1m]`"), {"model": "claude-sonnet-5-5"}, "a display name with its window"),
+    (picked("Set model to `Fable 5.1`"), {"model": "claude-fable-5-1"}, "Fable, by its display name"),
+    ([command("model", "claude-sonnet-5-5", "Set model to `claude-sonnet-5-5` for this session only")],
+     {"model": "claude-sonnet-5-5"}, "an id in the system record"),
     (picked("Set model to `Haiku 5.5`", isSidechain=True), {}, "a subagent's: not the session's"),
     (picked("Set model to `Sonnet 1`"), {}, "a model off the table: nothing"),
+    (picked("Set model to `Sonnet 5`"), {}, "an older model's display name: nothing"),
+    (picked("Set model to `claude-haiku-4-5`"), {}, "an id off the table: nothing"),
+    (picked("Set model to `opus (claude-opus-4-1)`"), {}, "an alias for an id off the table: nothing"),
+    (picked("Set model to `auto`"), {}, "auto: nothing"),
     ([{"type": "user", "timestamp": at(30), "message": {"role": "user", "content":
        "why does it say <local-command-stdout>Set model to `Haiku 5.5`</local-command-stdout>?"}}], {},
      "a prompt quoting one: nothing"),
@@ -666,6 +681,29 @@ def test_what_was_typed_before_the_span_counts(tmp_path):
     follower.read(NOW)
     assert follower.files[follower.main][0] > 0 and len(follower.snap.turns) == 1, "the read began at the span"
     assert stats.latest(follower.snap, "model", turns=False) == (NOW - 4 * 3600, "claude-haiku-5-5")
+
+
+def prompt(text, ago):
+    return {"type": "user", "timestamp": at(ago), "message": {"role": "user", "content": text}}
+
+
+def test_a_turn_begun_before_the_span_is_dated_by_its_prompt(store, tmp_path):
+    """Round 66, bug 2: a /model typed mid-turn before the span beats that turn's model,
+    though the hub's first read starts at the turn's next response, in the span."""
+    sid = store.create_session(str(tmp_path), runner="tab", model="claude-opus-5-5", effort="high")
+    store.db.execute("UPDATE sessions SET model_chosen_at = ? WHERE id = ?",
+                     (datetime.fromtimestamp(NOW - 10_000, timezone.utc).isoformat(), sid))
+    recs = [prompt("go", 9000), response("m1", ago=8900, read=5),
+            command("model", "haiku", "Set model to `Haiku 5.5` for this session only", ago=8000),
+            response("m2", ago=600, read=5)]
+    (tmp_path / "p").mkdir()
+    (tmp_path / "p" / f"{sid}.jsonl").write_bytes(b"\n".join(lines(*recs)) + b"\n")
+    follower = stats.UsageFollower(sid, tmp_path)
+    follower.read(NOW)
+    assert len(follower.snap.turns) == 1, "the read began at the span"
+    assert follower.snap.begun == NOW - 9000, "the turn under way began at its prompt"
+    stats.carry(store, sid, follower.snap)
+    assert store.session(sid)["model"] == "claude-haiku-5-5"
 
 
 @pytest.mark.parametrize("setting, effort, room, expected, desc", [
