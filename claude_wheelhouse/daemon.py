@@ -107,10 +107,16 @@ def checked_address(address: str) -> str:
 def hosts(address: str, port: int, names=()) -> set[str]:
     """The Host headers that name the daemon: its address and port, localhost too when it's
     on the loopback, and any other names it's reached by (a VPN's name for the machine).
-"""
+    In lower case: a host name is compared without regard to case (named)."""
     ip = ipaddress.ip_address(address)
     shown = f"[{address}]" if ip.version == 6 else address
-    return {f"{h}:{port}" for h in (shown, *names, *(["localhost"] if ip.is_loopback else []))}
+    return {f"{h}:{port}".lower() for h in (shown, *names, *(["localhost"] if ip.is_loopback else []))}
+
+
+def named(request: Request) -> str:
+    """The Host a request names, in lower case: DNS names are case-insensitive, so
+    LOCALHOST:7428 names the daemon as localhost:7428 does."""
+    return (request.headers.get("host") or "").lower()
 
 
 def take_lock(state_dir):
@@ -432,7 +438,7 @@ class Daemon:
     def check_host(self, request: Request) -> None:
         """Every request, before anything else: it names the daemon (D47), so a page rebound
         by DNS learns nothing, then it carries the token (a 401 if not)."""
-        if request.headers.get("host") not in self.allowed:
+        if named(request) not in self.allowed:
             raise Refused(421, "this daemon isn't reached by that name")
         if not auth.matches(request.headers.get("authorization"), self.token):
             raise Refused(401, "this daemon needs its token: claude-wheelhouse token prints it",
@@ -458,7 +464,7 @@ class Daemon:
             try:
                 self.check_host(request)
                 origin = request.headers.get("origin")
-                if origin is not None and origin not in {f"http://{h}" for h in self.allowed}:
+                if origin is not None and origin.lower() not in {f"http://{h}" for h in self.allowed}:
                     raise Refused(403, "requests from another site's page are refused")
                 key = request.headers.get("idempotency-key")
                 if not key:

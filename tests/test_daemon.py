@@ -309,10 +309,12 @@ async def test_an_error_is_replayed_as_it_was(daemon, store, sid):
 @pytest.mark.parametrize("method, headers, status, desc", [
     ("GET", {}, 200, "a client naming the daemon"),
     ("GET", {"host": "localhost:7428"}, 200, "by localhost, as it's on the loopback"),
+    ("GET", {"host": "LocalHost:7428"}, 200, "a host name in any case"),
     ("GET", {"host": "evil.example:7428"}, 421, "a page rebound to the daemon's address can't read it"),
     ("POST", {"host": "evil.example:7428"}, 421, "nor drive it"),
     ("POST", {}, 200, "a client sends no Origin"),
     ("POST", {"origin": URL}, 200, "a page of the daemon's own"),
+    ("POST", {"origin": "http://LOCALHOST:7428"}, 200, "named in any case"),
     ("POST", {"origin": "http://evil.example"}, 403, "another site's page is refused"),
     ("POST", {"origin": "null"}, 403, "as is a page with no origin of its own"),
 ])
@@ -323,7 +325,7 @@ async def test_host_and_origin(daemon, sid, method, headers, status, desc):
 
 
 def test_a_name_given_is_accepted_as_a_host():
-    assert hosts("100.64.0.1", 7428, ["home"]) == {"100.64.0.1:7428", "home:7428"}
+    assert hosts("100.64.0.1", 7428, ["Home"]) == {"100.64.0.1:7428", "home:7428"}
     assert hosts("::1", 7428) == {"[::1]:7428", "localhost:7428"}
 
 
