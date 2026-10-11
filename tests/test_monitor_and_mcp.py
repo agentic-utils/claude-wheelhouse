@@ -287,3 +287,15 @@ def test_the_sessions_status_call_settles_an_awaiting_item(store, sid):
     store.send(sid, "postgres?", q)
     mcp_server.update_item(q, status="answered")
     assert (sid, q) not in store.awaiting() and store.item(sid, q)["status"] == "answered"
+
+
+@pytest.mark.parametrize("fields, named, desc", [
+    ({"alternative": "Postgres"}, "alternative", "a task with an older decision field: that field is named"),
+    ({"reverse": "undo it"}, "reverse", "the other"),
+    ({"why": "because"}, "why", "and why itself"),
+])
+def test_only_a_decision_takes_the_decision_fields(store, sid, fields, named, desc):
+    from claude_wheelhouse import mcp_server
+    mcp_server._store, mcp_server._sid = store, sid
+    with pytest.raises(Exception, match=f"{named}: only a decision"):
+        mcp_server.post_item("task", "x", **fields)

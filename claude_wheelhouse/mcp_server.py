@@ -52,6 +52,8 @@ def post_item(kind: str, title: str, body: str = "", status: str | None = None, 
     an older protocol's: they join why.)"""
     if kind == "permission":   # the host posts these from Claude Code's own permission check
         raise ValueError("kind must be task, question, agent or decision")
+    if kind != "decision":   # refused by name: only a decision takes these
+        return _store.post_item(_sid, kind, title, body, status, why=why, alternative=alternative, reverse=reverse)
     return _store.post_item(_sid, kind, title, body, status, why=one_why(why, alternative, reverse))
 
 
