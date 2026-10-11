@@ -6,8 +6,9 @@ itself, it says as events (Event) to whoever listens.
 It owns the sessions' liveness, and Relaunch, from the stop to the start again. Like the
 app before it, it never acts on a session by itself: a host that dies stays dead until
 the person restores it. And it reads the sessions' transcripts: each conversation, each
-context size and each session's subagents, and fetches the account's usage, the reading
-and fetching on the owner's worker threads (spawn), never on the thread that calls it.
+context size and each session's subagents, and asks the account's plan usage of a Claude
+Code it keeps in the background (plan_usage), the reading and asking on the owner's worker
+threads (spawn), never on the thread that calls it.
 
 Its commands are the person's acts on sessions and items: each checks what it needs,
 writes the store and returns what it did (Done), with what to say to the person, for the
@@ -15,6 +16,7 @@ surface that gave it alone. One on a session that has gone raises SessionGone (r
 a surface reports; the dialogs that ask first, and their wording, are the surface's."""
 
 import functools
+import json
 import os
 import signal
 import sqlite3
@@ -22,7 +24,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import adopt, api, features, launch, liveness, models, stats, subagents, transcript, tutorial
+from . import adopt, api, features, launch, liveness, models, plan_usage, stats, subagents, transcript, tutorial
 from .host import AWAITING_NOTES, NO_NOTES
 from .store import DISMISSABLE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
 
@@ -30,6 +32,7 @@ RUNNING = ("live", "stalled", "starting")
 # a hosted session's activity when nothing is under way: errored and stopped count as resting
 RESTING = ("idle", "interrupted", "stopped", "in a shell tab", "error")
 PENDING = {"end": "ending", "park": "parking"}
+SDK_USAGE_EVERY = 10   # seconds between looks for an SDK session's plan usage reading
 RELAUNCH_WAIT = 30   # seconds a host has to stop for Relaunch before it gives up and says so
 AGENTS_FOLLOWED = 2   # subagent conversations followed at once: the inbox's and a full screen's
 TAB_RELAUNCH = "a session in a tab relaunches once it has exited: /exit it there, then Relaunch"
@@ -164,7 +167,13 @@ class Hub:
         # of the hundreds a session can have (the inbox's and a full screen's), and none once
         # none is shown. Oldest asked first
         self.agent_followers: dict[tuple[str, str], transcript.AgentFollower] = {}
-        self.usage = stats.AccountUsage()   # the account's, for every surface: fetched once
+        # the account's plan usage, for every surface: asked of one Claude Code, every
+        # plan_usage.EVERY seconds, and taken from SDK sessions' readings in the store
+        self.usage = plan_usage.AccountUsage()
+        self.usage_probe = plan_usage.Probe(self.store.path.parent)
+        self.usage_due = 0.0       # when /usage is next asked
+        self.sdk_usage_due = 0.0   # when the SDK sessions' reading is next looked at
+        self.sdk_usage = None      # the last it took, as stored
 
     # events
 
@@ -787,12 +796,33 @@ class Hub:
             watcher.syncing = False
 
     def fetch_usage(self) -> None:
-        """The account's session and weekly usage, fetched on a worker thread when it's due
-        (at most once a minute, stats.AccountUsage). Fetched whether or not any surface
-        shows it (no stats pane, say): one call a minute, and a daemon serves it to clients
-        that come and go."""
-        if self.usage.due(time.time()):
-            self.spawn(self.usage.fetch, "usage")
+        """The account's plan usage: /usage asked on a worker thread when it's due, every
+        plan_usage.EVERY seconds, whether or not any surface shows it (a daemon serves it to
+        clients that come and go); and an SDK session's newer reading, which its host keeps
+        in the store, looked for every SDK_USAGE_EVERY seconds."""
+        now = time.time()
+        if now >= self.usage_due:
+            self.usage_due = now + plan_usage.EVERY   # claimed here, so one ask is in flight at a time
+            self.spawn(functools.partial(self.usage.poll, self.usage_probe), "usage")
+        if now >= self.sdk_usage_due:
+            self.sdk_usage_due = now + SDK_USAGE_EVERY
+            self.take_sdk_usage()
+
+    def take_sdk_usage(self) -> None:
+        """An SDK session's reading (plan_usage.SDK_SETTING), once each time it changes."""
+        stored = self.store.setting(plan_usage.SDK_SETTING)
+        if stored is None or stored == self.sdk_usage:
+            return
+        self.sdk_usage = stored
+        try:
+            reading = json.loads(stored)
+            self.usage.take({k: tuple(v) for k, v in reading["limits"].items()}, float(reading["at"]))
+        except (ValueError, TypeError, KeyError, AttributeError) as e:
+            plan_usage.say_once(f"an SDK session's reading couldn't be read: {e}")
+
+    def stop_usage(self) -> None:
+        """The Claude Code that answers /usage killed: the hub is stopping."""
+        self.usage_probe.stop()
 
     def sent(self, sid: str, msg_id: int) -> str | None:
         """The full text of a message the person sent, for one a notification cut short."""

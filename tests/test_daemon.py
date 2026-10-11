@@ -844,7 +844,7 @@ NEW_ROUTES = [
     ("GET", "/inbox", None, lambda store, sid, r: (sorted(i["ref"] for i in r.json()["items"]),
                                                    "body" in r.json()["items"][0], r.json()["tutorial"]["sid"])
      == (["P1", "T1"], False, None), "every item, without its body, and the tutorial's state"),
-    ("GET", "/usage", None, lambda store, sid, r: r.json() == {"limits": {}, "failed": False}, "the account's usage"),
+    ("GET", "/usage", None, lambda store, sid, r: r.json() == {"limits": {}, "read": {}, "failed": False}, "the account's usage"),
     ("POST", "/settings", {"key": "layout.x", "value": "0.5"}, lambda store, sid, r: store.setting("layout.x") == "0.5",
      "a splitter's size kept"),
     ("GET", "/settings", None, lambda store, sid, r: r.json() == {}, "the kept sizes"),

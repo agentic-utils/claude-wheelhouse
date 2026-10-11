@@ -1,18 +1,15 @@
-import http.server
 import json
 import os
 import re
-import threading
 import time
 from datetime import datetime, timezone
 
 import pytest
 from rich.style import Style
 
-from claude_wheelhouse import api, models, stats, transcript
+from claude_wheelhouse import api, models, plan_usage, stats, transcript
 from claude_wheelhouse.stats import Snapshot, Turn
 
-REAL_FETCH = stats.AccountUsage.fetch   # before conftest stubs it
 
 NOW = float(int(time.time()))   # near the files' real modification times
 
@@ -234,22 +231,10 @@ def test_model_names(model, name, desc):
 SOON = NOW + 2 * 3600
 
 
-@pytest.mark.parametrize("body, expected, desc", [
-    ({"limits": [{"kind": "session", "percent": 23, "resets_at": "2026-10-08T12:39:59.772001+00:00"},
-                 {"kind": "weekly_all", "percent": 5, "resets_at": "2026-10-14T23:59:59+00:00"}]},
-     {"session": 23.0, "weekly_all": 5.0}, "both limits, as the endpoint sends them"),
-    ({"limits": [{"kind": "session", "percent": 40}]}, {"session": 40.0}, "no reset time still shows the bar"),
-    ({"limits": [{"kind": "session"}, "junk", {"kind": "weekly_all", "percent": None}]}, {}, "malformed entries are skipped"),
-    ({}, {}, "no limits at all"),
-    (None, {}, "no body"),
-])
-def test_usage_limits_parse(body, expected, desc):
-    assert {k: pct for k, (pct, _) in stats.limits(body).items()} == expected, desc
-
-
-def usage(**pct) -> stats.AccountUsage:
-    u = stats.AccountUsage()
+def usage(ago=0, **pct) -> plan_usage.AccountUsage:
+    u = plan_usage.AccountUsage()
     u.limits = {kind: (p, SOON) for kind, p in pct.items()}
+    u.read = dict.fromkeys(pct, NOW - ago)
     return u
 
 
@@ -257,7 +242,9 @@ def usage(**pct) -> stats.AccountUsage:
     (None, usage(session=23, weekly_all=5), 50, ["session", "23%", "weekly", "5%", "resets"], "both bars at 50 columns"),
     (None, usage(session=23, weekly_all=5), 80, ["session", "23%", "weekly", "5%"], "both bars at 80 columns"),
     (None, usage(session=97), 50, ["97%"], "one limit only"),
-    (None, stats.AccountUsage(), 50, ["usage loading…"], "before the first fetch"),
+    (None, plan_usage.AccountUsage(), 50, ["usage loading…"], "before the first reading"),
+    (None, usage(session=23, weekly_all=5, weekly_fable=40), 50, ["fable", "40%"], "Fable's week once it's used"),
+    (None, usage(ago=12 * 60, session=23), 50, ["23%", "usage read 12m ago"], "a reading older than a poll says its age"),
     (snap(83_000, 600), usage(session=23), 50, ["context", "8%", "83k/1M", "session", "23%"], "a session's context too"),
 ])
 def test_gauges(view, u, width, expect, desc):
@@ -269,8 +256,16 @@ def test_gauges(view, u, width, expect, desc):
     assert len(set(bars)) <= 1, f"{desc}: the bars line up"
 
 
-def test_usage_unavailable_after_a_failed_fetch():
-    u = stats.AccountUsage()
+@pytest.mark.parametrize("u, unwanted, desc", [
+    (usage(session=23, weekly_all=5, weekly_fable=0), "fable", "Fable's week unused: no gauge"),
+    (usage(ago=60, session=23), "ago", "a reading newer than a poll: no age"),
+])
+def test_gauges_leave_out(u, unwanted, desc):
+    assert unwanted not in "\n".join(r.plain for r in stats.gauges(None, u, NOW, 50)), desc
+
+
+def test_usage_unavailable_after_a_failed_reading():
+    u = plan_usage.AccountUsage()
     u.failed = True
     assert [r.plain for r in stats.gauges(None, u, NOW, 50)] == ["usage unavailable"]
 
@@ -338,11 +333,6 @@ def test_usage_grade(pct, colour, flashing, desc):
     assert stats.usage_grade(pct) == (colour, flashing), desc
 
 
-def test_usage_is_fetched_at_most_once_a_minute():
-    u = stats.AccountUsage()
-    assert [u.due(NOW), u.due(NOW + 30), u.due(NOW + 61)] == [True, False, True]
-
-
 def test_a_synthetic_reply_leaves_the_cache_warm_as_it_was(tmp_path):
     follower = stats.UsageFollower("s")
     follower.take(*stats.parse(lines(response("m1", ago=3000, made=900), synthetic("m2", ago=10)), set(), main=True))
@@ -392,38 +382,6 @@ def test_finished_subagents_are_not_looked_at_again(tmp_path):
     write(new, response("n1", read=40_000))
     assert new in follower.paths(NOW), "a new subagent is found when the folder changes"
     assert old in follower.paths(NOW + stats.REGLOB), "and every file is looked at again now and then"
-
-
-class Redirect(http.server.BaseHTTPRequestHandler):
-    seen: list = []
-
-    def do_GET(self):
-        Redirect.seen.append((self.path, self.headers.get("Authorization")))
-        if self.path == "/usage":
-            self.send_response(302)
-            self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}/elsewhere")
-            self.end_headers()
-        else:
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b'{"limits": []}')
-
-    def log_message(self, *a):
-        pass
-
-
-def test_the_usage_token_never_follows_a_redirect(tmp_path, monkeypatch):
-    (tmp_path / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "secret"}}))
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
-    server = http.server.HTTPServer(("127.0.0.1", 0), Redirect)
-    threading.Thread(target=server.handle_request, daemon=True).start()
-    monkeypatch.setattr(stats, "USAGE_URL", f"http://127.0.0.1:{server.server_port}/usage")
-    Redirect.seen = []
-    u = stats.AccountUsage()
-    REAL_FETCH(u)
-    server.server_close()
-    assert u.failed, "a redirect is a failed fetch"
-    assert Redirect.seen == [("/usage", "Bearer secret")], "the token went to the endpoint only"
 
 
 @pytest.mark.parametrize("zone, desc", [

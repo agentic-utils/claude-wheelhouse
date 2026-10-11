@@ -21,7 +21,7 @@ import time
 import uuid
 from typing import Callable, NamedTuple
 
-from . import adopt, auth, features, stats, tutorial
+from . import adopt, auth, features, plan_usage, stats, tutorial
 from .hub import RUNNING, Done, Event, Hub, host_context, requested
 from .store import SessionGone
 
@@ -57,6 +57,10 @@ class LocalClient(Hub):
         self.read_contexts()
         self.watch_agents()
         self.fetch_usage()
+
+    def disconnect(self) -> None:
+        """The app is closing: the Claude Code answering /usage goes with it."""
+        self.stop_usage()
 
     def status(self, sid: str) -> str | None:
         return self.statuses.get(sid)
@@ -109,9 +113,6 @@ class LocalClient(Hub):
     def start(self, post=None) -> None:
         pass   # its work runs on the app's own workers (spawn, post)
 
-    def disconnect(self) -> None:
-        pass
-
 
 class Unreachable(RuntimeError):
     """The daemon can't be reached: nothing was sent (UNREACHABLE)."""
@@ -159,7 +160,7 @@ class RemoteClient:
         self.synchronous, self.before_fetch = synchronous, before_fetch
         self.transport = transport
         self.http = self.make_http(TIMEOUT)
-        self.usage = stats.AccountUsage()   # the stats pane's: its numbers come from the daemon's
+        self.usage = plan_usage.AccountUsage()   # the stats pane's: its numbers come from the daemon's
         self.listeners: list[Callable[[Event], None]] = []
         self.post: Callable[[Callable[[], None]], None] = lambda callback: callback()
         self.connected = True
@@ -395,6 +396,7 @@ class RemoteClient:
                 self.sdk_said = True   # this app asked for SDK mode, but joined a daemon running without it
                 self.post(lambda: self.emit(Event("notice", TAB_MODE_DAEMON, "warning")))
         elif kind == "usage":
+            self.usage.read = data.get("read") or {}   # an older daemon's has none: taken as fresh
             self.usage.limits = {k: tuple(v) for k, v in data["limits"].items()}
             self.usage.failed = data["failed"]
         else:

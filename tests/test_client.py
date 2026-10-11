@@ -252,14 +252,15 @@ def test_a_command_refused_for_its_token_is_said_as_the_stream_says_it(store, si
 
 def test_the_account_usage_comes_from_the_daemon(store, served, monkeypatch):
     d = served(store.path)
-    d.daemon.hub.usage.limits = {"five_hour": (12.0, 1700000000.0)}
+    d.daemon.hub.usage.take({"session": (12.0, 1700000000.0)}, 1699990000.0)
     monkeypatch.setattr(client_mod, "USAGE_POLL", 0.05)
     c = d.client()
     c.start()
     try:
         until(lambda: ("usage",) in c.waiting, desc="fetched")
         c.refresh()
-        assert c.usage.limits == {"five_hour": (12.0, 1700000000.0)} and not c.usage.failed
+        assert c.usage.limits == {"session": (12.0, 1700000000.0)} and not c.usage.failed
+        assert c.usage.read == {"session": 1699990000.0}, "with when it was read, for its age"
     finally:
         c.disconnect()
 

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from claude_wheelhouse import host as host_mod, hub as hub_mod, launch, liveness, models, stats, subagents, transcript, tutorial
+from claude_wheelhouse import host as host_mod, hub as hub_mod, launch, liveness, models, plan_usage, stats, subagents, transcript, tutorial
 from claude_wheelhouse.hub import Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone
 
@@ -192,11 +192,11 @@ def test_a_conversation_is_none_once_its_session_has_gone(hub, store, sid):
     assert hub.conversation(sid) is None
 
 
-def test_the_usage_is_fetched_at_most_once_a_minute(hub, monkeypatch):
+def test_usage_is_asked_every_five_minutes(hub, monkeypatch):
     now, groups = [1000.0], []
     monkeypatch.setattr(hub_mod.time, "time", lambda: now[0])
     hub.spawn = lambda work, group: groups.append(group)
-    for at in (1000.0, 1030.0, 1061.0):
+    for at in (1000.0, 1061.0, 1000.0 + plan_usage.EVERY + 1):
         now[0] = at
         hub.fetch_usage()
     assert groups == ["usage", "usage"]

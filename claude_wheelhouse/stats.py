@@ -16,7 +16,6 @@ import os
 import re
 import textwrap
 import time
-import urllib.request
 import weakref
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -26,7 +25,7 @@ from rich.color import Color
 from rich.style import Style
 from rich.text import Text
 
-from . import models, transcript
+from . import models, plan_usage, transcript
 from .store import runner
 
 SPAN = 2 * 3600                    # the charts' last two hours
@@ -648,15 +647,17 @@ def meter(name: str, pct: float, colour: tuple, width: int, tail: str) -> Text:
             + Text(f" {pct:3.0f}%", style=f"bold {hexc(colour)}") + Text(tail, style=hexc(DIM)))
 
 
-def gauges(view, usage: "AccountUsage", now: float, width: int) -> list[Text]:
+def gauges(view, usage: "plan_usage.AccountUsage", now: float, width: int) -> list[Text]:
     """The context, session and weekly gauges, at one bar width so they line up. Across
     every running session the context is a sum with no one window: a number, not a gauge."""
     bars = []   # (name, percent, colour, tail)
     if isinstance(view, Snapshot):
         bars.append(("context", view.context * 100 / view.window, grade(view.context),
                      f" {approx(view)}{tokens(view.context)}/{tokens(view.window)}"))
+    shown = [kind for kind, _ in LIMITS
+             if kind in usage.limits and not (kind in OPTIONAL and usage.limits[kind][0] <= 0)]
     for kind, name in LIMITS:
-        if kind in usage.limits:
+        if kind in shown:
             pct, at = usage.limits[kind]
             colour, flashing = usage_grade(pct)
             bars.append((name, pct, flash(colour, flashing, now), f" {resets(at, now)}" if at else ""))
@@ -665,8 +666,11 @@ def gauges(view, usage: "AccountUsage", now: float, width: int) -> list[Text]:
     if isinstance(view, Totals):
         out.insert(0, label("context") + Text(f"{approx(view)}{tokens(view.context)} across {view.sessions}",
                                               style=hexc(TEXT)))
-    if not any(kind in usage.limits for kind, _ in LIMITS):
+    age = usage.age(now, shown)
+    if age is None:
         out.append(Text("usage unavailable" if usage.failed else "usage loading…", style=hexc(DIM)))
+    elif age > STALE:
+        out.append(label("") + Text(f"usage read {until(age)} ago", style=hexc(DIM)))
     return out
 
 
@@ -839,7 +843,7 @@ def spaced(rows: list[Text]) -> list[Text]:
     return [r for row in rows for r in (row, Text())]
 
 
-def layout(view, name: str, note: str | None, usage: "AccountUsage", now: float, width: int,
+def layout(view, name: str, note: str | None, usage: "plan_usage.AccountUsage", now: float, width: int,
            height: int, setting: dict | None = None, focused: bool = False) -> tuple[list[Text], list["Chart"]]:
     """The pane at a size: a bordered panel of the gauges (a blank line above them and
     under each) and the cache and compaction rows, then as many of the charts as fit under it.
@@ -877,60 +881,12 @@ def render(rows: list[Text], shown: list["Chart"], frame: int) -> Text:
     return Text("\n", no_wrap=True, overflow="crop").join(lines)
 
 
-# the account's usage limits: the same numbers as Claude Code's /usage
+# the account's usage limits: Claude Code's /usage, read by the hub (plan_usage)
 
-USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
-USAGE_EVERY = 60                   # seconds between fetches: an external endpoint
-LIMITS = (("session", "session"), ("weekly_all", "weekly"))
-
-
-def limits(data) -> dict[str, tuple[float, float | None]]:
-    """The usage endpoint's body as {kind: (percent, resets at)}, skipping what's malformed."""
-    out = {}
-    for lim in (data or {}).get("limits") or []:
-        if isinstance(lim, dict) and isinstance(lim.get("percent"), (int, float)):
-            out[lim.get("kind")] = (float(lim["percent"]), epoch(lim.get("resets_at") or ""))
-    return out
-
-
-class NoRedirects(urllib.request.HTTPRedirectHandler):
-    """urllib forwards the Authorization header on a redirect, to any host: the usage
-    fetch carries the person's login token, so a 30x is an error instead."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-OPENER = urllib.request.build_opener(NoRedirects)
-
-
-class AccountUsage:
-    """Session and weekly usage for the logged-in account, fetched at most once a minute,
-    off the UI thread. The last good numbers stay up while a fetch fails."""
-
-    def __init__(self):
-        self.limits: dict = {}
-        self.at = 0.0
-        self.failed = False
-
-    def due(self, now: float) -> bool:
-        if now - self.at < USAGE_EVERY:
-            return False
-        self.at = now   # claimed here, so one fetch is in flight at a time
-        return True
-
-    def fetch(self) -> None:
-        home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
-        try:
-            with open(os.path.join(home, ".credentials.json")) as f:
-                token = json.load(f)["claudeAiOauth"]["accessToken"]
-            req = urllib.request.Request(USAGE_URL, headers={
-                "Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20",
-                "anthropic-version": "2023-06-01", "User-Agent": "claude-wheelhouse"})
-            with OPENER.open(req, timeout=15) as r:
-                self.limits, self.failed = limits(json.load(r)), False
-        except Exception:
-            self.failed = True
+# the gauges, by plan_usage's kinds; an optional one only once it's above 0%
+LIMITS = (("session", "session"), ("weekly_all", "weekly"), ("weekly_fable", "fable"))
+OPTIONAL = {"weekly_fable"}
+STALE = plan_usage.EVERY + 30   # seconds after which a reading says how old it is: a poll has failed
 
 
 def usage_grade(pct: float) -> tuple[tuple, bool]:

@@ -31,7 +31,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from . import liveness, models, stats, transcript
+from . import liveness, models, plan_usage, stats, transcript
 from .launch import PROTOCOL_SDK, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT
 from .store import CLOSED, SessionGone, Store, db_path, now, runner
@@ -643,7 +643,7 @@ class Host:
     # Claude Code's messages
 
     async def read(self) -> None:
-        from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, UserMessage
+        from claude_agent_sdk import AssistantMessage, RateLimitEvent, ResultMessage, SystemMessage, UserMessage
         from claude_agent_sdk.types import TextBlock, ThinkingBlock, ToolUseBlock
         async for m in self.client.receive_messages():
             try:
@@ -672,6 +672,8 @@ class Host:
                             self.show("writing")
                 elif isinstance(m, UserMessage):
                     self.show("thinking")
+                elif isinstance(m, RateLimitEvent):
+                    self.rate_limited(m.rate_limit_info.raw)
                 elif isinstance(m, SystemMessage) and m.subtype == "compact_boundary":
                     meta = m.data.get("compact_metadata") or m.data.get("compactMetadata") or {}
                     self.compacted_from = meta.get("pre_tokens") or meta.get("preTokens") or 0
@@ -696,6 +698,13 @@ class Host:
                     await self.finished(m, keepalive)
             except sqlite3.OperationalError as e:   # database is locked: the activity line can wait
                 print(f"{now()} {e}: activity not recorded", file=sys.stderr, flush=True)
+
+    def rate_limited(self, raw) -> None:
+        """Claude Code's plan usage, as this session's stream says it: kept in the store,
+        where the hub takes it as its newest reading (plan_usage.SDK_SETTING)."""
+        limits = plan_usage.from_rate_limit(raw)
+        if limits:
+            self.store.set_setting(plan_usage.SDK_SETTING, json.dumps({"at": time.time(), "limits": limits}))
 
     def show(self, activity: str) -> None:
         """What the running turn is doing, on the activity line: not a keepalive's, which

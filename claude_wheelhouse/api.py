@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
-    from .stats import AccountUsage
+    from .plan_usage import AccountUsage
 
 WHEELHOUSE_API = 1                 # bumped on any breaking change, matched exactly
 GROUP = "claude_wheelhouse.modules"
@@ -71,7 +71,7 @@ class Context:
     sessions: Callable[[], list[dict]]
     focus: Callable[[], str | None]      # the session in context (highlighted or followed), if any
     config: dict = field(default_factory=dict)
-    # the account's session and weekly usage, which the hub fetches
+    # the account's session and weekly usage, which the hub reads (plan_usage)
     usage: "AccountUsage | None" = None
     # a hosted session's effort, set live: (session id, level); None where the surface has none
     set_effort: Callable[[str, str], None] | None = None

@@ -536,6 +536,7 @@ class Daemon:
             self.shutdown()
 
     def shutdown(self) -> None:
+        self.hub.stop_usage()
         self.pool.shutdown(wait=False, cancel_futures=True)
         self.worker.shutdown(wait=False, cancel_futures=True)
 
@@ -735,8 +736,10 @@ class Daemon:
                 "sdk": self.hub.sdk}
 
     def usage(self, request: Request) -> dict:
-        """The account's usage, as the hub last fetched it: {kind: [percent, resets at]}."""
-        return {"limits": {k: list(v) for k, v in self.hub.usage.limits.items()}, "failed": self.hub.usage.failed}
+        """The account's plan usage, as the hub last read it: {kind: [percent, resets at]}
+        and when each was read, {kind: read at}, all UTC epoch seconds (plan_usage.AccountUsage)."""
+        u = self.hub.usage
+        return {"limits": {k: list(v) for k, v in u.limits.items()}, "read": u.read, "failed": u.failed}
 
     def settings(self, request: Request) -> dict:
         """The TUI's kept splitter sizes, each a share of its parent: no other setting."""
