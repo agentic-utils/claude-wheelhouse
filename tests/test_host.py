@@ -391,6 +391,114 @@ def test_a_locked_database_as_the_host_relaunches_is_waited_out(host, store, sid
     assert host.client.connected
 
 
+def shell_host(store, sid, tmp_path, monkeypatch):
+    """A host on a session chosen as Sonnet at high, with a transcript a shell tab writes to,
+    and Claude Code's process already gone once the tab opens."""
+    folder = tmp_path / "projects" / "-repo"
+    folder.mkdir(parents=True)
+    path = folder / f"{sid}.jsonl"
+    tab_wrote(path, turn("h1", "claude-sonnet-5-5"))   # hosted
+    monkeypatch.setattr(host_mod.transcript, "PROJECTS", tmp_path / "projects")
+    monkeypatch.setattr(host_mod, "transcript_exists", lambda sid: True)
+    monkeypatch.setattr(host_mod, "SHELL_POLL_SECONDS", 0)
+    store.set_model(sid, "claude-sonnet-5-5")
+    store.set_effort(sid, "high")
+    h = Host(store, sid, client_factory=FakeClient, person="doug")
+    run(h.connect())
+    return h, path
+
+
+@pytest.mark.parametrize("steps, launched, desc", [
+    ([("choose", "claude-haiku-5-5"), ("type", "Opus 5.5")], "claude-opus-5-5",
+     "Haiku chosen in the wheelhouse, then /model opus typed in the tab: the later, the tab's, wins"),
+    ([("type", "Opus 5.5"), ("choose", "claude-haiku-5-5")], "claude-haiku-5-5",
+     "/model opus typed in the tab, then Haiku chosen in the wheelhouse: the later, the wheelhouse's, wins"),
+    ([("choose", "claude-haiku-5-5"), ("turn", "claude-sonnet-5-5")], "claude-haiku-5-5",
+     "Haiku chosen, then a turn in the tab on what it launched with: nothing typed, Haiku stands"),
+])
+def test_the_later_of_a_wheelhouse_choice_and_a_tabs_model_wins(store, sid, tmp_path, monkeypatch, steps, launched,
+                                                                 desc):
+    """Last write wins, by time (round 62, M2): what the host launches with on taking the
+    session back from its shell tab."""
+    h, path = shell_host(store, sid, tmp_path, monkeypatch)
+    monkeypatch.setattr(host_mod.liveness, "status", lambda session: "dead")
+    monkeypatch.setattr(h, "register", lambda: True)
+
+    def open_tab(s, i):
+        for what, value in steps:
+            time.sleep(0.002)   # each a moment after the last
+            if what == "choose":
+                s.set_model(i, value)   # hub.set_model during the shell
+            elif what == "type":
+                tab_wrote(path, typed("model", f"Set model to `{value}` for this session only"))
+            else:
+                tab_wrote(path, {"type": "user", "message": {"content": "go on"}}, turn("t1", value))
+    h.open_tab = open_tab
+    store.command(sid, "shell")
+
+    async def go():
+        h.reader = asyncio.create_task(asyncio.sleep(3600))
+        await h.poll()
+        h.reader.cancel()
+    run(go())
+    assert store.session(sid)["model"] == launched, desc
+    assert h.client.options.model == launched, f"{desc}: what the host launched with"
+
+
+@pytest.mark.parametrize("how, desc", [
+    ("died", "the host died while its shell tab was open: a Restore's host, after the tab exits, carries it"),
+    ("restored", "a Restore's host takes the session while the first still waits on the tab: it carries it"),
+])
+def test_a_host_taking_a_shell_session_carries_what_its_tab_typed(store, sid, tmp_path, monkeypatch, how, desc):
+    """Round 62, bug 1: nothing about the shell tab lives only in the first host's memory."""
+    first, path = shell_host(store, sid, tmp_path, monkeypatch)
+    monkeypatch.setattr(host_mod, "POLL_SECONDS", 0.01)
+    status = {"now": "live"}
+    monkeypatch.setattr(host_mod.liveness, "status", lambda session: status["now"])
+    first.open_tab = lambda s, i: tab_wrote(path, typed("model", "Set model to `Haiku 5.5` for this session only"))
+    store.command(sid, "shell")
+
+    async def go():
+        first.reader = asyncio.create_task(asyncio.sleep(3600))
+        handing = asyncio.create_task(first.poll())
+        while store.session(sid)["shell"] != "tab":
+            await asyncio.sleep(0.01)
+        if how == "died":
+            handing.cancel()
+            status["now"] = "dead"   # the tab exits, with no host to take the session back
+        second = Host(store, sid, client_factory=FakeClient, person="doug")
+        task = asyncio.create_task(second.run())
+        await asyncio.sleep(0.1)
+        store.set_parked(sid, True)
+        await asyncio.wait_for(task, 5)
+        if how == "restored":
+            await asyncio.wait_for(handing, 5)
+            assert first.stopping, f"{desc}: the first host lets go"
+        first.reader.cancel()
+        return second
+    second = run(go())
+    assert store.session(sid)["model"] == "claude-haiku-5-5", desc
+    assert second.client is None and second.applied[0] == "claude-haiku-5-5", f"{desc}: what the second launched with"
+
+
+def test_a_locked_database_after_connecting_never_stops_the_host(host, store, sid, monkeypatch):
+    """Round 62, bug 2: Claude Code connected, the activity line waits out a locked database
+    (steady), and one still locked past that is written by the next poll, not fatal."""
+    monkeypatch.setattr(host_mod, "STEADY_TRIES", (0, 0))
+    set_activity, fails = store.set_activity, iter([sqlite3.OperationalError("database is locked")] * 6)
+
+    def flaky(*a):
+        if (e := next(fails, None)) is not None:
+            raise e
+        set_activity(*a)
+    monkeypatch.setattr(store, "set_activity", flaky)
+    h = Host(store, sid, client_factory=FakeClient, person="doug")
+    run(h.connect())   # "starting" and "idle" each given up on, after three tries
+    assert h.client.connected and h.unsaid == "idle"
+    run(h.poll())
+    assert store.session(sid)["activity"] == "idle" and h.unsaid is None
+
+
 # review fixes (T29): cancelled calls, ordering, races, lost turns, the shell hand-back
 
 async def until_open(store, sid):

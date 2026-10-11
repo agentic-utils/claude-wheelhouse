@@ -609,8 +609,8 @@ def test_a_model_or_effort_typed_counts_before_the_next_turn(tmp_path, recs, ran
     follower.read(NOW)
     assert (follower.snap.requested, follower.snap.effort) == ran, desc
     served = "claude-opus-5-5" if any(r["type"] == "assistant" for r in recs) else None
-    assert stats.ran_since(tmp_path / "p" / "s.jsonl", 0) == (ran[0] or served, ran[1]), \
-        f"{desc}: as the host reads it after a shell tab (the served model where nothing asked)"
+    latest = tuple(x and x[1] for x in (stats.latest(follower.snap, "model"), stats.latest(follower.snap, "effort")))
+    assert latest == (ran[0] or served, ran[1]), f"{desc}: as a tab's is carried (the served model where nothing asked)"
 
 
 @pytest.mark.parametrize("setting, effort, room, expected, desc", [

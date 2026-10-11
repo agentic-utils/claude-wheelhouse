@@ -212,17 +212,37 @@ still gets `--model` and `--effort` at launch from the New session dialog, and t
 can type `/model` or `/effort` in it. The stats header shows what the transcript says it
 runs (each assistant record carries `requestedModel` and `effort`).
 
-Carried (Q56, option A): a `/model` or `/effort` typed in a tab is copied back to the
-columns, so the next Relaunch, Restore or return from a shell tab launches with it. The
-transcript says what was typed twice over: Claude Code 2.1 writes each command it takes as
-a `local_command` record ("Set model to `Haiku 5.5`", "Set effort level to low"), and each
-later response carries `requestedModel` and `effort`; the later of the two counts, so a
-`/model` followed by `/exit` is carried too. A tab session's columns take whatever its
-transcript's latest values are (`Hub.copy_back`, on each read, and once more after the tab
-exits). In a host's shell hand-over the host copies them back itself as it takes the
-session back, before it launches again (`Host.carry_back`): what the transcript shows the
-tab ran since it opened, where it differs from what the tab launched with. A choice made in
-the wheelhouse meanwhile stands, as the wheelhouse said it would. A suffixed id
+Carried (Q56, option A): a `/model` or `/effort` typed in a tab is carried to the columns,
+so the next Relaunch, Restore or return from a shell tab launches with it. Last write wins,
+by time, with all its state in the database:
+
+- Each wheelhouse write of a column (New session, the Model dialog, the slider, the daemon
+  and HTTP routes, all through `Store.create_session`, `set_model` and `set_effort`) stamps
+  when it was chosen: `model_chosen_at`, `effort_chosen_at` (UTC). A host putting back what
+  Claude Code refused is not a choice and leaves them.
+- The transcript's latest choice of each, with its time: a `local_command` record ("Set
+  model to `Haiku 5.5`", "Set effort level to low", as Claude Code 2.1 writes each it takes)
+  at its own timestamp; a turn's `requestedModel` and `effort` from when the turn began (its
+  prompt), not its later responses, so a `/model` typed while a turn streams beats that
+  turn. A typed choice wins a tie.
+- The rule (`stats.carry`, applied by `Store.carry` in one write transaction): where the
+  transcript's choice is newer than the column's chosen-at and differs, the column takes it
+  and chosen-at becomes its time; otherwise the column stands. A record older than the
+  wheelhouse's latest choice can never override it, and a wheelhouse choice made after a
+  `/model` typed in the tab wins on the tab's return.
+- A tab session's turns count as choices, as nothing else chooses for it. A hosted session's
+  don't: they run what the wheelhouse chose (its host, or its shell tab's launch flags), so
+  only what was typed counts. Choosing Haiku while the shell tab runs, then chatting there
+  without `/model`, leaves Haiku.
+- The hub applies it on every read of a tab session's transcript (and once more after the
+  tab exits), and of a hosted session's while it is out in a shell tab, so the stats pane
+  shows the tab's value as it runs. Every host applies it once more as it starts and as it
+  takes a session back from its shell tab, before reading the columns to launch, retrying
+  through a locked database. A host that died with its tab open, or a Restore's host taking
+  the session, carries the same.
+
+`/effort auto` is not carried: auto isn't a level the wheelhouse can launch with
+(`models.EFFORTS`, `--effort`), so the column keeps the last level. A suffixed id
 (`claude-opus-5-5[1m]`) is stored as its pinned id, the same model with the same 1M window
 (`models.pinned`); a response's dated id as the table's model it is, and one off the table
 not at all (`models.ran_as`).

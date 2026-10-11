@@ -27,6 +27,7 @@ from rich.style import Style
 from rich.text import Text
 
 from . import models, transcript
+from .store import runner
 
 SPAN = 2 * 3600                    # the charts' last two hours
 TTL = {"1h": 3600, "5m": 300}
@@ -68,6 +69,7 @@ class Turn:
     output: int = 0
     effort: str | None = None   # the effort it ran at, as Claude Code recorded it
     requested: str | None = None   # the model asked for (a /model's, say), as Claude Code recorded it
+    start: float | None = None   # when its turn began (parse): the time its requested model and effort count from
 
 
 @dataclass
@@ -81,7 +83,8 @@ class Compaction:
 
 @dataclass
 class Setting:
-    """A /model or /effort typed in Claude Code and taken: what it set, the other None."""
+    """A /model or /effort typed in Claude Code and taken: what it set, the other None. Or,
+    with neither, a prompt: where a main-thread turn began."""
     at: float
     model: str | None = None   # the table's pinned id
     effort: str | None = None
@@ -107,13 +110,30 @@ def setting(rec: dict, at: float) -> Setting | None:
     return None
 
 
-def parse(lines, seen: set, main: bool, settings: list | None = None) -> tuple[list[Turn], list[Compaction]]:
+USER = re.compile(rb'"type":\s*"user"')
+
+
+def is_prompt(rec: dict) -> bool:
+    """A main-thread user record that began a turn: Claude Code 2.1 marks each with its
+    turnPosition; before that, one typed (text, not a tool's result or a command's record)."""
+    if rec.get("type") != "user" or rec.get("isSidechain") or rec.get("isMeta") or rec.get("isCompactSummary"):
+        return False
+    content = (rec.get("message") or {}).get("content")
+    return "turnPosition" in rec or (isinstance(content, str) and not content.startswith("<"))
+
+
+def parse(lines, seen: set, main: bool, settings: list | None = None,
+          start: float | None = None) -> tuple[list[Turn], list[Compaction]]:
     """The turns and compactions in some transcript lines. One response is written as
     several lines sharing a message id: `seen` counts each once, across reads. Given a
-    list, the /model and /effort changes in them (setting) are added to it."""
+    list, the /model and /effort changes in them (setting) are added to it, and each prompt
+    as a Setting of neither; each main-thread turn is dated by when it began (Turn.start):
+    its prompt, else `start` (a turn already under way), else its first response read."""
     turns, compactions = [], []
     for line in lines:
-        if b'"usage"' not in line and b"compact_boundary" not in line and (settings is None or b"local_command" not in line):
+        if (b'"usage"' not in line and b"compact_boundary" not in line
+                and (settings is None or (b"local_command" not in line and not (
+                    b'"turnPosition"' in line or (USER.search(line) and b"tool_result" not in line))))):
             continue   # most lines: no need to parse them
         try:
             rec = json.loads(line)
@@ -124,6 +144,11 @@ def parse(lines, seen: set, main: bool, settings: list | None = None) -> tuple[l
         if settings is not None and rec.get("type") == "system" and rec.get("subtype") == "local_command":
             if main and not rec.get("isSidechain") and (found := setting(rec, at)):
                 settings.append(found)
+            continue
+        if settings is not None and rec.get("type") == "user":
+            if main and is_prompt(rec):
+                start = at
+                settings.append(Setting(at))
             continue
         if rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
             meta = rec.get("compactMetadata") or {}
@@ -147,10 +172,14 @@ def parse(lines, seen: set, main: bool, settings: list | None = None) -> tuple[l
         cc = usage.get("cache_creation") or {}
         ttl = "1h" if cc.get("ephemeral_1h_input_tokens") else "5m" if cc.get("ephemeral_5m_input_tokens") else None
         fresh = inp + made
+        on_main = main and not rec.get("isSidechain")
+        if on_main and settings is not None and start is None:
+            start = at   # its prompt unread: from its first response read
         turns.append(Turn(at, read, fresh if read else 0, 0 if read else fresh, inp + made + read, ttl,
-                          msg.get("model"), main and not rec.get("isSidechain"), usage.get("output_tokens", 0) or 0,
+                          msg.get("model"), on_main, usage.get("output_tokens", 0) or 0,
                           rec.get("effort") if isinstance(rec.get("effort"), str) else None,
-                          rec.get("requestedModel") if isinstance(rec.get("requestedModel"), str) else None))
+                          rec.get("requestedModel") if isinstance(rec.get("requestedModel"), str) else None,
+                          start if on_main else None))
     return turns, compactions
 
 
@@ -200,6 +229,11 @@ class Snapshot:
     max: int | None = None         # the host's window, with it
     effort: str | None = None      # the main thread's latest response's
     requested: str | None = None   # the model the main thread's latest response asked for
+    begun: float | None = None     # when the main thread's latest turn began (parse's start)
+    # the latest model (the table's pinned id) and effort, each as (when, value): typed, a
+    # /model or /effort Claude Code took; asked, what a main-thread turn ran on, from when it began
+    typed: dict = field(default_factory=dict)
+    asked: dict = field(default_factory=dict)
 
     @property
     def window(self) -> int:
@@ -316,7 +350,8 @@ class UsageFollower:
         now = time.time() if now is None else now
         snap = Snapshot(self.snap.model, self.snap.context, self.snap.peak, self.snap.last_at, self.snap.ttl,
                         list(self.snap.compactions), list(self.snap.turns), effort=self.snap.effort,
-                        requested=self.snap.requested)
+                        requested=self.snap.requested, begun=self.snap.begun, typed=dict(self.snap.typed),
+                        asked=dict(self.snap.asked))
         changed = False
         for path in self.paths(now):
             try:
@@ -344,7 +379,8 @@ class UsageFollower:
             end = data.rfind(b"\n") + 1   # a half-written last line waits for the next read
             self.files[path] = (offset + end, (st.st_size, st.st_mtime_ns))
             settings = []
-            turns, compactions = parse(data[:end].splitlines(), self.seen, path == self.main, settings)
+            turns, compactions = parse(data[:end].splitlines(), self.seen, path == self.main, settings,
+                                       snap.begun if path == self.main else None)
             take(snap, turns, compactions)
             changed = chose(snap, settings) or changed
             changed = changed or bool(turns or compactions)
@@ -390,6 +426,12 @@ def take(s: Snapshot, turns: list[Turn], compactions: list[Compaction]) -> None:
         if t.main:
             s.model, s.context, s.peak, s.last_at = t.model or s.model, t.context, max(s.peak, t.context), t.at
             s.effort, s.requested = t.effort or s.effort, t.requested or s.requested
+            begun = t.at if t.start is None else t.start
+            s.begun = max(s.begun or begun, begun)
+            if model := models.ran_as(t.requested, t.model):
+                s.asked["model"] = (begun, model)
+            if t.effort:
+                s.asked["effort"] = (begun, t.effort)
             s.ttl = t.ttl or s.ttl
             c = s.compactions[-1] if s.compactions else None
             if c and c.after is None and c.at <= t.at:
@@ -397,28 +439,60 @@ def take(s: Snapshot, turns: list[Turn], compactions: list[Compaction]) -> None:
 
 
 def chose(s: Snapshot, settings: list[Setting]) -> bool:
-    """A /model or /effort typed since the main thread's latest response, taken as what the
-    session now runs, as the next response will say: one typed before it is in it already.
-    Whether any was."""
-    newer = [x for x in settings if x.at >= (s.last_at or 0)]
-    for x in newer:
-        s.requested, s.effort = x.model or s.requested, x.effort or s.effort
-    return bool(newer)
+    """The /model, /effort and prompts read (parse), taken in: each typed is the latest
+    typed of its kind, and the pane shows it over a turn that began before it (one typed
+    while a turn streams doesn't change that turn: its later responses still say the old,
+    and the next turn will say the new). Whether any was typed."""
+    for x in settings:
+        if x.model is None and x.effort is None:
+            s.begun = max(s.begun or x.at, x.at)
+        for key in ("model", "effort"):
+            if getattr(x, key):
+                s.typed[key] = (x.at, getattr(x, key))
+    for key, attr in (("model", "requested"), ("effort", "effort")):
+        typed, asked = s.typed.get(key), s.asked.get(key)
+        if typed and (asked is None or typed[0] >= asked[0]):
+            setattr(s, attr, typed[1])
+    return any(x.model or x.effort for x in settings)
 
 
-def ran_since(path: Path | None, offset: int) -> tuple[str | None, str | None]:
-    """The model (the table's pinned id where it is one) and effort a transcript shows the
-    session last ran on in what was written past `offset`, else None for each."""
+def latest(snap: Snapshot, key: str, turns: bool = True) -> tuple[float, str] | None:
+    """The latest model or effort the transcript shows chosen, as (when, value): typed, or
+    (with turns) a turn's, from when that turn began. Typed wins a tie."""
+    found = [x for x in (snap.typed.get(key), snap.asked.get(key) if turns else None) if x]
+    return max(found, key=lambda x: x[0]) if found else None
+
+
+def carry(store, sid: str, snap: Snapshot) -> None:
+    """A /model or /effort typed in a tab, carried to the session's columns, so its next
+    launch keeps it (Q56): last write wins, by time. Where the transcript's latest choice is
+    newer than the column's (its *_chosen_at) and differs, the column takes it, dated then
+    (Store.carry). A choice made in the wheelhouse later stands, and one made earlier gives
+    way. A tab session's turns count as a choice from when each began, as nothing but the
+    tab chooses for it; a hosted session's only what was typed, as its turns run what the
+    wheelhouse chose (its host, or its shell tab's launch)."""
+    s = store.session(sid)
+    if s is None:
+        return
+    tab = runner(s) == "tab"
+    for key in ("model", "effort"):
+        if found := latest(snap, key, turns=tab):
+            store.carry(sid, key, found[1], found[0])
+
+
+def typed_in(path: Path | None) -> Snapshot:
+    """What a whole transcript shows typed (/model, /effort), for a host taking a session
+    back: only its local command records are parsed."""
+    snap = Snapshot()
     if path is None:
-        return None, None
+        return snap
+    settings = []
     with open(path, "rb") as f:
-        f.seek(offset)
-        data = f.read()
-    settings, snap = [], Snapshot()
-    turns, _ = parse(data[:data.rfind(b"\n") + 1].splitlines(), set(), True, settings)
-    take(snap, turns, [])
+        for line in f:
+            if b"local_command" in line and line.endswith(b"\n"):
+                parse([line], set(), True, settings)
     chose(snap, settings)
-    return models.ran_as(snap.requested, snap.model), snap.effort
+    return snap
 
 
 def current(snap: Snapshot, host) -> Snapshot:

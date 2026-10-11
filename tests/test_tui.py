@@ -4920,13 +4920,30 @@ async def test_a_tabs_header_shows_what_its_transcript_says_it_runs(store, tmp_p
     sid, app = await hosted_app(store, tmp_path, monkeypatch, "tab")
     path = tmp_path / f"projects/-home-u-repo/{sid}.jsonl"
     rec = json.loads(path.read_text())
-    rec |= {"requestedModel": "claude-opus-5-5[1m]", "effort": "max"}
+    later = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() + 2))   # a turn begun since
+    prompt = {"type": "user", "timestamp": later, "message": {"role": "user", "content": "go on"}}
+    rec |= {"timestamp": later, "requestedModel": "claude-opus-5-5[1m]", "effort": "max"}
     rec["message"] |= {"id": "m2", "model": "claude-opus-5-5"}
-    path.write_text(path.read_text() + json.dumps(rec) + "\n")
+    path.write_text(path.read_text() + json.dumps(prompt) + "\n" + json.dumps(rec) + "\n")
     async with app.run_test(size=(160, 40)) as pilot:
         assert "demo · Opus 5.5 · max · 1M ─" in await shown_stats(app, pilot)
     s = store.session(sid)
     assert (s["model"], s["effort"]) == ("claude-opus-5-5", "max"), "copied back, as the pinned id"
+
+
+@pytest.mark.anyio
+async def test_a_shell_tabs_model_shows_while_it_runs(store, tmp_path, monkeypatch):
+    """Round 62, M1: a hosted session out in its shell tab, with a /model typed there: the
+    stats pane shows the tab's model, not what the host launched with."""
+    sid, app = await hosted_app(store, tmp_path, monkeypatch)
+    store.set_shell(sid, "tab")
+    path = tmp_path / f"projects/-home-u-repo/{sid}.jsonl"
+    later = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() + 2))   # typed since
+    rec = {"type": "system", "subtype": "local_command", "timestamp": later, "commandRun": {"command": "model"},
+           "content": "<local-command-stdout>Set model to `Haiku 5.5` for this session only</local-command-stdout>"}
+    path.write_text(path.read_text() + json.dumps(rec) + "\n")
+    async with app.run_test(size=(160, 40)) as pilot:
+        assert "demo · Haiku 5.5 · high" in await shown_stats(app, pilot)
 
 
 @pytest.mark.anyio

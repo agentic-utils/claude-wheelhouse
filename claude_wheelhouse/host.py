@@ -247,6 +247,7 @@ class Host:
         self.last_turn = time.monotonic()
         self.quiet_since: float | None = time.monotonic()
         self.owner = False   # registered as the session's process: only then does it write the activity
+        self.unsaid: str | None = None   # an activity line a locked database kept unwritten (say)
         self.stopping = False
         self.stop_reason = ""
 
@@ -285,8 +286,8 @@ class Host:
         self.client = self.client_factory(self.options(resume))
         # as launched, until Claude Code says: written first, so the pane never shows the
         # last process's (or none) as pending while this one starts
-        before = await self.steady(self.store.session, self.sid)
-        before = (models.field(before, "applied_model"), models.field(before, "applied_effort"))
+        session = await self.steady(self.store.session, self.sid)
+        before = (models.field(session, "applied_model"), models.field(session, "applied_effort"))
         await self.steady(self.store.set_applied, self.sid, *self.applied)
         try:
             await self.client.connect()
@@ -299,11 +300,23 @@ class Host:
             self.store.set_applied(self.sid, *self.applied)
         except Exception as e:   # a nicety at start: never worth the session
             print(f"{now()} get_settings at start failed: {e}", file=sys.stderr, flush=True)
-        self.store.set_activity(self.sid, "starting")
+        # Claude Code is connected: a locked database mustn't stop it now. The line is only
+        # said, so one not written is said again on the next poll (unsaid)
+        await self.say("starting")
         if not resume:
-            await self.turn(opening_prompt(self.store.session(self.sid)))
+            await self.turn(opening_prompt(session))
         else:
-            self.store.set_activity(self.sid, "idle")
+            await self.say("idle")
+
+    async def say(self, activity: str) -> None:
+        """The activity line, through a locked database (steady); one still not written is
+        left for the next poll to write (unsaid), unless the host says another first."""
+        self.unsaid = None
+        try:
+            await self.steady(self.store.set_activity, self.sid, activity)
+        except sqlite3.OperationalError as e:
+            self.unsaid = activity
+            print(f"{now()} {e}: activity {activity!r} left for the next poll", file=sys.stderr, flush=True)
 
     @property
     def pending(self) -> int:
@@ -324,6 +337,7 @@ class Host:
         if keepalive:
             return
         self.quiet_since = None
+        self.unsaid = None   # this turn's line replaces one left unwritten
         try:   # sent: a locked database mustn't make the caller think otherwise
             self.store.set_activity(self.sid, "thinking")
         except sqlite3.OperationalError:
@@ -510,6 +524,9 @@ class Host:
         session = self.store.session(self.sid)
         if session is None or session["parked"]:
             return False
+        if self.unsaid is not None:   # a locked database kept it from the line: written now
+            self.store.set_activity(self.sid, self.unsaid)
+            self.unsaid = None
         msgs = self.store.claim(self.sid)
         self.forget_delivered()
         handed = {m["id"]: ref for ref, m in self.handed.items()}
@@ -787,10 +804,6 @@ class Host:
         # once the session is let go, a locked database mustn't strand it half handed over
         await self.steady(self.store.unregister, self.sid)
         self.owner = False
-        # what the tab launches with, and where its transcript starts: carry_back's
-        launched = await self.steady(self.store.session, self.sid)
-        launched = {"model": models.field(launched, "model"), "effort": models.field(launched, "effort")}
-        start = transcript_size(self.sid)
         await self.steady(self.store.set_shell, self.sid, "tab")
         try:
             (self.open_tab or default_open_tab)(self.store, self.sid)
@@ -812,7 +825,7 @@ class Host:
             self.stopping = True
             return
         await self.steady(self.store.set_shell, self.sid, None)
-        await self.steady(self.carry_back, launched, start)
+        await self.carry_back()
         self.sent, self.taken_up, self.turn_text, self.final_text = {}, [], [], []
         self.end_compact()
         self.tokens = None   # the tab ran turns this host never saw: its cache is the tab's
@@ -821,23 +834,24 @@ class Host:
         await self.connect()
         self.reader = asyncio.create_task(self.read())
 
-    def carry_back(self, launched: dict, start: int | None) -> None:
-        """A /model or /effort typed in the shell tab, copied to the session's columns before
-        the host launches again with them (Q56): what the tab's transcript shows it ran on
-        since it opened (from byte `start`), where that differs from what it launched with.
-        A choice made in the wheelhouse meanwhile stands: the wheelhouse said the session
-        would take it on coming back (Hub.choose). A transcript that can't be read carries
-        nothing, as does one whose start wasn't found (start None)."""
-        if start is None:
-            return
+    async def carry_back(self) -> None:
+        """A /model or /effort typed in a shell tab, carried to the session's columns before
+        the host launches with them (Q56), by the hub's rule (stats.carry): last write wins,
+        all its state in the database, so any host taking the session (this one back from
+        its tab, or a Restore's after this one died) carries the same. Retried through a
+        locked database for as long as it lasts: launching first would lose what was typed.
+        A transcript that can't be read carries nothing."""
         try:
-            ran = stats.ran_since(transcript.locate(self.sid), start)
+            typed = stats.typed_in(transcript.locate(self.sid))
         except OSError as e:
-            print(f"{now()} couldn't read the shell tab's transcript: {e}", file=sys.stderr, flush=True)
+            print(f"{now()} couldn't read the transcript for a /model or /effort typed: {e}",
+                  file=sys.stderr, flush=True)
             return
-        changed = {k: v for k, v in zip(launched, ran) if v and v != launched[k]}
-        if changed:
-            self.store.put_back(self.sid, launched, **changed)
+        while True:
+            try:
+                return await self.steady(stats.carry, self.store, self.sid, typed)
+            except sqlite3.OperationalError as e:
+                print(f"{now()} {e}: carrying back a /model or /effort typed, retrying", file=sys.stderr, flush=True)
 
     async def shell_wait(self) -> None:
         await asyncio.sleep(SHELL_POLL_SECONDS)
@@ -887,6 +901,7 @@ class Host:
         try:
             try:
                 self.store.set_shell(self.sid, None)   # a host killed while its shell tab was open left this
+                await self.carry_back()   # what was typed in that tab, or any other since the last host
                 self.deny_stale()
                 await self.connect()
             except sqlite3.OperationalError as e:   # the store, not Claude Code: say which
@@ -927,15 +942,6 @@ class Host:
 def default_client(options):
     from claude_agent_sdk import ClaudeSDKClient
     return ClaudeSDKClient(options=options)
-
-
-def transcript_size(sid: str) -> int | None:
-    """The size of a session's transcript: 0 if it has none yet, None if it can't be read."""
-    path = transcript.locate(sid)
-    try:
-        return path.stat().st_size if path else 0
-    except OSError:
-        return None
 
 
 def default_open_tab(store: Store, sid: str) -> None:

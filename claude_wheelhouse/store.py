@@ -188,7 +188,8 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("items", "dismissed", "TEXT"), ("sessions", "relaunch", "TEXT"),
                  ("sessions", "model", "TEXT"), ("sessions", "effort", "TEXT"),
                  ("sessions", "applied_model", "TEXT"), ("sessions", "applied_effort", "TEXT"),
-                 ("sessions", "interrupted_at", "TEXT")]
+                 ("sessions", "interrupted_at", "TEXT"), ("sessions", "model_chosen_at", "TEXT"),
+                 ("sessions", "effort_chosen_at", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -344,7 +345,7 @@ class Store:
                        sid: str | None = None, runner: str | None = None, model: str | None = None,
                        effort: str | None = None) -> str:
         """A new session, or (with sid) an adopted one keeping its Claude session id. Its
-        model and effort, if given, are launched with; unset (adopted), Claude Code's own."""
+        model and effort, if given, are launched with, chosen now; unset (adopted), Claude Code's own."""
         adopted = sid is not None
         sid = sid or str(uuid.uuid4())
         runner = runner or default_runner()
@@ -356,30 +357,50 @@ class Store:
             models.check_effort(effort)
         with self.tx() as db:
             db.execute(
-                "INSERT INTO sessions (id, name, ticket, brief, cwd, created_at, adopted, runner, model, effort) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (sid, name, ticket, brief, cwd, now(), int(adopted), runner, model, effort),
+                "INSERT INTO sessions (id, name, ticket, brief, cwd, created_at, adopted, runner, model, effort, "
+                "model_chosen_at, effort_chosen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (sid, name, ticket, brief, cwd, now(), int(adopted), runner, model, effort,
+                 model and stamp(), effort and stamp()),
             )
         return sid
 
     def set_model(self, sid: str, model: str) -> None:
-        """The model the session runs on: its host applies it live, every launch passes it."""
+        """The model the session runs on, chosen now: its host applies it live, every launch
+        passes it."""
         models.check_model(model)
         with self.tx() as db:
             self._require(db, sid)
-            db.execute("UPDATE sessions SET model = ? WHERE id = ?", (model, sid))
+            db.execute("UPDATE sessions SET model = ?, model_chosen_at = ? WHERE id = ?", (model, stamp(), sid))
 
     def set_effort(self, sid: str, effort: str) -> None:
-        """The effort the session runs at: its host applies it live, every launch passes it."""
+        """The effort the session runs at, chosen now: its host applies it live, every launch
+        passes it."""
         models.check_effort(effort)
         with self.tx() as db:
             self._require(db, sid)
-            db.execute("UPDATE sessions SET effort = ? WHERE id = ?", (effort, sid))
+            db.execute("UPDATE sessions SET effort = ?, effort_chosen_at = ? WHERE id = ?", (effort, stamp(), sid))
+
+    def carry(self, sid: str, column: str, value: str, at: float) -> bool:
+        """A model or effort typed in a tab at `at` (epoch seconds), carried to its column
+        (Q56): last write wins. Taken where it differs from the column and is newer than the
+        column's last choice (model_chosen_at, effort_chosen_at; none counts as older), and
+        the choice is then dated `at`. A tie goes to the column. Unchecked, as it is what
+        ran. Read and written in one write transaction, so a choice made meanwhile is never
+        undone. Whether it was taken."""
+        if column not in ("model", "effort"):
+            raise ValueError(f"column must be model or effort, not {column!r}")
+        with self.tx() as db:
+            row = db.execute(f"SELECT {column}, {column}_chosen_at FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if row is None or row[0] == value or (row[1] and datetime.fromisoformat(row[1]).timestamp() >= at):
+                return False
+            db.execute(f"UPDATE sessions SET {column} = ?, {column}_chosen_at = ? WHERE id = ?",
+                       (value, datetime.fromtimestamp(at, timezone.utc).isoformat(timespec="microseconds"), sid))
+        return True
 
     def put_back(self, sid: str, sent: dict, **values) -> None:
-        """The model or effort column put back to what Claude Code has in force: by a host
-        Claude Code refused the change, or by the hub for a tab its transcript shows the
-        person changed (Hub.copy_back). Unchecked, as it is what runs. Only where the column
+        """The model or effort column put back to what Claude Code has in force, by a host
+        Claude Code refused the change: not a choice, so its time stays. Unchecked, as it is
+        what runs. Only where the column
         still holds what was sent (sent): a newer choice made meanwhile stands, and is the
         host's to apply next."""
         with self.tx() as db:

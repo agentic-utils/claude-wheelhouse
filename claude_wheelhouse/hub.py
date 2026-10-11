@@ -620,7 +620,8 @@ class Hub:
         (self.store.set_model if what == "model" else self.store.set_effort)(sid, value)
         shown = models.name(value) or value
         if s["shell"]:   # its host gave it to a shell tab: it launches with the column on taking it back
-            return Done().say(f"{display_name(s)}: {what} {shown} once the wheelhouse takes it back from its shell tab")
+            return Done().say(f"{display_name(s)}: {what} {shown} when the wheelhouse takes it back from its shell "
+                              f"tab, unless /{what} is typed there after this")
         return Done().say(f"{display_name(s)}: {what} {shown}")
 
     def model_state(self, s) -> dict:
@@ -706,19 +707,14 @@ class Hub:
             self.post(functools.partial(self.emit, Event("landed", sid=follower.sid)))
 
     def copy_back(self, follower: stats.UsageFollower) -> None:
-        """A /model or /effort typed in a tab, copied to the session's columns, so its next
-        Relaunch or Restore launches with it (Q56): a tab session's columns take whatever its
-        transcript shows, as nothing else changes them. A hosted session's host applies the
-        columns itself, and copies back what its shell tab ran when it takes the session
-        back (Host.carry_back)."""
+        """A /model or /effort typed in a tab, carried to the session's columns, so its next
+        Relaunch, Restore or return from a shell tab launches with it (Q56), and the stats
+        pane shows it: by stats.carry's rule, last write wins. A tab session's on every read;
+        a hosted session's while it is out in a shell tab (its host carries once more as it
+        takes it back), not while hosted, as its host applies the columns."""
         s = self.store.session(follower.sid)
-        if s is None or runner(s) != "tab":
-            return
-        ran = (models.ran_as(follower.snap.requested, follower.snap.model), follower.snap.effort)
-        columns = {"model": models.field(s, "model"), "effort": models.field(s, "effort")}
-        changed = {k: v for k, v in zip(columns, ran) if v and v != columns[k]}
-        if changed:
-            self.store.put_back(follower.sid, columns, **changed)
+        if s is not None and (runner(s) == "tab" or s["shell"]):
+            stats.carry(self.store, follower.sid, follower.snap)
 
     def watch_agents(self) -> None:
         """Each session's subagents brought up to date as A items, on a worker thread: every
