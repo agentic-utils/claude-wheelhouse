@@ -57,6 +57,15 @@ def run_app(args, store=None) -> None:
 
 
 def main() -> None:
+    # host: a hosted session's process, started by the wheelhouse in SDK mode alone
+    # (launch.open_host runs `host <id>`), so taken before the main parser: neither --help
+    # nor an invalid choice's message lists it, like --enable-sdk
+    if sys.argv[1:2] == ["host"]:
+        host = argparse.ArgumentParser(prog="claude-wheelhouse host")
+        host.add_argument("session_id")
+        from .host import main as host_main
+        host_main(host.parse_args(sys.argv[2:]).session_id)
+        return
     # --enable-sdk: experimental SDK mode (features.py), deliberately left out of --help.
     # Taken before or after the command, for the commands that create sessions, and protocol
     sdk = argparse.ArgumentParser(add_help=False)
@@ -71,10 +80,6 @@ def main() -> None:
                                parents=[sdk]), sub=True)
     run = sub.add_parser("run", help="inside a launched tab: exec Claude for a session")
     run.add_argument("session_id")
-    # host: a hosted session's process, started by the wheelhouse in SDK mode alone, so
-    # left out of --help (no help, and not in the metavar below) like --enable-sdk
-    host = sub.add_parser("host")
-    host.add_argument("session_id")
     sub.add_parser("mcp", help="the per-session MCP server (stdio)")
     sub.add_parser("monitor", help="the per-session plugin monitor")
     sub.add_parser("protocol", help="print everything wheelhouse puts into a launched session", parents=[sdk])
@@ -89,7 +94,6 @@ def main() -> None:
                         "needed): the next start reads the token file again, or makes one if there's none")
     daemon.add_argument("--start-pipe", type=int, default=None, help=argparse.SUPPRESS)   # connect.start's
     sub.add_parser("token", help="print the daemon's token, for a client on another machine (--connect)")
-    sub.metavar = "{" + ",".join(c for c in sub.choices if c != "host") + "}"
     args = p.parse_args()
     if getattr(args, "enable_sdk", False):
         features.enable_sdk()
@@ -97,9 +101,6 @@ def main() -> None:
     if args.cmd == "run":
         from .launch import run as run_session
         run_session(args.session_id)
-    elif args.cmd == "host":
-        from .host import main as host_main
-        host_main(args.session_id)
     elif args.cmd == "mcp":
         from .mcp_server import main as mcp_main
         mcp_main()

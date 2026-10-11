@@ -86,6 +86,16 @@ def test_the_flag_is_left_out_of_help(monkeypatch, capsys):
     assert "host" not in out, "the host command is SDK mode's alone (review 68)"
 
 
+def test_an_invalid_command_doesnt_name_host(monkeypatch, capsys):
+    """Review 69: argparse's invalid choice message listed every command, host included."""
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", "bogus"])
+    with pytest.raises(SystemExit):
+        cli.main()
+    err = capsys.readouterr().err
+    assert "invalid choice" in err and "tutorial" in err, err
+    assert "host" not in err, err
+
+
 def test_the_hidden_host_command_still_runs(monkeypatch):
     from claude_wheelhouse import host
     seen = []
