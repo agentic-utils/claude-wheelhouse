@@ -437,20 +437,22 @@ class Store:
         with self.tx() as db:
             db.execute("UPDATE sessions SET shell = ? WHERE id = ?", (state, sid))
 
-    def set_relaunch(self, sid: str, host: tuple | None, deadline: float = 0.0, compacting: bool = False) -> None:
-        """A Relaunch under way: the host it stopped (or, compacting, will stop once the
-        session is compacted), (pid, start time), and the epoch second it gives up by, so a
-        wheelhouse started again carries it on; None once it's done."""
+    def set_relaunch(self, sid: str, host: tuple | None, deadline: float = 0.0, asked: float | None = None) -> None:
+        """A Relaunch under way: the host it stopped (or, compacting first, will stop once
+        the session is compacted, the epoch second Compact was asked for in `asked`), (pid,
+        start time), and the epoch second it gives up by, so a wheelhouse started again
+        carries it on; None once it's done."""
+        relaunch = [*host, deadline] + ([True, asked] if asked is not None else []) if host else None
         with self.tx() as db:
             db.execute("UPDATE sessions SET relaunch = ? WHERE id = ?",
-                       (json.dumps([*host, deadline, compacting]) if host else None, sid))
+                       (json.dumps(relaunch) if relaunch else None, sid))
 
-    def relaunches(self) -> dict[str, tuple[float, tuple, bool]]:
+    def relaunches(self) -> dict[str, tuple[float, tuple, float | None]]:
         """Each Relaunch under way, by session: (its epoch deadline, the host it stopped,
-        whether it is compacting first)."""
-        return {r["id"]: (deadline, (pid, start), bool(rest and rest[0])) for r in self._all(
-            "SELECT id, relaunch FROM sessions WHERE relaunch IS NOT NULL")
-            for pid, start, deadline, *rest in [json.loads(r["relaunch"])]}
+        and, compacting first, the epoch second Compact was asked for, else None)."""
+        return {r["id"]: (deadline, (pid, start), (rest[1] if len(rest) > 1 else 0.0) if rest and rest[0] else None)
+                for r in self._all("SELECT id, relaunch FROM sessions WHERE relaunch IS NOT NULL")
+                for pid, start, deadline, *rest in [json.loads(r["relaunch"])]}
 
     def unregister(self, sid: str) -> None:
         """The registered process is letting go of the session (a host handing over to a tab):

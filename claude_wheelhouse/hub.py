@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from . import adopt, api, launch, liveness, models, stats, subagents, transcript, tutorial
-from .host import COMPACTED, NO_NOTES
+from .host import AWAITING_NOTES, NO_NOTES
 from .store import DISMISSABLE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
 
 RUNNING = ("live", "stalled", "starting")
@@ -37,7 +37,9 @@ TAB_RELAUNCH = "a session in a tab relaunches once it has exited: /exit it there
 # for the compaction before it gives up, and says so
 COMPACT_FIRST_TOKENS = 150_000
 COMPACT_RELAUNCH_WAIT = 30 * 60
-COMPACTING_TO_RELAUNCH = "compacting, to relaunch once compacted"
+# activity lines of a host that isn't running a turn: one compacted with nothing behind it
+# is stopped for its Relaunch then, never in the middle of a turn queued behind /compact
+IDLE_LINES = ("idle", "error", "interrupted")
 
 
 def short(sid: str) -> str:
@@ -70,6 +72,13 @@ def host_context(s) -> api.HostContext | None:
     if runner(s) != "sdk" or at is None or not s["context_tokens"] or not s["context_max"]:
         return None
     return api.HostContext(s["context_tokens"], s["context_max"], at)
+
+
+def compacted_since(s, asked: float) -> bool:
+    """Whether the session's host has recorded a context under COMPACT_FIRST_TOKENS since
+    the epoch second `asked`: a compaction's end, which no later activity line hides."""
+    at = stats.epoch(s["context_at"] or "")
+    return at is not None and at >= asked and (s["context_tokens"] or 0) < COMPACT_FIRST_TOKENS
 
 
 @dataclass(frozen=True)
@@ -124,8 +133,10 @@ class Hub:
         self.relaunching: dict[str, tuple[float, tuple]] = {
             sid: (time.monotonic() + deadline - time.time(), host) for sid, (deadline, host, _) in under_way.items()}
         self.lapsed = {sid for sid, (deadline, host, _) in under_way.items() if deadline < time.time()}
-        # of those, the ones compacting before their host is stopped (compact_then_relaunch)
-        self.compacting: set[str] = {sid for sid, (*_, compacting) in under_way.items() if compacting}
+        # of those, the ones compacting before their host is stopped (compact_then_relaunch),
+        # with the epoch second Compact was asked for
+        self.compacting: dict[str, float] = {sid: asked for sid, (*_, asked) in under_way.items()
+                                             if asked is not None}
         self.followers: dict[str, transcript.Follower] = {}
         # each session's context size for the session list: read on workers, by a follower
         # shared with the stats pane (stats.follower), so each transcript is read once
@@ -263,11 +274,10 @@ class Hub:
                 and (s["context_tokens"] or 0) > COMPACT_FIRST_TOKENS)
 
     def compact_then_relaunch(self, sid: str, host: tuple) -> Done:
-        """Relaunch, compacting first: the host is asked to Compact, and once the session is
-        compacted, finish_relaunches stops it (stop_host), and starts it again once gone.
-        Only the host the confirm was about, (pid, start time), as stop_host. The activity
-        line says so until the host's own takes over, so an earlier compaction's line is
-        never read as this one's."""
+        """Relaunch, compacting first: the host is asked to Compact (unless a Compact is
+        under way already), and once the session is compacted and idle, finish_relaunches
+        stops it (stop_host), and starts it again once gone. Only the host the confirm was
+        about, (pid, start time), as stop_host."""
         s = self.row(sid)
         if runner(s) != "sdk" or s["shell"]:
             return Done(False).say(TAB_RELAUNCH, "warning")
@@ -276,31 +286,58 @@ class Hub:
         if (s["claude_pid"], s["claude_start"]) != host:
             return Done(False).say(f"{display_name(s)} started again meanwhile: Relaunch again to stop this host",
                                    "warning")
-        self.store.command(sid, "compact")
-        self.store.set_activity(sid, COMPACTING_TO_RELAUNCH)
-        self.relaunch_under_way(sid, host, compacting=True)
+        activity = s["activity"] or ""
+        if not (s["host_command"] == "compact" or activity.startswith("compacting") or activity == AWAITING_NOTES):
+            self.store.command(sid, "compact")
+        self.relaunch_under_way(sid, host, asked=time.time())
         return Done().say(f"relaunching {display_name(s)}: compacting first (it's asked what to keep)")
 
-    def relaunch_under_way(self, sid: str, host: tuple | None, compacting: bool = False) -> None:
-        """A Relaunch that has stopped a session's host, or is compacting before it does,
-        kept here and in the store; or, with no host, done with."""
+    def relaunch_under_way(self, sid: str, host: tuple | None, asked: float | None = None) -> None:
+        """A Relaunch that has stopped a session's host, or is compacting before it does
+        (Compact asked for at the epoch second `asked`), kept here and in the store; or, with
+        no host, done with."""
         if host:
-            wait = COMPACT_RELAUNCH_WAIT if compacting else RELAUNCH_WAIT
+            wait = COMPACT_RELAUNCH_WAIT if asked is not None else RELAUNCH_WAIT
             self.relaunching[sid] = (time.monotonic() + wait, host)
-            self.store.set_relaunch(sid, host, time.time() + wait, compacting)
-            (self.compacting.add if compacting else self.compacting.discard)(sid)
+            self.store.set_relaunch(sid, host, time.time() + wait, asked)
+            if asked is not None:
+                self.compacting[sid] = asked
+            else:
+                self.compacting.pop(sid, None)
         else:
             self.relaunching.pop(sid, None)
             self.lapsed.discard(sid)
-            self.compacting.discard(sid)
+            self.compacting.pop(sid, None)
             self.store.set_relaunch(sid, None)
 
-    def compacted(self, sid: str, s, host: tuple, deadline: float) -> None:
-        """A Relaunch compacting first, while its host still runs: once the session is
-        compacted, its host is stopped (stop_host); given up, and said so, if Compact was
-        interrupted, got no notes, or ran past COMPACT_RELAUNCH_WAIT."""
-        activity, name = s["activity"] or "", display_name(s)
-        if activity.startswith(COMPACTED):
+    def compacting_relaunch(self, sid: str, s, host: tuple, deadline: float) -> None:
+        """A Relaunch compacting first, while its host still runs. Once the session is
+        compacted (a context recorded since Compact was asked for, under
+        COMPACT_FIRST_TOKENS) and idle, its host is stopped (stop_host). Given up, and said
+        so, past COMPACT_RELAUNCH_WAIT (checked first, so a wheelhouse started hours later
+        never restarts it), once its host has gone to a shell tab or been started again,
+        or if Compact got no notes or was interrupted. Cancelled by another wheelhouse (an
+        Interrupt there), it is let go quietly. A host that died meanwhile is relaunched as
+        any stopped host is."""
+        name, activity = display_name(s), s["activity"] or ""
+        alive = liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"])
+        mine = (s["claude_pid"], s["claude_start"]) == host
+        stored = self.store.relaunches().get(sid)
+        if stored is None or stored[2] is None:   # cancelled elsewhere
+            self.relaunching.pop(sid, None)
+            self.lapsed.discard(sid)
+            self.compacting.pop(sid, None)
+            return
+        if sid in self.lapsed or time.monotonic() > deadline:
+            why = f"it wasn't compacted within {COMPACT_RELAUNCH_WAIT // 60} minutes"
+        elif s["shell"]:
+            why = "it was handed to a shell tab"
+        elif not mine and alive:
+            why = "its host was started again meanwhile"
+        elif not alive:   # died: relaunched as any stopped host, from the next tick
+            self.relaunch_under_way(sid, host)
+            return
+        elif compacted_since(s, self.compacting[sid]) and activity.startswith(IDLE_LINES):
             self.store.take_command(sid)   # a Compact the host never took would run again after
             done = self.stop_host(sid, host)
             for notice in done.notices:
@@ -308,13 +345,15 @@ class Hub:
             if not done.ok:
                 self.relaunch_under_way(sid, None)
             return
-        why = ("Compact was interrupted" if activity == "interrupted" else "Compact got no notes back"
-               if activity == NO_NOTES else f"it wasn't compacted within {COMPACT_RELAUNCH_WAIT // 60} minutes"
-               if time.monotonic() > deadline else None)
-        if why:
-            self.relaunch_under_way(sid, None)
-            self.announce(f"{name} wasn't relaunched: {why}. Relaunch again to try once more, or to relaunch "
-                          "without compacting", "warning")
+        elif activity == NO_NOTES:
+            why = "Compact got no notes back"
+        elif activity == "interrupted":
+            why = "Compact was interrupted"
+        else:
+            return
+        self.relaunch_under_way(sid, None)
+        self.announce(f"{name} wasn't relaunched: {why}. Relaunch again to try once more, or to relaunch "
+                      "without compacting", "warning")
 
     def finish_relaunches(self) -> None:
         """Start each stopped host again once its process has really gone: launch refuses a
@@ -327,12 +366,11 @@ class Hub:
             s = next((x for x in self.sessions if x["id"] == sid), None)
             if s is None:   # ended meanwhile
                 self.relaunch_under_way(sid, None)
+            elif sid in self.compacting:
+                self.compacting_relaunch(sid, s, host, deadline)
             elif sid in self.lapsed and not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
                 self.relaunch_under_way(sid, None)
                 self.announce(f"{display_name(s)} wasn't relaunched: Restore it", "warning")
-            elif sid in self.compacting and (s["claude_pid"], s["claude_start"]) == host and \
-                    liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
-                self.compacted(sid, s, host, deadline)
             elif not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
                 done = self.open_session(sid)   # as it ran: a host again, not WHEELHOUSE_RUNNER's way
                 self.relaunch_under_way(sid, None)   # after: a hub stopped between sees the new host
@@ -535,13 +573,19 @@ class Hub:
         return done
 
     def host_command(self, sid: str, what: str) -> Done:
-        """Interrupt, Compact or Shell, for the session's host to carry out."""
+        """Interrupt, Compact or Shell, for the session's host to carry out. Interrupt also
+        cancels a Relaunch compacting first, whichever wheelhouse began it (the store's)."""
         try:
             self.store.command(sid, what)
         except SessionGone:
             return Done(False)
-        return Done().say({"interrupt": "interrupting", "compact": "compacting: asking what to keep",
+        done = Done().say({"interrupt": "interrupting", "compact": "compacting: asking what to keep",
                            "shell": "opening a terminal tab"}[what])
+        stored = self.store.relaunches().get(sid)
+        if what == "interrupt" and stored is not None and stored[2] is not None:
+            self.relaunch_under_way(sid, None)
+            done.say("its Relaunch, waiting on Compact, is cancelled: it stays as it is", "warning")
+        return done
 
     # model and effort (.plan/model-effort.md)
 

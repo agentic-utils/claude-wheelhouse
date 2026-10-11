@@ -503,42 +503,134 @@ def test_compact_first_is_offered(hub, store, sid, monkeypatch, runner_, shell, 
     assert hub.compact_first(sid) is offered, desc
 
 
-@pytest.mark.parametrize("activity, stopped, said, desc", [
-    (host_mod.COMPACTED + " 220k → 40k tokens", True, "stopping its host", "compacted: its host is stopped"),
-    ("thinking", False, None, "still collecting notes: it waits"),
-    (hub_mod.COMPACTING_TO_RELAUNCH, False, None, "not taken up yet: it waits"),
-    ("interrupted", False, "Compact was interrupted", "interrupted: given up, and said so"),
-    (host_mod.NO_NOTES, False, "Compact got no notes back", "no notes: given up, and said so"),
-    ("timeout", False, "wasn't compacted within 30 minutes", "too long: given up, and said so"),
-])
-def test_compact_then_relaunch(hub, store, sid, heard, monkeypatch, activity, stopped, said, desc):
+def compacting(hub, store, sid, monkeypatch, alive):
+    """A Relaunch compacting first, under way: (the pids killed, the opens)."""
     host(store, sid)
-    alive, killed = {4242}, []
+    killed, opened = [], []
     monkeypatch.setattr(hub_mod.os, "kill", lambda pid, sig: killed.append(pid))
     monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: pid in alive)
     monkeypatch.setattr(liveness, "status", lambda s, **kw: "live" if s["claude_pid"] in alive else "dead")
+    monkeypatch.setattr(launch, "open_session", lambda store, sid: opened.append(sid))
+    store.set_context(sid, 220_000, 1_000_000)
     hub.refresh()
     done = hub.compact_then_relaunch(sid, (4242, 1))
     assert done.ok and told(done) == [("relaunching demo: compacting first (it's asked what to keep)",
-                                        "information")], desc
+                                        "information")]
+    return killed, opened
+
+
+def compacted_to(store, sid, tokens, activity):
+    """The host records a context since Compact was asked for, and an activity line."""
+    store.set_context(sid, tokens, 1_000_000)
+    store.set_activity(sid, activity)
+
+
+@pytest.mark.parametrize("then, stopped, said, desc", [
+    (lambda st, sid: compacted_to(st, sid, 40_000, host_mod.COMPACTED + " 220k → 40k tokens"), True,
+     "stopping its host", "compacted: its host is stopped"),
+    (lambda st, sid: compacted_to(st, sid, 40_000, "idle"), True, "stopping its host",
+     "compacted, then a turn queued behind /compact ended: the line says idle, the context says compacted"),
+    (lambda st, sid: compacted_to(st, sid, 40_000, "running Bash: ls"), False, None,
+     "compacted, with a turn queued behind it running: it waits for that turn"),
+    (lambda st, sid: compacted_to(st, sid, 230_000, "idle"), False, None,
+     "a turn ended, not compacted: it waits"),
+    (lambda st, sid: st.set_activity(sid, "idle · compacted 300k → 40k tokens"), False, None,
+     "a compaction from before Relaunch: its line isn't this one's"),
+    (lambda st, sid: st.set_activity(sid, "thinking"), False, None, "still collecting notes: it waits"),
+    (lambda st, sid: st.set_activity(sid, "interrupted"), False, "Compact was interrupted",
+     "interrupted: given up, and said so"),
+    (lambda st, sid: st.set_activity(sid, host_mod.NO_NOTES), False, "Compact got no notes back",
+     "no notes: given up, and said so"),
+    ("timeout", False, "wasn't compacted within 30 minutes", "too long: given up, and said so"),
+    ("late", False, "wasn't compacted within 30 minutes",
+     "compacted, but only seen past the deadline: given up, never a restart hours later"),
+    ("shell", False, "it was handed to a shell tab", "handed to a shell tab: given up, not 'relaunched'"),
+    ("other", False, "its host was started again meanwhile", "another host took over: given up"),
+])
+def test_compact_then_relaunch(hub, store, sid, heard, monkeypatch, then, stopped, said, desc):
+    alive = {4242, 5151}
+    killed, opened = compacting(hub, store, sid, monkeypatch, alive)
     s = store.session(sid)
-    assert (s["host_command"], s["activity"]) == ("compact", hub_mod.COMPACTING_TO_RELAUNCH), desc
-    assert sid in hub.compacting and store.relaunches()[sid][2] is True, f"{desc}: kept in the store"
-    if activity == "timeout":
+    assert (s["host_command"], s["activity"]) == ("compact", ""), f"{desc}: the activity line stays the host's"
+    assert sid in hub.compacting and store.relaunches()[sid][2] is not None, f"{desc}: kept in the store"
+    if then == "timeout":
         hub.relaunching[sid] = (0.0, (4242, 1))
+    elif then == "late":
+        compacted_to(store, sid, 40_000, "idle")
+        hub.relaunching[sid] = (0.0, (4242, 1))
+    elif then == "shell":
+        store.set_shell(sid, "tab")
+        store.db.execute("UPDATE sessions SET claude_pid = 5151")
+    elif then == "other":
+        store.db.execute("UPDATE sessions SET claude_pid = 5151")
     else:
-        store.set_activity(sid, activity)
+        then(store, sid)
     hub.refresh()
     hub.finish_relaunches()
     assert killed == ([4242] if stopped else []), desc
     if said:
         assert any(said in text for text, _ in heard), f"{desc}: {heard}"
+    assert not any("relaunched demo" == text for text, _ in heard), desc
     under_way = sid in hub.relaunching
     assert under_way == (stopped or not said), f"{desc}: given up only when said"
     assert (sid in hub.compacting) == (under_way and not stopped), f"{desc}: compacting until stopped"
+    assert not opened, desc
     if stopped:
         assert store.session(sid)["host_command"] is None, f"{desc}: no Compact left for the new host"
-        assert store.relaunches()[sid][2] is False, f"{desc}: now waiting for it to stop"
+        assert store.relaunches()[sid][2] is None, f"{desc}: now waiting for it to stop"
+
+
+def test_a_compacting_relaunch_whose_host_died_is_relaunched(hub, store, sid, heard, monkeypatch):
+    alive = {4242}
+    killed, opened = compacting(hub, store, sid, monkeypatch, alive)
+    alive.clear()
+    for _ in range(2):   # let go of compacting, then started again as any stopped host
+        hub.refresh()
+        hub.finish_relaunches()
+    assert (killed, opened) == ([], [sid])
+
+
+@pytest.mark.parametrize("activity, command, sent, desc", [
+    ("idle", None, True, "idle: Compact is asked for"),
+    ("compacting: collecting notes", None, False, "a Compact under way: not a second one"),
+    (host_mod.AWAITING_NOTES, None, False, "a Compact waiting for its notes: not a second one"),
+    ("compacting", None, False, "/compact running: not a second one"),
+    ("thinking", "compact", False, "Compact pressed, not yet taken: not a second one"),
+])
+def test_compact_first_never_asks_twice(hub, store, sid, monkeypatch, activity, command, sent, desc):
+    host(store, sid)
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
+    store.set_activity(sid, activity)
+    if command:
+        store.command(sid, command)
+    hub.refresh()
+    asked = []
+    real = store.command
+    monkeypatch.setattr(store, "command", lambda s, what: (asked.append(what), real(s, what)))
+    assert hub.compact_then_relaunch(sid, (4242, 1)).ok, desc
+    assert asked == (["compact"] if sent else []), desc
+    assert sid in hub.compacting, desc
+
+
+def test_interrupt_cancels_compact_first_in_every_wheelhouse(store, sid, monkeypatch):
+    """Interrupt cancels a Relaunch waiting on Compact, from the wheelhouse that began it
+    or another (the daemon's); the one that began it lets it go quietly."""
+    host(store, sid)
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    began, other = Hub(store), Hub(store)
+    said = []
+    began.listen(lambda e: said.append(e.text))
+    began.refresh()
+    assert began.compact_then_relaunch(sid, (4242, 1)).ok
+    done = other.host_command(sid, "interrupt")
+    assert any("cancelled" in text for text, _ in told(done)), told(done)
+    assert store.relaunches() == {} and store.session(sid)["host_command"] == "interrupt"
+    store.set_context(sid, 40_000, 1_000_000)   # compacted after all: still not relaunched
+    store.set_activity(sid, "idle")
+    began.refresh()
+    began.finish_relaunches()
+    assert sid not in began.relaunching and sid not in began.compacting and said == []
 
 
 def test_a_compacting_relaunch_is_carried_on_by_a_hub_started_again(store, sid, monkeypatch):

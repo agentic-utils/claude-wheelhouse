@@ -1,4 +1,5 @@
 import contextlib
+import json
 import threading
 from datetime import datetime, timezone
 from unittest import mock
@@ -533,3 +534,23 @@ def test_older_code_still_writes_a_database_with_the_model_columns(store, tmp_pa
                      "VALUES ('old', '', '', '', ?, '2026-10-01T00:00:00+00:00', 0, 'sdk')", (str(tmp_path),))
     s = store.session("old")
     assert (s["model"], s["effort"], s["applied_model"], s["applied_effort"]) == (None, None, None, None)
+
+
+@pytest.mark.parametrize("stored, expected, desc", [
+    ([4242, 1, 99.0], (99.0, (4242, 1), None), "a plain relaunch: older code wrote this too"),
+    ([4242, 1, 99.0, True, 50.0], (99.0, (4242, 1), 50.0), "compacting first, asked at 50"),
+    ([4242, 1, 99.0, True], (99.0, (4242, 1), 0.0), "compacting first, from round 43's code: asked at no time"),
+    ([4242, 1, 99.0, False], (99.0, (4242, 1), None), "round 43's plain relaunch"),
+])
+def test_relaunches_read_every_version(store, sid, stored, expected, desc):
+    store.db.execute("UPDATE sessions SET relaunch = ?", (json.dumps(stored),))
+    assert store.relaunches() == {sid: expected}, desc
+
+
+@pytest.mark.parametrize("asked, stored, desc", [
+    (None, [4242, 1, 99.0], "a plain relaunch is stored as older code reads it"),
+    (50.0, [4242, 1, 99.0, True, 50.0], "compacting first"),
+])
+def test_set_relaunch(store, sid, asked, stored, desc):
+    store.set_relaunch(sid, (4242, 1), 99.0, asked)
+    assert json.loads(store.session(sid)["relaunch"]) == stored, desc
