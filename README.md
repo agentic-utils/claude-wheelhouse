@@ -290,7 +290,10 @@ newer code restarts a daemon running older code from the same checkout.
 The daemon and the app share a secret: `daemon.token` beside the database, readable by you
 alone, made by the daemon the first time it starts and kept from then on. Every request
 carries it, and the daemon refuses one without it. `claude-wheelhouse token` prints it, to
-give to another machine. `claude-wheelhouse --connect host:7428` runs
+give to another machine. The daemon won't start if the file can be read by anyone else
+(`chmod 600` it). To replace the token, delete the file, stop the daemon (`claude-wheelhouse
+daemon --stop`), start it again (open the app), then give the new token to each `--connect`
+machine. `claude-wheelhouse --connect host:7428` runs
 the app on another machine against a daemon listening on an address that machine reaches
 (a VPN's): the token comes from `--token-file`, else `WHEELHOUSE_TOKEN`, else it asks for
 it, never from the command line. `claude-wheelhouse --local` runs the app with a hub of its

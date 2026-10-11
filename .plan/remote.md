@@ -124,10 +124,14 @@ was before 2c, its hub in process: the way back, at once.
   read the same file, `daemon.token` in the state dir (the database's directory, beside
   `daemon.lock`), mode 0600, so only the user can read it. It holds 32 random bytes,
   URL-safe base64. The daemon makes it the first time it starts, under its lock, so two
-  starting at once can't make two, and reuses it on every start after. Every request
+  starting at once can't make two, and reuses it on every start after, but only while the
+  file is the user's own and nobody else's to read or write: otherwise it refuses to
+  start, saying `chmod 600 <path>`, as ssh does with a key file. A temporary file left by
+  a start that died mid-write is removed at the next. Every request
   presents it as `Authorization: Bearer <token>`, GETs, commands, `/hello` and the event
   stream alike; one that doesn't gets 401 (with `WWW-Authenticate: Bearer`) and a message
-  saying `claude-wheelhouse token` prints it. It's compared in constant time
+  saying `claude-wheelhouse token` prints it. That's checked before routing, so a path the
+  daemon doesn't serve, or a method a route doesn't take, gets 401 too, never 404 or 405. It's compared in constant time
   (`hmac.compare_digest`). The Host check (D47) comes first, so a page rebound by DNS
   learns nothing, then the token, then Origin and the Idempotency-Key, which stay as they
   are: the key is still the cross-site guard for a browser that holds the token one day.
@@ -136,6 +140,16 @@ was before 2c, its hub in process: the way back, at once.
   address in the clear, and TLS is still phase 5. `claude-wheelhouse token` prints it, to
   give to a client on another machine. Nothing the daemon starts inherits
   `WHEELHOUSE_TOKEN`.
+  - **Replacing it.** It's never rotated by itself. To replace it: delete the file, stop
+    the daemon (`claude-wheelhouse daemon --stop`, which sends SIGTERM to the pid its lock
+    names, so it needs no token), start it again (open the app), which makes a new one,
+    then hand the new token to each `--connect` machine.
+  - **A token file that no longer matches the running daemon** (deleted, unreadable,
+    replaced or restored): the daemon keeps the token it read as it started, so the app
+    says what is wrong with the file, names the daemon's pid and says to stop it, at once,
+    without waiting; `claude-wheelhouse token` says the same. Under a running app, a token
+    refused is said as that, not as the daemon unreachable, and the token file is read again
+    whenever the stream reconnects, so stopping and starting the daemon is enough.
   - **`--connect`** takes the token from `--token-file PATH`, else `WHEELHOUSE_TOKEN`,
     else asks for it on the terminal without echo. Never a flag's value, which `ps` and
     the shell's history would show.
@@ -152,7 +166,8 @@ was before 2c, its hub in process: the way back, at once.
     `WHEELHOUSE_PORT`. Then it waits up to 10 s for the lock to be held and `/hello` to
     answer. Two TUIs starting at once both start one; the second finds the lock held and
     exits, and both join the first.
-  - **Held, but no answer** within 3 s (a daemon hung): the TUI says so, with its pid, and
+  - **Held, but no answer** within 10 s, as long as one just started has (a daemon hung):
+    the TUI says so, with its pid, and
     stops. It never kills a daemon it can't talk to; `--local` runs without it.
   - **It couldn't start** (the port taken by something else, say): the TUI says so, with
     the log's last line, and stops.
@@ -161,7 +176,8 @@ was before 2c, its hub in process: the way back, at once.
     The same fingerprint: join. Another, from the same package path: the code on disk has
     changed under a running daemon (a pull, say), so the TUI asks it to stop (`POST
     /shutdown`), waits for that daemon (its pid) to let go of the lock, starts one on the
-    new code and says so. This is safe because the daemon holds nothing that isn't in the database (a Relaunch under way
+    new code and says so: only the app whose request stopped it, as a daemon answers any
+    later `/shutdown` that it's stopping already. This is safe because the daemon holds nothing that isn't in the database (a Relaunch under way
     is, in `sessions.relaunch`), but for an answer the database couldn't take, which it writes
     as it stops if it can. Its other clients see their streams end and reconnect. Another
     fingerprint from another path (another checkout): joined if the API version matches,
@@ -228,8 +244,12 @@ was before 2c, its hub in process: the way back, at once.
   - A conversation a client has asked for is announced ("conversation") at the tick
     whenever its transcript has changed since it was last served, not only when a turn with
     usage lands: tool results, notices and a reply streamed in place grow it too, and the
-    TUI in process saw those at its next read.
-  - New session, from this machine (a loopback peer) only, may still open a tab. Under
+    TUI in process saw those at its next read. Once a tick: not again when the context read
+    has announced it. One asked for before its transcript existed (a new session's) is
+    looked for at each tick until it does.
+  - New session, from this machine only, may still open a tab: a peer on the loopback, on
+    the address the daemon listens on (an app here joins at the lock's address, a VPN's
+    say, so its requests come from there), or on any other address of this machine's own. Under
     `--connect` it offers no tab and no Browse (the directories are the daemon's), and the
     daemon checks the directory.
   - The text typed but not sent is still in memory, per client: the file per target, and
