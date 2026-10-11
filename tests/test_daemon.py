@@ -925,13 +925,38 @@ def local_ip() -> str | None:
     ("192.0.2.1", False, "an address of another machine's (TEST-NET-1)"),
     ("nonsense", False, "not an address"),
     ("own", True, "an address of this machine's off the loopback"),
+    ("0.0.0.0", False, "unspecified, which binds"),
+    ("::", False, "IPv6's unspecified"),
+    ("255.255.255.255", False, "the broadcast address, which binds"),
+    ("subnet broadcast", False, "a subnet's broadcast address, which binds"),
+    ("224.0.0.1", False, "multicast, which binds"),
+    ("ff02::1", False, "IPv6's multicast"),
 ])
 def test_own_address(host, own, desc):
     if host == "own":
         host = local_ip()
         if host is None:
             pytest.skip("this machine has no address off the loopback")
+    if host == "subnet broadcast":
+        host = next((str(ip) for ip in daemon_mod.broadcasts() if not ip.is_unspecified), None)
+        if host is None:
+            pytest.skip("this machine has no subnet broadcast address")
     assert daemon_mod.own_address(host) is own, desc
+
+
+@pytest.mark.parametrize("ipv4, ipv6, desc", [
+    ("1", "0", "IPv4's set"),
+    ("0", "1", "IPv6's set"),
+])
+def test_where_any_address_binds_only_the_loopback_is_own(tmp_path, monkeypatch, ipv4, ipv6, desc):
+    host = local_ip()
+    if host is None:
+        pytest.skip("this machine has no address off the loopback")
+    files = (tmp_path / "ipv4", tmp_path / "ipv6")
+    files[0].write_text(ipv4 + "\n")
+    files[1].write_text(ipv6 + "\n")
+    monkeypatch.setattr(daemon_mod, "NONLOCAL_BIND", files)
+    assert (daemon_mod.own_address(host), daemon_mod.own_address("127.0.0.1")) == (False, True), desc
 
 
 @pytest.mark.parametrize("method, path, token, status, desc", [
@@ -963,19 +988,30 @@ async def test_a_conversation_asked_for_before_its_transcript_exists_is_announce
     assert kinds(daemon).count(("conversation", sid)) == 1, kinds(daemon)
 
 
-async def test_a_conversation_is_announced_once_in_a_tick_that_read_its_context_too(
-        daemon, store, sid, tmp_path, monkeypatch):
+async def test_a_conversation_is_announced_once_when_its_context_read_lands_after_the_tick(
+        store, sid, tmp_path, monkeypatch):
+    """As in production: the context read runs on the pool and is said on the hub's thread,
+    after the tick that started it has published what grew. Said once, not twice."""
     monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
     folder = tmp_path / "projects" / transcript.project_folder(str(tmp_path))
     folder.mkdir(parents=True)
     file = folder / f"{sid}.jsonl"
     file.write_text(json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n")
-    assert (await call(daemon, "GET", f"/sessions/{sid}/conversation")).status_code == 200
-    with file.open("a") as f:
-        f.write(json.dumps({"type": "user", "message": {"content": "more"}}) + "\n")
-    monkeypatch.setattr(daemon.hub, "read_contexts", lambda: daemon.hub.emit(Event("landed", sid=sid)))
-    daemon.tick()
-    assert kinds(daemon).count(("conversation", sid)) == 1, kinds(daemon)
+    d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN)   # not inline: the pool and the hub's thread
+    d.feed = Feed(start=100)
+    try:
+        assert (await call(d, "GET", f"/sessions/{sid}/conversation")).status_code == 200
+        with file.open("a") as f:
+            f.write(json.dumps({"type": "user", "message": {"content": "more"}}) + "\n")
+        d.worker.submit(d.tick).result()
+        d.pool.shutdown(wait=True)   # the context read done, and its "landed" posted to the hub's thread
+        d.worker.submit(lambda: None).result()   # and heard there
+        assert ("stats", sid) in kinds(d), kinds(d)
+        assert kinds(d).count(("conversation", sid)) == 1, kinds(d)
+    finally:
+        d.pool.shutdown()
+        d.worker.shutdown()
+        d.watch.close()
 
 
 async def test_only_the_first_shutdown_stops_the_daemon(daemon):

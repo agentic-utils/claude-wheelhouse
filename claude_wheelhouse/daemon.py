@@ -34,6 +34,7 @@ import os
 import signal
 import socket
 import sqlite3
+import struct
 import sys
 import threading
 import time
@@ -207,15 +208,60 @@ class Feed:
         self.moved.set()
 
 
+def stamp_of(follower) -> tuple | None:
+    """A followed transcript's (size, mtime), or None if it isn't there (yet). The path is
+    read once: a conversation read on another thread may let go of it meanwhile
+    (Follower.forget)."""
+    path = follower.path or follower.find()
+    try:
+        st = path.stat() if path is not None else None
+    except OSError:
+        return None
+    return None if st is None else (st.st_size, st.st_mtime_ns)
+
+
+SIOCGIFBRDADDR = 0x8919   # linux/sockios.h: an interface's IPv4 broadcast address
+NONLOCAL_BIND = ("/proc/sys/net/ipv4/ip_nonlocal_bind", "/proc/sys/net/ipv6/ip_nonlocal_bind")
+
+
+def broadcasts() -> set[ipaddress.IPv4Address]:
+    """This machine's interfaces' subnet broadcast addresses, which a socket here can bind
+    to, though no peer can send from one."""
+    found = set()
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        for _, name in socket.if_nameindex():
+            with contextlib.suppress(OSError):
+                ifreq = fcntl.ioctl(s.fileno(), SIOCGIFBRDADDR, struct.pack("256s", name.encode()[:15]))
+                found.add(ipaddress.IPv4Address(ifreq[20:24]))
+    return found
+
+
+def binds_anything() -> bool:
+    """Whether the kernel lets a socket bind to any address, its own or not (ip_nonlocal_bind
+    set, for IPv4 or IPv6), so a bind proves nothing."""
+    for file in NONLOCAL_BIND:
+        with contextlib.suppress(OSError, ValueError):
+            if int(open(file).read()) != 0:
+                return True
+    return False
+
+
 def own_address(host: str) -> bool:
     """Whether an IP address is one of this machine's own: the loopback, or one a socket
-    here can bind to (no other machine's can be)."""
+    here can bind to (no other machine's can be). Never one no peer sends from: unspecified
+    (0.0.0.0, ::), broadcast (255.255.255.255, a subnet's) or multicast (224.0.0.0/4,
+    ff00::/8), all of which bind. The bind proves the address ours only while
+    net.ipv4.ip_nonlocal_bind and net.ipv6.ip_nonlocal_bind are 0: if either is 1, every
+    address binds, so only the loopback counts (this_machine takes the listen address too)."""
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
         return False
     if ip.is_loopback:
         return True
+    if (ip.is_unspecified or ip.is_multicast or ip == ipaddress.IPv4Address("255.255.255.255")
+            or ip in broadcasts() or binds_anything()):
+        return False
     with socket.socket(socket.AF_INET6 if ip.version == 6 else socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
             s.bind((host, 0))
@@ -294,8 +340,8 @@ class Daemon:
         self.watch = sqlite3.connect(store.path, isolation_level=None, check_same_thread=False)
         self.marked: dict = {}                      # the marks as last published
         self.shown: dict[str, str] = {}   # each session's status as last published
-        self.grown: dict[str, tuple] = {}   # each followed transcript's (size, mtime) as last published (publish_grown)
-        self.announced: set[str] = set()   # the conversations said to have moved since the tick began
+        # each followed transcript's (size, mtime) as last published, by publish_grown or a context read
+        self.grown: dict[str, tuple | None] = {}
         self.stopping = False   # a /shutdown has been taken: the next is told so
         self.view: list[dict] = []        # /sessions, as the hub's thread last made it
         self.unkept: dict[str, dict] = {}  # answers the store couldn't keep: kept here till a tick can
@@ -372,18 +418,24 @@ class Daemon:
     def heard(self, event: Event) -> None:
         """What the hub says by itself, to every client: a notice as it is, and a transcript
         read that brought something as that session's conversation and stats (its context
-        size) moving."""
+        size) moving. Its conversation is not said again if publish_grown has said it for the
+        transcript as it is now: the read lands after the tick that started it has published
+        what grew (it runs on the pool, and is said on the hub's thread). Both run on the
+        hub's thread, so grown is never changed under either."""
         if event.kind == "notice":
             self.publish("notice", text=event.text, severity=event.severity)
         elif event.kind == "landed":
             self.view = self.session_views()   # its context size
-            self.announced.add(event.sid)
-            self.publish("conversation", event.sid)
+            follower = self.hub.followers.get(event.sid)
+            stamp = None if follower is None else stamp_of(follower)
+            if stamp is None or stamp != self.grown.get(event.sid):
+                self.publish("conversation", event.sid)
+                if stamp is not None:
+                    self.grown[event.sid] = stamp
             self.publish("stats", event.sid)
 
     def tick(self) -> None:
         """The hub's refresh, as the TUI's tick has it, then what moved."""
-        self.announced = set()
         self.keep_answers()
         hub, seen = self.hub, self.marks()   # before the refresh: see publish_moved
         hub.refresh()
@@ -434,21 +486,15 @@ class Daemon:
 
     def publish_grown(self) -> None:
         """A conversation a client has asked for, its transcript changed since it was last
-        served: "conversation", once per change, and not again in a tick whose context read
-        has said so already. The context reads say so only for a turn with usage, and a
+        served: "conversation", once per change, and not again for a change a context read
+        has said already (heard). The context reads say so only for a turn with usage, and a
         transcript grows with tool results, notices and a reply streamed in place too, which
         a TUI in process saw at its next read. One asked for before its transcript existed
-        (a new session's) is looked for each time until it does. The path is read once: a
-        conversation read on another thread may let go of it meanwhile (Follower.forget)."""
+        (a new session's) is looked for each time until it does: cheap, one listing of the
+        projects dir and one stat per project in it (stamp_of)."""
         for sid, follower in list(self.hub.followers.items()):
-            path = follower.path or follower.find()
-            try:
-                st = path.stat() if path is not None else None
-            except OSError:
-                st = None
-            stamp = None if st is None else (st.st_size, st.st_mtime_ns)
-            if (stamp is not None and stamp != follower.seen and stamp != self.grown.get(sid)
-                    and sid not in self.announced):
+            stamp = stamp_of(follower)
+            if stamp is not None and stamp != follower.seen and stamp != self.grown.get(sid):
                 self.publish("conversation", sid)
             self.grown[sid] = stamp
         for sid in self.grown.keys() - self.hub.followers.keys():
