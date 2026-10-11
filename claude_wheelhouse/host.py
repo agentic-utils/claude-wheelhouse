@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from . import liveness, models, stats, transcript
 from .launch import PROTOCOL_SDK, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT
-from .store import CLOSED, SessionGone, Store, db_path, now
+from .store import CLOSED, SessionGone, Store, db_path, now, runner
 
 POLL_SECONDS = 1.0
 SHELL_POLL_SECONDS = 2.0
@@ -973,10 +973,17 @@ def default_open_tab(store: Store, sid: str) -> None:
 
 
 def main(sid: str) -> None:
+    """The `host` subcommand: host a session recorded as an SDK session, and nothing else.
+    EXPERIMENTAL (features.py). Only SDK mode records new ones, so with it off this hosts
+    only one that existed already: the app's Relaunch and Restore start it this way
+    (launch.open_host, which passes no --enable-sdk), so that session isn't stranded."""
     store = Store(db_path())
-    if store.session(sid) is None:
+    session = store.session(sid)
+    if session is None:
         sys.exit(f"claude-wheelhouse host: no session {sid} (ended?)")
-    os.chdir(store.session(sid)["cwd"])
+    if runner(session) != "sdk":
+        sys.exit(f"claude-wheelhouse host: session {sid} runs in a tab, not in a host")
+    os.chdir(session["cwd"])
     host = Host(store, sid)
     loop = asyncio.new_event_loop()
     task = loop.create_task(host.run())

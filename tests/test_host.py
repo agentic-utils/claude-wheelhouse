@@ -262,6 +262,33 @@ def test_open_session(store, tmp_path, monkeypatch, runner, opened, desc):
     assert seen == [opened], desc
 
 
+@pytest.mark.parametrize("runner, on, hosted, desc", [
+    ("sdk", False, True, "an existing SDK session with SDK mode off: Relaunch and Restore keep working"),
+    ("sdk", True, True, "an SDK session with it on"),
+    ("tab", False, False, "a tab session, SDK mode off: refused"),
+    ("tab", True, False, "a tab session, even with it on: refused"),
+])
+def test_the_host_command_hosts_only_sdk_sessions(store, tmp_path, monkeypatch, runner, on, hosted, desc):
+    monkeypatch.setattr(features, "_flag", on)
+    sid = store.create_session(str(tmp_path), runner=runner)
+    ran = []
+
+    class FakeHost:
+        def __init__(self, store, sid):
+            ran.append(sid)
+
+        async def run(self):
+            pass
+    monkeypatch.setattr(host_mod, "Host", FakeHost)
+    monkeypatch.chdir(tmp_path)   # main moves into the session's directory: put back after
+    if hosted:
+        host_mod.main(sid)
+    else:
+        with pytest.raises(SystemExit, match="runs in a tab, not in a host"):
+            host_mod.main(sid)
+    assert ran == ([sid] if hosted else []), desc
+
+
 @pytest.mark.parametrize("on, env, expected, desc", [
     (True, None, "sdk", "default"),
     (True, "tab", "tab", "WHEELHOUSE_RUNNER=tab"),
