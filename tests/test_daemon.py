@@ -740,13 +740,16 @@ async def test_relaunch_can_compact_first(daemon, store, sid, monkeypatch, body,
     assert store.session(sid)["host_command"] == command, desc
 
 
-@pytest.mark.parametrize("peer, status, desc", [
-    ("127.0.0.1", 200, "from this machine: the TUI's New session, with its tab box ticked"),
-    ("100.64.0.7", 400, "from another machine: a tab would open on a screen nobody there sees"),
+@pytest.mark.parametrize("address, peer, status, desc", [
+    ("127.0.0.1", "127.0.0.1", 200, "from this machine: the TUI's New session, with its tab box ticked"),
+    ("127.0.0.1", "100.64.0.7", 400, "from another machine: a tab would open on a screen nobody there sees"),
+    ("100.64.0.1", "100.64.0.1", 200, "a daemon on a VPN address, joined by an app on this machine at that address"),
+    ("100.64.0.1", "100.64.0.7", 400, "a daemon on a VPN address, from another machine on the VPN"),
 ])
-async def test_a_tab_session_only_from_this_machine(daemon, store, tmp_path, peer, status, desc):
-    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=daemon.app, client=(peer, 50000)), base_url=URL,
-                                  headers={"Authorization": f"Bearer {TOKEN}"}) as c:
+async def test_a_tab_session_only_from_this_machine(daemon, store, tmp_path, address, peer, status, desc):
+    daemon.allowed = hosts(address, 7428)
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=daemon.app, client=(peer, 50000)),
+                                  base_url=f"http://{address}:7428", headers={"Authorization": f"Bearer {TOKEN}"}) as c:
         r = await c.post("/sessions", json={"cwd": str(tmp_path), "runner": "tab"},
                          headers={"Idempotency-Key": str(uuid.uuid4())})
     assert r.status_code == status, desc
@@ -901,3 +904,87 @@ def test_the_lock_is_the_users_alone_and_names_an_address_only_once_listening(tm
         assert (tmp_path / daemon_mod.LOCK).read_text() == f"pid {os.getpid()} at http://127.0.0.1:7428\n"
     finally:
         lock.close()
+
+
+def local_ip() -> str | None:
+    """One of this machine's own addresses off the loopback, if it has one: the one a socket
+    would send from to an outside address (UDP: nothing is sent)."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("192.0.2.1", 9))
+            ip = s.getsockname()[0]
+        except OSError:
+            return None
+    return None if ip.startswith("127.") or ip == "0.0.0.0" else ip
+
+
+@pytest.mark.parametrize("host, own, desc", [
+    ("127.0.0.1", True, "the loopback"),
+    ("::1", True, "IPv6's loopback"),
+    ("192.0.2.1", False, "an address of another machine's (TEST-NET-1)"),
+    ("nonsense", False, "not an address"),
+    ("own", True, "an address of this machine's off the loopback"),
+])
+def test_own_address(host, own, desc):
+    if host == "own":
+        host = local_ip()
+        if host is None:
+            pytest.skip("this machine has no address off the loopback")
+    assert daemon_mod.own_address(host) is own, desc
+
+
+@pytest.mark.parametrize("method, path, token, status, desc", [
+    ("GET", "/nosuch", None, 401, "a path it doesn't serve, without the token"),
+    ("POST", "/nosuch/deeper", None, 401, "nor a command there"),
+    ("GET", "/dispatch", None, 401, "a method a route doesn't take, without the token"),
+    ("GET", "/nosuch", TOKEN, 404, "with the token: not there"),
+    ("GET", "/dispatch", TOKEN, 405, "with the token: not that method"),
+])
+async def test_what_isnt_served_is_refused_without_the_token_first(daemon, method, path, token, status, desc):
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=daemon.app), base_url=URL, headers=headers) as c:
+        r = await c.request(method, path)
+    assert r.status_code == status, desc
+    assert status != 401 or r.headers.get("www-authenticate") == "Bearer", desc
+
+
+async def test_a_conversation_asked_for_before_its_transcript_exists_is_announced_once_it_does(
+        daemon, store, sid, tmp_path, monkeypatch):
+    """A new session's conversation opened at once: its follower has no path yet."""
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    assert (await call(daemon, "GET", f"/sessions/{sid}/conversation")).status_code == 200
+    daemon.publish_grown()
+    assert ("conversation", sid) not in kinds(daemon), "no transcript yet: nothing to say"
+    folder = tmp_path / "projects" / transcript.project_folder(str(tmp_path))
+    folder.mkdir(parents=True)
+    (folder / f"{sid}.jsonl").write_text(json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n")
+    daemon.publish_grown()
+    assert kinds(daemon).count(("conversation", sid)) == 1, kinds(daemon)
+
+
+async def test_a_conversation_is_announced_once_in_a_tick_that_read_its_context_too(
+        daemon, store, sid, tmp_path, monkeypatch):
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    folder = tmp_path / "projects" / transcript.project_folder(str(tmp_path))
+    folder.mkdir(parents=True)
+    file = folder / f"{sid}.jsonl"
+    file.write_text(json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n")
+    assert (await call(daemon, "GET", f"/sessions/{sid}/conversation")).status_code == 200
+    with file.open("a") as f:
+        f.write(json.dumps({"type": "user", "message": {"content": "more"}}) + "\n")
+    monkeypatch.setattr(daemon.hub, "read_contexts", lambda: daemon.hub.emit(Event("landed", sid=sid)))
+    daemon.tick()
+    assert kinds(daemon).count(("conversation", sid)) == 1, kinds(daemon)
+
+
+async def test_only_the_first_shutdown_stops_the_daemon(daemon):
+    """Two apps found it on older code: only the one that stopped it says it restarted it."""
+    stopped = []
+    daemon.stop = lambda: stopped.append(1)
+    first = await call(daemon, "POST", "/shutdown")
+    second = await call(daemon, "POST", "/shutdown")
+    await asyncio.sleep(0)
+    assert (first.json()["ok"], told(first)) == (True, ["the daemon is stopping"])
+    assert (second.json()["ok"], told(second)) == (False, ["the daemon is stopping already"])
+    assert stopped == [1]

@@ -32,6 +32,7 @@ import ipaddress
 import json
 import os
 import signal
+import socket
 import sqlite3
 import sys
 import threading
@@ -44,6 +45,7 @@ import uvicorn
 from sse_starlette import EventSourceResponse
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware import Middleware
 from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
@@ -205,12 +207,49 @@ class Feed:
         self.moved.set()
 
 
-def loopback(request: Request) -> bool:
-    """Whether the request came from this machine."""
+def own_address(host: str) -> bool:
+    """Whether an IP address is one of this machine's own: the loopback, or one a socket
+    here can bind to (no other machine's can be)."""
     try:
-        return request.client is not None and ipaddress.ip_address(request.client.host).is_loopback
+        ip = ipaddress.ip_address(host)
     except ValueError:
         return False
+    if ip.is_loopback:
+        return True
+    with socket.socket(socket.AF_INET6 if ip.version == 6 else socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((host, 0))
+        except OSError:
+            return False
+    return True
+
+
+def this_machine(request: Request) -> bool:
+    """Whether the request came from this machine: from the loopback, from the address the
+    daemon listens on (an app here joins at the lock's address, a VPN's say, so that's where
+    its requests come from), or from any other address of this machine's own."""
+    if request.client is None:
+        return False
+    peer, server = request.client.host, request.scope.get("server")
+    return (server is not None and peer == server[0]) or own_address(peer)
+
+
+class Guard:
+    """Every request, before routing (Daemon.check_host): one to a path the daemon doesn't
+    serve, or by a method it doesn't take there, is refused for its Host or its token first,
+    as any other, so nothing without the token learns which routes there are."""
+
+    def __init__(self, app, daemon: "Daemon"):
+        self.app, self.daemon = app, daemon
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http":
+            try:
+                self.daemon.check_host(Request(scope))
+            except Refused as e:
+                await refusal(e)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
 
 
 def done_json(done: Done) -> dict:
@@ -256,6 +295,8 @@ class Daemon:
         self.marked: dict = {}                      # the marks as last published
         self.shown: dict[str, str] = {}   # each session's status as last published
         self.grown: dict[str, tuple] = {}   # each followed transcript's (size, mtime) as last published (publish_grown)
+        self.announced: set[str] = set()   # the conversations said to have moved since the tick began
+        self.stopping = False   # a /shutdown has been taken: the next is told so
         self.view: list[dict] = []        # /sessions, as the hub's thread last made it
         self.unkept: dict[str, dict] = {}  # answers the store couldn't keep: kept here till a tick can
         self.reading: dict[str, threading.Lock] = {}   # each session's transcript, read by one request at a time
@@ -293,7 +334,7 @@ class Daemon:
             Route("/tutorial/offer", self.command(self.answer_offer), methods=["POST"]),
             Route("/tutorial/seen", self.command(self.tutorial_seen), methods=["POST"]),
             Route("/shutdown", self.command(self.shutdown_requested), methods=["POST"]),
-        ], lifespan=self.lifespan)
+        ], middleware=[Middleware(Guard, daemon=self)], lifespan=self.lifespan)
 
     # the hub's work and what it says
 
@@ -336,11 +377,13 @@ class Daemon:
             self.publish("notice", text=event.text, severity=event.severity)
         elif event.kind == "landed":
             self.view = self.session_views()   # its context size
+            self.announced.add(event.sid)
             self.publish("conversation", event.sid)
             self.publish("stats", event.sid)
 
     def tick(self) -> None:
         """The hub's refresh, as the TUI's tick has it, then what moved."""
+        self.announced = set()
         self.keep_answers()
         hub, seen = self.hub, self.marks()   # before the refresh: see publish_moved
         hub.refresh()
@@ -391,16 +434,21 @@ class Daemon:
 
     def publish_grown(self) -> None:
         """A conversation a client has asked for, its transcript changed since it was last
-        served: "conversation", once per change. The context reads say so only for a turn
-        with usage, and a transcript grows with tool results, notices and a reply streamed
-        in place too, which a TUI in process saw at its next read."""
+        served: "conversation", once per change, and not again in a tick whose context read
+        has said so already. The context reads say so only for a turn with usage, and a
+        transcript grows with tool results, notices and a reply streamed in place too, which
+        a TUI in process saw at its next read. One asked for before its transcript existed
+        (a new session's) is looked for each time until it does. The path is read once: a
+        conversation read on another thread may let go of it meanwhile (Follower.forget)."""
         for sid, follower in list(self.hub.followers.items()):
+            path = follower.path or follower.find()
             try:
-                st = follower.path.stat() if follower.path is not None else None
+                st = path.stat() if path is not None else None
             except OSError:
                 st = None
             stamp = None if st is None else (st.st_size, st.st_mtime_ns)
-            if stamp is not None and stamp != follower.seen and stamp != self.grown.get(sid):
+            if (stamp is not None and stamp != follower.seen and stamp != self.grown.get(sid)
+                    and sid not in self.announced):
                 self.publish("conversation", sid)
             self.grown[sid] = stamp
         for sid in self.grown.keys() - self.hub.followers.keys():
@@ -455,7 +503,7 @@ class Daemon:
     # requests
 
     def check_host(self, request: Request) -> None:
-        """Every request, before anything else: it names the daemon (D47), so a page rebound
+        """Every request, before anything else (Guard): it names the daemon (D47), so a page rebound
         by DNS learns nothing, then it carries the token (a 401 if not)."""
         if named(request) not in self.allowed:
             raise Refused(421, "this daemon isn't reached by that name")
@@ -468,7 +516,6 @@ class Daemon:
         or the disk), on the hub's (on_hub), or on the event loop (None: memory only)."""
         async def endpoint(request: Request) -> Response:
             try:
-                self.check_host(request)
                 return JSONResponse(handler(request) if run is None else await run(handler, request))
             except Exception as e:
                 return refusal(e)
@@ -481,7 +528,6 @@ class Daemon:
         serves are read again first, so a client refetching on that event sees it."""
         async def endpoint(request: Request) -> Response:
             try:
-                self.check_host(request)
                 origin = request.headers.get("origin")
                 if origin is not None and origin.lower() not in {f"http://{h}" for h in self.allowed}:
                     raise Refused(403, "requests from another site's page are refused")
@@ -535,10 +581,6 @@ class Daemon:
         return response
 
     async def events(self, request: Request) -> Response:
-        try:
-            self.check_host(request)
-        except Refused as e:
-            return refusal(e)
         last = request.headers.get("last-event-id")
         return EventSourceResponse(self.feed.stream(int(last) if last and last.isdigit() else None), ping=PING)
 
@@ -716,12 +758,15 @@ class Daemon:
         """Stop, once this answer has gone: a client found it running older code."""
         if self.stop is None:
             return Done(False).say("this daemon can't be stopped from here", "warning")
+        if self.stopping:   # another client asked first: only that one stopped it
+            return Done(False).say("the daemon is stopping already")
+        self.stopping = True
         self.loop.call_soon_threadsafe(self.stop)
         return Done().say("the daemon is stopping")
 
     def new_session(self, request: Request, body: dict) -> Done:
         """A session in an existing directory, by its absolute path, run by a host. In a tab
-        only for a client on this machine (the loopback): a tab opens on this machine's
+        only for a client on this machine (this_machine): a tab opens on this machine's
         screen, where nobody remote is."""
         cwd = text(body, "cwd")
         if not os.path.isabs(cwd) or not os.path.isdir(cwd):
@@ -729,7 +774,7 @@ class Daemon:
         how = text(body, "runner", False) or "sdk"
         if how not in ("sdk", "tab"):
             raise Refused(400, "runner must be sdk or tab")
-        if how == "tab" and not loopback(request):
+        if how == "tab" and not this_machine(request):
             raise Refused(400, "a session started remotely runs by a host: runner can only be sdk")
         return self.hub.new_session(cwd, text(body, "name", False) or "", text(body, "ticket", False) or "",
                                     text(body, "brief", False) or "", how, text(body, "model", False),
