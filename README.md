@@ -382,7 +382,8 @@ The logs hold your directory paths and session ids: look them over before you at
 
 1. End your sessions: End each one in the wheelhouse (or `/exit` it in its tab), then
    close its tab.
-2. Quit the app (`Q`), then in the clone run `uv run claude-wheelhouse daemon --stop`.
+2. Quit the app (`Q`), then in the clone run `make stop`
+   (`uv run claude-wheelhouse daemon --stop`).
 3. Delete the clone: `make install` put the wheelhouse in the clone's `.venv`, and nowhere
    else.
 4. Delete the state directory: `rm -rf ~/.local/state/claude-wheelhouse`. If you made a
