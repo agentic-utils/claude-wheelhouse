@@ -15,12 +15,10 @@ same keys typed slowly do. A command blocks until it's answered, as the hub's ca
 and the refresh after it fetches what it changed at once."""
 
 import contextlib
-import secrets
 import socket
 import threading
 import time
 import uuid
-from urllib.parse import urlsplit
 from typing import Callable, NamedTuple
 
 from . import adopt, auth, stats, tutorial
@@ -35,7 +33,6 @@ AGENT_POLL = 1.0    # a subagent's conversation shown: fetched again each second
 USAGE_POLL = 60     # the account's usage, as the hub fetches it
 UNREACHABLE = "not connected to the daemon: nothing was sent"
 LOST = "lost the daemon mid-command: it may or may not have been done, so check before trying again"
-IMPOSTOR = "something answers at {url}, but not the wheelhouse daemon: it was never sent the token"
 
 
 class Inbox(NamedTuple):
@@ -119,40 +116,6 @@ class Unreachable(RuntimeError):
     """The daemon can't be reached: nothing was sent (UNREACHABLE)."""
 
 
-class Impostor(Unreachable):
-    """What listens at the daemon's address couldn't prove it holds the token (prove): it
-    was never sent the token, nor anything else."""
-
-
-def prove(http, url: str, token: str, reread=None) -> str:
-    """Whether what listens at url is the daemon, before it's sent the token: it's sent a
-    random nonce and must answer the proof only the token makes (auth.proof), over the
-    address this client reached it at. The token as proven (read again once, if a mismatch
-    may be a rotation); Impostor if it isn't the daemon, or Unreachable if nothing answers.
-    http: a client that sends no token."""
-    import httpx2
-    nonce = secrets.token_hex(16)
-    try:
-        r = http.get(f"{url}/hello", params={"nonce": nonce})
-    except (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.PoolTimeout) as e:
-        raise Unreachable(UNREACHABLE) from e
-    except httpx2.TransportError as e:
-        raise Unreachable(UNREACHABLE) from e
-    try:
-        answer = r.json().get("proof") if r.status_code == 200 else None
-    except ValueError:
-        answer = None
-    host = urlsplit(url).netloc
-    if auth.proven(answer, token, nonce, host):
-        return token
-    if reread is not None:
-        with contextlib.suppress(Exception):
-            fresh = reread()
-            if fresh != token and auth.proven(answer, fresh, nonce, host):
-                return fresh
-    raise Impostor(IMPOSTOR.format(url=url))
-
-
 class Refused(RuntimeError):
     """The daemon refused a request: its status and what it said."""
 
@@ -173,19 +136,17 @@ class RemoteClient:
 
     synchronous: no stream and no threads of its own; each refresh fetches everything at
     once, after before_fetch (a test's: the daemon's tick), as the hub in process read the
-    store. reread: the token read again after a 401 (the local daemon's file, rotated).
-    revive: called when the daemon can't be reached, to start the local one again if it
+    store. revive: called when the daemon can't be reached, to start the local one again if it
     has gone; its URL, or None. elsewhere: the daemon is another machine's (--connect)."""
     remote = True
     elsewhere = False
     store = None   # the database is the daemon's
 
-    def __init__(self, url: str, token: str, reread: Callable[[], str] | None = None,
-                 revive: Callable[[], str | None] | None = None, synchronous: bool = False,
+    def __init__(self, url: str, token: str, revive: Callable[[], str | None] | None = None, synchronous: bool = False,
                  before_fetch: Callable[[], None] | None = None, transport=None):
         import httpx2   # here, not at the top: the TUI in process (--local) never loads it
         self.httpx = httpx2
-        self.url, self.token, self.reread, self.revive = url, token, reread, revive
+        self.url, self.token, self.revive = url, token, revive
         self.synchronous, self.before_fetch = synchronous, before_fetch
         self.transport = transport
         self.http = self.make_http(TIMEOUT)
@@ -221,21 +182,13 @@ class RemoteClient:
         self.layout: dict | None = None   # the kept splitter sizes, read once
         self.stream_socket = None   # the stream's connection, while it's open
         self.refusal: str | None = None   # why the daemon refuses this client, said once
-        self.proven_url: str | None = None   # the URL whose listener last proved it's the daemon (prove)
         self.in_flight = False   # the fetching thread is fetching what it took from dirty
 
     def make_http(self, read: float):
-        """A connection with no token: each request carries it only once the listener has
-        proven it's the daemon (prove)."""
+        """A connection whose every request carries the token."""
         h = self.httpx
-        return h.Client(base_url=self.url, timeout=h.Timeout(read, connect=CONNECT), transport=self.transport)
-
-    def proven(self, http=None) -> None:
-        """The listener at the URL proven to be the daemon, unless it has been since the
-        last failure: before any request carries the token."""
-        if self.proven_url != self.url:
-            self.token = prove(http or self.http, self.url, self.token, self.reread)
-            self.proven_url = self.url
+        return h.Client(base_url=self.url, timeout=h.Timeout(read, connect=CONNECT), transport=self.transport,
+                        headers={"Authorization": auth.header(self.token)})
 
     # the hub's events, said on the TUI's thread
 
@@ -270,38 +223,24 @@ class RemoteClient:
     # requests
 
     def request(self, method: str, path: str, body=None, key: str | None = None):
-        """One request, answered as JSON, or Refused with the daemon's error; a 401 once
-        more with the token read again (rotated). Unreachable if it couldn't connect;
-        the httpx error as it is if the answer was lost after sending."""
+        """One request, answered as JSON, or Refused with the daemon's error (a 401 for a
+        token that isn't the daemon's). Unreachable if it couldn't connect; the httpx error
+        as it is if the answer was lost after sending."""
         if not self.connected and self.threads:   # lost: the stream says when it's back, so not tried meanwhile
             raise Unreachable(UNREACHABLE)
-        self.proven()
-        for attempt in range(2):
-            headers = {"Authorization": auth.header(self.token), **({"Idempotency-Key": key} if key else {})}
+        headers = {"Idempotency-Key": key} if key else {}
+        try:
+            r = self.http.request(method, path, json=body, headers=headers)
+        except (self.httpx.ConnectError, self.httpx.ConnectTimeout, self.httpx.PoolTimeout) as e:
+            raise Unreachable(UNREACHABLE) from e
+        if r.status_code >= 400:
             try:
-                r = self.http.request(method, path, json=body, headers=headers)
-            except (self.httpx.ConnectError, self.httpx.ConnectTimeout, self.httpx.PoolTimeout) as e:
-                self.proven_url = None   # whatever answers next proves itself first
-                raise Unreachable(UNREACHABLE) from e
-            except self.httpx.TransportError:
-                self.proven_url = None
-                raise
-            if r.status_code == 401 and attempt == 0 and self.reread is not None:
-                try:
-                    token = self.reread()
-                except Exception:   # the file gone or unreadable: the refusal stands
-                    token = self.token
-                if token != self.token:   # rotated: the daemon, proven, is sent the new one
-                    self.token = token
-                    continue
-            if r.status_code >= 400:
-                try:
-                    data = r.json()
-                except ValueError:
-                    data = {}
-                raise Refused(r.status_code, data.get("error") or f"the daemon answered {r.status_code}",
-                              data.get("type", ""))
-            return r.json()
+                data = r.json()
+            except ValueError:
+                data = {}
+            raise Refused(r.status_code, data.get("error") or f"the daemon answered {r.status_code}",
+                          data.get("type", ""))
+        return r.json()
 
     def get(self, path: str, params: dict | None = None):
         if params:
@@ -388,7 +327,7 @@ class RemoteClient:
             except (Unreachable, self.httpx.TransportError):
                 with self.lock:
                     self.forced = True   # the next refresh tries again
-            except Refused as e:   # busy (503), or the token refused: the next refresh tries again
+            except Refused as e:   # busy (503), or the token refused (401): the next refresh tries again
                 with self.lock:
                     self.forced = True
                 if e.status != 503:
@@ -721,8 +660,8 @@ class RemoteClient:
             self.post(lambda: self.emit(Event("link", "reconnected to the daemon")))
 
     def refused(self, error: str) -> None:
-        """The daemon answers, but refuses this client (its token, rotated): said once,
-        until it's taken again."""
+        """The daemon answers, but refuses this client (a token that isn't its own): said
+        once, until it's taken again."""
         if self.refusal is None:
             self.refusal = error
             self.post(lambda: self.emit(Event("notice", f"the daemon refused this client: {error}", "error")))
@@ -737,9 +676,7 @@ class RemoteClient:
         try:
             while not self.stopping:
                 try:
-                    # each connection first: what answers now may not be what answered before
-                    self.token = prove(http, self.url, self.token, self.reread)
-                    headers = {"Authorization": auth.header(self.token)}
+                    headers = {}
                     if self.last_event:
                         headers["Last-Event-ID"] = self.last_event
                     with http.sse("/events", headers=headers) as events:
@@ -758,13 +695,10 @@ class RemoteClient:
                                 return
                             self.heard(event.json())
                             self.last_event = event.id or self.last_event   # after: what it moved is marked
-                except Impostor as e:
-                    self.refused(str(e))
                 except (self.httpx.TransportError, self.httpx.SSEError, ValueError, RuntimeError):
                     pass   # RuntimeError: its connection closed under it (disconnect); Unreachable is one
                 if self.stopping:
                     return
-                self.proven_url = None   # the daemon may have gone, and something else taken its address
                 self.lost()
                 if self.revive is not None:
                     url = self.revive()

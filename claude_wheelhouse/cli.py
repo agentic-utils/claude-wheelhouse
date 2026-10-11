@@ -72,8 +72,7 @@ def main() -> None:
     daemon.add_argument("--port", type=int, default=None, help="the port to listen on (default 7428)")
     daemon.add_argument("--name", action="append", default=[], help="another name clients reach this machine by "
                         "(a VPN's name for it), so their requests are accepted: repeat for more")
-    token = sub.add_parser("token", help="print the daemon's token, for a remote client (--connect)")
-    token.add_argument("--rotate", action="store_true", help="replace it: every client with the old one is refused")
+    sub.add_parser("token", help="print the daemon's token, for a client on another machine (--connect)")
     args = p.parse_args()
 
     if args.cmd == "run":
@@ -100,9 +99,8 @@ def main() -> None:
         from .store import db_path
         state_dir = db_path().parent
         try:
-            auth.check_dir(state_dir)
-            print(auth.write(state_dir) if args.rotate else auth.read(auth.path(state_dir)))
-        except (auth.TokenError, OSError) as e:
+            print(auth.read(auth.path(state_dir)))
+        except auth.TokenError as e:
             sys.exit(f"claude-wheelhouse: {e} (the daemon makes it the first time it starts)")
     elif args.cmd == "tutorial":
         from .store import Store

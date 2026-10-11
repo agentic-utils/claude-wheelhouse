@@ -287,9 +287,10 @@ daemon stops under the app, the title bar says so in red and the app starts it a
 nothing you do is sent meanwhile, and what you'd typed stays in the box. An app started on
 newer code restarts a daemon running older code from the same checkout.
 
-Every request needs the daemon's token, from `daemon.token` beside the database (readable by
-you alone). `claude-wheelhouse token` prints it, to give to another machine, and
-`claude-wheelhouse token --rotate` replaces it. `claude-wheelhouse --connect host:7428` runs
+The daemon and the app share a secret: `daemon.token` beside the database, readable by you
+alone, made by the daemon the first time it starts and kept from then on. Every request
+carries it, and the daemon refuses one without it. `claude-wheelhouse token` prints it, to
+give to another machine. `claude-wheelhouse --connect host:7428` runs
 the app on another machine against a daemon listening on an address that machine reaches
 (a VPN's): the token comes from `--token-file`, else `WHEELHOUSE_TOKEN`, else it asks for
 it, never from the command line. `claude-wheelhouse --local` runs the app with a hub of its

@@ -153,44 +153,40 @@ def test_no_token_for_connect_says_where_to_give_it(monkeypatch):
         connect.given_token(None, {})
 
 
-def test_the_token_command_prints_and_rotates(db_file):
+def test_the_token_command_prints_the_one_the_daemon_made(db_file):
     env = dict(os.environ, PYTHONPATH=str(fingerprint.PACKAGE.parent))
-    run = lambda *args: subprocess.run([sys.executable, "-m", "claude_wheelhouse", "token", *args], env=env,
-                                       capture_output=True, text=True)
+    run = lambda: subprocess.run([sys.executable, "-m", "claude_wheelhouse", "token"], env=env,
+                                 capture_output=True, text=True)
     assert "the daemon makes it the first time it starts" in run().stderr
-    auth.ensure(db_file.parent)
-    first = run().stdout.strip()
-    assert first == auth.read(auth.path(db_file.parent))
-    second = run("--rotate").stdout.strip()
-    assert second != first and auth.read(auth.path(db_file.parent)) == second
+    token, _ = auth.ensure(db_file.parent)
+    assert run().stdout.strip() == token
+    assert run().stdout.strip() == token, "the same each time: no rotation"
 
 
-def test_the_lock_naming_a_listener_that_isnt_the_daemon_gets_no_token(state):
-    """Something on the lock's port that can't prove it holds the token: said, never sent it."""
-    from test_client import Squatter
+def test_a_daemon_that_refuses_the_token_says_so(state):
     state_dir, port = state
-    auth.ensure(state_dir)
-    squat = Squatter()
-    try:
-        with open(state_dir / connect.LOCK, "a+") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            lock.write(f"pid {os.getpid()} at {squat.url}\n")
-            lock.flush()
-            with pytest.raises(connect.NoDaemon, match="not the wheelhouse daemon: it was never sent the token"):
-                connect.local(state_dir, port)
-        assert squat.seen and squat.tokens() == []
-    finally:
-        squat.close()
+    url, token, _ = connect.local(state_dir, port)
+    with pytest.raises(connect.NoDaemon, match="refuses this token"):
+        connect.hello(url, "not-" + token, 2)
+
+
+def test_a_daemon_started_again_reuses_the_token(state):
+    state_dir, port = state
+    _, token, _ = connect.local(state_dir, port)
+    os.kill(daemon_pid(state_dir), signal.SIGTERM)
+    deadline = time.monotonic() + 10
+    while connect.holder(state_dir) is not None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert connect.local(state_dir, port)[1] == token
 
 
 @pytest.mark.parametrize("held, url, desc", [
     ("pid 1 at http://127.0.0.1:7428", "http://127.0.0.1:7428", "the loopback"),
     ("pid 1 at http://[::1]:7428", "http://[::1]:7428", "IPv6's"),
-    ("pid 1 at http://100.64.0.7:7428", None, "a VPN's: reached with --connect"),
-    ("pid 1 at http://evil.example:7428", None, "a name"),
+    ("pid 1 at http://100.64.0.7:7428", "http://100.64.0.7:7428", "a VPN's"),
     ("pid 1", None, "not listening yet"),
 ])
-def test_a_lock_names_only_an_address_on_this_machine(held, url, desc):
+def test_a_lock_names_the_address_once_listening(held, url, desc):
     assert connect.url_of(held) == url, desc
 
 
@@ -216,12 +212,12 @@ def test_a_lock_let_go_while_joining_is_gone_round_again(tmp_path, monkeypatch):
     script = iter(["old", "gone", "new"])
     now = {"held": f"pid 999999 at {url}"}
 
-    def hello(u, token, wait, state_dir=None, reread=None):
+    def hello(u, token, wait, state_dir=None):
         step = next(script)
         if step == "gone":
             raise connect.Gone()
         return {"code": fingerprint.code() if step == "new" else "old", "package": "elsewhere", "api": fingerprint.API,
-                "pid": 2}, token
+                "pid": 2}
     first = {"done": False}
 
     def hello_once(*a, **k):
@@ -242,16 +238,3 @@ def test_the_daemon_never_sees_the_apps_token_in_its_environment(state, monkeypa
     connect.local(state_dir, port)
     environ = open(f"/proc/{daemon_pid(state_dir)}/environ", "rb").read().split(b"\0")
     assert not [e for e in environ if e.startswith(b"WHEELHOUSE_TOKEN=")]
-
-
-def test_hello_reads_a_rotated_token_again(state):
-    state_dir, port = state
-    url, token, _ = connect.local(state_dir, port)
-    new = auth.write(state_dir)   # rotated: the daemon takes it at its next tick
-    deadline = time.monotonic() + 5
-    while True:   # until the daemon has it
-        info, took = connect.hello(url, token, 2, state_dir, reread=lambda: connect.token_of(state_dir))
-        if took == new or time.monotonic() > deadline:
-            break
-        time.sleep(0.2)
-    assert info["ready"] and took == new

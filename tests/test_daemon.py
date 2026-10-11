@@ -822,35 +822,10 @@ async def test_the_host_is_checked_before_the_token(daemon):
     assert r.status_code == 421 and "www-authenticate" not in r.headers
 
 
-async def test_a_rotated_token_is_taken_at_the_next_tick(store, tmp_path, monkeypatch):
-    from claude_wheelhouse import auth
-    auth.write(tmp_path)
-    old = auth.read(auth.path(tmp_path))
-    d = Daemon(store, hosts("127.0.0.1", 7428), auth.TokenFile(auth.path(tmp_path)), inline=True)
-    try:
-        def get(token):
-            return httpx2.AsyncClient(transport=httpx2.ASGITransport(app=d.app), base_url=URL,
-                                      headers={"Authorization": f"Bearer {token}"})
-        async with get(old) as c:
-            assert (await c.get("/sessions")).status_code == 200, "the token as made"
-        new = auth.write(tmp_path)   # claude-wheelhouse token --rotate
-        async with get(old) as c:
-            assert (await c.get("/sessions")).status_code == 200, "the old one, till the daemon reads the file again"
-        await d.on_hub(d.tick)
-        async with get(old) as c:
-            assert (await c.get("/sessions")).status_code == 401, "then refused"
-        async with get(new) as c:
-            assert (await c.get("/sessions")).status_code == 200, "and the new one taken"
-    finally:
-        d.pool.shutdown()
-        d.worker.shutdown()
-        d.watch.close()
-
-
 # what 2c adds for the TUI
 
 NEW_ROUTES = [
-    ("GET", "/hello?nonce=0123456789abcdef", None, lambda store, sid, r: (r.json()["api"], r.json()["ready"], r.json()["pid"])
+    ("GET", "/hello", None, lambda store, sid, r: (r.json()["api"], r.json()["ready"], r.json()["pid"])
      == (1, False, os.getpid()), "with the token, which daemon: its API, its code, not ready before its first tick"),
     ("GET", "/inbox", None, lambda store, sid, r: (sorted(i["ref"] for i in r.json()["items"]),
                                                    "body" in r.json()["items"][0], r.json()["tutorial"]["sid"])
@@ -903,59 +878,16 @@ async def test_an_error_says_its_type(daemon, sid, tmp_path, path, body, kind, d
     assert (r.status_code, r.json()["type"]) == (404, kind), desc
 
 
-@pytest.mark.parametrize("given, nonce, status, keys, desc", [
-    (None, "0123456789abcdef", 200, {"proof"}, "without the token: the proof alone, nothing about the daemon"),
-    ("Bearer wrong", "0123456789abcdef", 200, {"proof"}, "a wrong token: the same"),
-    (f"Bearer {TOKEN}", "0123456789abcdef", 200, {"proof", "api", "code", "package", "pid", "ready"}, "the token: who"),
-    (None, "", 400, {"error", "type"}, "no nonce"),
-    (None, "short", 400, {"error", "type"}, "a nonce too short to be one"),
+@pytest.mark.parametrize("given, status, desc", [
+    (None, 401, "without the token: refused, nothing about the daemon"),
+    ("Bearer wrong", 401, "a wrong token: the same"),
+    (f"Bearer {TOKEN}", 200, "the token: which daemon"),
 ])
-async def test_hello_proves_the_daemon_holds_the_token(daemon, given, nonce, status, keys, desc):
-    from claude_wheelhouse import auth
+async def test_hello_needs_the_token_like_every_route(daemon, given, status, desc):
     headers = {} if given is None else {"Authorization": given}
     async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=daemon.app), base_url=URL, headers=headers) as c:
-        r = await c.get("/hello", params={"nonce": nonce})
-    assert (r.status_code, set(r.json())) == (status, keys), desc
-    if status == 200:
-        assert auth.proven(r.json()["proof"], TOKEN, nonce, "127.0.0.1:7428"), f"{desc}: over the Host it named"
-        assert not auth.proven(r.json()["proof"], TOKEN, nonce, "127.0.0.1:9999"), f"{desc}: and no other"
-
-
-async def test_hello_answers_no_other_host(daemon):
-    """A listener relaying a client's nonce here must name this daemon's own address, so the
-    proof it gets back is for that address, never the one the client reached it at."""
-    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=daemon.app), base_url="http://127.0.0.1:9999") as c:
-        r = await c.get("/hello", params={"nonce": "0123456789abcdef"})
-    assert r.status_code == 421 and "proof" not in r.json()
-
-
-async def test_a_rotated_token_cuts_the_streams_open_with_the_old_one(store, tmp_path):
-    from claude_wheelhouse import auth
-    auth.write(tmp_path)
-    old = auth.read(auth.path(tmp_path))
-    d = Daemon(store, hosts("127.0.0.1", 7428), auth.TokenFile(auth.path(tmp_path)), inline=True)
-    d.feed = Feed(start=100)
-    try:
-        async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=d.app), base_url=URL,
-                                      headers={"Authorization": f"Bearer {old}"}) as c:
-            got = {}
-            async with anyio.create_task_group() as tg:
-                async def get():
-                    got["r"] = await c.get("/events")
-                tg.start_soon(get)
-                await anyio.sleep(0.05)
-                auth.write(tmp_path)   # claude-wheelhouse token --rotate
-                await d.on_hub(d.tick)   # which sees it, and cuts the stream
-                with anyio.fail_after(5):
-                    while "r" not in got:
-                        await anyio.sleep(0.02)
-            assert got["r"].status_code == 200 and received(got["r"].text)[0]["kind"] == "refetch", "it ended"
-            assert (await c.get("/events")).status_code == 401, "and the old token opens none again"
-        assert not d.feed.closed, "the daemon still serves the new token's"
-    finally:
-        d.pool.shutdown()
-        d.worker.shutdown()
-        d.watch.close()
+        r = await c.get("/hello")
+    assert r.status_code == status and ("api" in r.json()) == (status == 200), desc
 
 
 def test_the_lock_is_the_users_alone_and_names_an_address_only_once_listening(tmp_path):

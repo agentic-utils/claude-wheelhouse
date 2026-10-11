@@ -3,7 +3,6 @@ socket: what it shows changes only at refresh() or after a command, the stream's
 fetch in the background, a lost daemon is said and reconnected to, and a command is done
 once whatever the link does."""
 
-import threading
 import time
 
 import httpx2
@@ -175,17 +174,6 @@ def test_a_command_lost_twice_says_it_may_have_been_done(store, sid, served, mon
         c.disconnect()
 
 
-def test_a_rotated_token_is_read_again(store, sid, served):
-    d = served(store.path)
-    c = RemoteClient(d.url, "an-old-token", reread=lambda: TOKEN)
-    try:
-        c.refresh()
-        assert c.rename(sid, "renamed").ok and store.session(sid)["name"] == "renamed"
-        assert c.token == TOKEN
-    finally:
-        c.disconnect()
-
-
 def test_a_refused_token_is_said_once(store, sid, served, heard):
     d = served(store.path)
     c = heard(RemoteClient(d.url, "not-the-token"))
@@ -249,80 +237,6 @@ def vars_of(cls) -> set[str]:
         if inspect.isfunction(init):
             names |= set(re.findall(r"self\.(\w+)\s*(?::[^=]+)?=", inspect.getsource(init)))
     return names
-
-
-class Squatter:
-    """A listener on a port, not the daemon: it records every header it's sent and answers
-    as the daemon might (a proof made up, or relayed from the real daemon)."""
-
-    def __init__(self, port: int = 0, relay: str | None = None):
-        import socket
-        self.sock = socket.socket()
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind(("127.0.0.1", port))
-        self.sock.listen(16)
-        self.port = self.sock.getsockname()[1]
-        self.url = f"http://127.0.0.1:{self.port}"
-        self.relay, self.seen = relay, []
-        threading.Thread(target=self.serve, daemon=True).start()
-
-    def serve(self):
-        while True:
-            try:
-                conn, _ = self.sock.accept()
-            except OSError:
-                return
-            with conn:
-                data = conn.recv(65536).decode(errors="replace")
-                self.seen += data.splitlines()
-                body = b'{"proof": "made-up"}'
-                path = data.split(" ")[1] if " " in data else "/"
-                if self.relay and path.startswith("/hello"):   # the real daemon's proof, for its own address
-                    body = httpx2.get(self.relay + path).content
-                conn.sendall(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: %d\r\n\r\n%s"
-                             % (len(body), body))
-
-    def tokens(self):
-        return [line for line in self.seen if line.lower().startswith("authorization")]
-
-    def close(self):
-        self.sock.close()
-
-
-@pytest.mark.parametrize("relay, desc", [(False, "a proof made up"), (True, "the real daemon's proof, relayed")])
-def test_a_listener_that_isnt_the_daemon_is_never_sent_the_token(store, sid, served, relay, desc):
-    d = served(store.path)
-    squat = Squatter(relay=d.url if relay else None)
-    c = RemoteClient(squat.url, TOKEN)
-    try:
-        done = c.submit((sid, None), "hello")
-        assert not done.ok and "never sent the token" in done.notices[0].text, desc
-        assert c.thread(sid, "T1") is None and c.conversation(sid) is None, desc
-        c.start(lambda callback: callback())
-        until(lambda: any("hello" in line for line in squat.seen) and c.refusal, desc="the stream tried")
-        assert squat.tokens() == [], f"{desc}: {squat.tokens()}"
-        assert store.drafts(sid) == [], desc
-    finally:
-        c.disconnect()
-        squat.close()
-
-
-def test_a_listener_taking_the_daemons_port_after_it_dies_is_never_sent_the_token(store, sid, served, heard):
-    d = served(store.path)
-    c = heard(d.client())
-    try:
-        c.refresh()
-        until(lambda: c.last_event is not None, desc="the stream connected")
-        port = d.port
-        d.stop()
-        squat = Squatter(port)
-        until(lambda: any("hello" in line for line in squat.seen), desc="the stream reconnects, to the squatter")
-        assert not c.submit((sid, None), "hello").ok
-        time.sleep(1.5)   # more reconnects
-        assert squat.tokens() == []
-        squat.close()
-    finally:
-        c.disconnect()
 
 
 def test_a_command_sent_then_unreachable_says_it_may_have_been_done(store, sid, served, monkeypatch):

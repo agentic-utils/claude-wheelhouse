@@ -120,38 +120,22 @@ through it over HTTP and SSE rather than owning a hub. `claude-wheelhouse --conn
 host:port` joins a daemon on another machine. `claude-wheelhouse --local` is the TUI as it
 was before 2c, its hub in process: the way back, at once.
 
-- **The token.** Every request needs `Authorization: Bearer <token>`, GETs, commands and
-  the event stream alike, else 401 (with `WWW-Authenticate: Bearer`). The token is 32
-  random bytes, URL-safe base64, in `daemon.token` in the state dir (the database's
-  directory, beside `daemon.lock`), mode 0600. The daemon makes it the first time it
-  starts, under its lock, so two starting at once can't make two. One found readable by
-  group or others may have leaked, so the daemon replaces it, and says so; one owned by
-  another user stops it starting. It's compared in constant time (`hmac.compare_digest`).
-  The Host check (D47) comes first, so a page rebound by DNS learns nothing, then the
-  token, then Origin and the Idempotency-Key, which stay as they are: the key is still
-  the cross-site guard for a browser that holds the token one day. The token is a
-  password, not encryption: inside the VPN it travels in the tunnel's encryption, on a
-  LAN address in the clear, and TLS is still phase 5.
-  - **Proven before it's sent (review 56):** whatever listens at the daemon's address may
-    not be the daemon (another program took its port while it was down). So a client never
-    sends the token until the listener proves it holds it: `GET /hello?nonce=N`, the one
-    route without the token, answers HMAC-SHA256(token, label, Host, N), and the client
-    checks it in constant time against the address it connected to before anything carries
-    the token: each request's connection after a failure, and each reconnect of the stream.
-    The proof is over the Host the client named, which must be the daemon's own (D47), so a
-    listener elsewhere that relays the nonce to the real daemon gets a proof for the real
-    daemon's address, which the client refuses. The daemon writes its address into the lock
-    only once it's listening, and a client joins only a loopback address from the lock (a
-    daemon on a VPN's address is reached with `--connect`). The state dir must be the
-    user's and writable by nobody else (group-writable only for the user's private group,
-    as a umask of 002 makes it), the token is read without following a link, and the lock
-    is 0600. Nothing the daemon starts inherits `WHEELHOUSE_TOKEN`.
-  - **Rotation:** `claude-wheelhouse token --rotate` writes a new one in its place (a new
-    file renamed over the old, 0600). The daemon reads it again at its next tick when the
-    file changes, so from then on the old one gets 401, and the event streams opened with
-    it are ended, to be opened again with the new one or refused. The local TUI reads the file
-    again on a 401 and carries on; a remote client must be given the new one.
-    `claude-wheelhouse token` prints it, to give to one.
+- **The token: a shared secret on the filesystem.** The daemon and the TUI on its machine
+  read the same file, `daemon.token` in the state dir (the database's directory, beside
+  `daemon.lock`), mode 0600, so only the user can read it. It holds 32 random bytes,
+  URL-safe base64. The daemon makes it the first time it starts, under its lock, so two
+  starting at once can't make two, and reuses it on every start after. Every request
+  presents it as `Authorization: Bearer <token>`, GETs, commands, `/hello` and the event
+  stream alike; one that doesn't gets 401 (with `WWW-Authenticate: Bearer`) and a message
+  saying `claude-wheelhouse token` prints it. It's compared in constant time
+  (`hmac.compare_digest`). The Host check (D47) comes first, so a page rebound by DNS
+  learns nothing, then the token, then Origin and the Idempotency-Key, which stay as they
+  are: the key is still the cross-site guard for a browser that holds the token one day.
+  Host and Origin are compared without regard to case, as DNS names are. The token is a
+  password, not encryption: inside the VPN it travels in the tunnel's encryption, on a LAN
+  address in the clear, and TLS is still phase 5. `claude-wheelhouse token` prints it, to
+  give to a client on another machine. Nothing the daemon starts inherits
+  `WHEELHOUSE_TOKEN`.
   - **`--connect`** takes the token from `--token-file PATH`, else `WHEELHOUSE_TOKEN`,
     else asks for it on the terminal without echo. Never a flag's value, which `ps` and
     the shell's history would show.

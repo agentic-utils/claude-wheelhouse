@@ -16,8 +16,9 @@ It never binds 0.0.0.0: 127.0.0.1 by default, or the address given (the VPN inte
 a LAN address would open it to everyone on that LAN). Every request must name the daemon in
 its Host, and a POST from a browser page must come from the daemon's own origin, so a
 hostile page can't drive it or read it by DNS rebinding. Every request, the event stream's
-too, must carry the token in the state dir (auth.py), so neither another user on the
-machine nor another machine on the VPN can read or drive it without being given it. The
+too, must carry the shared secret in the state dir (auth.py) as a bearer token, else 401,
+so neither another user on the machine nor another machine on the VPN can read or drive
+it without being given it. The
 Idempotency-Key every command needs is the guard against cross-site requests too: a custom
 header makes a page's request a CORS preflight, which the daemon never grants, so a page
 can't send a command without it. It must never become optional."""
@@ -105,7 +106,8 @@ def checked_address(address: str) -> str:
 
 def hosts(address: str, port: int, names=()) -> set[str]:
     """The Host headers that name the daemon: its address and port, localhost too when it's
-    on the loopback, and any other names it's reached by (a VPN's name for the machine)."""
+    on the loopback, and any other names it's reached by (a VPN's name for the machine).
+"""
     ip = ipaddress.ip_address(address)
     shown = f"[{address}]" if ip.version == 6 else address
     return {f"{h}:{port}" for h in (shown, *names, *(["localhost"] if ip.is_loopback else []))}
@@ -158,7 +160,6 @@ class Feed:
         self.ring: deque[dict] = deque(maxlen=ring)
         self.moved = asyncio.Event()   # set, and replaced, at each event
         self.closed = False
-        self.epoch = 0   # moved on to end every stream open now (cut), as when the token is rotated
 
     def publish(self, kind: str, sid: str | None = None, ref: str | None = None, **more) -> None:
         self.seq += 1
@@ -179,10 +180,7 @@ class Feed:
     async def stream(self, last: int | None):
         """A client's events, from after last (its Last-Event-ID). A client that connects
         afresh, or falls behind the ring (reconnecting, or reading slower than events come),
-        is told to refetch, at the latest seq, and carries on from there. Ends once closed, or
-        cut: a stream opened before the token was rotated is let go, and asked for again with
-        the new one, or refused."""
-        epoch = self.epoch
+        is told to refetch, at the latest seq, and carries on from there. Ends once closed."""
         while True:
             moved = self.moved
             events = self.since(last)
@@ -191,15 +189,9 @@ class Feed:
             for e in events:
                 yield {"id": str(e["seq"]), "data": json.dumps(e)}
             last = events[-1]["seq"] if events else last
-            if self.closed or self.epoch != epoch:
+            if self.closed:
                 return
             await moved.wait()
-
-    def cut(self) -> None:
-        """Every stream open now ends, once it has sent what it has; new ones are served."""
-        self.epoch += 1
-        self.moved.set()
-        self.moved = asyncio.Event()
 
     def close(self) -> None:
         """Every stream ends, once it has sent what it has: the daemon is stopping."""
@@ -238,15 +230,12 @@ class Daemon:
     inline: the hub's own background work runs in the call that starts it, as in a test;
     otherwise on worker threads, its callbacks back on the hub's thread."""
 
-    def __init__(self, store: Store, allowed: set[str], token: "str | auth.TokenFile", inline: bool = False,
+    def __init__(self, store: Store, allowed: set[str], token: str, inline: bool = False,
                  ticks: bool = True):
         fingerprint.code()   # the code as loaded, for /hello: asked before anything can change it
         self.hub = Hub(store, **({} if inline else {"spawn": self.spawn, "post": self.post}))
         self.store, self.allowed = store, allowed
-        # the token every request must carry: the token file's, read again when it changes
-        # (rotated), or one given (a test's)
-        self.tokens = token if isinstance(token, auth.TokenFile) else None
-        self.token = token.token if isinstance(token, auth.TokenFile) else token
+        self.token = token   # the shared secret every request must carry (auth.py)
         self.stop = None   # how /shutdown stops it: the server's, once serving
         self.ticks = ticks   # whether it ticks by itself: not when a test ticks it
         self.agent_lock = threading.Lock()   # the subagent conversations followed, by one request at a time
@@ -278,7 +267,7 @@ class Daemon:
             Route("/models", self.query(lambda request: models.catalogue(), run=None)),
             Route("/events", self.events),
             # what the TUI needs beyond the sketch (phase 2c)
-            Route("/hello", self.hello),
+            Route("/hello", self.query(self.hello, run=None)),
             Route("/inbox", self.query(self.inbox)),
             Route("/usage", self.query(self.usage, run=None)),
             Route("/settings", self.query(self.settings)),
@@ -324,14 +313,6 @@ class Daemon:
             self.loop, self.loop_thread = asyncio.get_running_loop(), threading.get_ident()
         return await self.loop.run_in_executor(self.worker, functools.partial(work, *args))
 
-    def cut_streams(self) -> None:
-        """Every event stream open now ended, from any thread: the feed is the event loop's."""
-        if self.loop is None or threading.get_ident() == self.loop_thread:
-            self.feed.cut()
-        else:
-            with contextlib.suppress(RuntimeError):
-                self.loop.call_soon_threadsafe(self.feed.cut)
-
     def publish(self, kind: str, sid: str | None = None, ref: str | None = None, **more) -> None:
         """An event, from any thread: the feed is the event loop's."""
         if self.loop is None or threading.get_ident() == self.loop_thread:
@@ -353,10 +334,6 @@ class Daemon:
 
     def tick(self) -> None:
         """The hub's refresh, as the TUI's tick has it, then what moved."""
-        if self.tokens is not None and self.tokens.check():   # rotated: the old one is refused from now
-            self.token = self.tokens.token
-            self.cut_streams()   # those opened with the old one too
-            print("wheelhouse daemon: the token has changed: clients need the new one", file=sys.stderr, flush=True)
         self.keep_answers()
         hub, seen = self.hub, self.marks()   # before the refresh: see publish_moved
         hub.refresh()
@@ -454,7 +431,7 @@ class Daemon:
 
     def check_host(self, request: Request) -> None:
         """Every request, before anything else: it names the daemon (D47), so a page rebound
-        by DNS learns nothing, then it carries the token."""
+        by DNS learns nothing, then it carries the token (a 401 if not)."""
         if request.headers.get("host") not in self.allowed:
             raise Refused(421, "this daemon isn't reached by that name")
         if not auth.matches(request.headers.get("authorization"), self.token):
@@ -626,25 +603,12 @@ class Daemon:
             raise Refused(403, f"can't list {path}: {e.strerror}") from None
         return {"path": path, "parent": os.path.dirname(path), "dirs": names}
 
-    async def hello(self, request: Request) -> Response:
-        """The one route without the token: a client proves the listener is this daemon before
-        it sends the token anywhere. It sends a nonce, and gets the proof (auth.proof), an
-        HMAC of it with the token over the Host it named, which must be this daemon's (D47):
-        a listener elsewhere relaying the nonce here gets a proof for this daemon's address,
-        not its own. With the token as well, which daemon this is, for a client deciding
-        whether to join it: its API, its code as loaded (another from the same package path
-        is older code: restart it), its pid, and whether its first tick has made /sessions."""
-        host = request.headers.get("host")
-        if host not in self.allowed:
-            return refusal(Refused(421, "this daemon isn't reached by that name"))
-        nonce = request.query_params.get("nonce", "")
-        if not 16 <= len(nonce) <= 128 or not nonce.isalnum():
-            return refusal(Refused(400, "hello needs a nonce: 16 to 128 letters and digits"))
-        out = {"proof": auth.proof(self.token, nonce, host)}
-        if auth.matches(request.headers.get("authorization"), self.token):
-            out |= {"api": fingerprint.API, "code": fingerprint.code(), "package": str(fingerprint.PACKAGE),
-                    "pid": os.getpid(), "ready": bool(self.marked)}
-        return JSONResponse(out)
+    def hello(self, request: Request) -> dict:
+        """Which daemon this is, for a client deciding whether to join it: its API, its code
+        as loaded (another from the same package path is older code: restart it), its pid,
+        and whether its first tick has made /sessions."""
+        return {"api": fingerprint.API, "code": fingerprint.code(), "package": str(fingerprint.PACKAGE),
+                "pid": os.getpid(), "ready": bool(self.marked)}
 
     def inbox(self, request: Request) -> dict:
         """What the TUI's item list is painted from, all at once so it agrees with itself:
@@ -853,17 +817,17 @@ class Server(uvicorn.Server):
 
 def main(address: str = ADDRESS, port: int = PORT, names=()) -> None:
     """Serve until stopped (Ctrl+C, SIGTERM from systemd, or POST /shutdown): one per user,
-    or AlreadyRunning. Its token is made, under the lock, the first time."""
+    or AlreadyRunning. Its token is made, under the lock, the first time, and reused after."""
     address = checked_address(address)
     allowed = hosts(address, port, names)
     store = Store()
     url = f"http://{address if ipaddress.ip_address(address).version == 4 else f'[{address}]'}:{port}"
     lock = take_lock(store.path.parent)
     try:
-        _, said = auth.ensure(store.path.parent)
+        token, said = auth.ensure(store.path.parent)
         if said:
             print(f"wheelhouse daemon: {said}", flush=True)
-        daemon = Daemon(store, allowed, auth.TokenFile(auth.path(store.path.parent)))
+        daemon = Daemon(store, allowed, token)
         server = Server(daemon, uvicorn.Config(daemon.app, host=address, port=port, log_level="warning"),
                         listening=functools.partial(announce, lock, url))
         daemon.stop = functools.partial(server.handle_exit, signal.SIGTERM, None)
