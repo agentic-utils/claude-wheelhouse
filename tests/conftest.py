@@ -1,11 +1,41 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from claude_wheelhouse import tui
+from claude_wheelhouse import launch, store as store_module, tui
 from claude_wheelhouse.store import Store
 
 SHIPPED_DWELL = tui.DWELL   # before no_dwell_timer puts it out of reach
+NO_DEFAULT_DB = Path("/nonexistent-wheelhouse-test-state/wheelhouse.db")   # unwritable: a reach for it fails
+
+
+def live_state_dir() -> Path:
+    return (Path.home() / ".local/state/claude-wheelhouse").resolve()
+
+
+def pytest_configure(config):
+    """A run never touches the person's own wheelhouse. A session the wheelhouse launched
+    hands its tests WHEELHOUSE_DB, pointing at the live database: the run stops before any
+    test if the database or its state directory still resolves under the live one."""
+    store_module.DEFAULT_DB = NO_DEFAULT_DB
+    live = live_state_dir()
+    for name, path in [("store.DEFAULT_DB", store_module.DEFAULT_DB), ("launch.db_path()", launch.db_path()),
+                       ("state dir", launch.db_path().parent)]:
+        if path.resolve().is_relative_to(live):
+            raise pytest.UsageError(f"test isolation: {name} is {path}, under the live wheelhouse {live}. "
+                                    "Unset WHEELHOUSE_DB (and WHEELHOUSE_SESSION_ID, WHEELHOUSE_TOKEN) and run again.")
+
+
+@pytest.fixture(autouse=True)
+def isolated_db(tmp_path, monkeypatch):
+    """Every test has a database of its own (db_file is this one), wherever the run was started."""
+    path = tmp_path / "wheelhouse.db"
+    monkeypatch.setenv("WHEELHOUSE_DB", str(path))
+    monkeypatch.setattr(store_module, "DEFAULT_DB", path)
+    monkeypatch.delenv("WHEELHOUSE_SESSION_ID", raising=False)
+    monkeypatch.delenv("WHEELHOUSE_TOKEN", raising=False)
+    return path
 
 
 @pytest.fixture(autouse=True)
@@ -37,10 +67,8 @@ def no_dwell_timer(monkeypatch):
 
 
 @pytest.fixture
-def db_file(tmp_path, monkeypatch):
-    path = tmp_path / "wheelhouse.db"
-    monkeypatch.setenv("WHEELHOUSE_DB", str(path))
-    return path
+def db_file(isolated_db):
+    return isolated_db
 
 
 @pytest.fixture
