@@ -1,4 +1,3 @@
-import asyncio
 import bisect
 import functools
 import html
@@ -8,7 +7,6 @@ import re
 import time
 import random
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -1106,8 +1104,8 @@ async def test_a_raw_burst_opens_what_the_cursor_is_on(store, sid, tmp_path, whe
     ("sessions", ("down", "tab", "down"), "one", ["B:one"], "from the session list: Down, Tab, Down (review 13)"),
     ("items", ("shift+tab", "down"), None, [], "from the items: Shift+Tab, Down"),
 ])
-async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp_path, where, burst, selected, dwelt,
-                                                                   desc):
+async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp_path, clock, where, burst, selected,
+                                                                   dwelt, desc):
     """Following A, a burst that moves both lists' cursors and ends on session B follows B
     (D22), and ends as the same keys typed slowly do: each key settles the one before it
     (land), so the decision a Down landed on before a Tab moved on is selected, A's in the
@@ -1126,8 +1124,7 @@ async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp
         await pilot.pause()
         store.db.execute("UPDATE items SET status = 'unseen'")
         app.refresh_data()   # the decision seen as it was selected at the start rises again (T71): let it land
-        while app.item_sink.move or app.session_sink.move:
-            await pilot.pause(0.05)
+        await clock.finish_moves(pilot, app)
         (app.items_table if where == "items" else app.session_list).focus()
         await pilot.pause()
         raw_keys(app, *burst)
@@ -1164,7 +1161,7 @@ def raw_click(app, widget, offset, times=1) -> None:
         app._driver.send_message(event)
 
 
-async def two_lists(tmp_path, where, steps, slow, counts=(2, 2)) -> dict:
+async def two_lists(clock, tmp_path, where, steps, slow, counts=(2, 2)) -> dict:
     """Sessions A, followed, and B, each with decisions one and two (or as many of one, two,
     three and four as counts gives), all unseen; then the steps
     from the items or the session list, typed slowly or sent as one raw burst. A step is a key,
@@ -1186,8 +1183,7 @@ async def two_lists(tmp_path, where, steps, slow, counts=(2, 2)) -> dict:
         await pilot.pause()
         store.db.execute("UPDATE items SET status = 'unseen'")
         app.refresh_data()   # the decision seen as it was selected at the start rises again (T71): let it land
-        while app.item_sink.move or app.session_sink.move:
-            await pilot.pause(0.05)
+        await clock.finish_moves(pilot, app)
         (app.items_table if where == "items" else app.session_list).focus()
         await pilot.pause()
         for step in steps:
@@ -1232,12 +1228,12 @@ async def two_lists(tmp_path, where, steps, slow, counts=(2, 2)) -> dict:
     ("items", ("down", "down", "shift+tab", "down", "tab", "down"), "from the items: across and back"),
     ("items", ("down", "shift+tab", "down", "tab", "enter"), "from the items: across, back, Enter opens B's"),
 ])
-async def test_a_raw_burst_across_both_lists_ends_as_typed_slowly(tmp_path, where, keys, desc):
+async def test_a_raw_burst_across_both_lists_ends_as_typed_slowly(tmp_path, clock, where, keys, desc):
     """Review 17: every key settles what the ones before it moved before it acts (land), so a
     burst ends where the same keys typed slowly do, and never opens A's decision while B is
     current."""
-    raw = await two_lists(tmp_path / "raw", where, keys, slow=False)
-    slow = await two_lists(tmp_path / "slow", where, keys, slow=True)
+    raw = await two_lists(clock, tmp_path / "raw", where, keys, slow=False)
+    slow = await two_lists(clock, tmp_path / "slow", where, keys, slow=True)
     assert raw == slow, f"{desc}: raw {raw}, slow {slow}"
 
 
@@ -1254,15 +1250,15 @@ async def test_a_raw_burst_across_both_lists_ends_as_typed_slowly(tmp_path, wher
     ("items", ("click 1", "enter", "o", "k"), "a click on A's one, Enter opens it, o k in its thread"),
     ("items", ("click 1", "down", "enter"), "a click on A's one, Down, Enter opens two"),
 ])
-async def test_a_click_then_a_raw_burst_ends_as_typed_slowly(tmp_path, monkeypatch, where, steps, desc):
+async def test_a_click_then_a_raw_burst_ends_as_typed_slowly(tmp_path, clock, monkeypatch, where, steps, desc):
     """Review 17: a click's selection is handled before the keys typed after it (land runs it),
     not behind them, where it followed B again and undid what they did. Review 18: so is a
     double-click's on an item, which opens it. Running sessions: a click on a dead one offers
     a relaunch, which the keys would answer."""
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
-    raw = await two_lists(tmp_path / "raw", where, steps, slow=False)
-    slow = await two_lists(tmp_path / "slow", where, steps, slow=True)
+    raw = await two_lists(clock, tmp_path / "raw", where, steps, slow=False)
+    slow = await two_lists(clock, tmp_path / "slow", where, steps, slow=True)
     assert raw == slow, f"{desc}: raw {raw}, slow {slow}"
 
 
@@ -1275,14 +1271,14 @@ async def test_a_click_then_a_raw_burst_ends_as_typed_slowly(tmp_path, monkeypat
     ("sessions", ("down", "click 1"), "Down in the session list, a click on an item: of the session Down reached"),
     ("sessions", ("down", "click 2"), "Down in the session list, a click on its second item"),
 ])
-async def test_a_raw_burst_then_a_click_ends_as_typed_slowly(tmp_path, monkeypatch, where, steps, desc):
+async def test_a_raw_burst_then_a_click_ends_as_typed_slowly(tmp_path, clock, monkeypatch, where, steps, desc):
     """Review 18: a click settles what the keys before it moved, as a key does (land), with no
     key behind it to: else the Down's decision was never selected, or the items' click was
     on the session the list left."""
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
-    raw = await two_lists(tmp_path / "raw", where, steps, slow=False)
-    slow = await two_lists(tmp_path / "slow", where, steps, slow=True)
+    raw = await two_lists(clock, tmp_path / "raw", where, steps, slow=False)
+    slow = await two_lists(clock, tmp_path / "slow", where, steps, slow=True)
     assert raw == slow, f"{desc}: raw {raw}, slow {slow}"
 
 
@@ -1294,14 +1290,15 @@ async def test_a_raw_burst_then_a_click_ends_as_typed_slowly(tmp_path, monkeypat
     (("down", "click 1"), "Down to B, a click on a row B's list has too: B's one"),
     (("down", "double 1"), "Down to B, a double-click on B's one opens it"),
 ])
-async def test_a_raw_burst_then_a_click_on_a_shorter_list_ends_as_typed_slowly(tmp_path, monkeypatch, steps, desc):
+async def test_a_raw_burst_then_a_click_on_a_shorter_list_ends_as_typed_slowly(tmp_path, clock, monkeypatch, steps,
+                                                                                desc):
     """Review 19: a click's settle can follow another session and refill the items, so the
     row it was on may be gone: as typed slowly, where the click lands below the rows, it
     does nothing."""
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
-    raw = await two_lists(tmp_path / "raw", "sessions", steps, slow=False, counts=(4, 1))
-    slow = await two_lists(tmp_path / "slow", "sessions", steps, slow=True, counts=(4, 1))
+    raw = await two_lists(clock, tmp_path / "raw", "sessions", steps, slow=False, counts=(4, 1))
+    slow = await two_lists(clock, tmp_path / "slow", "sessions", steps, slow=True, counts=(4, 1))
     assert raw == slow, f"{desc}: raw {raw}, slow {slow}"
 
 
@@ -1328,11 +1325,11 @@ async def test_keys_after_quit_are_dropped(store, sid, keys, desc):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("closing, desc", [
-    (0, "a shutdown that is over before the next tick"),
-    (1.2, "a shutdown that takes over a second: the tick fires once the screens are gone, and does nothing"),
+@pytest.mark.parametrize("ticks, desc", [
+    (False, "a shutdown that is over before the next tick"),
+    (True, "a shutdown that takes over a second: the tick fires once the screens are gone, and does nothing"),
 ])
-async def test_the_refresh_tick_lets_the_app_shut_down(store, sid, monkeypatch, closing, desc):
+async def test_the_refresh_tick_lets_the_app_shut_down(store, sid, monkeypatch, clock, ticks, desc):
     """Review 18: Textual stops the timers only after it has closed the screens, so under load
     the refresh tick can fire with none left, and painting raised ScreenStackError."""
     from textual.app import App
@@ -1340,7 +1337,9 @@ async def test_the_refresh_tick_lets_the_app_shut_down(store, sid, monkeypatch, 
 
     async def slow_close(self):
         await close_all(self)
-        await asyncio.sleep(closing)   # the rest of the app closing
+        if ticks:   # the rest of the app closing, the tick falling due meanwhile
+            clock.tick(self)
+            clock.animate(self)
     monkeypatch.setattr(App, "_close_all", slow_close)
     app = WheelhouseApp(store)
     try:
@@ -2169,7 +2168,7 @@ async def test_restored_text_is_typed_onto_at_the_end(store, sid):
     (True, "writing to the session from its conversation row"),
 ])
 @pytest.mark.anyio
-async def test_typing_survives_refresh_ticks_even_when_items_arrive_above(store, sid, conversation, desc):
+async def test_typing_survives_refresh_ticks_even_when_items_arrive_above(store, sid, clock, conversation, desc):
     q = store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -2181,8 +2180,11 @@ async def test_typing_survives_refresh_ticks_even_when_items_arrive_above(store,
         await pilot.pause()
         await pilot.click("#answer")
         await pilot.press(*"SQL")
-        store.post_item(sid, "question", "which port?")   # sorts into the list during typing
-        await pilot.pause(2.2)
+        port = store.post_item(sid, "question", "which port?")   # sorts into the list during typing
+        for _ in range(2):
+            clock.tick(app)
+            await pilot.pause()
+        assert f"{sid}|{port}" in app.items_table.rows, f"{desc}: the ticks refreshed the list"
         await pilot.press(*"ite")
         assert app.selected == (sid, None if conversation else q), f"{desc}: the highlight stays put"
         assert (app.answer.text, app.answer.cursor_location) == ("SQLite", (0, 6)), f"{desc}: text and cursor untouched"
@@ -2390,7 +2392,7 @@ async def test_the_item_list_shows_a_question_awaiting_the_session(store, sid, k
      "a decision seen as it's selected keeps its place; once left, it settles at the foot (T71)"),
     ("question", "new", True, ["old", "new"], "a question answered while selected would fall below the open one"),
 ])
-async def test_the_selected_item_keeps_its_place(store, sid, kind, pick, answer, after, desc):
+async def test_the_selected_item_keeps_its_place(store, sid, clock, kind, pick, answer, after, desc):
     """Doug: "only move items when not selected". The selected row keeps its place while
     it's selected, however its status changes; it re-sorts once the selection moves on."""
     extra = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"} if kind == "decision" else {}
@@ -2412,8 +2414,7 @@ async def test_the_selected_item_keeps_its_place(store, sid, kind, pick, answer,
                 dwell(app)
             app.refresh_data()
             await pilot.pause()
-            while app.item_sink.move:   # a settled item sinks to the foot (T71)
-                await pilot.pause(0.05)
+            await clock.finish_moves(pilot, app)   # a settled item sinks to the foot (T71)
             assert order() == (["new", "old"] if age == pick else after), \
                 f"{desc}: {'held while selected' if age == pick else 're-sorted once the selection moved on'}"
             assert app.selected == (sid, refs[age]) and table.cursor_key() == f"{sid}|{refs[age]}", desc
@@ -2481,7 +2482,7 @@ PIN_ACTS = {
     ("permission open", "#allow", True, "the person answering a permission: an explicit act, as Delete is"),
     ("permission open", "allowed", False, "a permission answered elsewhere (its own terminal)"),
 ])
-async def test_a_selected_item_moves_only_on_delete(store, sid, live, start, act, moves, desc):
+async def test_a_selected_item_moves_only_on_delete(store, sid, live, clock, start, act, moves, desc):
     """Doug: "only move items when not selected (so eg the falling animation for completed
     tasks, which I think should also apply to seen decisions and answered questions, should
     only take place after I move focus to something else)". The one exception is the
@@ -2518,8 +2519,7 @@ async def test_a_selected_item_moves_only_on_delete(store, sid, live, start, act
                 PIN_ACTS[act](store, sid, ref)
                 app.refresh_data()
             await pilot.pause()
-            while app.item_sink.move:
-                await pilot.pause(0.05)
+            await clock.finish_moves(pilot, app)
             app.refresh_data()   # a later tick holds it too
             await pilot.pause()
             assert (where() != before) == moves, f"{desc}: {'moved at once' if moves else 'held while selected'}"
@@ -2529,32 +2529,7 @@ async def test_a_selected_item_moves_only_on_delete(store, sid, live, start, act
 DECIDED = {"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"}
 
 
-class DwellClock:
-    """The dwell's timer (WheelhouseApp.dwell_after) on a clock of the test's own: it lapses
-    only as a step moves the clock on, never by real time, so a slow run's startup and
-    pauses can't eat its margin. A rest is 1.5 of the dwell, a short look half of it."""
-
-    def __init__(self):
-        self.now, self.timers = 0.0, []
-
-    def after(self, delay, callback):
-        timer = SimpleNamespace(due=self.now + delay, callback=callback, stopped=False)
-        timer.stop = lambda: setattr(timer, "stopped", True)
-        self.timers.append(timer)
-        return timer
-
-    def advance(self, by):
-        self.now += by
-        for timer in [t for t in self.timers if t.due <= self.now and not t.stopped]:
-            timer.stop()
-            timer.callback()
-
-
-@pytest.fixture
-def dwell_clock(monkeypatch):
-    clock = DwellClock()
-    monkeypatch.setattr(WheelhouseApp, "dwell_after", clock.after)
-    return clock
+REST, SHORT = 1.5, 0.5   # seconds: a rest outlasts the 1 s dwell, a short look doesn't (the clock fixture)
 
 
 async def dwell_steps(pilot, app, keys, steps, clock) -> None:
@@ -2565,7 +2540,7 @@ async def dwell_steps(pilot, app, keys, steps, clock) -> None:
             app.items_table.move_cursor(row=app.items_table.get_row_index(keys[what]))
             await pilot.pause()
         elif how in ("rest", "short"):
-            clock.advance(tui.DWELL * (1.5 if how == "rest" else 0.5))
+            clock.advance(REST if how == "rest" else SHORT)
         elif how == "follow":
             app.follow(keys[what])
             await pilot.pause()
@@ -2616,7 +2591,7 @@ async def dwell_steps(pilot, app, keys, steps, clock) -> None:
     (("on D", "short", "blur", "rest"), "unseen", "the window losing focus mid-dwell: a break in looking"),
     (("on D", "short", "blur", "short", "focus", "rest"), "seen", "focus again, then a rest of the dwell: seen"),
 ])
-async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_path, dwell_clock, steps, want, desc):
+async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_path, clock, steps, want, desc):
     """Doug: "I need to look at an item for at least 1 second before the state changes". An
     unseen decision becomes seen only once it has stayed selected, on the inbox or in its
     thread, for the dwell without a break, but not while the window is out of focus. Doug: "state
@@ -2633,7 +2608,7 @@ async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_p
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await dwell_steps(pilot, app, keys, steps, dwell_clock)
+        await dwell_steps(pilot, app, keys, steps, clock)
         assert store.item(sid, d)["status"] == want, f"{desc}: {store.item(sid, d)['status']}"
         if "session B" in steps:
             assert app.selected == (other, None), f"{desc}: B's conversation followed"
@@ -2646,7 +2621,7 @@ async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_p
     (False, "seen by the dwell while selected: held in place, not sinking"),
     (True, "and once the selection moves on, it sinks to the foot"),
 ])
-async def test_a_decision_seen_by_the_dwell_sinks_only_once_left(store, sid, dwell_clock, leave, desc):
+async def test_a_decision_seen_by_the_dwell_sinks_only_once_left(store, sid, clock, leave, desc):
     """The owner's rule for settled items: a decision that becomes seen while selected stays
     where it is until the selection moves on, then sinks (ranked, Sink), with seen arriving
     by the dwell's own timer."""
@@ -2663,16 +2638,20 @@ async def test_a_decision_seen_by_the_dwell_sinks_only_once_left(store, sid, dwe
         order = lambda: [k.split("|")[1] for k in table.keys()]
         before = order()
         assert before[-1] == old, f"{desc}: the settled task at the foot, {before}"
-        await dwell_steps(pilot, app, {"D": f"{sid}|{d}", "Q": f"{sid}|{q}"}, ("on D", "rest"), dwell_clock)
+        await dwell_steps(pilot, app, {"D": f"{sid}|{d}", "Q": f"{sid}|{q}"}, ("on D", "rest"), clock)
         app.refresh_data()
         await pilot.pause()
         assert store.item(sid, d)["status"] == "seen", f"{desc}: seen by the timer"
         assert order() == before and app.item_sink.move is None, f"{desc}: held while selected"
         if leave:
-            await dwell_steps(pilot, app, {"Q": f"{sid}|{q}"}, ("on Q",), dwell_clock)
+            await dwell_steps(pilot, app, {"Q": f"{sid}|{q}"}, ("on Q",), clock)
+            frames = 0
             while app.item_sink.move is not None:
                 assert_one_current(app, f"{desc}: mid-move")
-                await pilot.pause(0.03)
+                frames += 1
+                clock.advance(tui.Sink.SECONDS / 8)
+                await pilot.pause()
+            assert frames > 3, f"{desc}: it sank a frame at a time ({frames})"
             assert order()[-2:] == [old, d] and app.selected == (sid, q), f"{desc}: {order()}"
 
 
@@ -2898,10 +2877,9 @@ async def test_the_word_after_acting_on_marks_names_each_act(store, sid, kinds, 
 
 
 @pytest.mark.anyio
-async def test_the_word_after_acting_on_marks_mid_sink_names_them_as_they_will_stand(store, sid, monkeypatch):
+async def test_the_word_after_acting_on_marks_mid_sink_names_them_as_they_will_stand(store, sid, clock):
     """A question answered sinks below a settled task; Delete on both, the move still under
-    way, names them in the order they'll stand, not the frame's."""
-    monkeypatch.setattr(tui.Sink, "SECONDS", 60)   # the move under way throughout
+    way (the clock stands still), names them in the order they'll stand, not the frame's."""
     q = store.post_item(sid, "question", "q")
     t = store.post_item(sid, "task", "t", status="done")
     at = "UPDATE items SET updated_at = ? WHERE ref = ?"   # settled oldest first: the question to go below
@@ -4004,7 +3982,8 @@ def session_names(app) -> list[str]:
     ([], "demo", ["bee", "sea", "demo"], "Park moves the row to the foot, and the cursor with it (review 7)"),
     (["bee", "sea"], "sea", ["demo", "sea", "bee"], "Unpark moves it up, and the cursor with it"),
 ])
-async def test_the_cursor_stays_on_a_session_that_moves(store, sid, tmp_path, monkeypatch, parked, start, order, desc):
+async def test_the_cursor_stays_on_a_session_that_moves(store, sid, tmp_path, monkeypatch, clock, parked, start, order,
+                                                         desc):
     some_live(monkeypatch)
     ids = {"demo": sid, **{n: store.create_session(str(tmp_path), name=n) for n in ("bee", "sea")}}
     for name in parked:
@@ -4019,8 +3998,13 @@ async def test_the_cursor_stays_on_a_session_that_moves(store, sid, tmp_path, mo
         else:
             await park_live(app, pilot, ids[start])
         await pilot.pause()
-        while app.session_sink.move:   # it falls or rises there (T66)
-            await pilot.pause(0.05)
+        frames = 0
+        while app.session_sink.move:   # it falls or rises there (T66), the cursor on it throughout
+            assert app.current_session() == ids[start], f"{desc}: mid-move"
+            frames += 1
+            clock.advance(tui.Sink.SECONDS / 8)
+            await pilot.pause()
+        assert frames > 3, f"{desc}: it moved a frame at a time ({frames})"
         assert session_names(app) == order, desc
         assert app.current_session() == ids[start], desc
 

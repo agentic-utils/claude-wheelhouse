@@ -75,12 +75,14 @@ class Breaks(Widget):
     ([api.Loaded("stats", None, api.STALE)], [f"stats: {api.STALE}"], "the stats module not installed"),
     ([api.Loaded("demo", module())], [], "a pane with no hooks runs: Textual's own Widget.animate isn't one"),
 ])
-async def test_a_broken_module_leaves_the_app_running(store, monkeypatch, loaded, cards, desc):
+async def test_a_broken_module_leaves_the_app_running(store, monkeypatch, clock, loaded, cards, desc):
     monkeypatch.setattr(api, "load", lambda: loaded)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         app.refresh_data()
-        await pilot.pause(0.3)   # animate's turn too
+        for _ in range(2):   # animate's turn too: the panes animate every other frame
+            clock.animate(app)
+            await pilot.pause()
         assert app.is_running, desc
         shown = [str(w.render()) for w in app.query(".module-error")]
         assert shown == cards, desc

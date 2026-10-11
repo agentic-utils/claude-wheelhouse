@@ -362,6 +362,7 @@ class Sink:
     runs only while a move does: nothing runs while nothing moves."""
     SECONDS = 0.4
     FRAME = 1 / 30
+    now = staticmethod(time.monotonic)   # the clock a move is timed by: a test runs it on its own
 
     def __init__(self, repaint):
         self.repaint = repaint   # the list's paint, which lays it again: each frame
@@ -376,7 +377,8 @@ class Sink:
         to = {k: i if i < top else foot + i - top for i, k in enumerate(keys)}
         moved = self.sunk is not None and any(k in self.to and (k in sunk) != (k in self.sunk) for k in keys)
         if moved or (self.move and to != self.to):   # from wherever each row shows now
-            self.move = (self.at(time.monotonic()), time.monotonic())
+            now = self.now()
+            self.move = (self.at(now), now)
             if self.timer is None:
                 self.timer = app.set_interval(self.FRAME, self.repaint)
         self.to, self.sunk = to, set(sunk)
@@ -395,7 +397,7 @@ class Sink:
         return out
 
     def frame(self) -> list[str | None]:
-        now = time.monotonic()
+        now = self.now()
         if self.move and now - self.move[1] >= self.SECONDS:
             self.jump(keep=True)
         slots = self.at(now)

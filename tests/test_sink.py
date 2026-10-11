@@ -1,12 +1,8 @@
 """Settled items and parked sessions sink to the foot of their list, and rise again (T66, T71):
 one status table for every kind (store.standing), and one animation for both lists (Sink)."""
 
-import time
-from types import SimpleNamespace
-
 import pytest
 
-from claude_wheelhouse import tui
 from claude_wheelhouse.store import Store, standing
 from claude_wheelhouse.tui import BLANK, Sink, WheelhouseApp
 from test_tui import assert_one_current, dwell, one_second, raw_keys
@@ -91,15 +87,6 @@ def test_a_dismissed_item_comes_back(store, sid, kind, change, back, desc):
     assert (standing(store.item(sid, ref)) != "finished") == back, desc
 
 
-async def moved(app, pilot):
-    """Until both lists have stopped moving."""
-    for _ in range(100):
-        if app.session_sink.move is None and app.item_sink.move is None:
-            return
-        await pilot.pause(0.05)
-    raise AssertionError("still moving")
-
-
 def refs(app) -> list[str]:
     return [k.split("|")[1] for k in app.items_table.keys()]
 
@@ -119,7 +106,7 @@ SETTLE = {
     ("decision", "a decision seen as it's selected: it falls below an older settled item, never jumps up"),
     ("agent", "a subagent failed while selected"),
 ])
-async def test_a_settled_item_holds_while_selected_and_sinks_after(store, sid, kind, desc):
+async def test_a_settled_item_holds_while_selected_and_sinks_after(store, sid, clock, kind, desc):
     """Doug: "only move items when not selected (so eg the falling animation for completed
     tasks ... should only take place after I move focus to something else)"."""
     start = {"task": "running", "question": "open", "agent": "running"}.get(kind)
@@ -149,16 +136,19 @@ async def test_a_settled_item_holds_while_selected_and_sinks_after(store, sid, k
         table.move_cursor(row=table.get_row_index(f"{sid}|{q}"))
         await pilot.pause()
         app.refresh_data()
-        assert app.item_sink.move is not None, f"{desc}: sinking once the selection moved on"
+        frames = 0
         while app.item_sink.move is not None:   # the cursor stays on its item throughout
             assert_one_current(app, f"{desc}: mid-move")
-            await pilot.pause(0.03)
+            frames += 1
+            clock.advance(Sink.SECONDS / 8)
+            await pilot.pause()
+        assert frames > 3, f"{desc}: sinking once the selection moved on, a frame at a time ({frames})"
         assert refs(app)[-2:] == [old, top], f"{desc}: at the foot, below the older settled item"
         assert app.selected == (sid, q), desc
 
 
 @pytest.mark.anyio
-async def test_delete_moves_at_once(store, sid):
+async def test_delete_moves_at_once(store, sid, clock):
     """D33: closing with Delete is an explicit act, so it moves at once, unanimated."""
     with one_second():
         q = store.post_item(sid, "question", "which db?")
@@ -183,7 +173,7 @@ async def test_delete_moves_at_once(store, sid):
     ("three", ("ctrl+r",), "Ctrl+R reopens a closed question: with the settled, at once"),
     ("three", ("ctrl+r", "delete"), "and Delete closes it again: back at the foot, at once"),
 ])
-async def test_delete_moves_at_once_both_ways(store, sid, subject, keys, desc):
+async def test_delete_moves_at_once_both_ways(store, sid, clock, subject, keys, desc):
     """D33: closing with Delete moves the item at once, and so does reopening it with Ctrl+R."""
     from claude_wheelhouse.store import inbox_rank
     with one_second():
@@ -214,7 +204,7 @@ async def test_delete_moves_at_once_both_ways(store, sid, subject, keys, desc):
     (("claude-wheelhouse", "a-really-quite-long-session-name", "charlie"),
      "long names: the horizontal scrollbar takes the list's last line, and the parked one sits above it"),
 ])
-async def test_a_parked_session_shows_at_the_foot(tmp_path, monkeypatch, names, desc):
+async def test_a_parked_session_shows_at_the_foot(tmp_path, monkeypatch, clock, names, desc):
     """T66: the parked sessions sit at the foot of the list's visible rows, whatever the
     width of its names, never under its scrollbar."""
     from claude_wheelhouse import liveness
@@ -226,8 +216,7 @@ async def test_a_parked_session_shows_at_the_foot(tmp_path, monkeypatch, names, 
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         app.refresh_data()
-        await moved(app, pilot)
-        await pilot.pause()
+        await clock.finish_moves(pilot, app)
         table = app.session_list
         shown = table.scrollable_content_region.height - table.header_height
         assert table.max_scroll_y == 0, f"{desc}: nothing to scroll to"
@@ -296,27 +285,8 @@ def slots(app) -> dict[str, int]:
     return {r.key.value: i for i, r in enumerate(app.session_list.ordered_rows) if not r.key.value.startswith(BLANK)}
 
 
-class SteppedClock:
-    """tui's time.monotonic, stepped by the test while it holds the clock (stepping), so a
-    Sink's move is sampled at set points of it however slowly a loaded run lays its frames;
-    the real clock otherwise, for what else in the app times itself by it."""
-
-    def __init__(self):
-        self.now, self.stepping = 0.0, False
-
-    def monotonic(self):
-        return self.now if self.stepping else time.monotonic()
-
-
-@pytest.fixture
-def stepped(monkeypatch):
-    clock = SteppedClock()
-    monkeypatch.setattr(tui, "time", SimpleNamespace(**{**vars(time), "monotonic": clock.monotonic}))
-    return clock
-
-
 @pytest.mark.anyio
-async def test_a_parked_session_falls_to_the_foot_and_rises_back(store, sid, tmp_path, monkeypatch, stepped):
+async def test_a_parked_session_falls_to_the_foot_and_rises_back(store, sid, tmp_path, monkeypatch, clock):
     """T66: parked sessions sit at the foot of the list's room, falling there as they park,
     rising back into the list as they're unparked; the cursor stays on its session."""
     from claude_wheelhouse import liveness
@@ -332,17 +302,14 @@ async def test_a_parked_session_falls_to_the_foot_and_rises_back(store, sid, tmp
         assert slots(app) == {sid: 0, other: 1}, "no gap with nothing parked"
         for parked, end, desc in ((True, room - 1, "falls to the foot"), (False, 0, "rises back to the top")):
             store.set_parked(sid, parked)
-            stepped.stepping = True   # the move starts at the stepped clock's now
             app.refresh_data()
             seen = []
             while app.session_sink.move is not None:
                 seen.append(slots(app)[sid])
                 assert app.current_session() == sid, f"{desc}: the cursor rides its row"
                 assert_one_current(app, f"{desc}: mid-move")
-                stepped.now += Sink.SECONDS / 8
-                app.session_sink.repaint()   # a frame at that point of the move
+                clock.advance(Sink.SECONDS / 8)   # a frame at that point of the move
                 await pilot.pause()
-            stepped.stepping = False
             seen.append(slots(app)[sid])
             assert len(seen) > 3 and seen == sorted(seen, reverse=not parked), f"{desc}: step by step, {seen}"
             assert seen[-1] == end and table.row_count == (room if parked else 2), desc
@@ -350,7 +317,7 @@ async def test_a_parked_session_falls_to_the_foot_and_rises_back(store, sid, tmp
         assert app.current_session() == other
 
 
-async def moving(tmp_path, where, keys, typed, count=3, start=None) -> dict:
+async def moving(clock, tmp_path, where, keys, typed, count=3, start=None) -> dict:
     """Sessions alpha, bravo and charlie, live, with questions one, two and three (or count of
     one to four), alpha's. A move starts (bravo parks, or question one is answered and sinks),
     then the keys, from the session list on alpha (or start) or the items on two (or start):
@@ -364,8 +331,8 @@ async def moving(tmp_path, where, keys, typed, count=3, start=None) -> dict:
     with one_second():
         refs_ = {store.post_item(alpha, "question", t): t for t in ("one", "two", "three", "four")[:count]}
     one = list(refs_)[0]
-    # a long move, so the keys land inside it however slowly they're typed
-    with mock.patch.object(liveness, "status", lambda s, waking=False: "live"), mock.patch.object(Sink, "SECONDS", 3):
+    # the move stands still until the clock moves on, so the keys land inside it however slowly they're typed
+    with mock.patch.object(liveness, "status", lambda s, waking=False: "live"):
         app = WheelhouseApp(store)
         async with app.run_test(size=(160, 40)) as pilot:
             await pilot.pause()
@@ -386,7 +353,7 @@ async def moving(tmp_path, where, keys, typed, count=3, start=None) -> dict:
             sink = app.session_sink if where == "sessions" else app.item_sink
             assert sink.move, "under way"
             if typed == "after":
-                await moved(app, pilot)
+                await clock.finish_moves(pilot, app)
             if typed == "raw":
                 raw_keys(app, *keys)
             else:
@@ -396,7 +363,7 @@ async def moving(tmp_path, where, keys, typed, count=3, start=None) -> dict:
                 await pilot.pause()
             early = sink.move is not None
             assert_one_current(app, f"{where} {keys}: as they land")
-            await moved(app, pilot)
+            await clock.finish_moves(pilot, app)
             assert_one_current(app, f"{where} {keys}: after the move")
             return {"current": ids.get(app.current_session()), "early": early,
                     "selected": app.selected and refs_.get(app.selected[1]),
@@ -412,11 +379,11 @@ async def moving(tmp_path, where, keys, typed, count=3, start=None) -> dict:
     ("items", ("up",), "alpha", "two", "Up on two as one sinks: two is first now, so it stays"),
     ("items", ("down", "down"), "alpha", "one", "Down, Down: one, at the foot"),
 ])
-async def test_keys_typed_during_a_move_end_as_typed_slowly(tmp_path, where, keys, current, selected, desc):
+async def test_keys_typed_during_a_move_end_as_typed_slowly(tmp_path, clock, where, keys, current, selected, desc):
     """Arrows step through the final order, never a frame's, so a burst typed during a move
     ends as the same keys typed slowly do (and D22 holds while it moves)."""
-    raw = await moving(tmp_path / "raw", where, keys, "raw")
-    slow = await moving(tmp_path / "slow", where, keys, "slow")
+    raw = await moving(clock, tmp_path / "raw", where, keys, "raw")
+    slow = await moving(clock, tmp_path / "slow", where, keys, "slow")
     assert raw.pop("early") and slow.pop("early"), f"{desc}: the keys landed mid-move"
     assert raw == slow == {"current": current, "selected": selected, "marked": []}, f"{desc}: raw {raw}, slow {slow}"
 
@@ -437,19 +404,19 @@ async def test_keys_typed_during_a_move_end_as_typed_slowly(tmp_path, where, key
     ("sessions", "charlie", ("ctrl+home",), "alpha", None, [], "Ctrl+Home from charlie: alpha"),
 ])
 async def test_every_cursor_key_typed_during_a_move_ends_as_typed_after_it(
-        tmp_path, where, start, keys, current, selected, marked, desc):
+        tmp_path, clock, where, start, keys, current, selected, marked, desc):
     """Every key that moves a list's cursor acts in the final order, never a frame's: a burst
     typed during a move ends as the same keys typed once it has ended, so Delete on what they
     marked closes what the person meant."""
-    out = {typed: await moving(tmp_path / typed, where, keys, typed, count=4, start=start)
+    out = {typed: await moving(clock, tmp_path / typed, where, keys, typed, count=4, start=start)
            for typed in ("raw", "slow", "after")}
-    assert out["raw"].pop("early"), f"{desc}: the burst landed mid-move"
-    out["slow"].pop("early"), out["after"].pop("early")
+    early = {typed: o.pop("early") for typed, o in out.items()}
+    assert early == {"raw": True, "slow": True, "after": False}, f"{desc}: the keys landed mid-move, or after it"
     expected = {"current": current, "selected": selected, "marked": marked}
     assert out["raw"] == out["slow"] == out["after"] == expected, f"{desc}: {out}"
 
 
-async def held(tmp_path, keys, slow, closed=False) -> dict:
+async def held(clock, tmp_path, keys, slow, closed=False) -> dict:
     """Alpha's task D selected as the session marks it done, so it holds there, above the
     settled t0 and t1 it will sink below (or, closed, its question D as the session closes
     it, finished, held in sight with F off); then the keys, raw as a terminal sends a burst,
@@ -476,7 +443,7 @@ async def held(tmp_path, keys, slow, closed=False) -> dict:
             app.items_table.focus()
             app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{d}"))
             await pilot.pause()
-            await moved(app, pilot)
+            await clock.finish_moves(pilot, app)
             assert app.selected == (sid, d)
             store.update_item(sid, d, status="closed" if closed else "done")
             app.refresh_data()
@@ -484,12 +451,12 @@ async def held(tmp_path, keys, slow, closed=False) -> dict:
             if slow:
                 for key in keys:
                     await pilot.press(key)
-                    await moved(app, pilot)
+                    await clock.finish_moves(pilot, app)
             else:
                 raw_keys(app, *keys)
             for _ in range(4):
                 await pilot.pause()
-            await moved(app, pilot)
+            await clock.finish_moves(pilot, app)
             assert_one_current(app, f"{'slow' if slow else 'raw'} {keys}")
             return {"rows": [title[r] for r in refs(app)], "selected": app.selected and title[app.selected[1]],
                     "D": store.item(sid, d)["status"]}
@@ -500,12 +467,12 @@ async def held(tmp_path, keys, slow, closed=False) -> dict:
     (("down", "down", "down", "down", "delete"), "Down off D as it holds, on down to it at the foot, Delete"),
     (("down", "1", "down", "down", "delete"), "the same with a 1 on the way, which does nothing on a task"),
 ])
-async def test_delete_on_a_row_still_sinking_ends_as_typed_slowly(tmp_path, keys, desc):
+async def test_delete_on_a_row_still_sinking_ends_as_typed_slowly(tmp_path, clock, keys, desc):
     """Review 25: a burst's Delete lands on a frame the sink hasn't drawn yet. The row it takes
     goes from its place in the final order, so the selection falls to the neighbour it has
     there, t0, as when typed slowly, not the one beside it in the frame."""
-    raw = await held(tmp_path / "raw", keys, slow=False)
-    slow = await held(tmp_path / "slow", keys, slow=True)
+    raw = await held(clock, tmp_path / "raw", keys, slow=False)
+    slow = await held(clock, tmp_path / "slow", keys, slow=True)
     assert raw == slow == {"rows": ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0"], "selected": "t0", "D": "done"}, \
         f"{desc}: raw {raw}, slow {slow}"
 
@@ -519,10 +486,10 @@ async def test_delete_on_a_row_still_sinking_ends_as_typed_slowly(tmp_path, keys
      "answered", "Ctrl+R on it reopens it as answered: with the settled, still selected"),
     (("ctrl+r", "delete"), ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0"], "t0", "closed", "and Delete closes it again, from the foot"),
 ])
-async def test_delete_on_a_held_finished_item_sends_it_away(tmp_path, keys, rows, selected, status, desc):
+async def test_delete_on_a_held_finished_item_sends_it_away(tmp_path, clock, keys, rows, selected, status, desc):
     """Delete only ever closes. On an item its session finished while selected, held
     in place with F off, it lets it go at once, as closing it there would; Ctrl+R reopens it.
     Raw or slow, the same."""
-    raw = await held(tmp_path / "raw", keys, slow=False, closed=True)
-    slow = await held(tmp_path / "slow", keys, slow=True, closed=True)
+    raw = await held(clock, tmp_path / "raw", keys, slow=False, closed=True)
+    slow = await held(clock, tmp_path / "slow", keys, slow=True, closed=True)
     assert raw == slow == {"rows": rows, "selected": selected, "D": status}, f"{desc}: raw {raw}, slow {slow}"
