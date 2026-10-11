@@ -59,17 +59,17 @@ def run_app(args, store=None) -> None:
 def main() -> None:
     # host: a hosted session's process, started by the wheelhouse in SDK mode alone
     # (launch.open_host runs `host <id>`), so taken before the main parser: neither --help
-    # nor an invalid choice's message lists it, like --enable-sdk, which may come first
-    flags = 0
-    while sys.argv[1 + flags:2 + flags] == [features.FLAG]:
-        flags += 1
-    if sys.argv[1 + flags:2 + flags] == ["host"]:
-        if flags:
+    # nor an invalid choice's message lists it, like --enable-sdk, which it takes before or
+    # after it as every command does
+    given = sys.argv[1:]
+    rest = [a for a in given if a != features.FLAG]
+    if rest[:1] == ["host"]:
+        if len(rest) < len(given):
             features.enable_sdk()
         host = argparse.ArgumentParser(prog="claude-wheelhouse host")
         host.add_argument("session_id")
         from .host import main as host_main
-        host_main(host.parse_args(sys.argv[2 + flags:]).session_id)
+        host_main(host.parse_args(rest[1:]).session_id)
         return
     # --enable-sdk: experimental SDK mode (features.py), deliberately left out of --help.
     # Taken before or after the command, for the commands that create sessions, and protocol

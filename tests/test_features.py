@@ -99,6 +99,8 @@ def test_an_invalid_command_doesnt_name_host(monkeypatch, capsys):
 @pytest.mark.parametrize("argv, on, desc", [
     (["host", "abc"], False, "alone"),
     (["--enable-sdk", "host", "abc"], True, "after the flag, which turns SDK mode on as for any command"),
+    (["host", "--enable-sdk", "abc"], True, "the flag after the command, as every command takes it"),
+    (["host", "abc", "--enable-sdk"], True, "the flag last"),
 ])
 def test_the_hidden_host_command_still_runs(monkeypatch, argv, on, desc):
     from claude_wheelhouse import host
