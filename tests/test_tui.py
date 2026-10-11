@@ -2656,6 +2656,37 @@ async def test_a_decision_seen_by_the_dwell_sinks_only_once_left(store, sid, clo
 
 
 @pytest.mark.anyio
+async def test_a_lapse_as_an_arrow_acts_marks_nothing_new(store, sid, clock, monkeypatch):
+    """Review 42: the dwell's timer puts its lapse in the app's queue (look), so it can fire as
+    Down acts, before Down's highlight lands, and run once it has. The lapse is the old look's
+    (dwell_gen): the row Down lands on starts a dwell of its own and is not seen at once."""
+    with one_second():
+        refs = [store.post_item(sid, "decision", t, **DECIDED) for t in ("D", "E", "F")]
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        table.focus()
+        table.move_cursor(row=1)   # the middle row: a fresh look, its own timer
+        await pilot.pause()
+        top = app.selected[1]
+        check = app._check_bindings
+
+        async def acting(key, priority=False):
+            done = await check(key, priority)
+            if done and key == "down":   # Down's binding has acted; its highlight is still to land
+                clock.advance(REST)
+            return done
+        monkeypatch.setattr(app, "_check_bindings", acting)
+        raw_keys(app, "down")
+        for _ in range(4):
+            await pilot.pause()
+        landed = app.selected[1]
+        assert landed != top and landed in refs, f"Down moved on: {landed}"
+        assert store.item(sid, landed)["status"] == "unseen", "the row Down landed on, seen at once"
+
+
+@pytest.mark.anyio
 async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid):
     q = store.post_item(sid, "question", "which db?")
     d = store.post_item(sid, "decision", "cache in SQLite", alternative="Postgres",
