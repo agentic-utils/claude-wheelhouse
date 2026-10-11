@@ -222,6 +222,7 @@ class RemoteClient:
         self.stream_socket = None   # the stream's connection, while it's open
         self.refusal: str | None = None   # why the daemon refuses this client, said once
         self.proven_url: str | None = None   # the URL whose listener last proved it's the daemon (prove)
+        self.in_flight = False   # the fetching thread is fetching what it took from dirty
 
     def make_http(self, read: float):
         """A connection with no token: each request carries it only once the listener has
@@ -755,8 +756,8 @@ class RemoteClient:
                         for event in events:
                             if self.stopping:
                                 return
-                            self.last_event = event.id or self.last_event
                             self.heard(event.json())
+                            self.last_event = event.id or self.last_event   # after: what it moved is marked
                 except Impostor as e:
                     self.refused(str(e))
                 except (self.httpx.TransportError, self.httpx.SSEError, ValueError, RuntimeError):
@@ -828,6 +829,7 @@ class RemoteClient:
                     self.dirty.add(("usage",))
                 todo, self.dirty = self.dirty, set()
                 shown = self.wanted | self.asked
+                self.in_flight = True
             for key in sorted(todo):
                 if key[0] in ("thread", "conversation", "agent") and key not in shown:
                     continue
@@ -848,6 +850,8 @@ class RemoteClient:
                 with self.lock:
                     if key not in self.waiting or self.waiting[key][0] < seq:
                         self.waiting[key] = (seq, data)
+            with self.lock:
+                self.in_flight = False
 
 
 def hub_error(e: Refused) -> Exception:

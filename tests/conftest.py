@@ -1,3 +1,4 @@
+import functools
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -237,16 +238,37 @@ def served():
 def pytest_generate_tests(metafunc):
     """A test marked both runs twice: through a hub in process (--local), and through the
     daemon (via)."""
-    if metafunc.definition.get_closest_marker("both"):
-        metafunc.parametrize("via", ["local", "daemon"], indirect=True)
+    marker = metafunc.definition.get_closest_marker("both")
+    if marker:   # threaded=False: a test whose change is a transcript file a dead session never reads again
+        threaded = marker.kwargs.get("threaded", True)
+        metafunc.parametrize("via", ["local", "daemon", *(["threaded"] if threaded else [])], indirect=True)
+
+
+def caught_up(client, served, refresh) -> None:
+    """The daemon's tick, then the client's threads given time to hear all it published and
+    fetch what it moved, then the refresh that swaps it in: as a refresh tick a second after
+    a change, but on the test's clock."""
+    served.tick()
+    feed, deadline = served.daemon.feed, time.monotonic() + 15
+    while True:
+        with client.lock:
+            settled = (client.last_event is not None and int(client.last_event) >= feed.seq and not client.dirty
+                       and not client.in_flight)
+        if settled or time.monotonic() > deadline:
+            break
+        time.sleep(0.005)
+    refresh()
 
 
 @pytest.fixture(autouse=True)
 def via(request, monkeypatch):
     """How WheelhouseApp(store) reaches the hub: in process, or (marked both) through a
-    daemon served on that store's database, with a client that fetches at each refresh
-    after the daemon's tick. app.store is still the test's store, to write as hosts do and
-    read what the app did; app.hub the daemon's."""
+    daemon served on that store's database. "daemon": a client that fetches at each refresh,
+    after the daemon's tick. "threaded": the client as it runs, its stream and fetching on
+    threads of their own, what they bring swapped in at the refresh; each refresh ticks the
+    daemon first and waits for the client to have heard and fetched all it published. app.store
+    is still the test's store, to write as hosts do and read what the app did; app.hub the
+    daemon's."""
     how = getattr(request, "param", "local")
     if how == "local":
         yield how
@@ -261,7 +283,19 @@ def via(request, monkeypatch):
         served = daemons.get(store.path)
         if served is None:
             served = daemons[store.path] = ServedDaemon(store.path)
-        client = served.client(synchronous=True, before_fetch=served.tick)
+        if how == "daemon":
+            client = served.client(synchronous=True, before_fetch=served.tick)
+        else:
+            client = served.client()
+            client.refresh = functools.partial(caught_up, client, served, client.refresh)
+            start = client.start
+            # the stream's notices posted without waiting on the app: a refresh waiting here on
+            # the stream would otherwise wait on itself
+            def start_threads(post=None, start=start):
+                import asyncio
+                loop = asyncio.get_running_loop()
+                start(lambda callback: loop.call_soon_threadsafe(callback))
+            client.start = start_threads
         made.append(client)
         init(self, client=client)
         self.store, self.hub = store, served.daemon.hub
