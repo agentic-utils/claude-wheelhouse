@@ -58,7 +58,7 @@ def run_app(args, store=None) -> None:
 
 def main() -> None:
     # --enable-sdk: experimental SDK mode (features.py), deliberately left out of --help.
-    # Taken before or after the command, for the commands that create sessions
+    # Taken before or after the command, for the commands that create sessions, and protocol
     sdk = argparse.ArgumentParser(add_help=False)
     sdk.add_argument(features.FLAG, dest="enable_sdk", action="store_true", default=argparse.SUPPRESS,
                      help=argparse.SUPPRESS)
@@ -75,7 +75,7 @@ def main() -> None:
     host.add_argument("session_id")
     sub.add_parser("mcp", help="the per-session MCP server (stdio)")
     sub.add_parser("monitor", help="the per-session plugin monitor")
-    sub.add_parser("protocol", help="print everything wheelhouse puts into a launched session")
+    sub.add_parser("protocol", help="print everything wheelhouse puts into a launched session", parents=[sdk])
     daemon = sub.add_parser("daemon", help="serve the wheelhouse over HTTP (the app starts it, or joins it)",
                             parents=[sdk])
     daemon.add_argument("--address", default=None, help="the IP address to listen on (default 127.0.0.1; "

@@ -85,9 +85,13 @@ def test_the_flag_is_left_out_of_help(monkeypatch, capsys):
     assert "sdk" not in out.lower() and "agent" not in out.lower()
 
 
-@pytest.mark.parametrize("on, desc", [(False, "off: a tab's alone"), (True, "on: a hosted session's too")])
-def test_the_protocol_command(monkeypatch, capsys, on, desc):
-    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", *(["--enable-sdk"] if on else []), "protocol"])
+@pytest.mark.parametrize("argv, on, desc", [
+    (["protocol"], False, "off: a tab's alone"),
+    (["--enable-sdk", "protocol"], True, "on: a hosted session's too"),
+    (["protocol", "--enable-sdk"], True, "the flag after the command"),
+])
+def test_the_protocol_command(monkeypatch, capsys, argv, on, desc):
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", *argv])
     cli.main()
     out = capsys.readouterr().out
     assert ("protocol_sdk.md" in out) is on, desc
