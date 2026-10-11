@@ -31,6 +31,7 @@ from claude_wheelhouse.tui import (BLANK, MATRIX, NOTHING_SELECTED, PERMISSION_H
 
 
 @pytest.mark.anyio
+@pytest.mark.both
 async def test_answer_reaches_the_session(store, sid, live):
     store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
     q = store.post_item(sid, "question", "which db?", "Postgres or SQLite for the cache?")
@@ -916,6 +917,7 @@ async def step(app, pilot, how, sid, other):
 
 
 @pytest.mark.anyio
+@pytest.mark.both
 @pytest.mark.parametrize("filtered", [False, True])
 @pytest.mark.parametrize("steps, unfiltered_current, filtered_current, desc", [
     (["park", "unpark"], "A", "A", "Park follows the session (review 10): it stays current, Unpark one press away"),
@@ -1011,6 +1013,7 @@ def burst_state(store, sids) -> dict:
     (("delete",), True), (("ctrl+s",), True), (("ctrl+t",), True), (("ctrl+j",), False),
     (("ctrl+r",), True), (("ctrl+j", "ctrl+s"), True), ("allow", False),
 ])
+@pytest.mark.both
 async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, filtered, where, burst, hits, live):
     """Q35, review 12: Down then at once an action key (or Allow) acts on where the cursor
     went, never on the row it left, from either list, following a session or not: every
@@ -1071,6 +1074,7 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
     ("sessions", ("down", "e"), "End, pressed by its key: asks about B"),
     ("items", ("down", "enter"), "Enter: opens B's question full screen"),
 ])
+@pytest.mark.both
 async def test_a_raw_burst_opens_what_the_cursor_is_on(store, sid, tmp_path, where, burst, desc):
     """Review 12's probes: a burst ending in a key that opens something opens it for the row
     the cursor went to."""
@@ -1104,6 +1108,7 @@ async def test_a_raw_burst_opens_what_the_cursor_is_on(store, sid, tmp_path, whe
     ("sessions", ("down", "tab", "down"), "one", ["B:one"], "from the session list: Down, Tab, Down (review 13)"),
     ("items", ("shift+tab", "down"), None, [], "from the items: Shift+Tab, Down"),
 ])
+@pytest.mark.both
 async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp_path, clock, where, burst, selected,
                                                                    dwelt, desc):
     """Following A, a burst that moves both lists' cursors and ends on session B follows B
@@ -1241,6 +1246,7 @@ async def two_lists(clock, tmp_path, where, steps, slow, counts=(2, 2), tick=Fal
     ("items", ("down", "down", "shift+tab", "down", "tab", "down"), "from the items: across and back"),
     ("items", ("down", "shift+tab", "down", "tab", "enter"), "from the items: across, back, Enter opens B's"),
 ])
+@pytest.mark.both
 async def test_a_raw_burst_across_both_lists_ends_as_typed_slowly(tmp_path, clock, where, keys, desc):
     """Review 17: every key settles what the ones before it moved before it acts (land), so a
     burst ends where the same keys typed slowly do, and never opens A's decision while B is
@@ -1265,6 +1271,7 @@ async def test_a_raw_burst_across_both_lists_ends_as_typed_slowly(tmp_path, cloc
     ("items", ("click 1", "enter", "o", "k"), "a click on A's one, Enter opens it, o k in its thread"),
     ("items", ("click 1", "down", "enter"), "a click on A's one, Down, Enter opens two"),
 ])
+@pytest.mark.both
 async def test_a_click_then_a_raw_burst_ends_as_typed_slowly(tmp_path, clock, monkeypatch, where, steps, desc):
     """Review 17: a click's selection is handled before the keys typed after it (land runs it),
     not behind them, where it followed B again and undid what they did. Review 18: so is a
@@ -1286,6 +1293,7 @@ async def test_a_click_then_a_raw_burst_ends_as_typed_slowly(tmp_path, clock, mo
     ("sessions", ("down", "click 1"), "Down in the session list, a click on an item: of the session Down reached"),
     ("sessions", ("down", "click 2"), "Down in the session list, a click on its second item"),
 ])
+@pytest.mark.both
 async def test_a_raw_burst_then_a_click_ends_as_typed_slowly(tmp_path, clock, monkeypatch, where, steps, desc):
     """Review 18: a click settles what the keys before it moved, as a key does (land), with no
     key behind it to: else the Down's decision was never selected, or the items' click was
@@ -1305,6 +1313,7 @@ async def test_a_raw_burst_then_a_click_ends_as_typed_slowly(tmp_path, clock, mo
     (("down", "click 1"), "Down to B, a click on a row B's list has too: B's one"),
     (("down", "double 1"), "Down to B, a double-click on B's one opens it"),
 ])
+@pytest.mark.both
 async def test_a_raw_burst_then_a_click_on_a_shorter_list_ends_as_typed_slowly(tmp_path, clock, monkeypatch, steps,
                                                                                 desc):
     """Review 19: a click's settle can follow another session and refill the items, so the
@@ -1439,6 +1448,7 @@ class Burst:
     ("items", "qa", ("c", "down"), lambda b: b.asked(), "alpha", "C compacts the session of the item it was on"),
     ("items", "qa", ("h", "down"), lambda b: b.asked(), "alpha", "H opens a shell on the session of the item it was on"),
 ])
+@pytest.mark.both
 async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch, focus, at, burst, seen, want, desc):
     """Review 14: each key acts as it arrives, on what has focus then, so no key overtakes
     the one typed before it: a later key that moves the focus or a cursor never changes what
@@ -1500,6 +1510,7 @@ async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch,
     ("items", "qa", ("question_mark", "q"), ("Screen", "", [], False, "park"),
      "? opens the keys, and Q behind it closes them rather than quitting"),
 ])
+@pytest.mark.both
 async def test_a_key_that_opens_something_takes_the_keys_behind_it(store, tmp_path, monkeypatch, focus, at, burst,
                                                                     want, desc):
     """Review 15: a key that opens a screen or moves the focus does so before the next key
@@ -1597,6 +1608,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
      "the effort slider: each arrow moves on from where the last left it"),
     ("stats", "alpha", ("end", "left", "home", "right"), {"effort": "medium"}, "Home and End, then arrows"),
 ])
+@pytest.mark.both
 async def test_a_key_lands_before_the_next_acts(store, tmp_path, monkeypatch, focus, at, burst, want, desc):
     """Review 16: what a key sets in motion lands before the key behind it acts: the press
     a focused button's Enter posts, the Submitted an input's, the screen it opens or closes,
@@ -1622,6 +1634,7 @@ async def test_a_key_lands_before_the_next_acts(store, tmp_path, monkeypatch, fo
     ("session-list", "alpha", ("m", "down", "down", "enter", "m", "escape"), "Model chosen by keys, opened again"),
     ("stats", "alpha", ("right", "right", "left", "tab", "right"), "the slider's arrows, then Tab on round"),
 ])
+@pytest.mark.both
 async def test_a_raw_burst_ends_as_the_same_keys_typed_slowly(store, tmp_path, monkeypatch, focus, at, burst, desc):
     """Type-ahead: a burst sent as a terminal sends it ends where the same keys, each landing
     before the next is pressed, do."""
@@ -1689,6 +1702,7 @@ async def test_a_session_ending_elsewhere_with_nothing_left_clears_the_pane(stor
     (False, "a refresh that changes no rows"),
     (True, "a refresh that rebuilds the list"),
 ])
+@pytest.mark.both
 async def test_a_refresh_before_the_persons_highlight_lands(store, sid, item_arrives, desc):
     """The items' cursor follows the selection by key on every paint (review 11, bug 1), but
     not over an arrow whose highlight is still on its way to settle: it isn't lost."""
@@ -1910,6 +1924,7 @@ UP, NEAR_END = ("pageup",) * 3, ("up",) * 3
      "shows below them"),
 ])
 @pytest.mark.parametrize("width", [160, 100])   # the lines each block takes, and so the shift, differ
+@pytest.mark.both
 async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch, change, keys, shape, desc, width):
     """A reader scrolled up keeps their place across a change; one at the end stays there.
     waiting: under the 80 entries shown, so no oldest turn drops off to undo the warning's shift."""
@@ -1952,6 +1967,7 @@ async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch
     (False, True, "your own answer, at the newest reply: it shows at the end"),
     (True, True, "your own answer, scrolled up to read: back to the end, where it shows"),
 ])
+@pytest.mark.both
 async def test_a_new_reply_in_a_long_thread(store, sid, up, own, desc):
     ref = store.post_item(sid, "question", "q", body="\n\n".join(f"para {i}" for i in range(80)), status="open")
     app = WheelhouseApp(store)
@@ -1969,7 +1985,7 @@ async def test_a_new_reply_in_a_long_thread(store, sid, up, own, desc):
             await pilot.press("ctrl+enter")
         else:
             store.reply(sid, ref, "a new reply", status="open")
-            app.screen.paint()
+            app.refresh_data()   # the tick, which repaints the thread
         await pilot.wait_for_scheduled_animations()
         await pilot.pause()
         assert ("my answer" in app.screen.text) == own, f"{desc}: the answer shows in the thread"
@@ -2210,6 +2226,7 @@ async def test_restored_text_is_typed_onto_at_the_end(store, sid):
     (True, "writing to the session from its conversation row"),
 ])
 @pytest.mark.anyio
+@pytest.mark.both
 async def test_typing_survives_refresh_ticks_even_when_items_arrive_above(store, sid, clock, conversation, desc):
     q = store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
@@ -2347,6 +2364,7 @@ async def test_refresh_leaves_a_selection_in_the_answer_box(store, sid, row, des
             "highlight of row 0 used to arrive after it and take the pane back)"),
     (True, "a move overtaken by a rebuild is dropped, so the pane shows what is highlighted"),
 ])
+@pytest.mark.both
 async def test_a_refresh_racing_a_move_keeps_pane_and_highlight_together(store, sid, new_item, desc):
     store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
@@ -2381,6 +2399,7 @@ async def test_a_refresh_racing_a_move_keeps_pane_and_highlight_together(store, 
     ("backspace", "question", "open", False, True, "open", "in the answer box Backspace edits the text"),
     ("delete", "question", "open", False, True, "open", "and so does Delete"),
 ])
+@pytest.mark.both
 async def test_delete_closes_and_ctrl_r_reopens_questions(store, sid, key, kind, status, finished, focus_box, expected, desc):
     ref = store.post_item(sid, kind, "which db?", status=status)
     app = WheelhouseApp(store)
@@ -2434,6 +2453,7 @@ async def test_the_item_list_shows_a_question_awaiting_the_session(store, sid, k
      "a decision seen as it's selected keeps its place; once left, it settles at the foot (T71)"),
     ("question", "new", True, ["old", "new"], "a question answered while selected would fall below the open one"),
 ])
+@pytest.mark.both
 async def test_the_selected_item_keeps_its_place(store, sid, clock, kind, pick, answer, after, desc):
     """Doug: "only move items when not selected". The selected row keeps its place while
     it's selected, however its status changes; it re-sorts once the selection moves on."""
@@ -2524,6 +2544,7 @@ PIN_ACTS = {
     ("permission open", "#allow", True, "the person answering a permission: an explicit act, as Delete is"),
     ("permission open", "allowed", False, "a permission answered elsewhere (its own terminal)"),
 ])
+@pytest.mark.both
 async def test_a_selected_item_moves_only_on_delete(store, sid, live, clock, start, act, moves, desc):
     """Doug: "only move items when not selected (so eg the falling animation for completed
     tasks, which I think should also apply to seen decisions and answered questions, should
@@ -2633,6 +2654,7 @@ async def dwell_steps(pilot, app, keys, steps, clock) -> None:
     (("on D", "short", "blur", "rest"), "unseen", "the window losing focus mid-dwell: a break in looking"),
     (("on D", "short", "blur", "short", "focus", "rest"), "seen", "focus again, then a rest of the dwell: seen"),
 ])
+@pytest.mark.both
 async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_path, clock, steps, want, desc):
     """Doug: "I need to look at an item for at least 1 second before the state changes". An
     unseen decision becomes seen only once it has stayed selected, on the inbox or in its
@@ -2663,6 +2685,7 @@ async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_p
     (False, "seen by the dwell while selected: held in place, not sinking"),
     (True, "and once the selection moves on, it sinks to the foot"),
 ])
+@pytest.mark.both
 async def test_a_decision_seen_by_the_dwell_sinks_only_once_left(store, sid, clock, leave, desc):
     """The owner's rule for settled items: a decision that becomes seen while selected stays
     where it is until the selection moves on, then sinks (ranked, Sink), with seen arriving
@@ -2698,6 +2721,7 @@ async def test_a_decision_seen_by_the_dwell_sinks_only_once_left(store, sid, clo
 
 
 @pytest.mark.anyio
+@pytest.mark.both
 async def test_a_lapse_as_an_arrow_acts_marks_nothing_new(store, sid, clock, monkeypatch):
     """Review 42: the dwell's timer puts its lapse in the app's queue (look), so it can fire as
     Down acts, before Down's highlight lands, and run once it has. The lapse is the old look's
@@ -2767,6 +2791,7 @@ TIE_SECOND = "2026-10-08T10:00:05+00:00"   # every write a case makes, after its
     ("Q1-Q3 open", "Q2", "Q3 answered, Q2 answered", "Q2 Q1 Q3", "down", "Q1 Q2 Q3", "Q1",
      "another answered, then the selected: held, then by id, as when the selected was answered first"),
 ])
+@pytest.mark.both
 async def test_items_that_tie_to_the_second_keep_one_order(store, sid, clock, posts, selected, acts, held, leave,
                                                            after, lands, desc, typing):
     """#70: now() stamps whole seconds, so items an agent posts or settles together tie on
@@ -2860,6 +2885,7 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
     ("closed", "delete", True, "closed", "Delete on a closed decision (shown with f) leaves it closed"),
     ("closed", "ctrl+r", True, "seen", "Ctrl+R reopens it as seen"),
 ])
+@pytest.mark.both
 async def test_delete_closes_and_ctrl_r_reopens_decisions(store, sid, start, key, finished, expected, desc):
     d = store.post_item(sid, "decision", "cache in SQLite", why="over Postgres: local; undo: swap")
     if start == "closed":
@@ -2916,6 +2942,7 @@ async def test_marking_rows(store, sid, steps, marked, desc):
     (False, "thread", "", "closed", "full screen, Ctrl+R only takes back: nothing queued, nothing done"),
     (True, "thread", "a word", "closed", "and takes the word back there"),
 ])
+@pytest.mark.both
 async def test_ctrl_r_takes_a_queued_answer_back_before_it_reopens(store, sid, queued, where, box, status, desc):
     """Ctrl+R keeps its meaning where the item has an answer queued: taking it back. Only with
     none, in the item list, where Delete closes, does it reopen a finished item."""
@@ -2994,6 +3021,7 @@ async def ctrl_r_where(tmp_path, follow, focus, at, marks, typed, slow) -> dict:
      "review: half an answer to a closed question, Ctrl+R in the box leaves it closed, as before 4ea937b"),
     (False, "box", "Q1", (), "", (), None, "an empty box with nothing queued: Ctrl+R there still only takes back"),
 ])
+@pytest.mark.both
 async def test_ctrl_r_reopens_only_from_the_item_list(tmp_path, follow, focus, at, marks, typed, reopened, said, desc):
     """D44: Ctrl+R reopens only with the item list focused. In the answer box it only takes a
     queued answer back, as it did before it reopened anything, so what's typed is never lost
@@ -3072,6 +3100,7 @@ async def test_the_word_after_acting_on_marks_mid_sink_names_them_as_they_will_s
 
 
 @pytest.mark.anyio
+@pytest.mark.both
 async def test_delete_closes_the_marked_questions_and_ctrl_r_reopens_them(store, sid):
     with one_second():   # Q1-Q3 in order, under the rows clicked
         q1, q2, q3 = (store.post_item(sid, "question", t) for t in "abc")
@@ -3192,6 +3221,7 @@ async def test_a_failed_transcript_read_is_shown_not_fatal(store, sid, monkeypat
     (False, True, "the shimmer and the eyes run while the answer box is idle"),
     (True, False, "the shimmer and the eyes rest while you type (D41)"),
 ])
+@pytest.mark.both
 async def test_the_stats_shimmer_and_eyes_rest_while_typing(store, sid, monkeypatch, focus_answer, moves, desc):
     monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: True)
     app = WheelhouseApp(store)
@@ -3379,6 +3409,7 @@ def shown_buttons(app) -> set[str]:
     ("#always", "allowed", "always", "allow, and keep the rule"),
     ("#deny", "denied", "deny", "deny"),
 ])
+@pytest.mark.both
 async def test_permission_buttons(store, tmp_path, press, status, decision, desc):
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
     ref = store.post_item(sid, "permission", "Bash: rm -rf build")
@@ -3399,6 +3430,7 @@ async def test_permission_buttons(store, tmp_path, press, status, decision, desc
     ("immediate", "ctrl+enter", "Ctrl+Enter in Immediate mode: denied the same way"),
     ("queued", "#deny", "Deny takes what's typed as the reason"),
 ])
+@pytest.mark.both
 async def test_a_message_on_a_permission_denies_it_at_once(store, tmp_path, mode_, how, desc):
     """Doug (#53): permissions are answered with buttons and don't need to be queued; a
     typed message stays as an optional reason to deny."""
@@ -4564,7 +4596,8 @@ def say(path, text):
 
 
 @pytest.mark.anyio
-async def test_a_subagent_items_own_conversation_follows_it_live(store, sid, tmp_path, monkeypatch):
+@pytest.mark.both
+async def test_a_subagent_items_own_conversation_follows_it_live(store, sid, tmp_path, monkeypatch, via):
     monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
     path = subagent_file(tmp_path, sid, "ag1", 60)
     store.track_agent(sid, "ag1", "find the bug", "A `general-purpose` subagent.", datetime.now(timezone.utc))
@@ -4604,7 +4637,12 @@ async def test_a_subagent_items_own_conversation_follows_it_live(store, sid, tmp
         items.focus()
         items.move_cursor(row=items.get_row_index(f"{sid}|{q}"))
         await laid(pilot)
-        assert app.hub.agent_followers == {}, "no longer followed once another item is selected"
+        if via == "local":
+            assert app.hub.agent_followers == {}, "no longer followed once another item is selected"
+        else:   # the daemon keeps the last two any client asked for; this one no longer asks
+            app.refresh_data()   # what was shown before the selection moved: then not
+            app.refresh_data()
+            assert not [k for k in app.client.wanted if k[0] == "agent"], "no longer fetched once another is selected"
 
 
 @pytest.mark.anyio
@@ -4886,6 +4924,7 @@ async def test_a_click_on_a_level_sets_it(store, tmp_path, monkeypatch, level):
     (200_000, ("click:#relaunch-now",), "RelaunchChoice", ("now", (4242, 1)), "Relaunch now clicked"),
     (200_000, ("click:#relaunch-cancel",), "RelaunchChoice", None, "Cancel clicked"),
 ])
+@pytest.mark.both
 async def test_relaunch_offers_to_compact_a_big_session_first(store, sid, monkeypatch, tokens, keys, dialog,
                                                               stopped, desc):
     from claude_wheelhouse import hub as hub_mod, liveness
@@ -5024,3 +5063,77 @@ async def test_focusing_the_slider_lays_it_out_focused_at_once(store, tmp_path, 
         app.session_list.focus()
         await pilot.pause()
         assert focused[-1:] == [False], f"laid out on blur as {focused}"
+
+
+# through the daemon, as the TUI runs by default (phase 2c)
+
+def until(check, seconds=10.0, desc=""):
+    deadline = time.monotonic() + seconds
+    while not check():
+        assert time.monotonic() < deadline, f"timed out: {desc}"
+        time.sleep(0.02)
+
+
+@pytest.mark.anyio
+async def test_what_the_stream_brings_waits_for_the_tick(store, sid, served, clock):
+    """An item a host posts, fetched in the background as the daemon's event says, shows
+    at the refresh tick, never at a repaint a key makes: a burst acts on the rows it began on."""
+    d = served(store.path)
+    q = store.post_item(sid, "question", "first")
+    app = WheelhouseApp(client=d.client())
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        until(lambda: app.client.last_event is not None, desc="the stream connected")
+        app.refresh_data()
+        rows = lambda: [r.key.value for r in app.items_table.ordered_rows]
+        assert rows() == [f"{sid}|{q}"]
+        q2 = store.post_item(sid, "question", "second")
+        d.tick()
+        until(lambda: ("inbox",) in app.client.waiting, desc="fetched")
+        app.items_table.focus()
+        await pilot.press("down", "up")   # repaints the list as the keys land
+        assert rows() == [f"{sid}|{q}"], "not before the tick"
+        clock.tick(app)
+        await pilot.pause()
+        assert set(rows()) == {f"{sid}|{q}", f"{sid}|{q2}"}, "at the tick"
+
+
+@pytest.mark.anyio
+async def test_a_lost_daemon_shows_in_the_title_and_refuses_what_would_act(store, sid, served, clock):
+    d = served(store.path)
+    q = store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(client=d.client())
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        until(lambda: app.client.last_event is not None, desc="the stream connected")
+        app.refresh_data()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{q}"))
+        await pilot.pause()
+        d.stop()
+        until(lambda: not app.client.connected, desc="lost")
+        await pilot.pause()
+        clock.animate(app)
+        assert app.title_bar.render().plain.strip() == "daemon unreachable: reconnecting…"
+        assert any("daemon unreachable" in n.message for n in app._notifications)
+        app.answer.text = "SQLite"
+        app.answer.focus()
+        await pilot.press("ctrl+enter")
+        await pilot.pause()
+        assert app.answer.text == "SQLite", "what's typed stays"
+        assert any(n.message == "not connected to the daemon: nothing was sent" for n in app._notifications)
+        assert store.drafts(sid) == []
+
+
+@pytest.mark.anyio
+async def test_quitting_through_the_daemon_leaves_a_relaunch_to_it(store, sid, served, monkeypatch):
+    d = served(store.path)
+    exits = []
+    monkeypatch.setattr(WheelhouseApp, "exit", lambda self, *a, **k: exits.append(True))
+    app = WheelhouseApp(client=d.client(synchronous=True, before_fetch=d.tick))
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.client.relaunching = {sid}   # as the daemon's view says
+        monkeypatch.setattr(app.client, "refresh", lambda: None)
+        await app.action_quit()
+        await pilot.pause()
+        assert exits == [True] and not isinstance(app.screen, Confirm), "nothing to ask: the daemon carries it on"

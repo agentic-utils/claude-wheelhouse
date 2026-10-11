@@ -8,6 +8,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "claude-agent-sdk>=0.2.164",
+    "httpx2>=2.13",
     "mcp>=2.2",
     "sse-starlette>=3.5",
     "starlette>=1.7",
@@ -27,6 +28,7 @@ dev = ["httpx2>=2.13", "pytest>=8", "pytest-xdist>=3.8"]
 [tool.pytest.ini_options]
 # in parallel, a worker a core (pytest-xdist); `-n 0` runs it serially
 addopts = "-n auto"
+markers = ["both: runs twice, through a hub in process (--local) and through the daemon (conftest.via)"]
 
 [build-system]
 requires = ["hatchling>=1.27"]

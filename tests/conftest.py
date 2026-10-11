@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -166,3 +167,107 @@ def clock(monkeypatch):
     monkeypatch.setattr(tui.WheelhouseApp, "set_interval", interval)
     monkeypatch.setattr(tui.WheelhouseApp, "set_timer", timer)
     return clock
+
+
+TOKEN = "the-test-token"
+
+
+class ServedDaemon:
+    """A daemon serving a database over a real socket, on a thread of its own, for the TUI
+    to reach as it reaches the real one (client.RemoteClient). It ticks only when told
+    (tick): a test's refresh ticks it first, as the hub in process read the store then."""
+
+    def __init__(self, path, port: int = 0):
+        import socket
+        import threading
+
+        import uvicorn
+
+        from sse_starlette.sse import AppStatus
+
+        from claude_wheelhouse import daemon as daemon_mod
+        AppStatus.should_exit = False   # sse-starlette's, for the whole process: set when the last one stopped
+        sock = socket.socket()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # a daemon started again on its port
+        sock.bind(("127.0.0.1", port))
+        self.port = sock.getsockname()[1]
+        self.url = f"http://127.0.0.1:{self.port}"
+        self.store = Store(path)
+        self.daemon = daemon_mod.Daemon(self.store, daemon_mod.hosts("127.0.0.1", self.port), TOKEN, inline=True,
+                                        ticks=False)
+        self.server = daemon_mod.Server(self.daemon, uvicorn.Config(self.daemon.app, log_level="warning"))
+        self.thread = threading.Thread(target=self.server.run, kwargs={"sockets": [sock]}, daemon=True)
+        self.thread.start()
+        for _ in range(500):
+            if self.server.started:
+                break
+            time.sleep(0.01)
+        assert self.server.started, "the test daemon didn't start"
+        self.tick()
+
+    def tick(self) -> None:
+        import asyncio
+        asyncio.run_coroutine_threadsafe(self.daemon.on_hub(self.daemon.tick), self.daemon.loop).result(30)
+
+    def client(self, **kw):
+        from claude_wheelhouse.client import RemoteClient
+        return RemoteClient(self.url, TOKEN, **kw)
+
+    def stop(self) -> None:
+        if self.thread.is_alive():
+            import signal
+            self.server.handle_exit(signal.SIGTERM, None)   # as systemd stops it: the streams end first
+            self.thread.join(10)
+            self.daemon.watch.close()
+
+
+@pytest.fixture
+def served():
+    """served(path): a ServedDaemon on that database, stopped at the test's end."""
+    running = []
+
+    def serve(path, port: int = 0):
+        running.append(ServedDaemon(path, port))
+        return running[-1]
+    yield serve
+    for d in running:
+        d.stop()
+
+
+def pytest_generate_tests(metafunc):
+    """A test marked both runs twice: through a hub in process (--local), and through the
+    daemon (via)."""
+    if metafunc.definition.get_closest_marker("both"):
+        metafunc.parametrize("via", ["local", "daemon"], indirect=True)
+
+
+@pytest.fixture(autouse=True)
+def via(request, monkeypatch):
+    """How WheelhouseApp(store) reaches the hub: in process, or (marked both) through a
+    daemon served on that store's database, with a client that fetches at each refresh
+    after the daemon's tick. app.store is still the test's store, to write as hosts do and
+    read what the app did; app.hub the daemon's."""
+    how = getattr(request, "param", "local")
+    if how == "local":
+        yield how
+        return
+    daemons = {}
+    made = []
+    init = tui.WheelhouseApp.__init__
+
+    def through_daemon(self, store=None, client=None):
+        if client is not None or store is None:
+            return init(self, store, client)
+        served = daemons.get(store.path)
+        if served is None:
+            served = daemons[store.path] = ServedDaemon(store.path)
+        client = served.client(synchronous=True, before_fetch=served.tick)
+        made.append(client)
+        init(self, client=client)
+        self.store, self.hub = store, served.daemon.hub
+    monkeypatch.setattr(tui.WheelhouseApp, "__init__", through_daemon)
+    yield how
+    for client in made:
+        client.disconnect()
+    for served in daemons.values():
+        served.stop()

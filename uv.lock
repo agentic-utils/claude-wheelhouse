@@ -147,6 +147,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "claude-agent-sdk" },
+    { name = "httpx2" },
     { name = "mcp" },
     { name = "sse-starlette" },
     { name = "starlette" },
@@ -164,6 +165,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "claude-agent-sdk", specifier = ">=0.2.164" },
+    { name = "httpx2", specifier = ">=2.13" },
     { name = "mcp", specifier = ">=2.2" },
     { name = "sse-starlette", specifier = ">=3.5" },
     { name = "starlette", specifier = ">=1.7" },
@@ -175,7 +177,7 @@ requires-dist = [
 dev = [
     { name = "httpx2", specifier = ">=2.13" },
     { name = "pytest", specifier = ">=8" },
-    { name = "pytest-xdist", specifier = ">=3.8.0" },
+    { name = "pytest-xdist", specifier = ">=3.8" },
 ]
 
 [[package]]

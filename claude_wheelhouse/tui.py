@@ -1,4 +1,5 @@
-"""The wheelhouse app: a Textual app. It only reads and writes the database."""
+"""The wheelhouse app: a Textual app. It reads and acts through a client (client.py): the
+daemon's hub, over HTTP and SSE, or with --local a hub of its own, in process."""
 
 import asyncio
 import bisect
@@ -45,11 +46,12 @@ from textual.widgets import (
 )
 
 from . import api, emoji, models, stats, subagents, transcript, tutorial
-from .hub import COMPACT_RELAUNCH_WAIT, TAB_RELAUNCH, Done, Event, Hub, aimed, display_name, host_context, short
+from .client import LocalClient, Unreachable
+from .hub import COMPACT_RELAUNCH_WAIT, TAB_RELAUNCH, Done, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .stats_pane import SessionStats
-from .store import (DISMISSABLE, FINISHED_RANK, SETTLED, SETTLED_RANK, SessionGone, Store, default_runner,
+from .store import (DISMISSABLE, FINISHED_RANK, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     inbox_rank, mode, runner, standing)
 from .unsent import Unsent
 
@@ -61,6 +63,7 @@ STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "
                 "dead": "bold #ff2a6d", "ending": "bold #d300c5", "parking": "bold #d300c5",
                 "relaunching": "bold #05d9e8"}
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
+UNREACHABLE = Text(" daemon unreachable: reconnecting… ", style="bold #000000 on #ff2a6d")   # the title, while it is
 # seconds the person must stay on an item, without a break, before it counts as looked at:
 # an unseen decision becomes seen, a tutorial step ticks (dwelt). Passing over it does neither
 DWELL = 1.0
@@ -124,9 +127,11 @@ def session_action(method):
             return method(self, *args, **kwargs)
         except (SessionGone, sqlite3.IntegrityError):
             self.notify("session no longer exists", severity="warning")
-            if self.selected and self.store.session(self.selected[0]) is None:
+            if self.selected and self.client.session(self.selected[0]) is None:
                 self.selected = None
             self.refresh_data()
+        except Unreachable as e:   # the daemon: nothing was sent, and what's typed stays
+            self.notify(str(e), severity="error")
     return guarded
 
 
@@ -165,14 +170,14 @@ def share(stored: str | None) -> float | None:
     return min(max(value, 0.0), 1.0) if math.isfinite(value) else None
 
 
-def thread_blocks(store: Store, sid: str, ref: str, session_name: str = "") -> list[tuple[str, str]]:
-    """An item's detail and conversation, oldest first, as (who, markdown) blocks: the
-    person's messages (queued ones marked), the session's replies, and its progress notes
-    as quieter quotes."""
-    item = store.item(sid, ref)
-    if item is None:
+def thread_blocks(found, session_name: str = "") -> list[tuple[str, str]]:
+    """An item's detail and conversation, oldest first, as (who, markdown) blocks, from the
+    item and its messages (client.thread): the person's messages (queued ones marked), the
+    session's replies, and its progress notes as quieter quotes."""
+    if found is None:
         return [("note", "_gone_")]
-    msgs = store.thread(sid, ref)
+    item, msgs = found
+    ref = item["ref"]
     queued = any(m["draft"] for m in msgs)
     where = f"{session_name} · " if session_name else ""
     out = [("head", f"## {ref} · {item['title']}\n\n{where}`{item['kind']}` · **{item['status']}**"
@@ -191,7 +196,9 @@ def thread_blocks(store: Store, sid: str, ref: str, session_name: str = "") -> l
 
 
 def thread_markdown(store: Store, sid: str, ref: str, session_name: str = "") -> str:
-    return "\n\n".join(md for _, md in thread_blocks(store, sid, ref, session_name))
+    item = store.item(sid, ref)
+    found = None if item is None else (item, store.thread(sid, ref))
+    return "\n\n".join(md for _, md in thread_blocks(found, session_name))
 
 
 @functools.lru_cache(maxsize=2048)
@@ -897,7 +904,7 @@ class ThreadView(Screen):
         self.app.retarget()
 
     def paint(self) -> None:
-        s = self.app.store.session(self.sid)
+        s = self.app.client.session(self.sid)
         blocks, _ = self.app.item_blocks(self.sid, self.ref, s and (s["name"] or short(self.sid)))
         text = "\n\n".join(md for _, md in blocks)
         if text != self.text:
@@ -958,11 +965,15 @@ class NewSession(Dialog):
     BINDINGS = [Binding("escape", "answer", show=False)]
 
     def compose(self) -> ComposeResult:
+        # on another machine's daemon (--connect): its directories aren't this machine's, to
+        # check or browse here (the daemon checks), and a tab would open on its screen
+        elsewhere = self.app.client.elsewhere
         with Vertical(id="dialog"):
             yield Label("NEW SESSION", classes="dialog-title")
             with Horizontal(id="cwd-row"):
-                yield Input(value=os.getcwd(), placeholder="working directory", id="cwd")
-                yield Button("Browse…", id="browse")
+                yield Input(value="" if elsewhere else os.getcwd(), placeholder="working directory", id="cwd")
+                if not elsewhere:
+                    yield Button("Browse…", id="browse")
             yield Input(placeholder="name (optional)", id="name")
             yield Input(placeholder="ticket: #42, owner/repo#42 or ABC-123 (optional)", id="ticket")
             yield TextArea(id="brief")
@@ -971,7 +982,8 @@ class NewSession(Dialog):
                              allow_blank=False, id="model")
                 yield Select([(e, e) for e in models.EFFORTS], value=models.default_effort(models.DEFAULT_MODEL),
                              allow_blank=False, id="effort")
-            yield Checkbox("Open in a terminal tab instead of the wheelhouse", default_runner() == "tab", id="tab")
+            yield Checkbox("Open in a terminal tab instead of the wheelhouse",
+                           default_runner() == "tab" and not elsewhere, id="tab", disabled=elsewhere)
             with Horizontal(classes="buttons"):
                 yield Button("Launch", variant="success", id="launch")
                 yield Button("Cancel", id="cancel")
@@ -979,7 +991,7 @@ class NewSession(Dialog):
     @on(Button.Pressed, "#launch")
     def launch(self) -> None:
         cwd = self.query_one("#cwd", Input).value.strip()
-        if not os.path.isdir(cwd):
+        if not self.app.client.elsewhere and not os.path.isdir(cwd):
             self.notify(f"no such directory: {cwd}", severity="error")
             return
         self.action_answer({"cwd": cwd, "name": self.query_one("#name", Input).value.strip(),
@@ -1189,7 +1201,7 @@ class AdoptSession(Dialog):
         c = self.chosen()
         if c is None:
             return
-        pid = self.app.hub.running_pid(c.id)   # check again: it may have exited, or come back
+        pid = self.app.client.running_pid(c.id)   # check again: it may have exited, or come back
         if pid:
             self.query_one("#adopt-hint", Label).update(
                 f"Still running (pid {pid}): type /exit in its tab, then press Adopt.")
@@ -1549,11 +1561,15 @@ class WheelhouseApp(App):
         *BUTTON_KEYS,
     ]
 
-    def __init__(self, store: Store | None = None):
+    def __init__(self, store: Store | None = None, client=None):
+        """client: the daemon's (client.RemoteClient); else a hub of this app's own, in
+        process, on store (--local, and the tests)."""
         super().__init__()
         ScrollBar.renderer = KnurlRender   # Textual's hook for every scrollbar: a class variable
-        self.hub = Hub(store, spawn=self.spawn, post=self.post)
-        self.store = self.hub.store
+        self.client = client or LocalClient(store, spawn=self.spawn, post=self.post)
+        # the hub in process and its store, for --local alone: through the daemon, neither is this app's
+        self.hub = None if self.client.remote else self.client
+        self.store = self.client.store
         self.kept = Unsent()   # text typed but not submitted: this client's, not the hub's
         self.frame = 0
         self.eye_frame = 0   # the frame the busy sessions' eyes last moved on (animate)
@@ -1585,13 +1601,16 @@ class WheelhouseApp(App):
         self.selected: tuple[str, str | None] | None = None   # its setter restarts the dwell (look)
         self.detail_follows = False   # the detail pane shows a conversation: it follows its newest turn
         self.modules = api.load()
-        self.ctx = api.Context(self.store.path.parent, self.module_sessions, self.focus_sid, usage=self.hub.usage,
+        # the state dir: the database's, for a module that keeps files of its own
+        state_dir = self.store.path.parent if self.store else db_path().parent
+        self.ctx = api.Context(state_dir, self.module_sessions, self.focus_sid, usage=self.client.usage,
                                set_effort=self.set_effort)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
         self.module_ids: dict[str, str] = {}   # each pane's widget id: the module that has it
         self.box_target: tuple | None = None
         self.landing = False   # a key's land under way, which the refresh tick waits out (tick)
-        self.hub.listen(self.heard)
+        self.said: list[tuple[str, str]] = []   # what to say as it opens, (text, severity): how it found the daemon
+        self.client.listen(self.heard)
         # the tutorial steps only the screen sees (a question opened, the conversation
         # followed), by tutorial session
 
@@ -1647,10 +1666,11 @@ class WheelhouseApp(App):
                        *self.query("#sessions-pane Grid Button")):
             widget.can_focus = False
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
-            if (stored := share(self.store.setting(LAYOUT + splitter.key))) is not None:
+            if (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
                 splitter.apply(stored)
         self.eye_col = self.session_list.add_columns("", "session", "ctx", "?", "D", "✉", "")[-1]
         self.checklist = self.query_one("#checklist", Static)
+        self.client.start(self.post)   # the daemon's stream, now there's an app to tell
         self.set_interval(0.1, self.animate)
         self.set_interval(1.0, self.tick)
         # a screen over the inbox, or a thread opened, is a break in looking: the dwell restarts
@@ -1659,8 +1679,14 @@ class WheelhouseApp(App):
         # what's loaded by the first paint lives as long as the app: kept out of the full
         # collections, which otherwise walk it all, a pause typing can feel, every few seconds
         self.call_after_refresh(lambda: (gc.collect(), gc.freeze()))
-        if tutorial.should_offer(self.store):
+        for text, severity in self.said:
+            self.notify(text, severity=severity)
+        if self.client.should_offer():
             self.push_screen(TutorialOffer(), self.offer_answered)
+
+    def on_unmount(self) -> None:
+        """The daemon's stream let go as the app closes: nothing posts to it after."""
+        self.client.disconnect()
 
     def fit_layout(self) -> None:
         """The panes' sizes kept within the terminal: one kept from a wider one shrinks."""
@@ -1745,7 +1771,8 @@ class WheelhouseApp(App):
 
     def animate(self) -> None:
         self.frame += 1
-        self.title_bar.update(shimmer(self.frame), layout=False)   # one line, never a new size
+        # one line, never a new size: the daemon out of reach says so there, until it's back
+        self.title_bar.update(shimmer(self.frame) if self.client.connected else UNREACHABLE, layout=False)
         # the eyes and panes rest while you type, nothing drawn but what the keys change
         # (D41). No screen at all while the app shuts down, when asking what has focus would raise
         if self.frame % 2 == 0 and self.screen_stack and not isinstance(self.focused, Compose):
@@ -1761,16 +1788,14 @@ class WheelhouseApp(App):
             self.refresh_data()
 
     def refresh_data(self) -> None:
-        self.hub.refresh()
+        self.client.refresh()
         if self.filter_sid and not any(s["id"] == self.filter_sid for s in self.sessions):
             self.clear_filter()   # the followed session went (ended elsewhere): as Esc, no ghost row
-        self.hub.read_contexts()
-        self.hub.watch_agents()
-        self.hub.fetch_usage()
+        self.client.background()   # in process, the hub's reading: the daemon's hub does its own
         self.paint_sessions()
         self.paint_items()
         self.each_pane("tick")
-        self.hub.finish_relaunches()
+        self.client.finish_relaunches()
         self.paint_session_info()
         self.paint_sendbar()
         self.paint_checklist()
@@ -1837,7 +1862,7 @@ class WheelhouseApp(App):
             return
         if self.selected == self.picked:
             self.saw(sid, ref)
-        if ref and self.hub.mark_seen(sid, ref):   # a no-op unless it's an unseen decision
+        if ref and self.client.mark_seen(sid, ref):   # a no-op unless it's an unseen decision
             self.paint_sessions()   # its D count
             self.paint_items()   # it keeps its place while selected (ranked), and sinks once left
             self.paint_detail()
@@ -1849,22 +1874,24 @@ class WheelhouseApp(App):
         """The session whose conversation the right pane follows, if that row is highlighted."""
         return self.selected[0] if self.selected and self.selected[1] is None else None
 
-    # the hub's sessions and their liveness, as the widgets read them (hub.Hub)
+    # the hub's sessions and their liveness, as the widgets read them (client.py)
 
     @property
     def sessions(self) -> list:
-        return self.hub.sessions
+        return self.client.sessions
 
     @property
     def statuses(self) -> dict[str, str]:
-        return self.hub.statuses
+        return self.client.statuses
 
     @property
-    def relaunching(self) -> dict[str, tuple[float, tuple]]:
-        return self.hub.relaunching
+    def relaunching(self):
+        """The sessions a Relaunch is under way for."""
+        return self.client.relaunching
 
     @property
     def contexts(self) -> dict[str, stats.UsageFollower]:
+        """The hub's context followers: in process alone (--local)."""
         return self.hub.contexts
 
     @property
@@ -1872,29 +1899,30 @@ class WheelhouseApp(App):
         return self.hub.agent_watchers
 
     def running(self, sid: str) -> bool:
-        return self.hub.running(sid)
+        return self.client.running(sid)
 
     def dead(self, sid: str) -> bool:
-        return self.hub.dead(sid)
+        return self.client.dead(sid)
 
     def stale(self, sid: str) -> bool:
-        return self.hub.stale(sid)
+        return self.client.stale(sid)
 
     def sends_now(self, sid: str) -> bool:
-        return self.hub.sends_now(sid)
+        return self.client.sends_now(sid)
 
     def pending(self, sid: str) -> str | None:
-        return self.hub.pending(sid)
+        return self.client.pending(sid)
 
     def shown_status(self, sid: str) -> str:
-        return self.hub.shown_status(sid)
+        return self.client.shown_status(sid)
 
     def busy(self, sid: str) -> bool:
-        return self.hub.busy(sid)
+        return self.client.busy(sid)
 
     def heard(self, event: Event) -> None:
-        """What the hub says: a notice is a toast; a transcript read that landed repaints."""
-        if event.kind == "notice":
+        """What the hub says: a notice is a toast; a transcript read that landed repaints;
+        the daemon lost or found again is said, and the title bar shows it lost."""
+        if event.kind in ("notice", "link"):
             self.notify(event.text, severity=event.severity)
         elif event.kind == "landed":
             self.read_landed(event.sid)
@@ -1921,10 +1949,7 @@ class WheelhouseApp(App):
         self.each_pane("landed", sid)   # a repaint, not a tick: a tick would start another read
 
     def context_cell(self, s) -> Text | str:
-        follower = self.contexts.get(s["id"])
-        if not (follower and follower.ready):
-            return ""
-        size = stats.current(follower.snap, host_context(s)).context
+        size = self.client.context_size(s)
         return stats.context_bar(size) if size else ""
 
     def sweep_eyes(self) -> None:
@@ -1982,11 +2007,9 @@ class WheelhouseApp(App):
         keep = table.final_row()
         rows_out = []
         names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
-        processing = self.store.processing()
-        queued = {(m["session_id"], m["item_ref"]) for m in self.store.drafts()}
-        awaiting = self.store.awaiting()
+        found, processing, queued, awaiting = self.client.inbox(self.filter_sid)
         busy = queued | awaiting
-        items = self.ranked(self.store.items(self.filter_sid), processing, busy)
+        items = self.ranked(found, processing, busy)
         active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
         for it in items:
             bands[band(self.ranks[item_key(it)])].append(it)
@@ -2105,8 +2128,8 @@ class WheelhouseApp(App):
     def item_blocks(self, sid: str, ref: str, session_name: str = "") -> tuple[list[tuple[str, str]], bool]:
         """An item's thread (thread_blocks), and for a subagent's, under it, the subagent's own
         conversation, followed live (Hub.agent_conversation). Whether it has one."""
-        agent = self.hub.agent_conversation(sid, ref)
-        return thread_blocks(self.store, sid, ref, session_name) + (agent or []), agent is not None
+        agent = self.client.agent_conversation(sid, ref)
+        return thread_blocks(self.client.thread(sid, ref), session_name) + (agent or []), agent is not None
 
     def paint_detail(self) -> None:
         agent = False
@@ -2117,7 +2140,7 @@ class WheelhouseApp(App):
         else:   # what was shown has gone (a followed session ended, say): not left standing
             blocks = [("note", NOTHING_SELECTED)]
         if not agent and not isinstance(self.screen, ThreadView):   # which may follow one itself
-            self.hub.unfollow_agent()
+            self.client.unfollow_agent()
         # a conversation, the session's or a subagent's, shows its newest turn, and follows it
         self.detail_follows = bool(self.viewing or agent)
         text = "\n\n".join(md for _, md in blocks)
@@ -2129,7 +2152,7 @@ class WheelhouseApp(App):
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 
     def conversation(self, sid: str) -> list[tuple[str, str]]:
-        blocks = self.hub.conversation(sid)
+        blocks = self.client.conversation(sid)
         if blocks is None:   # the session went
             self.selected = None
             return [("note", "_gone_")]
@@ -2195,13 +2218,13 @@ class WheelhouseApp(App):
 
     def module_sessions(self) -> list[dict]:
         return [{"id": s["id"], "name": s["name"] or short(s["id"]), "running": self.running(s["id"]),
-                 "context": host_context(s), **self.hub.model_state(s)} for s in self.sessions]
+                 "context": host_context(s), **self.client.model_state(s)} for s in self.sessions]
 
     def set_effort(self, sid: str, effort: str) -> None:
         """The stats pane's slider moved: written now, and the panes painted from it, so the
         next key of a burst moves on from there. Said only if it didn't take."""
         try:
-            done = self.hub.set_effort(sid, effort)
+            done = self.client.set_effort(sid, effort)
         except (SessionGone, ValueError) as e:
             self.notify(str(e), severity="warning")
             return
@@ -2270,13 +2293,13 @@ class WheelhouseApp(App):
 
     def paint_checklist(self) -> None:
         """While the tutorial's session exists: its steps, at the top of the right pane."""
-        sid = next((s["id"] for s in self.sessions if tutorial.is_tutorial(self.store, s)), None)
-        if sid is None:
+        found = self.client.tutorial()
+        if found is None:
             if self.checklist.display:
                 self.checklist.display = False
                 self.refit()
             return
-        steps = tutorial.steps(self.store, sid, tutorial.seen(self.store, sid))
+        sid, steps = found
         nxt = next((key for key, *_, done in steps if not done), None)
         text = Text.assemble(("TUTORIAL", "bold #ffd300"), ("  ? lists every key", "#777777"))
         session = next(s for s in self.sessions if s["id"] == sid)
@@ -2302,14 +2325,14 @@ class WheelhouseApp(App):
         """The person opened something of the tutorial's: a question or its conversation.
         Called only from what the person does, never from automatic selection: Enter at once,
         their own selection once they have looked at it (dwelt)."""
-        s = next((s for s in self.sessions if s["id"] == sid), None)
-        if not tutorial.is_tutorial(self.store, s):
+        found = self.client.tutorial()
+        if found is None or found[0] != sid:
             return
         if step is None:
-            item = ref and self.store.item(sid, ref)
+            item = ref and self.client.item(sid, ref)
             step = "follow" if ref is None else {"question": "open"}.get(item and item["kind"])
         if step:
-            tutorial.see(self.store, sid, step)
+            self.client.see(sid, step)
             self.paint_checklist()
 
     def paint_session_info(self) -> None:
@@ -2388,7 +2411,7 @@ class WheelhouseApp(App):
 
     @session_action
     def relaunch(self, sid: str) -> None:
-        if self.told(self.hub.relaunch(sid)).ok:
+        if self.told(self.client.relaunch(sid)).ok:
             self.refresh_data()
 
     @on(Button.Pressed, "#relaunch")
@@ -2403,7 +2426,7 @@ class WheelhouseApp(App):
             return
         s = self.row(sid)
         if sid in self.relaunching:
-            self.notify("already relaunching: " + ("compacting first" if sid in self.hub.compacting
+            self.notify("already relaunching: " + ("compacting first" if sid in self.client.compacting
                                                    else "waiting for its host to stop"), severity="warning")
         elif self.statuses.get(sid) == "dead":
             self.offer_relaunch(sid)
@@ -2411,7 +2434,7 @@ class WheelhouseApp(App):
             self.notify(TAB_RELAUNCH, severity="warning")
         elif self.statuses.get(sid) == "starting":
             self.notify("it's still starting: Relaunch once it's running", severity="warning")
-        elif self.hub.compact_first(sid):
+        elif self.client.compact_first(sid):
             host = (s["claude_pid"], s["claude_start"])
             self.push_screen(RelaunchChoice(
                 f"Relaunch {self.label(sid)}? Its context is {s['context_tokens'] // 1000}k tokens, which a "
@@ -2430,22 +2453,23 @@ class WheelhouseApp(App):
         """Stop the session's host, if it is still the one the confirm was about: the hub
         starts it again once it has gone (hub.Hub.stop_host). Compacting first, the hub
         stops it once the session is compacted (hub.Hub.compact_then_relaunch)."""
-        stop = self.hub.compact_then_relaunch if compact else self.hub.stop_host
+        stop = self.client.compact_then_relaunch if compact else self.client.stop_host
         if self.told(stop(sid, host)).ok:
             self.refresh_data()
 
     async def action_quit(self) -> None:
         """Quit, but not silently out from under a relaunch: a host stopped and not yet
         started again would stay dead. Any whose host has gone is started now; for one still
-        stopping, the person chooses."""
+        stopping, the person chooses. The daemon carries a Relaunch on by itself, so through
+        it there's nothing to ask."""
         self.refresh_data()
-        if not self.relaunching:
+        if not self.relaunching or self.client.remote:
             self.exit()
             return
         stopping = ", ".join(self.display_name(self.row(sid)) for sid in self.relaunching
-                             if sid not in self.hub.compacting)
+                             if sid not in self.client.compacting)
         compacting = ", ".join(self.display_name(self.row(sid)) for sid in self.relaunching
-                               if sid in self.hub.compacting)
+                               if sid in self.client.compacting)
         said = []
         if stopping:
             said.append(f"Still relaunching {stopping}: its host hasn't stopped yet. Quit anyway, and leave it "
@@ -2579,7 +2603,7 @@ class WheelhouseApp(App):
             self.close_marked()
             return
         target = self.composing()[1]
-        item = target and target[1] and self.store.item(*target)
+        item = target and target[1] and self.client.item(*target)
         if not item:
             return
         if not closable(item):
@@ -2601,12 +2625,12 @@ class WheelhouseApp(App):
         (ranked). One finished already only goes, from where it was held while selected."""
         self.item_sink.jump()
         self.repin.add(item_key(item))
-        self.told(self.hub.close(item["session_id"], item["ref"], closed))
+        self.told(self.client.close(item["session_id"], item["ref"], closed))
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's Allow, Always or Deny: an explicit act, as Delete is, so selected, the
         item moves at once (ranked)."""
-        self.told(self.hub.answer_permission(sid, ref, decision, message))
+        self.told(self.client.answer_permission(sid, ref, decision, message))
         self.repin.add(f"{sid}|{ref}")
 
     def close_marked(self, closed: bool = True) -> None:
@@ -2618,7 +2642,7 @@ class WheelhouseApp(App):
             finished = standing(it) == "finished"
             return (not finished or not self.show_finished) if closed else finished
         picked = [it for key in self.items_table.final() if key in self.items_table.marked   # as they'll stand
-                  if (it := self.store.item(*key.split("|"))) and closable(it)]
+                  if (it := self.client.item(*key.split("|"))) and closable(it)]
         if not picked or not any(acts(it) for it in picked):
             self.notify("the marked rows are finished already: Ctrl+R reopens them" if picked and closed else
                         f"nothing among the marked rows to {'close' if closed else 'reopen'}", severity="warning")
@@ -2645,7 +2669,7 @@ class WheelhouseApp(App):
 
     def offer_answered(self, take: bool) -> None:
         """The first-run offer, answered either way: it never comes back."""
-        if self.told(self.hub.answer_offer(take)).ok:
+        if self.told(self.client.answer_offer(take)).ok:
             self.refresh_data()
 
     def composing(self):
@@ -2675,7 +2699,7 @@ class WheelhouseApp(App):
         box, target, text = self.typed()
         if not box:
             return
-        done = self.told(self.hub.submit(target, text))   # an open permission is denied, never queued (#53)
+        done = self.told(self.client.submit(target, text))   # an open permission is denied, never queued (#53)
         if not done.ok:   # a permission answered meanwhile
             return
         if done.denied:   # an explicit act, as Delete is: selected, the item moves at once (ranked)
@@ -2697,12 +2721,12 @@ class WheelhouseApp(App):
         box, target = self.composing()
         if box is None or not target:
             return
-        drafts = [m for m in self.store.drafts(target[0]) if m["item_ref"] == target[1]]
+        drafts = [m for m in self.client.drafts(target[0]) if m["item_ref"] == target[1]]
         if not drafts and self.focused is self.items_table:
             if self.items_table.marked:
                 self.close_marked(False)
                 return
-            item = target[1] and self.store.item(*target)
+            item = target[1] and self.client.item(*target)
             if item and closable(item) and standing(item) == "finished":
                 self.close(item, False)
                 self.notify(f"reopened {item['ref']} as {CLOSABLE.get(item['kind'], item['status'])}")
@@ -2711,7 +2735,7 @@ class WheelhouseApp(App):
         if box.text.strip():
             self.notify("the box isn't empty: queue or clear it first", severity="warning")
             return
-        body = drafts and self.hub.unqueue(drafts[-1]["id"])
+        body = drafts and self.client.unqueue(drafts[-1]["id"])
         if not body:
             self.notify(f"nothing queued for {aimed(target)}")
             return
@@ -2738,7 +2762,7 @@ class WheelhouseApp(App):
         return None
 
     def asking(self, target):
-        return self.hub.asking(target)
+        return self.client.asking(target)
 
     def context_session(self) -> str | None:
         """The session a key acts on, or None (said so) with no session in context. A dialog
@@ -2758,12 +2782,12 @@ class WheelhouseApp(App):
 
     @session_action
     def send_session(self, sid: str) -> None:
-        self.told(self.hub.send_queue(sid))   # a dead one's, as its hidden Send button: its drafts stay drafts (#62)
+        self.told(self.client.send_queue(sid))   # a dead one's, as its hidden Send button: its drafts stay drafts (#62)
         self.refresh_data()
 
     @session_action
     def send_all(self) -> None:
-        self.told(self.hub.send_all())
+        self.told(self.client.send_all())
         self.refresh_data()
 
     def action_toggle_mode(self) -> None:
@@ -2773,7 +2797,7 @@ class WheelhouseApp(App):
 
     @session_action
     def toggle_mode(self, sid: str) -> None:
-        self.told(self.hub.toggle_mode(sid))
+        self.told(self.client.toggle_mode(sid))
         self.refresh_data()
 
     @on(Button.Pressed, "#mode")
@@ -2827,7 +2851,7 @@ class WheelhouseApp(App):
         self.push_screen(Confirm(ask), lambda yes: yes and self.host_command(sid, what))
 
     def host_command(self, sid: str, what: str) -> None:
-        self.told(self.hub.host_command(sid, what))
+        self.told(self.client.host_command(sid, what))
 
     @on(Button.Pressed, "#model")
     @session_action
@@ -2842,17 +2866,13 @@ class WheelhouseApp(App):
 
     @session_action
     def change_model(self, sid: str, model: str | None) -> None:
-        if model and self.told(self.hub.set_model(sid, model)).ok:   # not if cancelled, or unchanged
+        if model and self.told(self.client.set_model(sid, model)).ok:   # not if cancelled, or unchanged
             self.refresh_data()
 
     @on(Splitter.Resized)
     def keep_layout(self, event: Splitter.Resized) -> None:
         """A splitter dragged: its size is kept for next time. Reset: the default again."""
-        key = LAYOUT + event.splitter.key
-        if event.fraction is None:
-            self.store.clear_setting(key)
-        else:
-            self.store.set_setting(key, f"{event.fraction:.6f}")
+        self.client.set_setting(LAYOUT + event.splitter.key, None if event.fraction is None else f"{event.fraction:.6f}")
         self.fit_layout()   # the default put back may not fit
 
     # the session area: the list's highlighted session, and its buttons
@@ -2871,15 +2891,15 @@ class WheelhouseApp(App):
 
     def launch_new(self, form) -> None:
         if form:
-            self.told(self.hub.new_session(**form))
+            self.told(self.client.new_session(**form))
 
     def action_adopt(self) -> None:
         if isinstance(self.focused, (TextArea, Input)):
             return
-        self.push_screen(AdoptSession(self.hub.adoptable()), self.launch_adopted)
+        self.push_screen(AdoptSession(self.client.adoptable()), self.launch_adopted)
 
     def launch_adopted(self, form) -> None:
-        if form and self.told(self.hub.adopt(form["candidate"], form["name"])).ok:
+        if form and self.told(self.client.adopt(form["candidate"], form["name"])).ok:
             self.refresh_data()
 
     async def action_press(self, button_id: str) -> None:
@@ -2978,7 +2998,7 @@ class WheelhouseApp(App):
         screen.set_focus(nxt, scroll_visible=not isinstance(nxt, Transcript))
 
     def row(self, sid: str):
-        return self.hub.row(sid)
+        return self.client.row(sid)
 
     def label(self, sid: str) -> str:
         s = self.row(sid)
@@ -2991,17 +3011,17 @@ class WheelhouseApp(App):
         sid = self.current_session()
         if not sid:
             return
-        self.told(self.hub.restore(sid))
+        self.told(self.client.restore(sid))
 
     def action_restore_all(self) -> None:
         if isinstance(self.focused, (TextArea, Input)):
             return
-        dead = self.hub.restorable()
+        dead = self.client.restorable()
         if not dead:
             self.notify("nothing to restore")
             return
         self.push_screen(Confirm(f"Restore {len(dead)} dead session(s)?"),
-                         lambda yes: yes and self.told(self.hub.restore_all(dead)))
+                         lambda yes: yes and self.told(self.client.restore_all(dead)))
 
     @on(Button.Pressed, "#park")
     @session_action
@@ -3011,7 +3031,7 @@ class WheelhouseApp(App):
         if not sid:
             return
         if self.row(sid)["parked"]:
-            self.told(self.hub.unpark(sid))
+            self.told(self.client.unpark(sid))
             self.follow(sid)   # as Park: it stays current
             self.refresh_data()
             return
@@ -3029,7 +3049,7 @@ class WheelhouseApp(App):
 
     @session_action
     def rename(self, sid: str, name: str | None) -> None:
-        if self.told(self.hub.rename(sid, name)).ok:   # not if cancelled, or unchanged
+        if self.told(self.client.rename(sid, name)).ok:   # not if cancelled, or unchanged
             self.refresh_data()
 
     @on(Button.Pressed, "#end")
@@ -3038,7 +3058,7 @@ class WheelhouseApp(App):
         self.settle()
         sid = self.current_session()
         if sid:
-            n = len(self.store.drafts(sid))
+            n = len(self.client.drafts(sid))
             lost = f" {n} queued answer(s) will be discarded." if n else ""
             self.lifecycle(sid, "end",
                            ask=f"Ask {self.label(sid)} to end? Claude does its own session-end steps, then deletes its wheelhouse data.{lost}",
@@ -3062,21 +3082,21 @@ class WheelhouseApp(App):
 
     @session_action
     def ask(self, sid: str, what: str) -> None:
-        self.told(self.hub.ask(sid, what))
+        self.told(self.client.ask(sid, what))
         self.keep_current(sid, what)
         self.refresh_data()
 
     @session_action
     def act_on_dead(self, sid: str, what: str) -> None:
         """The confirm may have sat open while the session came back: the hub checks again."""
-        if self.told(self.hub.act_on_dead(sid, what)).ok:
+        if self.told(self.client.act_on_dead(sid, what)).ok:
             self.keep_current(sid, what)
         self.refresh_data()
 
     @session_action
     def resolve_request(self, sid: str, what: str, choice: str) -> None:
         if choice == "cancel":
-            self.told(self.hub.cancel_request(sid, what))
+            self.told(self.client.cancel_request(sid, what))
             self.refresh_data()
         elif choice == "force":
             warning = ("Deletes its wheelhouse data now, without its session-end steps." if what == "end"
@@ -3086,7 +3106,7 @@ class WheelhouseApp(App):
 
     @session_action
     def force(self, sid: str, what: str) -> None:
-        self.told(self.hub.force(sid, what))
+        self.told(self.client.force(sid, what))
         self.keep_current(sid, what)
         self.refresh_data()
 

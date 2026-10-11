@@ -519,7 +519,7 @@ class Daemon:
                 "model_state": self.hub.model_state(s), "mode": mode(s), "busy": self.hub.busy(sid),
                 "running_model": running and running.model, "running_effort": running and running.effort,
                 "stale": self.hub.stale(sid), "sends_now": self.hub.sends_now(sid),
-                "compact_first": self.hub.compact_first(sid),
+                "compact_first": self.hub.compact_first(sid), "compacting": sid in self.hub.compacting,
                 "context": {"tokens": snap.context, "window": snap.window, "estimate": snap.estimate}
                 if snap and snap.context else None}
 
