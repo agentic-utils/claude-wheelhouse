@@ -160,9 +160,10 @@ TRIGGER_BODIES = {f"{table}_marked_{op.lower()}": f"AFTER {op} ON {table} "
 OUR_TRIGGER = re.compile(rf"^(?:{'|'.join(TRIGGER_BODIES)})(?:_v(\d+))?$")
 # retired, every version dropped on open: items_seq_* numbered each write of updated_at in
 # items.seq (#70, 2bbb99a), with the unique index items_seq (INDEXES drops it). Ties now go
-# by id (inbox_rank), so nothing reads seq. A process still running 2bbb99a recreates them
-# when it opens, which is harmless: they only write seq, and bump the items' mark once more.
-# The column stays, unused: dropping it rewrites the table, and that code still reads it
+# by id (inbox_rank), so nothing reads seq. 2bbb99a must not run against a database this
+# code has opened: items posted here have a NULL seq, and 2bbb99a recreates the triggers
+# without renumbering, so its items() fails comparing None with a number. It never ran live
+# (the live processes predate it). The column stays, unused: dropping it rewrites the table
 RETIRED_TRIGGER = re.compile(r"^items_seq_(?:insert|update)(?:_v\d+)?$")
 TRIGGER_NAMES = {f"{name}_v{TRIGGERS_VERSION}": body for name, body in TRIGGER_BODIES.items()}
 TRIGGERS = [f"CREATE TRIGGER IF NOT EXISTS {name} {body}" for name, body in TRIGGER_NAMES.items()]

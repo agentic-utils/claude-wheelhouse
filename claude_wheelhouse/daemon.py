@@ -510,7 +510,8 @@ class Daemon:
     def thread(self, request: Request) -> dict:
         sid, ref = request.path_params["sid"], request.path_params["ref"]
         item = self.item(sid, ref)
-        return {"item": dict(item), "messages": [dict(m) for m in self.store.thread(sid, ref)]}
+        row = {k: v for k, v in dict(item).items() if k != "seq"}   # retired, unused (store.RETIRED_TRIGGER)
+        return {"item": row, "messages": [dict(m) for m in self.store.thread(sid, ref)]}
 
     def folders(self, request: Request) -> dict:
         """A directory's folders, for the New session picker: hidden ones left out, but for

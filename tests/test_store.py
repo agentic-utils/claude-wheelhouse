@@ -455,7 +455,7 @@ def test_a_new_database_has_no_seq(store):
     assert "seq" not in {r[1] for r in store.db.execute("PRAGMA table_info(items)")}
 
 
-TIE = "2026-10-08T10:00:00+00:00"
+TIE, EARLIER = "2026-10-08T10:00:00+00:00", "2026-10-08T09:59:59+00:00"
 
 
 @pytest.mark.parametrize("posts, order, desc", [
@@ -464,11 +464,14 @@ TIE = "2026-10-08T10:00:00+00:00"
     ([("task", "done"), ("task", "running"), ("task", "done"), ("task", "running")], "T4 T2 T1 T3",
      "each band in its own direction"),
     ([("question", "open"), ("task", "running"), ("question", "open")], "Q2 Q1 T1", "rank first, then the tie"),
+    ([("task", "running"), ("task", "running", EARLIER)], "T1 T2", "active: time beats id, newer first"),
+    ([("task", "done"), ("task", "done", EARLIER)], "T2 T1", "settled: time beats id, older first"),
+    ([("question", "closed"), ("question", "closed", EARLIER)], "Q2 Q1", "finished: time beats id, older first"),
 ])
 def test_items_that_tie_to_the_second_go_by_id_in_their_bands_direction(store, sid, posts, order, desc):
     """Doug: "Sort on time first, id second, to ensure stable ordering even when items are
-    updated in the same second bucket." """
-    with mock.patch("claude_wheelhouse.store.now", lambda: TIE):
-        for kind, status in posts:
+    updated in the same second bucket." A post is stamped TIE unless it names its own time."""
+    for kind, status, *at in posts:
+        with mock.patch("claude_wheelhouse.store.now", lambda: at[0] if at else TIE):
             store.post_item(sid, kind, kind, status=status)
     assert " ".join(r["ref"] for r in store.items(sid)) == order, desc

@@ -111,12 +111,14 @@ async def test_each_route(daemon, store, sid, tmp_path, method, path, body, did,
     assert did(store, sid, r), f"{desc}: {r.text}"
 
 
-async def test_the_inbox_carries_no_seq_from_a_database_that_had_it(daemon, store, sid):
+async def test_the_inbox_and_a_thread_carry_no_seq_from_a_database_that_had_it(daemon, store, sid):
     """#70: items.seq is retired, but a database 2bbb99a opened keeps the column, unused."""
     store.db.execute("ALTER TABLE items ADD COLUMN seq INTEGER")
     store.post_item(sid, "task", "do it")
     r = await call(daemon, "GET", "/items")
     assert [i["ref"] for i in r.json()] == ["T1"] and "seq" not in r.json()[0], r.text
+    r = await call(daemon, "GET", f"/items/{sid}/T1/thread")
+    assert r.json()["item"]["ref"] == "T1" and "seq" not in r.json()["item"], r.text
 
 
 @pytest.mark.parametrize("method, path, body, status, desc", [
