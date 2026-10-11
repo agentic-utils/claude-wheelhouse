@@ -793,8 +793,9 @@ class Daemon:
         sids = body.get("sids")
         if not (isinstance(sids, list) and all(isinstance(sid, str) for sid in sids)):
             raise Refused(400, "sids must be a list of session ids")
-        for sid in sids:
-            self.no_remote_tab(request, self.restore_runner(sid))
+        for sid in sids:   # one ended meanwhile is the hub's to say
+            if self.store.session(sid) is not None:
+                self.no_remote_tab(request, self.restore_runner(sid))
         return self.hub.restore_all(sids)
 
     def answer_offer(self, request: Request, body: dict) -> Done:

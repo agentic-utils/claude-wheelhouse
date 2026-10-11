@@ -115,6 +115,8 @@ ROUTES = [
 def fill(value, sid, tmp_path):
     if isinstance(value, dict):
         return {k: fill(v, sid, tmp_path) for k, v in value.items()}
+    if isinstance(value, list):
+        return [fill(v, sid, tmp_path) for v in value]
     return value.format(sid=sid, ref="T1", tmp=tmp_path) if isinstance(value, str) else value
 
 
