@@ -21,7 +21,7 @@ import time
 import uuid
 from typing import Callable, NamedTuple
 
-from . import adopt, auth, stats, tutorial
+from . import adopt, auth, features, stats, tutorial
 from .hub import RUNNING, Done, Event, Hub, host_context, requested
 from .store import SessionGone
 
@@ -130,6 +130,10 @@ def blocks(data) -> list[tuple[str, str]] | None:
     return None if data is None else [(b["who"], b["text"]) for b in data]
 
 
+TAB_MODE_DAEMON = ("the running daemon is in tab mode: claude-wheelhouse daemon --stop, then start again "
+                   "to use SDK mode")
+
+
 class RemoteClient:
     """The daemon's hub, through its routes (daemon.py), with its token. What the TUI shows
     is what refresh() last swapped in; the stream's events and what they fetch wait beside
@@ -171,6 +175,7 @@ class RemoteClient:
         self.draft_rows: list[dict] = []
         self.tutorial_state: dict = {}
         self.sdk = False   # SDK mode (features.py), the daemon's: off until its inbox says
+        self.sdk_said = False   # whether TAB_MODE_DAEMON has been said
         # the threads, conversations and subagents' conversations shown, by key: ("thread",
         # sid, ref), ("conversation", sid), ("agent", sid, ref)
         self.cache: dict[tuple, object] = {}
@@ -386,6 +391,9 @@ class RemoteClient:
                               {tuple(k) for k in data["awaiting"]})
             self.tutorial_state = data["tutorial"]
             self.sdk = data.get("sdk", False)   # a daemon on older code doesn't say: off
+            if features.sdk_enabled() and not self.sdk and not self.elsewhere and not self.sdk_said:
+                self.sdk_said = True   # this app asked for SDK mode, but joined a daemon running without it
+                self.post(lambda: self.emit(Event("notice", TAB_MODE_DAEMON, "warning")))
         elif kind == "usage":
             self.usage.limits = {k: tuple(v) for k, v in data["limits"].items()}
             self.usage.failed = data["failed"]

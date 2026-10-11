@@ -279,6 +279,28 @@ def test_sdk_mode_is_the_daemons(store, served, monkeypatch, on):
         c.disconnect()
 
 
+@pytest.mark.parametrize("app, daemon, said, desc", [
+    (True, False, True, "asked for, but the daemon joined runs without it: said once"),
+    (True, True, False, "the daemon runs in it too"),
+    (False, False, False, "not asked for"),
+])
+def test_an_app_in_sdk_mode_joining_a_tab_mode_daemon_says_so_once(store, served, monkeypatch, app, daemon, said,
+                                                                   desc):
+    monkeypatch.setattr(features, "_flag", daemon)
+    d = served(store.path)
+    monkeypatch.setattr(features, "_flag", app)
+    c = d.client(synchronous=True, before_fetch=d.tick)
+    heard = []
+    c.listen(lambda e: heard.append(e.text))
+    try:
+        c.refresh()
+        c.forced = True   # fetched again: still said only once
+        c.refresh()
+        assert heard.count(client_mod.TAB_MODE_DAEMON) == (1 if said else 0), f"{desc}: {heard}"
+    finally:
+        c.disconnect()
+
+
 def test_the_stream_and_fetching_stop_with_the_client(store, served):
     d = served(store.path)
     c = d.client()
