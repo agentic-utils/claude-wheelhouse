@@ -26,8 +26,8 @@ from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
 from claude_wheelhouse.store import Store, mode
 from claude_wheelhouse.tui import (BLANK, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice, Confirm,
-                                   Folders, Hint, PermissionButtons, RenameSession, SendBar, ThreadView, Transcript, hint,
-                                   render)
+                                   Folders, Hint, PermissionButtons, RenameSession, SendBar, SessionList, ThreadView,
+                                   Transcript, cylon, hint, render)
 
 
 @pytest.mark.anyio
@@ -3055,12 +3055,61 @@ async def test_the_stats_shimmer_and_eyes_rest_while_typing(store, sid, monkeypa
             app.answer.focus()
             await pilot.pause()
         before = app.query_one("#stats").frame
-        eye = str(app.session_list.get_cell(sid, app.eye_col))
+        eye = app.session_list.eye_frame
         for _ in range(4):
             app.animate()
             app.refresh_data()   # nor does the refresh move them
         assert (app.query_one("#stats").frame != before) == moves, desc
-        assert (str(app.session_list.get_cell(sid, app.eye_col)) != eye) == moves, desc
+        assert (app.session_list.eye_frame != eye) == moves, desc
+
+
+def cells(strip) -> list[tuple]:
+    """A drawn line, character by character with its style: the same look whatever its segments."""
+    return [(ch, seg.style) for seg in strip for ch in seg.text]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("on_busy, focused, desc", [
+    (True, True, "the cursor on the busy row, the list focused"),
+    (False, True, "the cursor on another row, the list focused"),
+    (True, False, "the cursor on the busy row, the list not focused"),
+    (False, False, "the cursor on another row, the list not focused"),
+])
+async def test_the_eyes_look_as_when_they_were_the_tables_data(store, sid, tmp_path, monkeypatch, on_busy, focused, desc):
+    other = store.create_session(str(tmp_path), name="calm")
+    monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: s == sid)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        t = app.session_list
+        t.focus() if focused else app.items_table.focus()
+        t.move_cursor(row=t.get_row_index(sid if on_busy else other))
+        await pilot.pause()
+        for frame in range(0, 26, 5):
+            t.sweep(frame)
+            got = [cells(t.render_line(y)) for y in range(t.size.height)]
+            t.eyes = set()   # as it was: the eye in the table's data
+            t.update_cell(sid, app.eye_col, cylon(frame))
+            want = [cells(t.render_line(y)) for y in range(t.size.height)]
+            t.update_cell(sid, app.eye_col, Text(" " * SessionList.EYE))
+            t.eyes = {sid}
+            assert got == want, f"{desc}, frame {frame}"
+
+
+@pytest.mark.anyio
+async def test_an_eye_frame_draws_the_busy_rows_alone(store, sid, tmp_path, monkeypatch):
+    store.create_session(str(tmp_path), name="calm")
+    monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: s == sid)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        t = app.session_list
+        drawn = []
+        monkeypatch.setattr(t, "refresh_row", lambda row: drawn.append(row))
+        count = t._update_count
+        app.sweep_eyes()
+        assert t._update_count == count, "the table's data is as it was: its caches stand"
+        assert drawn == [t.get_row_index(sid)], "the busy row alone is drawn again"
 
 
 @pytest.mark.anyio

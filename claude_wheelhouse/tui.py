@@ -517,6 +517,50 @@ class SessionList(SinkList):
                 Binding("p", "app.press('park')", "Park", show=False),
                 Binding("e", "app.press('end')", "End", show=False)]
 
+    EYE = 8   # the Cylon eye's width (cylon)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.eyes: set[str] = set()   # the busy sessions' rows, whose eye cell paint_sessions leaves blank
+        self.eye_frame = 0
+
+    def sweep(self, frame: int) -> None:
+        """The busy rows' eyes to `frame`: drawn over their blank cell as each line is drawn
+        (_render_line), and those rows alone drawn again. Never in the table's data, where
+        each change would draw every row again: DataTable's caches key on its count of them."""
+        self.eye_frame = frame
+        for sid in self.eyes:
+            if sid in self.rows:
+                self.refresh_row(self.get_row_index(sid))
+
+    def _render_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
+        """The line as DataTable draws it, with a busy row's eye over its blank cell (sweep)."""
+        strip = super()._render_line(y, x1, x2, base_style)
+        if not self.eyes or not self.columns:
+            return strip
+        try:
+            row_key, line = self._get_offsets(y)
+        except LookupError:
+            return strip
+        if line or row_key.value not in self.eyes:
+            return strip
+        *before, _ = self.ordered_columns
+        x = sum(c.get_render_width(self) for c in before) + self.cell_padding - x1
+        lo, hi = max(0, x), min(strip.cell_length, x + self.EYE)
+        if lo >= hi:   # scrolled out of sight
+            return strip
+        # as DataTable draws a cell: its row's style, the eye's own, then the cursor's or the
+        # mouse's colours where they come first (the blank cell under it has the first and last)
+        row = self._row_locations.get(row_key)
+        _, post = self._get_styles_to_render_cell(
+            False, False, False, self.hover_coordinate.row == row, self.cursor_coordinate.row == row,
+            self.show_cursor, self._show_hover_cursor, self.cursor_foreground_priority == "css",
+            self.cursor_background_priority == "css")
+        under = next(iter(strip.crop(lo, lo + 1)), None)
+        base = under.style if under is not None and under.style else Style()
+        eye = Strip([Segment(seg.text, base + seg.style + post) for seg in cylon(self.eye_frame).render(self.app.console)])
+        return Strip.join([strip.crop(0, lo), eye.crop(lo - x, hi - x), strip.crop(hi)])
+
     async def action_select_cursor(self) -> None:
         await select_now(self)
 
@@ -1556,7 +1600,7 @@ class WheelhouseApp(App):
     def animate(self) -> None:
         self.frame += 1
         self.title_bar.update(shimmer(self.frame), layout=False)   # one line, never a new size
-        # the eyes and panes rest while you type: each frame repaints the whole session list
+        # the eyes and panes rest while you type, nothing drawn but what the keys change
         # (D41). No screen at all while the app shuts down, when asking what has focus would raise
         if self.frame % 2 == 0 and self.screen_stack and not isinstance(self.focused, Compose):
             self.sweep_eyes()
@@ -1738,11 +1782,9 @@ class WheelhouseApp(App):
         return stats.context_bar(size) if size else ""
 
     def sweep_eyes(self) -> None:
-        """Move the Cylon eye on busy rows without rebuilding the table."""
+        """Move the Cylon eye on busy rows without rebuilding the table (SessionList.sweep)."""
         self.eye_frame = self.frame
-        for s in self.sessions:
-            if self.busy(s["id"]) and s["id"] in self.session_list.rows:
-                self.session_list.update_cell(s["id"], self.eye_col, cylon(self.eye_frame))
+        self.session_list.sweep(self.eye_frame)
 
     def paint_sessions(self) -> None:
         """Every session: parked ones dimmed, at the foot of the list's room (they fall there
@@ -1751,10 +1793,10 @@ class WheelhouseApp(App):
         table = self.session_list
         keep, key = table.final_row(), self.current_session()   # in the final order, as the items' (paint_items)
         pending = key != self.sessions_cursor   # the person's move, not yet settled
-        rows = []
+        rows, table.eyes = [], {s["id"] for s in self.sessions if self.busy(s["id"])}
         for s in sorted(self.sessions, key=lambda s: s["parked"]):   # stable: creation order within each
             st = self.shown_status(s["id"])
-            busy = cylon(self.eye_frame) if self.busy(s["id"]) else Text("")
+            busy = Text(" " * SessionList.EYE) if s["id"] in table.eyes else Text("")   # the eye's room (sweep)
             dot = Text("●", style="#777777" if s["parked"] else STATUS_STYLE[st])
             name = Text(self.display_name(s), style="dim" if s["parked"] else "")
             if self.stale(s["id"]):
