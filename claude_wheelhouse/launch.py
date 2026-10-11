@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import features, liveness, models
+from . import features, liveness, models, tutorial
 from .transcript import NO_BRIEF
 from .store import Store, db_path, default_runner, now, runner
 
@@ -166,19 +166,18 @@ def open_session(store: Store, sid: str) -> None:
 
 
 def restore_session(store: Store, sid: str, sdk: bool | None = None) -> None:
-    """Restore (or adopt) a session that isn't running. With SDK mode on (sdk, else
-    features.sdk_enabled()), the way new sessions run now: a tab from before hosts existed
-    comes back as a host unless WHEELHOUSE_RUNNER=tab. With it off, the way it ran: a
-    host's session keeps its host, so it isn't stranded (features.py). The check comes
-    first, so a running tab is never recorded as hosted."""
+    """Restore (or adopt) a session that isn't running, the way it ran: a tab stays a tab
+    and a host's session keeps its host, so it isn't stranded with SDK mode off (features.py).
+    Only a session from before hosts existed (no runner recorded) takes the way new sessions
+    run now (store.default_runner, with SDK mode on per sdk, else features.sdk_enabled()),
+    and never the tutorial, which is always a tab. The check comes first, so a running tab
+    is never recorded as hosted."""
     session = store.session(sid)
     if session is None:
         raise KeyError(sid)
     check_free(session)
-    if sdk is None:
-        sdk = features.sdk_enabled()
-    if sdk:
-        store.set_runner(sid, default_runner(sdk))
+    if session["runner"] is None:
+        store.set_runner(sid, "tab" if tutorial.is_tutorial(store, session) else default_runner(sdk))
     open_session(store, sid)
 
 

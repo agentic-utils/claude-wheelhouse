@@ -1282,20 +1282,25 @@ def test_steady_rides_out_a_lock(monkeypatch, locks, returns, desc):
 
 
 @pytest.mark.parametrize("on, stored, env, alive, opened, recorded, desc", [
-    (True, "tab", None, False, "host", "sdk", "a stored tab session is restored as a host"),
-    (True, "tab", "tab", False, "tab", "tab", "WHEELHOUSE_RUNNER=tab keeps it a tab"),
-    (True, "sdk", "tab", False, "tab", "tab", "and brings a hosted session back as a tab"),
-    (True, "tab", None, True, None, "tab", "a running session is refused and keeps its runner"),
+    (True, None, None, False, "host", "sdk", "SDK mode on: a session from before hosts existed comes back as a host"),
+    (True, None, "tab", False, "tab", "tab", "unless WHEELHOUSE_RUNNER=tab"),
+    (False, None, "sdk", False, "tab", "tab", "SDK mode off: as a tab, whatever WHEELHOUSE_RUNNER says"),
+    (True, "tab", None, False, "tab", "tab", "SDK mode on: a session recorded as a tab stays one (review 68)"),
+    (True, "sdk", "tab", False, "host", "sdk", "and a host's keeps its host, whatever WHEELHOUSE_RUNNER says"),
+    (True, None, None, True, None, None, "a running session is refused, and nothing is recorded"),
     (False, "sdk", None, False, "host", "sdk", "SDK mode off: a host's session keeps its host, not stranded"),
-    (False, "tab", "sdk", False, "tab", "tab", "and a tab stays a tab, whatever WHEELHOUSE_RUNNER says"),
+    (False, "tab", "sdk", False, "tab", "tab", "and a tab stays a tab"),
 ])
 def test_restore_session(store, tmp_path, monkeypatch, on, stored, env, alive, opened, recorded, desc):
     monkeypatch.setattr(features, "_flag", on)
-    sid = store.create_session(str(tmp_path), runner=stored)
+    sid = store.create_session(str(tmp_path), runner=stored or "tab")
+    if stored is None:   # as the runner column's migration left a session from before hosts
+        with store.tx() as db:
+            db.execute("UPDATE sessions SET runner = NULL WHERE id = ?", (sid,))
     if env:
         monkeypatch.setenv("WHEELHOUSE_RUNNER", env)
     else:
-        monkeypatch.delenv("WHEELHOUSE_RUNNER")
+        monkeypatch.delenv("WHEELHOUSE_RUNNER", raising=False)
     monkeypatch.setattr(launch.liveness, "is_alive", lambda *a: alive)
     seen = []
     monkeypatch.setattr(launch, "open_host", lambda s, i: seen.append("host"))

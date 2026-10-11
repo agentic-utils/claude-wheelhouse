@@ -415,3 +415,32 @@ async def test_a_stopped_tab_says_why(store, tut, registered, why, desc):
         assert why in app._checklist_text, desc
         assert "claude-wheelhouse tutorial starts it afresh" in app._checklist_text
         assert "▶ Find the demo in its tab" in app._checklist_text
+
+
+@pytest.mark.parametrize("how", ["restore", "relaunch", "adopt"])
+@pytest.mark.parametrize("stored, desc", [
+    ("tab", "the tutorial, recorded as a tab"),
+    (None, "a tutorial with no runner recorded, as one from before hosts would be"),
+])
+def test_the_tutorial_comes_back_as_a_tab_with_sdk_mode_on(store, tut, monkeypatch, how, stored, desc):
+    """Review 68: Restore, Relaunch and Adopt with SDK mode on once made every tab, the
+    tutorial's included, an SDK session."""
+    from claude_wheelhouse import adopt
+    from claude_wheelhouse.hub import Hub
+    monkeypatch.setattr(features, "_flag", True)
+    monkeypatch.delenv("WHEELHOUSE_RUNNER", raising=False)
+    if stored is None:
+        with store.tx() as db:
+            db.execute("UPDATE sessions SET runner = NULL WHERE id = ?", (tut,))
+    seen = []
+    monkeypatch.setattr(launch, "open_host", lambda s, i: seen.append("host"))
+    monkeypatch.setattr(launch, "open_tab", lambda s, i: seen.append("tab"))
+    monkeypatch.setattr(adopt.liveness, "running_pid", lambda *a, **k: None)
+    if how == "restore":
+        launch.restore_session(store, tut)
+    elif how == "relaunch":
+        assert Hub(store, sdk=True).relaunch(tut).ok, desc
+    else:
+        adopt.adopt(store, adopt.Candidate(tut, store.session(tut)["cwd"], "tutorial", 0.0, None), "", sdk=True)
+    assert seen == ["tab"], f"{how}: {desc}"
+    assert store.session(tut)["runner"] == "tab", f"{how}: {desc}"

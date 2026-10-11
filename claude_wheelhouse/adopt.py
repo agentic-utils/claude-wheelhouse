@@ -149,8 +149,8 @@ def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = livenes
 
 def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSIONS,
           proc: Path = liveness.PROC, open_tab=None, sdk: bool | None = None) -> str:
-    """Register the session and open it (a host, or a tab: see store.default_runner, which a
-    tracked session is switched to as well while SDK mode is on). Refuses while it is still
+    """Register the session and open it (a new one as store.default_runner says; one the
+    wheelhouse already tracks as it ran: see launch.restore_session). Refuses while it is still
     running. A session the wheelhouse already tracks keeps its row (and its items), renamed
     if asked. sdk: whether SDK mode is on, else features.sdk_enabled()."""
     open_tab = open_tab or functools.partial(launch.restore_session, sdk=sdk)
