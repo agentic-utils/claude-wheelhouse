@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import liveness, models
+from . import features, liveness, models
 from .transcript import NO_BRIEF
 from .store import Store, db_path, default_runner, now, runner
 
@@ -34,13 +34,21 @@ PLUGIN_DIR = Path(__file__).parent / "plugin"
 DECISIONS = (Path(__file__).parent / "protocol_decisions.md").read_text()
 
 
+def protocol_file(name: str) -> str:
+    """One of the protocol's files, less a leading <!-- --> comment: a note for whoever reads
+    the file (protocol_sdk.md's), never sent to a session."""
+    text = (Path(__file__).parent / name).read_text()
+    if text.startswith("<!--"):
+        text = text[text.index("-->") + 3:].lstrip("\n")
+    return text
+
+
 def protocol(decisions: bool | None = None, runner: str = "tab") -> str:
     """protocol.md, then what differs by how the session runs (protocol_tab.md or
     protocol_sdk.md: how the person's messages reach it), then the decisions section."""
     if decisions is None:
         decisions = os.environ.get("WHEELHOUSE_DECISIONS", "1") != "0"
-    here = Path(__file__).parent
-    base = (here / "protocol.md").read_text() + (here / f"protocol_{runner}.md").read_text()
+    base = protocol_file("protocol.md") + protocol_file(f"protocol_{runner}.md")
     return base + "\n" + DECISIONS if decisions else base
 
 
@@ -119,9 +127,12 @@ def opening_prompt(session) -> str:
     return f"Brief:\n{prompt}" if prompt.startswith("-") else prompt
 
 
-def injected() -> str:
+def injected(sdk: bool | None = None) -> str:
     """Everything a launched session receives, for `claude-wheelhouse protocol`: read it
-    before letting the wheelhouse put standing instructions into your sessions."""
+    before letting the wheelhouse put standing instructions into your sessions. With SDK
+    mode on (sdk, else features.sdk_enabled()), a hosted session's part too."""
+    if sdk is None:
+        sdk = features.sdk_enabled()
     from . import mcp_server, monitor   # mcp_server pulls in the MCP SDK: only load it here
     from .store import GONE_TEXT
     skill = (PLUGIN_DIR / "skills/wheelhouse/SKILL.md").read_text()
@@ -135,8 +146,8 @@ def injected() -> str:
                          monitor.format_message({"body": JOINED_TEXT, "item_ref": None, "kind": "notice"})])
     return "\n\n".join([
         f"== protocol.md, protocol_tab.md and protocol_decisions.md (appended to the system prompt) ==\n\n{PROTOCOL}",
-        "== protocol_sdk.md (in place of protocol_tab.md for a session run in the wheelhouse) ==\n\n"
-        + (Path(__file__).parent / "protocol_sdk.md").read_text(),
+        *(["== protocol_sdk.md (in place of protocol_tab.md for a session run in the wheelhouse) ==\n\n"
+            + protocol_file("protocol_sdk.md")] if sdk else []),
         f"== /wheelhouse skill ({PLUGIN_DIR / 'skills/wheelhouse/SKILL.md'}) ==\n\n{skill}",
         f"== MCP server \"wheelhouse\" ==\n\n{mcp_server.server.instructions}\n\n{tools}",
         f"== Notifications from the wheelhouse monitor ==\n\n{notices}",
@@ -154,15 +165,20 @@ def open_session(store: Store, sid: str) -> None:
     (open_host if runner(session) == "sdk" else open_tab)(store, sid)
 
 
-def restore_session(store: Store, sid: str) -> None:
-    """Restore (or adopt) a session that isn't running, the way new sessions run now: a tab
-    from before hosts existed comes back as a host unless WHEELHOUSE_RUNNER=tab. The check
-    comes first, so a running tab is never recorded as hosted."""
+def restore_session(store: Store, sid: str, sdk: bool | None = None) -> None:
+    """Restore (or adopt) a session that isn't running. With SDK mode on (sdk, else
+    features.sdk_enabled()), the way new sessions run now: a tab from before hosts existed
+    comes back as a host unless WHEELHOUSE_RUNNER=tab. With it off, the way it ran: a
+    host's session keeps its host, so it isn't stranded (features.py). The check comes
+    first, so a running tab is never recorded as hosted."""
     session = store.session(sid)
     if session is None:
         raise KeyError(sid)
     check_free(session)
-    store.set_runner(sid, default_runner())
+    if sdk is None:
+        sdk = features.sdk_enabled()
+    if sdk:
+        store.set_runner(sid, default_runner(sdk))
     open_session(store, sid)
 
 
@@ -176,7 +192,10 @@ def check_free(session) -> None:
 
 
 def open_host(store: Store, sid: str) -> None:
-    """Start the session's SDK host, detached so that the TUI closing never takes it down."""
+    """Start the session's SDK host, detached so that the TUI closing never takes it down.
+    EXPERIMENTAL (features.py): SDK mode is not for use by anyone other than the author until
+    Anthropic's terms are confirmed. It starts a host for a session already recorded as one;
+    only SDK mode creates such sessions."""
     session = store.session(sid)
     if session is None:
         raise KeyError(sid)

@@ -5,6 +5,8 @@ import errno
 import os
 import sys
 
+from . import features
+
 
 def truecolour(environ=os.environ) -> None:
     """Windows Terminal draws 24-bit colour but doesn't tell WSL so: no COLORTERM, and TERM
@@ -55,19 +57,27 @@ def run_app(args, store=None) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(prog="claude-wheelhouse", description="Sidecar for parallel Claude Code sessions")
+    # --enable-sdk: experimental SDK mode (features.py), deliberately left out of --help.
+    # Taken before or after the command, for the commands that create sessions
+    sdk = argparse.ArgumentParser(add_help=False)
+    sdk.add_argument(features.FLAG, dest="enable_sdk", action="store_true", default=argparse.SUPPRESS,
+                     help=argparse.SUPPRESS)
+    p = argparse.ArgumentParser(prog="claude-wheelhouse", description="Sidecar for parallel Claude Code sessions",
+                                parents=[sdk])
     client_args(p)
     sub = p.add_subparsers(dest="cmd")
-    client_args(sub.add_parser("tui", help="the wheelhouse app (default)"), sub=True)
-    client_args(sub.add_parser("tutorial", help="start the tutorial afresh, then open the wheelhouse app"), sub=True)
+    client_args(sub.add_parser("tui", help="the wheelhouse app (default)", parents=[sdk]), sub=True)
+    client_args(sub.add_parser("tutorial", help="start the tutorial afresh, then open the wheelhouse app",
+                               parents=[sdk]), sub=True)
     run = sub.add_parser("run", help="inside a launched tab: exec Claude for a session")
     run.add_argument("session_id")
-    host = sub.add_parser("host", help="run a session through the Agent SDK (started by the wheelhouse)")
+    host = sub.add_parser("host", help="inside the wheelhouse: a session's host process (started by the wheelhouse)")
     host.add_argument("session_id")
     sub.add_parser("mcp", help="the per-session MCP server (stdio)")
     sub.add_parser("monitor", help="the per-session plugin monitor")
     sub.add_parser("protocol", help="print everything wheelhouse puts into a launched session")
-    daemon = sub.add_parser("daemon", help="serve the wheelhouse over HTTP (the app starts it, or joins it)")
+    daemon = sub.add_parser("daemon", help="serve the wheelhouse over HTTP (the app starts it, or joins it)",
+                            parents=[sdk])
     daemon.add_argument("--address", default=None, help="the IP address to listen on (default 127.0.0.1; "
                         "never 0.0.0.0): the VPN interface's, to reach it from another machine")
     daemon.add_argument("--port", type=int, default=None, help="the port to listen on (default 7428)")
@@ -78,6 +88,8 @@ def main() -> None:
     daemon.add_argument("--start-pipe", type=int, default=None, help=argparse.SUPPRESS)   # connect.start's
     sub.add_parser("token", help="print the daemon's token, for a client on another machine (--connect)")
     args = p.parse_args()
+    if getattr(args, "enable_sdk", False):
+        features.enable_sdk()
 
     if args.cmd == "run":
         from .launch import run as run_session
@@ -104,7 +116,7 @@ def main() -> None:
             sys.exit(str(e))
     elif args.cmd == "protocol":
         from .launch import injected
-        print(injected())
+        print(injected(features.sdk_enabled()))
     elif args.cmd == "token":
         from . import auth
         from .connect import NoDaemon, check

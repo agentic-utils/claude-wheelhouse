@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import models
+from . import features, models
 
 DEFAULT_DB = Path.home() / ".local/state/claude-wheelhouse/wheelhouse.db"
 
@@ -61,9 +61,12 @@ DEFAULT_MODE = "queued"
 MODES = ("queued", "immediate")
 # How a session runs: "sdk" in a wheelhouse host process (claude-wheelhouse host), "tab" as
 # interactive Claude Code in a Windows Terminal tab. Stored per session; NULL (rows from before
-# hosts existed) means tab. New sessions take WHEELHOUSE_RUNNER, else DEFAULT_RUNNER.
+# hosts existed) means tab. New sessions run DEFAULT_RUNNER, or with SDK mode on (features.py:
+# experimental, the author's alone until Anthropic's terms are confirmed) SDK_DEFAULT_RUNNER;
+# WHEELHOUSE_RUNNER overrides either, but never turns SDK mode on by itself.
 RUNNERS = ("sdk", "tab")
-DEFAULT_RUNNER = "sdk"
+DEFAULT_RUNNER = "tab"
+SDK_DEFAULT_RUNNER = "sdk"
 # What the person can ask a running host to do, handed over in sessions.host_command
 HOST_COMMANDS = ("interrupt", "shell", "compact")
 
@@ -234,11 +237,15 @@ def runner(session) -> str:
     return (session["runner"] if "runner" in session.keys() else None) or "tab"
 
 
-def default_runner() -> str:
-    r = os.environ.get("WHEELHOUSE_RUNNER") or DEFAULT_RUNNER
+def default_runner(sdk: bool | None = None) -> str:
+    """How a new session runs. sdk: whether SDK mode is on, else features.sdk_enabled().
+    With it off, a session runs in a tab whatever WHEELHOUSE_RUNNER says."""
+    if sdk is None:
+        sdk = features.sdk_enabled()
+    r = os.environ.get("WHEELHOUSE_RUNNER") or (SDK_DEFAULT_RUNNER if sdk else DEFAULT_RUNNER)
     if r not in RUNNERS:
         raise ValueError(f"WHEELHOUSE_RUNNER must be one of {', '.join(RUNNERS)}, not {r!r}")
-    return r
+    return r if sdk else "tab"
 
 
 def needs_relaunch(session) -> bool:

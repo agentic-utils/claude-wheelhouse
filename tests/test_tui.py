@@ -18,9 +18,9 @@ from textual.containers import VerticalScroll
 from textual.pilot import _get_mouse_message_arguments
 from textual.strip import Strip
 from textual.visual import Visual, visualize
-from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, TextArea
+from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
-from claude_wheelhouse import launch, stats, transcript, tui
+from claude_wheelhouse import features, launch, stats, transcript, tui
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
@@ -242,7 +242,7 @@ async def test_adopt(store, monkeypatch, alive_on_adopt, launched, stack, desc):
     monkeypatch.setattr(adopt, "candidates", lambda store: [adoptable(pid=4242)])
     monkeypatch.setattr(liveness, "running_pid", lambda sid, *a: alive_on_adopt)
     got = []
-    monkeypatch.setattr(adopt, "adopt", lambda store, c, name: got.append((c.id, name)))
+    monkeypatch.setattr(adopt, "adopt", lambda store, c, name, sdk=None: got.append((c.id, name)))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.press("a")
@@ -1574,6 +1574,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
     return out
 
 
+@pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
 @pytest.mark.parametrize("focus, at, burst, want, desc", [
     ("items", "qa", ("h", "enter", "y"), {"stack": ("Screen",), "hosts": []},
@@ -3478,11 +3479,13 @@ async def test_host_buttons(store, tmp_path, monkeypatch, runner_, live, shown, 
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("tick, runner_, desc", [
-    (False, "sdk", "runs in the wheelhouse by default"),
-    (True, "tab", "the box opens a tab instead"),
+@pytest.mark.parametrize("on, tick, runner_, desc", [
+    (True, False, "sdk", "SDK mode: runs in the wheelhouse by default"),
+    (True, True, "tab", "the box opens a tab instead"),
+    (False, None, "tab", "SDK mode off: no box, and a tab, whatever WHEELHOUSE_RUNNER says"),
 ])
-async def test_new_session_runner(store, tmp_path, monkeypatch, tick, runner_, desc):
+async def test_new_session_runner(store, tmp_path, monkeypatch, on, tick, runner_, desc):
+    monkeypatch.setattr(features, "_flag", on)
     launched = []
     monkeypatch.setattr(launch, "open_session", lambda s, i, watch=None: launched.append(s.session(i)["runner"]))
     monkeypatch.setenv("WHEELHOUSE_RUNNER", "sdk")
@@ -3490,6 +3493,8 @@ async def test_new_session_runner(store, tmp_path, monkeypatch, tick, runner_, d
     async with app.run_test(size=(180, 40)) as pilot:
         await pilot.press("n")
         await pilot.pause()
+        assert bool(app.screen.query("#tab")) is on, desc
+        assert app.screen.query_one("#model", Select).display, f"{desc}: model and effort are a tab's too"
         app.screen.query_one("#cwd", Input).value = str(tmp_path)
         if tick:
             app.screen.query_one("#tab", Checkbox).value = True
@@ -3894,6 +3899,7 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
         assert not {"Inbox", "Sessions"} & set(labels), "no tab keys: the tabs are gone (#58)"
 
 
+@pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
 @pytest.mark.parametrize("size, half", [((80, 24), False), ((100, 30), True), ((160, 40), True)])
 @pytest.mark.parametrize("status, parked, shown, desc", [
@@ -4161,7 +4167,7 @@ async def test_parked_sessions_stay_in_the_list_after_the_rest(store, sid, tmp_p
 
 def test_the_keys_overlay_has_relaunch_and_no_tabs():
     from claude_wheelhouse.tui import keys_help
-    text = keys_help()
+    text = keys_help(sdk=True)
     assert "Relaunch (L in the session list):" in text and "Sessions tab" not in text and "Inbox tab" not in text
     for key in ("**I**", "**C**", "**H**", "**1**", "**2**", "**3**", "**Shift+A**", "**Tab**", "**Shift+Tab**",
                 "## Tab order"):
@@ -4544,14 +4550,18 @@ async def test_the_button_keys(store, keyed, key, button, where, pressed):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("key, setup, said, desc", [
-    ("i", "tab", "Interrupt doesn't apply to this session", "Interrupt on a tab session"),
-    ("1", "question", "Allow doesn't apply to the item in context", "Allow on a question"),
-    ("A", "nothing queued", "Send all (0): nothing to do", "Send all with nothing queued"),
-    ("r", "dead", "Rename doesn't apply to this session", "the session list's R on a dead session"),
+@pytest.mark.parametrize("on, key, setup, said, desc", [
+    (True, "i", "tab", "Interrupt doesn't apply to this session", "Interrupt on a tab session"),
+    (True, "1", "question", "Allow doesn't apply to the item in context", "Allow on a question"),
+    (False, "i", "tab", None, "SDK mode off: Interrupt on a tab session goes unmentioned"),
+    (False, "1", "question", None, "and so does Allow on a question"),
+    (False, "m", "tab", None, "and Model"),
+    (False, "A", "nothing queued", "Send all (0): nothing to do", "Send all with nothing queued"),
+    (False, "r", "dead", "Rename doesn't apply to this session", "the session list's R on a dead session"),
 ])
-async def test_a_button_key_that_does_not_apply_says_so(store, tmp_path, monkeypatch, key, setup, said, desc):
+async def test_a_button_key_that_does_not_apply_says_so(store, tmp_path, monkeypatch, on, key, setup, said, desc):
     from claude_wheelhouse import liveness
+    monkeypatch.setattr(features, "_flag", on)
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead" if setup == "dead" else "live")
     sid = store.create_session(str(tmp_path), name="s", runner="tab" if setup == "tab" else "sdk")
     store.post_item(sid, "question", "q?")
@@ -4564,7 +4574,7 @@ async def test_a_button_key_that_does_not_apply_says_so(store, tmp_path, monkeyp
         monkeypatch.setattr(app, "notify", lambda text, **kw: notes.append(text))
         await pilot.press(key)
         await pilot.pause()
-        assert (got, notes) == ([], [said]), desc
+        assert (got, notes) == ([], [said] if said else []), desc
 
 
 def subagent_file(tmp_path, sid, aid, n):
@@ -4847,12 +4857,14 @@ async def shown_stats(app, pilot) -> str:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("runner_, slider, desc", [
-    ("sdk", True, "a session run by a host: Model, the slider, and a Tab stop to it"),
-    ("tab", False, "a tab: neither, and no stop (Q52)"),
+@pytest.mark.parametrize("on, runner_, slider, desc", [
+    (True, "sdk", True, "a session run by a host: Model, the slider, and a Tab stop to it"),
+    (True, "tab", False, "a tab: neither, and no stop (Q52)"),
+    (False, "sdk", False, "SDK mode off: a host's session runs on as it was set, with neither"),
 ])
-async def test_model_and_effort_are_offered_only_for_a_hosted_session(store, tmp_path, monkeypatch, runner_, slider,
+async def test_model_and_effort_are_offered_only_for_a_hosted_session(store, tmp_path, monkeypatch, on, runner_, slider,
                                                                         desc):
+    monkeypatch.setattr(features, "_flag", on)
     sid, app = await hosted_app(store, tmp_path, monkeypatch, runner_)
     async with app.run_test(size=(160, 40)) as pilot:
         shown = await shown_stats(app, pilot)
@@ -4877,6 +4889,7 @@ async def test_model_and_effort_are_offered_only_for_a_hosted_session(store, tmp
     assert store.session(sid)["model"] == "claude-sonnet-5-5", desc
 
 
+@pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
 async def test_a_model_change_says_so_and_shows_as_applying(store, tmp_path, monkeypatch):
     sid, app = await hosted_app(store, tmp_path, monkeypatch)
@@ -4893,6 +4906,7 @@ async def test_a_model_change_says_so_and_shows_as_applying(store, tmp_path, mon
     assert store.session(sid)["model"] == "claude-opus-5-5"
 
 
+@pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
 @pytest.mark.parametrize("level", ["low", "xhigh", "max"])
 async def test_a_click_on_a_level_sets_it(store, tmp_path, monkeypatch, level):
@@ -4972,6 +4986,7 @@ async def test_a_tabs_header_shows_what_its_transcript_says_it_runs(store, tmp_p
     assert (s["model"], s["effort"]) == ("claude-opus-5-5", "max"), "copied back, as the pinned id"
 
 
+@pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
 async def test_a_shell_tabs_model_shows_while_it_runs(store, tmp_path, monkeypatch):
     """Round 62, M1: a hosted session out in its shell tab, with a /model typed there: the
@@ -5006,6 +5021,7 @@ async def test_model_in_a_full_screen_item_says_so(store, tmp_path, monkeypatch)
         assert [type(s).__name__ for s in app.screen_stack] == ["Screen", "ThreadView"]
 
 
+@pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
 async def test_the_arrows_start_from_the_transcripts_effort_with_nothing_set(store, tmp_path, monkeypatch):
     """An old host: NULL columns, nothing applied. The slider lights the transcript's level,
@@ -5021,6 +5037,7 @@ async def test_the_arrows_start_from_the_transcripts_effort_with_nothing_set(sto
         assert_one_current(app, "after the arrow")
 
 
+@pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
 @pytest.mark.parametrize("arrow, level", [("◂", "medium"), ("▸", "xhigh")])
 async def test_a_click_on_an_arrow_steps_the_narrow_slider(store, tmp_path, monkeypatch, arrow, level):
@@ -5041,6 +5058,7 @@ async def test_a_click_on_an_arrow_steps_the_narrow_slider(store, tmp_path, monk
 
 
 
+@pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
 async def test_focusing_the_slider_lays_it_out_focused_at_once(store, tmp_path, monkeypatch):
     """Focus lays the slider out as focused (its ←/→, where there's room) in the same frame,

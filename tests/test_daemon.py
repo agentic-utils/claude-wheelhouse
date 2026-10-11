@@ -24,9 +24,10 @@ TOKEN = "the-test-token"
 
 
 @pytest.fixture
-def daemon(store, monkeypatch):
+def daemon(store, monkeypatch, sdk_on):
+    """A daemon in SDK mode, which a remote client's sessions need (test_sdk_mode_off_refuses_new_sessions)."""
     monkeypatch.setattr(launch, "open_session", lambda store, sid: None)
-    monkeypatch.setattr(launch, "restore_session", lambda store, sid: None)
+    monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None: None)
     d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True)
     d.feed = Feed(start=100)
     yield d
@@ -1035,3 +1036,31 @@ async def test_only_the_first_shutdown_stops_the_daemon(daemon):
     assert (first.json()["ok"], told(first)) == (True, ["the daemon is stopping"])
     assert (second.json()["ok"], told(second)) == (False, ["the daemon is stopping already"])
     assert stopped == [1]
+
+
+@pytest.mark.parametrize("body, peer, status, desc", [
+    ({"cwd": "/", "runner": "sdk"}, "127.0.0.1", 403, "a host, asked for by name"),
+    ({"cwd": "/"}, "127.0.0.1", 403, "nor by default"),
+    ({"cwd": "/", "runner": "sdk"}, "100.64.0.7", 403, "nor from another machine"),
+    ({"cwd": "/", "runner": "tab"}, "100.64.0.7", 403, "nor a tab from another machine, on a screen nobody there sees"),
+    ({"cwd": "/", "runner": "tab"}, "127.0.0.1", 200, "a tab from this machine: the app's New session"),
+])
+async def test_sdk_mode_off_refuses_hosted_sessions(store, monkeypatch, body, peer, status, desc):
+    """Out of SDK mode (features.py) the daemon creates no host's session, so a remote
+    client can't create a session at all: a host is SDK mode's, and a tab is this machine's."""
+    opened = []
+    monkeypatch.setattr(launch, "open_session", lambda store, sid: opened.append(sid))
+    d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True, sdk=False)
+    try:
+        async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=d.app, client=(peer, 50000)),
+                                      base_url="http://127.0.0.1:7428",
+                                      headers={"Authorization": f"Bearer {TOKEN}"}) as c:
+            r = await c.post("/sessions", json=body, headers={"Idempotency-Key": str(uuid.uuid4())})
+    finally:
+        d.pool.shutdown()
+        d.worker.shutdown()
+        d.watch.close()
+    assert r.status_code == status, f"{desc}: {r.text}"
+    if status == 403:
+        assert "SDK mode is off" in r.json()["error"], desc
+    assert [s["runner"] for s in store.sessions()] == (["tab"] if status == 200 else []), desc

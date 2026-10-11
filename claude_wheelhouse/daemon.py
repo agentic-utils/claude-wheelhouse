@@ -322,9 +322,10 @@ class Daemon:
     otherwise on worker threads, its callbacks back on the hub's thread."""
 
     def __init__(self, store: Store, allowed: set[str], token: str, inline: bool = False,
-                 ticks: bool = True):
+                 ticks: bool = True, sdk: bool | None = None):
         fingerprint.code()   # the code as loaded, for /hello: asked before anything can change it
-        self.hub = Hub(store, **({} if inline else {"spawn": self.spawn, "post": self.post}))
+        # sdk: SDK mode (features.py), else features.sdk_enabled(): it gates every session the hub creates
+        self.hub = Hub(store, sdk=sdk, **({} if inline else {"spawn": self.spawn, "post": self.post}))
         self.store, self.allowed = store, allowed
         self.token = token   # the shared secret every request must carry (auth.py)
         self.stop = None   # how /shutdown stops it: the server's, once serving
@@ -805,13 +806,19 @@ class Daemon:
     def new_session(self, request: Request, body: dict) -> Done:
         """A session in an existing directory, by its absolute path, run by a host. In a tab
         only for a client on this machine (this_machine): a tab opens on this machine's
-        screen, where nobody remote is."""
+        screen, where nobody remote is. By a host only in SDK mode (features.py:
+        EXPERIMENTAL, the author's alone until Anthropic's terms are confirmed): out of it, a
+        remote client can't start a session at all."""
         cwd = text(body, "cwd")
         if not os.path.isabs(cwd) or not os.path.isdir(cwd):
             raise Refused(400, f"cwd must be an existing directory's absolute path: {cwd!r} isn't")
         how = text(body, "runner", False) or "sdk"
         if how not in ("sdk", "tab"):
             raise Refused(400, "runner must be sdk or tab")
+        if not self.hub.sdk and not this_machine(request):
+            raise Refused(403, "SDK mode is off: this wheelhouse doesn't start sessions remotely")
+        if how == "sdk" and not self.hub.sdk:
+            raise Refused(403, "SDK mode is off: this wheelhouse doesn't host sessions")
         if how == "tab" and not this_machine(request):
             raise Refused(400, "a session started remotely runs by a host: runner can only be sdk")
         return self.hub.new_session(cwd, text(body, "name", False) or "", text(body, "ticket", False) or "",

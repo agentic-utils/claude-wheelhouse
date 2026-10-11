@@ -961,7 +961,9 @@ class Dialog(ModalScreen):
 
 class NewSession(Dialog):
     """Name and ticket are optional; the brief becomes the first prompt. Model and effort
-    start at the defaults (models.py), and go to every launch of the session."""
+    start at the defaults (models.py), and go to every launch of the session. It opens in a
+    tab; in SDK mode alone (features.py) a box offers the wheelhouse's host instead, ticked
+    for a tab by default only under WHEELHOUSE_RUNNER=tab."""
     BINDINGS = [Binding("escape", "answer", show=False)]
 
     def compose(self) -> ComposeResult:
@@ -982,8 +984,9 @@ class NewSession(Dialog):
                              allow_blank=False, id="model")
                 yield Select([(e, e) for e in models.EFFORTS], value=models.default_effort(models.DEFAULT_MODEL),
                              allow_blank=False, id="effort")
-            yield Checkbox("Open in a terminal tab instead of the wheelhouse",
-                           default_runner() == "tab" and not elsewhere, id="tab", disabled=elsewhere)
+            if self.app.client.sdk:   # the runner choice: SDK mode only (features.py, EXPERIMENTAL)
+                yield Checkbox("Open in a terminal tab instead of the wheelhouse",
+                               default_runner(True) == "tab" and not elsewhere, id="tab", disabled=elsewhere)
             with Horizontal(classes="buttons"):
                 yield Button("Launch", variant="success", id="launch")
                 yield Button("Cancel", id="cancel")
@@ -997,7 +1000,8 @@ class NewSession(Dialog):
         self.action_answer({"cwd": cwd, "name": self.query_one("#name", Input).value.strip(),
                             "ticket": self.query_one("#ticket", Input).value.strip(),
                             "brief": self.query_one("#brief", TextArea).text.strip(),
-                            "runner": "tab" if self.query_one("#tab", Checkbox).value else "sdk",
+                            "runner": "tab" if not self.app.client.sdk or self.query_one("#tab", Checkbox).value
+                            else "sdk",
                             "model": self.query_one("#model", Select).value,
                             "effort": self.query_one("#effort", Select).value})
 
@@ -1397,8 +1401,9 @@ TAB_KEYS = [Binding("tab", "app.focus_next"), Binding("shift+tab", "app.focus_pr
 LIST_KEYS = [Binding(key, action) for key, action in (
     ("up", "cursor_up"), ("down", "cursor_down"), ("pageup", "page_up"), ("pagedown", "page_down"),
     ("ctrl+home", "scroll_top"), ("ctrl+end", "scroll_bottom"))]
+SLIDER_TAB = ", then the stats pane's effort slider while it shows"   # SDK mode's alone (keys_help)
 TABS = ("Tab goes round the panes: the session list, the items, the answer box, then the "
-        "conversation, then the stats pane's effort slider while it shows, and Shift+Tab back. Ctrl+Enter in the answer box goes back to the items with "
+        "conversation{slider}, and Shift+Tab back. Ctrl+Enter in the answer box goes back to the items with "
         "the cursor where it was, so Down then Tab answers the next one. An item opened full screen "
         "has two stops, its answer box and its thread. In the conversation or a thread, Up, Down, PgUp, "
         "PgDn, Home and End scroll it. The buttons never take focus: each has a key.")
@@ -1414,25 +1419,34 @@ MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Wi
          "Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back.")
+# the SDK-only buttons' keys, and those buttons, which the ? overlay leaves out unless SDK
+# mode is on (features.py, EXPERIMENTAL: the author's alone until Anthropic's terms are
+# confirmed). Out of it, a key of one that doesn't show does nothing, and says nothing
+SDK_BUTTONS = ("interrupt", "compact", "shell", "model", "allow", "always", "deny")
+SDK_WHOSE = (", Model on one run in the wheelhouse; then Mode, Send on one that isn't dead, "
+             "and on one run in the wheelhouse Interrupt, Compact and Shell. Its effort is the slider at the top of "
+             "the stats pane.")
 WHOSE = ("The buttons under the session list act on the session highlighted there, and only those that "
          "apply show: Rename, Relaunch and Park on a running one, Restore on a dead one, End on either, "
-         "Unpark on a parked one, Model on one run in the wheelhouse; then Mode, Send on one that isn't dead, "
-         "and on one run in the wheelhouse Interrupt, Compact and Shell. Its effort is the slider at the top of "
-         "the stats pane. Hover over one for what it does, and its key is in brackets below. New, Adopt and Restore all are keys in the footer. An item "
+         "Unpark on a parked one{sdk} Hover over one for what it does, and its key is in brackets below. New, Adopt and Restore all are keys in the footer. An item "
          "opened full screen has Mode, Send and the rest in its bar, for its own session. Ctrl+S and Ctrl+T "
          "act on the same session: highlighting an item highlights its session there.")
 
 
-def keys_help() -> str:
-    """The ? overlay: every key, from the bindings themselves, and every button."""
+def keys_help(sdk: bool = False) -> str:
+    """The ? overlay: every key, from the bindings themselves, and every button. Those of SDK
+    mode (SDK_BUTTONS, the effort slider) only with it on (sdk)."""
     everywhere = [b for b in WheelhouseApp.BINDINGS if b not in BUTTON_KEYS]
-    sections = [("Everywhere", everywhere), ("Outside a text box", BUTTON_KEYS),
+    sdk_keys = {f"press('{b}')" for b in SDK_BUTTONS}
+    button_keys = [b for b in BUTTON_KEYS if sdk or b.action not in sdk_keys]
+    sections = [("Everywhere", everywhere), ("Outside a text box", button_keys),
                 ("Moving between panes", TAB_KEYS), ("Either list", LIST_KEYS),
                 ("The session list", SessionList.BINDINGS),
                 ("The item list", ItemList.BINDINGS),
                 ("An answer box", Compose.BINDINGS), ("The conversation pane", Transcript.BINDINGS),
                 ("An item opened full screen", ThreadView.BINDINGS),
-                ("The stats pane, with a session run in the wheelhouse in context", SessionStats.BINDINGS)]
+                *([("The stats pane, with a session run in the wheelhouse in context", SessionStats.BINDINGS)]
+                  if sdk else [])]
     out = ["# Keys"]
     for title, bindings in sections:
         out.append(f"## {title}")
@@ -1443,7 +1457,10 @@ def keys_help() -> str:
                 keys.append(key_name(b.key))
         # dict.fromkeys: one line for a key bound twice, as F is (its footer label changes)
         out += dict.fromkeys(f"- **{' or '.join(keys)}**: {DESCRIBE[action]}" for action, keys in actions.items())
-    out += ["## Tab order", TABS, "## Mouse", MOUSE, "## Buttons", WHOSE, *[f"- {text}" for text in BUTTONS.values()],
+    whose = WHOSE.format(sdk=SDK_WHOSE if sdk else "; then Mode, and Send on one that isn't dead.")
+    buttons = [text for id_, text in BUTTONS.items() if sdk or id_ not in SDK_BUTTONS]
+    out += ["## Tab order", TABS.format(slider=SLIDER_TAB if sdk else ""), "## Mouse", MOUSE, "## Buttons", whose,
+            *[f"- {text}" for text in buttons],
             "## Sending", SEND_RULES,
             "## The tutorial", "`make tutorial` starts it afresh any time. Esc or ? closes this list."]
     return "\n\n".join(out)
@@ -1455,7 +1472,7 @@ class KeysHelp(Dialog):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="keys-dialog"):
-            yield Static(RichMarkdown(keys_help()), id="keys")
+            yield Static(RichMarkdown(keys_help(self.app.client.sdk)), id="keys")
 
 
 
@@ -2236,7 +2253,8 @@ class WheelhouseApp(App):
         """A session's lifecycle buttons (LIFECYCLE), as show_button takes them, each shown
         only where it applies (#62, D26): Rename, Relaunch and Park on a live session,
         Restore on a dead one, Unpark on a parked one live or dead, End on either, and Model
-        on one running in a wheelhouse host (Q52: never a tab's)."""
+        on one running in a wheelhouse host (Q52: never a tab's) while SDK mode is on: out of
+        it, a host's session runs on as it was set (features.py)."""
         dead = s is not None and self.statuses.get(s["id"]) == "dead"
         live = s is not None and not dead
         parked = s is not None and bool(s["parked"])
@@ -2244,7 +2262,7 @@ class WheelhouseApp(App):
         return [("rename", "Rename", False, live), ("relaunch", "Relaunch", False, live),
                 ("restore", "Restore", False, dead),
                 ("park", "Unpark" if parked else "Park", False, live or parked), ("end", "End", False, s is not None),
-                ("model", "Model", False, hosted)]
+                ("model", "Model", False, hosted and self.client.sdk)]
 
     def controls(self, s) -> list[tuple[str, str, bool, bool]]:
         """A session's conversation buttons (CONVERSATION), as show_button takes them: (id,
@@ -2910,6 +2928,8 @@ class WheelhouseApp(App):
         if isinstance(self.focused, (TextArea, Input)) or self.composing()[0] is None:
             return
         button = next(iter(self.screen.query(f"#{button_id}")), None)
+        if not self.client.sdk and button_id in SDK_BUTTONS and not (button and button.display and button.parent.display):
+            return   # out of SDK mode its buttons go unmentioned (a host's session still shows its own)
         if button is None:   # not on this screen (Model, in a full-screen item's bar): said all the same
             name = next((b.description for b in BUTTON_KEYS if b.action == f"press('{button_id}')"),
                         button_id.capitalize())

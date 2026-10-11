@@ -1,3 +1,7 @@
+<!-- EXPERIMENTAL: SDK mode (a session run in a wheelhouse host through the Claude Agent SDK)
+is not for use by anyone other than the author until Anthropic's terms for it are confirmed.
+It is off unless the app starts with --enable-sdk (features.py). This comment is never sent
+to a session: launch.protocol_file drops it. -->
 - This session runs inside the wheelhouse, with no terminal: everything you write in chat
   shows in the wheelhouse's conversation pane, and the person talks to you from there.
   Their messages arrive as your user turns, marked `[wheelhouse] from <their username>`

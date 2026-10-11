@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import adopt, api, launch, liveness, models, stats, subagents, transcript, tutorial
+from . import adopt, api, features, launch, liveness, models, stats, subagents, transcript, tutorial
 from .host import AWAITING_NOTES, NO_NOTES
 from .store import DISMISSABLE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
 
@@ -119,8 +119,13 @@ class Done:
 class Hub:
     """The wheelhouse's service over the store. Its state lives as long as it does."""
 
-    def __init__(self, store: Store | None = None, spawn=None, post=None):
+    def __init__(self, store: Store | None = None, spawn=None, post=None, sdk: bool | None = None):
         self.store = store or Store()
+        # SDK mode (features.py, EXPERIMENTAL: the author's alone until Anthropic's terms are
+        # confirmed): off, no new session runs in a host, whoever asks (a surface, a daemon's
+        # client), and a host's model and effort aren't changed. A session hosted already keeps
+        # working: it shows, relaunches and ends as before
+        self.sdk = features.sdk_enabled() if sdk is None else sdk
         self.listeners: list[Callable[[Event], None]] = []
         # how its owner runs work on a worker thread, by group, and a callback back on its
         # own thread (a no-op once it's closing): both at once by default, as in a test
@@ -238,7 +243,10 @@ class Hub:
         """Launch a session the way it runs, a host or a tab; a restore runs it the way new
         sessions run now (launch.restore_session)."""
         try:
-            (launch.restore_session if restore else launch.open_session)(self.store, sid)
+            if restore:
+                launch.restore_session(self.store, sid, sdk=self.sdk)
+            else:
+                launch.open_session(self.store, sid)
         except Exception as e:   # already running, wt.exe missing...
             return Done(False).say(str(e), "error")
         return Done()
@@ -427,7 +435,10 @@ class Hub:
     def new_session(self, cwd: str, name: str, ticket: str, brief: str, runner: str, model: str | None = None,
                     effort: str | None = None) -> Done:
         """A new session, launched. Its model and effort as given, else the defaults
-        (models.chosen): stored either way, so every launch of it passes them."""
+        (models.chosen): stored either way, so every launch of it passes them. A host only in
+        SDK mode (features.py): out of it, runner sdk is refused before anything is created."""
+        if runner == "sdk" and not self.sdk:
+            return Done(False).say("a new session runs in a tab", "error")
         model, effort = models.chosen(model, effort)
         sid = self.store.create_session(cwd, name=name, ticket=ticket, brief=brief, runner=runner, model=model,
                                         effort=effort)
@@ -447,7 +458,7 @@ class Hub:
     def adopt(self, candidate: adopt.Candidate, name: str) -> Done:
         """A session started outside the wheelhouse, brought in (adopt.adopt). Whether it was."""
         try:
-            adopt.adopt(self.store, candidate, name)
+            adopt.adopt(self.store, candidate, name, sdk=self.sdk)
         except Exception as e:   # came back to life, wt.exe missing...
             return Done(False).say(str(e), "error")
         return Done().say(f"adopting {name or short(candidate.id)}")
@@ -615,6 +626,8 @@ class Hub:
         s = self.row(sid)
         if runner(s) != "sdk":
             return Done(False).say(f"{display_name(s)} runs in a tab: type /{what} there", "warning")
+        if not self.sdk:   # a host's session out of SDK mode runs on as it was set (features.py)
+            return Done(False).say(f"{display_name(s)}'s {what} can't be changed here", "warning")
         same = models.field(s, what) == value
         # still a choice, dated now, so a /model or /effort typed in a shell tab before it doesn't override it
         (self.store.set_model if what == "model" else self.store.set_effort)(sid, value)
@@ -644,8 +657,9 @@ class Hub:
             snap = follower.snap if follower and follower.ready else None
             ran = (snap.requested or snap.model, snap.effort) if snap else (None, None)
             return {"model": ran[0] or want[0], "effort": ran[1] or want[1], "pending": None, "hosted": False}
+        # hosted says its effort can be changed live, so the slider shows: not out of SDK mode
         return {"model": want[0] or (got[0] if hosted else None), "effort": want[1] or (got[1] if hosted else None),
-                "pending": pending, "hosted": hosted}
+                "pending": pending, "hosted": hosted and self.sdk}
 
     # items
 

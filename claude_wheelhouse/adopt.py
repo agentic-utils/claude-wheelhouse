@@ -3,11 +3,12 @@
 The wheelhouse lists recent transcripts from ~/.claude/projects, plus sessions it already
 tracks whose process has gone (e.g. an adoption whose tab failed). If the chosen session is
 still running, the person types /exit in its tab first; the wheelhouse never kills it. Then
-the wheelhouse registers the session under its own id and opens it like any restore (a host,
-or a tab under WHEELHOUSE_RUNNER=tab), resuming it by id with the wheelhouse's MCP server,
+the wheelhouse registers the session under its own id and opens it like any restore (a tab,
+or with SDK mode on a host unless WHEELHOUSE_RUNNER=tab), resuming it by id with the wheelhouse's MCP server,
 protocol and /wheelhouse commands.
 """
 
+import functools
 import json
 import time
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import launch, liveness
-from .store import Store
+from .store import Store, default_runner
 from .transcript import project_folder
 
 PROJECTS = Path.home() / ".claude/projects"
@@ -147,10 +148,12 @@ def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = livenes
 
 
 def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSIONS,
-          proc: Path = liveness.PROC, open_tab=launch.restore_session) -> str:
+          proc: Path = liveness.PROC, open_tab=None, sdk: bool | None = None) -> str:
     """Register the session and open it (a host, or a tab: see store.default_runner, which a
-    tracked session is switched to as well). Refuses while it is still running.
-    A session the wheelhouse already tracks keeps its row (and its items), renamed if asked."""
+    tracked session is switched to as well while SDK mode is on). Refuses while it is still
+    running. A session the wheelhouse already tracks keeps its row (and its items), renamed
+    if asked. sdk: whether SDK mode is on, else features.sdk_enabled()."""
+    open_tab = open_tab or functools.partial(launch.restore_session, sdk=sdk)
     pid = liveness.running_pid(c.id, sessions, proc)
     if pid:
         raise StillRunning(pid)
@@ -159,7 +162,7 @@ def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSI
             store.rename(c.id, name)
         open_tab(store, c.id)
         return c.id
-    sid = store.create_session(c.cwd, name=name, sid=c.id)
+    sid = store.create_session(c.cwd, name=name, sid=c.id, runner=default_runner(sdk))
     try:
         open_tab(store, sid)
     except BaseException:

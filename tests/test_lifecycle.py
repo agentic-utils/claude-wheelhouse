@@ -416,7 +416,7 @@ async def test_relaunch(store, sid, monkeypatch, run, state, shell, stops, keys,
     monkeypatch.setattr(liveness, "is_alive", lambda *a: alive["now"])
     monkeypatch.setattr(hub, "RELAUNCH_WAIT", 0)
     monkeypatch.setattr(launch, "open_session", lambda s, i: calls.append("open"))
-    monkeypatch.setattr(launch, "restore_session", lambda s, i: calls.append("restore"))
+    monkeypatch.setattr(launch, "restore_session", lambda s, i, sdk=None: calls.append("restore"))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         seen = notices(app, monkeypatch)

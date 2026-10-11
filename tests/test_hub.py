@@ -83,7 +83,7 @@ def test_relaunch_stops_the_host_then_starts_it_again(hub, store, sid, heard, mo
 
 
 def test_relaunch_of_a_dead_session_unparks_it(hub, store, sid, heard, monkeypatch):
-    monkeypatch.setattr(launch, "restore_session", lambda store, sid: None)
+    monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None: None)
     store.set_parked(sid, True)
     done = hub.relaunch(sid)
     assert done.ok and not store.session(sid)["parked"]
@@ -144,7 +144,7 @@ def test_a_relaunch_found_past_its_deadline_is_let_go_and_said(store, sid, monke
     calls, heard = [], []
     monkeypatch.setattr(liveness, "is_alive", lambda *a: False)
     monkeypatch.setattr(launch, "open_session", lambda store, sid: calls.append("open"))
-    monkeypatch.setattr(launch, "restore_session", lambda store, sid: calls.append("restore"))
+    monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None: calls.append("restore"))
     hub = Hub(store)
     hub.listen(lambda e: heard.append((e.text, e.severity)))
     hub.refresh()
@@ -286,14 +286,14 @@ def test_close_and_reopen(hub, store, sid, kind, closed, after, desc):
     assert store.item(sid, ref)["status"] == after, desc
 
 
-def refuse(store):
+def refuse(store, sdk=None):
     raise RuntimeError("claude missing")
 
 
 @pytest.mark.parametrize("take, start, started, setting, desc", [
     (False, None, False, "dismissed", "declined: never offered again"),
     (True, refuse, False, "dismissed", "a start that fails is said, and not offered again"),
-    (True, lambda store: store.set_setting(tutorial.OFFER_KEY, "taken"), True, "taken", "taken: it starts"),
+    (True, lambda store, sdk=None: store.set_setting(tutorial.OFFER_KEY, "taken"), True, "taken", "taken: it starts"),
 ])
 def test_the_tutorial_offer_answered(hub, store, heard, monkeypatch, take, start, started, setting, desc):
     if start:
@@ -437,6 +437,7 @@ def test_a_subagents_conversation_follows_it_live_and_two_at_most(hub, store, si
     ("claude-haiku-5-5", None, ("claude-haiku-5-5", "xhigh"), "a model alone takes its tier's effort (Q54)"),
     ("claude-opus-5-5", "max", ("claude-opus-5-5", "max"), "as chosen"),
 ])
+@pytest.mark.usefixtures("sdk_on")
 def test_a_new_session_stores_its_model_and_effort(hub, store, tmp_path, monkeypatch, model, effort, stored, desc):
     monkeypatch.setattr(launch, "open_session", lambda store, sid: None)
     done = hub.new_session(str(tmp_path), "n", "", "", "sdk", model, effort)
@@ -444,6 +445,21 @@ def test_a_new_session_stores_its_model_and_effort(hub, store, tmp_path, monkeyp
     assert (s["model"], s["effort"]) == stored, desc
 
 
+@pytest.mark.parametrize("on, runner, ok, desc", [
+    (False, "tab", True, "SDK mode off: a tab"),
+    (False, "sdk", False, "nor a host, whoever asks: refused before anything is created"),
+    (True, "sdk", True, "SDK mode on: a host"),
+])
+def test_sdk_mode_gates_a_new_hosted_session(store, tmp_path, monkeypatch, on, runner, ok, desc):
+    opened = []
+    monkeypatch.setattr(launch, "open_session", lambda store, sid: opened.append(sid))
+    done = Hub(store, sdk=on).new_session(str(tmp_path), "n", "", "", runner)
+    assert done.ok is ok and len(store.sessions()) == len(opened) == int(ok), desc
+    if ok:
+        assert store.session(done.sid)["runner"] == runner, desc
+
+
+@pytest.mark.usefixtures("sdk_on")
 @pytest.mark.parametrize("runner, command, value, ok, column, said, desc", [
     ("sdk", "set_model", "claude-opus-5-5", True, "claude-opus-5-5", "demo: model Opus 5.5", "a hosted session's model"),
     ("sdk", "set_effort", "xhigh", True, "xhigh", "demo: effort xhigh", "its effort"),
@@ -467,6 +483,26 @@ def test_model_and_effort_change_only_for_a_hosted_session(hub, store, tmp_path,
     assert [e.text for e in done.notices] == ([said] if said else []), desc
 
 
+@pytest.mark.parametrize("command, value", [("set_model", "claude-opus-5-5"), ("set_effort", "xhigh")])
+def test_a_hosts_model_and_effort_stay_as_set_out_of_sdk_mode(store, tmp_path, command, value):
+    sid = store.create_session(str(tmp_path), name="demo", runner="sdk", model="claude-sonnet-5-5", effort="high")
+    done = getattr(Hub(store, sdk=False), command)(sid, value)
+    assert not done.ok and (store.session(sid)["model"], store.session(sid)["effort"]) == ("claude-sonnet-5-5", "high")
+    assert [e.text for e in done.notices] == [f"demo's {command.removeprefix('set_')} can't be changed here"]
+
+
+@pytest.mark.parametrize("on, hosted", [(True, True), (False, False)])
+def test_the_slider_is_sdk_modes(store, tmp_path, monkeypatch, on, hosted):
+    """A running host's session out of SDK mode: no slider (hosted False), its settings still shown."""
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), runner="sdk", model="claude-opus-5-5", effort="high")
+    hub = Hub(store, sdk=on)
+    hub.refresh()
+    got = hub.model_state(hub.row(sid))
+    assert (got["model"], got["effort"], got["hosted"]) == ("claude-opus-5-5", "high", hosted)
+
+
+@pytest.mark.usefixtures("sdk_on")
 @pytest.mark.parametrize("runner, status, shell, columns, applied, state, desc", [
     ("sdk", "live", None, ("claude-opus-5-5", "high"), ("claude-opus-5-5", "high"),
      ("claude-opus-5-5", "high", None, True), "applied: nothing pending"),
@@ -744,6 +780,7 @@ def test_a_tabs_model_and_effort_are_copied_back(hub, store, tmp_path, monkeypat
     assert (s["model"], s["effort"]) == columns, desc
 
 
+@pytest.mark.usefixtures("sdk_on")
 def test_a_choice_made_during_a_shell_tab_is_not_undone_by_the_hub(hub, store, tmp_path, monkeypatch):
     """The review's repro: hosted on Opus, Sonnet chosen, the shell tab launched on Sonnet,
     Haiku chosen while it runs; the tab's first turn, on Sonnet, leaves Haiku standing."""

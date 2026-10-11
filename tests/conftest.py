@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_wheelhouse import launch, store as store_module, tui
+from claude_wheelhouse import features, launch, store as store_module, tui
 from claude_wheelhouse.store import Store
 
 SHIPPED_DWELL = tui.DWELL   # before no_dwell_timer puts it out of reach
@@ -38,6 +38,20 @@ def isolated_db(tmp_path, monkeypatch):
     monkeypatch.delenv("WHEELHOUSE_SESSION_ID", raising=False)
     monkeypatch.delenv("WHEELHOUSE_TOKEN", raising=False)
     return path
+
+
+@pytest.fixture(autouse=True)
+def sdk_off(tmp_path, monkeypatch):
+    """SDK mode off, as a new user has it, whatever .env the run starts beside or the person
+    keeps in ~/.config: a test that needs it on takes sdk_on."""
+    monkeypatch.setattr(features, "_flag", False)
+    monkeypatch.setattr(features, "env_files", lambda: [tmp_path / "no-cwd.env", tmp_path / "no-config.env"])
+
+
+@pytest.fixture
+def sdk_on(monkeypatch):
+    """SDK mode on, as --enable-sdk turns it on."""
+    monkeypatch.setattr(features, "_flag", True)
 
 
 @pytest.fixture(autouse=True)

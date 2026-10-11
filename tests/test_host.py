@@ -9,11 +9,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_wheelhouse import host as host_mod, launch
+from claude_wheelhouse import features, host as host_mod, launch
 from claude_wheelhouse.host import (AWAITING_NOTES, CANCELLED, COMPACT_ASK, HOST_QUESTION, NO_NOTES, Host, format_turn,
                                     keep_notes, question_answers, question_item, tool_summary)
 from claude_wheelhouse.store import SessionGone
 from claude_wheelhouse.monitor import REQUEST_TEXT
+
+pytestmark = pytest.mark.usefixtures("sdk_on")   # hosts are SDK mode's
 
 
 class FakeClient:
@@ -260,11 +262,14 @@ def test_open_session(store, tmp_path, monkeypatch, runner, opened, desc):
     assert seen == [opened], desc
 
 
-@pytest.mark.parametrize("env, expected, desc", [
-    (None, "sdk", "default"),
-    ("tab", "tab", "WHEELHOUSE_RUNNER=tab"),
+@pytest.mark.parametrize("on, env, expected, desc", [
+    (True, None, "sdk", "default"),
+    (True, "tab", "tab", "WHEELHOUSE_RUNNER=tab"),
+    (False, None, "tab", "SDK mode off: a tab"),
+    (False, "sdk", "tab", "WHEELHOUSE_RUNNER=sdk doesn't turn SDK mode on by itself"),
 ])
-def test_default_runner(store, tmp_path, monkeypatch, env, expected, desc):
+def test_default_runner(store, tmp_path, monkeypatch, on, env, expected, desc):
+    monkeypatch.setattr(features, "_flag", on)
     if env:
         monkeypatch.setenv("WHEELHOUSE_RUNNER", env)
     else:
@@ -1249,13 +1254,16 @@ def test_steady_rides_out_a_lock(monkeypatch, locks, returns, desc):
     assert run(Host.steady(write)) is returns, desc
 
 
-@pytest.mark.parametrize("stored, env, alive, opened, recorded, desc", [
-    ("tab", None, False, "host", "sdk", "a stored tab session is restored as a host"),
-    ("tab", "tab", False, "tab", "tab", "WHEELHOUSE_RUNNER=tab keeps it a tab"),
-    ("sdk", "tab", False, "tab", "tab", "and brings a hosted session back as a tab"),
-    ("tab", None, True, None, "tab", "a running session is refused and keeps its runner"),
+@pytest.mark.parametrize("on, stored, env, alive, opened, recorded, desc", [
+    (True, "tab", None, False, "host", "sdk", "a stored tab session is restored as a host"),
+    (True, "tab", "tab", False, "tab", "tab", "WHEELHOUSE_RUNNER=tab keeps it a tab"),
+    (True, "sdk", "tab", False, "tab", "tab", "and brings a hosted session back as a tab"),
+    (True, "tab", None, True, None, "tab", "a running session is refused and keeps its runner"),
+    (False, "sdk", None, False, "host", "sdk", "SDK mode off: a host's session keeps its host, not stranded"),
+    (False, "tab", "sdk", False, "tab", "tab", "and a tab stays a tab, whatever WHEELHOUSE_RUNNER says"),
 ])
-def test_restore_session(store, tmp_path, monkeypatch, stored, env, alive, opened, recorded, desc):
+def test_restore_session(store, tmp_path, monkeypatch, on, stored, env, alive, opened, recorded, desc):
+    monkeypatch.setattr(features, "_flag", on)
     sid = store.create_session(str(tmp_path), runner=stored)
     if env:
         monkeypatch.setenv("WHEELHOUSE_RUNNER", env)

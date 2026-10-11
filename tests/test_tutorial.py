@@ -6,7 +6,7 @@ from textual.widgets import DataTable, Static, TextArea
 from claude_wheelhouse import launch, tutorial
 from claude_wheelhouse.store import Store
 from claude_wheelhouse.tui import BUTTONS, Compose, ItemList, KeysHelp, ThreadView, Transcript, TutorialOffer, \
-    WheelhouseApp, key_name, keys_help
+    SDK_BUTTONS, WheelhouseApp, key_name, keys_help
 from claude_wheelhouse.tutorial import should_offer as real_should_offer   # before conftest stubs it
 from test_tui import dwell, one_second
 
@@ -240,16 +240,26 @@ async def test_the_checklist_follows_the_tutorial(store, sid, tut):
     (Transcript, "the conversation pane's"), (ThreadView, "a full-screen item's"),
 ])
 def test_the_overlay_lists_every_key(cls, desc):
-    text = keys_help()
+    text = keys_help(sdk=True)
     for b in cls.BINDINGS:
         assert f"**{key_name(b.key)}" in text or f" or {key_name(b.key)}" in text, f"{desc}: {b.key}"
 
 
 def test_the_overlay_lists_every_button():
-    text = keys_help()
+    text = keys_help(sdk=True)
     bar = {"mode", "send", "send-all", "allow", "always", "deny", "interrupt", "compact", "shell"}
     assert bar <= set(BUTTONS), "every send bar button is described"
     assert all(BUTTONS[b] in text for b in BUTTONS)
+
+
+def test_the_overlay_leaves_sdk_mode_out_unless_it_is_on():
+    text = keys_help()
+    for word in ("Interrupt", "Compact", "Shell", "Model", "Allow", "Always", "Deny", "effort", "run in the wheelhouse"):
+        assert word not in text, word
+    for b in WheelhouseApp.BINDINGS:
+        if b.action not in {f"press('{x}')" for x in SDK_BUTTONS}:
+            assert f"**{key_name(b.key)}" in text or f" or {key_name(b.key)}" in text, b.key
+    assert all(BUTTONS[b] in text for b in BUTTONS if b not in SDK_BUTTONS)
 
 
 @pytest.mark.anyio
