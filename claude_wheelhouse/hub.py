@@ -615,9 +615,11 @@ class Hub:
         s = self.row(sid)
         if runner(s) != "sdk":
             return Done(False).say(f"{display_name(s)} runs in a tab: type /{what} there", "warning")
-        if models.field(s, what) == value:
-            return Done(False)   # last write wins: it's that already
+        same = models.field(s, what) == value
+        # still a choice, dated now, so a /model or /effort typed in a shell tab before it doesn't override it
         (self.store.set_model if what == "model" else self.store.set_effort)(sid, value)
+        if same:
+            return Done(False)   # it's that already: nothing to apply or say
         shown = models.name(value) or value
         if s["shell"]:   # its host gave it to a shell tab: it launches with the column on taking it back
             return Done().say(f"{display_name(s)}: {what} {shown} when the wheelhouse takes it back from its shell "

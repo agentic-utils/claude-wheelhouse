@@ -521,6 +521,8 @@ def test_a_locked_database_after_connecting_never_stops_the_host(host, store, si
 @pytest.mark.parametrize("how, desc", [
     ("park", "parked while it waits on a locked database: it stops, never launching"),
     ("stop", "told to stop while it waits: it stops, never launching"),
+    ("park_request", "Park pressed while it waits: it stops, never launching"),
+    ("end_request", "End pressed while it waits: it stops, never launching"),
     ("malformed", "a database error other than a lock: said as the database's, not Claude Code's"),
 ])
 def test_a_host_carrying_back_at_start_stops_when_it_should_and_says_why(store, sid, monkeypatch, how, desc):
@@ -538,10 +540,14 @@ def test_a_host_carrying_back_at_start_stops_when_it_should_and_says_why(store, 
     async def go():
         task = asyncio.create_task(h.run())
         await asyncio.sleep(0.05)
+        while how != "malformed" and not said and not task.done():   # under load: waiting before it's asked to stop
+            await asyncio.sleep(0.01)
         if how == "park":
             store.set_parked(sid, True)
         elif how == "stop":
             h.stopping = True
+        elif how.endswith("_request"):
+            store.request(sid, how.split("_")[0])
         await asyncio.wait_for(task, 5)
     run(go())
     assert h.client is None, desc

@@ -760,6 +760,21 @@ def test_a_choice_made_during_a_shell_tab_is_not_undone_by_the_hub(hub, store, t
     assert store.session(sid)["model"] == "claude-haiku-5-5"
 
 
+@pytest.mark.parametrize("what, value, typed", [
+    ("model", "claude-opus-5-5", "claude-sonnet-5-5"),
+    ("effort", "high", "low"),
+])
+def test_rechoosing_what_a_session_has_is_still_a_choice(hub, store, tmp_path, what, value, typed):
+    """Round 66, nit 4: chosen in the wheelhouse again, unchanged, it is dated now, so a /model
+    or /effort typed in its shell tab before that doesn't override it."""
+    sid = store.create_session(str(tmp_path), runner="sdk", model="claude-opus-5-5", effort="high")
+    store.db.execute(f"UPDATE sessions SET {what}_chosen_at = ? WHERE id = ?",
+                     (datetime.fromtimestamp(time.time() - 3600, timezone.utc).isoformat(), sid))
+    assert not (hub.set_model if what == "model" else hub.set_effort)(sid, value).ok, "it's that already"
+    assert not store.carry(sid, what, typed, time.time() - 60), f"a /{what} typed before the re-choice gives way"
+    assert store.session(sid)[what] == value
+
+
 @pytest.mark.parametrize("locked, desc", [
     (0, "a tab that has exited: its transcript read once more, for what it wrote in its last second"),
     (1, "the database locked as the hub copies back: the next tick reads, and copies, again"),
