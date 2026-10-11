@@ -613,6 +613,61 @@ def test_a_model_or_effort_typed_counts_before_the_next_turn(tmp_path, recs, ran
     assert latest == (ran[0] or served, ran[1]), f"{desc}: as a tab's is carried (the served model where nothing asked)"
 
 
+def picked(out, ago=30, **over):
+    """A local command's output as Claude Code 2.1.280 writes a choice made in /model's
+    picker (real shapes, text scrubbed): a caveat, the command, then a user record holding
+    only its output, with no command named."""
+    base = {"parentUuid": "p", "isSidechain": False, "promptId": "q", "type": "user", "timestamp": at(ago),
+            "userType": "external", "entrypoint": "cli", "cwd": "/repo", "sessionId": "s", "version": "2.1.280"}
+    return [base | {"message": {"role": "user", "content": "<local-command-caveat>Caveat: ...</local-command-caveat>"},
+                    "isMeta": True, "uuid": "u1"},
+            base | {"message": {"role": "user", "content": "<command-name>/model</command-name>\n            "
+                                "<command-message>model</command-message>\n            <command-args></command-args>"},
+                    "uuid": "u2"},
+            base | {"message": {"role": "user", "content": f"<local-command-stdout>{out}</local-command-stdout>"},
+                    "uuid": "u3"} | over]
+
+
+@pytest.mark.parametrize("recs, typed, desc", [
+    (picked("Set model to `Opus 5.5 (1M context)` and saved as your default for new sessions"),
+     {"model": "claude-opus-5-5"}, "a model picked in /model's picker"),
+    (picked("Set model to `Haiku 5.5`"), {"model": "claude-haiku-5-5"}, "the shorter user record"),
+    (picked("Set effort level to low (this session only)"), {"effort": "low"}, "an /effort as a user record"),
+    ([command("model", "haiku", "Set model to `Haiku 5.5` for this session only")], {"model": "claude-haiku-5-5"},
+     "the system record still counts"),
+    ([command("effort", "medium", "Set effort level to medium (this session only): Balanced approach")],
+     {"effort": "medium"}, "an /effort's system record too"),
+    (picked("Set model to `Haiku 5.5`", isSidechain=True), {}, "a subagent's: not the session's"),
+    (picked("Set model to `Sonnet 1`"), {}, "a model off the table: nothing"),
+    ([{"type": "user", "timestamp": at(30), "message": {"role": "user", "content":
+       "why does it say <local-command-stdout>Set model to `Haiku 5.5`</local-command-stdout>?"}}], {},
+     "a prompt quoting one: nothing"),
+])
+def test_every_shape_of_a_model_or_effort_taken_counts(tmp_path, recs, typed, desc):
+    """Round 64, blocker 1: both shapes Claude Code 2.1 writes, by the hub's reads and by a
+    host's whole-transcript scan alike."""
+    (tmp_path / "p").mkdir()
+    path = tmp_path / "p" / "s.jsonl"
+    path.write_bytes(b"\n".join(lines(*recs)) + b"\n")
+    follower = stats.UsageFollower("s", tmp_path)
+    follower.read(NOW)
+    for how, snap in (("read", follower.snap), ("typed_in", stats.typed_in(path))):
+        assert {k: v for k, (_, v) in snap.typed.items()} == typed, f"{desc}: {how}"
+
+
+def test_what_was_typed_before_the_span_counts(tmp_path):
+    """Round 64, M4: a first read starts at the span, but a /model typed hours before (then
+    turns the span starts after) is still taken, as a host would take it."""
+    recs = [response("m0", ago=5 * 3600, read=5), *picked("Set model to `Haiku 5.5`", ago=4 * 3600),
+            response("m1", ago=3 * 3600, read=5), response("m2", ago=60, read=5)]
+    (tmp_path / "p").mkdir()
+    (tmp_path / "p" / "s.jsonl").write_bytes(b"\n".join(lines(*recs)) + b"\n")
+    follower = stats.UsageFollower("s", tmp_path)
+    follower.read(NOW)
+    assert follower.files[follower.main][0] > 0 and len(follower.snap.turns) == 1, "the read began at the span"
+    assert stats.latest(follower.snap, "model", turns=False) == (NOW - 4 * 3600, "claude-haiku-5-5")
+
+
 @pytest.mark.parametrize("setting, effort, room, expected, desc", [
     (None, "low", 0, "holly · Opus 5.5 · low · 1M window", "a tab's: what its transcript ran"),
     (None, None, 0, "holly · Opus 5.5 · 1M window", "no effort recorded yet"),

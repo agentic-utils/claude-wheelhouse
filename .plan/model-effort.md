@@ -220,10 +220,14 @@ by time, with all its state in the database:
   and HTTP routes, all through `Store.create_session`, `set_model` and `set_effort`) stamps
   when it was chosen: `model_chosen_at`, `effort_chosen_at` (UTC). A host putting back what
   Claude Code refused is not a choice and leaves them.
-- The transcript's latest choice of each, with its time: a `local_command` record ("Set
-  model to `Haiku 5.5`", "Set effort level to low", as Claude Code 2.1 writes each it takes)
-  at its own timestamp; a turn's `requestedModel` and `effort` from when the turn began (its
-  prompt), not its later responses, so a `/model` typed while a turn streams beats that
+- The transcript's latest choice of each, with its time: a record of Claude Code taking it
+  ("Set model to `Haiku 5.5`", "Set effort level to low") at its own timestamp. Claude Code
+  2.1 writes two shapes: a system `local_command` record naming the command, for one typed
+  with its argument, and a user record holding only the command's `local-command-stdout`
+  with no command named, as for a model picked in `/model`'s picker ("Set model to `Opus
+  5.5 (1M context)` and saved as your default for new sessions"); both count
+  (`stats.setting`). Then a turn's `requestedModel` and `effort`, from when the turn began
+  (its prompt), not its later responses, so a `/model` typed while a turn streams beats that
   turn. A typed choice wins a tie.
 - The rule (`stats.carry`, applied by `Store.carry` in one write transaction): where the
   transcript's choice is newer than the column's chosen-at and differs, the column takes it
@@ -236,13 +240,21 @@ by time, with all its state in the database:
   without `/model`, leaves Haiku.
 - The hub applies it on every read of a tab session's transcript (and once more after the
   tab exits), and of a hosted session's while it is out in a shell tab, so the stats pane
-  shows the tab's value as it runs. Every host applies it once more as it starts and as it
+  shows the tab's value as it runs. Its first read of a transcript starts at the charts'
+  span, but takes what was typed before that in the same scan as the compactions
+  (`stats.before`), so a `/model` then `/exit` long before the wheelhouse opened counts. Every host applies it once more as it starts and as it
   takes a session back from its shell tab, before reading the columns to launch, retrying
-  through a locked database. A host that died with its tab open, or a Restore's host taking
-  the session, carries the same.
+  through a locked database (its activity line says it waits on one) until the session is
+  parked or ended. A host that died with its tab open, or a Restore's host taking the
+  session, carries the same.
+- Columns set before choices were dated count as chosen when code that dates them first
+  opened the database (the migration adding `model_chosen_at` and `effort_chosen_at`), so a
+  `/model` typed weeks before can't override them.
 
 `/effort auto` is not carried: auto isn't a level the wheelhouse can launch with
-(`models.EFFORTS`, `--effort`), so the column keeps the last level. A suffixed id
+(`models.EFFORTS`, `--effort`), so the column keeps the last level. For a tab session the
+next turn's recorded effort is then carried, pinning the level auto ran at: accepted, as a
+turn's recorded effort is what actually ran. A suffixed id
 (`claude-opus-5-5[1m]`) is stored as its pinned id, the same model with the same 1M window
 (`models.pinned`); a response's dated id as the table's model it is, and one off the table
 not at all (`models.ran_as`).

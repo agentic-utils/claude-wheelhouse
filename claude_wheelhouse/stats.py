@@ -96,12 +96,33 @@ SET_MODEL = re.compile(r"Set model to `([^`(]+?)\s*(?:\([^`]*\))?`")
 SET_EFFORT = re.compile(r"Set effort level to (\w+)")
 
 
+STDOUT = "<local-command-stdout>"   # how a local command's output starts
+SET_MARKS = (b"local_command", f"{STDOUT}Set ".encode())   # in each line setting may take
+
+
+def may_set(line: bytes) -> bool:
+    """A line that may hold a /model or /effort Claude Code took (setting), judged from its
+    bytes: for scanning."""
+    return any(mark in line for mark in SET_MARKS)
+
+
 def setting(rec: dict, at: float) -> Setting | None:
-    """A local command's record (type system, subtype local_command) as the change it made,
-    if it was a /model or /effort Claude Code took: one it refused, or a model off the
-    table, is None."""
-    command = (rec.get("commandRun") or {}).get("command")
-    text = rec.get("content") if isinstance(rec.get("content"), str) else ""
+    """A local command's record as the change it made, if it was a /model or /effort Claude
+    Code took: one it refused, or a model off the table, is None. Claude Code 2.1 writes
+    two shapes: a system record (subtype local_command) naming the command it ran, for one
+    typed with its argument; and, for a choice made in /model's picker, a user record with
+    no command named, its content only the command's output (local-command-stdout)."""
+    if rec.get("type") == "system" and rec.get("subtype") == "local_command":
+        command = (rec.get("commandRun") or {}).get("command")
+        text = rec.get("content") if isinstance(rec.get("content"), str) else ""
+    elif rec.get("type") == "user" and not rec.get("isMeta"):
+        text = (rec.get("message") or {}).get("content")
+        if not isinstance(text, str) or not text.startswith(STDOUT):
+            return None
+        command = "model" if text.startswith(f"{STDOUT}Set model to") else \
+            "effort" if text.startswith(f"{STDOUT}Set effort level to") else None
+    else:
+        return None
     if command == "model" and (m := SET_MODEL.search(text)):
         model = next((x.id for x in models.MODELS if x.name == m[1]), None)
         return Setting(at, model=model) if model else None
@@ -132,7 +153,7 @@ def parse(lines, seen: set, main: bool, settings: list | None = None,
     turns, compactions = [], []
     for line in lines:
         if (b'"usage"' not in line and b"compact_boundary" not in line
-                and (settings is None or (b"local_command" not in line and not (
+                and (settings is None or (not may_set(line) and not (
                     b'"turnPosition"' in line or (USER.search(line) and b"tool_result" not in line))))):
             continue   # most lines: no need to parse them
         try:
@@ -146,7 +167,9 @@ def parse(lines, seen: set, main: bool, settings: list | None = None,
                 settings.append(found)
             continue
         if settings is not None and rec.get("type") == "user":
-            if main and is_prompt(rec):
+            if main and not rec.get("isSidechain") and (found := setting(rec, at)):
+                settings.append(found)
+            elif main and is_prompt(rec):
                 start = at
                 settings.append(Setting(at))
             continue
@@ -290,21 +313,25 @@ def window_start(f, size: int, cutoff: float) -> int:
     return 0
 
 
-def compactions_before(f, end: int) -> list[Compaction]:
-    """The compactions in the first `end` bytes, found without parsing the rest."""
-    out, pos, carry = [], 0, b""
+def before(f, end: int) -> tuple[list[Compaction], list[Setting]]:
+    """The compactions, and each /model and /effort Claude Code took (setting), in the first
+    `end` bytes, found without parsing the rest: a tab's /model then /exit long before the
+    wheelhouse opened is carried as surely as one typed in the span."""
+    compactions, settings, pos, carry = [], [], 0, b""
     f.seek(0)
     while pos < end:
         n = min(CHUNK, end - pos)
         buf, pos = carry + f.read(n), pos + n
-        cut = buf.rfind(b"\n") + 1
-        buf, carry = buf[:cut], buf[cut:]
-        i = buf.find(b"compact_boundary")
-        while i >= 0:
-            a, b = buf.rfind(b"\n", 0, i) + 1, buf.find(b"\n", i)
-            out += parse([buf[a:b]], set(), main=True)[1]
-            i = buf.find(b"compact_boundary", b + 1)
-    return out
+        cut = buf.rfind(b"\n") + 1   # whole lines only: the rest is carried to the next chunk
+        carry, starts = buf[cut:], set()
+        for marker in (b"compact_boundary", *SET_MARKS):
+            i = buf.find(marker, 0, cut)
+            while i >= 0:
+                starts.add(buf.rfind(b"\n", 0, i) + 1)
+                i = buf.find(marker, buf.find(b"\n", i) + 1, cut)
+        for a in sorted(starts):
+            compactions += parse([buf[a:buf.find(b"\n", a)]], set(), True, settings)[1]
+    return compactions, [x for x in settings if x.model or x.effort]
 
 
 class UsageFollower:
@@ -313,7 +340,8 @@ class UsageFollower:
 
     read() runs off the UI thread and swaps in a new snapshot when it's done, so the pane
     can show `snap` at any time. A first read of a big transcript starts at the span
-    (window_start); only its compactions are taken from before that."""
+    (window_start); only its compactions and what was typed (/model, /effort) are taken
+    from before that, in one scan, once per follower."""
 
     def __init__(self, sid: str, projects: Path | None = None):
         self.sid, self.projects = sid, projects
@@ -370,10 +398,11 @@ class UsageFollower:
             with open(path, "rb") as f:
                 if path == self.main and offset == 0:
                     offset = window_start(f, st.st_size, now - SPAN)
-                    early = [dataclasses.replace(c, after=0) for c in compactions_before(f, offset)]
+                    early, typed = before(f, offset)
+                    early = [dataclasses.replace(c, after=0) for c in early]
                     snap.compactions += early
                     snap.peak = max([snap.peak, *(c.pre for c in early)])
-                    changed = changed or bool(early)
+                    changed = chose(snap, typed) or changed or bool(early)
                 f.seek(offset)
                 data = f.read(st.st_size - offset)
             end = data.rfind(b"\n") + 1   # a half-written last line waits for the next read
@@ -482,16 +511,12 @@ def carry(store, sid: str, snap: Snapshot) -> None:
 
 def typed_in(path: Path | None) -> Snapshot:
     """What a whole transcript shows typed (/model, /effort), for a host taking a session
-    back: only its local command records are parsed."""
+    back: only the records that may say so are parsed (before)."""
     snap = Snapshot()
     if path is None:
         return snap
-    settings = []
     with open(path, "rb") as f:
-        for line in f:
-            if b"local_command" in line and line.endswith(b"\n"):
-                parse([line], set(), True, settings)
-    chose(snap, settings)
+        chose(snap, before(f, os.fstat(f.fileno()).st_size)[1])
     return snap
 
 

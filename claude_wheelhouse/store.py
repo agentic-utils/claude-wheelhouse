@@ -288,6 +288,11 @@ class Store:
                 for kind in DISMISSABLE:
                     db.execute(f"UPDATE items SET dismissed = status WHERE kind = ? AND status IN "
                                f"({','.join('?' * len(SETTLED[kind]))})", (kind, *SETTLED[kind]))
+            # a model or effort set before choices were dated counts as chosen when this code
+            # first opened the database: never older than a /model typed weeks before (Q56)
+            for column in ("model", "effort"):
+                if ("sessions", f"{column}_chosen_at") in added:
+                    db.execute(f"UPDATE sessions SET {column}_chosen_at = ? WHERE {column} IS NOT NULL", (stamp(),))
             for statement in INDEXES.split(";"):
                 if statement.strip():
                     db.execute(statement)

@@ -541,6 +541,27 @@ def test_a_host_puts_back_what_claude_code_refused_and_records_what_it_has(store
         model, "max", "claude-haiku-5-5", "max"), desc
 
 
+def test_a_model_and_effort_set_before_choices_were_dated_count_as_chosen_on_upgrade(db_file, tmp_path):
+    """Round 64, bug 2: the migration adding model_chosen_at and effort_chosen_at dates what
+    is set then, once, so a /model typed weeks before can't override it."""
+    from datetime import datetime, timezone
+    store = Store(db_file)
+    both = store.create_session(str(tmp_path), model="claude-haiku-5-5", effort="low")
+    neither = store.create_session(str(tmp_path))
+    for column in ("model_chosen_at", "effort_chosen_at"):
+        store.db.execute(f"ALTER TABLE sessions DROP COLUMN {column}")   # as before d3480cc
+    start = datetime.now(timezone.utc)
+    store = Store(db_file)
+    dated = [datetime.fromisoformat(store.session(both)[c]) for c in ("model_chosen_at", "effort_chosen_at")]
+    assert all(start <= d <= datetime.now(timezone.utc) for d in dated), "dated when the columns are added (UTC)"
+    assert (store.session(neither)["model_chosen_at"], store.session(neither)["effort_chosen_at"]) == (None, None)
+    weeks_ago = start.timestamp() - 21 * 86400
+    assert not store.carry(both, "model", "claude-opus-5-5", weeks_ago), "an old /model doesn't override it"
+    store.db.execute("UPDATE sessions SET model_chosen_at = NULL WHERE id = ?", (neither,))
+    store.db.execute("UPDATE sessions SET model = 'claude-opus-5-5' WHERE id = ?", (neither,))
+    assert Store(db_file).session(neither)["model_chosen_at"] is None, "once: a later open dates nothing"
+
+
 def test_older_code_still_writes_a_database_with_the_model_columns(store, tmp_path):
     """Older code (the editable install's other copies) never names the new columns: its
     insert, as it was, still works, and leaves them NULL."""
