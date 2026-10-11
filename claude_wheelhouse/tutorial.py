@@ -12,7 +12,6 @@ earlier tutorial session is ended (its items go with it) and its directory recre
 
 import json
 import os
-import shlex
 import shutil
 import signal
 import time
@@ -67,18 +66,9 @@ STEPS = (
 )
 
 
-SOURCE = Path(__file__).resolve().parent.parent   # a source checkout's root, run from it (make run)
-
-
-def command(source: Path | None = None) -> str:
-    """The command that starts the tutorial for how the app was installed: claude-wheelhouse
-    tutorial whenever claude-wheelhouse is on PATH (a package, uv tool install -e), else from
-    a source checkout (the README's make install) make -C <its directory> tutorial, which
-    works from any directory."""
-    source = source or SOURCE
-    if shutil.which("claude-wheelhouse") or not (source / "Makefile").is_file():
-        return "claude-wheelhouse tutorial"
-    return f"make -C {shlex.quote(str(source))} tutorial"
+# what starts the tutorial, named by every hint (the offer, the ? overlay, the checklist, the
+# dismiss notice): fixed, as which copy the person's own shell runs can't be told from here
+COMMAND = "claude-wheelhouse tutorial (make tutorial in a source checkout)"
 
 
 MARKER = ".wheelhouse-tutorial"   # written into the directory: only a directory carrying it is ever deleted

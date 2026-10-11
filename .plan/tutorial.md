@@ -131,7 +131,7 @@ really use.
   detached, so a later failure comes afterwards: once it isn't running, "its tab didn't
   start Claude Code" if it never registered (wt.exe failed, or Claude Code did), else "its
   tab has closed". A tutorial an earlier version ran in the wheelhouse shows its host's
-  stop reason. The checklist shows it, with the command to start afresh (`tutorial.command()`).
+  stop reason. The checklist shows it, with the command to start afresh (`tutorial.COMMAND`).
 - `?` opens every key, generated from the bindings themselves (a test fails if a binding
   has no description), the mouse, every button and the send-mode rules.
 

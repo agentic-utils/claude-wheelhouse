@@ -80,11 +80,11 @@ Publishing is outward-facing and runs under Doug's PyPI account, so it needs him
   and the tutorial with `claude-wheelhouse tutorial`. The `make` targets stay, for a
   checkout.
 - The app's own text named `make tutorial` in four places (`TutorialOffer`, the `?`
-  overlay, the checklist, `answer_offer`), wrong for an installed copy. Done: each takes
-  `tutorial.command()`: `claude-wheelhouse tutorial` whenever `claude-wheelhouse` is on
-  PATH (a package, `uv tool install -e`), else from a source checkout (a `Makefile` beside
-  the package) `make -C <checkout> tutorial`, which works from any directory (reviews 68
-  and 69).
+  overlay, the checklist, `answer_offer`), wrong for an installed copy. Done: each names
+  `tutorial.COMMAND`, the fixed "claude-wheelhouse tutorial (make tutorial in a source
+  checkout)". Guessing one from `PATH` (reviews 68 and 69) named a command that fails
+  under `make run`, where `uv run` puts the venv's `claude-wheelhouse` on `PATH` but the
+  person's own shell can't run it.
 
 ## The update check
 
