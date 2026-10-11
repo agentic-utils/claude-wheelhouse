@@ -49,6 +49,13 @@ def sdk_off(tmp_path, monkeypatch):
     monkeypatch.setattr(features, "env_files", lambda: [tmp_path / "no-cwd.env", tmp_path / "no-config.env"])
 
 
+@pytest.fixture(autouse=True)
+def usage_mode_default(monkeypatch):
+    """No --usage-mode given, and nothing yet said of a bad one (features.usage_mode)."""
+    monkeypatch.setattr(features, "_usage_mode", None)
+    monkeypatch.setattr(features, "_warned", set())
+
+
 @pytest.fixture
 def sdk_on(monkeypatch):
     """SDK mode on, as --enable-sdk turns it on."""

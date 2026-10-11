@@ -170,7 +170,7 @@ class Hub:
         # the account's plan usage, for every surface: asked of one Claude Code, every
         # plan_usage.EVERY seconds, and taken from SDK sessions' readings in the store
         self.usage = plan_usage.AccountUsage()
-        self.usage_probe = plan_usage.Probe(self.store.path.parent)
+        self.usage_probe = plan_usage.Probe(self.store.path.parent, features.usage_mode())
         # when /usage is next asked: None until the first tick, which only sets it, so the
         # first ask is a tick later, once a daemon is serving (its lifespan ticks before it
         # binds: one that can't bind never runs Claude Code)

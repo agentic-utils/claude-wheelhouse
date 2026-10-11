@@ -33,8 +33,7 @@ SDK_SETTING = "plan_usage.sdk"   # settings: an SDK session's latest reading, {"
 CLAUDE = "claude"
 CLAUDE_ENV = "WHEELHOUSE_CLAUDE"   # the claude to run instead: the tests' one that isn't there, which daemons they start inherit
 FLAGS = ("--verbose", "--setting-sources=", "--strict-mcp-config", "--no-session-persistence")
-MODES = ("oneshot", "persistent")
-MODE = "oneshot"     # how the hub's Probe asks, by default
+MODES = ("oneshot", "persistent")   # features.usage_mode chooses: the first by default
 ASK = json.dumps({"type": "user", "message": {"role": "user", "content": "/usage"}}) + "\n"
 # the probe isn't one of the wheelhouse's sessions
 UNSET = ("WHEELHOUSE_DB", "WHEELHOUSE_SESSION_ID", "WHEELHOUSE_TOKEN")
@@ -211,7 +210,7 @@ class Probe:
 
     def __init__(self, cwd: Path, mode: str | None = None, command=None, timeout: float = TIMEOUT):
         self.cwd, self.timeout = cwd, timeout
-        self.mode = mode or MODE
+        self.mode = mode or MODES[0]
         self.command = list(command) if command else None   # a test's fake, else command(mode)
         self.proc: subprocess.Popen | None = None
         self.answers: queue.Queue = queue.Queue()

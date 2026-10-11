@@ -17,7 +17,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `daemon.py`: the hub served over HTTP (`.plan/remote.md`); no client uses it yet.
 - `host.py`: a session run through the Claude Agent SDK, one detached process per session.
   Experimental, and off unless `features.sdk_enabled()`: read `features.py` first.
-- `features.py`: SDK mode's switch, `sdk_enabled()`.
+- `features.py`: SDK mode's switch, `sdk_enabled()`, and the plan usage mode,
+  `usage_mode()` (`--usage-mode`, or `usage-mode` in a `.env`).
 - `launch.py`: Windows Terminal tabs (`wt.exe` through `cmd.exe`), the `claude` command
   line, and the protocol text injected into a session.
 - `mcp_server.py`: the per-session `wheelhouse` MCP server. Each tool's docstring is its
@@ -29,7 +30,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `transcript.py`: a session's conversation, read from its Claude Code transcript.
 - `stats.py`, `stats_pane.py`: token stats and charts; the pane is a module (`api.py`).
 - `plan_usage.py`: the account's session and weekly usage, from `/usage` asked of
-  Claude Code every 5 minutes (a one-shot `claude -p` by default, or one kept running), and from SDK sessions' rate_limit_events.
+  Claude Code every 5 minutes (a one-shot `claude -p` by default, or one kept running with
+  `--usage-mode persistent`), and from SDK sessions' rate_limit_events.
 - `api.py`: the module protocol (entry point group `claude_wheelhouse.modules`). Bump
   `WHEELHOUSE_API` on any breaking change to it.
 - `models.py`: the models and effort levels offered. A new model is a row here.

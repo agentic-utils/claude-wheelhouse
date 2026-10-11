@@ -122,3 +122,46 @@ def test_the_protocol_command(monkeypatch, capsys, argv, on, desc):
     out = capsys.readouterr().out
     assert ("protocol_sdk.md" in out) is on, desc
     assert "EXPERIMENTAL" not in out, "the file's note never reaches a session"
+
+
+@pytest.mark.parametrize("flag, cwd_env, config_env, mode, warns, desc", [
+    (None, None, None, "oneshot", False, "nothing given: oneshot"),
+    ("persistent", None, None, "persistent", False, "the flag"),
+    (None, "usage-mode=persistent", None, "persistent", False, "the starting directory's .env"),
+    (None, None, "USAGE_MODE=persistent", "persistent", False, "the user's .env, the key in capitals"),
+    (None, "usage_mode=Persistent", None, "persistent", False, "the key with an underscore, any case of value"),
+    (None, "usage-mode=oneshot", "usage-mode=persistent", "oneshot", False, "the starting directory's wins"),
+    ("oneshot", "usage-mode=persistent", None, "oneshot", False, "the flag wins over .env"),
+    (None, "usage-mode=always", None, "oneshot", True, "a bad value: said, and oneshot"),
+])
+def test_usage_mode(tmp_path, monkeypatch, capsys, flag, cwd_env, config_env, mode, warns, desc):
+    cwd, config = tmp_path / "cwd.env", tmp_path / "config.env"
+    monkeypatch.setattr(features, "env_files", lambda: [cwd, config])
+    for path, text in ((cwd, cwd_env), (config, config_env)):
+        if text:
+            path.write_text(text + "\n")
+    if flag:
+        features.set_usage_mode(flag)
+    assert [features.usage_mode(), features.usage_mode()] == [mode, mode], desc
+    err = capsys.readouterr().err
+    assert err.count("not oneshot or persistent") == (1 if warns else 0), f"{desc}: said once at most: {err!r}"
+
+
+@pytest.mark.parametrize("argv, mode, desc", [
+    (["daemon"], "oneshot", "no flag"),
+    (["--usage-mode", "persistent", "daemon"], "persistent", "before the command"),
+    (["daemon", "--usage-mode", "persistent"], "persistent", "after it"),
+])
+def test_the_usage_mode_flag(monkeypatch, argv, mode, desc):
+    seen = []
+    monkeypatch.setattr(daemon, "main", lambda *a: seen.append(features.usage_mode()))
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", *argv])
+    cli.main()
+    assert seen == [mode], desc
+
+
+def test_a_bad_usage_mode_flag_is_refused(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", "--usage-mode", "always"])
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert "invalid choice: 'always'" in capsys.readouterr().err

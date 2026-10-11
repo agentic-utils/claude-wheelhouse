@@ -76,20 +76,26 @@ def main() -> None:
     sdk = argparse.ArgumentParser(add_help=False)
     sdk.add_argument(features.FLAG, dest="enable_sdk", action="store_true", default=argparse.SUPPRESS,
                      help=argparse.SUPPRESS)
+    # --usage-mode: how the stats pane's plan usage is read (features.usage_mode), before or
+    # after the command, for those that run a hub: the app's, and the daemon's
+    usage = argparse.ArgumentParser(add_help=False)
+    usage.add_argument(features.USAGE_FLAG, dest="usage_mode", choices=features.USAGE_MODES,
+                       default=argparse.SUPPRESS, help="how the usage bar reads /usage: a short claude -p every "
+                       "5 minutes (oneshot, the default), or one Claude Code kept running (persistent)")
     p = argparse.ArgumentParser(prog="claude-wheelhouse", description="Sidecar for parallel Claude Code sessions",
-                                parents=[sdk])
+                                parents=[sdk, usage])
     client_args(p)
     sub = p.add_subparsers(dest="cmd")
-    client_args(sub.add_parser("tui", help="the wheelhouse app (default)", parents=[sdk]), sub=True)
+    client_args(sub.add_parser("tui", help="the wheelhouse app (default)", parents=[sdk, usage]), sub=True)
     client_args(sub.add_parser("tutorial", help="start the tutorial afresh, then open the wheelhouse app",
-                               parents=[sdk]), sub=True)
+                               parents=[sdk, usage]), sub=True)
     run = sub.add_parser("run", help="inside a launched tab: exec Claude for a session")
     run.add_argument("session_id")
     sub.add_parser("mcp", help="the per-session MCP server (stdio)")
     sub.add_parser("monitor", help="the per-session plugin monitor")
     sub.add_parser("protocol", help="print everything wheelhouse puts into a launched session", parents=[sdk])
     daemon = sub.add_parser("daemon", help="serve the wheelhouse over HTTP (the app starts it, or joins it)",
-                            parents=[sdk])
+                            parents=[sdk, usage])
     daemon.add_argument("--address", default=None, help="the IP address to listen on (default 127.0.0.1; "
                         "never 0.0.0.0): the VPN interface's, to reach it from another machine")
     daemon.add_argument("--port", type=int, default=None, help="the port to listen on (default 7428)")
@@ -102,6 +108,8 @@ def main() -> None:
     args = p.parse_args()
     if getattr(args, "enable_sdk", False):
         features.enable_sdk()
+    if getattr(args, "usage_mode", None):
+        features.set_usage_mode(args.usage_mode)
 
     if args.cmd == "run":
         from .launch import run as run_session

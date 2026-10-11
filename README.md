@@ -84,7 +84,9 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   150k, yellow under 300k, amber under 600k, then red), and the account's session and weekly usage with their reset times, as
   `/usage` shows them: every 5 minutes the wheelhouse runs a short `claude -p "/usage"`
   in the background (no tokens are spent), and says how old the numbers are when a
-  reading is late. Under them, whether the prompt cache is warm
+  reading is late. `--usage-mode persistent` (or `usage-mode=persistent` in a `.env` in
+  the directory you start the app from, or in `~/.config/claude-wheelhouse/.env`) keeps
+  one Claude Code running and asks it instead: quicker per reading, but it stays in memory. Under them, whether the prompt cache is warm
   and when it goes cold (once cold, what the next turn re-pays), and its compactions.
   Straight after a compaction a session keeps its pre-compaction size until the next
   response sizes it. Below the panel, two charts of the last two hours, subagents included: how each turn's

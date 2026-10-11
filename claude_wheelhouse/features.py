@@ -1,4 +1,4 @@
-"""SDK mode's switch, sdk_enabled().
+"""SDK mode's switch, sdk_enabled(), and how plan usage is read, usage_mode().
 
 EXPERIMENTAL: SDK mode (sessions run in a wheelhouse host through the Claude Agent SDK:
 host.py, protocol_sdk.md, launch.open_host) is not for use by anyone other than the
@@ -15,13 +15,25 @@ Relaunch of a running one starts its host again. Once one has stopped, Restore (
 Relaunch of a dead session) brings it back as a tab, as it does any session, the way new
 sessions run now (launch.restore_runner, Doug's Q27 option A). The flag gates creating new ones, and the controls that only choose how one
 runs (Model, the effort slider). Through the daemon the mode is the daemon's (connect.start
-passes the flag on; its inbox tells the app)."""
+passes the flag on; its inbox tells the app).
 
+The stats pane's plan usage runs a one-shot `claude -p "/usage"` every 5 minutes, or with
+--usage-mode persistent (or usage-mode=persistent, USAGE_MODE or usage_mode, in either
+.env) keeps one Claude Code running and asks it (plan_usage.Probe, Doug's Q69). The flag
+wins over .env, the starting directory's .env over the user's; a value that is neither
+mode is said once and taken as oneshot. connect.start passes the mode to the daemon."""
+
+import sys
 from pathlib import Path
 
 FLAG = "--enable-sdk"
 KEYS = ("enable-sdk", "ENABLE_SDK", "enable_sdk")   # the .env key, written any of these ways
 _flag = False   # set by the command line (enable_sdk)
+USAGE_FLAG = "--usage-mode"
+USAGE_KEYS = ("usage-mode", "USAGE_MODE", "usage_mode")
+USAGE_MODES = ("oneshot", "persistent")   # the first the default
+_usage_mode: str | None = None   # set by the command line (set_usage_mode)
+_warned: set[str] = set()
 
 
 def env_files() -> list[Path]:
@@ -63,3 +75,28 @@ def enable_sdk() -> None:
 def sdk_enabled() -> bool:
     """Whether SDK mode is on: --enable-sdk, or enable-sdk=true in either .env file."""
     return _flag or any(read_env(path).get(name, "").lower() == "true" for path in env_files() for name in KEYS)
+
+
+def set_usage_mode(mode: str) -> None:
+    """--usage-mode on the command line."""
+    global _usage_mode
+    _usage_mode = mode
+
+
+def usage_mode() -> str:
+    """How plan usage is read: --usage-mode, else usage-mode in the starting directory's
+    .env, else the user's, else oneshot. A value that is neither mode is said once, on
+    stderr, and taken as oneshot."""
+    given, where = _usage_mode, USAGE_FLAG
+    if given is None:
+        given, where = next(((env[name], f"{name} in {path}") for path in env_files()
+                             for env in [read_env(path)] for name in USAGE_KEYS if name in env), (None, None))
+    if given is None:
+        return USAGE_MODES[0]
+    if given.lower() in USAGE_MODES:
+        return given.lower()
+    said = f"claude-wheelhouse: {where} is {given!r}, not oneshot or persistent: plan usage runs oneshot"
+    if said not in _warned:
+        _warned.add(said)
+        print(said, file=sys.stderr, flush=True)
+    return USAGE_MODES[0]

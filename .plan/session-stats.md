@@ -21,8 +21,10 @@ highlighted item.
   reset times, and Fable's week once it's above 0%. Not from the transcripts: every 5 minutes the hub
   (`plan_usage.py`, #16) runs `claude -p "/usage"` with no settings, MCP servers or
   transcript, about 4 s and 4.7 CPU-seconds with no tokens, nothing left running between
-  (Doug's Q69: the default). Its "persistent" mode keeps one `claude -p --input-format
-  stream-json` running and sends it `/usage` instead: 2 to 3 s a call, but about 230 MB
+  (Doug's Q69: the default). Its "persistent" mode (`--usage-mode persistent`, or
+  `usage-mode=persistent` in either `.env` that `features.py` reads; the flag wins, a bad
+  value is said once and taken as oneshot, and `connect.start` passes the mode to the
+  daemon) keeps one `claude -p --input-format stream-json` running and sends it `/usage` instead: 2 to 3 s a call, but about 230 MB
   resident and 2% of a core at idle, about twice the CPU overall. Either way it reads
   the answer's "Current session" and "Current week" lines. Their reset times are local
   wall-clock to the minute with a zone and no year, converted to UTC with the year

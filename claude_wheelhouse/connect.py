@@ -83,7 +83,7 @@ def start(state_dir: Path, port: int) -> int:
     nor the installed one when this one is a copy run from its folder. One that finds
     another holding the lock stops at once, and says so in the log. In SDK mode if this
     process is (features.py): it runs in the state dir, where the starting directory's .env
-    isn't, so it is told with --enable-sdk.
+    isn't, so it is told with --enable-sdk, and with --usage-mode how to read plan usage.
 
     Returns the read end of a pipe whose write end only the daemon holds (its number given
     as --start-pipe, which the daemon keeps from anything it starts): it reads as ended the
@@ -97,7 +97,8 @@ def start(state_dir: Path, port: int) -> int:
             print(time.strftime("%Y-%m-%dT%H:%M:%S%z"), f"pid {os.getpid()} asked for a daemon", file=log, flush=True)
             argv = ["setsid", "--fork", sys.executable, "-m", "claude_wheelhouse", "daemon", "--port", str(port),
                     "--start-pipe", str(held)]
-            subprocess.run(argv + ([features.FLAG] if features.sdk_enabled() else []), cwd=state_dir,
+            argv += [features.USAGE_FLAG, features.usage_mode()] + ([features.FLAG] if features.sdk_enabled() else [])
+            subprocess.run(argv, cwd=state_dir,
                            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                            env=dict(env, PYTHONSAFEPATH="1", PYTHONPATH=path), pass_fds=(held,), check=True)
     except BaseException:

@@ -83,6 +83,17 @@ def test_a_daemon_started_by_an_app_in_sdk_mode_is_in_it_too(tmp_path, monkeypat
     assert (features.FLAG in ran[0]) is on, ran
 
 
+@pytest.mark.parametrize("mode", ["oneshot", "persistent"])
+def test_a_daemon_started_by_an_app_reads_plan_usage_as_the_app_would(tmp_path, monkeypatch, mode):
+    """Its .env isn't the starting directory's: so it is told the mode."""
+    features.set_usage_mode(mode)
+    ran = []
+    monkeypatch.setattr(connect.subprocess, "run", lambda argv, **k: ran.append(argv))
+    os.close(connect.start(tmp_path, 7428))
+    argv = ran[0]
+    assert argv[argv.index(features.USAGE_FLAG) + 1] == mode, argv
+
+
 def test_a_lock_file_left_by_a_daemon_that_died_is_only_text(state):
     state_dir, port = state
     (state_dir / connect.LOCK).write_text("pid 999999 at http://127.0.0.1:1\n")
