@@ -59,7 +59,9 @@ def run_app(args, store=None) -> None:
 def tutorial_again(yes: bool) -> None:
     """claude-wheelhouse tutorial: the tutorial offered at the app's next start (tutorial.reset),
     once the person says yes (or --yes). Refused while a daemon runs: the app goes through
-    it, and decides on the offer only as it starts."""
+    it, and decides on the offer only as it starts. An app run with --local takes no lock,
+    so it can't be seen here: its tutorial session is ended under it (SIGTERM, row removed),
+    and the offer waits for its next start."""
     from . import tutorial
     from .connect import STOP, holder
     from .store import Store, db_path
@@ -115,7 +117,12 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd")
     client_args(sub.add_parser("tui", help="the wheelhouse app (default)", parents=[sdk, usage]), sub=True)
     again = sub.add_parser("tutorial", help="have the app offer the tutorial at its next start, ending any "
-                           "earlier tutorial session (run with the app and the daemon stopped)")
+                           "earlier tutorial session (run with the app and the daemon stopped)",
+                           description="Has the app offer the tutorial at its next start, ending any earlier "
+                           "tutorial session. Run it with the app and the daemon stopped. It refuses while the "
+                           "daemon runs, but an app started with --local has no daemon and can't be detected: "
+                           "running this then stops that app's tutorial session and removes it, and the offer "
+                           "shows only when the app next starts.")
     again.add_argument("--yes", "-y", action="store_true", help="don't ask first")
     run = sub.add_parser("run", help="inside a launched tab: exec Claude for a session")
     run.add_argument("session_id")

@@ -59,7 +59,9 @@ Claude Code asks whether you trust the demo's folder, say yes in its tab. It alw
 afresh (any earlier tutorial is ended), in its own scratch directory,
 `claude-wheelhouse-tutorial/` next to the database. It is a real Claude Code session on
 Sonnet 5.5 at high effort, and costs a few cents' worth of tokens on your Claude Code
-account.
+account. The tutorial's session is whichever one runs in that directory, so don't start a
+session of your own there: starting the tutorial, or `make tutorial`, would end yours too,
+items and all.
 
 To be offered it again, quit the app, then:
 
@@ -72,9 +74,12 @@ make run
 `make tutorial` (`uv run claude-wheelhouse tutorial`) asks first (`--yes` skips the
 question), then ends the earlier tutorial session, if there is one, and has the next start
 offer the tutorial even though you have other sessions. Your other sessions are kept. It
-refuses while the daemon runs, since the app decides on the offer only as it starts. The
-offer, and the app's help, say to run `claude-wheelhouse tutorial (make tutorial in a
-source checkout)` with the wheelhouse stopped: in your clone, that is `make tutorial`.
+refuses while the daemon runs, since the app decides on the offer only as it starts. An
+app started with `--local` runs no daemon, so it can't be detected: quit it first, or
+`make tutorial` stops its tutorial session and removes it from under it, and the offer
+shows only when the app next starts. The offer, and the app's help, say to run
+`claude-wheelhouse tutorial (make tutorial in a source checkout)` with the wheelhouse
+stopped: in your clone, that is `make tutorial`.
 
 After that, `make run` (`uv run claude-wheelhouse`) opens the wheelhouse, and `N` starts a
 session.

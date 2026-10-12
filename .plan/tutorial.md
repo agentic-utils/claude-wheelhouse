@@ -117,11 +117,17 @@ really use.
 - `make tutorial` runs `claude-wheelhouse tutorial` (`tutorial.reset`): refused while the
   daemon's lock is held (`connect.holder`), with how to stop it; then a y/N (`--yes` skips
   it); then it ends any tutorial session as above and sets `tutorial_offer` to `reset`. It
-  never opens the app or a tab.
+  never opens the app or a tab. The lock is checked again after the y/N, which can wait
+  while the app is started. An app run with `--local` takes no lock, so it can't be
+  detected: run then, the command SIGTERMs that app's tutorial tab and removes its row, and
+  the offer shows only at the app's next start. Documented, not guarded.
 - The steps: find the demo in its tab (it ticks once the session has posted, so past any
   trust prompt), open a question, answer both, send them, see the reply, read and close
   the decision, end it.
 - The tutorial session is simply the one whose directory is `claude-wheelhouse-tutorial/`: no schema column.
+  So a session of the person's own started in that directory is taken for the tutorial's,
+  and ended with it (`stop_earlier`, on taking the offer or on `make tutorial`). The README
+  says not to start one there.
   Its `.claude/settings.json` allows the wheelhouse's own tools (so a tester in default
   permission mode isn't asked about each post).
 - The brief has the session post a task, two related questions (tone, and a sign-off that
