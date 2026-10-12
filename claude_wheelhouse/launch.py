@@ -18,6 +18,7 @@ import getpass
 import json
 import os
 import pwd
+import re
 import shlex
 import subprocess
 import sys
@@ -76,11 +77,19 @@ def tab_title(session) -> str:
     return title.replace(";", ",")
 
 
+def window_name(user: str) -> str:
+    """The Windows Terminal window a user's tabs open in, wheelhouse-<user> (Doug's Q75), so
+    each wheelhouse's sessions gather in a window of their own, whoever else runs one: wt's
+    -w opens a window by that name the first time and adds to it after. Letters, digits, -
+    and _ only, which neither cmd nor wt reads as anything but a name."""
+    return "wheelhouse-" + re.sub(r"[^A-Za-z0-9_-]+", "-", user)
+
+
 def wt_argv(session, *, python: str, distro: str, user: str, shell: str) -> list[str]:
     if CMD_META & set(session["cwd"]):
         raise ValueError(f"can't launch in {session['cwd']}: it contains one of {''.join(sorted(CMD_META))}")
     return [
-        "cmd.exe", "/c", "wt.exe", "-w", "0", "new-tab", "--title", tab_title(session),
+        "cmd.exe", "/c", "wt.exe", "-w", window_name(user), "new-tab", "--title", tab_title(session),
         "wsl.exe", "-d", distro, "-u", user, "--cd", session["cwd"].replace(";", r"\;"),
         "--", shell, "-lic", f"exec {shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}",
     ]

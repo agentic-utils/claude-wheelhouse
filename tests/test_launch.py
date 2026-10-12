@@ -17,7 +17,7 @@ def row(**over):
 ])
 def test_wt_argv(over, title, cwd, desc):
     argv = launch.wt_argv(row(**over), python="/py", distro="Ubuntu", user="u", shell="/bin/zsh")
-    assert argv[:8] == ["cmd.exe", "/c", "wt.exe", "-w", "0", "new-tab", "--title", title], desc
+    assert argv[:8] == ["cmd.exe", "/c", "wt.exe", "-w", "wheelhouse-u", "new-tab", "--title", title], desc
     assert argv[argv.index("--cd") + 1] == cwd, desc
     assert argv[-4:] == ["--", "/bin/zsh", "-lic", "exec /py -m claude_wheelhouse run abc-123"], desc
 
@@ -42,6 +42,17 @@ def test_claude_argv(over, resume, has, lacks, last, desc):
     mcp = json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"]["wheelhouse"]
     assert mcp["env"]["WHEELHOUSE_SESSION_ID"] == "abc-123"
     assert argv[argv.index("--plugin-dir") + 1] == str(launch.PLUGIN_DIR)
+
+
+@pytest.mark.parametrize("user, window, desc", [
+    ("doug", "wheelhouse-doug", "a user's tabs gather in a window of their own"),
+    ("tfu", "wheelhouse-tfu", "another user's in another"),
+    ("doug_2-x", "wheelhouse-doug_2-x", "letters, digits, - and _ kept"),
+    ("d.lindsay", "wheelhouse-d-lindsay", "anything else becomes -"),
+    ("a&b;c", "wheelhouse-a-b-c", "nothing cmd or wt would read as more than a name"),
+])
+def test_window_name(user, window, desc):
+    assert launch.window_name(user) == window, desc
 
 
 def test_wt_argv_refuses_cmd_metacharacters_in_the_directory():

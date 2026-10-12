@@ -29,8 +29,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   Experimental, and off unless `features.sdk_enabled()`: read `features.py` first.
 - `features.py`: SDK mode's switch, `sdk_enabled()`, and the plan usage mode,
   `usage_mode()` (`--usage-mode`, or `usage-mode` in a `.env`).
-- `launch.py`: Windows Terminal tabs (`wt.exe` through `cmd.exe`), the `claude` command
-  line, and the protocol text injected into a session.
+- `launch.py`: Windows Terminal tabs (`wt.exe` through `cmd.exe`, in the user's own
+  window, `window_name`), the `claude` command line, and the protocol text injected into
+  a session.
 - `mcp_server.py`: the per-session `wheelhouse` MCP server. Each tool's docstring is its
   description to Claude, so it is user-facing text.
 - `monitor.py` and `plugin/`: the tab session's plugin monitor and `/wheelhouse` skill.

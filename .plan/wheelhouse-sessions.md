@@ -100,9 +100,16 @@ inbox too, by design: parking is your own signal to set it aside.
 writes the session row, then opens a Windows Terminal tab:
 
 ```
-cmd.exe /c wt.exe -w 0 new-tab --title <name> wsl.exe -d <distro> -u <user> --cd <dir> -- \
+cmd.exe /c wt.exe -w wheelhouse-<user> new-tab --title <name> wsl.exe -d <distro> -u <user> --cd <dir> -- \
     <login shell> -lic "exec <python> -m claude_wheelhouse run <session-id>"
 ```
+
+The tabs open in a window named for the user (Doug's Q75), not the most recently used
+one (`-w 0`), so each wheelhouse's sessions gather in a window of their own, and two
+users' wheelhouses on one machine keep apart. The name keeps letters, digits, `-` and `_`
+of the user's name, `-` for anything else (`launch.window_name`). It is the user of the
+process that launches, which is the daemon's, so an app on another machine (`--connect`)
+never names it.
 
 wsl.exe runs its command with no shell, so the user's profile never runs and
 `~/.local/bin`, where claude is installed, is missing from the `PATH`. Going through the
@@ -533,6 +540,7 @@ The goal is one tool: the wheelhouse, with the cache view as one of its tabs.
 | `--system-prompt-snapshot off` makes a resumed session see `--append-system-prompt` | true (headless check); the default does not |
 | `~/.claude/sessions/<pid>.json` records each running session with `sessionId` and `procStart` (= `/proc/<pid>/stat` field 22) | true |
 | `wt.exe new-tab --title`, `-w 0` | true (Microsoft docs) |
+| `wt.exe -w <name>` adds to the window of that name, opening one by that name if none has it | Microsoft docs; not yet seen live |
 | `wt.exe` callable directly from WSL | false: it is a 2-byte execution alias; `cmd.exe /c wt.exe` works |
 
 ## Verified end to end

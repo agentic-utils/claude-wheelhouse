@@ -10,7 +10,8 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
 ## Requirements
 
 - Windows with WSL and Windows Terminal. The wheelhouse runs inside WSL and opens each
-  session in a new Windows Terminal tab (through `cmd.exe` and `wt.exe`).
+  session in a new Windows Terminal tab (through `cmd.exe` and `wt.exe`), all in a window
+  of their own named `wheelhouse-<your WSL user>`, which the first launch opens.
 - [uv](https://docs.astral.sh/uv/), which installs everything else, Python included.
 - Python 3.12 or later (`requires-python` in `pyproject.toml`). uv fetches 3.12 if your
   system doesn't have it.

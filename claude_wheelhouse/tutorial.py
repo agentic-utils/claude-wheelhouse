@@ -58,8 +58,9 @@ can be ended. If they ask for changes, make them."""
 
 # (key, what to do, how): in the order the tutorial's session makes them possible
 STEPS = (
-    ("start", "Find the demo in its tab", "it opens in a new Windows Terminal tab: if Claude Code asks "
-     "whether you trust the folder, say yes there, then come back here as it posts its items"),
+    ("start", "Find the demo in its tab", "it opens in a new Windows Terminal tab, in a window of the "
+     "wheelhouse's own: if Claude Code asks whether you trust the folder, say yes there, then come back here as "
+     "it posts its items"),
     ("open", "Open a question", "highlight Q1 in the item list, or press Enter on it"),
     ("queue", "Answer both questions", "type in the box, Ctrl+Enter queues each answer"),
     ("send", "Send them together", "Ctrl+S, or the Send button under the session list"),
