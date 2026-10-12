@@ -233,3 +233,51 @@ def test_a_bad_port_flag_stops_it_in_a_line(monkeypatch, argv, said, desc):
     with pytest.raises(SystemExit) as e:
         cli.main()
     assert e.value.code == said, desc
+
+
+@pytest.mark.parametrize("flag, cwd_env, config_env, hours, warns, desc", [
+    (None, None, None, 8, False, "nothing given: 8"),
+    ("2", None, None, 2, False, "the flag"),
+    (None, "keepalive-hours=3", None, 3, False, "the starting directory's .env"),
+    (None, None, "keepalive-hours=4", 4, False, "the user's .env"),
+    (None, "keepalive-hours=3", "keepalive-hours=4", 3, False, "the starting directory's wins"),
+    ("2", "keepalive-hours=3", "keepalive-hours=4", 2, False, "the flag wins over both"),
+    (None, "KEEPALIVE_HOURS=3", None, 8, False, "the key is lower case only, as port's"),
+    (None, "keepalive-hours=1.5", None, 1.5, False, "a fraction"),
+    (None, "keepalive-hours=0", None, 0, False, "0: off"),
+    (None, "keepalive-hours=lots", None, 8, True, "a bad value: said once, and 8"),
+    ("-1", None, None, 8, True, "a negative flag: said once, and 8"),
+])
+def test_keepalive_hours(tmp_path, monkeypatch, capsys, flag, cwd_env, config_env, hours, warns, desc):
+    cwd, config = tmp_path / "cwd.env", tmp_path / "config.env"
+    monkeypatch.setattr(features, "env_files", lambda: [cwd, config])
+    for path, text in ((cwd, cwd_env), (config, config_env)):
+        if text:
+            path.write_text(text + "\n")
+    if flag:
+        features.set_keepalive_hours(flag)
+    assert [features.keepalive_hours(), features.keepalive_hours()] == [hours, hours], desc
+    err = capsys.readouterr().err
+    assert err.count("not a number of hours") == (1 if warns else 0), f"{desc}: said once at most: {err!r}"
+
+
+@pytest.mark.parametrize("argv, hours, desc", [
+    (["daemon"], 8, "no flag"),
+    (["--keepalive-hours", "2", "daemon"], 2, "before the command"),
+    (["daemon", "--keepalive-hours", "0.5"], 0.5, "after it"),
+])
+def test_the_keepalive_hours_flag_reaches_the_hub(monkeypatch, argv, hours, desc):
+    seen = []
+    monkeypatch.setattr(daemon, "main", lambda *a: seen.append(features.keepalive_hours()))
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", *argv])
+    cli.main()
+    assert seen == [hours], desc
+
+
+def test_a_host_takes_the_keepalive_hours_it_is_started_with(monkeypatch):
+    from claude_wheelhouse import host
+    seen = []
+    monkeypatch.setattr(host, "main", lambda sid: seen.append((sid, features.keepalive_hours())))
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", "host", "abc", "--keepalive-hours", "2"])
+    cli.main()
+    assert seen == [("abc", 2)]

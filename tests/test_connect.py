@@ -485,3 +485,20 @@ def test_a_daemon_on_code_from_before_the_token_is_said_as_that(older, token_fil
             ask()
         assert f"the daemon (pid {os.getpid()}) runs older code" in str(e.value), f"{desc}: {e.value}"
         assert connect.STOP in str(e.value) and "has gone" not in str(e.value), f"{desc}: {e.value}"
+
+
+@pytest.mark.parametrize("given, passed, desc", [
+    (None, "8", "the default"),
+    ("2.5", "2.5", "as set here"),
+    ("0", "0", "off"),
+])
+def test_a_daemon_started_by_an_app_keeps_sessions_warm_as_long_as_the_app_would(tmp_path, monkeypatch,
+                                                                                given, passed, desc):
+    """Its .env isn't the starting directory's: so it is told the limit."""
+    if given:
+        features.set_keepalive_hours(given)
+    ran = []
+    monkeypatch.setattr(connect.subprocess, "run", lambda argv, **k: ran.append(argv))
+    os.close(connect.start(tmp_path, 7428))
+    argv = ran[0]
+    assert argv[argv.index(features.KEEPALIVE_FLAG) + 1] == passed, desc

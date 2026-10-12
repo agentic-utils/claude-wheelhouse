@@ -8,7 +8,7 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 `claude_wheelhouse/`:
 
 - `cli.py`: the `claude-wheelhouse` entry point and its subcommands (`tui`, the default;
-  `tutorial`, `run`, `host`, `mcp`, `monitor`, `protocol`, `daemon`, `token`).
+  `tutorial`, `run`, `host`, `mcp`, `monitor`, `protocol`, `daemon`, `token`, `open-items`).
 - `store.py`: the SQLite store, the only source of truth. Schema, added columns,
   triggers, `PROTOCOL_VERSION`. Every public write is its own committed transaction.
 - `hub.py`: what the wheelhouse knows and does, whatever shows it. Owns liveness and
@@ -29,8 +29,10 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `host.py`: a session run through the Claude Agent SDK, one detached process per session.
   Experimental, and off unless `features.sdk_enabled()`: read `features.py` first.
 - `features.py`: SDK mode's switch, `sdk_enabled()`, the plan usage mode,
-  `usage_mode()` (`--usage-mode`, or `usage-mode` in a `.env`), and the daemon's port,
-  `port()` (`--port`, `WHEELHOUSE_PORT`, or `port` in a `.env`).
+  `usage_mode()` (`--usage-mode`, or `usage-mode` in a `.env`), the daemon's port,
+  `port()` (`--port`, `WHEELHOUSE_PORT`, or `port` in a `.env`), and how long a quiet
+  session is kept warm, `keepalive_hours()` (`--keepalive-hours`, or `keepalive-hours` in a
+  `.env`; 8 by default, 0 for off).
 - `launch.py`: Windows Terminal tabs (`wt.exe` through `cmd.exe`, in the user's own
   window, `window_name`), the `claude` command line, and the protocol text injected into
   a session.

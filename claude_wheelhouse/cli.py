@@ -98,8 +98,12 @@ def main() -> None:
             features.enable_sdk()
         host = argparse.ArgumentParser(prog="claude-wheelhouse host")
         host.add_argument("session_id")
+        host.add_argument(features.KEEPALIVE_FLAG, dest="keepalive_hours", default=None)
+        hosted = host.parse_args(rest[1:])
+        if hosted.keepalive_hours is not None:
+            features.set_keepalive_hours(hosted.keepalive_hours)
         from .host import main as host_main
-        host_main(host.parse_args(rest[1:]).session_id)
+        host_main(hosted.session_id)
         return
     # --enable-sdk: experimental SDK mode (features.py), deliberately left out of --help.
     # Taken before or after the command, for the commands that create sessions, and protocol
@@ -118,11 +122,17 @@ def main() -> None:
     port.add_argument(features.PORT_FLAG, dest="port", metavar="PORT", default=argparse.SUPPRESS,
                       help=f"the local daemon's port (default {features.PORT}, or WHEELHOUSE_PORT, or port= in a "
                       ".env): another for each user on the machine who runs a wheelhouse")
+    # --keepalive-hours: how long a quiet session is kept warm (features.keepalive_hours),
+    # before or after the command, for the app and the daemon, which keeps tab sessions warm
+    keep = argparse.ArgumentParser(add_help=False)
+    keep.add_argument(features.KEEPALIVE_FLAG, dest="keepalive_hours", metavar="N", default=argparse.SUPPRESS,
+                      help=f"keep a quiet session's prompt cache warm for up to N hours (default "
+                      f"{features.KEEPALIVE_HOURS:g}, or keepalive-hours= in a .env; 0 turns it off)")
     p = argparse.ArgumentParser(prog="claude-wheelhouse", description="Sidecar for parallel Claude Code sessions",
-                                parents=[sdk, usage, port])
+                                parents=[sdk, usage, port, keep])
     client_args(p)
     sub = p.add_subparsers(dest="cmd")
-    client_args(sub.add_parser("tui", help="the wheelhouse app (default)", parents=[sdk, usage, port]), sub=True)
+    client_args(sub.add_parser("tui", help="the wheelhouse app (default)", parents=[sdk, usage, port, keep]), sub=True)
     again = sub.add_parser("tutorial", help="have the app offer the tutorial at its next start, ending any "
                            "earlier tutorial session (run with the app and the daemon stopped)",
                            description="Has the app offer the tutorial at its next start, ending any earlier "
@@ -139,7 +149,7 @@ def main() -> None:
     sub.add_parser("monitor", help="the per-session plugin monitor")
     sub.add_parser("protocol", help="print everything wheelhouse puts into a launched session", parents=[sdk])
     daemon = sub.add_parser("daemon", help="serve the wheelhouse over HTTP (the app starts it, or joins it)",
-                            parents=[sdk, usage, port])
+                            parents=[sdk, usage, port, keep])
     daemon.add_argument("--address", default=None, help="the IP address to listen on (default 127.0.0.1; "
                         "never 0.0.0.0): the VPN interface's, to reach it from another machine")
     daemon.add_argument("--name", action="append", default=[], help="another name clients reach this machine by "
@@ -155,6 +165,8 @@ def main() -> None:
         features.set_usage_mode(args.usage_mode)
     if getattr(args, "port", None):
         features.set_port(args.port)
+    if getattr(args, "keepalive_hours", None) is not None:
+        features.set_keepalive_hours(args.keepalive_hours)
 
     if args.cmd == "run":
         from .launch import run as run_session

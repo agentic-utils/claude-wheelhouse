@@ -1,5 +1,5 @@
-"""SDK mode's switch, sdk_enabled(), how plan usage is read, usage_mode(), and the local
-daemon's port, port().
+"""SDK mode's switch, sdk_enabled(), how plan usage is read, usage_mode(), the local
+daemon's port, port(), and how long a quiet session is kept warm, keepalive_hours().
 
 EXPERIMENTAL: SDK mode (sessions run in a wheelhouse host through the Claude Agent SDK:
 host.py, protocol_sdk.md, launch.open_host, and the plan usage readings SDK sessions give,
@@ -29,7 +29,13 @@ The local daemon's port is 7428 unless --port, WHEELHOUSE_PORT or port= in eithe
 says otherwise, in that order (Doug's Q74), so a second user on the machine can run a
 wheelhouse of their own beside the first. A value that isn't a port from 1024 to 65535 is
 refused (BadPort), naming where it was given. The app resolves it, and connect.start
-passes it to the daemon it starts; a daemon started by hand resolves it the same way."""
+passes it to the daemon it starts; a daemon started by hand resolves it the same way.
+
+A session quiet over 150k tokens of context gets a keepalive every 55 minutes until it has
+been quiet keepalive_hours() hours: --keepalive-hours, else keepalive-hours= in either
+.env, in that order (Doug's Q80), else 8. Fractions are allowed, 0 turns the keepalive
+off, and anything else is said once and taken as 8. The hub reads it for tab sessions;
+launch.open_host passes it to each SDK host, and connect.start to the daemon."""
 
 import os
 import sys
@@ -48,6 +54,10 @@ PORT = 7428
 PORT_TAKEN = ("port {port} is taken by another process (another user's wheelhouse?): set port= in "
               "~/.config/claude-wheelhouse/.env")
 _port: str | None = None   # set by the command line (set_port)
+KEEPALIVE_FLAG = "--keepalive-hours"
+KEEPALIVE_KEYS = ("keepalive-hours",)   # lower case only, as port
+KEEPALIVE_HOURS = 8.0
+_keepalive_hours: str | None = None   # set by the command line (set_keepalive_hours)
 _warned: set[str] = set()
 
 
@@ -153,3 +163,33 @@ def port() -> int:
     if not (given.strip().isdecimal() and 1024 <= int(given) <= 65535):
         raise BadPort(f"{where} is {given!r}: give a port from 1024 to 65535")
     return int(given)
+
+
+def set_keepalive_hours(hours: str) -> None:
+    """--keepalive-hours on the command line."""
+    global _keepalive_hours
+    _keepalive_hours = hours
+
+
+def keepalive_hours() -> float:
+    """How long a quiet session is kept warm, in hours: --keepalive-hours, else
+    keepalive-hours= in the starting directory's .env, else the user's, else 8. A number
+    of 0 or more, fractions allowed (0: no keepalive); anything else is said once, on
+    stderr, and taken as 8."""
+    given, where = _keepalive_hours, KEEPALIVE_FLAG
+    if given is None:
+        given, where = next(((env[name], f"{name}= in {path}") for path in env_files()
+                             for env in [read_env(path)] for name in KEEPALIVE_KEYS if name in env), (None, None))
+    if given is None:
+        return KEEPALIVE_HOURS
+    try:
+        hours = float(given)
+    except ValueError:
+        hours = -1.0
+    if hours >= 0 and hours != float("inf"):
+        return hours
+    said = f"claude-wheelhouse: {where} is {given!r}, not a number of hours: the keepalive runs for 8"
+    if said not in _warned:
+        _warned.add(said)
+        print(said, file=sys.stderr, flush=True)
+    return KEEPALIVE_HOURS
