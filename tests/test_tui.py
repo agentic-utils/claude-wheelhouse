@@ -523,26 +523,42 @@ async def test_the_session_description_box(store, sid, tmp_path, synopsis, brief
         assert shown in app._info_text, desc
 
 
+LONG_SYNOPSIS = " ".join(f"Sentence {n} of the synopsis says what the session is up to at some length." for n in range(6))
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("runner_, live, activity, after, desc", [
-    ("sdk", True, "running Bash: make test", "running Bash: make test", "a running hosted session's, last"),
+    ("sdk", True, "running Bash: make test", "running Bash: make test", "a running hosted session's"),
     ("sdk", True, "thinking", "thinking", "whatever it says"),
+    ("sdk", True, "", "", "none yet"),
+    ("sdk", True, "running Bash: " + "x" * 300, "running Bash: " + "x" * 300, "a long one, cropped to its two rows"),
     ("sdk", False, "thinking", "", "none while it isn't running"),
     ("tab", True, "thinking", "", "none for a tab, which has its own terminal"),
 ])
-async def test_the_activity_is_under_the_synopsis(store, tmp_path, monkeypatch, runner_, live, activity, after, desc):
-    """The activity changes from moment to moment: last in the description, nothing moves as it does."""
+async def test_the_activity_has_its_own_rows(store, tmp_path, monkeypatch, runner_, live, activity, after, desc):
+    """D81: the activity sits in two fixed rows under the description's scroll, always in view
+    under a long synopsis, and nothing above it moves, rewraps or gains a scrollbar as it changes."""
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live" if live else "dead")
     sid = store.create_session(str(tmp_path), name="hosted", runner=runner_)
-    store.set_synopsis(sid, "Building the thread view.")
+    store.set_synopsis(sid, LONG_SYNOPSIS)
     store.set_activity(sid, activity)
     app = WheelhouseApp(store)
-    async with app.run_test(size=(180, 40)) as pilot:
+    async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        above, below = app._info_text.split("Building the thread view.")
-        assert activity not in above, f"{desc}: not above the synopsis"
-        assert below.strip() == after, desc
+        box, scroll = app.query_one("#session-info"), app.query_one("#session-info-scroll")
+        line, text = app.query_one("#session-activity"), app.query_one("#session-info-text")
+        assert (app._activity_text, bool(activity) and activity in app._info_text) == (after, False), desc
+        assert line.region.height == 2 and line.region.y == scroll.region.bottom, f"{desc}: two rows under the scroll"
+        assert line.region.bottom <= box.region.bottom, f"{desc}: in view"
+        geometry = (scroll.region, scroll.virtual_size, text.region, scroll.vertical_scrollbar.display)
+    store.set_activity(sid, "")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        scroll, text = app.query_one("#session-info-scroll"), app.query_one("#session-info-text")
+        assert (scroll.region, scroll.virtual_size, text.region, scroll.vertical_scrollbar.display) == geometry, \
+            f"{desc}: the same as with no activity"
 
 
 @pytest.mark.anyio

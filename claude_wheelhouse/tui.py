@@ -1528,6 +1528,10 @@ class WheelhouseApp(App):
     #session-list {{ height: 1fr; min-height: 5; }}   /* on a short terminal the description gives way first */
     #session-info {{ height: 50%; min-height: 3; background: #000000; padding: 0 1; }}
     #session-info-text {{ color: #e8e8e8; }}
+    #session-info-scroll {{ height: 1fr; }}
+    /* the activity's own two rows under the description, always there and never taller, so
+       nothing above moves or rewraps as it appears, changes or clears (D81) */
+    #session-activity {{ height: 2; overflow: hidden; color: #05d9e8; text-style: italic; }}
     /* three to a row, one row each, a blank row between rows (#62). Only the buttons that
        apply show, and a hidden one leaves no hole: the grid places the shown ones in turn.
        The lifecycle buttons, then the conversation's: Mode across two columns, for its
@@ -1662,8 +1666,10 @@ class WheelhouseApp(App):
             with Vertical(id="sessions-pane", classes="panel"):
                 yield SessionList(id="session-list", cursor_type="row")
                 yield Splitter("session-info", "#session-info", "#session-list", "y")
-                with VerticalScroll(id="session-info"):
-                    yield Static(id="session-info-text")
+                with Vertical(id="session-info"):
+                    with VerticalScroll(id="session-info-scroll"):
+                        yield Static(id="session-info-text")
+                    yield Static(id="session-activity")
                 with Grid(id="session-buttons"):
                     for label, id_ in LIFECYCLE:   # compact: one row each
                         yield Button(label, id=id_, compact=True, tooltip=BUTTONS[id_])
@@ -1697,13 +1703,14 @@ class WheelhouseApp(App):
         self.session_list = self.query_one("#session-list", SessionList)
         self.session_list.sink, self.items_table.sink = self.session_sink, self.item_sink
         self.session_info = self.query_one("#session-info-text", Static)
+        self.session_activity = self.query_one("#session-activity", Static)
         # out of the Tab order, which goes from the session list straight to the items: the
         # buttons still click, and the list's own keys press them (SessionList)
         self.conversation_buttons = self.query_one("#conversation-buttons", Grid)
         self.session_buttons = self.query_one("#session-buttons", Grid)
         # the conversation's one stop is its transcript, not this scroll too: its keys
         # still scroll it, an ancestor's bindings (TAB_ORDER)
-        for widget in (self.query_one("#session-info"), self.query_one("#checklist-scroll"), self.detail_scroll,
+        for widget in (self.query_one("#session-info-scroll"), self.query_one("#checklist-scroll"), self.detail_scroll,
                        *self.query("#sessions-pane Grid Button")):
             widget.can_focus = False
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
@@ -2414,6 +2421,10 @@ class WheelhouseApp(App):
         if text.plain != getattr(self, "_info_text", None):
             self._info_text = text.plain
             self.session_info.update(text)
+        activity = self.activity_line(s) if s else ""
+        if activity != getattr(self, "_activity_text", None):
+            self._activity_text = activity
+            self.session_activity.update(activity)
         before = [b.display for b in self.query("#sessions-pane Grid, #sessions-pane Grid Button")]
         for grid, buttons in ((self.session_buttons, self.lifecycle_buttons(s)),
                               (self.conversation_buttons, self.controls(s))):
@@ -2450,10 +2461,11 @@ class WheelhouseApp(App):
             t.append(s["brief"])
         else:
             t.append("No synopsis yet.", style="#777777")
-        # the activity last: it changes from moment to moment, and nothing above it moves as it does
-        if runner(s) == "sdk" and s["activity"] and self.running(s["id"]):
-            t.append(f"\n\n{s['activity']}", style="italic #05d9e8")
         return t
+
+    def activity_line(self, s) -> str:
+        """What a session run in the wheelhouse is doing now, for the line under its description."""
+        return s["activity"] if runner(s) == "sdk" and s["activity"] and self.running(s["id"]) else ""
 
     # selection
 

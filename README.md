@@ -185,9 +185,10 @@ session.
 - **Sessions.** The left-hand column lists every session (parked ones dimmed, at the
   foot of the list's room: they fall there as you park them, and rise back as you unpark
   them). Under it, a description of the highlighted one: its status, ticket, directory
-  and counts, its synopsis, which the session keeps up to date itself (its brief until
-  it sets one), and last what a session run in the wheelhouse is doing now, so nothing
-  moves as that changes, in a box that takes half the column. The dot before each name, and the
+  and counts, and its synopsis, which the session keeps up to date itself (its brief until
+  it sets one), in a box that takes half the column. The box's last two rows always show
+  what a session run in the wheelhouse is doing now, cropped to fit, so nothing above
+  them moves as that changes. The dot before each name, and the
   status in the description, are green when it's live, cyan while it starts or relaunches,
   yellow when stalled (its Claude Code runs, but its wheelhouse MCP server hasn't checked in
   for 2 minutes), magenta while it's been asked to park or end, red when dead (its Claude

@@ -579,7 +579,13 @@ def current(snap: Snapshot, host) -> Snapshot:
 # what the pane says
 
 def tokens(n: float) -> str:
-    return f"{n / 1_000_000:.1f}".removesuffix(".0") + "M" if n >= 1_000_000 else f"{n / 1_000:.0f}k" if n >= 1_000 else str(int(n))
+    """At most three figures, rolling up a unit where rounding would reach 1000: 999.6k is
+    1M, not 1000k, and 123.4M is 123M, so a count stays within five characters."""
+    if n >= 99_950_000:
+        return f"{n / 1_000_000:.0f}M"
+    if n >= 999_500:
+        return f"{n / 1_000_000:.1f}".removesuffix(".0") + "M"
+    return f"{n / 1_000:.0f}k" if n >= 1_000 else str(int(n))
 
 
 def clock(at: float) -> str:
@@ -1100,15 +1106,16 @@ def chart_lines(c: Chart, frame: int, ticks: bool = True) -> list[Text]:
     hourly ticks under it. The shimmer and gradient are the dashboard's."""
     name, series = CHARTS[c.kind]
     head = Text("▸ ", style=f"bold {hexc(ACCENT)}") + Text(name, style=f"bold {hexc(TEXT)}")
-    # the last hour's tokens at the right, a five-character number's room kept so a longer one
-    # never drops a key; the keys that don't fit beside it are left out whole, not cropped
+    # the last hour's tokens at the right, a five-character number's room kept (tokens() never
+    # needs more) so the count's size never changes which keys show. The keys sit a space apart,
+    # and those that don't fit beside it are left out whole, the first ones first (D82)
     note = Text(f"{tokens(c.hour):>5} tokens/last hr", style=hexc(DIM))
     width = MARGIN + len(c.columns)
-    for k, legend in series:
-        key = Text("  ▆", style=hexc(CO[k])) + Text(" " + legend, style=hexc(DIM))
-        if head.cell_len + key.cell_len + 2 + note.cell_len > width:
-            break
-        head += key
+    keys = [Text("▆", style=hexc(CO[k])) + Text(" " + legend, style=hexc(DIM)) for k, legend in series]
+    while keys and head.cell_len + 2 + sum(k.cell_len + 1 for k in keys) - 1 + 2 + note.cell_len > width:
+        keys.pop(0)
+    if keys:
+        head += Text("  ") + Text(" ").join(keys)
     head += Text(" " * max(width - head.cell_len - note.cell_len, 2)) + note
     out = ([Text()] if c.gap else []) + [head]
     for row in range(c.height - 1, -1, -1):

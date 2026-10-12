@@ -48,8 +48,8 @@ highlighted item.
   1, 2 or 5 times a power of ten, so it rescales only when a bar crosses one of those. Context assembly stacks tokens read
   from cache (green), new input (blue) and cache misses (red); output is yellow. At the
   right of each chart's caption row, its series' tokens over the last hour by timestamp
-  (`340k tokens/last hr`), whatever the chart spans; the colour keys that don't fit
-  beside it are left out whole.
+  (`340k tokens/last hr`), whatever the chart spans. The colour keys sit a space apart, and those that don't
+  fit beside it are left out whole, cache first, then new, so miss stays longest (D82).
 
 With no session in context, the panel shows totals across the running sessions.
 
@@ -74,7 +74,7 @@ for all three so they line up. Below the panel, two charts share one hour axis. 
 │cache   1h · warm until 00:45 BST (50m)            │
 │compact 1× · last 23:05 BST · 201k → 52k           │
 ╰───────────────────────────────────────────────────╯
-▸ context assembly  ▆ cache       4.1M tokens/last hr
+▸ context assembly  ▆ miss        4.1M tokens/last hr
           ▇                █▆▂    █   █ █▅       ▇
 531k  ▇   █ █  ▄ ▂      ▃  ███  ▅ █  ▄█ ██▄▅     █ ▄▄
       █▇ ▂█ █▄▇█▅█▁  ▇ ██▃ ███  █ █  ██ ████ ▇ ▇▄█ ██

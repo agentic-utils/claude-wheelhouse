@@ -332,8 +332,17 @@ def test_each_chart_sums_its_last_hour(ago, kind, hour, desc):
     (80, 0, ["cache", "new", "miss"], "0 tokens/last hr", "none"),
     (80, 340_000, ["cache", "new", "miss"], "340k tokens/last hr", "thousands as k"),
     (80, 1_234_567, ["cache", "new", "miss"], "1.2M tokens/last hr", "millions to one place"),
-    (56, 950, ["cache", "new"], "950 tokens/last hr", "a key that doesn't fit beside it is left out whole"),
+    (64, 950, ["cache", "new", "miss"], "950 tokens/last hr", "every key, a space apart, at 64"),
+    (62, 950, ["cache", "new", "miss"], "950 tokens/last hr", "every key, just"),
+    (61, 950, ["new", "miss"], "950 tokens/last hr", "cache is left out first, whole"),
+    (56, 950, ["new", "miss"], "950 tokens/last hr", "new and miss at 56"),
+    (54, 950, ["new", "miss"], "950 tokens/last hr", "new and miss, just"),
+    (53, 950, ["miss"], "950 tokens/last hr", "then new: miss stays longest"),
+    (48, 950, ["miss"], "950 tokens/last hr", "miss, just"),
+    (47, 950, [], "950 tokens/last hr", "then no key"),
     (40, 12_300_000, [], "12.3M tokens/last hr", "no key at the narrowest that holds the caption and count"),
+    (40, 123_400_000, [], "123M tokens/last hr", "100M or more still fits at 40"),
+    (40, 999_600, [], "1M tokens/last hr", "999.6k rolls over to 1M"),
 ])
 def test_the_last_hour_is_on_the_caption_row(width, tokens, keys, note, desc):
     c = stats.chart([Turn(NOW - 60, tokens, 0, 0, 0, None, None, True)], NOW, width=width, height=4)
@@ -341,6 +350,23 @@ def test_the_last_hour_is_on_the_caption_row(width, tokens, keys, note, desc):
     assert head.plain.startswith("▸ context assembly") and head.plain.endswith(" " + note), desc
     assert head.cell_len == width, f"{desc}: right-aligned, {head.cell_len} cells in {width}"
     assert [k for k in ("cache", "new", "miss") if f"▆ {k}" in head.plain] == keys, desc
+
+
+@pytest.mark.parametrize("n, shown, desc", [
+    (0, "0", "none"),
+    (999, "999", "under a thousand, as it is"),
+    (999.7, "999", "a fraction dropped, not rounded up to 1000"),
+    (1_000, "1k", "a thousand"),
+    (999_499, "999k", "just under the rollover"),
+    (999_600, "1M", "999.6k rolls over to 1M, not 1000k"),
+    (1_000_000, "1M", "a million, no .0"),
+    (1_234_567, "1.2M", "millions to one place"),
+    (99_940_000, "99.9M", "one place up to 100M"),
+    (99_960_000, "100M", "rounding to 100M drops the place"),
+    (123_456_789, "123M", "three figures above 100M, so five characters at most"),
+])
+def test_tokens_rounds_to_three_figures(n, shown, desc):
+    assert stats.tokens(n) == shown, desc
 
 
 @pytest.mark.parametrize("colour, f, rgb, desc", [
