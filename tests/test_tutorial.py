@@ -435,7 +435,7 @@ async def test_a_host_that_cant_start_says_why(store, fake_claude):
             await pilot.pause(0.1)
             if why in app._checklist_text:
                 break
-        assert why in app._checklist_text and f"{tutorial.COMMAND} offers it again at the next start" in app._checklist_text
+        assert why in app._checklist_text and f"{tutorial.AGAIN} at the next start" in app._checklist_text
 
 
 def test_an_earlier_host_that_exits_as_its_told_is_no_error(store, monkeypatch):
@@ -499,7 +499,7 @@ async def test_a_stopped_tab_says_why(store, tut, registered, why, desc):
         await pilot.pause()
         assert app.hub.statuses[tut] == "dead", f"{desc}: not running"
         assert why in app._checklist_text, desc
-        assert f"{tutorial.COMMAND} offers it again at the next start" in app._checklist_text
+        assert f"{tutorial.AGAIN} at the next start" in app._checklist_text
         assert "▶ Find the demo in its tab" in app._checklist_text
 
 
@@ -542,23 +542,26 @@ async def test_every_hint_names_the_same_fixed_command(store, monkeypatch, fake_
     """Review 68: the offer, the ? overlay, the dismiss notice and a stopped tutorial's
     checklist all name the command that has it offered again. Guessing it from
     PATH named a command that fails under make run, where uv puts the venv's
-    claude-wheelhouse on PATH but the person's shell can't run it, so every hint names both."""
+    claude-wheelhouse on PATH but the person's shell can't run it, so every hint names both.
+    Each is shown in a running app, where the command is refused, so each says to stop it first."""
     from claude_wheelhouse.hub import Hub
-    said = "claude-wheelhouse tutorial (make tutorial in a source checkout)"
+    said = "With the wheelhouse stopped, claude-wheelhouse tutorial (make tutorial in a source checkout) offers it again"
     monkeypatch.setattr(tutorial.shutil, "which", lambda cmd, *a, **k: f"/venv/bin/{cmd}")   # as under uv run
-    assert f"{said} has it offered again" in keys_help(), "? overlay"
+    assert f"{said} at the next start" in keys_help(), "? overlay"
     monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert f"{said} offers it again" in str(app.screen.query_one("#offer").render()), "offer"
+        offer = app.screen.query_one("#offer")
+        assert str(offer.render()).endswith(f"· {said}"), "offer"
+        assert len(str(offer.render())) <= offer.content_region.width, "offer: one line at 160 columns"
     assert [e.text for e in Hub(store).answer_offer(False).notices] == \
-        [f"{said} offers the tutorial again; ? lists every key"], "dismiss notice"
+        [f"{said}; ? lists every key"], "dismiss notice"
     tutorial.prepare(store)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert f"\n{said} offers it again at the next start" in app._checklist_text, "checklist"
+        assert f"\n{said} at the next start" in app._checklist_text, "checklist"
 
 
 @pytest.mark.parametrize("how", ["restore", "open"])

@@ -498,7 +498,7 @@ class Hub:
         tutorial started."""
         if not take:
             self.store.set_setting(tutorial.OFFER_KEY, "dismissed")
-            return Done(False).say(f"{tutorial.COMMAND} offers the tutorial again; ? lists every key")
+            return Done(False).say(f"{tutorial.AGAIN}; ? lists every key")
         try:
             tutorial.start(self.store)   # always a tab, SDK mode or not
         except Exception as e:   # claude missing, say

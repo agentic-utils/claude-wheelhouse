@@ -145,6 +145,10 @@ really use.
   start Claude Code" if it never registered (wt.exe failed, or Claude Code did), else "its
   tab has closed". A tutorial an earlier version ran in the wheelhouse shows its host's
   stop reason. The checklist shows it, with the command to start afresh (`tutorial.COMMAND`).
+- Every hint shown in a running app (the offer, `?`, that checklist line, the notice on
+  dismissing the offer) says `tutorial.AGAIN`: with the wheelhouse stopped, the command
+  offers it again. The command is refused while the daemon runs, so a hint that left that
+  out sent the person to a refusal.
 - `?` opens every key, generated from the bindings themselves (a test fails if a binding
   has no description), the mouse, every button and the send-mode rules.
 

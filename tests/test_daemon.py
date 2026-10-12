@@ -1103,7 +1103,7 @@ GONE = "host has stopped: Relaunch it from the daemon's machine"
     (True, "sdk", "/adopt", {"id": "adoptee"}, None, REMOTE, 200, "adopting", ["host"], "adopted by a host"),
     (True, "sdk", "/restore-all", {"sids": ["{sid}", "{tut}"]}, None, REMOTE, 200, "tut " + HELD, ["host"],
      "the rest restored, the tutorial held back"),
-    (False, "tab", "/tutorial/offer", {"take": False}, None, REMOTE, 200, "offers the tutorial again", [],
+    (False, "tab", "/tutorial/offer", {"take": False}, None, REMOTE, 200, "the wheelhouse stopped", [],
      "the offer dismissed: nothing opens"),
     (False, "tab", "/sessions/{sid}/relaunch", GONE_HOST, "host", REMOTE, 200, GONE, [],
      "a host gone meanwhile would come back as a tab"),

@@ -73,8 +73,8 @@ make run
 question), then ends the earlier tutorial session, if there is one, and has the next start
 offer the tutorial even though you have other sessions. Your other sessions are kept. It
 refuses while the daemon runs, since the app decides on the offer only as it starts. The
-offer, and the app's help, name `claude-wheelhouse tutorial (make tutorial in a source
-checkout)`: in your clone, that is `make tutorial`.
+offer, and the app's help, say to run `claude-wheelhouse tutorial (make tutorial in a
+source checkout)` with the wheelhouse stopped: in your clone, that is `make tutorial`.
 
 After that, `make run` (`uv run claude-wheelhouse`) opens the wheelhouse, and `N` starts a
 session.
