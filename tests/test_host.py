@@ -1462,76 +1462,6 @@ def finish_at(h, tokens, compacted=False):
                    bool(ended) and all(t.keepalive for t in ended)))
 
 
-def nudges(store, sid):
-    return [(i["status"], i["title"]) for i in store.items(sid) if i["answer"] in (host_mod.NUDGE, host_mod.NUDGE_DONE)]
-
-
-@pytest.mark.parametrize("steps, expected, desc", [
-    ([150_000], [], "under the line: no nudge"),
-    ([220_000], [("open", "context 220k: compact?")], "past it: one question suggesting Compact"),
-    ([220_000, 240_000, 260_000], [("open", "context 220k: compact?")], "one per crossing, not one per turn"),
-    ([220_000, ("compacted", 40_000)], [("closed", "context 220k: compact?")], "compacted: it closes by itself"),
-    ([220_000, ("compacted", 180_000)], [("closed", "context 220k: compact?")],
-     "compacted, if still past 150k: it closes too"),
-    ([220_000, 180_000], [("open", "context 220k: compact?")], "under 200k but not compacted: it stays"),
-    ([220_000, 180_000, 230_000], [("open", "context 220k: compact?")],
-     "hovering about 200k: one nudge, not one per crossing"),
-    ([220_000, 140_000], [("closed", "context 220k: compact?")], "back under 150k by itself: it closes"),
-    ([220_000, ("compacted", 40_000), 210_000], [("open", "context 210k: compact?"),
-                                                 ("closed", "context 220k: compact?")],
-     "a second crossing nudges again"),
-    ([220_000, "close", 240_000], [("closed", "context 220k: compact?")],
-     "closed by the person: not asked again until it has been under"),
-    ([220_000, "restart", 240_000], [("open", "context 220k: compact?")],
-     "a host started again remembers the crossing"),
-])
-def test_compact_nudge(host, store, sid, steps, expected, desc):
-    h = host
-    for step in steps:
-        if step == "close":
-            ref = next(i["ref"] for i in store.items(sid) if i["answer"] == host_mod.NUDGE)
-            store.update_item(sid, ref, status="closed")
-        elif step == "restart":
-            h = Host(store, sid, client_factory=FakeClient, person="doug")
-            run(h.connect())
-        elif isinstance(step, tuple):
-            finish_at(h, step[1], compacted=True)
-        else:
-            finish_at(h, step)
-    assert nudges(store, sid) == expected, desc
-
-
-@pytest.mark.parametrize("compacted, note, desc", [
-    (True, "Compacted: the context is 40k now.", "compacted"),
-    (False, "The context is 40k now.", "back under by itself"),
-])
-def test_compact_nudge_closes_saying_so(host, store, sid, compacted, note, desc):
-    finish_at(host, 220_000)
-    finish_at(host, 40_000, compacted=compacted)
-    ref = store.items(sid)[0]["ref"]
-    assert [m["body"] for m in store.thread(sid, ref)] == [note], desc
-    assert host_mod.HOST_QUESTION != store.item(sid, ref)["answer"], "a restart's deny_stale leaves it be"
-
-
-def test_a_message_on_the_nudge_goes_as_a_general_one(streamed, store, sid):
-    """The session never posted the nudge: a message on it is an ordinary message, and the
-    host answers it there itself, so it never waits on the session."""
-    h = streamed
-    finish_at(h, 220_000)
-    ref = store.items(sid)[0]["ref"]
-    store.send(sid, "not now", ref)
-
-    async def go():
-        reader = asyncio.create_task(h.read())
-        await h.poll()
-        await feed(h, h.client.replay(), text("Fine, carrying on."), result(), None)
-        await reader
-    run(go())
-    assert h.client.queries == ["[wheelhouse] from doug (general):\nnot now"]
-    assert [m["body"] for m in store.thread(sid, ref) if m["author"] == "claude"] == [host_mod.NUDGE_PASSED]
-    assert (sid, ref) not in store.awaiting()
-
-
 H = 3600
 
 
@@ -1547,7 +1477,6 @@ H = 3600
     ({"quiet": 8 * H - 60}, True, "just inside the 8 hours"),
     ({"waits": None}, False, "nothing waits on the person: the session is done, not waiting"),
     ({"waits": "answered"}, False, "its question answered: nothing waits on the person"),
-    ({"waits": "nudge"}, False, "only the host's own Compact nudge: not the session waiting"),
     ({"waits": "decision"}, True, "an unseen decision waits on the person"),
     ({"waits": "permission"}, True, "an open permission waits on the person"),
 ])
@@ -1562,8 +1491,6 @@ def test_keepalive_due(host, store, sid, state, due, desc):
         store.post_item(sid, "decision", "used SQLite", why="over Postgres: no server; undo: swap the DSN")
     elif waits == "permission":
         store.post_item(sid, "permission", "Bash: ls")
-    elif waits == "nudge":
-        store.set_answer(sid, store.post_item(sid, "question", "context 220k: compact?"), host_mod.NUDGE)
     host.tokens = state.get("tokens", 200_000)
     host.last_turn = at - state.get("last", 55 * 60)
     quiet = state.get("quiet", 2 * H)

@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from . import liveness, models, plan_usage, stats, transcript
 from .launch import PROTOCOL_SDK, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT
-from .store import CLOSED, SessionGone, Store, db_path, now, runner
+from .store import SessionGone, Store, db_path, now, runner
 
 POLL_SECONDS = 1.0
 SHELL_POLL_SECONDS = 2.0
@@ -57,16 +57,6 @@ NO_NOTES = (f"idle · Compact got no notes back in {COMPACT_TIMEOUT // 60} quiet
             "so nothing was compacted")
 AWAITING_NOTES = "idle · Compact is waiting for the session's notes (Interrupt cancels it)"
 COMPACTED = "idle · compacted"   # how the activity line starts once a compaction's turn has ended
-# A context past this many tokens gets one question item suggesting Compact, per crossing:
-# every turn re-reads the whole context from the prompt cache
-NUDGE_TOKENS = 200_000
-# once nudged, the context must be compacted, or fall back under this, before the nudge
-# closes: a context hovering about NUDGE_TOKENS never brings one nudge after another
-NUDGE_RESET_TOKENS = 150_000
-# an item's answer column marks the host's Compact nudge, until the context is back under
-# NUDGE_TOKENS; then it is marked done, and the next crossing nudges again
-NUDGE = '{"from": "context nudge"}'
-NUDGE_DONE = '{"from": "context nudge", "done": true}'
 # Keepalive: the hosts' prompt cache lives an hour (1 h cache writes) and a cold one is
 # written again whole. A session over KEEPALIVE_TOKENS, quiet and waiting on the person,
 # gets a tiny turn KEEPALIVE_AFTER seconds after its last, to keep it warm, until it has
@@ -74,9 +64,6 @@ NUDGE_DONE = '{"from": "context nudge", "done": true}'
 KEEPALIVE_TOKENS = 150_000
 KEEPALIVE_AFTER = 55 * 60
 KEEPALIVE_FOR = 8 * 3600
-# the reply on a message the person sent on the Compact nudge, which the session never
-# posted: it goes to the session as a general message
-NUDGE_PASSED = "Passed to the session as a general message: this question is the wheelhouse's, not the session's."
 KEEPALIVE_TEXT = ("[wheelhouse] Keepalive: the person is away, and this turn only keeps your prompt cache "
                   "warm. Reply with the one word ok and do nothing else: no tools, no wheelhouse calls.")
 # an answer's `n:` or `Qn:` markers: at the start, or after a comma, semicolon or line
@@ -114,17 +101,6 @@ def keep_notes(text: str | None, nonce: str) -> str | None:
     tag = rf"<keep\s+id=[\"']?{re.escape(nonce)}[\"']?\s*>"
     blocks = re.findall(rf"^[ \t]*{tag}[ \t]*\n(.*?)^[ \t]*</keep>[ \t]*$", text or "", re.DOTALL | re.MULTILINE)
     return blocks[-1].strip() if blocks else None
-
-
-def nudge_item(tokens: int) -> tuple[str, str]:
-    """The Compact nudge's title and body."""
-    k = tokens // 1000
-    return (f"context {k}k: compact?",
-            f"This session's context is {k}k tokens, and every turn re-reads all of it. Compact "
-            "(C, or the Compact button) asks the session what to keep, then compacts it with that. "
-            "This closes by itself once the session is compacted; close it (Delete) to leave the "
-            "session as it is. It isn't asked again until the context has been under "
-            f"{NUDGE_TOKENS // 1000}k and passes it once more.")
 
 
 def tool_summary(name: str, inp: dict) -> str:
@@ -556,21 +532,16 @@ class Host:
             if (item is None or item["status"] == "closed") and not fut.done():
                 fut.set_result(None)
         if turn:
-            # a message on the Compact nudge goes as a general one: the session never posted it
-            nudged = {m["item_ref"] for m in turn if m["item_ref"] and self.is_nudge(m["item_ref"])}
             refs = {}
             for m in turn:
-                if m["item_ref"] and m["item_ref"] not in nudged:
+                if m["item_ref"]:
                     refs[m["item_ref"]] = max(refs.get(m["item_ref"], 0), m["id"])
-            shown = [{**dict(m), "item_ref": None} if m["item_ref"] in nudged else m for m in turn]
             try:
-                await self.turn(format_turn(shown, self.person), refs=refs)
+                await self.turn(format_turn(turn, self.person), refs=refs)
             except BaseException:   # not sent: left for the next host to deliver
                 self.store.release(turn)
                 raise
             await self.confirm(turn)
-            for ref in nudged:
-                self.store.host_reply(self.sid, ref, NUDGE_PASSED)
         for what, text in REQUEST_TEXT.items():
             asked = session[f"{what}_requested_at"]
             if asked and session[f"{what}_told_at"] != asked and self.store.tell_request(self.sid, what, asked):
@@ -607,18 +578,13 @@ class Host:
                 and at - self.quiet_since < KEEPALIVE_FOR and self.waits_on_person())
 
     def waits_on_person(self) -> bool:
-        """Whether the session waits on the person: an open question (not the host's Compact
-        nudge), an unseen decision or an open permission. A permission or AskUserQuestion
-        waits inside a running turn, where no keepalive is sent (keepalive_due), so in
-        practice it is the questions and decisions the session posts itself that bring one."""
-        return any((i["kind"] == "question" and i["status"] == "open" and i["answer"] not in (NUDGE, NUDGE_DONE))
+        """Whether the session waits on the person: an open question, an unseen decision or
+        an open permission. A permission or AskUserQuestion waits inside a running turn,
+        where no keepalive is sent (keepalive_due), so in practice it is the questions and decisions the session posts itself that bring one."""
+        return any((i["kind"] == "question" and i["status"] == "open")
                    or (i["kind"] == "decision" and i["status"] == "unseen")
                    or (i["kind"] == "permission" and i["status"] == "open")
                    for i in self.store.items(self.sid, include_closed=False))
-
-    def is_nudge(self, ref: str) -> bool:
-        item = self.store.item(self.sid, ref)
-        return item is not None and item["answer"] in (NUDGE, NUDGE_DONE)
 
     def forget_delivered(self) -> None:
         """Drop remembered ids someone else has since recorded as delivered (a shell tab's
@@ -753,7 +719,6 @@ class Host:
         tokens = await self.context()
         if tokens is not None:
             self.tokens = tokens
-            self.nudge(tokens, compacted=self.compacted_from is not None)
         if not self.pending:
             self.last_turn = time.monotonic()
             if self.quiet_since is None:
@@ -786,25 +751,6 @@ class Host:
             self.store.set_context(self.sid, tokens, top)
             return tokens
         return None
-
-    def nudge(self, tokens: int, compacted: bool = False) -> None:
-        """Past NUDGE_TOKENS, one question item suggesting Compact, for this crossing: the
-        store remembers it (NUDGE), so a host started again, or the person closing it, never
-        brings a second. It closes, saying so, once the session is compacted or back under
-        NUDGE_RESET_TOKENS, and the next crossing nudges again."""
-        nudges = [i for i in self.store.items(self.sid) if i["answer"] == NUDGE]
-        if tokens >= NUDGE_TOKENS:
-            if not nudges:
-                ref = self.store.post_item(self.sid, "question", *nudge_item(tokens))
-                self.store.set_answer(self.sid, ref, NUDGE)
-            return
-        if not (compacted or tokens < NUDGE_RESET_TOKENS):
-            return
-        for item in nudges:
-            self.store.set_answer(self.sid, item["ref"], NUDGE_DONE)
-            if item["status"] not in CLOSED:
-                self.store.update_item(self.sid, item["ref"], status="closed",
-                                       note=f"{'Compacted: t' if compacted else 'T'}he context is {tokens // 1000}k now.")
 
     # hand-over to an interactive tab
 

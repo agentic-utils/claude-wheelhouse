@@ -299,16 +299,8 @@ an hour idle waiting on the person cost $10.60, and one host restart rewrote 429
 The hosts' cache writes are the 1 h kind (the transcripts' `ephemeral_1h_input_tokens`),
 so an hour's quiet is what turns the cache cold.
 
-- **Compact nudge.** When a turn ends with the context at `NUDGE_TOKENS` (200k) or more,
-  the host posts one question item, `context 220k: compact?`, with Compact a key away (`C`
-  with it selected). It is one per crossing: the item's answer column (`NUDGE`) remembers
-  it, so neither a restarted host nor the person closing it brings a second. Once a turn
-  ends compacted, or under `NUDGE_RESET_TOKENS` (150k), the item closes with a note, and
-  the next crossing nudges afresh: a context hovering about 200k brings one nudge, not one
-  per crossing. A message the person sends on it goes to the session as a general one
-  (the session never posted it), and the host answers it there itself.
 - **Keepalive.** A session whose last turn ended over `KEEPALIVE_TOKENS` (150k), with
-  nothing running and waiting on the person (an open question other than the nudge, or an
+  nothing running and waiting on the person (an open question, or an
   unseen decision, of its own: a permission or AskUserQuestion waits inside a running turn,
   so never brings one), gets a tiny turn from the host
   `KEEPALIVE_AFTER` (55 min) after its last one, telling it to reply with one word and do
