@@ -86,6 +86,17 @@ def tutorial_again(yes: bool) -> None:
           + "; the wheelhouse's next start (make run in a source checkout) offers the tutorial")
 
 
+def open_items() -> None:
+    """claude-wheelhouse open-items: the session's open tasks and questions
+    (launch.after_compaction), printed for the plugin's SessionStart hook after a compaction,
+    which Claude Code adds to the context. Nothing when there are none, or no session."""
+    from .launch import after_compaction
+    from .store import Store
+    sid = os.environ.get("WHEELHOUSE_SESSION_ID")
+    if sid and (text := after_compaction(Store(), sid)):
+        print(f"[wheelhouse] {text}")
+
+
 def main() -> None:
     # host: a hosted session's process, started by the wheelhouse in SDK mode alone
     # (launch.open_host runs `host <id>`), so taken before the main parser: neither --help
@@ -147,6 +158,8 @@ def main() -> None:
     run.add_argument("session_id")
     sub.add_parser("mcp", help="the per-session MCP server (stdio)")
     sub.add_parser("monitor", help="the per-session plugin monitor")
+    sub.add_parser("open-items", help="inside a launched tab: print the session's open items (the plugin's "
+                   "hook, after a compaction)")
     sub.add_parser("protocol", help="print everything wheelhouse puts into a launched session", parents=[sdk])
     daemon = sub.add_parser("daemon", help="serve the wheelhouse over HTTP (the app starts it, or joins it)",
                             parents=[sdk, usage, port, keep])
@@ -207,6 +220,8 @@ def main() -> None:
             sys.exit(f"claude-wheelhouse: {e}{first}")
     elif args.cmd == "tutorial":
         tutorial_again(args.yes)
+    elif args.cmd == "open-items":
+        open_items()
     elif args.cmd == "monitor":
         from .monitor import main as monitor_main
         monitor_main()

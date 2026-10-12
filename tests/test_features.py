@@ -281,3 +281,31 @@ def test_a_host_takes_the_keepalive_hours_it_is_started_with(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", "host", "abc", "--keepalive-hours", "2"])
     cli.main()
     assert seen == [("abc", 2)]
+
+
+@pytest.mark.parametrize("items, printed, desc", [
+    ([], "", "nothing open: nothing printed"),
+    ([("task", "waiting", "build it"), ("task", "done", "old")],
+     "[wheelhouse] After the compaction, these items are still open in the wheelhouse. Keep them current with "
+     "update_item; correct any that's finished:\nT1 [waiting] build it\n", "the open items, with titles"),
+    (None, "", "no session: nothing printed"),
+])
+def test_open_items_prints_the_list_for_the_hook(store, sid, monkeypatch, capsys, items, printed, desc):
+    for kind, status, title in items or []:
+        store.post_item(sid, kind, title, status=status)
+    if items is None:
+        monkeypatch.delenv("WHEELHOUSE_SESSION_ID", raising=False)
+    else:
+        monkeypatch.setenv("WHEELHOUSE_SESSION_ID", sid)
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", "open-items"])
+    cli.main()
+    assert capsys.readouterr().out == printed, desc
+
+
+def test_the_plugin_runs_open_items_after_a_compaction():
+    import json
+
+    from claude_wheelhouse import launch
+    hooks = json.loads((launch.PLUGIN_DIR / "hooks" / "hooks.json").read_text())["hooks"]["SessionStart"]
+    assert [h["matcher"] for h in hooks] == ["compact"]
+    assert hooks[0]["hooks"][0]["command"].endswith("-m claude_wheelhouse open-items")
