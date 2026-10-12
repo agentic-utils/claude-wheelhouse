@@ -229,8 +229,9 @@ session.
   pending Park or Stop & Forget is pressed again to choose: `C` cancels the request, `F` forces
   it (the session is stopped at once, without its steps), `Esc` leaves it be. In the session's
   tab, `/wheelhouse park` and `/wheelhouse end` do the same from there. A tab closes once its
-  session stops, however it stopped: its shell exits cleanly after Claude Code, which Windows
-  Terminal's default `closeOnExit` takes as the end of the tab. If the wheelhouse can't start
+  session stops, by `/exit` or by the wheelhouse: its shell then exits cleanly, which Windows
+  Terminal's default `closeOnExit` takes as the end of the tab. If Claude Code fails instead,
+  the tab stays open on its error. If the wheelhouse can't start
   a session in its tab, the tab says why and waits for Enter. The wheelhouse never deletes
   anything by itself.
   The buttons stay out of the Tab order, and each has a key: with the list focused, `R` renames, `L` relaunches

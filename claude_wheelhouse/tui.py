@@ -3330,8 +3330,10 @@ class WheelhouseApp(App):
             self.told(self.client.cancel_request(sid, what))
             self.refresh_data()
         elif choice == "force":
+            n = len(self.client.drafts(sid)) if what == "end" else 0
             warning = ("Stops it now and deletes its wheelhouse data, without its session-end steps." if what == "end"
                        else "Stops it now and parks it, without its handoff notes.")
+            warning += f" {n} queued answer(s) will be discarded." if n else ""
             self.push_screen(Confirm(f"Force {VERBS[('active', what)][0]} {self.label(sid)}? {warning}"),
                              lambda yes: yes and self.force(sid, what))
 

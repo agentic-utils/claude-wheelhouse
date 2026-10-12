@@ -19,8 +19,10 @@ def test_wt_argv(over, title, cwd, desc):
     argv = launch.wt_argv(row(**over), python="/py", distro="Ubuntu", user="u", shell="/bin/zsh")
     assert argv[:8] == ["cmd.exe", "/c", "wt.exe", "-w", "wheelhouse-u", "new-tab", "--title", title], desc
     assert argv[argv.index("--cd") + 1] == cwd, desc
-    # not exec'd, then exit 0: the tab closes however Claude Code ended (143 when stopped)
-    assert argv[-4:] == ["--", "/bin/zsh", "-lic", "/py -m claude_wheelhouse run abc-123; exit 0"], desc
+    # not exec'd: a stop's 143 or 137 exits 0 and closes the tab; any other code is kept
+    assert argv[-4:] == ["--", "/bin/zsh", "-lic", "/py -m claude_wheelhouse run abc-123; "
+                         "rc=$?; if [ $rc -eq 143 -o $rc -eq 137 ]; then exit 0; fi; exit $rc"], desc
+    assert not launch.CMD_META & set(argv[-1]), f"{desc}: cmd.exe would act on its own operators"
 
 
 @pytest.mark.parametrize("over, resume, has, lacks, last, desc", [

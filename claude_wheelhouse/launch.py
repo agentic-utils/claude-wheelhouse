@@ -121,10 +121,12 @@ def wt_argv(session, *, python: str, distro: str, user: str, shell: str) -> list
     return [
         "cmd.exe", "/c", "wt.exe", "-w", window_name(user), "new-tab", "--title", tab_title(session),
         "wsl.exe", "-d", distro, "-u", user, "--cd", session["cwd"].replace(";", r"\;"),
-        # not exec'd: the shell exits 0 after it, however Claude Code ended (143 once stopped
-        # by a signal), so Windows Terminal's default closeOnExit closes the tab. run itself
-        # execs claude, so the registered pid is still Claude Code's
-        "--", shell, "-lic", f"{shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}; exit 0",
+        # not exec'd: a stop by the wheelhouse (143 for SIGTERM, 137 for the group's SIGKILL)
+        # exits the shell 0, so Windows Terminal's default closeOnExit closes the tab; any other
+        # failure keeps its code, and the tab stays open on its error. run itself execs
+        # claude, so the registered pid is still Claude Code's
+        "--", shell, "-lic", f"{shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}; "
+                             "rc=$?; if [ $rc -eq 143 -o $rc -eq 137 ]; then exit 0; fi; exit $rc",
     ]
 
 
