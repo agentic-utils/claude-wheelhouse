@@ -63,9 +63,11 @@ def tutorial_again(yes: bool) -> None:
     from . import tutorial
     from .connect import STOP, holder
     from .store import Store, db_path
-    if held := holder(db_path().parent):
-        sys.exit(f"claude-wheelhouse: the wheelhouse daemon is running ({held}): quit the app, stop the daemon "
-                 f"with {STOP} (make stop in a source checkout), then run this again")
+    def refuse_while_running() -> None:
+        if held := holder(db_path().parent):
+            sys.exit(f"claude-wheelhouse: the wheelhouse daemon is running ({held}): quit the app, stop the daemon "
+                     f"with {STOP} (make stop in a source checkout), then run this again")
+    refuse_while_running()
     if not yes:
         try:
             said = input("This ends the tutorial session, if there is one (your other sessions are kept), and the "
@@ -75,6 +77,7 @@ def tutorial_again(yes: bool) -> None:
         if said.strip().lower() not in ("y", "yes"):
             print("nothing changed")
             return
+        refuse_while_running()   # again: the app may have been started while the question waited
     ended = tutorial.reset(Store())
     print(("ended the earlier tutorial session" if ended else "no tutorial session to end")
           + "; the wheelhouse's next start (make run in a source checkout) offers the tutorial")

@@ -172,19 +172,20 @@ def daemon_lock(db_file):
 
 
 @pytest.mark.parametrize("argv, said, daemon, reset, desc", [
-    (["tutorial"], "y", False, True, "y: reset"),
-    (["tutorial"], "YES\n", False, True, "yes, in any case: reset"),
-    (["tutorial"], "n", False, False, "n: nothing changed"),
-    (["tutorial"], "", False, False, "Enter: no, the default"),
-    (["tutorial"], EOFError, False, False, "no input to read: no"),
-    (["tutorial", "--yes"], None, False, True, "--yes: reset without asking"),
-    (["tutorial", "-y"], None, True, False, "a daemon running: refused, even with --yes"),
-    (["tutorial"], None, True, False, "a daemon running: refused before asking"),
+    (["tutorial"], "y", None, True, "y: reset"),
+    (["tutorial"], "YES\n", None, True, "yes, in any case: reset"),
+    (["tutorial"], "n", None, False, "n: nothing changed"),
+    (["tutorial"], "", None, False, "Enter: no, the default"),
+    (["tutorial"], EOFError, None, False, "no input to read: no"),
+    (["tutorial", "--yes"], None, None, True, "--yes: reset without asking"),
+    (["tutorial", "-y"], None, "before", False, "a daemon running: refused, even with --yes"),
+    (["tutorial"], None, "before", False, "a daemon running: refused before asking"),
+    (["tutorial"], "y", "asking", False, "a daemon started while it asked: refused after the answer"),
 ])
 def test_the_tutorial_command_resets_the_offer(store, tmp_path, monkeypatch, capsys, request,
                                                argv, said, daemon, reset, desc):
     from claude_wheelhouse import cli
-    if daemon:
+    if daemon == "before":
         request.getfixturevalue("daemon_lock")
     other = store.create_session(str(tmp_path), name="real work")
     store.post_item(other, "task", "keep me")
@@ -194,6 +195,8 @@ def test_the_tutorial_command_resets_the_offer(store, tmp_path, monkeypatch, cap
 
     def ask(prompt):
         asked.append(prompt)
+        if daemon == "asking":   # the app started while the question waited
+            request.getfixturevalue("daemon_lock")
         if said is EOFError:
             raise EOFError
         return said
@@ -205,7 +208,7 @@ def test_the_tutorial_command_resets_the_offer(store, tmp_path, monkeypatch, cap
             cli.main()
     else:
         cli.main()
-    assert bool(asked) is (said is not None), f"{desc}: asked only without --yes, and never with a daemon"
+    assert bool(asked) is (said is not None), f"{desc}: asked only without --yes, and never with a daemon already running"
     assert store.setting(tutorial.OFFER_KEY) == (tutorial.RESET if reset else "dismissed"), desc
     assert (store.session(tut) is None) is reset, f"{desc}: the tutorial session ended only on a reset"
     assert [it["title"] for it in store.items(other)] == ["keep me"], f"{desc}: other sessions are kept"
