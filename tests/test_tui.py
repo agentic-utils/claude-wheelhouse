@@ -549,7 +549,9 @@ async def test_the_activity_has_its_own_rows(store, tmp_path, monkeypatch, runne
         box, scroll = app.query_one("#session-info"), app.query_one("#session-info-scroll")
         line, text = app.query_one("#session-activity"), app.query_one("#session-info-text")
         assert (app._activity_text, bool(activity) and activity in app._info_text) == (after, False), desc
-        assert line.region.height == 2 and line.region.y == scroll.region.bottom, f"{desc}: two rows under the scroll"
+        rows = 2 if runner_ == "sdk" else 0   # a tab's session has no activity, so no rows for one
+        assert line.region.height == rows and (not rows or line.region.y == scroll.region.bottom), \
+            f"{desc}: {rows} rows under the scroll"
         assert line.region.bottom <= box.region.bottom, f"{desc}: in view"
         geometry = (scroll.region, scroll.virtual_size, text.region, scroll.vertical_scrollbar.display)
     store.set_activity(sid, "")

@@ -1526,7 +1526,7 @@ class WheelhouseApp(App):
     .answer-hint {{ color: #777777; height: 1; }}
     #thread-scroll {{ height: 1fr; }}
     #session-list {{ height: 1fr; min-height: 5; }}   /* on a short terminal the description gives way first */
-    #session-info {{ height: 50%; min-height: 3; background: #000000; padding: 0 1; }}
+    #session-info {{ height: 50%; min-height: 5; background: #000000; padding: 0 1; }}
     #session-info-text {{ color: #e8e8e8; }}
     #session-info-scroll {{ height: 1fr; }}
     /* the activity's own two rows under the description, always there and never taller, so
@@ -2421,6 +2421,8 @@ class WheelhouseApp(App):
         if text.plain != getattr(self, "_info_text", None):
             self._info_text = text.plain
             self.session_info.update(text)
+        # only a session run in the wheelhouse has an activity: a tab's would be two blank rows
+        self.session_activity.display = bool(s) and runner(s) == "sdk"
         activity = self.activity_line(s) if s else ""
         if activity != getattr(self, "_activity_text", None):
             self._activity_text = activity
