@@ -432,6 +432,13 @@ a key spelt any other way isn't read.
 | `PORT` | `WHEELHOUSE_PORT` | `--port N` | 7428 |
 | `USAGE_MODE` | `WHEELHOUSE_USAGE_MODE` | `--usage-mode oneshot\|persistent` | `oneshot` |
 | `KEEPALIVE_HOURS` | `WHEELHOUSE_KEEPALIVE_HOURS` | `--keepalive-hours N` | 8 (0 turns it off) |
+| `ANIMATION_FPS` | `WHEELHOUSE_ANIMATION_FPS` | `--animation-fps N` | 10 (0 turns animation off) |
+
+`ANIMATION_FPS` sets how many frames a second the title's shimmer, the session eyes and
+the stats bars move; fractions are allowed. While the terminal window is unfocused and no
+session is busy, the animation rests, and starts again when you come back or a session
+gets busy. The daemon reads only the settings it uses: `PORT`, `USAGE_MODE` and
+`KEEPALIVE_HOURS`.
 
 ## Where state lives
 

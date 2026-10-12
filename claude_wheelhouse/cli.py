@@ -140,11 +140,17 @@ def main() -> None:
     keep.add_argument(features.KEEPALIVE_FLAG, dest="keepalive_hours", metavar="N", default=argparse.SUPPRESS,
                       help=f"keep a quiet session's prompt cache warm for up to N hours (default "
                       f"{features.KEEPALIVE_HOURS:g}, or WHEELHOUSE_KEEPALIVE_HOURS, or KEEPALIVE_HOURS= in a .env; 0 turns it off)")
+    # --animation-fps: the app's animation frame rate (features.animation_fps), before or after tui
+    fps = argparse.ArgumentParser(add_help=False)
+    fps.add_argument(features.ANIMATION_FLAG, dest="animation_fps", metavar="N", default=argparse.SUPPRESS,
+                     help=f"animate the title, the eyes and the stats bars N frames a second (default "
+                     f"{features.ANIMATION_FPS:g}, or WHEELHOUSE_ANIMATION_FPS, or ANIMATION_FPS= in a .env; "
+                     "0 turns animation off)")
     p = argparse.ArgumentParser(prog="claude-wheelhouse", description="Sidecar for parallel Claude Code sessions",
-                                parents=[sdk, usage, port, keep])
+                                parents=[sdk, usage, port, keep, fps])
     client_args(p)
     sub = p.add_subparsers(dest="cmd")
-    client_args(sub.add_parser("tui", help="the wheelhouse app (default)", parents=[sdk, usage, port, keep]), sub=True)
+    client_args(sub.add_parser("tui", help="the wheelhouse app (default)", parents=[sdk, usage, port, keep, fps]), sub=True)
     again = sub.add_parser("tutorial", help="have the app offer the tutorial at its next start, ending any "
                            "earlier tutorial session (run with the app and the daemon stopped)",
                            description="Has the app offer the tutorial at its next start, ending any earlier "
@@ -181,6 +187,8 @@ def main() -> None:
         features.set_port(args.port)
     if getattr(args, "keepalive_hours", None) is not None:
         features.set_keepalive_hours(args.keepalive_hours)
+    if getattr(args, "animation_fps", None) is not None:
+        features.set_animation_fps(args.animation_fps)
 
     if args.cmd == "run":
         from .launch import run as run_session

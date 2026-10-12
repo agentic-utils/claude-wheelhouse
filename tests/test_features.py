@@ -339,6 +339,50 @@ def test_a_host_takes_the_keepalive_hours_it_is_started_with(monkeypatch):
     assert seen == [("abc", 2)]
 
 
+@pytest.mark.parametrize("flag, install_env, config_env, fps, warns, desc", [
+    (None, None, None, 10, False, "nothing given: 10"),
+    ("4", None, None, 4, False, "the flag"),
+    (None, "ANIMATION_FPS=5", None, 5, False, "the install directory's .env"),
+    (None, None, "ANIMATION_FPS=6", 6, False, "the user's .env"),
+    (None, "ANIMATION_FPS=5", "ANIMATION_FPS=6", 5, False, "the install directory's wins"),
+    ("4", "ANIMATION_FPS=5", None, 4, False, "the flag wins over .env"),
+    ("env", "ANIMATION_FPS=5", None, 3, False, "WHEELHOUSE_ANIMATION_FPS before .env"),
+    (None, "animation_fps=5", None, 10, False, "the key in lower case: not read"),
+    (None, "ANIMATION_FPS=2.5", None, 2.5, False, "a fraction"),
+    ("0", None, None, 0, False, "0: no animation"),
+    (None, "ANIMATION_FPS=fast", None, 10, True, "a bad value: said once, and 10"),
+    ("-1", None, None, 10, True, "a negative flag: said once, and 10"),
+    ("inf", None, None, 10, True, "no end to it: said once, and 10"),
+])
+def test_animation_fps(tmp_path, monkeypatch, capsys, flag, install_env, config_env, fps, warns, desc):
+    install, config = tmp_path / "install.env", tmp_path / "config.env"
+    monkeypatch.setattr(features, "env_files", lambda: [install, config])
+    for path, text in ((install, install_env), (config, config_env)):
+        if text:
+            path.write_text(text + "\n")
+    if flag == "env":
+        monkeypatch.setenv("WHEELHOUSE_ANIMATION_FPS", "3")
+    elif flag:
+        features.set_animation_fps(flag)
+    assert [features.animation_fps(), features.animation_fps()] == [fps, fps], desc
+    err = capsys.readouterr().err
+    assert err.count("not a number of frames a second") == (1 if warns else 0), f"{desc}: said once at most: {err!r}"
+
+
+@pytest.mark.parametrize("argv, fps, desc", [
+    ([], 10, "no flag"),
+    (["--animation-fps", "2"], 2, "before tui, or with no command"),
+    (["tui", "--animation-fps", "0.5"], 0.5, "after tui"),
+    (["--animation-fps", "0"], 0, "0"),
+])
+def test_the_animation_fps_flag_reaches_the_app(monkeypatch, argv, fps, desc):
+    seen = []
+    monkeypatch.setattr(cli, "run_app", lambda args: seen.append(features.animation_fps()))
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", *argv])
+    cli.main()
+    assert seen == [fps], desc
+
+
 @pytest.mark.parametrize("items, printed, desc", [
     ([], "", "nothing open: nothing printed"),
     ([("task", "waiting", "build it"), ("task", "done", "old")],

@@ -37,7 +37,13 @@ A session quiet over 150k tokens of context gets a keepalive every 55 minutes un
 been quiet keepalive_hours() hours: --keepalive-hours, else WHEELHOUSE_KEEPALIVE_HOURS, else
 KEEPALIVE_HOURS= in either .env, in that order (Doug's Q80), else 8. Fractions are allowed, 0 turns the keepalive
 off, and anything else is said once and taken as 8. The hub reads it for tab sessions;
-launch.open_host passes it to each SDK host, and connect.start to the daemon."""
+launch.open_host passes it to each SDK host, and connect.start to the daemon.
+
+The app's animation (the title's shimmer, the Cylon eyes, the stats bars) runs at
+animation_fps() frames a second: --animation-fps, else WHEELHOUSE_ANIMATION_FPS, else
+ANIMATION_FPS= in either .env, else 10 (Doug's Q82, D85). Fractions are allowed, 0 turns
+animation off (the title and eyes drawn still), and anything else is said once and taken
+as 10."""
 
 import os
 import sys
@@ -60,6 +66,10 @@ KEEPALIVE_FLAG = "--keepalive-hours"
 KEEPALIVE_KEY = "KEEPALIVE_HOURS"
 KEEPALIVE_HOURS = 8.0
 _keepalive_hours: str | None = None   # set by the command line (set_keepalive_hours)
+ANIMATION_FLAG = "--animation-fps"
+ANIMATION_KEY = "ANIMATION_FPS"
+ANIMATION_FPS = 10.0
+_animation_fps: str | None = None   # set by the command line (set_animation_fps)
 _warned: set[str] = set()
 # the directory the package runs from: the checkout, as uv sync installs it (editable), so
 # the same .env whatever directory the app, the daemon or a tab is started in
@@ -202,3 +212,27 @@ def keepalive_hours() -> float:
         return hours
     _say(f"claude-wheelhouse: {where} is {value!r}, not a number of hours: the keepalive runs for 8")
     return KEEPALIVE_HOURS
+
+
+def set_animation_fps(fps: str) -> None:
+    """--animation-fps on the command line."""
+    global _animation_fps
+    _animation_fps = fps
+
+
+def animation_fps() -> float:
+    """The app's animation frames a second: --animation-fps, else WHEELHOUSE_ANIMATION_FPS,
+    else ANIMATION_FPS= in the install directory's .env, else the user's, else 10. A number
+    of 0 or more, fractions allowed (0: no animation); anything else is said once, on
+    stderr, and taken as 10."""
+    if (setting := given(_animation_fps, ANIMATION_FLAG, ANIMATION_KEY)) is None:
+        return ANIMATION_FPS
+    value, where = setting
+    try:
+        fps = float(value)
+    except ValueError:
+        fps = -1.0
+    if 0 <= fps < float("inf"):
+        return fps
+    _say(f"claude-wheelhouse: {where} is {value!r}, not a number of frames a second: the animation runs at 10")
+    return ANIMATION_FPS

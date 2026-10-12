@@ -59,6 +59,7 @@ def usage_mode_default(monkeypatch):
     monkeypatch.setattr(features, "_usage_mode", None)
     monkeypatch.setattr(features, "_port", None)
     monkeypatch.setattr(features, "_keepalive_hours", None)
+    monkeypatch.setattr(features, "_animation_fps", None)
     monkeypatch.setattr(features, "_warned", set())
 
 
@@ -189,7 +190,7 @@ def clock(monkeypatch):
                 raise AssertionError(f"the clock fixture doesn't know the app's interval {callback.__name__}")
             clock.bind(app)
             clock.held.add(callback.__name__)
-            return SimpleNamespace(stop=lambda: None)
+            return SimpleNamespace(stop=lambda: None, pause=lambda: None, resume=lambda: None)   # as Timer (pace)
         return every(app, delay, callback, **kw)
 
     def timer(app, delay, callback=None, **kw):

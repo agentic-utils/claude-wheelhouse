@@ -3325,6 +3325,59 @@ async def test_the_stats_shimmer_and_eyes_rest_while_typing(store, sid, monkeypa
         assert (app.session_list.eye_frame != eye) == moves, desc
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("fps, interval, desc", [
+    (None, 0.1, "the default: 10 a second"),
+    ("2.5", 0.4, "a fraction"),
+    ("0", None, "0: no animation at all"),
+])
+async def test_the_animation_runs_at_the_rate_given(store, sid, monkeypatch, fps, interval, desc):
+    monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: True)
+    if fps is not None:
+        features.set_animation_fps(fps)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert (app.animation and app.animation._interval) == interval, desc
+        if interval is None:   # still, and drawn: the title's first look, the busy row's eye where it starts
+            await pilot.pause(0.3)
+            app.tick()
+            assert (app.frame, app.session_list.eye_frame) == (0, 0), desc
+            assert app.title_bar.look == tui.shimmer_phase(0), desc
+            assert sid in app.session_list.eyes, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("busy, steps, animating, desc", [
+    (False, (), True, "focused, as a terminal that never reports focus counts: runs"),
+    (False, ("blur",), False, "unfocused, nothing busy: rests"),
+    (True, ("blur",), True, "unfocused, a session busy: runs"),
+    (False, ("blur", "focus"), True, "focus back: runs again"),
+    (False, ("blur", "busy"), True, "a session turns busy while unfocused: runs again"),
+    (True, ("blur", "idle"), False, "the busy session goes quiet while unfocused: rests"),
+    (False, ("blur", "busy", "idle", "focus"), True, "rests, runs, rests, then focus: runs"),
+])
+async def test_the_animation_rests_unfocused_only_when_nothing_is_busy(store, sid, monkeypatch, busy, steps,
+                                                                        animating, desc):
+    state = {"busy": busy}
+    monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: state["busy"])
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        for step in steps:
+            if step in ("blur", "focus"):
+                app.post_message(events.AppBlur() if step == "blur" else events.AppFocus())
+            else:
+                state["busy"] = step == "busy"
+                app.refresh_data()
+            await pilot.pause()
+        assert app.animating is animating, desc
+        frame, title = app.frame, app.title_bar.look
+        await pilot.pause(0.4)
+        assert (app.frame > frame) is animating, f"{desc}: frames {frame} to {app.frame}"
+        assert (app.title_bar.look != title) is animating, f"{desc}: the shimmer moves only while it runs"
+
+
 def cells(strip) -> list[tuple]:
     """A drawn line, character by character with its style: the same look whatever its segments."""
     return [(ch, seg.style) for seg in strip for ch in seg.text]

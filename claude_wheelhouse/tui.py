@@ -46,7 +46,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, emoji, models, stats, subagents, transcript, tutorial
+from . import api, emoji, features, models, stats, subagents, transcript, tutorial
 from .client import LocalClient, Unreachable
 from .hub import COMPACT_RELAUNCH_WAIT, TAB_RELAUNCH, Done, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
@@ -1681,6 +1681,8 @@ class WheelhouseApp(App):
         self.kept = Unsent()   # text typed but not submitted: this client's, not the hub's
         self.frame = 0
         self.eye_frame = 0   # the frame the busy sessions' eyes last moved on (animate)
+        self.animation = None   # animate's timer: none at 0 fps (features.animation_fps)
+        self.animating = True   # whether it runs: paused while unfocused with nothing busy (pace)
         self.filter_sid: str | None = None
         # the dwell (DWELL): what the person is looking at, (selection, screen), its generation,
         # bumped whenever that changes, and its one-shot timer, running only while they rest
@@ -1785,7 +1787,9 @@ class WheelhouseApp(App):
         self.checklist = self.query_one("#checklist", Static)
         self.client.start(self.post)   # the daemon's stream, now there's an app to tell
         self.client.drop_ended_tutorial()   # an ended tutorial's checklist lasts only the app run it ended in
-        self.set_interval(0.1, self.animate)
+        if fps := features.animation_fps():   # 0: no animation, the title and eyes drawn still
+            self.animation = self.set_interval(1 / fps, self.animate)
+        self.paint_title()
         self.set_interval(1.0, self.tick)
         # a screen over the inbox, or a thread opened, is a break in looking: the dwell restarts
         self.screen_change_signal.subscribe(self, lambda _: self.look(), immediate=True)
@@ -1899,11 +1903,7 @@ class WheelhouseApp(App):
 
     def animate(self) -> None:
         self.frame += 1
-        # one line, never a new size: the daemon out of reach says so there, until it's back
-        if self.client.connected:
-            self.title_bar.show(shimmer_phase(self.frame), shimmer(self.frame))
-        else:
-            self.title_bar.show("unreachable", UNREACHABLE)
+        self.paint_title()
         # the eyes and panes rest while you type, nothing drawn but what the keys change
         # (D41). No screen at all while the app shuts down, when asking what has focus would raise
         if self.frame % 2 == 0 and self.screen_stack and not isinstance(self.focused, Compose):
@@ -1916,7 +1916,27 @@ class WheelhouseApp(App):
         burst is done (settle), not wherever a tick falls. Nor once the screens are gone: the
         timer can still fire while the app shuts down, and there is nothing left to paint."""
         if not self.landing and self.screen_stack:
+            self.paint_title()   # the daemon out of reach, said even while the animation rests
             self.refresh_data()
+
+    def paint_title(self) -> None:
+        """The title at this frame: one line, never a new size. The daemon out of reach says so
+        there, until it's back. Drawn only when its look changes (TitleBar.show)."""
+        if self.client.connected:
+            self.title_bar.show(shimmer_phase(self.frame), shimmer(self.frame))
+        else:
+            self.title_bar.show("unreachable", UNREACHABLE)
+
+    def pace(self) -> None:
+        """The animation paused while the terminal is unfocused and no session is busy (Doug's
+        Q82, option A), resumed when either changes: a still window costs next to nothing. A
+        terminal that never reports focus counts as focused (Textual's app_focus starts True)."""
+        run = self.app_focus or bool(self.session_list.eyes)
+        if self.animation is not None and run and not self.animating:
+            self.animation.resume()
+        elif self.animation is not None and not run and self.animating:
+            self.animation.pause()
+        self.animating = run
 
     def refresh_data(self) -> None:
         self.client.refresh()
@@ -1972,9 +1992,10 @@ class WheelhouseApp(App):
 
     def watch_app_focus(self) -> None:
         """The terminal window lost focus or got it back (AppBlur, AppFocus): a break in
-        looking, and the dwell starts again on return. A terminal that doesn't report focus
-        never sends either."""
+        looking, and the dwell starts again on return, and the animation rests or runs again
+        (pace). A terminal that doesn't report focus never sends either."""
         self.look()
+        self.pace()
 
     def dwelt(self, gen: int) -> None:
         """The selection has been in sight for DWELL without a break: an unseen decision becomes
@@ -2097,6 +2118,7 @@ class WheelhouseApp(App):
         keep, key = table.final_row(), self.current_session()   # in the final order, as the items' (paint_items)
         pending = key != self.sessions_cursor   # the person's move, not yet settled
         rows, table.eyes = [], {s["id"] for s in self.sessions if self.busy(s["id"])}
+        self.pace()   # a session busy, or none now: the animation runs, or may rest
         for s in sorted(self.sessions, key=lambda s: s["parked"]):   # stable: creation order within each
             st = self.shown_status(s["id"])
             busy = Text(" " * SessionList.EYE) if s["id"] in table.eyes else Text("")   # the eye's room (sweep)

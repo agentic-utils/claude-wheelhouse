@@ -38,7 +38,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   lower case. The settings: SDK mode's switch, `sdk_enabled()` (`ENABLE_SDK`), the plan
   usage mode, `usage_mode()` (`USAGE_MODE`), the daemon's port, `port()` (`PORT`), and how
   long a quiet session is kept warm, `keepalive_hours()` (`KEEPALIVE_HOURS`; 8 by default,
-  0 for off). The README's Settings table lists them.
+  0 for off), and the app's animation rate, `animation_fps()` (`ANIMATION_FPS`; 10 by
+  default, 0 for off; `WheelhouseApp.pace` rests it while unfocused with nothing busy). The README's Settings table lists them.
 - `launch.py`: Windows Terminal tabs (`wt.exe` through `cmd.exe`, in the user's own
   window, `window_name`), the `claude` command line, and the protocol text injected into
   a session.
