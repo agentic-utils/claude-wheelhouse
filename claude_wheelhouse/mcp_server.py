@@ -7,14 +7,17 @@ session's Claude process was registered by `claude_wheelhouse run` before it exe
 import functools
 import os
 import threading
+import threading
 import time
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
+from . import liveness
 from .store import GONE_TEXT, SessionGone, Store, runner
 
 HEARTBEAT_SECONDS = 30
+STOP_AFTER = 1   # seconds after park_session or end_session replies before its Claude Code is stopped
 
 server = MCPServer("wheelhouse", instructions="Wheelhouse: post and update tasks and questions; read "
                    "the person's answers. It tracks your subagents itself. See the wheelhouse protocol.")
@@ -168,19 +171,38 @@ def list_items(include_closed: bool = False) -> str:
     return "\n".join(f"{r['ref']} [{r['status']}] {r['title']}" for r in rows) or "no items"
 
 
+def stop_soon(s) -> bool:
+    """Stop this session's Claude Code STOP_AFTER seconds from now, once the tool's result has
+    reached its transcript: only if it is the registered process (s, the row read before it
+    changed) and this server's parent, as in a tab. A host's session needs nothing: its host
+    exits once the row is parked or gone, which stops its Claude Code. Whether it will."""
+    if s is None or not s["claude_pid"] or s["claude_pid"] != os.getppid():
+        return False
+    timer = threading.Timer(STOP_AFTER, liveness.stop, (s["claude_pid"], s["claude_start"], s["boot_id"]))
+    timer.daemon = True
+    timer.start()
+    return True
+
+
 @wheelhouse_tool
 def park_session() -> str:
-    """Park this session: hidden from the inbox and off the restore list until resumed."""
+    """Park this session: it stops (its tab closes a moment after this returns), dimmed at the
+    foot of the wheelhouse's list until the person unparks it. Write your handoff notes into
+    your items first: this is the last thing you do."""
+    s = _store.session(_sid)
     _store.set_parked(_sid, True)
-    return "parked; the person can close this tab"
+    return "parked; this session stops in a moment" if stop_soon(s) else "parked"
 
 
 @wheelhouse_tool
 def end_session() -> str:
-    """End this session for good: deletes all of its wheelhouse data. If your own instructions
-    describe anything to do when a session ends, do it before calling this."""
+    """Forget this session: deletes all of its wheelhouse data, and it stops (its tab closes a
+    moment after this returns). If your own instructions describe anything to do when a
+    session ends, do it before calling this: this is the last thing you do."""
+    s = _store.session(_sid)
     _store.end(_sid)
-    return "ended; wheelhouse data deleted; the person can close this tab"
+    return ("forgotten; wheelhouse data deleted; this session stops in a moment" if stop_soon(s)
+            else "forgotten; wheelhouse data deleted")
 
 
 def _heartbeat() -> None:

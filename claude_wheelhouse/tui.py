@@ -48,7 +48,7 @@ from textual.widgets import (
 
 from . import api, emoji, features, models, stats, subagents, transcript, tutorial
 from .client import LocalClient, Unreachable
-from .hub import COMPACT_RELAUNCH_WAIT, TAB_RELAUNCH, Done, Event, aimed, display_name, host_context, short
+from .hub import COMPACT_RELAUNCH_WAIT, Done, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .stats_pane import SessionStats
@@ -2622,36 +2622,36 @@ class WheelhouseApp(App):
     @on(Button.Pressed, "#relaunch")
     @session_action
     def relaunch_pressed(self) -> None:
-        """Relaunch, in one click: a dead session as Restore brings it back; a running one
-        run in the wheelhouse has its host stopped, then started again on the conversation.
-        A tab is the person's to /exit: it relaunches once it has."""
+        """Relaunch (Unpark on a parked session), in one press: one that isn't running comes
+        back where it left off, unparked; a running one is stopped, a host or a tab's Claude
+        Code, then started again on the conversation, asked first only if it's mid-turn
+        (that turn is lost), or offered Compact first if its context is large."""
         self.settle()
         sid = self.current_session()
         if not sid:
             return
         s = self.row(sid)
+        host = (s["claude_pid"], s["claude_start"])
         if sid in self.relaunching:
             self.notify("already relaunching: " + ("compacting first" if sid in self.client.compacting
-                                                   else "waiting for its host to stop"), severity="warning")
+                                                   else "waiting for it to stop"), severity="warning")
         elif self.statuses.get(sid) == "dead":
-            self.offer_relaunch(sid)
-        elif runner(s) != "sdk" or s["shell"]:
-            self.notify(TAB_RELAUNCH, severity="warning")
+            self.relaunch(sid)
         elif self.statuses.get(sid) == "starting":
             self.notify("it's still starting: Relaunch once it's running", severity="warning")
         elif self.client.compact_first(sid):
-            host = (s["claude_pid"], s["claude_start"])
             self.push_screen(RelaunchChoice(
                 f"Relaunch {self.label(sid)}? Its context is {s['context_tokens'] // 1000}k tokens, which a "
                 "restart writes to the prompt cache again whole. Compact first: it's asked what to keep, "
                 "compacted with that, then relaunched. Or relaunch now: its host stops, interrupting any "
                 "turn under way, and starts again on the same conversation."),
                 lambda how: how and self.stop_host(sid, host, compact=how == "compact"))
-        else:
-            host = (s["claude_pid"], s["claude_start"])
-            self.push_screen(Confirm(f"Relaunch {self.label(sid)}? Its host stops, interrupting any turn "
-                                     "under way, and starts again on the same conversation."),
+        elif self.busy(sid):
+            self.push_screen(Confirm(f"Relaunch {self.label(sid)}? It's mid-turn: it stops, losing that turn, "
+                                     "and starts again on the same conversation."),
                              lambda yes: yes and self.stop_host(sid, host))
+        else:
+            self.stop_host(sid, host)
 
     @session_action
     def stop_host(self, sid: str, host: tuple, compact: bool = False) -> None:

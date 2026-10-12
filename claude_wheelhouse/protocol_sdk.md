@@ -16,9 +16,10 @@ to a session: launch.protocol_file drops it. -->
   updated the item, and don't repeat it with `reply`.
 - Tool calls that need the person's approval, and the questions you ask with
   AskUserQuestion, reach the wheelhouse inbox by themselves: don't also post them as items.
-- The wheelhouse may ask you to park or end, in a `[wheelhouse]` message. To park, bring
-  your items up to date and call `park_session`. To end, first do anything your own
-  instructions describe for when a session ends, then call `end_session`. If a later
+- The wheelhouse may ask you to park or end (Stop & Forget), in a `[wheelhouse]` message.
+  To park, write your handoff notes into your items and call `park_session`. To end, first
+  do anything your own instructions describe for when a session ends, then call
+  `end_session`. Either stops this session once it returns: call it last. If a later
   message says the request was cancelled, carry on as before.
 - While the person is away, the wheelhouse may send a `[wheelhouse] Keepalive` or
   `[wheelhouse] Check:` turn about every 55 minutes to keep your prompt cache warm. Do as

@@ -1,4 +1,5 @@
-"""Is a session alive? Decided by its Claude process, never by the heartbeat.
+"""Is a session alive? Decided by its Claude process, never by the heartbeat. And
+stopping one (stop), guarded the same way.
 
 Sleep and hibernate keep the process, so the session stays live. A reboot or a
 WSL shutdown changes the boot id, so it is dead. The process start time guards
@@ -6,6 +7,9 @@ against pid reuse. The heartbeat only feeds the 'stalled' hint.
 """
 
 import json
+import os
+import signal
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +20,7 @@ STARTING_GRACE = 90      # seconds a launched session may take to register
 STALLED_AFTER = 120      # heartbeat age that suggests a stalled session
 CLOCK_JUMP = 30          # wall clock ahead of monotonic by this much means we slept
 WAKE_GRACE = 60          # hold off the stalled hint this long after waking
+KILL_AFTER = 10          # seconds a stopped Claude Code has to exit before its process group is killed
 
 
 def boot_id(proc: Path = PROC) -> str:
@@ -38,6 +43,40 @@ def is_alive(pid, start, boot, proc: Path = PROC) -> bool:
     if not pid or start is None or boot != boot_id(proc):
         return False
     return start_time(pid, proc) == start
+
+
+def stop(pid, start, boot, kill_after: float | None = KILL_AFTER, proc: Path = PROC) -> bool:
+    """Stop a session's process, only if it is still the one registered (pid, start time,
+    boot id): SIGTERM, Claude Code's own clean exit (about a second, idle or mid-tool, its
+    transcript intact for --resume), then, if it's still alive kill_after seconds later
+    (None: never), SIGKILL to its process group. Whether it was signalled: not if it had
+    gone. Another OSError (not ours to signal) is raised."""
+    if not is_alive(pid, start, boot, proc):
+        return False
+    group = None
+    if kill_after is not None:
+        try:
+            group = os.getpgid(pid)
+        except OSError:
+            pass   # gone already: the signal below says so
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return False
+    if group is not None:
+        timer = threading.Timer(kill_after, kill_group, (pid, start, boot, group, proc))
+        timer.daemon = True
+        timer.start()
+    return True
+
+
+def kill_group(pid, start, boot, group: int, proc: Path = PROC) -> None:
+    """SIGKILL the process group of a stopped process that is still alive, as registered."""
+    if is_alive(pid, start, boot, proc):
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except OSError:
+            pass   # gone meanwhile
 
 
 def registered_this_launch(session) -> bool:

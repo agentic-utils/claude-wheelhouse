@@ -84,10 +84,11 @@ def format_batch(msgs, person: str | None = None) -> tuple[str, int]:
 
 
 REQUEST_TEXT = {
-    "end": "[wheelhouse] The person pressed End in the wheelhouse. If your own instructions describe "
-           "anything to do when a session ends, do it first, then call end_session.",
-    "park": "[wheelhouse] The person pressed Park in the wheelhouse. Bring your wheelhouse items up "
-            "to date, then call park_session.",
+    "end": "[wheelhouse] The person pressed Stop & Forget in the wheelhouse. If your own instructions "
+           "describe anything to do when a session ends, do it first, then call end_session: this "
+           "session stops once it returns.",
+    "park": "[wheelhouse] The person pressed Park in the wheelhouse. Write your handoff notes into your "
+            "wheelhouse items, then call park_session: this session stops once it returns.",
 }
 
 

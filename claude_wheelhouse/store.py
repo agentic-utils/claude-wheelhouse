@@ -56,7 +56,9 @@ DECISION_FIELDS = (("why", "Why"),)
 # 10: the host posts only what a turn ends by saying, so the protocol asks it to end with the answer.
 # 11: replies list the items still open (in_doubt), and the wheelhouse checks on them, so the
 # protocol asks the session to correct any that's finished.
-PROTOCOL_VERSION = 11
+# 12: park_session and end_session stop the session's Claude Code once they return, and
+# park asks for handoff notes: an older session's tab stays open, parked but running.
+PROTOCOL_VERSION = 12
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.

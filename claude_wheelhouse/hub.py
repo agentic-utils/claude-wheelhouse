@@ -35,7 +35,6 @@ PENDING = {"end": "ending", "park": "parking"}
 SDK_USAGE_EVERY = 10   # seconds between looks for an SDK session's plan usage reading
 RELAUNCH_WAIT = 30   # seconds a host has to stop for Relaunch before it gives up and says so
 AGENTS_FOLLOWED = 2   # subagent conversations followed at once: the inbox's and a full screen's
-TAB_RELAUNCH = "a session in a tab relaunches once it has exited: /exit it there, then Relaunch"
 # A host's restart writes its whole context to the prompt cache again: past this many
 # tokens, Relaunch offers to compact first, and waits up to COMPACT_RELAUNCH_WAIT seconds
 # for the compaction before it gives up, and says so
@@ -294,28 +293,39 @@ class Hub:
                              f"{display_name(s)}'s host has stopped: Relaunch it from the daemon's machine")
 
     def stop_host(self, sid: str, host: tuple, may_tab: bool = True) -> Done:
-        """Stop a session's host, as SIGTERM does (its own clean stop: Claude Code is
-        disconnected, and an open permission or question closes as withdrawn, or as lost
-        when the new host starts). The confirm may have sat open meanwhile, so only the
-        host it was asked about, (pid, start time), is stopped: one handed to a shell tab
-        registers the tab's Claude Code instead, the person's to /exit. finish_relaunches
-        starts it again once the process has gone. Whether anything changed."""
+        """Stop a running session for Relaunch: a host as SIGTERM does (its own clean stop:
+        Claude Code is disconnected, and an open permission or question closes as withdrawn,
+        or as lost when the new host starts); a tab's Claude Code the same way, its process
+        group killed if it hasn't gone within liveness.KILL_AFTER (stop_process). The confirm
+        may have sat open meanwhile, so only the process it was asked about, (pid, start
+        time), is stopped. finish_relaunches starts it again once the process has gone: a
+        tab in a new tab. A host's session out in a shell tab goes back to its waiting host
+        as that tab stops, which is its relaunch. Whether anything changed."""
         s = self.row(sid)
-        if runner(s) != "sdk" or s["shell"]:
-            return Done(False).say(TAB_RELAUNCH, "warning")
         if not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
             return self.host_gone(sid, s, may_tab)   # gone meanwhile: nothing to stop
         if (s["claude_pid"], s["claude_start"]) != host:
-            return Done(False).say(f"{display_name(s)} started again meanwhile: Relaunch again to stop this host",
-                                   "warning")
+            return Done(False).say(f"{display_name(s)} started again meanwhile: Relaunch again to stop "
+                                   f"{'this host' if runner(s) == 'sdk' and not s['shell'] else 'it'}", "warning")
         try:
-            os.kill(s["claude_pid"], signal.SIGTERM)
-        except ProcessLookupError:
-            pass   # exited between the check and the signal: finish_relaunches starts it again
+            self.stop_process(s)
         except OSError as e:
-            return Done(False).say(f"couldn't stop its host: {e}", "error")
+            return Done(False).say(f"couldn't stop {display_name(s)}: {e}", "error")
+        if runner(s) == "sdk" and s["shell"]:   # its host takes it back as the tab stops
+            return Done().say(f"relaunching {display_name(s)}: its shell tab stops, and its host takes it back")
         self.relaunch_under_way(sid, host, may_tab=may_tab)
-        return Done().say(f"relaunching {display_name(s)}: stopping its host")
+        return Done().say(f"relaunching {display_name(s)}: stopping its "
+                          f"{'host' if runner(s) == 'sdk' else 'Claude Code'}")
+
+    @staticmethod
+    def stop_process(s) -> bool:
+        """Stop a session's registered process, if it is still that one (liveness.stop): a
+        host by SIGTERM alone, its own clean stop; Claude Code in a tab by SIGTERM, then its
+        process group killed if it is still alive liveness.KILL_AFTER seconds later. Whether
+        it was signalled. An OSError other than its having gone is raised."""
+        hosted = runner(s) == "sdk" and not s["shell"]
+        return liveness.stop(s["claude_pid"], s["claude_start"], s["boot_id"],
+                             kill_after=None if hosted else liveness.KILL_AFTER)
 
     def compact_first(self, sid: str) -> bool:
         """Whether Relaunch should offer to compact first: a running host whose context, as
@@ -331,8 +341,8 @@ class Hub:
         stops it (stop_host), and starts it again once gone. Only the host the confirm was
         about, (pid, start time), as stop_host."""
         s = self.row(sid)
-        if runner(s) != "sdk" or s["shell"]:
-            return Done(False).say(TAB_RELAUNCH, "warning")
+        if runner(s) != "sdk" or s["shell"]:   # nothing to compact it: relaunched at once
+            return self.stop_host(sid, host, may_tab)
         if not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
             return self.host_gone(sid, s, may_tab)   # gone meanwhile: nothing to compact
         if (s["claude_pid"], s["claude_start"]) != host:
@@ -538,6 +548,13 @@ class Hub:
         return self.force(sid, what)
 
     def force(self, sid: str, what: str) -> Done:
+        """Park or Forget now, without the session's own steps: a running one is stopped
+        first (stop_process), then parked or its row deleted."""
+        s = self.row(sid)
+        try:
+            self.stop_process(s)
+        except OSError as e:
+            return Done(False).say(f"couldn't stop {display_name(s)}: {e}", "error")
         if what == "end":
             self.store.end(sid)
         else:

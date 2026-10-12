@@ -69,3 +69,41 @@ def test_wake_detector(steps, expected, desc):
         mono[0] += dm
         result = w.tick()
     assert result is expected, desc
+
+
+class Timers:
+    """threading.Timer, recorded: run() fires every timer started, as its delay passing would."""
+
+    def __init__(self):
+        self.started = []
+
+    def __call__(self, delay, fn, args=()):
+        timer = type("T", (), {"daemon": False, "start": lambda t: self.started.append((delay, fn, args))})()
+        return timer
+
+    def run(self):
+        for _, fn, args in self.started:
+            fn(*args)
+
+
+@pytest.mark.parametrize("start, kill_after, gone_on_term, signalled, termed, group_killed, desc", [
+    (1000, 10, True, True, True, False, "SIGTERM, and it exits: its group is left alone"),
+    (1000, 10, False, True, True, True, "still alive after the grace: its process group is killed"),
+    (1000, None, False, True, True, False, "a host: SIGTERM alone, never the group"),
+    (999, 10, True, False, False, False, "the pid reused by another process (start time differs): untouched"),
+])
+def test_stop(proc, monkeypatch, no_group_kill, start, kill_after, gone_on_term, signalled, termed, group_killed,
+              desc):
+    terms, timers = [], Timers()
+
+    def kill(pid, sig):
+        terms.append((pid, sig))
+        if gone_on_term:
+            (proc / str(pid) / "stat").unlink()
+    monkeypatch.setattr(liveness.os, "kill", kill)
+    monkeypatch.setattr(liveness.threading, "Timer", timers)
+    assert liveness.stop(4242, start, BOOT, kill_after=kill_after, proc=proc) is signalled, desc
+    timers.run()
+    assert terms == ([(4242, liveness.signal.SIGTERM)] if termed else []), desc
+    assert [d for d, *_ in timers.started] == ([kill_after] if termed and kill_after else []), desc
+    assert no_group_kill == ([(-4242, liveness.signal.SIGKILL)] if group_killed else []), desc

@@ -5125,7 +5125,7 @@ async def test_a_click_on_a_level_sets_it(store, tmp_path, monkeypatch, level):
     (200_000, ("r",), "RelaunchChoice", ("now", (4242, 1)), "past 150k: R relaunches now"),
     (200_000, ("escape",), "RelaunchChoice", None, "Esc cancels"),
     (200_000, ("enter",), "RelaunchChoice", None, "it opens on Cancel: a reflex Enter relaunches nothing"),
-    (100_000, ("y",), "Confirm", ("now", (4242, 1)), "a small one: the plain confirm"),
+    (100_000, (), None, ("now", (4242, 1)), "a small one, idle: relaunched at once, no confirm"),
     (200_000, ("tab", "enter"), "RelaunchChoice", ("compact", (4242, 1)),
      "Tab to Compact first, then Enter: it compacts first, and the app's Compact button doesn't answer too"),
     (200_000, ("click:#relaunch-compact",), "RelaunchChoice", ("compact", (4242, 1)), "Compact first clicked"),
@@ -5149,9 +5149,10 @@ async def test_relaunch_offers_to_compact_a_big_session_first(store, sid, monkey
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         app.session_list.focus()
+        main = type(app.screen).__name__
         await pilot.press("l")
         await pilot.pause()
-        assert type(app.screen).__name__ == dialog, desc
+        assert type(app.screen).__name__ == (dialog or main), desc
         for key in keys:
             if key.startswith("click:"):
                 await pilot.click(key.removeprefix("click:"))
@@ -5159,7 +5160,7 @@ async def test_relaunch_offers_to_compact_a_big_session_first(store, sid, monkey
                 await pilot.press(key)
             await pilot.pause()
         assert calls == ([stopped] if stopped else []), desc
-        assert type(app.screen).__name__ != dialog, f"{desc}: answered"
+        assert type(app.screen).__name__ == main, f"{desc}: answered"
         assert app.store.session(sid)["host_command"] is None, f"{desc}: no Compact, Interrupt or Shell sent besides"
 
 

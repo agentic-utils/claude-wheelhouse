@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_wheelhouse import features, launch, store as store_module, tui
+from claude_wheelhouse import features, launch, liveness, store as store_module, tui
 from claude_wheelhouse.store import Store
 
 SHIPPED_DWELL = tui.DWELL   # before no_dwell_timer puts it out of reach
@@ -351,3 +351,13 @@ def via(request, monkeypatch):
         client.disconnect()
     for served in daemons.values():
         served.stop()
+
+
+@pytest.fixture(autouse=True)
+def no_group_kill(monkeypatch):
+    """No test kills a real process group: liveness.stop's fallback SIGKILL is recorded, and
+    its timer never starts a thread. A test of it reads what was recorded."""
+    killed = []
+    monkeypatch.setattr(liveness.os, "getpgid", lambda pid: -pid)
+    monkeypatch.setattr(liveness.os, "killpg", lambda group, sig: killed.append((group, sig)))
+    return killed

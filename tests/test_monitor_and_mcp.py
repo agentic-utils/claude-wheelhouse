@@ -194,7 +194,7 @@ def test_a_cancel_then_a_fresh_request_arrive_in_order(store, sid):
     out = io.StringIO()
     monitor.poll_once(store, sid, out)
     text = out.getvalue()
-    assert text.index("cancelled the end request") < text.index("pressed End"), text
+    assert text.index("cancelled the end request") < text.index("pressed Stop & Forget"), text
 
 
 def test_the_monitor_survives_a_locked_database(sid, monkeypatch):
@@ -336,3 +336,31 @@ def test_a_change_of_work_lists_what_is_still_open(store, sid, monkeypatch, befo
     monkeypatch.setattr(store_mod, "now", real_now)
     name, first, kwargs = call
     assert getattr(mcp_server, name)(first, **kwargs) == said, desc
+
+
+@pytest.mark.parametrize("tool, parent, stops, said, gone, desc", [
+    ("park_session", 4242, True, "parked; this session stops in a moment", False,
+     "a tab's: its Claude Code (this server's parent, as registered) is stopped after the reply"),
+    ("end_session", 4242, True, "forgotten; wheelhouse data deleted; this session stops in a moment", True,
+     "Forget too, read before the row is deleted"),
+    ("park_session", 777, False, "parked", False, "a host's session: its host exits by itself, nothing signalled"),
+    ("end_session", 777, False, "forgotten; wheelhouse data deleted", True, "so on Forget"),
+])
+def test_park_and_forget_stop_the_session_after_replying(store, sid, monkeypatch, tool, parent, stops, said, gone,
+                                                        desc):
+    from claude_wheelhouse import mcp_server
+    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
+    mcp_server._store, mcp_server._sid = store, sid
+    timers, stopped = [], []
+    monkeypatch.setattr(mcp_server.os, "getppid", lambda: parent)
+    monkeypatch.setattr(mcp_server.liveness, "stop", lambda *a: stopped.append(a))
+    monkeypatch.setattr(mcp_server.threading, "Timer",
+                        lambda delay, fn, args: types.SimpleNamespace(start=lambda: timers.append((delay, fn, args)),
+                                                                      daemon=False))
+    assert getattr(mcp_server, tool)() == said, desc
+    assert stopped == [], f"{desc}: nothing signalled before the reply has gone"
+    for delay, fn, args in timers:
+        fn(*args)
+    assert stopped == ([(4242, 1, "b")] if stops else []), desc
+    assert [d for d, *_ in timers] == ([mcp_server.STOP_AFTER] if stops else []), desc
+    assert (store.session(sid) is None) is gone, desc

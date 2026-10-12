@@ -441,20 +441,24 @@ def test_the_monitor_says_so_once_and_stops(store, sid):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("run, state, shell, stops, keys, killed, launched, said, desc", [
-    ("sdk", "live", None, True, ["y"], True, ["open"], "relaunched demo",
-     "a running host is stopped, then started again once its process has gone (#56)"),
-    ("sdk", "stalled", None, True, ["y"], True, ["open"], "relaunched demo", "so is a quiet one"),
-    ("sdk", "live", None, True, ["n"], False, [], None, "backed out of at the confirm"),
-    ("sdk", "live", None, False, ["y"], True, [], "didn't stop within",
+@pytest.mark.parametrize("run, state, shell, busy, stops, keys, killed, launched, said, desc", [
+    ("sdk", "live", None, True, True, ["y"], True, ["open"], "relaunched demo",
+     "a running host mid-turn is stopped once confirmed, then started again once its process has gone (#56)"),
+    ("sdk", "stalled", None, False, True, [], True, ["open"], "relaunched demo", "an idle one, at once: no confirm"),
+    ("sdk", "live", None, True, True, ["n"], False, [], None, "backed out of at the mid-turn confirm"),
+    ("sdk", "live", None, False, False, [], True, [], "didn't stop within",
      "a host that doesn't stop isn't started twice: it says so"),
-    ("tab", "live", None, True, [], False, [], "/exit it there", "a running tab is the person's to /exit"),
-    ("sdk", "live", "tab", True, [], False, [], "/exit it there", "so is a host's session open in a shell tab"),
+    ("tab", "live", None, False, True, [], True, ["open"], "relaunched demo",
+     "a running tab's Claude Code is stopped, then opened again in a new tab"),
+    ("sdk", "live", "tab", False, True, [], True, [], "its host takes it back",
+     "a host's session in a shell tab: the tab stops, and its waiting host is the relaunch"),
 ])
-async def test_relaunch(store, sid, monkeypatch, run, state, shell, stops, keys, killed, launched, said, desc):
+async def test_relaunch(store, sid, monkeypatch, run, state, shell, busy, stops, keys, killed, launched, said, desc):
     store.set_runner(sid, run)
     store.set_shell(sid, shell)
     store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
+    if busy:   # mid-turn: a task under way
+        store.post_item(sid, "task", "under way", status="running")
     fake_status(monkeypatch, state)
     alive, kills, calls = {"now": state != "dead"}, [], []
 
@@ -494,8 +498,8 @@ def parked(store, sid, alive):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("before, during_confirm, after_stop, killed, launched, said, desc", [
-    (None, handed_to_a_tab, None, [], [], "/exit it there",
-     "handed to a shell tab while the confirm was open: the person's tab is left alone (review 7)"),
+    (None, handed_to_a_tab, None, [], [], "started again meanwhile",
+     "handed to a shell tab while the confirm was open: the tab's Claude Code isn't stopped unasked (review 7)"),
     (None, a_newer_host, None, [], [], "started again meanwhile",
      "a newer host while the confirm was open: not stopped unasked"),
     (None, None, a_newer_host, [4242], [], "relaunched demo",
@@ -506,6 +510,7 @@ async def test_relaunch_races(store, sid, monkeypatch, before, during_confirm, a
                               desc):
     store.set_runner(sid, "sdk")
     store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
+    store.post_item(sid, "task", "under way", status="running")   # mid-turn: Relaunch confirms
     fake_status(monkeypatch, "live")
     alive, kills, calls = {4242}, [], []
 
@@ -546,6 +551,7 @@ async def test_relaunch_races(store, sid, monkeypatch, before, during_confirm, a
 async def test_quitting_mid_relaunch(store, sid, monkeypatch, stopped, keys, launched, exited, desc):
     store.set_runner(sid, "sdk")
     store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
+    store.post_item(sid, "task", "under way", status="running")   # mid-turn: Relaunch confirms
     fake_status(monkeypatch, "live")
     alive, calls, exits = {4242}, [], []
     monkeypatch.setattr(hub.os, "kill", lambda pid, sig: None)   # SIGTERMed, still stopping

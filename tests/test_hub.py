@@ -1015,3 +1015,19 @@ def test_a_real_turn_restarts_the_quiet_time(hub, store, sid):
     hub.keep_warm(t0 + 59 * M)
     hub.keep_warm(t0 + 113 * M)
     assert len(notices(store, sid)) == 2, "quiet again from 58 minutes: a second keepalive inside the hour"
+
+
+@pytest.mark.parametrize("what, alive, killed, parked, gone, desc", [
+    ("end", True, [4242], 0, True, "forced Forget on a running session: stopped first, then its row deleted"),
+    ("park", True, [4242], 1, False, "forced Park: stopped, then parked"),
+    ("end", False, [], 0, True, "Forget on one not running: nothing to stop"),
+])
+def test_force_stops_the_process_then_acts(hub, store, sid, monkeypatch, what, alive, killed, parked, gone, desc):
+    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
+    kills = []
+    monkeypatch.setattr(liveness, "is_alive", lambda *a: alive and not kills)
+    monkeypatch.setattr(hub_mod.os, "kill", lambda pid, sig: kills.append(pid))
+    assert hub.force(sid, what).ok, desc
+    assert kills == killed, desc
+    s = store.session(sid)
+    assert (s is None) is gone and (gone or s["parked"] == parked), desc
