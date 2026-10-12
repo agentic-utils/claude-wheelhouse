@@ -124,7 +124,7 @@ def test_open_tab_refuses_a_session_that_is_still_starting(store, sid, monkeypat
     assert len(calls) == 1
 
 
-def test_two_runs_racing_exec_claude_once(store, sid, tmp_path, monkeypatch, capsys):
+def test_two_runs_racing_exec_claude_once(store, sid, tmp_path, monkeypatch):
     """Round-2 #5: run()'s check and register are one compare-and-set."""
     import threading
     import time
@@ -150,7 +150,7 @@ def test_two_runs_racing_exec_claude_once(store, sid, tmp_path, monkeypatch, cap
         t.start()
     for t in threads:
         t.join()
-    assert len(execs) == 1 and exits == ["1"] and "already running" in capsys.readouterr().err
+    assert len(execs) == 1 and len(exits) == 1 and "already running" in exits[0]
 
 
 def test_protocol_shows_everything_a_session_receives(db_file):
@@ -281,11 +281,11 @@ def test_clean_env(base, extra, want, desc):
     (True, True, "in a tab: the reason stays up until Enter, as the tab closes once run exits"),
     (False, False, "no terminal: nothing to wait on"),
 ])
-def test_run_refusing_says_why_before_the_tab_closes(monkeypatch, capsys, tty, waited, desc):
+def test_run_refusing_says_why_before_the_tab_closes(monkeypatch, tty, waited, desc):
     asked = []
     monkeypatch.setattr(launch.sys.stdin, "isatty", lambda: tty, raising=False)
     monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt))
     with pytest.raises(SystemExit) as e:
         launch.run("no-such-session")
-    assert e.value.code == 1 and "no session no-such-session" in capsys.readouterr().err, desc
-    assert bool(asked) == waited, desc
+    assert "no session no-such-session" in e.value.code, desc
+    assert [("no session no-such-session" in p) for p in asked] == ([True] if waited else []), desc

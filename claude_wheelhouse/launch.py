@@ -307,13 +307,12 @@ def open_tab(store: Store, sid: str, notice: bool = True) -> None:
 
 
 def refuse(text: str) -> None:
-    """run can't start Claude Code: say why and, in a terminal, wait for Enter before
-    exiting, as the tab closes once run does (wt_argv)."""
-    print(text, file=sys.stderr, flush=True)
+    """run can't start Claude Code: exit saying why (SystemExit carries the text), first, in
+    a terminal, waiting for Enter, as the tab closes once run does (wt_argv)."""
     if sys.stdin.isatty():
         with contextlib.suppress(EOFError, KeyboardInterrupt):
-            input("Press Enter to close this tab. ")
-    sys.exit(1)
+            input(f"{text}\nPress Enter to close this tab. ")
+    sys.exit(text)
 
 
 def run(sid: str) -> None:
