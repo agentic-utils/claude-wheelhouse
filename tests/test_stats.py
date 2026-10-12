@@ -849,3 +849,57 @@ def test_the_slider_falls_back_on_the_transcript(setting, view_effort, lit, desc
     rows, _ = stats.layout(s, "holly", None, usage(), NOW, 64, 40, setting)
     line = rows[stats.SLIDER_ROW]
     assert [line.plain[x.start:x.end] for x in line.spans if "on " in str(x.style)] == [lit], desc
+
+
+def fresh_chart(turns, now, kind):
+    """A chart as made before the charts were kept (Series): every turn gone through again."""
+    keys = [k for k, _ in stats.CHARTS[kind][1]]
+    bs = stats._buckets(turns, now, 56 - stats.MARGIN, stats.SPAN)
+    totals = [sum(b[k] for k in keys) for b in bs]
+    maxt = stats.nice(max(totals, default=0))
+    hour = sum(getattr(t, k) for t in turns if now - 3600 <= t.at <= now for k in keys)
+    return [stats.build_column([(stats.CO[k], b[k]) for k in keys], t, maxt, 4) for b, t in zip(bs, totals)], maxt, hour
+
+
+@pytest.mark.parametrize("later, desc", [
+    (0, "now, a turn on it"),
+    (1, "a second on, the same window"),
+    (5, "past the turn that was in the future"),
+    (3600 - 30, "just before the oldest turn leaves the hour"),
+    (3600 - 30 + 1, "as it leaves, in the same window"),
+    (3600 + 400, "windows on, others leaving"),
+])
+@pytest.mark.parametrize("kind", ["assembly", "output"])
+def test_a_kept_chart_is_the_one_made_afresh_at_every_second(later, kind, desc):
+    turns = [Turn(NOW - 3570, 5, 1, 0, 6, None, None, True, output=3),
+             Turn(NOW - 600, 7, 2, 1, 9, None, None, True, output=4),
+             Turn(NOW - 600, 1, 1, 1, 9, None, None, False, output=1),   # the same second as another
+             Turn(NOW, 2, 0, 3, 9, None, None, True, output=2),
+             Turn(NOW + 4, 9, 9, 9, 9, None, None, True, output=9)]   # a clock ahead: shown once it's past
+    for now in (NOW, NOW + later):   # the first fills the cache the second may reuse
+        c = stats.chart(list(turns), now, width=56, height=4, kind=kind)
+        assert (c.columns, c.maxt, c.hour) == fresh_chart(turns, now, kind), f"{desc}, at +{now - NOW:g}s"
+
+
+@pytest.mark.parametrize("change, kept, desc", [
+    (lambda turns, now: (turns, now + 1), True, "a second on in the same window: the same columns"),
+    (lambda turns, now: (list(turns), now), True, "a new list of the same turns (combine): the same"),
+    (lambda turns, now: (turns + [Turn(now, 1, 1, 1, 1, None, None, True)], now), False, "a turn more: made again"),
+    (lambda turns, now: (turns, now + stats.SPAN), False, "the window moved on: made again"),
+])
+def test_a_charts_columns_are_made_once_for_a_window_and_its_turns(change, kept, desc):
+    turns, now = [Turn(EVEN - 60, 5, 1, 0, 6, None, None, True)], EVEN
+    first = stats.chart(turns, now, width=56, height=4)
+    turns, now = change(turns, now)
+    assert (stats.chart(turns, now, width=56, height=4).columns is first.columns) == kept, desc
+
+
+@pytest.mark.parametrize("later, hour, desc", [
+    (0, 6, "the turn, a minute old, is in the hour"),
+    (3540, 6, "an hour to the second after it"),
+    (3541, 0, "a second later it has gone: the total still follows the clock"),
+])
+def test_the_hours_total_follows_the_clock_with_the_turns_unchanged(later, hour, desc):
+    turns = [Turn(EVEN - 60, 5, 1, 0, 6, None, None, True)]
+    stats.chart(turns, EVEN, width=56, height=4)   # kept
+    assert stats.chart(turns, EVEN + later, width=56, height=4).hour == hour, desc

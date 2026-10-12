@@ -8,8 +8,10 @@ wheelhouse's own, shared with the session list's context bar (#51). See
 .plan/session-stats.md.
 """
 
+import bisect
 import dataclasses
 import functools
+import itertools
 import json
 import math
 import os
@@ -924,8 +926,63 @@ def window(now: float, columns: int, span: int = SPAN) -> tuple[float, float]:
     return (math.floor(now / width) - max(columns, 1) + 1) * width, width
 
 
+class Series:
+    """A list of turns, as the charts read it each second: when each was, in order, and each
+    series' running totals in that order, so the turns in a stretch of time are found by
+    bisection rather than by going through them all. A turn never changes once made (parse),
+    so this holds as long as the list has the same turns."""
+
+    def __init__(self, turns: list[Turn]):
+        self.turns = list(turns)   # held: the key's ids stay theirs while this is cached
+        ordered = sorted(self.turns, key=lambda t: t.at)
+        self.ats = [t.at for t in ordered]
+        self.totals = {k: [0, *itertools.accumulate(getattr(t, k) for t in ordered)] for k in SERIES}
+        self.drawn: dict[tuple, object] = {}   # what was made of them for a window (buckets, chart)
+
+    def upto(self, now: float) -> int:
+        """How many of the turns are at or before `now`: with the window, all that a chart of
+        them depends on, whatever the second."""
+        return bisect.bisect_right(self.ats, now)
+
+    def total(self, key: str, since: float, now: float) -> int:
+        """The series `key` over the turns from `since` to `now`, both included."""
+        sums = self.totals[key]
+        return sums[bisect.bisect_right(self.ats, now)] - sums[bisect.bisect_left(self.ats, since)]
+
+    def kept(self, key: tuple, make):
+        """What `make` makes of the turns for `key`, made once. The window steps on every
+        minute or so, and each step's is wanted only until the next."""
+        if key not in self.drawn:
+            if len(self.drawn) >= 16:
+                self.drawn.clear()
+            self.drawn[key] = make()
+        return self.drawn[key]
+
+
+SERIES_KEPT: dict[tuple, Series] = {}   # the last few lists of turns charted, by their turns' ids
+
+
+def series(turns: list[Turn]) -> Series:
+    """The Series for these turns, built once while they stay the same: a snapshot's turns
+    change only with a read that brought some, and running sessions' combined turns are a
+    new list of the same turns each second (combine)."""
+    key = tuple(map(id, turns))
+    found = SERIES_KEPT.pop(key, None) or Series(turns)
+    SERIES_KEPT[key] = found   # the newest last: the oldest goes first
+    while len(SERIES_KEPT) > 8:
+        del SERIES_KEPT[next(iter(SERIES_KEPT))]
+    return found
+
+
 def buckets(turns: list[Turn], now: float, columns: int, span: int = SPAN) -> list[dict]:
-    """The window's buckets, oldest first, each summing its turns."""
+    """The window's buckets, oldest first, each summing its turns. Made once for each window
+    and its turns (Series): the list is shared, so don't change it."""
+    s = series(turns)
+    start, _ = window(now, columns, span)
+    return s.kept(("buckets", columns, span, start, s.upto(now)), lambda: _buckets(turns, now, columns, span))
+
+
+def _buckets(turns: list[Turn], now: float, columns: int, span: int) -> list[dict]:
     out = [dict.fromkeys(SERIES, 0) for _ in range(max(columns, 0))]
     if not out:
         return out
@@ -1002,18 +1059,24 @@ class Chart:
 def chart(turns: list[Turn], now: float, width: int, height: int, kind: str = "assembly", span: int = SPAN,
           gap: bool = False) -> Chart:
     keys = [k for k, _ in CHARTS[kind][1]]
-    bs = buckets(turns, now, width - MARGIN, span)
-    totals = [sum(b[k] for k in keys) for b in bs]
-    maxt = nice(max(totals, default=0))
-    start, step = window(now, len(bs), span)
-    return Chart([build_column([(CO[k], b[k]) for k in keys], t, maxt, height) for b, t in zip(bs, totals)],
-                 maxt, height, start, step * len(bs), kind, gap, last_hour(turns, now, keys))
+    s, columns = series(turns), max(width - MARGIN, 0)
+    start, step = window(now, columns, span)
+
+    def bars() -> tuple[list, float]:
+        bs = buckets(turns, now, columns, span)
+        totals = [sum(b[k] for k in keys) for b in bs]
+        maxt = nice(max(totals, default=0))
+        return [build_column([(CO[k], b[k]) for k in keys], t, maxt, height) for b, t in zip(bs, totals)], maxt
+    # the columns, made once for each window and its turns (Series): only the hour's total moves between
+    built, maxt = s.kept(("chart", kind, columns, span, height, start, s.upto(now)), bars)
+    return Chart(built, maxt, height, start, step * columns, kind, gap, last_hour(turns, now, keys))
 
 
 def last_hour(turns: list[Turn], now: float, keys: list[str]) -> int:
     """The tokens of the series `keys`, the bars' own, in turns from an hour before `now` to
     `now`, both included: by timestamp, not the chart's buckets, whose oldest starts earlier."""
-    return sum(getattr(t, k) for t in turns if now - 3600 <= t.at <= now for k in keys)
+    s = series(turns)
+    return sum(s.total(k, now - 3600, now) for k in keys)
 
 
 def charts(turns: list[Turn], now: float, width: int, room: int, height: int) -> list[Chart]:
