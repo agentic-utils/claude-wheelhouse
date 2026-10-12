@@ -58,6 +58,18 @@ PROTOCOL_SDK = protocol(runner="sdk")
 # Sent whenever a tab resumes a conversation (adopt, Restore, relaunch): it triggers a turn,
 # so work the session was already doing shows up in the wheelhouse without waiting for its
 # next post. Safe to repeat: the session checks what the wheelhouse already holds.
+def after_compaction(store: Store, sid: str) -> str:
+    """What a session is told once a compaction has ended (Store.open_items), without the
+    [wheelhouse] mark: its open tasks and questions, with their titles, as it has just
+    forgotten them. Empty when there are none."""
+    rows = store.open_items(sid)
+    if not rows:
+        return ""
+    return ("After the compaction, these items are still open in the wheelhouse. Keep them current "
+            "with update_item; correct any that's finished:\n"
+            + "\n".join(f"{r['ref']} [{r['status']}] {r['title']}" for r in rows))
+
+
 JOINED_TEXT = ("You have just been opened in the wheelhouse, mid-conversation. Call list_items to see "
                "what it already holds for this session, then post as items the questions you are "
                "already waiting on the person for and the tasks you have running (skip any already "
@@ -241,8 +253,10 @@ def open_host(store: Store, sid: str) -> None:
     with open(logs / f"{sid}.log", "a") as log:
         print(now(), sid, "resume" if resuming else "new", session["cwd"], file=log, flush=True)
         # setsid --fork: the host is init's child, not ours, so when it exits it is reaped
-        # rather than left a zombie of the TUI that still looks alive
-        subprocess.run(["setsid", "--fork", sys.executable, "-m", "claude_wheelhouse", "host", sid],
+        # rather than left a zombie of the TUI that still looks alive. It runs in the
+        # session's directory, where the app's .env isn't: told how long to keep it warm
+        subprocess.run(["setsid", "--fork", sys.executable, "-m", "claude_wheelhouse", "host", sid,
+                        features.KEEPALIVE_FLAG, f"{features.keepalive_hours():g}"],
                        cwd=session["cwd"], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                        env=dict(os.environ, WHEELHOUSE_DB=str(store.path)), check=True)
     if resuming:

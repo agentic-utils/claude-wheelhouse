@@ -31,8 +31,8 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from . import liveness, models, plan_usage, stats, transcript
-from .launch import PROTOCOL_SDK, opening_prompt, transcript_exists
+from . import features, liveness, models, plan_usage, stats, transcript
+from .launch import PROTOCOL_SDK, after_compaction, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT
 from .store import SessionGone, Store, db_path, now, runner
 
@@ -57,15 +57,25 @@ NO_NOTES = (f"idle · Compact got no notes back in {COMPACT_TIMEOUT // 60} quiet
             "so nothing was compacted")
 AWAITING_NOTES = "idle · Compact is waiting for the session's notes (Interrupt cancels it)"
 COMPACTED = "idle · compacted"   # how the activity line starts once a compaction's turn has ended
-# Keepalive: the hosts' prompt cache lives an hour (1 h cache writes) and a cold one is
-# written again whole. A session over KEEPALIVE_TOKENS, quiet and waiting on the person,
-# gets a tiny turn KEEPALIVE_AFTER seconds after its last, to keep it warm, until it has
-# been quiet KEEPALIVE_FOR seconds: an abandoned session doesn't pay for ever
+# Keepalive: the prompt cache lives an hour (1 h cache writes) and a cold one is written
+# again whole. A session over KEEPALIVE_TOKENS, quiet and waiting on the person or with an
+# item in doubt (Store.in_doubt), gets a tiny turn KEEPALIVE_AFTER seconds after its last, to
+# keep it warm, until it has been quiet features.keepalive_hours(): an abandoned session
+# doesn't pay for ever. With an item in doubt the turn is the check (CHECK_BODY), which asks
+# the session about it. The hub keeps tab sessions warm the same way (Hub.keep_warm)
 KEEPALIVE_TOKENS = 150_000
 KEEPALIVE_AFTER = 55 * 60
-KEEPALIVE_FOR = 8 * 3600
-KEEPALIVE_TEXT = ("[wheelhouse] Keepalive: the person is away, and this turn only keeps your prompt cache "
+KEEPALIVE_BODY = ("Keepalive: the person is away, and this turn only keeps your prompt cache "
                   "warm. Reply with the one word ok and do nothing else: no tools, no wheelhouse calls.")
+KEEPALIVE_TEXT = f"[wheelhouse] {KEEPALIVE_BODY}"
+CHECK_BODY = ("Check: {items}. Correct any that's finished with update_item or reply, then reply ok. "
+              "Leave alone any you don't recognise.")
+
+
+def keepalive_body(doubted: list[str]) -> str:
+    """The keepalive's text, without the [wheelhouse] mark: the check on the items in doubt
+    if there are any, else the plain keepalive."""
+    return CHECK_BODY.format(items=", ".join(doubted)) if doubted else KEEPALIVE_BODY
 # an answer's `n:` or `Qn:` markers: at the start, or after a comma, semicolon or line
 # break, and never a time (`1:30`)
 ANSWER_MARK = re.compile(r"(?:^|[,;\n])\s*[Qq]?(\d+)\s*:(?!\d)")
@@ -225,6 +235,7 @@ class Host:
         # ended, and since when the session has been quiet (None while a turn other than a
         # keepalive runs), all monotonic
         self.tokens: int | None = None
+        self.keepalive_for = features.keepalive_hours() * 3600   # seconds; 0: no keepalive
         self.last_turn = time.monotonic()
         self.quiet_since: float | None = time.monotonic()
         self.owner = False   # registered as the session's process: only then does it write the activity
@@ -552,7 +563,7 @@ class Host:
             self.store.set_activity(self.sid, NO_NOTES)
         await self.reconcile(session)
         if self.keepalive_due(time.monotonic()):
-            await self.turn(KEEPALIVE_TEXT, keepalive=True)
+            await self.turn(f"[wheelhouse] {keepalive_body(self.store.in_doubt(self.sid))}", keepalive=True)
         command = self.store.take_command(self.sid)
         if command == "interrupt":
             await self.client.interrupt()
@@ -570,12 +581,18 @@ class Host:
 
     def keepalive_due(self, at: float) -> bool:
         """Whether a keepalive turn is due: nothing running, no Compact under way, the last
-        turn not a compaction (there is no cache to preserve), the context past KEEPALIVE_TOKENS, the last turn KEEPALIVE_AFTER ago, quiet for less than
-        KEEPALIVE_FOR, and the session waiting on the person (waits_on_person)."""
-        return (not self.pending and self.compact_nonce is None and not self.compacted_last
-                and self.quiet_since is not None
+        turn not a compaction (there is no cache to preserve), the context past KEEPALIVE_TOKENS,
+        the last turn KEEPALIVE_AFTER ago, quiet for less than the keepalive limit
+        (features.keepalive_hours; 0, never), not parked, and the session waiting on the
+        person (waits_on_person) or with an item in doubt (Store.in_doubt)."""
+        if not (not self.pending and self.compact_nonce is None and not self.compacted_last
+                and self.quiet_since is not None and self.keepalive_for > 0
                 and (self.tokens or 0) > KEEPALIVE_TOKENS and at - self.last_turn >= KEEPALIVE_AFTER
-                and at - self.quiet_since < KEEPALIVE_FOR and self.waits_on_person())
+                and at - self.quiet_since < self.keepalive_for):
+            return False
+        session = self.store.session(self.sid)
+        return (session is not None and not session["parked"]
+                and (self.waits_on_person() or bool(self.store.in_doubt(self.sid))))
 
     def waits_on_person(self) -> bool:
         """Whether the session waits on the person: an open question, an unseen decision or
@@ -716,6 +733,9 @@ class Host:
                 self.store.set_activity(self.sid, "compacting")
                 return
         self.compacted_last = self.compacted_from is not None
+        if self.compacted_last and (reminder := after_compaction(self.store, self.sid)):
+            # once per compaction, its open items: the next turn carries them, or it is one
+            self.store.notice(self.sid, reminder)
         tokens = await self.context()
         if tokens is not None:
             self.tokens = tokens

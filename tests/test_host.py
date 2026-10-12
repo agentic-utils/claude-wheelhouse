@@ -819,13 +819,15 @@ def test_get_input_hosted(store, tmp_path, monkeypatch, runner, shell, takes, de
 @pytest.mark.parametrize("resuming, desc", [(True, "a restore"), (False, "a new session")])
 def test_open_host_detaches(store, sid, monkeypatch, resuming, desc):
     """The host is started through setsid --fork so it is never the TUI's child (and never
-    its zombie), with its output logged; a restore gets the joined notice."""
+    its zombie), with its output logged and the app's keepalive limit; a restore gets the
+    joined notice."""
+    features.set_keepalive_hours("2.5")
     calls = []
     monkeypatch.setattr(launch, "transcript_exists", lambda i: resuming)
     monkeypatch.setattr(launch.subprocess, "run", lambda argv, **kw: calls.append((argv, kw)))
     launch.open_host(store, sid)
     argv, kw = calls[0]
-    assert argv[:2] == ["setsid", "--fork"] and argv[-2:] == ["host", sid], desc
+    assert argv[:2] == ["setsid", "--fork"] and argv[-4:] == ["host", sid, "--keepalive-hours", "2.5"], desc
     assert kw["check"] and kw["stdin"] is launch.subprocess.DEVNULL, desc
     log = store.path.parent / "hosts" / f"{sid}.log"
     assert ("resume" if resuming else "new") in log.read_text(), desc
@@ -1479,10 +1481,29 @@ H = 3600
     ({"waits": "answered"}, False, "its question answered: nothing waits on the person"),
     ({"waits": "decision"}, True, "an unseen decision waits on the person"),
     ({"waits": "permission"}, True, "an open permission waits on the person"),
+    ({"waits": "doubt"}, True, "an item in doubt only: the check is due"),
+    ({"waits": "question+doubt"}, True, "both"),
+    ({"waits": "running"}, False, "a task running but touched 5 minutes ago: not in doubt, nothing waits"),
+    ({"parked": True}, False, "parked"),
+    ({"quiet": 2 * H, "hours": 2}, False, "past a configured 2 hours"),
+    ({"quiet": 2 * H - 60, "hours": 2}, True, "inside a configured 2 hours"),
+    ({"hours": 0}, False, "0 hours: off"),
 ])
-def test_keepalive_due(host, store, sid, state, due, desc):
+def test_keepalive_due(host, store, sid, monkeypatch, state, due, desc):
+    from claude_wheelhouse import store as store_mod
     at = 100 * H
     waits = state.get("waits", "question")
+    if waits and ("doubt" in waits or waits == "running"):
+        stamp = (datetime.now(store_mod.timezone.utc)
+                 - store_mod.timedelta(minutes=20 if "doubt" in waits else 5)).isoformat(timespec="seconds")
+        real_now = store_mod.now
+        monkeypatch.setattr(store_mod, "now", lambda: stamp)
+        store.post_item(sid, "task", "build it", status="running")
+        monkeypatch.setattr(store_mod, "now", real_now)
+        waits = waits.removesuffix("doubt").rstrip("+")
+    if state.get("parked"):
+        store.set_parked(sid, True)
+    host.keepalive_for = state.get("hours", 8) * H
     if waits in ("question", "answered"):
         ref = store.post_item(sid, "question", "which?")
         if waits == "answered":
@@ -1856,3 +1877,34 @@ def test_a_put_back_leaves_a_newer_choice_made_meanwhile(hosted, store):
     run(hosted.poll())
     s = store.session(hosted.sid)
     assert (s["model"], s["applied_model"]) == ("claude-opus-5-5", "claude-opus-5-5")
+
+
+@pytest.mark.parametrize("doubted, text, desc", [
+    ([], host_mod.KEEPALIVE_TEXT, "nothing in doubt: the plain keepalive"),
+    (["T1 running", "Q2 reply owed"], "[wheelhouse] Check: T1 running, Q2 reply owed. Correct any that's finished "
+     "with update_item or reply, then reply ok. Leave alone any you don't recognise.", "the check lists them"),
+])
+def test_the_keepalive_text(host, store, sid, monkeypatch, doubted, text, desc):
+    monkeypatch.setattr(store, "in_doubt", lambda s, at=None: doubted)
+    store.post_item(sid, "question", "which?")
+    finish_at(host, 200_000)
+    host.last_turn -= host_mod.KEEPALIVE_AFTER
+    run(host.poll())
+    assert host.client.queries == [text], desc
+
+
+@pytest.mark.parametrize("items, told, desc", [
+    ([], None, "nothing open: nothing said"),
+    ([("task", "running", "build it"), ("task", "done", "old"), ("question", "open", "which db?"),
+      ("agent", "running", "explore")],
+     "these items are still open in the wheelhouse. Keep them current with update_item; correct any that's "
+     "finished:\nQ1 [open] which db?\nT1 [running] build it", "its open tasks and questions, with titles, "
+     "as list_items orders them"),
+])
+def test_a_compaction_is_followed_by_the_open_items_once(host, store, sid, items, told, desc):
+    for kind, status, title in items:
+        store.post_item(sid, kind, title, status=status)
+    finish_at(host, 60_000, compacted=True)
+    finish_at(host, 60_000)
+    notices = [m["body"] for m in store.pending(sid) if m["kind"] == "notice"]
+    assert notices == ([f"After the compaction, {told}"] if told else []), desc
