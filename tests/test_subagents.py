@@ -551,36 +551,67 @@ def test_records_a_compaction_replays_change_nothing(store, sid, joined, batches
     assert agents(store, sid)["Check pages"]["status"] == status, desc
 
 
-@pytest.mark.parametrize("after, status, scans, desc", [
-    ([RESUME], "running", 0, "a record written after the restart is new by its timestamp: no search"),
-    (compacted(history()[:3]), "done", 1, "a replayed one is no newer: searched for, and found, once"),
-    (compacted(history()[:3]) * 2, "done", 1, "its second replay is known by its uuid: no search"),
+
+
+@pytest.mark.parametrize("after, status, loads, desc", [
+    ([RESUME], "running", 1, "a record that would change an item reads the uuids before the first read, once"),
+    (compacted(history()[:3]), "done", 1, "a replayed one is found among them"),
+    (compacted(history()[:3]) * 2 + [RESUME], "running", 1, "and they are read only once"),
+    ([stamped(tool_use("toolu_y", "other"), "y1")], "done", 0, "a record that changes nothing reads nothing"),
 ])
-def test_after_a_restart_only_a_record_no_newer_than_the_first_read_is_searched_for(store, sid, joined, after,
-                                                                                     status, scans, desc):
+def test_after_a_restart_the_uuids_before_the_first_read_are_read_once(store, sid, joined, after, status, loads,
+                                                                       desc):
     joined.agent("a1", "Check pages")
-    joined.write(*[stamped(tool_use(f"toolu_x{i}", "filler"), f"x{i}") for i in range(2000)], *history())
+    joined.write(*history())
     AgentWatcher(sid).sync(store, NOW)
     w = AgentWatcher(sid)   # restarted: the first read starts at the end
     w.sync(store, NOW)
     joined.write(*after)
     w.sync(store, NOW)
-    assert (agents(store, sid)["Check pages"]["status"], w.scans) == (status, scans), desc
+    assert (agents(store, sid)["Check pages"]["status"], w.loads) == (status, loads), desc
 
 
-@pytest.mark.parametrize("size, at, desc", [
-    (subagents.SCAN * 2, 0, "at the start"),
-    (subagents.SCAN * 2, subagents.SCAN - 5, "across a chunk boundary"),
-    (subagents.SCAN * 2, subagents.SCAN * 2 - 20, "just before where the first read started"),
+def reply(uid, at):
+    return {"isSidechain": False, "type": "assistant", "uuid": uid, "timestamp": iso(at),
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}], "usage": {"output_tokens": 1}}}
+
+
+def test_a_first_read_starting_inside_a_replayed_run_knows_the_rest_of_it(store, sid, joined):
+    """a1 finished, was resumed and finished again; a2 runs from NOW - 300. A compaction then
+    replays 300 KB of old records, a reply and a1's SendMessage. A restart's first read starts at
+    a2's start, inside that run: the replayed SendMessage after it is newer than everything
+    near there, and still resumes nothing."""
+    joined.agent("a1", "Check pages")
+    joined.agent("a2", "Other job", started=NOW - 300)
+    filler = [stamped(tool_use(f"toolu_x{i}", "filler", at=NOW - 450), f"x{i}") for i in range(1500)]
+    resumed = {**stamped(send("a1"), "u5"), "timestamp": iso(NOW - 250)}
+    joined.write(*history(), *filler, stamped(tool_use("toolu_a2", "Other job", at=NOW - 300), "v1"),
+                 stamped(launched("toolu_a2", "a2"), "v2"), reply("r1", NOW - 290), resumed,
+                 {**stamped(notified("a1", "toolu_a1", "completed", form="attachment"), "n2"),
+                  "timestamp": iso(NOW - 200)})
+    AgentWatcher(sid).sync(store, NOW)
+    genuine = joined.main.stat().st_size
+    joined.write(*compacted(filler + [reply("r1", NOW - 290), resumed]))
+    w = AgentWatcher(sid)   # restarted: a2 still runs, so the first read starts at its start
+    w.sync(store, NOW)
+    assert w.base > genuine, "the first read starts inside the replayed run"
+    got = {k: v["status"] for k, v in agents(store, sid).items()}
+    assert got == {"Check pages": "done", "Other job": "running"}, got
+
+
+@pytest.mark.parametrize("at, desc", [
+    (0, "at the start"),
+    (subagents.SCAN - 5, "across a chunk boundary"),
+    (subagents.SCAN * 2 - 30, "just before where the first read started"),
 ])
-def test_the_search_before_the_first_read_finds_a_uuid_anywhere(tmp_path, size, at, desc):
-    needle = b'"uuid":"u-needle"'
+def test_every_uuid_before_the_first_read_is_collected(tmp_path, at, desc):
     path = tmp_path / "t.jsonl"
-    data = bytearray(b"x" * size)
-    data[at:at + len(needle)] = needle
+    data = bytearray((b"x" * 99 + b"\n") * (subagents.SCAN * 2 // 100 + 1))
+    line = b'{"uuid":"u-needle"}'
+    data[at:at + len(line)] = line
     path.write_bytes(bytes(data))
     w = AgentWatcher("s")
-    w.main, w.base = path, size
-    assert w.written_before(needle), desc
-    w.base = at + len(needle) - 1
-    assert not w.written_before(needle), f"{desc}: not when it ends past where the first read started"
+    w.main, w.base = path, subagents.SCAN * 2
+    assert b"u-needle" in w.uuids_before(), desc
+    w.base = at + len(line) - 2
+    assert b"u-needle" not in w.uuids_before(), f"{desc}: not when it ends past where the first read started"

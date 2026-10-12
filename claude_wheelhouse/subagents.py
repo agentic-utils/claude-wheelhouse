@@ -52,9 +52,8 @@ FIELD = re.compile(r"<(task-id|tool-use-id|status|summary)>(.*?)</\1>", re.S)
 TASK_ID = re.compile(r"<task-id>(.*?)</task-id>", re.S)
 RESULT_ID = re.compile(rb'"tool_use_id":\s*"([^"]+)"')
 SEND = re.compile(rb'"name":\s*"SendMessage"')
-STAMP = re.compile(rb'"timestamp":\s*"([^"]+)"')
-NEAR = 1 << 16   # bytes either side of where the first read started, for its newest timestamp
-SCAN = 1 << 22   # bytes read at a time, looking for a uuid before there
+UUID = re.compile(rb'"uuid":"([^"]+)"')   # as Claude Code writes it, compact
+SCAN = 1 << 22   # bytes read at a time, collecting the uuids written before the first read
 NOTE_MAX = 500
 DIED = "the session stopped while this subagent ran"
 
@@ -131,8 +130,8 @@ class AgentWatcher:
         self.stamp: tuple | None = None   # its (size, mtime) then
         self.base = 0                      # where the first read started
         self.seen: set[str] = set()        # uuids of the records read that may change an item
-        self.newest: datetime | None = None   # newest_near() at the first read
-        self.scans = 0                     # searches before base, for the tests
+        self.before: set[bytes] | None = None   # every uuid written before base, once needed
+        self.loads = 0                     # times that was read, for the tests
         self.agents: dict[str, Agent] = {}   # the ones tracked: started after the cut-off
         self.by_tool: dict[str, str] = {}    # Agent tool call id: agent id
         self.skipped: set[str] = set()       # finished before the cut-off, or a subagent's subagent
@@ -235,8 +234,7 @@ class AgentWatcher:
                 running = [a.started.timestamp() for aid, a in self.agents.items()
                            if self.links.get(aid, "running") == "running"]
                 self.offset = stats.window_start(f, st.st_size, min(running)) if running else st.st_size
-                self.base, self.seen = self.offset, set()
-                self.newest = self.newest_near(f, st.st_size)
+                self.base, self.seen, self.before = self.offset, set(), None
             f.seek(self.offset)
             data = f.read(st.st_size - self.offset)
         end = data.rfind(b"\n") + 1   # a half-written last line waits for the next read
@@ -296,9 +294,9 @@ class AgentWatcher:
         """A record written again, not new: a compaction run through the Agent SDK resumes
         the session, and Claude Code appends records it had already written, uuid and old
         timestamp included. So a uuid already read is a replay, and so is one written before
-        where the first read started. That is looked for only when the record would change an
-        item (`acts`) and is no newer than the records around there, as a replay of one is:
-        a record written since costs nothing."""
+        where the first read started: those uuids are read once, the first time a record
+        would change an item (`acts`). Not timestamps: a first read can start inside a run of
+        replayed records, newer ones after it."""
         uid = rec.get("uuid")
         if not isinstance(uid, str):
             return False
@@ -307,39 +305,30 @@ class AgentWatcher:
         self.seen.add(uid)
         if not (acts and self.base):
             return False
-        try:
-            at = when(rec.get("timestamp"))
-            if at is not None and at > self.newest:
-                return False
-            self.scans += 1
-            return self.written_before(b'"uuid":"' + uid.encode() + b'"')
-        except OSError:
-            return False
+        if self.before is None:
+            try:
+                self.before = self.uuids_before()
+            except OSError:
+                return False   # looked for again next time
+        return uid.encode() in self.before
 
-    def newest_near(self, f, size: int) -> datetime:
-        """The newest timestamp around where the first read starts, taken then: the records
-        just before it and the one at it. Nothing written before it is newer, give or take
-        the odd record Claude Code writes out of order. None found: no record is newer."""
-        start = max(0, self.base - NEAR)
-        f.seek(start)
-        buf = f.read(min(size, self.base + NEAR) - start)
-        end = buf.find(b"\n", self.base - start)
-        stamps = [when(s.decode(errors="replace")) for s in STAMP.findall(buf[:end] if end >= 0 else buf)]
-        return max((s for s in stamps if s), default=datetime.max.replace(tzinfo=timezone.utc))
-
-    def written_before(self, needle: bytes) -> bool:
-        """Whether the transcript holds `needle` before where the first read started, read in
-        chunks that overlap by the needle's length."""
+    def uuids_before(self) -> set[bytes]:
+        """Every uuid written before where the first read started, read once, in chunks
+        cut at a line's end (a uuid never spans lines): about 15 ms for a 50 MB transcript."""
+        self.loads += 1
+        found: set[bytes] = set()
         with open(self.main, "rb") as f:
-            pos, tail = 0, b""
+            pos, carry = 0, b""
             while pos < self.base:
                 chunk = f.read(min(SCAN, self.base - pos))
                 if not chunk:
-                    return False
-                if needle in tail + chunk[:len(needle)] or needle in chunk:
-                    return True
-                tail, pos = chunk[1 - len(needle):], pos + len(chunk)
-        return False
+                    break
+                pos += len(chunk)
+                buf = carry + chunk
+                cut = buf.rfind(b"\n") + 1 if pos < self.base else len(buf)
+                found.update(UUID.findall(buf, 0, cut))
+                carry = buf[cut:]
+        return found
 
     def set(self, aid: str, status: str, note: str) -> None:
         a = self.agents[aid]
