@@ -20,9 +20,11 @@ def test_wt_argv(over, title, cwd, desc):
     assert argv[:8] == ["cmd.exe", "/c", "wt.exe", "-w", "wheelhouse-u", "new-tab", "--title", title], desc
     assert argv[argv.index("--cd") + 1] == cwd, desc
     # not exec'd: a stop's 143 or 137 exits 0 and closes the tab; any other code is kept
-    assert argv[-4:] == ["--", "/bin/zsh", "-lic", "/py -m claude_wheelhouse run abc-123; "
-                         "rc=$?; if [ $rc -eq 143 -o $rc -eq 137 ]; then exit 0; fi; exit $rc"], desc
+    # each `;` escaped for wt.exe, which unescapes it for the shell
+    assert argv[-4:] == ["--", "/bin/zsh", "-lic", r"/py -m claude_wheelhouse run abc-123\; "
+                         r"rc=$?\; if [ $rc -eq 143 -o $rc -eq 137 ]\; then exit 0\; fi\; exit $rc"], desc
     assert not launch.CMD_META & set(argv[-1]), f"{desc}: cmd.exe would act on its own operators"
+    assert ";" not in argv[-1].replace(r"\;", ""), f"{desc}: a bare ; would split wt.exe's command line"
 
 
 @pytest.mark.parametrize("over, resume, has, lacks, last, desc", [

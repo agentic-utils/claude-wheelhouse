@@ -125,8 +125,9 @@ def wt_argv(session, *, python: str, distro: str, user: str, shell: str) -> list
         # exits the shell 0, so Windows Terminal's default closeOnExit closes the tab; any other
         # failure keeps its code, and the tab stays open on its error. run itself execs
         # claude, so the registered pid is still Claude Code's
-        "--", shell, "-lic", f"{shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}; "
-                             "rc=$?; if [ $rc -eq 143 -o $rc -eq 137 ]; then exit 0; fi; exit $rc",
+        # each `;` written `\;`, as wt.exe would otherwise split its own command line there
+        "--", shell, "-lic", (f"{shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}; "
+                              "rc=$?; if [ $rc -eq 143 -o $rc -eq 137 ]; then exit 0; fi; exit $rc").replace(";", r"\;"),
     ]
 
 
