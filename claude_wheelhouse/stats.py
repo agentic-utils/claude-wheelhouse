@@ -990,6 +990,7 @@ class Chart:
     span: float
     kind: str = "assembly"
     gap: bool = False   # a blank line above it
+    hour: int = 0   # its series' tokens in the last hour, on its legend's line
 
 
 def chart(turns: list[Turn], now: float, width: int, height: int, kind: str = "assembly", span: int = SPAN,
@@ -1000,7 +1001,13 @@ def chart(turns: list[Turn], now: float, width: int, height: int, kind: str = "a
     maxt = nice(max(totals, default=0))
     start, step = window(now, len(bs), span)
     return Chart([build_column([(CO[k], b[k]) for k in keys], t, maxt, height) for b, t in zip(bs, totals)],
-                 maxt, height, start, step * len(bs), kind, gap)
+                 maxt, height, start, step * len(bs), kind, gap, last_hour(turns, now, keys))
+
+
+def last_hour(turns: list[Turn], now: float, keys: list[str]) -> int:
+    """The tokens of the series `keys`, the bars' own, in turns from an hour before `now` to
+    `now`, both included: by timestamp, not the chart's buckets, whose oldest starts earlier."""
+    return sum(getattr(t, k) for t in turns if now - 3600 <= t.at <= now for k in keys)
 
 
 def charts(turns: list[Turn], now: float, width: int, room: int, height: int) -> list[Chart]:
@@ -1093,8 +1100,16 @@ def chart_lines(c: Chart, frame: int, ticks: bool = True) -> list[Text]:
     hourly ticks under it. The shimmer and gradient are the dashboard's."""
     name, series = CHARTS[c.kind]
     head = Text("▸ ", style=f"bold {hexc(ACCENT)}") + Text(name, style=f"bold {hexc(TEXT)}")
+    # the last hour's tokens at the right, a five-character number's room kept so a longer one
+    # never drops a key; the keys that don't fit beside it are left out whole, not cropped
+    note = Text(f"{tokens(c.hour):>5} tokens/last hr", style=hexc(DIM))
+    width = MARGIN + len(c.columns)
     for k, legend in series:
-        head += Text("  ▆", style=hexc(CO[k])) + Text(" " + legend, style=hexc(DIM))
+        key = Text("  ▆", style=hexc(CO[k])) + Text(" " + legend, style=hexc(DIM))
+        if head.cell_len + key.cell_len + 2 + note.cell_len > width:
+            break
+        head += key
+    head += Text(" " * max(width - head.cell_len - note.cell_len, 2)) + note
     out = ([Text()] if c.gap else []) + [head]
     for row in range(c.height - 1, -1, -1):
         line = bar_label(c, row)

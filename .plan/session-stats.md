@@ -46,7 +46,10 @@ highlighted item.
   current one, partly filled; anchored to now, their edges slid on every repaint and the
   bars seemed to breathe (#63, D27). The Y axis tops out at the tallest bar rounded up to
   1, 2 or 5 times a power of ten, so it rescales only when a bar crosses one of those. Context assembly stacks tokens read
-  from cache (green), new input (blue) and cache misses (red); output is yellow.
+  from cache (green), new input (blue) and cache misses (red); output is yellow. At the
+  right of each chart's caption row, its series' tokens over the last hour by timestamp
+  (`340k tokens/last hr`), whatever the chart spans; the colour keys that don't fit
+  beside it are left out whole.
 
 With no session in context, the panel shows totals across the running sessions.
 
@@ -71,7 +74,7 @@ for all three so they line up. Below the panel, two charts share one hour axis. 
 │cache   1h · warm until 00:45 BST (50m)            │
 │compact 1× · last 23:05 BST · 201k → 52k           │
 ╰───────────────────────────────────────────────────╯
-▸ context assembly  ▆ cache  ▆ new  ▆ miss
+▸ context assembly  ▆ cache       4.1M tokens/last hr
           ▇                █▆▂    █   █ █▅       ▇
 531k  ▇   █ █  ▄ ▂      ▃  ███  ▅ █  ▄█ ██▄▅     █ ▄▄
       █▇ ▂█ █▄▇█▅█▁  ▇ ██▃ ███  █ █  ██ ████ ▇ ▇▄█ ██
@@ -79,7 +82,7 @@ for all three so they line up. Below the panel, two charts share one hour axis. 
       ████████████████████████▅██████████████████████
     0 └──────────────────────────────────────────────
 
-▸ output  ▆ output tokens
+▸ output  ▆ output tokens         212k tokens/last hr
                                       █
  18k   ▄  ▅                ▅ ▂  ▅     █          ▇
        █  █  ▃    ▁      ▁ █ █  █ ▂  ▂█  ▆█▆▃  ▂ █

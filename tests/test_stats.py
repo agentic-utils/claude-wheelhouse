@@ -315,6 +315,34 @@ def test_the_output_chart_stacks_output_tokens():
     assert stats.chart_lines(c, 0, ticks=False)[-1].plain.strip().startswith("0 └"), "no hour ticks: they go under the last"
 
 
+@pytest.mark.parametrize("ago, kind, hour, desc", [
+    (60, "assembly", 123, "context assembly: cache read, new and miss, the bars' own series"),
+    (60, "output", 7, "output: its output tokens"),
+    (3600, "assembly", 123, "a turn exactly an hour ago counts"),
+    (3601, "assembly", 0, "a second older doesn't, though the chart still draws it"),
+    (-1, "assembly", 0, "nor one after now, which the bars leave out too"),
+])
+def test_each_chart_sums_its_last_hour(ago, kind, hour, desc):
+    turn = Turn(EVEN - ago, 100, 20, 3, 0, None, None, True, output=7)
+    assert stats.chart([turn], EVEN, width=56, height=4, kind=kind).hour == hour, desc
+
+
+@pytest.mark.parametrize("width, tokens, keys, note, desc", [
+    (80, 950, ["cache", "new", "miss"], "950 tokens/last hr", "every key, and the count at the right"),
+    (80, 0, ["cache", "new", "miss"], "0 tokens/last hr", "none"),
+    (80, 340_000, ["cache", "new", "miss"], "340k tokens/last hr", "thousands as k"),
+    (80, 1_234_567, ["cache", "new", "miss"], "1.2M tokens/last hr", "millions to one place"),
+    (56, 950, ["cache", "new"], "950 tokens/last hr", "a key that doesn't fit beside it is left out whole"),
+    (40, 12_300_000, [], "12.3M tokens/last hr", "no key at the narrowest that holds the caption and count"),
+])
+def test_the_last_hour_is_on_the_caption_row(width, tokens, keys, note, desc):
+    c = stats.chart([Turn(NOW - 60, tokens, 0, 0, 0, None, None, True)], NOW, width=width, height=4)
+    head = stats.chart_lines(c, 0)[0]
+    assert head.plain.startswith("▸ context assembly") and head.plain.endswith(" " + note), desc
+    assert head.cell_len == width, f"{desc}: right-aligned, {head.cell_len} cells in {width}"
+    assert [k for k in ("cache", "new", "miss") if f"▆ {k}" in head.plain] == keys, desc
+
+
 @pytest.mark.parametrize("colour, f, rgb, desc", [
     ((52, 224, 150), 1.0, (52, 224, 150), "full brightness is the colour itself"),
     ((52, 224, 150), 0.5, (26, 112, 75), "halved, truncated as the dashboard does"),
