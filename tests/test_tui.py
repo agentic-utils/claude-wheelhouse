@@ -2138,14 +2138,16 @@ def blinking(box) -> bool:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("box_id, key, desc", [
-    ("answer", "up", "an arrow in the answer box"),
-    ("answer", "end", "End in the answer box"),
-    ("answer", "x", "typing in the answer box"),
-    ("brief", "left", "an arrow in the new session's brief"),
-    ("name", "home", "Home in a dialog's input, where the cursor can't move"),
+@pytest.mark.parametrize("box_id, key, elsewhere, desc", [
+    ("answer", "up", None, "an arrow in the answer box"),
+    ("answer", "end", None, "End in the answer box"),
+    ("answer", "x", None, "typing in the answer box"),
+    ("brief", "left", None, "an arrow in the new session's brief"),
+    ("name", "home", None, "Home in a dialog's input, where the cursor can't move"),
+    ("answer", "up", "name", "an arrow in the answer box, then typing in a dialog opened and closed meanwhile"),
 ])
-async def test_a_held_key_shows_a_text_box_cursor_solid_until_a_quiet_spell(store, sid, clock, box_id, key, desc):
+async def test_a_held_key_shows_a_text_box_cursor_solid_until_a_quiet_spell(store, sid, clock, box_id, key, elsewhere,
+                                                                            desc):
     from claude_wheelhouse import tui
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -2161,6 +2163,15 @@ async def test_a_held_key_shows_a_text_box_cursor_solid_until_a_quiet_spell(stor
             await pilot.pause()
             assert box._cursor_visible and not blinking(box), f"{desc}: solid at press {n + 1}"
             clock.advance(tui.QUIET * 0.9)
+        if elsewhere:   # a key in another box, within this one's quiet spell, leaves its spell running
+            app.push_screen(tui.NewSession())
+            await pilot.pause()
+            app.screen.query_one(f"#{elsewhere}").focus()
+            await pilot.pause()
+            await pilot.press("x")
+            await pilot.pause()
+            app.pop_screen()
+            await pilot.pause()
         assert box._cursor_visible and not blinking(box), f"{desc}: solid within the quiet spell"
         clock.advance(tui.QUIET * 0.2)
         assert blinking(box), f"{desc}: blinking again after the quiet spell"

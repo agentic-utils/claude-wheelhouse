@@ -1619,7 +1619,6 @@ class WheelhouseApp(App):
         self.dwelling: tuple | None = None
         self.dwell_gen = 0
         self.dwell_timer = None
-        self.quiet_timer = None   # a text box's cursor shown solid until it runs out (hold_cursor)
         self.picked: tuple | None = None   # the selection the person last made, not the app (saw)
         # where each list's cursor was last left by the app, or settled (settle): a cursor
         # anywhere else is the person's move, not yet acted on
@@ -1776,10 +1775,12 @@ class WheelhouseApp(App):
         so it can be seen while a key is held. Textual restarts the blink only for a key the
         box itself gets, and a key that moves the cursor is a binding (take_key)."""
         box._pause_blink(visible=True)
-        if self.quiet_timer is not None:
-            self.quiet_timer.stop()
+        # each box its own spell: a key in another (a dialog's, over this one) leaves it running,
+        # as closing the dialog gives this box no Focus to restart its blink
+        if (timer := getattr(box, "quiet_timer", None)) is not None:
+            timer.stop()
         # a box that has lost focus meanwhile keeps the hidden, paused cursor Textual gave it
-        self.quiet_timer = self.after(QUIET, lambda: box.has_focus and box._restart_blink())
+        box.quiet_timer = self.after(QUIET, lambda: box.has_focus and box._restart_blink())
 
     async def _on_key(self, event: events.Key) -> None:
         # a key the widgets let through: its bindings were tried as it arrived (take_key)
