@@ -33,6 +33,12 @@ PLUGIN_DIR = Path(__file__).parent / "plugin"
 # A/B tested: WHEELHOUSE_DECISIONS=0 launches sessions without it. See
 # .plan/decisions-priming-test.md.
 DECISIONS = (Path(__file__).parent / "protocol_decisions.md").read_text()
+# A Claude Code started with a parent Claude Code session's variables in its environment
+# (CLAUDECODE, CLAUDE_CODE_CHILD_SESSION and the rest) takes itself for that session's child
+# and writes no transcript: a wheelhouse started from inside a session would hand them on.
+# Every launch drops them (clean_env), all but the person's own config directory
+INHERITED = "CLAUDE"
+KEPT = ("CLAUDE_CONFIG_DIR",)
 
 
 def protocol_file(name: str) -> str:
@@ -77,6 +83,15 @@ JOINED_TEXT = ("You have just been opened in the wheelhouse, mid-conversation. C
 
 
 CMD_META = set('&|<>^%"')
+
+
+def clean_env(base=None, **extra: str) -> dict[str, str]:
+    """The environment a launch passes on: base (os.environ by default) without a parent
+    Claude Code session's variables (INHERITED, but for KEPT), with extra set."""
+    base = os.environ if base is None else base
+    env = {k: v for k, v in base.items() if not k.startswith(INHERITED) or k in KEPT}
+    env.update(extra)
+    return env
 
 
 def login_shell() -> str:
@@ -258,7 +273,7 @@ def open_host(store: Store, sid: str) -> None:
         subprocess.run(["setsid", "--fork", sys.executable, "-m", "claude_wheelhouse", "host", sid,
                         features.KEEPALIVE_FLAG, f"{features.keepalive_hours():g}"],
                        cwd=session["cwd"], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                       env=dict(os.environ, WHEELHOUSE_DB=str(store.path)), check=True)
+                       env=clean_env(WHEELHOUSE_DB=str(store.path)), check=True)
     if resuming:
         store.notice(sid, JOINED_TEXT)
 
@@ -278,8 +293,8 @@ def open_tab(store: Store, sid: str, notice: bool = True) -> None:
     with open(store.path.parent / "launch.log", "a") as log:
         print(now(), sid, "launching", " ".join(argv), file=log, flush=True)
         # cmd.exe warns about (and ignores) a \\wsl$ working directory, so start it from C:
-        subprocess.Popen(argv, cwd="/mnt/c", stdin=subprocess.DEVNULL, stdout=log,
-                         stderr=subprocess.STDOUT, start_new_session=True)
+        subprocess.Popen(argv, cwd="/mnt/c", stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                         start_new_session=True, env=clean_env())
     if notice and transcript_exists(sid):   # resuming: the session takes seconds to start, the notice waits
         store.notice(sid, JOINED_TEXT)
 
@@ -290,7 +305,7 @@ def run(sid: str) -> None:
     session = store.session(sid)
     if session is None:
         sys.exit(f"claude-wheelhouse: no session {sid} (ended?)")
-    env = dict(os.environ, WHEELHOUSE_SESSION_ID=sid, WHEELHOUSE_DB=str(store.path), WHEELHOUSE_PYTHON=sys.executable)
+    env = clean_env(WHEELHOUSE_SESSION_ID=sid, WHEELHOUSE_DB=str(store.path), WHEELHOUSE_PYTHON=sys.executable)
     os.chdir(session["cwd"])
     resume = transcript_exists(sid)
     argv = claude_argv(session, python=sys.executable, resume=resume)

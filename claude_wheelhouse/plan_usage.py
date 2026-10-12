@@ -25,6 +25,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from .launch import clean_env
+
 EVERY = 300          # seconds between /usage calls
 TIMEOUT = 60         # seconds a call may take: the first, starting Claude Code, takes about 8
 BACKOFF = 10         # seconds before a Claude Code that died is started again, doubled per death
@@ -290,7 +292,7 @@ class Probe:
 
     def spawn(self, stdin) -> subprocess.Popen:
         """Claude Code started, as self.proc, so stop can kill it."""
-        env = {k: v for k, v in os.environ.items() if k not in UNSET}
+        env = {k: v for k, v in clean_env().items() if k not in UNSET}
         try:
             proc = subprocess.Popen(self.command or command(self.mode), stdin=stdin, stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, cwd=self.cwd, env=env, text=True,

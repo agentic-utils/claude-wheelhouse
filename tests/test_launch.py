@@ -225,3 +225,48 @@ def test_the_shell_hand_over_and_restore_take_the_columns(store, monkeypatch):
     sid = store.create_session("/tmp", runner="sdk", model="claude-opus-5-5", effort="max")
     argv = launch.claude_argv(store.session(sid), python="/py", resume=True)
     assert argv[argv.index("--model") + 1] == "claude-opus-5-5" and argv[argv.index("--effort") + 1] == "max"
+
+
+PARENT = {"CLAUDECODE": "1", "CLAUDE_CODE_CHILD_SESSION": "1", "CLAUDE_CODE_ENTRYPOINT": "cli",
+          "CLAUDE_CONFIG_DIR": "/home/u/.claude-alt", "PATH": "/usr/bin"}
+
+
+def launched_env(path, store, sid, monkeypatch, tmp_path):
+    """The environment each launch path hands on, run with a parent session's in os.environ."""
+    seen = []
+    monkeypatch.setattr(launch.liveness, "is_alive", lambda *a: False)
+    monkeypatch.setattr(launch, "transcript_exists", lambda sid: False)
+    if path == "run":
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(launch.os, "execvpe", lambda file, argv, env: seen.append(env))
+        launch.run(sid)
+    elif path == "tab":
+        monkeypatch.setattr(launch.subprocess, "Popen", lambda argv, **kw: seen.append(kw["env"]))
+        launch.open_tab(store, sid)
+    else:
+        store.set_runner(sid, "sdk")
+        monkeypatch.setattr(launch.subprocess, "run", lambda argv, **kw: seen.append(kw["env"]))
+        launch.open_host(store, sid)
+    return seen[0]
+
+
+@pytest.mark.parametrize("path, desc", [
+    ("run", "a tab's run execs claude without the parent session's variables"),
+    ("tab", "wt.exe is started without them"),
+    ("host", "an SDK host is started without them, so the claude it runs never sees them"),
+])
+def test_every_launch_scrubs_a_parent_sessions_environment(path, desc, store, sid, monkeypatch, tmp_path):
+    for key, value in PARENT.items():
+        monkeypatch.setenv(key, value)
+    env = launched_env(path, store, sid, monkeypatch, tmp_path)
+    assert not [k for k in env if k.startswith("CLAUDE") and k != "CLAUDE_CONFIG_DIR"], desc
+    assert env["CLAUDE_CONFIG_DIR"] == "/home/u/.claude-alt" and env["PATH"] == "/usr/bin", desc
+
+
+@pytest.mark.parametrize("base, extra, want, desc", [
+    ({"CLAUDECODE": "1", "HOME": "/h"}, {}, {"HOME": "/h"}, "CLAUDECODE goes"),
+    ({"CLAUDE_CODE_CHILD_SESSION": "1"}, {"A": "b"}, {"A": "b"}, "a child-session marker goes; extra is set"),
+    ({"CLAUDE_CONFIG_DIR": "/c"}, {}, {"CLAUDE_CONFIG_DIR": "/c"}, "the person's config directory stays"),
+])
+def test_clean_env(base, extra, want, desc):
+    assert launch.clean_env(base, **extra) == want, desc
