@@ -50,7 +50,7 @@ class Session:
     def write(self, *recs):
         with open(self.main, "a") as f:
             for r in recs:
-                f.write(json.dumps(r) + "\n")
+                f.write(json.dumps(r, separators=(",", ":")) + "\n")   # compact, as Claude Code writes
 
 
 def tool_use(tool, desc, background=True, at=NOW - 600):
@@ -526,7 +526,7 @@ def compacted(recs):
 
 
 RESTART = "restart"
-RESUME = stamped(send("a1"), "u5")
+RESUME = {**stamped(send("a1"), "u5"), "timestamp": iso(NOW - 30)}
 
 
 @pytest.mark.parametrize("batches, status, desc", [
@@ -549,3 +549,38 @@ def test_records_a_compaction_replays_change_nothing(store, sid, joined, batches
             joined.write(*batch)
         w.sync(store, NOW)
     assert agents(store, sid)["Check pages"]["status"] == status, desc
+
+
+@pytest.mark.parametrize("after, status, scans, desc", [
+    ([RESUME], "running", 0, "a record written after the restart is new by its timestamp: no search"),
+    (compacted(history()[:3]), "done", 1, "a replayed one is no newer: searched for, and found, once"),
+    (compacted(history()[:3]) * 2, "done", 1, "its second replay is known by its uuid: no search"),
+])
+def test_after_a_restart_only_a_record_no_newer_than_the_first_read_is_searched_for(store, sid, joined, after,
+                                                                                     status, scans, desc):
+    joined.agent("a1", "Check pages")
+    joined.write(*[stamped(tool_use(f"toolu_x{i}", "filler"), f"x{i}") for i in range(2000)], *history())
+    AgentWatcher(sid).sync(store, NOW)
+    w = AgentWatcher(sid)   # restarted: the first read starts at the end
+    w.sync(store, NOW)
+    joined.write(*after)
+    w.sync(store, NOW)
+    assert (agents(store, sid)["Check pages"]["status"], w.scans) == (status, scans), desc
+
+
+@pytest.mark.parametrize("size, at, desc", [
+    (subagents.SCAN * 2, 0, "at the start"),
+    (subagents.SCAN * 2, subagents.SCAN - 5, "across a chunk boundary"),
+    (subagents.SCAN * 2, subagents.SCAN * 2 - 20, "just before where the first read started"),
+])
+def test_the_search_before_the_first_read_finds_a_uuid_anywhere(tmp_path, size, at, desc):
+    needle = b'"uuid":"u-needle"'
+    path = tmp_path / "t.jsonl"
+    data = bytearray(b"x" * size)
+    data[at:at + len(needle)] = needle
+    path.write_bytes(bytes(data))
+    w = AgentWatcher("s")
+    w.main, w.base = path, size
+    assert w.written_before(needle), desc
+    w.base = at + len(needle) - 1
+    assert not w.written_before(needle), f"{desc}: not when it ends past where the first read started"

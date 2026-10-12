@@ -30,7 +30,6 @@ earliest subagent still running (stats.window_start), or at the end when none is
 """
 
 import json
-import mmap
 import re
 import time
 from dataclasses import dataclass
@@ -53,6 +52,9 @@ FIELD = re.compile(r"<(task-id|tool-use-id|status|summary)>(.*?)</\1>", re.S)
 TASK_ID = re.compile(r"<task-id>(.*?)</task-id>", re.S)
 RESULT_ID = re.compile(rb'"tool_use_id":\s*"([^"]+)"')
 SEND = re.compile(rb'"name":\s*"SendMessage"')
+STAMP = re.compile(rb'"timestamp":\s*"([^"]+)"')
+NEAR = 1 << 16   # bytes either side of where the first read started, for its newest timestamp
+SCAN = 1 << 22   # bytes read at a time, looking for a uuid before there
 NOTE_MAX = 500
 DIED = "the session stopped while this subagent ran"
 
@@ -129,6 +131,8 @@ class AgentWatcher:
         self.stamp: tuple | None = None   # its (size, mtime) then
         self.base = 0                      # where the first read started
         self.seen: set[str] = set()        # uuids of the records read that may change an item
+        self.newest: datetime | None = None   # newest_near() at the first read
+        self.scans = 0                     # searches before base, for the tests
         self.agents: dict[str, Agent] = {}   # the ones tracked: started after the cut-off
         self.by_tool: dict[str, str] = {}    # Agent tool call id: agent id
         self.skipped: set[str] = set()       # finished before the cut-off, or a subagent's subagent
@@ -232,6 +236,7 @@ class AgentWatcher:
                            if self.links.get(aid, "running") == "running"]
                 self.offset = stats.window_start(f, st.st_size, min(running)) if running else st.st_size
                 self.base, self.seen = self.offset, set()
+                self.newest = self.newest_near(f, st.st_size)
             f.seek(self.offset)
             data = f.read(st.st_size - self.offset)
         end = data.rfind(b"\n") + 1   # a half-written last line waits for the next read
@@ -252,15 +257,14 @@ class AgentWatcher:
                 status = FINISH.get(first.get("status"))
                 aids = [i for i in ids if i in self.agents] or [self.by_tool.get(first.get("tool-use-id"))]
                 aids = [aid for aid in aids if aid and status]
-                if aids and not self.replayed(rec):
+                if not self.replayed(rec, acts=bool(aids)):
                     for aid in aids:
                         self.set(aid, status, "" if status == "done" else first.get("summary", ""))
                 return
         if b'"tool_result"' in line and any(i.decode() in self.by_tool for i in RESULT_ID.findall(line)):
             rec = json.loads(line)
-            if self.replayed(rec):
-                return
             result = rec.get("toolUseResult")
+            finished = []
             for block in (rec.get("message") or {}).get("content") or []:
                 aid = self.by_tool.get(block.get("tool_use_id")) if isinstance(block, dict) else None
                 if aid is None or block.get("type") != "tool_result":
@@ -269,17 +273,22 @@ class AgentWatcher:
                         else result_text(block).startswith("Async agent launched"):
                     continue   # a background launch: it finishes with a notification
                 failed = bool(block.get("is_error"))
-                self.set(aid, "failed" if failed else "done", result_text(block) if failed else "")
+                finished.append((aid, "failed" if failed else "done", result_text(block) if failed else ""))
+            if not self.replayed(rec, acts=bool(finished)):
+                for aid, status, note in finished:
+                    self.set(aid, status, note)
         elif SEND.search(line):
             rec = json.loads(line)
             if rec.get("type") != "assistant":
                 return
             sent = [(block.get("input") or {}).get("to") for block in (rec.get("message") or {}).get("content") or []
                     if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "SendMessage"]
-            sent = [aid for aid in sent if aid in self.agents]
+            if not sent:
+                return
             # finished as the transcript said, or as the item was written before a restart
-            resumed = [aid for aid in sent if (self.agents[aid].status or self.links.get(aid)) not in (None, "running")]
-            if sent and not self.replayed(rec, acts=bool(resumed)):
+            resumed = [aid for aid in sent if isinstance(aid, str) and aid in self.agents
+                       and (self.agents[aid].status or self.links.get(aid)) not in (None, "running")]
+            if not self.replayed(rec, acts=bool(resumed)):
                 for aid in resumed:
                     self.set(aid, "running", "")
 
@@ -287,8 +296,9 @@ class AgentWatcher:
         """A record written again, not new: a compaction run through the Agent SDK resumes
         the session, and Claude Code appends records it had already written, uuid and old
         timestamp included. So a uuid already read is a replay, and so is one written before
-        where the first read started, looked for only when the record would change an item
-        (`acts`), which is rare: a first read stays cheap."""
+        where the first read started. That is looked for only when the record would change an
+        item (`acts`) and is no newer than the records around there, as a replay of one is:
+        a record written since costs nothing."""
         uid = rec.get("uuid")
         if not isinstance(uid, str):
             return False
@@ -297,12 +307,39 @@ class AgentWatcher:
         self.seen.add(uid)
         if not (acts and self.base):
             return False
-        pattern = re.compile(rb'"uuid":\s*"' + re.escape(uid.encode()) + rb'"')
         try:
-            with open(self.main, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
-                return pattern.search(m, 0, self.base) is not None
-        except (OSError, ValueError):
+            at = when(rec.get("timestamp"))
+            if at is not None and at > self.newest:
+                return False
+            self.scans += 1
+            return self.written_before(b'"uuid":"' + uid.encode() + b'"')
+        except OSError:
             return False
+
+    def newest_near(self, f, size: int) -> datetime:
+        """The newest timestamp around where the first read starts, taken then: the records
+        just before it and the one at it. Nothing written before it is newer, give or take
+        the odd record Claude Code writes out of order. None found: no record is newer."""
+        start = max(0, self.base - NEAR)
+        f.seek(start)
+        buf = f.read(min(size, self.base + NEAR) - start)
+        end = buf.find(b"\n", self.base - start)
+        stamps = [when(s.decode(errors="replace")) for s in STAMP.findall(buf[:end] if end >= 0 else buf)]
+        return max((s for s in stamps if s), default=datetime.max.replace(tzinfo=timezone.utc))
+
+    def written_before(self, needle: bytes) -> bool:
+        """Whether the transcript holds `needle` before where the first read started, read in
+        chunks that overlap by the needle's length."""
+        with open(self.main, "rb") as f:
+            pos, tail = 0, b""
+            while pos < self.base:
+                chunk = f.read(min(SCAN, self.base - pos))
+                if not chunk:
+                    return False
+                if needle in tail + chunk[:len(needle)] or needle in chunk:
+                    return True
+                tail, pos = chunk[1 - len(needle):], pos + len(chunk)
+        return False
 
     def set(self, aid: str, status: str, note: str) -> None:
         a = self.agents[aid]
