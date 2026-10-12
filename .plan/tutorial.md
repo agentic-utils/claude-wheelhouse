@@ -154,7 +154,10 @@ their tokens per run.
 - The brief has the session post a task, two related questions (tone, and a sign-off that
   depends on the tone) and a decision, then wait. On the answers it replies, writes the
   message in chat, then marks the task done. It's told to touch nothing else and to skip its own session-end routine (no
-  memory or handoff notes) when ended.
+  memory or handoff notes) when ended. It asks for the decision outright, so the demo posts
+  one even under `WHEELHOUSE_DECISIONS=0`, which only drops the protocol's decisions section.
+- Immediate mode has no step of its own: the hint under the answer box names the mode and
+  Ctrl+T, and `?` gives the send-mode rules.
 - First run: with no sessions and no `tutorial_offer` setting (a new `settings` table), a
   one-line offer (wrapped on a narrow screen, so its command is never cut) sits at the top
   of the screen. Enter starts the tutorial, Esc dismisses it; either way the setting is written and it never comes back. `tutorial_offer = reset`

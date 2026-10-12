@@ -91,7 +91,8 @@ session.
 ## What it does
 
 - **Inbox.** Every task, question and subagent status from every session in one list,
-  open questions first. Pick one to preview its detail and thread; Enter opens it full
+  open questions first. A task is todo, running, blocked, waiting, done or dropped, as its
+  session sets it. Pick one to preview its detail and thread; Enter opens it full
   screen as a conversation, with the session's replies. Ctrl+Enter submits an answer, and
   each session has a send mode: in Queued mode (where every session starts) answers wait
   and go out together, Ctrl+S sending the session's as one message; in Immediate mode each
@@ -184,7 +185,11 @@ session.
   foot of the list's room: they fall there as you park them, and rise back as you unpark
   them). Under it, a description of the highlighted one: its status, ticket, directory
   and counts, and its synopsis, which the session keeps up to date itself (its brief until
-  it sets one), in a box that takes half the column.
+  it sets one), in a box that takes half the column. The dot before each name, and the
+  status in the description, are green when it's live, cyan while it starts or relaunches,
+  yellow when stalled (its Claude Code runs, but its wheelhouse MCP server hasn't checked in
+  for 2 minutes), magenta while it's been asked to park or end, red when dead (its Claude
+  Code isn't running) and grey when parked.
   The highlighted session is the current one: highlighting an item moves the list's
   highlight to the item's session, and moving the list's highlight follows that session.
   The buttons under the description act on it, and only those that apply show, each with
@@ -209,11 +214,12 @@ session.
   `/exit`ed it in its tab. Nothing restarts on its own, and a resumed session is asked to
   post the questions and tasks it already had open. Park
   drops a session's items off the inbox until you unpark or restore it. End deletes its wheelhouse data. On a running
-  session, Park and End only ask the session to do it (press again to cancel or force);
-  on a dead one they act at once, without resuming it. The wheelhouse never deletes
-  anything by itself.
+  session, Park and End only ask the session to do it (press again to choose: `C` cancels
+  the request, `F` forces it, `Esc` leaves it be); on a dead one they act at once, without
+  resuming it. In the session's tab, `/wheelhouse park` and `/wheelhouse end` do the same
+  from there. The wheelhouse never deletes anything by itself.
   The buttons stay out of the Tab order, and each has a key: with the list focused, `R` renames, `L` relaunches,
-  `S` restores, `Shift+S` restores all, `P` parks or unparks and `E` ends; the rest are under Keys below.
+  `S` restores, `P` parks or unparks and `E` ends; the rest are under Keys below.
 - **Adopt.** Brings a session the wheelhouse didn't launch into the wheelhouse: pick it
   from the recent sessions in `~/.claude/projects` (one whose adoption failed is offered
   again). If it's still running, type `/exit` in
@@ -238,7 +244,8 @@ how to work.
   followed by how your messages reach it ([`protocol_tab.md`](claude_wheelhouse/protocol_tab.md)) and
   [`protocol_decisions.md`](claude_wheelhouse/protocol_decisions.md), which
   has the session report the choices it makes without asking.
-  `WHEELHOUSE_DECISIONS=0` launches sessions without that section.
+  `WHEELHOUSE_DECISIONS=0`, set where the daemon starts, launches sessions without that
+  section (the daemon reads it as it starts, so restart it after a change).
 - [The `/wheelhouse` skill](claude_wheelhouse/plugin/skills/wheelhouse/SKILL.md):
   `/wheelhouse park` and `/wheelhouse end`.
 - [The `wheelhouse` MCP server](claude_wheelhouse/mcp_server.py): the tools the session
@@ -261,6 +268,7 @@ selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued o
 `Ctrl+S` send the session's queue (not a dead one's: Restore it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
 as answered, a decision as seen), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
+A dialog asking yes or no takes `Y` or `N` (`Esc` is no, and so is `Enter`, as No has the focus).
 
 `Tab` goes round the panes: the session list, the items, the answer box, then the conversation (one
 stop, where the arrows, `PgUp`, `PgDn`, `Home` and `End` scroll it), and `Shift+Tab` goes back.
@@ -323,11 +331,21 @@ machine. `claude-wheelhouse --connect host:7428` runs
 the app on another machine against a daemon listening on an address that machine reaches
 (a VPN's): the token comes from `--token-file`, else `WHEELHOUSE_TOKEN`, else it asks for
 it, never from the command line. There it answers and manages the sessions, but starts none:
-a tab would open on the daemon's machine. `claude-wheelhouse --local` runs the app with a hub of its
-own, without the daemon, as it ran before.
+a tab would open on the daemon's machine. The daemon accepts only requests addressed to its
+own address, so if the other machine reaches it by a name (the VPN's), give that too:
+
+    claude-wheelhouse daemon --stop
+    claude-wheelhouse daemon --address 100.64.0.5 --name mybox.tailnet.ts.net
+
+(`--name` repeats for more names; quit the app first, as below, and start that daemon before
+the app.) On the other machine, `claude-wheelhouse --connect mybox.tailnet.ts.net:7428`.
+
+`claude-wheelhouse --local` runs the app with a hub of its own, without the daemon, as it
+ran before. Don't run it while the daemon runs: two hubs would act on the same sessions (the
+app warns if you do).
 
 To stop the daemon, quit the app (`Q`) first, since an open app starts it again, then run
-`claude-wheelhouse daemon --stop`. It stops the daemon by the pid in `daemon.lock`, with no
+`make stop` in the clone (`claude-wheelhouse daemon --stop`). It stops the daemon by the pid in `daemon.lock`, with no
 token needed, and says what it did ("no wheelhouse daemon is running" if there was none).
 Running sessions carry on in their tabs, and the next `claude-wheelhouse` starts a fresh
 daemon.
@@ -448,8 +466,8 @@ did, what you expected and what happened, and attach:
 - `launch.log` and `daemon.log`, which sit next to the database: in
   `~/.local/state/claude-wheelhouse/`, or the directory of `WHEELHOUSE_DB` if you set it;
 - the output of `uv run claude-wheelhouse protocol`, run in the clone: what your sessions
-  are told and the command they launch with, under the settings in force
-  (`WHEELHOUSE_DECISIONS`, for one);
+  are told and the command they launch with, under the settings in force in the shell you
+  run it from (`WHEELHOUSE_DECISIONS`, for one, which sessions take from the daemon's);
 - the commit you're on (`git rev-parse --short HEAD` in the clone) and `claude --version`.
 
 The logs hold your directory paths and session ids: look them over before you attach them.

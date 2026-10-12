@@ -9,6 +9,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 
 - `cli.py`: the `claude-wheelhouse` entry point and its subcommands (`tui`, the default;
   `tutorial`, `run`, `host`, `mcp`, `monitor`, `protocol`, `daemon`, `token`, `open-items`).
+  The app takes `--local`, or `--connect HOST:PORT` with `--token-file`; it and `daemon`
+  take `--port`, `--usage-mode`, `--keepalive-hours` and `--enable-sdk` (`features.py`);
+  `daemon` adds `--address`, `--name` (repeatable) and `--stop`; `tutorial` takes `--yes`.
 - `store.py`: the SQLite store, the only source of truth. Schema, added columns,
   triggers, `PROTOCOL_VERSION`. Every public write is its own committed transaction.
 - `hub.py`: what the wheelhouse knows and does, whatever shows it. Owns liveness and
@@ -61,7 +64,7 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 ## Run
 
 - `make install` (`uv sync --reinstall-package claude-wheelhouse`), then `make run`.
-  `make tutorial` (`claude-wheelhouse tutorial`), with the app and daemon stopped, has the
+  `make stop` (`claude-wheelhouse daemon --stop`) stops the daemon. `make tutorial` (`claude-wheelhouse tutorial`), with the app and daemon stopped, has the
   next start offer the tutorial again. `make` lists the targets. Python 3.12, managed by uv.
 - The install is editable: `.venv` imports this checkout. In another clone or worktree,
   that venv's `pytest` script imports the main checkout, not yours. Run
@@ -69,7 +72,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 
 ## Test
 
-- Run `uv run python -m pytest` (or `make test`). `pyproject.toml` adds `-n auto`; `-n 0` runs
+- Run `uv run python -m pytest` (or `make test`, which runs the `pytest` script, in the main
+  checkout only: see above). `pyproject.toml` adds `-n auto`; `-n 0` runs
   serially.
 - Inside a wheelhouse session, first `unset WHEELHOUSE_DB WHEELHOUSE_SESSION_ID WHEELHOUSE_TOKEN`.
   `conftest.py` refuses to run (`test isolation: ...`) while the database or its state
@@ -103,15 +107,21 @@ that keeps files of its own gets it as `api.Context.state_dir`. Environment vari
 `WHEELHOUSE_SESSION_ID` and `WHEELHOUSE_PYTHON`, which a launched session is given,
 `WHEELHOUSE_RUNNER` (`tab` or `sdk`; it never turns SDK mode on by itself), and
 `TEXTUAL_COLOR_SYSTEM`, which overrides the truecolour the app assumes under Windows
-Terminal (`cli.truecolour`).
-`claude-wheelhouse daemon --stop` stops the local daemon; quit the app first, or it starts
-another.
+Terminal (`WT_SESSION` set and `COLORTERM` not: `cli.truecolour`), and
+`WHEELHOUSE_CLAUDE`, the `claude` the usage probe runs instead (the tests' missing one).
+Read from the system: `SHELL` (each tab runs `claude` through `$SHELL -lic`) and
+`WSL_DISTRO_NAME` (the distro a tab opens in).
+`make stop` (`claude-wheelhouse daemon --stop`) stops the local daemon; quit the app first,
+or it starts another.
 
 ## The live database
 
 Never open, write, migrate or delete `~/.local/state/claude-wheelhouse/wheelhouse.db`,
 or anything else under `~/.local/state/claude-wheelhouse/`. It is the person's running
-wheelhouse. Point experiments at a scratch path with `WHEELHOUSE_DB`.
+wheelhouse. Point experiments at a scratch path with `WHEELHOUSE_DB`, and with it either
+`WHEELHOUSE_PORT` (another free port) or `--local`: the scratch app otherwise tries to start
+its own daemon on the person's port, which theirs holds. Launching a session from it still
+opens a real Windows Terminal tab running Claude Code.
 
 ## Compatibility with running sessions
 
@@ -133,6 +143,8 @@ Update these in the same commit as the behaviour they describe:
 
 - `protocol*.md`, the MCP tool docstrings and `launch.JOINED_TEXT`: what sessions are told.
 - `tutorial.py`: the tutorial session's `BRIEF` and checklist `STEPS`.
+- `tui.py`'s `DESCRIBE` (each binding's line in the `?` overlay; a test fails when a binding
+  has none), `BUTTONS` (each button's tooltip and overlay line), `SEND_RULES` and `MOUSE`.
 - `README.md`: anything a user sees or does.
 - The matching `.plan/` doc when a design decision changes.
 
