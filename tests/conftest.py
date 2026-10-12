@@ -1,4 +1,5 @@
 import functools
+import itertools
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -173,9 +174,18 @@ class Clock:
 
 
 @pytest.fixture
-def clock(monkeypatch):
-    """Clock: the app's timers on the test's own time. The dwell lapses at its shipped length
-    (tui.DWELL), so a test resting on an item rests that long."""
+def frame_clock(monkeypatch):
+    """The animation's clock (WheelhouseApp.now) a frame later each time it is read, as at
+    10 fps whatever the real time: each app.animate() moves everything one frame."""
+    reads = itertools.count()
+    monkeypatch.setattr(tui.WheelhouseApp, "now", staticmethod(lambda: next(reads) / tui.FRAMES))
+
+
+@pytest.fixture
+def clock(monkeypatch, frame_clock):
+    """Clock: the app's timers on the test's own time, an animation frame a clock.animate
+    (frame_clock). The dwell lapses at its shipped length (tui.DWELL), so a test resting on
+    an item rests that long."""
     clock = Clock()
     monkeypatch.setattr(tui.Sink, "now", staticmethod(clock.now))
     monkeypatch.setattr(tui.WheelhouseApp, "after", lambda self, delay, callback: clock.after(delay, callback))

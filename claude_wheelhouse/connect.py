@@ -320,8 +320,8 @@ def local(state_dir: Path, port: int, given: bool = False) -> tuple[str, str, li
             failed += 1
             if failed >= 2 or not found:
                 line = last_line(state_dir)
-                if line == features.PORT_TAKEN.format(port=port):   # the daemon's own words (daemon.listener)
-                    raise NoDaemon(line)
+                if line.startswith(features.PORT_TAKEN.format(port=port)):   # the daemon's words (daemon.listener)
+                    raise NoDaemon(features.port_taken(port))   # where the app's port was set: it starts the daemon with --port
                 raise NoDaemon(f"the daemon didn't start: {line or 'see ' + LOG} "
                                f"(in {state_dir}). claude-wheelhouse --local runs without it")
             continue

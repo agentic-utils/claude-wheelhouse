@@ -22,7 +22,7 @@ highlighted item.
   (`plan_usage.py`, #16) runs `claude -p "/usage"` with no settings, MCP servers or
   transcript, about 4 s and 4.7 CPU-seconds with no tokens, nothing left running between
   (Doug's Q69: the default). Its "persistent" mode (`--usage-mode persistent`, or
-  `usage-mode=persistent` in either `.env` that `features.py` reads; the flag wins, a bad
+  `WHEELHOUSE_USAGE_MODE`, or `USAGE_MODE=persistent` in either `.env` that `features.py` reads; the flag wins, a bad
   value is said once and taken as oneshot, and `connect.start` passes the mode to the
   daemon) keeps one `claude -p --input-format stream-json` running and sends it `/usage` instead: 2 to 3 s a call, but averaged
   over the 5 minutes about 3% of a core and 250 MB resident, against oneshot's 1.6% and

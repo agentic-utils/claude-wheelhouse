@@ -263,7 +263,7 @@ other step ids:
 |---|---|
 | `demo` | the tutorial's demo session is running; Start launches one |
 | `session` | any running session of the person's, hosted in the wheelhouse |
-| `sdk` | SDK mode is on (`--enable-sdk`, or `enable-sdk=true` in a `.env`): the step is offered only then. The permission step, which the tab tutorial leaves out, comes back this way |
+| `sdk` | SDK mode is on (`--enable-sdk`, `WHEELHOUSE_ENABLE_SDK=true`, or `ENABLE_SDK=true` in a `.env`): the step is offered only then. The permission step, which the tab tutorial leaves out, comes back this way |
 | a step id | that step is done first (`send` needs `queue`) |
 
 A step whose needs aren't met stays pending and shows in the checklist greyed, with what

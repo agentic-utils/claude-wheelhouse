@@ -3308,7 +3308,8 @@ async def test_a_failed_transcript_read_is_shown_not_fatal(store, sid, monkeypat
     (True, False, "the shimmer and the eyes rest while you type (D41)"),
 ])
 @pytest.mark.both
-async def test_the_stats_shimmer_and_eyes_rest_while_typing(store, sid, monkeypatch, focus_answer, moves, desc):
+async def test_the_stats_shimmer_and_eyes_rest_while_typing(store, sid, monkeypatch, frame_clock, focus_answer, moves,
+                                                             desc):
     monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: True)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -3345,6 +3346,35 @@ async def test_the_animation_runs_at_the_rate_given(store, sid, monkeypatch, fps
             assert (app.frame, app.session_list.eye_frame) == (0, 0), desc
             assert app.title_bar.look == tui.shimmer_phase(0), desc
             assert sid in app.session_list.eyes, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("fps, desc", [
+    ("10", "the default"),
+    ("2", "a fifth of the frames"),
+    ("2.5", "a fraction"),
+    ("30", "the most"),
+])
+async def test_the_animation_moves_at_the_same_speed_at_any_rate(store, sid, monkeypatch, fps, desc):
+    """Wherever 10 fps puts the title's shimmer, the eyes and the bars after a time, every
+    rate puts them there too: a lower one draws fewer frames, not slower ones."""
+    monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: True)
+    at = [100.0]
+    monkeypatch.setattr(WheelhouseApp, "now", staticmethod(lambda: at[0]))
+    features.set_animation_fps(fps)
+    rate = float(fps)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        for n in range(1, round(rate * 6) + 1):   # six seconds of this rate's frames
+            at[0] = 100.0 + n / rate
+            app.animate()
+            if n % round(rate * 2) == 0:   # every 2 s: where 10 fps has 20 more frames
+                seconds = round(n / rate)
+                frame = seconds * tui.FRAMES
+                assert app.title_bar.look == tui.shimmer_phase(frame), f"{desc}: the shimmer at {seconds} s"
+                assert app.session_list.eye_frame == frame, f"{desc}: the eyes at {seconds} s"
+                assert app.query_one("#stats").frame == frame // 2, f"{desc}: the bars at {seconds} s"
 
 
 @pytest.mark.anyio
@@ -3413,6 +3443,7 @@ async def test_the_eyes_look_as_when_they_were_the_tables_data(store, sid, tmp_p
 
 @pytest.mark.anyio
 async def test_an_eye_frame_draws_the_busy_rows_alone(store, sid, tmp_path, monkeypatch):
+    features.set_animation_fps("0")   # no frames but the test's: a timer's sweep would leave nothing to draw
     store.create_session(str(tmp_path), name="calm")
     monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: s == sid)
     app = WheelhouseApp(store)
@@ -5329,7 +5360,8 @@ async def test_quitting_through_the_daemon_leaves_a_relaunch_to_it(store, sid, s
     (True, tui.SHIMMER_PERIOD, tui.SHIMMER_PERIOD, "the shimmer: each frame a new look"),
     (False, 6, 1, "the daemon out of reach: said once, not again each frame"),
 ])
-async def test_the_title_shows_a_look_only_once_it_changes(store, monkeypatch, connected, frames, updates, desc):
+async def test_the_title_shows_a_look_only_once_it_changes(store, monkeypatch, frame_clock, connected, frames, updates,
+                                                            desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -5344,13 +5376,13 @@ async def test_the_title_shows_a_look_only_once_it_changes(store, monkeypatch, c
 
 
 @pytest.mark.anyio
-async def test_the_titles_kept_lines_are_its_looks_as_drawn_afresh(store):
+async def test_the_titles_kept_lines_are_its_looks_as_drawn_afresh(store, monkeypatch):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         title = app.title_bar
         for frame in range(3 * tui.SHIMMER_PERIOD):   # the first round draws, the rest recall
-            app.frame = frame - 1
+            monkeypatch.setattr(WheelhouseApp, "now", staticmethod(lambda: app.started + frame / tui.FRAMES))
             app.animate()
             got = cells(title.render_line(0))
             title._render_content()   # as a plain Static draws it

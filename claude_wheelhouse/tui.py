@@ -64,6 +64,7 @@ STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "
                 "dead": "bold #ff2a6d", "ending": "bold #d300c5", "parking": "bold #d300c5",
                 "relaunching": "bold #05d9e8"}
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
+FRAMES = 10   # frames a second that the shimmer, the eyes and the bars are counted in, whatever the rate drawn
 SHIMMER_PERIOD = 2 * len(SHIMMER)   # the title's frames before its colours come round again (shimmer)
 UNREACHABLE = Text(" daemon unreachable: reconnecting… ", style="bold #000000 on #ff2a6d")   # the title, while it is
 # seconds the person must stay on an item, without a break, before it counts as looked at:
@@ -1682,6 +1683,8 @@ class WheelhouseApp(App):
         self.frame = 0
         self.eye_frame = 0   # the frame the busy sessions' eyes last moved on (animate)
         self.animation = None   # animate's timer: none at 0 fps (features.animation_fps)
+        self.started = 0.0   # when the animation's time starts (animate)
+        self.half_frame = 0   # the frame // 2 the eyes and panes last moved on (animate)
         self.animating = True   # whether it runs: paused while unfocused with nothing busy (pace)
         self.filter_sid: str | None = None
         # the dwell (DWELL): what the person is looking at, (selection, screen), its generation,
@@ -1787,6 +1790,7 @@ class WheelhouseApp(App):
         self.checklist = self.query_one("#checklist", Static)
         self.client.start(self.post)   # the daemon's stream, now there's an app to tell
         self.client.drop_ended_tutorial()   # an ended tutorial's checklist lasts only the app run it ended in
+        self.started = self.now()
         if fps := features.animation_fps():   # 0: no animation, the title and eyes drawn still
             self.animation = self.set_interval(1 / fps, self.animate)
         self.paint_title()
@@ -1901,14 +1905,24 @@ class WheelhouseApp(App):
 
     # periodic work
 
+    @staticmethod
+    def now() -> float:
+        """The animation's clock (animate): a test runs it on one of its own."""
+        return time.monotonic()
+
     def animate(self) -> None:
-        self.frame += 1
+        """A frame: everything where the time elapsed puts it, counted in FRAMES a second, so
+        at any rate (features.animation_fps) the shimmer, the eyes and the bars move at the
+        same speed; a lower rate draws fewer of the frames."""
+        self.frame = round((self.now() - self.started) * FRAMES)
         self.paint_title()
         # the eyes and panes rest while you type, nothing drawn but what the keys change
         # (D41). No screen at all while the app shuts down, when asking what has focus would raise
-        if self.frame % 2 == 0 and self.screen_stack and not isinstance(self.focused, Compose):
+        half = self.frame // 2   # FRAMES / 2 a second, as in the dashboard
+        if half != self.half_frame and self.screen_stack and not isinstance(self.focused, Compose):
+            self.half_frame = half
             self.sweep_eyes()
-            self.each_pane("animate", self.frame // 2)   # 5 frames a second, as in the dashboard
+            self.each_pane("animate", half)
 
     def tick(self) -> None:
         """The refresh, each second, skipped while a key lands (land): a refresh settles, and a

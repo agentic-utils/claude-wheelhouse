@@ -262,6 +262,25 @@ def test_a_bad_port_is_refused_naming_where(tmp_path, monkeypatch, flag, environ
     assert str(e.value) == said.format(config=config), desc
 
 
+@pytest.mark.parametrize("flag, environ, config_env, fix, desc", [
+    (None, None, None, "set PORT= in ~/.config/claude-wheelhouse/.env", "the default: where to set another"),
+    ("7429", None, None, "it is set by --port: give another there", "the flag"),
+    (None, "7429", None, "it is set by WHEELHOUSE_PORT: give another there", "the environment variable"),
+    (None, None, "PORT=7429", "it is set by PORT= in {config}: give another there", "a .env, by its path"),
+])
+def test_a_port_taken_names_where_it_was_set(tmp_path, monkeypatch, flag, environ, config_env, fix, desc):
+    config = tmp_path / "config.env"
+    monkeypatch.setattr(features, "env_files", lambda: [tmp_path / "install.env", config])
+    if config_env:
+        config.write_text(config_env + "\n")
+    if environ:
+        monkeypatch.setenv("WHEELHOUSE_PORT", environ)
+    if flag:
+        features.set_port(flag)
+    want = f"port 7429 is taken by another process (another user's wheelhouse?): {fix.format(config=config)}"
+    assert features.port_taken(7429) == want, desc
+
+
 @pytest.mark.parametrize("argv, port, desc", [
     (["daemon"], 7428, "no flag"),
     (["--port", "7429", "daemon"], 7429, "before the command"),
@@ -353,6 +372,8 @@ def test_a_host_takes_the_keepalive_hours_it_is_started_with(monkeypatch):
     (None, "ANIMATION_FPS=fast", None, 10, True, "a bad value: said once, and 10"),
     ("-1", None, None, 10, True, "a negative flag: said once, and 10"),
     ("inf", None, None, 10, True, "no end to it: said once, and 10"),
+    ("30", None, None, 30, False, "30: the most"),
+    (None, "ANIMATION_FPS=60", None, 30, True, "more than 30: said once, and 30"),
 ])
 def test_animation_fps(tmp_path, monkeypatch, capsys, flag, install_env, config_env, fps, warns, desc):
     install, config = tmp_path / "install.env", tmp_path / "config.env"
@@ -366,7 +387,7 @@ def test_animation_fps(tmp_path, monkeypatch, capsys, flag, install_env, config_
         features.set_animation_fps(flag)
     assert [features.animation_fps(), features.animation_fps()] == [fps, fps], desc
     err = capsys.readouterr().err
-    assert err.count("not a number of frames a second") == (1 if warns else 0), f"{desc}: said once at most: {err!r}"
+    assert err.count("frames a second:") == (1 if warns else 0), f"{desc}: said once at most: {err!r}"
 
 
 @pytest.mark.parametrize("argv, fps, desc", [

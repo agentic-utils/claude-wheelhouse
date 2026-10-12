@@ -148,11 +148,11 @@ is the moment it has forgotten them), and no agent, decision or permission items
 
 - Command line: `--keepalive-hours N` (`features.KEEPALIVE_FLAG`), on the app and the
   daemon, as `--usage-mode` is.
-- `.env`: `keepalive-hours=N` (`features.KEEPALIVE_KEYS = ("keepalive-hours",)`, lower
-  case only, as `port` is), in the starting directory's `.env` or
-  `~/.config/claude-wheelhouse/.env`.
-- `features.keepalive_hours()`: the flag, else the starting directory's `.env`, else the
-  user's, else 8. A positive number, fractions allowed; 0 turns the keepalive off. Any
+- Environment and `.env`: `WHEELHOUSE_KEEPALIVE_HOURS`, or `KEEPALIVE_HOURS=N`
+  (`features.KEEPALIVE_KEY`, upper case only, as every key is) in the install directory's
+  `.env` (the checkout) or `~/.config/claude-wheelhouse/.env`.
+- `features.keepalive_hours()`, through `features.given()`: the flag, else the variable,
+  else the install directory's `.env`, else the user's, else 8. A positive number, fractions allowed; 0 turns the keepalive off. Any
   other value is said once on stderr and taken as 8.
 - The hub reads it for tab sessions, and passes it to each SDK host it starts as
   `--keepalive-hours`. `connect.py` passes it on when it restarts the daemon, beside
@@ -213,8 +213,8 @@ Parameterised, one case per line with its description, using the `clock` fixture
   both, neither, parked, compacted last, past the limit at 8 h and at a configured 2 h,
   off at 0; the text lists the items and falls back when none; the compaction list is
   sent once.
-- `test_features`: `keepalive_hours()` from the flag, each `.env` key spelling, the
-  starting directory's `.env` before the user's, the flag before both, the default, a
+- `test_features`: `keepalive_hours()` from the flag, the variable, the upper-case
+  key alone, the install directory's `.env` before the user's, the flag before both, the default, a
   fraction, 0, and a bad value said once and taken as 8.
 - `test_cli`: `--keepalive-hours` reaches the hub and is passed on when the daemon
   restarts; `open-items` prints the list, and nothing when none.

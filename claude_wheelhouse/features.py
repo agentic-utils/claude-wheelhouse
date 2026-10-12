@@ -41,9 +41,10 @@ launch.open_host passes it to each SDK host, and connect.start to the daemon.
 
 The app's animation (the title's shimmer, the Cylon eyes, the stats bars) runs at
 animation_fps() frames a second: --animation-fps, else WHEELHOUSE_ANIMATION_FPS, else
-ANIMATION_FPS= in either .env, else 10 (Doug's Q82, D85). Fractions are allowed, 0 turns
-animation off (the title and eyes drawn still), and anything else is said once and taken
-as 10."""
+ANIMATION_FPS= in either .env, else 10 (Doug's Q82, D85). Fractions are allowed up to 30,
+0 turns animation off (the title and eyes drawn still), more than 30 is said once and
+taken as 30, and anything else is said once and taken as 10. Whatever the rate, everything
+moves at the same speed: frames are counted from the time elapsed (WheelhouseApp.animate)."""
 
 import os
 import sys
@@ -59,8 +60,7 @@ _usage_mode: str | None = None   # set by the command line (set_usage_mode)
 PORT_FLAG = "--port"
 PORT_KEY = "PORT"
 PORT = 7428
-PORT_TAKEN = ("port {port} is taken by another process (another user's wheelhouse?): set PORT= in "
-              "~/.config/claude-wheelhouse/.env")
+PORT_TAKEN = "port {port} is taken by another process (another user's wheelhouse?)"   # then port_taken's advice
 _port: str | None = None   # set by the command line (set_port)
 KEEPALIVE_FLAG = "--keepalive-hours"
 KEEPALIVE_KEY = "KEEPALIVE_HOURS"
@@ -69,6 +69,7 @@ _keepalive_hours: str | None = None   # set by the command line (set_keepalive_h
 ANIMATION_FLAG = "--animation-fps"
 ANIMATION_KEY = "ANIMATION_FPS"
 ANIMATION_FPS = 10.0
+MAX_FPS = 30.0   # above it, said once and taken as it
 _animation_fps: str | None = None   # set by the command line (set_animation_fps)
 _warned: set[str] = set()
 # the directory the package runs from: the checkout, as uv sync installs it (editable), so
@@ -190,6 +191,15 @@ def port() -> int:
     return int(value)
 
 
+def port_taken(port: int) -> str:
+    """Port `port` is another process's: said with where it was set (port_given), to choose
+    another there, or, the default taken, where to set one."""
+    setting = port_given()
+    fix = f"it is set by {setting[1]}: give another there" if setting else \
+        "set PORT= in ~/.config/claude-wheelhouse/.env"
+    return f"{PORT_TAKEN.format(port=port)}: {fix}"
+
+
 def set_keepalive_hours(hours: str) -> None:
     """--keepalive-hours on the command line."""
     global _keepalive_hours
@@ -223,8 +233,8 @@ def set_animation_fps(fps: str) -> None:
 def animation_fps() -> float:
     """The app's animation frames a second: --animation-fps, else WHEELHOUSE_ANIMATION_FPS,
     else ANIMATION_FPS= in the install directory's .env, else the user's, else 10. A number
-    of 0 or more, fractions allowed (0: no animation); anything else is said once, on
-    stderr, and taken as 10."""
+    of 0 or more, fractions allowed (0: no animation), up to MAX_FPS: more is said once,
+    on stderr, and taken as 30; anything else is said once and taken as 10."""
     if (setting := given(_animation_fps, ANIMATION_FLAG, ANIMATION_KEY)) is None:
         return ANIMATION_FPS
     value, where = setting
@@ -232,7 +242,11 @@ def animation_fps() -> float:
         fps = float(value)
     except ValueError:
         fps = -1.0
-    if 0 <= fps < float("inf"):
+    if 0 <= fps <= MAX_FPS:
         return fps
+    if MAX_FPS < fps < float("inf"):
+        _say(f"claude-wheelhouse: {where} is {value!r}, above {MAX_FPS:g} frames a second: the animation runs at "
+             f"{MAX_FPS:g}")
+        return MAX_FPS
     _say(f"claude-wheelhouse: {where} is {value!r}, not a number of frames a second: the animation runs at 10")
     return ANIMATION_FPS

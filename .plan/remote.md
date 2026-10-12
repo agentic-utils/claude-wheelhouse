@@ -178,7 +178,7 @@ was before 2c, its hub in process: the way back, at once.
     claude_wheelhouse daemon` on the same interpreter and environment (so `WHEELHOUSE_DB`
     and the rest go with it), in a session of its own (`setsid`), so it outlives the TUI,
     its output appended to `daemon.log` in the state dir, on the port the app resolved
-    (`features.port()`: `--port`, else `WHEELHOUSE_PORT`, else `port=` in either `.env`,
+    (`features.port()`: `--port`, else `WHEELHOUSE_PORT`, else `PORT=` in either `.env`,
     else 7428; Doug's Q74), passed as `--port`. Then it waits up to 10 s for the lock to be held and `/hello` to
     answer. Two TUIs starting at once both start one; the second finds the lock held and
     exits, and both join the first.

@@ -147,8 +147,8 @@ def test_a_port_taken_says_which_and_the_setting_that_moves_it(state, monkeypatc
         taken.listen()
         with pytest.raises(connect.NoDaemon) as e:
             connect.local(state_dir, port)
-    assert str(e.value) == (f"port {port} is taken by another process (another user's wheelhouse?): set PORT= in "
-                            "~/.config/claude-wheelhouse/.env")
+    assert str(e.value) == (f"port {port} is taken by another process (another user's wheelhouse?): it is set by "
+                            "WHEELHOUSE_PORT: give another there"), "where the app's port was set (state sets the variable)"
     assert connect.holder(state_dir) is None
 
 

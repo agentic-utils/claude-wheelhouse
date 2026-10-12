@@ -16,10 +16,10 @@ downloads the thing, they get tab mode unless I personally tell them about SDK m
 by users other than the author until we can confirm Anthropic T&Cs".
 
 - On: `claude-wheelhouse --enable-sdk` (before or after the command, for the app, the
-  tutorial and the daemon), or `enable-sdk=true` in `./.env` (where the app starts) or
-  `~/.config/claude-wheelhouse/.env`. `features.sdk_enabled()` is the one switch; the
+  tutorial and the daemon), or `WHEELHOUSE_ENABLE_SDK=true`, or `ENABLE_SDK=true` in the
+  install directory's `.env` (the checkout) or `~/.config/claude-wheelhouse/.env`. `features.sdk_enabled()` is the one switch; the
   flag is left out of `--help`. Through the daemon the mode is the daemon's: an app in SDK
-  mode starts it with `--enable-sdk` (it runs in the state dir, away from `./.env`), and
+  mode starts it with `--enable-sdk` (the flag is the app's alone), and
   its inbox tells each client, whose SDK-only controls follow it. An app joining a daemon
   already running takes that daemon's mode.
 - Off (the default): `DEFAULT_RUNNER` is `tab`, and `WHEELHOUSE_RUNNER=sdk` doesn't turn
@@ -310,7 +310,7 @@ so an hour's quiet is what turns the cache cold.
   cache warm for a few thousand tokens of reads instead of a cold rewrite of the whole
   context. The keepalive's own end restarts the 55 minutes but not the quiet time, so they
   stop once the session has been quiet `features.keepalive_hours()` (8 h unless
-  `--keepalive-hours` or `keepalive-hours=` in a `.env` says otherwise; 0 turns it off,
+  `--keepalive-hours`, `WHEELHOUSE_KEEPALIVE_HOURS` or `KEEPALIVE_HOURS=` in a `.env` says otherwise; 0 turns it off,
   and the hub passes it to each host): an abandoned session doesn't pay for ever. A host just started (or just back from a shell tab) sends none until a
   turn of its own has ended, since it can't know the cache is warm. Compact under way, a
   pending permission and a turn Claude Code started itself all hold it off, and so does a

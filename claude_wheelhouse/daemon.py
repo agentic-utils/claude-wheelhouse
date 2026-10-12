@@ -142,7 +142,7 @@ def listener(address: str, port: int) -> socket.socket:
     except OSError as e:
         sock.close()
         if e.errno == errno.EADDRINUSE:
-            raise PortTaken(features.PORT_TAKEN.format(port=port)) from None
+            raise PortTaken(features.port_taken(port)) from None
         raise ValueError(f"can't listen on {address} port {port}: {e.strerror}") from None
     return sock
 

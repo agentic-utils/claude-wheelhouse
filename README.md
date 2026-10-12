@@ -435,7 +435,8 @@ a key spelt any other way isn't read.
 | `ANIMATION_FPS` | `WHEELHOUSE_ANIMATION_FPS` | `--animation-fps N` | 10 (0 turns animation off) |
 
 `ANIMATION_FPS` sets how many frames a second the title's shimmer, the session eyes and
-the stats bars move; fractions are allowed. While the terminal window is unfocused and no
+the stats bars move; fractions are allowed, up to 30. Every rate moves them at the same
+speed: a lower one draws fewer steps. While the terminal window is unfocused and no
 session is busy, the animation rests, and starts again when you come back or a session
 gets busy. The daemon reads only the settings it uses: `PORT`, `USAGE_MODE` and
 `KEEPALIVE_HOURS`.
