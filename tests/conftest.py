@@ -39,6 +39,8 @@ def isolated_db(tmp_path, monkeypatch):
     monkeypatch.delenv("WHEELHOUSE_SESSION_ID", raising=False)
     monkeypatch.delenv("WHEELHOUSE_TOKEN", raising=False)
     monkeypatch.delenv("WHEELHOUSE_PORT", raising=False)   # a test that wants one sets it (features.port)
+    for setting in ("ENABLE_SDK", "USAGE_MODE", "KEEPALIVE_HOURS", "ANIMATION_FPS"):   # features.given's
+        monkeypatch.delenv(f"WHEELHOUSE_{setting}", raising=False)
     return path
 
 

@@ -350,7 +350,7 @@ def test_the_address_to_bind(address, ok, desc):
 
 @pytest.mark.parametrize("address, taken, error, said, desc", [
     ("127.0.0.1", False, None, None, "a free port: bound"),
-    ("127.0.0.1", True, PortTaken, "port {port} is taken by another process (another user's wheelhouse?): set port= "
+    ("127.0.0.1", True, PortTaken, "port {port} is taken by another process (another user's wheelhouse?): set PORT= "
      "in ~/.config/claude-wheelhouse/.env", "another process's: said as the app says it"),
     ("192.0.2.1", False, ValueError, "can't listen on 192.0.2.1 port {port}: Cannot assign requested address",
      "an address not this machine's: another failure, in a line"),

@@ -77,8 +77,8 @@ def start(state_dir: Path, port: int) -> int:
     (the state dir) left off it, so `-m claude_wheelhouse` never finds another checkout's,
     nor the installed one when this one is a copy run from its folder. One that finds
     another holding the lock stops at once, and says so in the log. In SDK mode if this
-    process is (features.py): it runs in the state dir, where the starting directory's .env
-    isn't, so it is told with --enable-sdk, with --usage-mode how to read plan usage, with
+    process is (features.py): it reads the same .env files, but not the app's flags, so it
+    is told with --enable-sdk, with --usage-mode how to read plan usage, with
     --keepalive-hours how long to keep quiet sessions warm, and its port with --port.
 
     Returns the read end of a pipe whose write end only the daemon holds (its number given

@@ -31,11 +31,14 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   daemon on older code. Bump its `API` when the daemon's routes change incompatibly.
 - `host.py`: a session run through the Claude Agent SDK, one detached process per session.
   Experimental, and off unless `features.sdk_enabled()`: read `features.py` first.
-- `features.py`: SDK mode's switch, `sdk_enabled()`, the plan usage mode,
-  `usage_mode()` (`--usage-mode`, or `usage-mode` in a `.env`), the daemon's port,
-  `port()` (`--port`, `WHEELHOUSE_PORT`, or `port` in a `.env`), and how long a quiet
-  session is kept warm, `keepalive_hours()` (`--keepalive-hours`, or `keepalive-hours` in a
-  `.env`; 8 by default, 0 for off).
+- `features.py`: every setting, read by one helper, `given()`: the flag, else
+  `WHEELHOUSE_<KEY>`, else `KEY=` in the install directory's `.env`
+  (`features.INSTALL_DIR`, the checkout, never the cwd), else
+  `~/.config/claude-wheelhouse/.env`, else the default. Keys are upper case only, flags
+  lower case. The settings: SDK mode's switch, `sdk_enabled()` (`ENABLE_SDK`), the plan
+  usage mode, `usage_mode()` (`USAGE_MODE`), the daemon's port, `port()` (`PORT`), and how
+  long a quiet session is kept warm, `keepalive_hours()` (`KEEPALIVE_HOURS`; 8 by default,
+  0 for off). The README's Settings table lists them.
 - `launch.py`: Windows Terminal tabs (`wt.exe` through `cmd.exe`, in the user's own
   window, `window_name`), the `claude` command line, and the protocol text injected into
   a session.
@@ -102,8 +105,8 @@ directory of `WHEELHOUSE_DB`. It holds `wheelhouse.db` (WAL), `daemon.token`,
 `daemon.lock`, `daemon.log`, `launch.log`, the tutorial's scratch directory, and
 `hosts/<id>.log`, each SDK host's output (SDK mode, experimental). A module
 that keeps files of its own gets it as `api.Context.state_dir`. Environment variables:
-`WHEELHOUSE_DB`, `WHEELHOUSE_PORT` (the daemon's port, below `--port` and above `port=` in a
-`.env`), `WHEELHOUSE_TOKEN` (`--connect`), `WHEELHOUSE_DECISIONS=0`,
+`WHEELHOUSE_DB`, `WHEELHOUSE_PORT` and the other settings' variables (`features.given`),
+`WHEELHOUSE_TOKEN` (`--connect`), `WHEELHOUSE_DECISIONS=0`,
 `WHEELHOUSE_SESSION_ID` and `WHEELHOUSE_PYTHON`, which a launched session is given,
 `WHEELHOUSE_RUNNER` (`tab` or `sdk`; it never turns SDK mode on by itself), and
 `TEXTUAL_COLOR_SYSTEM`, which overrides the truecolour the app assumes under Windows

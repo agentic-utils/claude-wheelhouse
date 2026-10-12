@@ -354,14 +354,14 @@ Running sessions carry on in their tabs, and the next `claude-wheelhouse` starts
 daemon.
 
 The port is 7428 unless you choose another: `--port` (on the app or `claude-wheelhouse
-daemon`), else `WHEELHOUSE_PORT`, else `port=` in a `.env` file (the one in the directory
-you start from, then `~/.config/claude-wheelhouse/.env`), in that order. It must be from
+daemon`), else `WHEELHOUSE_PORT`, else `PORT=` in a `.env` file, in that order (see
+[Settings](#settings)). It must be from
 1024 to 65535; anything else stops the app or daemon with a line naming where it was set.
 The app starts its daemon on that port. If the daemon is already running on another, the
 app joins it where it is and says so; stop it to move it. If another process holds the
 port, the app (or the daemon started by hand) says:
 
-    port 7428 is taken by another process (another user's wheelhouse?): set port= in ~/.config/claude-wheelhouse/.env
+    port 7428 is taken by another process (another user's wheelhouse?): set PORT= in ~/.config/claude-wheelhouse/.env
 
 ### Two wheelhouses on one machine
 
@@ -371,7 +371,7 @@ their tabs open in their own Windows Terminal window (`wheelhouse-doug`,
 For a second user `tfu`, as `tfu`:
 
     mkdir -p ~/.config/claude-wheelhouse
-    echo port=7429 >> ~/.config/claude-wheelhouse/.env
+    echo PORT=7429 >> ~/.config/claude-wheelhouse/.env
 
 Then start each user's app as usual. A daemon started by hand reads the same file.
 
@@ -383,9 +383,8 @@ what it prints. That spends no tokens, and the wheelhouse never reads your Claud
 login. When a reading is late, the gauges say how old their numbers are.
 
 `--usage-mode persistent` keeps one Claude Code running and asks it instead: quicker per
-reading, but it stays in memory. `usage-mode=persistent` in a `.env` file does the same;
-the `.env` goes in the directory you start the app from (the clone, with `make run`) or in
-`~/.config/claude-wheelhouse/.env`. The daemon does the asking, so a change takes effect
+reading, but it stays in memory. `WHEELHOUSE_USAGE_MODE=persistent`, or `USAGE_MODE=persistent` in a `.env` file, does the
+same (see [Settings](#settings)). The daemon does the asking, so a change takes effect
 when the daemon restarts (quit the app, `claude-wheelhouse daemon --stop`, then open the
 app again). If the app is given a mode and joins a daemon already running the other, it
 says so once.
@@ -407,8 +406,8 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   whole), and with an item in doubt it is the check, `Check: T1 running, Q2 reply owed`,
   which the session answers by correcting what's finished. It stops once the session has
   been quiet 8 hours. `--keepalive-hours N` (on the app or `claude-wheelhouse daemon`), or
-  `keepalive-hours=N` in a `.env` (the one in the directory you start the app from, or
-  `~/.config/claude-wheelhouse/.env`), sets another limit; fractions are allowed and 0
+  `WHEELHOUSE_KEEPALIVE_HOURS=N`, or `KEEPALIVE_HOURS=N` in a `.env` (see
+  [Settings](#settings)), sets another limit; fractions are allowed and 0
   turns it off. Each message costs one request, which reads the cached context: for a
   quiet session that is much cheaper than writing the cache again when you come back.
 - After a compaction, the session is told its open tasks and questions, with their titles,
@@ -418,6 +417,21 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   as the monitor is run, and Claude Code adds what it prints to the session's context.
 - The check and the still-open lists only start once a session runs this version: one
   started on older code shows as needing a relaunch, and gets neither until relaunched.
+
+## Settings
+
+Each setting can be given four ways. The first found wins: the flag (on the app, or on
+`claude-wheelhouse daemon` for the daemon's own), then the environment variable, then the
+key in a `.env` file, then the default. Two `.env` files are read, in this order: the one
+in the wheelhouse's install directory (the clone, whatever directory you start from), then
+`~/.config/claude-wheelhouse/.env`. Keys in a `.env` are upper case and flags lower case;
+a key spelt any other way isn't read.
+
+| `.env` key | Environment variable | Flag | Default |
+|---|---|---|---|
+| `PORT` | `WHEELHOUSE_PORT` | `--port N` | 7428 |
+| `USAGE_MODE` | `WHEELHOUSE_USAGE_MODE` | `--usage-mode oneshot\|persistent` | `oneshot` |
+| `KEEPALIVE_HOURS` | `WHEELHOUSE_KEEPALIVE_HOURS` | `--keepalive-hours N` | 8 (0 turns it off) |
 
 ## Where state lives
 

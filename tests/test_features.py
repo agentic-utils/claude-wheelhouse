@@ -34,34 +34,81 @@ def test_read_env_of_no_file(tmp_path):
     assert features.read_env(tmp_path / "missing.env") == {}
 
 
-@pytest.mark.parametrize("cwd_env, config_env, on, desc", [
+@pytest.mark.parametrize("install_env, config_env, on, desc", [
     (None, None, False, "no .env: off"),
-    ("enable-sdk=true", None, True, "the starting directory's .env"),
-    (None, "enable-sdk=true", True, "the user's config .env"),
-    ("enable-sdk=TRUE", None, True, "true in any case"),
-    ("enable-sdk=false", None, False, "false"),
-    ("enable-sdk=1", None, False, "only true turns it on"),
-    ("ENABLE_SDK=true", None, True, "the key in capitals and underscores"),
-    ("enable_sdk=true", None, True, "the key with an underscore"),
-    ("Enable-Sdk=true", None, False, "no other spelling of the key"),
-    ("enable-sdk=yes", None, False, "nor any value but true"),
-    ("\ufeffenable-sdk=true # mine", None, True, "a byte order mark and an inline comment"),
-    ("enable-sdk=false", "enable-sdk=true", True, "either file turns it on"),
+    ("ENABLE_SDK=true", None, True, "the install directory's .env"),
+    (None, "ENABLE_SDK=true", True, "the user's config .env"),
+    ("ENABLE_SDK=TRUE", None, True, "true in any case"),
+    ("ENABLE_SDK=false", None, False, "false"),
+    ("ENABLE_SDK=1", None, False, "only true turns it on"),
+    ("enable-sdk=true", None, False, "the key hyphenated, in lower case: not read"),
+    ("enable_sdk=true", None, False, "the key in lower case: not read"),
+    ("ENABLE_SDK=yes", None, False, "nor any value but true"),
+    ("\ufeffENABLE_SDK=true # mine", None, True, "a byte order mark and an inline comment"),
+    ("ENABLE_SDK=false", "ENABLE_SDK=true", False, "the install directory's .env before the user's"),
 ])
-def test_sdk_enabled_from_either_env_file(tmp_path, monkeypatch, cwd_env, config_env, on, desc):
-    # the real env_files, not conftest's, on a home and a starting directory of the test's own
+def test_sdk_enabled_from_either_env_file(tmp_path, monkeypatch, install_env, config_env, on, desc):
+    # the real env_files, not conftest's, on a home and an install directory of the test's own
     monkeypatch.setattr(features, "env_files", REAL_ENV_FILES)
-    home, start = tmp_path / "home", tmp_path / "start"
+    home, install = tmp_path / "home", tmp_path / "install"
     (home / ".config/claude-wheelhouse").mkdir(parents=True)
-    start.mkdir()
+    install.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(start)
-    assert features.env_files() == [start / ".env", home / ".config/claude-wheelhouse/.env"]
-    if cwd_env:
-        (start / ".env").write_text(cwd_env + "\n")
+    monkeypatch.setattr(features, "INSTALL_DIR", install)
+    assert features.env_files() == [install / ".env", home / ".config/claude-wheelhouse/.env"]
+    if install_env:
+        (install / ".env").write_text(install_env + "\n")
     if config_env:
         (home / ".config/claude-wheelhouse/.env").write_text(config_env + "\n")
     assert features.sdk_enabled() is on, desc
+
+
+@pytest.mark.parametrize("cwd, desc", [
+    ("install", "started in the install directory (make run)"),
+    ("elsewhere", "started anywhere else (a tab, the daemon's state dir)"),
+])
+def test_the_env_read_is_the_install_directorys_not_the_cwds(tmp_path, monkeypatch, cwd, desc):
+    monkeypatch.setattr(features, "env_files", REAL_ENV_FILES)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    install, elsewhere = tmp_path / "install", tmp_path / "elsewhere"
+    for d in (install, elsewhere):
+        d.mkdir()
+    (install / ".env").write_text("PORT=7440\n")
+    (elsewhere / ".env").write_text("PORT=7441\n")
+    monkeypatch.setattr(features, "INSTALL_DIR", install)
+    monkeypatch.chdir(tmp_path / cwd)
+    assert features.port() == 7440, desc
+
+
+def test_the_install_directory_is_the_checkout():
+    """uv sync installs the package editable, so its parent is the clone, Makefile and all."""
+    assert (features.INSTALL_DIR / "pyproject.toml").is_file()
+    assert (features.INSTALL_DIR / "claude_wheelhouse" / "features.py").is_file()
+
+
+@pytest.mark.parametrize("flag, environ, install_env, config_env, want, desc", [
+    (None, None, None, None, None, "none given: None"),
+    (None, None, None, "KEY=c", ("c", "KEY= in {config}"), "the user's .env"),
+    (None, None, "KEY=i", "KEY=c", ("i", "KEY= in {install}"), "the install directory's .env before the user's"),
+    (None, "e", "KEY=i", None, ("e", "WHEELHOUSE_KEY"), "the environment variable before .env"),
+    ("f", "e", "KEY=i", None, ("f", "--key"), "the flag before all"),
+    (None, "", "KEY=i", None, ("i", "KEY= in {install}"), "an empty variable: as none"),
+    (None, None, "key=i", None, None, "a key in lower case: not read"),
+    (None, None, "WHEELHOUSE_KEY=i", None, None, "nor the variable's name in a .env"),
+])
+def test_a_setting_is_taken_from_the_first_place_that_gives_it(tmp_path, monkeypatch, flag, environ, install_env,
+                                                                config_env, want, desc):
+    install, config = tmp_path / "install.env", tmp_path / "config.env"
+    monkeypatch.setattr(features, "env_files", lambda: [install, config])
+    for path, text in ((install, install_env), (config, config_env)):
+        if text:
+            path.write_text(text + "\n")
+    if environ is not None:
+        monkeypatch.setenv("WHEELHOUSE_KEY", environ)
+    else:
+        monkeypatch.delenv("WHEELHOUSE_KEY", raising=False)
+    got = features.given(flag, "--key", "KEY")
+    assert got == (want and (want[0], want[1].format(install=install, config=config))), desc
 
 
 @pytest.mark.parametrize("argv, on, desc", [
@@ -127,12 +174,15 @@ def test_the_protocol_command(monkeypatch, capsys, argv, on, desc):
 @pytest.mark.parametrize("flag, cwd_env, config_env, mode, warns, desc", [
     (None, None, None, "oneshot", False, "nothing given: oneshot"),
     ("persistent", None, None, "persistent", False, "the flag"),
-    (None, "usage-mode=persistent", None, "persistent", False, "the starting directory's .env"),
-    (None, None, "USAGE_MODE=persistent", "persistent", False, "the user's .env, the key in capitals"),
-    (None, "usage_mode=Persistent", None, "persistent", False, "the key with an underscore, any case of value"),
-    (None, "usage-mode=oneshot", "usage-mode=persistent", "oneshot", False, "the starting directory's wins"),
-    ("oneshot", "usage-mode=persistent", None, "oneshot", False, "the flag wins over .env"),
-    (None, "usage-mode=always", None, "oneshot", True, "a bad value: said, and oneshot"),
+    (None, "USAGE_MODE=persistent", None, "persistent", False, "the install directory's .env"),
+    (None, None, "USAGE_MODE=persistent", "persistent", False, "the user's .env"),
+    ("env", "USAGE_MODE=oneshot", None, "persistent", False, "WHEELHOUSE_USAGE_MODE before .env"),
+    (None, "USAGE_MODE=Persistent", None, "persistent", False, "any case of value"),
+    (None, "usage-mode=persistent", None, "oneshot", False, "the key hyphenated: not read"),
+    (None, "usage_mode=persistent", None, "oneshot", False, "the key in lower case: not read"),
+    (None, "USAGE_MODE=oneshot", "USAGE_MODE=persistent", "oneshot", False, "the install directory's wins"),
+    ("oneshot", "USAGE_MODE=persistent", None, "oneshot", False, "the flag wins over .env"),
+    (None, "USAGE_MODE=always", None, "oneshot", True, "a bad value: said, and oneshot"),
 ])
 def test_usage_mode(tmp_path, monkeypatch, capsys, flag, cwd_env, config_env, mode, warns, desc):
     cwd, config = tmp_path / "cwd.env", tmp_path / "config.env"
@@ -140,7 +190,9 @@ def test_usage_mode(tmp_path, monkeypatch, capsys, flag, cwd_env, config_env, mo
     for path, text in ((cwd, cwd_env), (config, config_env)):
         if text:
             path.write_text(text + "\n")
-    if flag:
+    if flag == "env":
+        monkeypatch.setenv("WHEELHOUSE_USAGE_MODE", "persistent")
+    elif flag:
         features.set_usage_mode(flag)
     assert [features.usage_mode(), features.usage_mode()] == [mode, mode], desc
     err = capsys.readouterr().err
@@ -169,13 +221,13 @@ def test_a_bad_usage_mode_flag_is_refused(monkeypatch, capsys):
 
 @pytest.mark.parametrize("flag, environ, cwd_env, config_env, port, desc", [
     (None, None, None, None, 7428, "nothing given: 7428"),
-    (None, None, None, "port=7429", 7429, "the user's .env"),
-    (None, None, "port=7430", "port=7429", 7430, "the starting directory's wins over the user's"),
-    (None, "7431", "port=7430", None, 7431, "WHEELHOUSE_PORT wins over .env"),
-    ("7432", "7431", "port=7430", None, 7432, "the flag wins over all"),
-    (None, None, "PORT=3000", None, 7428, "PORT, a project's own server's, isn't the wheelhouse's"),
-    (None, None, "port=1024", None, 1024, "the lowest port taken"),
-    (None, None, "port=65535", None, 65535, "the highest"),
+    (None, None, None, "PORT=7429", 7429, "the user's .env"),
+    (None, None, "PORT=7430", "PORT=7429", 7430, "the install directory's wins over the user's"),
+    (None, "7431", "PORT=7430", None, 7431, "WHEELHOUSE_PORT wins over .env"),
+    ("7432", "7431", "PORT=7430", None, 7432, "the flag wins over all"),
+    (None, None, "port=3000", None, 7428, "the key in lower case: not read"),
+    (None, None, "PORT=1024", None, 1024, "the lowest port taken"),
+    (None, None, "PORT=65535", None, 65535, "the highest"),
 ])
 def test_port(tmp_path, monkeypatch, flag, environ, cwd_env, config_env, port, desc):
     cwd, config = tmp_path / "cwd.env", tmp_path / "config.env"
@@ -193,8 +245,8 @@ def test_port(tmp_path, monkeypatch, flag, environ, cwd_env, config_env, port, d
 @pytest.mark.parametrize("flag, environ, config_env, said, desc", [
     ("80", None, None, "--port is '80': give a port from 1024 to 65535", "the flag, below 1024"),
     (None, "seven", None, "WHEELHOUSE_PORT is 'seven': give a port from 1024 to 65535", "the variable, not a number"),
-    (None, None, "port=65536", "port= in {config} is '65536': give a port from 1024 to 65535", ".env, naming the file"),
-    (None, None, "port=-1", "port= in {config} is '-1': give a port from 1024 to 65535", "a negative number"),
+    (None, None, "PORT=65536", "PORT= in {config} is '65536': give a port from 1024 to 65535", ".env, naming the file"),
+    (None, None, "PORT=-1", "PORT= in {config} is '-1': give a port from 1024 to 65535", "a negative number"),
 ])
 def test_a_bad_port_is_refused_naming_where(tmp_path, monkeypatch, flag, environ, config_env, said, desc):
     config = tmp_path / "config.env"
@@ -238,14 +290,16 @@ def test_a_bad_port_flag_stops_it_in_a_line(monkeypatch, argv, said, desc):
 @pytest.mark.parametrize("flag, cwd_env, config_env, hours, warns, desc", [
     (None, None, None, 8, False, "nothing given: 8"),
     ("2", None, None, 2, False, "the flag"),
-    (None, "keepalive-hours=3", None, 3, False, "the starting directory's .env"),
-    (None, None, "keepalive-hours=4", 4, False, "the user's .env"),
-    (None, "keepalive-hours=3", "keepalive-hours=4", 3, False, "the starting directory's wins"),
-    ("2", "keepalive-hours=3", "keepalive-hours=4", 2, False, "the flag wins over both"),
-    (None, "KEEPALIVE_HOURS=3", None, 8, False, "the key is lower case only, as port's"),
-    (None, "keepalive-hours=1.5", None, 1.5, False, "a fraction"),
-    (None, "keepalive-hours=0", None, 0, False, "0: off"),
-    (None, "keepalive-hours=lots", None, 8, True, "a bad value: said once, and 8"),
+    (None, "KEEPALIVE_HOURS=3", None, 3, False, "the install directory's .env"),
+    (None, None, "KEEPALIVE_HOURS=4", 4, False, "the user's .env"),
+    (None, "KEEPALIVE_HOURS=3", "KEEPALIVE_HOURS=4", 3, False, "the install directory's wins"),
+    ("2", "KEEPALIVE_HOURS=3", "KEEPALIVE_HOURS=4", 2, False, "the flag wins over both"),
+    (None, "keepalive-hours=3", None, 8, False, "the old hyphenated key: not read"),
+    (None, "keepalive_hours=3", None, 8, False, "the key in lower case: not read"),
+    (None, "KEEPALIVE_HOURS=1.5", None, 1.5, False, "a fraction"),
+    ("env", "KEEPALIVE_HOURS=3", None, 6, False, "WHEELHOUSE_KEEPALIVE_HOURS before .env"),
+    (None, "KEEPALIVE_HOURS=0", None, 0, False, "0: off"),
+    (None, "KEEPALIVE_HOURS=lots", None, 8, True, "a bad value: said once, and 8"),
     ("-1", None, None, 8, True, "a negative flag: said once, and 8"),
 ])
 def test_keepalive_hours(tmp_path, monkeypatch, capsys, flag, cwd_env, config_env, hours, warns, desc):
@@ -254,7 +308,9 @@ def test_keepalive_hours(tmp_path, monkeypatch, capsys, flag, cwd_env, config_en
     for path, text in ((cwd, cwd_env), (config, config_env)):
         if text:
             path.write_text(text + "\n")
-    if flag:
+    if flag == "env":
+        monkeypatch.setenv("WHEELHOUSE_KEEPALIVE_HOURS", "6")
+    elif flag:
         features.set_keepalive_hours(flag)
     assert [features.keepalive_hours(), features.keepalive_hours()] == [hours, hours], desc
     err = capsys.readouterr().err

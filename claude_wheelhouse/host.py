@@ -3,7 +3,7 @@ the TUI, and talks to everything else through the store, like the monitor and MC
 
 EXPERIMENTAL: SDK mode is not for use by anyone other than the author until Anthropic's
 terms for it are confirmed. Nothing creates a hosted session unless SDK mode is on
-(--enable-sdk, or enable-sdk=true in a .env: features.py); a session hosted already keeps
+(--enable-sdk, or ENABLE_SDK=true in a .env: features.py); a session hosted already keeps
 its host whatever the flag says.
 
 The host is the session's user. The person's sent messages become turns, End and Park

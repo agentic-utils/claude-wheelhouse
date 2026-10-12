@@ -8,8 +8,11 @@ author until Anthropic's terms for it are confirmed. It is deliberately undocume
 README never mentions it, and a new user gets tab mode.
 
 It is off unless the app is started with --enable-sdk, or a .env file holds
-`enable-sdk=true` (ENABLE_SDK or enable_sdk as the key do too): the one in the directory
-the app starts in, or ~/.config/claude-wheelhouse/.env. Off, nothing creates an SDK session (New session, the
+`ENABLE_SDK=true`: the one in the install directory (the checkout the package runs from,
+INSTALL_DIR, never the directory it is started in), or ~/.config/claude-wheelhouse/.env.
+Every setting is read by given(): its flag, else the environment variable WHEELHOUSE_<KEY>,
+else KEY= in the install directory's .env, else the user's, else its default. .env keys
+are upper case only (no other spelling is read) and flags lower case. Off, nothing creates an SDK session (New session, the
 tutorial, Adopt, Restore and the daemon all run tabs) and the SDK-only controls hide.
 Sessions a host already runs keep working, so nobody's work is stranded: they show and
 end as before, with the controls that manage them (store.runner says which they are), and
@@ -20,20 +23,19 @@ runs (Model, the effort slider). Through the daemon the mode is the daemon's (co
 passes the flag on; its inbox tells the app).
 
 The stats pane's plan usage runs a one-shot `claude -p "/usage"` every 5 minutes, or with
---usage-mode persistent (or usage-mode=persistent, USAGE_MODE or usage_mode, in either
-.env) keeps one Claude Code running and asks it (plan_usage.Probe, Doug's Q69). The flag
-wins over .env, the starting directory's .env over the user's; a value that is neither
+--usage-mode persistent (or WHEELHOUSE_USAGE_MODE, or USAGE_MODE= in either .env) keeps
+one Claude Code running and asks it (plan_usage.Probe, Doug's Q69), in given()'s order; a value that is neither
 mode is said once and taken as oneshot. connect.start passes the mode to the daemon.
 
-The local daemon's port is 7428 unless --port, WHEELHOUSE_PORT or port= in either .env
+The local daemon's port is 7428 unless --port, WHEELHOUSE_PORT or PORT= in either .env
 says otherwise, in that order (Doug's Q74), so a second user on the machine can run a
 wheelhouse of their own beside the first. A value that isn't a port from 1024 to 65535 is
 refused (BadPort), naming where it was given. The app resolves it, and connect.start
 passes it to the daemon it starts; a daemon started by hand resolves it the same way.
 
 A session quiet over 150k tokens of context gets a keepalive every 55 minutes until it has
-been quiet keepalive_hours() hours: --keepalive-hours, else keepalive-hours= in either
-.env, in that order (Doug's Q80), else 8. Fractions are allowed, 0 turns the keepalive
+been quiet keepalive_hours() hours: --keepalive-hours, else WHEELHOUSE_KEEPALIVE_HOURS, else
+KEEPALIVE_HOURS= in either .env, in that order (Doug's Q80), else 8. Fractions are allowed, 0 turns the keepalive
 off, and anything else is said once and taken as 8. The hub reads it for tab sessions;
 launch.open_host passes it to each SDK host, and connect.start to the daemon."""
 
@@ -42,28 +44,50 @@ import sys
 from pathlib import Path
 
 FLAG = "--enable-sdk"
-KEYS = ("enable-sdk", "ENABLE_SDK", "enable_sdk")   # the .env key, written any of these ways
+KEY = "ENABLE_SDK"   # the .env key: every key is upper case, every flag lower case
 _flag = False   # set by the command line (enable_sdk)
 USAGE_FLAG = "--usage-mode"
-USAGE_KEYS = ("usage-mode", "USAGE_MODE", "usage_mode")
+USAGE_KEY = "USAGE_MODE"
 USAGE_MODES = ("oneshot", "persistent")   # the first the default
 _usage_mode: str | None = None   # set by the command line (set_usage_mode)
 PORT_FLAG = "--port"
-PORT_KEYS = ("port",)   # lower case only: PORT in a project's .env is usually its own server's
+PORT_KEY = "PORT"
 PORT = 7428
-PORT_TAKEN = ("port {port} is taken by another process (another user's wheelhouse?): set port= in "
+PORT_TAKEN = ("port {port} is taken by another process (another user's wheelhouse?): set PORT= in "
               "~/.config/claude-wheelhouse/.env")
 _port: str | None = None   # set by the command line (set_port)
 KEEPALIVE_FLAG = "--keepalive-hours"
-KEEPALIVE_KEYS = ("keepalive-hours",)   # lower case only, as port
+KEEPALIVE_KEY = "KEEPALIVE_HOURS"
 KEEPALIVE_HOURS = 8.0
 _keepalive_hours: str | None = None   # set by the command line (set_keepalive_hours)
 _warned: set[str] = set()
+# the directory the package runs from: the checkout, as uv sync installs it (editable), so
+# the same .env whatever directory the app, the daemon or a tab is started in
+INSTALL_DIR = Path(__file__).resolve().parent.parent
 
 
 def env_files() -> list[Path]:
-    """The .env files read, in order: the starting directory's, then the user's config."""
-    return [Path.cwd() / ".env", Path.home() / ".config/claude-wheelhouse/.env"]
+    """The .env files read, in order: the install directory's, then the user's config."""
+    return [INSTALL_DIR / ".env", Path.home() / ".config/claude-wheelhouse/.env"]
+
+
+def given(flag_value: str | None, flag: str, key: str) -> tuple[str, str] | None:
+    """A setting as the person gave it, unchecked, and where: the flag, else the environment
+    variable WHEELHOUSE_<key>, else key= in the install directory's .env, else the user's;
+    None if none gives it. Keys are upper case only, as flags are lower case."""
+    if flag_value is not None:
+        return flag_value, flag
+    if os.environ.get(var := f"WHEELHOUSE_{key}"):
+        return os.environ[var], var
+    return next(((env[key], f"{key}= in {path}") for path in env_files()
+                 for env in [read_env(path)] if key in env), None)
+
+
+def _say(said: str) -> None:
+    """said on stderr, once a process."""
+    if said not in _warned:
+        _warned.add(said)
+        print(said, file=sys.stderr, flush=True)
 
 
 def read_env(path: Path) -> dict[str, str]:
@@ -98,8 +122,10 @@ def enable_sdk() -> None:
 
 
 def sdk_enabled() -> bool:
-    """Whether SDK mode is on: --enable-sdk, or enable-sdk=true in either .env file."""
-    return _flag or any(read_env(path).get(name, "").lower() == "true" for path in env_files() for name in KEYS)
+    """Whether SDK mode is on: --enable-sdk, else WHEELHOUSE_ENABLE_SDK, else ENABLE_SDK= in
+    the install directory's .env, else the user's, is true (given)."""
+    setting = given("true" if _flag else None, FLAG, KEY)
+    return setting is not None and setting[0].lower() == "true"
 
 
 def set_usage_mode(mode: str) -> None:
@@ -109,8 +135,8 @@ def set_usage_mode(mode: str) -> None:
 
 
 def usage_mode() -> str:
-    """How plan usage is read: --usage-mode, else usage-mode in the starting directory's
-    .env, else the user's, else oneshot. A value that is neither mode is said once, on
+    """How plan usage is read: --usage-mode, else WHEELHOUSE_USAGE_MODE, else USAGE_MODE= in
+    the install directory's .env, else the user's, else oneshot. A value that is neither mode is said once, on
     stderr, and taken as oneshot."""
     return usage_mode_given() or USAGE_MODES[0]
 
@@ -118,18 +144,12 @@ def usage_mode() -> str:
 def usage_mode_given() -> str | None:
     """The usage mode the person chose, by --usage-mode or a .env; None if neither chose
     one, or the .env's value is neither mode (said once, on stderr)."""
-    given, where = _usage_mode, USAGE_FLAG
-    if given is None:
-        given, where = next(((env[name], f"{name} in {path}") for path in env_files()
-                             for env in [read_env(path)] for name in USAGE_KEYS if name in env), (None, None))
-    if given is None:
+    if (setting := given(_usage_mode, USAGE_FLAG, USAGE_KEY)) is None:
         return None
-    if given.lower() in USAGE_MODES:
-        return given.lower()
-    said = f"claude-wheelhouse: {where} is {given!r}, not oneshot or persistent: plan usage runs oneshot"
-    if said not in _warned:
-        _warned.add(said)
-        print(said, file=sys.stderr, flush=True)
+    mode, where = setting
+    if mode.lower() in USAGE_MODES:
+        return mode.lower()
+    _say(f"claude-wheelhouse: {where} is {mode!r}, not oneshot or persistent: plan usage runs oneshot")
     return None
 
 
@@ -145,13 +165,8 @@ def set_port(port: str) -> None:
 
 def port_given() -> tuple[str, str] | None:
     """The port the person set, unchecked, and where: --port, else WHEELHOUSE_PORT, else
-    port= in the starting directory's .env, else the user's; None if none sets one."""
-    if _port is not None:
-        return _port, PORT_FLAG
-    if os.environ.get("WHEELHOUSE_PORT"):
-        return os.environ["WHEELHOUSE_PORT"], "WHEELHOUSE_PORT"
-    return next(((env[name], f"{name}= in {path}") for path in env_files()
-                 for env in [read_env(path)] for name in PORT_KEYS if name in env), None)
+    PORT= in the install directory's .env (never a bare PORT variable, other tools' own), else the user's; None if none sets one."""
+    return given(_port, PORT_FLAG, PORT_KEY)
 
 
 def port() -> int:
@@ -159,10 +174,10 @@ def port() -> int:
     where, for anything but a whole number from 1024 to 65535."""
     if (setting := port_given()) is None:
         return PORT
-    given, where = setting
-    if not (given.strip().isdecimal() and 1024 <= int(given) <= 65535):
-        raise BadPort(f"{where} is {given!r}: give a port from 1024 to 65535")
-    return int(given)
+    value, where = setting
+    if not (value.strip().isdecimal() and 1024 <= int(value) <= 65535):
+        raise BadPort(f"{where} is {value!r}: give a port from 1024 to 65535")
+    return int(value)
 
 
 def set_keepalive_hours(hours: str) -> None:
@@ -173,23 +188,17 @@ def set_keepalive_hours(hours: str) -> None:
 
 def keepalive_hours() -> float:
     """How long a quiet session is kept warm, in hours: --keepalive-hours, else
-    keepalive-hours= in the starting directory's .env, else the user's, else 8. A number
+    WHEELHOUSE_KEEPALIVE_HOURS, else KEEPALIVE_HOURS= in the install directory's .env, else the user's, else 8. A number
     of 0 or more, fractions allowed (0: no keepalive); anything else is said once, on
     stderr, and taken as 8."""
-    given, where = _keepalive_hours, KEEPALIVE_FLAG
-    if given is None:
-        given, where = next(((env[name], f"{name}= in {path}") for path in env_files()
-                             for env in [read_env(path)] for name in KEEPALIVE_KEYS if name in env), (None, None))
-    if given is None:
+    if (setting := given(_keepalive_hours, KEEPALIVE_FLAG, KEEPALIVE_KEY)) is None:
         return KEEPALIVE_HOURS
+    value, where = setting
     try:
-        hours = float(given)
+        hours = float(value)
     except ValueError:
         hours = -1.0
     if hours >= 0 and hours != float("inf"):
         return hours
-    said = f"claude-wheelhouse: {where} is {given!r}, not a number of hours: the keepalive runs for 8"
-    if said not in _warned:
-        _warned.add(said)
-        print(said, file=sys.stderr, flush=True)
+    _say(f"claude-wheelhouse: {where} is {value!r}, not a number of hours: the keepalive runs for 8")
     return KEEPALIVE_HOURS

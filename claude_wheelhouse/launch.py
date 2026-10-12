@@ -254,7 +254,7 @@ def open_host(store: Store, sid: str) -> None:
         print(now(), sid, "resume" if resuming else "new", session["cwd"], file=log, flush=True)
         # setsid --fork: the host is init's child, not ours, so when it exits it is reaped
         # rather than left a zombie of the TUI that still looks alive. It runs in the
-        # session's directory, where the app's .env isn't: told how long to keep it warm
+        # session's directory, without the app's flags: told how long to keep it warm
         subprocess.run(["setsid", "--fork", sys.executable, "-m", "claude_wheelhouse", "host", sid,
                         features.KEEPALIVE_FLAG, f"{features.keepalive_hours():g}"],
                        cwd=session["cwd"], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,

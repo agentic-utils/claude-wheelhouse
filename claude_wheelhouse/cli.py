@@ -126,19 +126,20 @@ def main() -> None:
     usage = argparse.ArgumentParser(add_help=False)
     usage.add_argument(features.USAGE_FLAG, dest="usage_mode", choices=features.USAGE_MODES,
                        default=argparse.SUPPRESS, help="how the usage bar reads /usage: a short claude -p every "
-                       "5 minutes (oneshot, the default), or one Claude Code kept running (persistent)")
+                       "5 minutes (oneshot, the default), or one Claude Code kept running (persistent); or "
+                       "WHEELHOUSE_USAGE_MODE, or USAGE_MODE= in a .env")
     # --port: the local daemon's (features.port), before or after the command, for the app,
     # which starts the daemon on it or warns if the one it joins listens elsewhere, and the daemon
     port = argparse.ArgumentParser(add_help=False)
     port.add_argument(features.PORT_FLAG, dest="port", metavar="PORT", default=argparse.SUPPRESS,
-                      help=f"the local daemon's port (default {features.PORT}, or WHEELHOUSE_PORT, or port= in a "
+                      help=f"the local daemon's port (default {features.PORT}, or WHEELHOUSE_PORT, or PORT= in a "
                       ".env): another for each user on the machine who runs a wheelhouse")
     # --keepalive-hours: how long a quiet session is kept warm (features.keepalive_hours),
     # before or after the command, for the app and the daemon, which keeps tab sessions warm
     keep = argparse.ArgumentParser(add_help=False)
     keep.add_argument(features.KEEPALIVE_FLAG, dest="keepalive_hours", metavar="N", default=argparse.SUPPRESS,
                       help=f"keep a quiet session's prompt cache warm for up to N hours (default "
-                      f"{features.KEEPALIVE_HOURS:g}, or keepalive-hours= in a .env; 0 turns it off)")
+                      f"{features.KEEPALIVE_HOURS:g}, or WHEELHOUSE_KEEPALIVE_HOURS, or KEEPALIVE_HOURS= in a .env; 0 turns it off)")
     p = argparse.ArgumentParser(prog="claude-wheelhouse", description="Sidecar for parallel Claude Code sessions",
                                 parents=[sdk, usage, port, keep])
     client_args(p)
