@@ -7,7 +7,6 @@ session's Claude process was registered by `claude_wheelhouse run` before it exe
 import functools
 import os
 import threading
-import threading
 import time
 
 from mcp.server.mcpserver import MCPServer
@@ -186,7 +185,7 @@ def stop_soon(s) -> bool:
 
 @wheelhouse_tool
 def park_session() -> str:
-    """Park this session: it stops (its tab closes a moment after this returns), dimmed at the
+    """Park this session: it stops a moment after this returns, and shows dimmed at the
     foot of the wheelhouse's list until the person unparks it. Write your handoff notes into
     your items first: this is the last thing you do."""
     s = _store.session(_sid)
@@ -196,8 +195,8 @@ def park_session() -> str:
 
 @wheelhouse_tool
 def end_session() -> str:
-    """Forget this session: deletes all of its wheelhouse data, and it stops (its tab closes a
-    moment after this returns). If your own instructions describe anything to do when a
+    """Forget this session: deletes all of its wheelhouse data, and it stops a moment after
+    this returns. If your own instructions describe anything to do when a
     session ends, do it before calling this: this is the last thing you do."""
     s = _store.session(_sid)
     _store.end(_sid)

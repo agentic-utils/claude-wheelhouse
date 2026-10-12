@@ -19,7 +19,8 @@ def test_wt_argv(over, title, cwd, desc):
     argv = launch.wt_argv(row(**over), python="/py", distro="Ubuntu", user="u", shell="/bin/zsh")
     assert argv[:8] == ["cmd.exe", "/c", "wt.exe", "-w", "wheelhouse-u", "new-tab", "--title", title], desc
     assert argv[argv.index("--cd") + 1] == cwd, desc
-    assert argv[-4:] == ["--", "/bin/zsh", "-lic", "exec /py -m claude_wheelhouse run abc-123"], desc
+    # not exec'd, then exit 0: the tab closes however Claude Code ended (143 when stopped)
+    assert argv[-4:] == ["--", "/bin/zsh", "-lic", "/py -m claude_wheelhouse run abc-123; exit 0"], desc
 
 
 @pytest.mark.parametrize("over, resume, has, lacks, last, desc", [
@@ -119,7 +120,7 @@ def test_open_tab_refuses_a_session_that_is_still_starting(store, sid, monkeypat
     assert len(calls) == 1
 
 
-def test_two_runs_racing_exec_claude_once(store, sid, tmp_path, monkeypatch):
+def test_two_runs_racing_exec_claude_once(store, sid, tmp_path, monkeypatch, capsys):
     """Round-2 #5: run()'s check and register are one compare-and-set."""
     import threading
     import time
@@ -145,7 +146,7 @@ def test_two_runs_racing_exec_claude_once(store, sid, tmp_path, monkeypatch):
         t.start()
     for t in threads:
         t.join()
-    assert len(execs) == 1 and len(exits) == 1 and "already running" in exits[0]
+    assert len(execs) == 1 and exits == ["1"] and "already running" in capsys.readouterr().err
 
 
 def test_protocol_shows_everything_a_session_receives(db_file):
@@ -270,3 +271,17 @@ def test_every_launch_scrubs_a_parent_sessions_environment(path, desc, store, si
 ])
 def test_clean_env(base, extra, want, desc):
     assert launch.clean_env(base, **extra) == want, desc
+
+
+@pytest.mark.parametrize("tty, waited, desc", [
+    (True, True, "in a tab: the reason stays up until Enter, as the tab closes once run exits"),
+    (False, False, "no terminal: nothing to wait on"),
+])
+def test_run_refusing_says_why_before_the_tab_closes(monkeypatch, capsys, tty, waited, desc):
+    asked = []
+    monkeypatch.setattr(launch.sys.stdin, "isatty", lambda: tty, raising=False)
+    monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt))
+    with pytest.raises(SystemExit) as e:
+        launch.run("no-such-session")
+    assert e.value.code == 1 and "no session no-such-session" in capsys.readouterr().err, desc
+    assert bool(asked) == waited, desc

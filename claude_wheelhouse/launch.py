@@ -14,6 +14,7 @@ interactive login shell, giving it the environment of an ordinary WSL tab: a log
 alone stops at ~/.bashrc's interactive guard, which skips anything set below it (brew).
 """
 
+import contextlib
 import getpass
 import json
 import os
@@ -120,7 +121,10 @@ def wt_argv(session, *, python: str, distro: str, user: str, shell: str) -> list
     return [
         "cmd.exe", "/c", "wt.exe", "-w", window_name(user), "new-tab", "--title", tab_title(session),
         "wsl.exe", "-d", distro, "-u", user, "--cd", session["cwd"].replace(";", r"\;"),
-        "--", shell, "-lic", f"exec {shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}",
+        # not exec'd: the shell exits 0 after it, however Claude Code ended (143 once stopped
+        # by a signal), so Windows Terminal's default closeOnExit closes the tab. run itself
+        # execs claude, so the registered pid is still Claude Code's
+        "--", shell, "-lic", f"{shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}; exit 0",
     ]
 
 
@@ -299,12 +303,22 @@ def open_tab(store: Store, sid: str, notice: bool = True) -> None:
         store.notice(sid, JOINED_TEXT)
 
 
+def refuse(text: str) -> None:
+    """run can't start Claude Code: say why and, in a terminal, wait for Enter before
+    exiting, as the tab closes once run does (wt_argv)."""
+    print(text, file=sys.stderr, flush=True)
+    if sys.stdin.isatty():
+        with contextlib.suppress(EOFError, KeyboardInterrupt):
+            input("Press Enter to close this tab. ")
+    sys.exit(1)
+
+
 def run(sid: str) -> None:
     """Runs inside the new tab: final liveness check, then exec Claude."""
     store = Store()
     session = store.session(sid)
     if session is None:
-        sys.exit(f"claude-wheelhouse: no session {sid} (ended?)")
+        refuse(f"claude-wheelhouse: no session {sid} (ended?)")
     env = clean_env(WHEELHOUSE_SESSION_ID=sid, WHEELHOUSE_DB=str(store.path), WHEELHOUSE_PYTHON=sys.executable)
     os.chdir(session["cwd"])
     resume = transcript_exists(sid)
@@ -316,9 +330,9 @@ def run(sid: str) -> None:
     # Check-and-register is one transaction, so two tabs racing can't both get here.
     other = liveness.running_pid(sid)   # e.g. adopted, but its old tab never ran /exit
     if other:
-        sys.exit(f"claude-wheelhouse: session {session['name'] or sid} is still running (pid {other}): "
+        refuse(f"claude-wheelhouse: session {session['name'] or sid} is still running (pid {other}): "
                  "type /exit in its tab, then relaunch it from the wheelhouse")
     pid = os.getpid()
     if not store.register_if_free(sid, pid, liveness.start_time(pid), liveness.boot_id(), liveness.is_alive):
-        sys.exit(f"claude-wheelhouse: session {session['name'] or sid} is already running in another tab")
+        refuse(f"claude-wheelhouse: session {session['name'] or sid} is already running in another tab")
     os.execvpe("claude", argv, env)
