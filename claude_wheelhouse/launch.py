@@ -81,7 +81,9 @@ def window_name(user: str) -> str:
     """The Windows Terminal window a user's tabs open in, wheelhouse-<user> (Doug's Q75), so
     each wheelhouse's sessions gather in a window of their own, whoever else runs one: wt's
     -w opens a window by that name the first time and adds to it after. Letters, digits, -
-    and _ only, which neither cmd nor wt reads as anything but a name."""
+    and _ only, which neither cmd nor wt reads as anything but a name: anything else becomes
+    -, so d.lindsay and d-lindsay would share a window (users on one machine that close in
+    name aren't expected)."""
     return "wheelhouse-" + re.sub(r"[^A-Za-z0-9_-]+", "-", user)
 
 

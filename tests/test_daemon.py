@@ -372,6 +372,15 @@ def test_the_socket_the_daemon_listens_on(address, taken, error, said, desc):
         assert str(e.value) == said.format(port=port), desc
 
 
+def test_two_daemons_starting_together_on_one_port_the_second_is_told_it_is_taken():
+    """Each listens as it binds: two SO_REUSEADDR sockets can both bind a port neither listens on."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    with listener("127.0.0.1", port), pytest.raises(PortTaken, match=f"port {port} is taken"):
+        listener("127.0.0.1", port)
+
+
 def test_main_refuses_every_interface_before_anything_else(monkeypatch):
     monkeypatch.setattr(daemon_mod, "Store", lambda: pytest.fail("opened the store"))
     with pytest.raises(ValueError, match="every interface"):

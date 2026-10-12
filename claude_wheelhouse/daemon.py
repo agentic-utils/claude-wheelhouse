@@ -128,13 +128,17 @@ def named(request: Request) -> str:
 
 
 def listener(address: str, port: int) -> socket.socket:
-    """The socket the daemon listens on, bound here rather than by uvicorn, which would only
-    log the error and exit: PortTaken if another process has the port, said as the app says
-    it (connect.local); ValueError, in a line, if it can't be bound for another reason."""
+    """The socket the daemon listens on, bound and listening here rather than in uvicorn,
+    which would only log the error and exit: PortTaken if another process has the port, said
+    as the app says it (connect.local); ValueError, in a line, if it can't be had for another
+    reason. It listens at once: two sockets with SO_REUSEADDR can both bind a port while
+    neither listens, so two users' daemons starting together would both bind, and the
+    second fail only in uvicorn's listen."""
     sock = socket.socket(socket.AF_INET6 if ipaddress.ip_address(address).version == 6 else socket.AF_INET)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # as asyncio's own does
     try:
         sock.bind((address, port))
+        sock.listen()
     except OSError as e:
         sock.close()
         if e.errno == errno.EADDRINUSE:
@@ -997,15 +1001,16 @@ def main(address: str = ADDRESS, port: int = features.PORT, names=(), start_pipe
     url = f"http://{address if ipaddress.ip_address(address).version == 4 else f'[{address}]'}:{port}"
     lock = take_lock(store.path.parent)
     try:
-        sock = listener(address, port)   # once the lock is held: a second daemon of this user's is AlreadyRunning
-        token, said = auth.ensure(store.path.parent)
-        if said:
-            print(f"wheelhouse daemon: {said}", flush=True)
-        daemon = Daemon(store, allowed, token)
-        server = Server(daemon, uvicorn.Config(daemon.app, host=address, port=port, log_level="warning"),
-                        listening=functools.partial(announce, lock, url))
-        daemon.stop = functools.partial(server.handle_exit, signal.SIGTERM, None)
-        print(f"wheelhouse daemon (pid {os.getpid()}) on {url}, state in {store.path.parent}", flush=True)
-        server.run(sockets=[sock])
+        # once the lock is held: a second daemon of this user's is AlreadyRunning
+        with listener(address, port) as sock:
+            token, said = auth.ensure(store.path.parent)
+            if said:
+                print(f"wheelhouse daemon: {said}", flush=True)
+            daemon = Daemon(store, allowed, token)
+            server = Server(daemon, uvicorn.Config(daemon.app, host=address, port=port, log_level="warning"),
+                            listening=functools.partial(announce, lock, url))
+            daemon.stop = functools.partial(server.handle_exit, signal.SIGTERM, None)
+            print(f"wheelhouse daemon (pid {os.getpid()}) on {url}, state in {store.path.parent}", flush=True)
+            server.run(sockets=[sock])
     finally:
         lock.close()

@@ -133,18 +133,23 @@ def set_port(port: str) -> None:
     _port = port
 
 
+def port_given() -> tuple[str, str] | None:
+    """The port the person set, unchecked, and where: --port, else WHEELHOUSE_PORT, else
+    port= in the starting directory's .env, else the user's; None if none sets one."""
+    if _port is not None:
+        return _port, PORT_FLAG
+    if os.environ.get("WHEELHOUSE_PORT"):
+        return os.environ["WHEELHOUSE_PORT"], "WHEELHOUSE_PORT"
+    return next(((env[name], f"{name}= in {path}") for path in env_files()
+                 for env in [read_env(path)] for name in PORT_KEYS if name in env), None)
+
+
 def port() -> int:
-    """The local daemon's port: --port, else WHEELHOUSE_PORT, else port= in the starting
-    directory's .env, else the user's, else 7428. BadPort, naming where, for anything but a
-    whole number from 1024 to 65535."""
-    given, where = _port, PORT_FLAG
-    if given is None and os.environ.get("WHEELHOUSE_PORT"):
-        given, where = os.environ["WHEELHOUSE_PORT"], "WHEELHOUSE_PORT"
-    if given is None:
-        given, where = next(((env[name], f"{name}= in {path}") for path in env_files()
-                             for env in [read_env(path)] for name in PORT_KEYS if name in env), (None, None))
-    if given is None:
+    """The local daemon's port: the one given (port_given), else 7428. BadPort, naming
+    where, for anything but a whole number from 1024 to 65535."""
+    if (setting := port_given()) is None:
         return PORT
+    given, where = setting
     if not (given.strip().isdecimal() and 1024 <= int(given) <= 65535):
         raise BadPort(f"{where} is {given!r}: give a port from 1024 to 65535")
     return int(given)

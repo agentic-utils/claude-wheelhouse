@@ -38,6 +38,7 @@ def isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(store_module, "DEFAULT_DB", path)
     monkeypatch.delenv("WHEELHOUSE_SESSION_ID", raising=False)
     monkeypatch.delenv("WHEELHOUSE_TOKEN", raising=False)
+    monkeypatch.delenv("WHEELHOUSE_PORT", raising=False)   # a test that wants one sets it (features.port)
     return path
 
 

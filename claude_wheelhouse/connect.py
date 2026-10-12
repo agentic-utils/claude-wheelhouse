@@ -287,13 +287,14 @@ def listening(state_dir: Path, wait: float, ended: int | None = None) -> str | N
     return None
 
 
-def local(state_dir: Path, port: int) -> tuple[str, str, list[str]]:
+def local(state_dir: Path, port: int, given: bool = False) -> tuple[str, str, list[str]]:
     """The local daemon, joined or started: its URL, its token and what to say about it.
     One from the same package on other code runs older code (the checkout changed under it),
     so it's stopped and one started on this code; one from another package is joined if it
     serves the same API. A lock let go meanwhile (another app restarting it, or its own
     Reviver) is gone round again: only a daemon this app started that never listens, or one
-    that holds its lock and never answers, is fatal."""
+    that holds its lock and never answers, is fatal. given: whether the person set the port
+    (features.port_given), for what's said of a daemon on another."""
     said, restarted, failed = [], False, 0
     deadline = time.monotonic() + 3 * START_WAIT
     while True:
@@ -339,7 +340,7 @@ def local(state_dir: Path, port: int) -> tuple[str, str, list[str]]:
         exposed = auth.exposed(file) if found else None   # one started on it would have refused it
         if exposed and f"the daemon runs, but {exposed}" not in said:
             said.append(f"the daemon runs, but {exposed}")
-        elsewhere = elsewhere_said(url, port)   # the lock's address wins over the port asked for
+        elsewhere = elsewhere_said(url, port, given)   # the lock's address wins over the port asked for
         if elsewhere and elsewhere not in said:
             said.append(elsewhere)
         if info is None:
@@ -359,14 +360,16 @@ def local(state_dir: Path, port: int) -> tuple[str, str, list[str]]:
         return url, token, said
 
 
-def elsewhere_said(url: str, port: int) -> str | None:
+def elsewhere_said(url: str, port: int, given: bool) -> str | None:
     """What to say of a running daemon whose lock names another port than the one asked for
-    (one started by hand, or by an app with another setting): joined where it is."""
+    (one started by hand, or by an app with another setting): joined where it is. given:
+    whether the person set this port, or it is the default."""
     match = re.search(r":(\d+)$", url)
     if match is None or int(match[1]) == port:
         return None
-    return (f"the daemon runs on port {match[1]}, not {port} as set here: joined it there. To move it, quit the "
-            f"app, stop it ({STOP}) and start again")
+    asked = f"{port} as set here" if given else f"the default {port}"
+    return (f"the daemon runs on port {match[1]}, not {asked}: joined it there. To move it, quit the app, stop it "
+            f"({STOP}) and start again")
 
 
 class Reviver:
@@ -409,7 +412,7 @@ class Reviver:
 
 def local_client(state_dir: Path) -> tuple[RemoteClient, list[str]]:
     port = features.port()
-    url, token, said = local(state_dir, port)
+    url, token, said = local(state_dir, port, features.port_given() is not None)
     client = RemoteClient(url, token, revive=Reviver(state_dir, port),
                           why_refused=lambda: refused_trouble(auth.path(state_dir), holder(state_dir)))
     return client, said
