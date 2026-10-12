@@ -2442,8 +2442,6 @@ class WheelhouseApp(App):
                                                  (s["unseen_decisions"], "unseen D"), (s["drafts"], "queued")) if n]
         if counts:
             t.append("\n" + " · ".join(counts))
-        if runner(s) == "sdk" and s["activity"] and self.running(s["id"]):
-            t.append(f"\n{s['activity']}", style="italic #05d9e8")
         t.append("\n\n")
         if s["synopsis"]:
             t.append(s["synopsis"])
@@ -2452,6 +2450,9 @@ class WheelhouseApp(App):
             t.append(s["brief"])
         else:
             t.append("No synopsis yet.", style="#777777")
+        # the activity last: it changes from moment to moment, and nothing above it moves as it does
+        if runner(s) == "sdk" and s["activity"] and self.running(s["id"]):
+            t.append(f"\n\n{s['activity']}", style="italic #05d9e8")
         return t
 
     # selection

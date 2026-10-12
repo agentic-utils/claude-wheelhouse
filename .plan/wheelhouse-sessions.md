@@ -431,7 +431,8 @@ Adopt brings a session the wheelhouse didn't launch into the wheelhouse, by hand
 - **Session area** (#58, which replaced the Sessions tab and the Inbox/Sessions tabs).
   The session list, every session with parked ones dimmed at the foot; under it a
   description of the current session (status, runner, mode, ticket, directory,
-  open-question, running, unseen-decision and queued counts, activity, synopsis or brief);
+  open-question, running, unseen-decision and queued counts, synopsis or brief, then the
+  activity last, so nothing above it moves as it changes);
   under that its buttons, only those that apply (#62, D26): Rename and Relaunch on a live
   session; Restore on a dead one, parked or not (unparks only once the launch goes
   through); Park, or Unpark on a parked one, and End on either, live or dead. Park and End

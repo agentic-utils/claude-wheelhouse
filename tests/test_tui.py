@@ -524,6 +524,28 @@ async def test_the_session_description_box(store, sid, tmp_path, synopsis, brief
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("runner_, live, activity, after, desc", [
+    ("sdk", True, "running Bash: make test", "running Bash: make test", "a running hosted session's, last"),
+    ("sdk", True, "thinking", "thinking", "whatever it says"),
+    ("sdk", False, "thinking", "", "none while it isn't running"),
+    ("tab", True, "thinking", "", "none for a tab, which has its own terminal"),
+])
+async def test_the_activity_is_under_the_synopsis(store, tmp_path, monkeypatch, runner_, live, activity, after, desc):
+    """The activity changes from moment to moment: last in the description, nothing moves as it does."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live" if live else "dead")
+    sid = store.create_session(str(tmp_path), name="hosted", runner=runner_)
+    store.set_synopsis(sid, "Building the thread view.")
+    store.set_activity(sid, activity)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        above, below = app._info_text.split("Building the thread view.")
+        assert activity not in above, f"{desc}: not above the synopsis"
+        assert below.strip() == after, desc
+
+
+@pytest.mark.anyio
 async def test_end_names_the_queued_answers_it_discards(store, sid):
     store.queue(sid, "a", "Q1")
     app = WheelhouseApp(store)
