@@ -8,7 +8,8 @@ for SDK and tab sessions: from the files Claude Code writes, not from the sessio
   failure); a background one's `<task-notification>` (completed, failed, killed when the
   person stops it, stopped when its session ended under it). A background launch's own
   tool_result ("Async agent launched") finishes nothing. SendMessage to a finished
-  subagent resumes it, so its item runs again.
+  subagent resumes it, so its item runs again. A record written again changes nothing:
+  a compaction through the Agent SDK appends earlier records, with their uuids.
 - Its session dying: the TUI says so (sync's alive), and a subagent still running then
   fails, with a note. A notification read later, when the session is resumed, updates it
   as usual.
@@ -29,6 +30,7 @@ earliest subagent still running (stats.window_start), or at the end when none is
 """
 
 import json
+import mmap
 import re
 import time
 from dataclasses import dataclass
@@ -125,6 +127,8 @@ class AgentWatcher:
         self.listed: int | None = None    # the subagents folder's mtime when last listed
         self.offset: int | None = None    # the main transcript, read to here
         self.stamp: tuple | None = None   # its (size, mtime) then
+        self.base = 0                      # where the first read started
+        self.seen: set[str] = set()        # uuids of the records read that may change an item
         self.agents: dict[str, Agent] = {}   # the ones tracked: started after the cut-off
         self.by_tool: dict[str, str] = {}    # Agent tool call id: agent id
         self.skipped: set[str] = set()       # finished before the cut-off, or a subagent's subagent
@@ -227,6 +231,7 @@ class AgentWatcher:
                 running = [a.started.timestamp() for aid, a in self.agents.items()
                            if self.links.get(aid, "running") == "running"]
                 self.offset = stats.window_start(f, st.st_size, min(running)) if running else st.st_size
+                self.base, self.seen = self.offset, set()
             f.seek(self.offset)
             data = f.read(st.st_size - self.offset)
         end = data.rfind(b"\n") + 1   # a half-written last line waits for the next read
@@ -240,17 +245,21 @@ class AgentWatcher:
     def take(self, line: bytes) -> None:
         """One transcript record: parsed only when its bytes say it may matter."""
         if b"<task-notification>" in line:
-            text = notification(json.loads(line))
+            rec = json.loads(line)
+            text = notification(rec)
             if text:
                 ids, first = fields(text)
                 status = FINISH.get(first.get("status"))
                 aids = [i for i in ids if i in self.agents] or [self.by_tool.get(first.get("tool-use-id"))]
-                for aid in aids:
-                    if aid and status:
+                aids = [aid for aid in aids if aid and status]
+                if aids and not self.replayed(rec):
+                    for aid in aids:
                         self.set(aid, status, "" if status == "done" else first.get("summary", ""))
                 return
         if b'"tool_result"' in line and any(i.decode() in self.by_tool for i in RESULT_ID.findall(line)):
             rec = json.loads(line)
+            if self.replayed(rec):
+                return
             result = rec.get("toolUseResult")
             for block in (rec.get("message") or {}).get("content") or []:
                 aid = self.by_tool.get(block.get("tool_use_id")) if isinstance(block, dict) else None
@@ -265,12 +274,35 @@ class AgentWatcher:
             rec = json.loads(line)
             if rec.get("type") != "assistant":
                 return
-            for block in (rec.get("message") or {}).get("content") or []:
-                if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "SendMessage":
-                    aid = (block.get("input") or {}).get("to")
-                    # finished as the transcript said, or as the item was written before a restart
-                    if aid in self.agents and (self.agents[aid].status or self.links.get(aid)) not in (None, "running"):
-                        self.set(aid, "running", "")
+            sent = [(block.get("input") or {}).get("to") for block in (rec.get("message") or {}).get("content") or []
+                    if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "SendMessage"]
+            sent = [aid for aid in sent if aid in self.agents]
+            # finished as the transcript said, or as the item was written before a restart
+            resumed = [aid for aid in sent if (self.agents[aid].status or self.links.get(aid)) not in (None, "running")]
+            if sent and not self.replayed(rec, acts=bool(resumed)):
+                for aid in resumed:
+                    self.set(aid, "running", "")
+
+    def replayed(self, rec: dict, acts: bool = True) -> bool:
+        """A record written again, not new: a compaction run through the Agent SDK resumes
+        the session, and Claude Code appends records it had already written, uuid and old
+        timestamp included. So a uuid already read is a replay, and so is one written before
+        where the first read started, looked for only when the record would change an item
+        (`acts`), which is rare: a first read stays cheap."""
+        uid = rec.get("uuid")
+        if not isinstance(uid, str):
+            return False
+        if uid in self.seen:
+            return True
+        self.seen.add(uid)
+        if not (acts and self.base):
+            return False
+        pattern = re.compile(rb'"uuid":\s*"' + re.escape(uid.encode()) + rb'"')
+        try:
+            with open(self.main, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
+                return pattern.search(m, 0, self.base) is not None
+        except (OSError, ValueError):
+            return False
 
     def set(self, aid: str, status: str, note: str) -> None:
         a = self.agents[aid]

@@ -502,3 +502,50 @@ def test_review_probes(store, sid, joined, db_file, scenario, want, desc):
 def test_a_dead_sessions_subagent_says_why_it_failed(store, sid, joined, db_file):
     p5_its_session_died(store, sid, joined, db_file)
     assert notes(store, sid, "A1") == ["the session stopped while this subagent ran"]
+
+
+def stamped(rec, uid):
+    return {**rec, "uuid": uid, "cwd": "/home/me"}
+
+
+def history():
+    """Launched, sent a message while it ran, then finished: each record with its uuid."""
+    t = "toolu_a1"
+    return [stamped(tool_use(t, "Check pages"), "u1"), stamped(launched(t, "a1"), "u2"), stamped(send("a1"), "u3"),
+            stamped(notified("a1", t, "completed", form="attachment"), "u4")]
+
+
+def compacted(recs):
+    """What a compaction through the Agent SDK appends: earlier records again, byte for byte
+    but for cwd (same uuid, same old timestamp), then its compact boundary and summary."""
+    boundary = {"type": "system", "subtype": "compact_boundary", "uuid": "b1", "parentUuid": None,
+                "timestamp": iso(NOW - 10), "compactMetadata": {"trigger": "manual"}}
+    summary = {"type": "user", "uuid": "b2", "parentUuid": "b1", "isCompactSummary": True, "timestamp": iso(NOW - 10),
+               "message": {"role": "user", "content": "This session is being continued from a previous conversation"}}
+    return [{**r, "cwd": "/sdk"} for r in recs] + [boundary, summary]
+
+
+RESTART = "restart"
+RESUME = stamped(send("a1"), "u5")
+
+
+@pytest.mark.parametrize("batches, status, desc", [
+    ([history() + compacted(history()[:3])], "done", "a SendMessage a compaction replays resumes nothing"),
+    ([history(), compacted(history()[:3])], "done", "nor when the replay is read after the original"),
+    ([history(), RESTART, compacted(history()[:3])], "done",
+     "nor after a restart, its original before where the first read started"),
+    ([history(), compacted(history()[:3]) + [RESUME]], "running", "a SendMessage written after the replay resumes it"),
+    ([history(), RESTART, [RESUME]], "running", "a SendMessage written after a restart resumes it"),
+    ([history() + [RESUME], compacted(history())], "running",
+     "a finish a compaction replays doesn't finish a resumed subagent"),
+])
+def test_records_a_compaction_replays_change_nothing(store, sid, joined, batches, status, desc):
+    joined.agent("a1", "Check pages")
+    w = AgentWatcher(sid)
+    for batch in batches:
+        if batch == RESTART:
+            w = AgentWatcher(sid)
+        else:
+            joined.write(*batch)
+        w.sync(store, NOW)
+    assert agents(store, sid)["Check pages"]["status"] == status, desc

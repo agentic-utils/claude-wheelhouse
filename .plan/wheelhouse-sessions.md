@@ -216,6 +216,9 @@ SDK and tab sessions, rather than relying on the session to post them
   `<status>`, `<tool-use-id>` and `<summary>`; the subagent's text in `<result>` is never
   read as fields. A notification quoted anywhere else (a message, tool output) is ignored.
   SendMessage to a finished subagent resumes it: running again, after a restart too.
+  A record written again changes nothing. A compaction through the Agent SDK resumes the
+  session, and Claude Code appends records it had already written, same uuid and old
+  timestamp, so a uuid already in the transcript marks a replay, not a timestamp.
 - **Its session dies.** When the TUI's liveness check has a session dead, each of its
   subagent items still running fails, with the note "the session stopped while this
   subagent ran" (parked or not, on the next tick: no timer of its own). If the session is
