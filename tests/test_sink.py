@@ -232,10 +232,11 @@ async def test_a_parked_session_shows_at_the_foot(tmp_path, monkeypatch, clock, 
     """T66: the parked sessions sit at the foot of the list's visible rows, whatever the
     width of its names, never under its scrollbar."""
     from claude_wheelhouse import liveness
-    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     store = Store(tmp_path / "w.db")
     ids = [store.create_session(str(tmp_path), name=n) for n in names]
     store.set_parked(ids[0], True)
+    # Parked is not running: a running parked one is unparked as the hub starts (session-states)
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead" if s["id"] == ids[0] else "live")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
