@@ -5267,3 +5267,92 @@ async def test_quitting_through_the_daemon_leaves_a_relaunch_to_it(store, sid, s
         await app.action_quit()
         await pilot.pause()
         assert exits == [True] and not isinstance(app.screen, Confirm), "nothing to ask: the daemon carries it on"
+
+
+# the idle app draws only what changes (#16)
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("connected, frames, updates, desc", [
+    (True, tui.SHIMMER_PERIOD, tui.SHIMMER_PERIOD, "the shimmer: each frame a new look"),
+    (False, 6, 1, "the daemon out of reach: said once, not again each frame"),
+])
+async def test_the_title_shows_a_look_only_once_it_changes(store, monkeypatch, connected, frames, updates, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.client.connected = connected
+        app.title_bar.show("before", Text("before"))
+        shown = []
+        update = app.title_bar.update
+        monkeypatch.setattr(app.title_bar, "update", lambda *a, **k: (shown.append(a), update(*a, **k)))
+        for _ in range(frames):
+            app.animate()
+        assert len(shown) == updates, desc
+
+
+@pytest.mark.anyio
+async def test_the_titles_kept_lines_are_its_looks_as_drawn_afresh(store):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        title = app.title_bar
+        for frame in range(3 * tui.SHIMMER_PERIOD):   # the first round draws, the rest recall
+            app.frame = frame - 1
+            app.animate()
+            got = cells(title.render_line(0))
+            title._render_content()   # as a plain Static draws it
+            assert got == cells(title._render_cache.lines[0]), f"frame {frame}"
+            assert "".join(ch for ch, _ in got).strip() == tui.TITLE.strip(), f"frame {frame}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("first, then, drawn, desc", [
+    (0, 1, False, "the eye where it was: nothing drawn again"),
+    (0, 4, True, "the eye moved: its row drawn again"),
+])
+async def test_an_eye_that_stays_put_draws_nothing_again(store, sid, monkeypatch, first, then, drawn, desc):
+    monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: s == sid)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        t = app.session_list
+        assert (tui.eye_at(first) != tui.eye_at(then)) == drawn, desc
+        t.sweep(first)
+        rows = []
+        monkeypatch.setattr(t, "refresh_row", lambda row: rows.append(row))
+        t.sweep(then)
+        assert bool(rows) == drawn, desc
+        assert t.eye_frame == then, f"{desc}: the frame drawn from is the latest"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("paint", ["paint_session_info", "paint_sendbar"])
+async def test_a_repaint_finds_its_widgets_without_querying(store, sid, monkeypatch, paint):
+    from textual.dom import DOMNode
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        getattr(app, paint)()   # finds them, the once
+        asked = []
+        query = DOMNode.query
+        monkeypatch.setattr(DOMNode, "query", lambda self, *a: (asked.append(a), query(self, *a))[1])
+        getattr(app, paint)()
+        assert asked == [], paint
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+async def test_a_refresh_with_nothing_new_draws_nothing_again(store, sid, monkeypatch):
+    store.post_item(sid, "task", "a task")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.refresh_data()
+        await pilot.pause()
+        drawn = []
+        for w in app.screen.query("*"):
+            refresh = w.refresh
+            monkeypatch.setattr(w, "refresh", functools.partial(
+                lambda w, refresh, *a, **k: (drawn.append(w), refresh(*a, **k))[1], w, refresh))
+        app.refresh_data()
+        assert drawn == [], "nothing changed, nothing drawn"

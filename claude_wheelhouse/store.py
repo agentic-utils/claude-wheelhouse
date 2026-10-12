@@ -5,6 +5,7 @@ synchronous=FULL in WAL mode, fsynced) before the call returns, so a crash
 never loses a change the caller was told about.
 """
 
+import functools
 import json
 import os
 import re
@@ -1181,5 +1182,6 @@ def inbox_rank(item, processing=frozenset(), busy=frozenset()) -> tuple:
     return (RANK.get(status, 9), _neg_time(item["updated_at"]), -item["id"])
 
 
+@functools.lru_cache(maxsize=8192)   # each item's, every refresh: parsed once, not each second
 def _neg_time(iso: str) -> float:
     return -datetime.fromisoformat(iso).timestamp()

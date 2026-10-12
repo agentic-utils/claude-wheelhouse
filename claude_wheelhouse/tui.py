@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import subprocess
 import time
+import weakref
 from typing import Callable, Self
 
 from rich.markdown import Markdown as RichMarkdown
@@ -63,6 +64,7 @@ STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "
                 "dead": "bold #ff2a6d", "ending": "bold #d300c5", "parking": "bold #d300c5",
                 "relaunching": "bold #05d9e8"}
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
+SHIMMER_PERIOD = 2 * len(SHIMMER)   # the title's frames before its colours come round again (shimmer)
 UNREACHABLE = Text(" daemon unreachable: reconnecting… ", style="bold #000000 on #ff2a6d")   # the title, while it is
 # seconds the person must stay on an item, without a break, before it counts as looked at:
 # an unseen decision becomes seen, a tutorial step ticks (dwelt). Passing over it does neither
@@ -87,9 +89,14 @@ SLOT_PARENTS = {"inbox.side": "#items-pane"}
 LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of its parent
 
 
+def eye_at(frame: int, width: int = 8) -> int:
+    """Where the eye is at `frame`: all that changes from one of its frames to the next (cylon)."""
+    return round((math.sin(frame / 4) + 1) / 2 * (width - 1))
+
+
 def cylon(frame: int, width: int = 8) -> Text:
     """A red eye sweeping back and forth with a fading tail."""
-    pos = round((math.sin(frame / 4) + 1) / 2 * (width - 1))
+    pos = eye_at(frame, width)
     t = Text()
     for i in range(width):
         d = abs(i - pos)
@@ -98,7 +105,18 @@ def cylon(frame: int, width: int = 8) -> Text:
     return t
 
 
+def shimmer_phase(frame: int) -> int:
+    """The title's look at `frame`: it comes round every SHIMMER_PERIOD frames (shimmer)."""
+    return frame % SHIMMER_PERIOD
+
+
 def shimmer(frame: int) -> Text:
+    """The title at `frame`, one of SHIMMER_PERIOD looks, each built once."""
+    return _shimmer(shimmer_phase(frame))
+
+
+@functools.cache
+def _shimmer(frame: int) -> Text:
     t = Text()
     for i, ch in enumerate(TITLE):
         t.append(ch, style=f"bold {SHIMMER[(i + frame) // 2 % len(SHIMMER)]}")
@@ -585,12 +603,18 @@ class SessionList(SinkList):
         super().__init__(**kwargs)
         self.eyes: set[str] = set()   # the busy sessions' rows, whose eye cell paint_sessions leaves blank
         self.eye_frame = 0
+        self.swept: tuple | None = None   # the busy rows and the eye's place as last drawn again (sweep)
 
     def sweep(self, frame: int) -> None:
         """The busy rows' eyes to `frame`: drawn over their blank cell as each line is drawn
         (_render_line), and those rows alone drawn again. Never in the table's data, where
-        each change would draw every row again: DataTable's caches key on its count of them."""
+        each change would draw every row again: DataTable's caches key on its count of them.
+        Not if the eyes are where they were last drawn, on the same rows: a frame can leave them there."""
         self.eye_frame = frame
+        swept = (frozenset(self.eyes), eye_at(frame, self.EYE))   # a row the table draws anew, it draws as it is
+        if swept == self.swept:
+            return
+        self.swept = swept
         for sid in self.eyes:
             if sid in self.rows:
                 self.refresh_row(self.get_row_index(sid))
@@ -790,11 +814,20 @@ CONVERSATION = (("Mode", "mode", "default"), ("Send", "send", "primary"), ("Inte
                 ("Compact", "compact", "default"), ("Shell", "shell", "default"))
 
 
+# each root's buttons by id, as show_button found them: they live as long as it does, and
+# finding them again each second was a good part of the refresh
+HELD_BUTTONS: weakref.WeakKeyDictionary[Widget, dict[str, Button]] = weakref.WeakKeyDictionary()
+
+
 def show_button(root: Widget, button_id: str, label: str, disabled: bool, shown: bool = True) -> None:
     """A button's caption and state, wherever it lives under root."""
-    button = next(iter(root.query(f"#{button_id}")), None)
-    if button is None:   # the app's first refresh can come before the buttons mount
-        return
+    held = HELD_BUTTONS.setdefault(root, {})
+    button = held.get(button_id)
+    if button is None:
+        button = next(iter(root.query(f"#{button_id}")), None)
+        if button is None:   # the app's first refresh can come before the buttons mount
+            return
+        held[button_id] = button
     if str(button.label) != label:
         button.label = label
     button.disabled = disabled
@@ -844,7 +877,8 @@ class SendBar(Horizontal):
             button.can_focus = False
 
     def activity(self, text: str) -> None:
-        label = next(iter(self.query("#activity")), None)
+        label = getattr(self, "activity_label", None) or next(iter(self.query("#activity")), None)
+        self.activity_label = label   # held once found: it lives as long as the bar
         if label is not None and str(label.content) != text:
             label.update(text)
 
@@ -932,6 +966,35 @@ def hint(sends: str, dead: bool = False) -> str:
     ctrl_s = "" if dead else " · Ctrl+S sends its queue"
     return (f"Ctrl+Enter to {sends}{ctrl_s} · Ctrl+T switches mode"
             " · Ctrl+R takes a queued answer back")
+
+
+class TitleBar(Static):
+    """The title: one of a few looks, its shimmer's phases and the daemon out of reach. A
+    look already shown is not shown again, and each look's line is drawn once and recalled:
+    the shimmer moves ten times a second, and drawing it afresh each time was a good part of
+    what the app cost while idle."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.look: object = None   # what shows, as show was given it
+        self.lines: dict[tuple, Strip] = {}   # each look's lines as drawn, for one size, style and selection
+        self.lines_for: tuple | None = None
+
+    def show(self, look: object, content: Text) -> None:
+        """Show `content`, which `look` names: nothing to do if it already shows."""
+        if look != self.look:
+            self.look = look
+            self.update(content, layout=False)
+
+    def render_line(self, y: int) -> Strip:
+        drawn_for = (self.size, self.visual_style, self.text_selection)
+        if drawn_for != self.lines_for:
+            self.lines, self.lines_for = {}, drawn_for
+        key = (self.look, y)
+        line = self.lines.get(key)
+        if line is None:
+            line = self.lines[key] = super().render_line(y)
+        return line
 
 
 class Hint(Label):
@@ -1654,13 +1717,14 @@ class WheelhouseApp(App):
         self.module_ids: dict[str, str] = {}   # each pane's widget id: the module that has it
         self.box_target: tuple | None = None
         self.landing = False   # a key's land under way, which the refresh tick waits out (tick)
+        self.held_bars: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()   # by screen (bar_widgets)
         self.said: list[tuple[str, str]] = []   # what to say as it opens, (text, severity): how it found the daemon
         self.client.listen(self.heard)
         # the tutorial steps only the screen sees (a question opened, the conversation
         # followed), by tutorial session
 
     def compose(self) -> ComposeResult:
-        yield Static(id="title")
+        yield TitleBar(id="title")
         with Columns(id="main"):
             # the sessions, the highlighted one's description, and what can be done to it
             with Vertical(id="sessions-pane", classes="panel"):
@@ -1695,7 +1759,7 @@ class WheelhouseApp(App):
     async def on_mount(self) -> None:
         await self.mount_panes()
         # held, not queried: timers fire while a dialog is on top and during shutdown
-        self.title_bar = self.query_one("#title", Static)
+        self.title_bar = self.query_one("#title", TitleBar)
         self.items_table = self.query_one("#items", ItemList)
         self.detail = self.query_one("#detail", Transcript)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
@@ -1708,6 +1772,7 @@ class WheelhouseApp(App):
         # buttons still click, and the list's own keys press them (SessionList)
         self.conversation_buttons = self.query_one("#conversation-buttons", Grid)
         self.session_buttons = self.query_one("#session-buttons", Grid)
+        self.session_controls = list(self.query("#sessions-pane Grid, #sessions-pane Grid Button"))   # theirs and they
         # the conversation's one stop is its transcript, not this scroll too: its keys
         # still scroll it, an ancestor's bindings (TAB_ORDER)
         for widget in (self.query_one("#session-info-scroll"), self.query_one("#checklist-scroll"), self.detail_scroll,
@@ -1835,7 +1900,10 @@ class WheelhouseApp(App):
     def animate(self) -> None:
         self.frame += 1
         # one line, never a new size: the daemon out of reach says so there, until it's back
-        self.title_bar.update(shimmer(self.frame) if self.client.connected else UNREACHABLE, layout=False)
+        if self.client.connected:
+            self.title_bar.show(shimmer_phase(self.frame), shimmer(self.frame))
+        else:
+            self.title_bar.show("unreachable", UNREACHABLE)
         # the eyes and panes rest while you type, nothing drawn but what the keys change
         # (D41). No screen at all while the app shuts down, when asking what has focus would raise
         if self.frame % 2 == 0 and self.screen_stack and not isinstance(self.focused, Compose):
@@ -2073,12 +2141,13 @@ class WheelhouseApp(App):
         names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
         found, processing, queued, awaiting = self.client.inbox(self.filter_sid)
         busy = queued | awaiting
-        items = self.ranked(found, processing, busy)
+        keyed = self.ranked_keyed(found, processing, busy)
+        key_of = {id(it): key for key, it in keyed}   # each item's row key, made once
         active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
-        for it in items:
-            bands[band(self.ranks[item_key(it)])].append(it)
+        for key, it in keyed:
+            bands[band(self.ranks[key])].append(it)
         rows = item_rows(active, names) + item_rows(settled, names) + item_rows(finished if self.show_finished else [], names)
-        sunk = {item_key(it) for it in settled + finished}
+        sunk = {key_of[id(it)] for it in settled + finished}
         if self.filter_sid:   # the session's own conversation, pinned first
             general = (self.filter_sid, None) in queued
             rows_out.append((f"{self.filter_sid}|", (names.get(self.filter_sid, "")[:14], Text("💬"),
@@ -2107,7 +2176,7 @@ class WheelhouseApp(App):
             else:   # a subagent, tucked under its session's name
                 cells = (name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
                          shown, Text(it["title"], style="dim"))
-            rows_out.append((item_key(it), cells))
+            rows_out.append((key_of[id(it)], cells))
         if self.filter_sid:   # the session column goes: the inbox follows the one session
             rows_out = [(k, cells[1:]) for k, cells in rows_out]
         cells = dict(rows_out)
@@ -2140,6 +2209,10 @@ class WheelhouseApp(App):
         self.paint_detail()
 
     def ranked(self, items, processing, busy=frozenset()) -> list:
+        """Items in inbox order (ranked_keyed)."""
+        return [it for _, it in self.ranked_keyed(items, processing, busy)]
+
+    def ranked_keyed(self, items, processing, busy=frozenset()) -> list[tuple[str, dict]]:
         """Items in inbox order (inbox_rank), but for the selected item, pinned: it keeps the
         rank it was shown with when it was selected, so its own change (a decision seen, a
         question answered, a task done) never moves it under the person. It re-sorts once the
@@ -2151,7 +2224,8 @@ class WheelhouseApp(App):
         key = self.selected and self.selected[1] and f"{self.selected[0]}|{self.selected[1]}"
         if self.pin is None or self.pin[0] != key:
             self.pin = (key, self.ranks[key]) if key in self.ranks else None
-        ranks = {item_key(it): inbox_rank(it, processing, busy) for it in items}
+        keyed = [(item_key(it), it) for it in items]   # (row key, item): each key made once
+        ranks = {key: inbox_rank(it, processing, busy) for key, it in keyed}
         if self.pin and self.pin[0] in ranks:
             if self.pin[0] in self.repin:   # Delete, Ctrl+R or a permission answered: at once, and held there
                 self.pin = (self.pin[0], ranks[self.pin[0]])
@@ -2159,7 +2233,7 @@ class WheelhouseApp(App):
                 ranks[self.pin[0]] = self.pin[1]
         self.repin = set()
         self.ranks = ranks
-        return sorted(items, key=lambda it: ranks[item_key(it)])
+        return sorted(keyed, key=lambda pair: ranks[pair[0]])
 
     def keep_unsent(self, box, old, new) -> None:
         """Park what's typed for the old target and bring back what was typed for the new one."""
@@ -2336,11 +2410,21 @@ class WheelhouseApp(App):
         return [("mode", *mode_, True), ("send", f"Send ({n})", not n, not dead),
                 *[(b, b.capitalize(), False, hosted) for b in ("interrupt", "compact", "shell")]]
 
+    def bar_widgets(self, screen: Screen) -> tuple[SendBar | None, list[Hint], list[PermissionButtons]]:
+        """A screen's send bar, answer hints and permission buttons: held once its bar is
+        there, as they're composed with it and live as long as the screen."""
+        held = self.held_bars.get(screen)
+        if held is None:
+            held = (next(iter(screen.query(SendBar)), None), list(screen.query(Hint)), list(screen.query(PermissionButtons)))
+            if held[0] is not None:
+                self.held_bars[screen] = held
+        return held
+
     def paint_sendbar(self) -> None:
         """The bar on the screen in front: Send all, and the hint, permission buttons and
         activity of the session in context there; a full-screen item's bar also has its
         session's conversation buttons."""
-        bar = next(iter(self.screen.query(SendBar)), None)
+        bar, hints, permission_rows = self.bar_widgets(self.screen)
         if bar is None:
             return
         asking = self.asking(self.bar_item(self.screen)) is not None   # first: it settles
@@ -2351,9 +2435,9 @@ class WheelhouseApp(App):
                 show_button(bar, *args)
         total = sum(x["drafts"] for x in self.sessions if not self.dead(x["id"]))   # Send all skips the dead
         sends = "send" if s is not None and (mode(s) == "immediate" or self.sends_now(s["id"])) else "queue"
-        for h in self.screen.query(Hint):
+        for h in hints:
             h.set_base(PERMISSION_HINT if asking else hint(sends, s is not None and self.dead(s["id"])))
-        for row in self.screen.query(PermissionButtons):
+        for row in permission_rows:
             if row.display != asking:
                 row.display = asking
                 self.refit()   # a row more or less over the answer box
@@ -2427,13 +2511,13 @@ class WheelhouseApp(App):
         if activity != getattr(self, "_activity_text", None):
             self._activity_text = activity
             self.session_activity.update(activity)
-        before = [b.display for b in self.query("#sessions-pane Grid, #sessions-pane Grid Button")]
+        before = [b.display for b in self.session_controls]
         for grid, buttons in ((self.session_buttons, self.lifecycle_buttons(s)),
                               (self.conversation_buttons, self.controls(s))):
             for args in buttons:
                 show_button(grid, *args)
             grid.display = any(shown for *_, shown in buttons)   # none: no blank row for it either
-        if [b.display for b in self.query("#sessions-pane Grid, #sessions-pane Grid Button")] != before:
+        if [b.display for b in self.session_controls] != before:
             self.refit()   # rows of buttons more or less under the description
 
     def describe(self, s) -> Text:
