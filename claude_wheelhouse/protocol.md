@@ -25,7 +25,11 @@ anything here seems to conflict with them, follow yours.
   running tasks, as items straight away. Check `list_items` first so you don't post twice.
 - Keep statuses current with `update_item`: tasks `todo running blocked waiting done
   dropped`; questions `open answered closed`; agents `running done failed` (the wheelhouse
-  sets these for you). Add a `note` for progress worth keeping.
+  sets these for you). Add a `note` for progress worth keeping. When a reply lists what is
+  still open, correct any of it that is finished, and reply on any marked reply owed.
+- The wheelhouse may check on items you haven't touched in a while, with a `[wheelhouse]
+  Check:` message listing their refs and statuses: correct any that's finished with
+  `update_item` or `reply`, then reply ok. Leave alone any ref you don't recognise.
 - Don't close a question yourself. Closing is the person's call (they press Delete in the
   wheelhouse's item list), unless the work it unblocked is done.
 - Keep a synopsis of this session with `set_synopsis`: two or three sentences on what it

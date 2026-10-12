@@ -53,7 +53,9 @@ DECISION_FIELDS = (("why", "Why"),)
 # session's host posts its chat as the reply on the ref answered, so the protocol asks it
 # for the status alone. 9: a decision's alternative, why and reverse are one short line, `why`.
 # 10: the host posts only what a turn ends by saying, so the protocol asks it to end with the answer.
-PROTOCOL_VERSION = 10
+# 11: replies list the items still open (in_doubt), and the wheelhouse checks on them, so the
+# protocol asks the session to correct any that's finished.
+PROTOCOL_VERSION = 11
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.
@@ -192,7 +194,8 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "model", "TEXT"), ("sessions", "effort", "TEXT"),
                  ("sessions", "applied_model", "TEXT"), ("sessions", "applied_effort", "TEXT"),
                  ("sessions", "interrupted_at", "TEXT"), ("sessions", "model_chosen_at", "TEXT"),
-                 ("sessions", "effort_chosen_at", "TEXT"), ("sessions", "launched_over", "INTEGER")]
+                 ("sessions", "effort_chosen_at", "TEXT"), ("sessions", "launched_over", "INTEGER"),
+                 ("items", "session_at", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -202,6 +205,10 @@ AGENTS_SINCE = "agents_since"
 # seconds: how long before a subagent starts the session's own A item for it may be made
 AGENT_MATCH_BEFORE = 600
 AGENT_MATCH_AFTER = 15   # subagents.GRACE: by then the wheelhouse makes its own
+# an item the session has been silent on this long, in a transient state (in_doubt), is one
+# the wheelhouse asks it about: still open, or finished and never closed?
+DOUBT_AFTER = timedelta(minutes=15)
+TRANSIENT = ("running", "blocked", "waiting")   # a task's statuses that are under way
 REQUESTS = ("end", "park")   # what the wheelhouse can ask a running session to do
 CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print is retaken
 KEYS_KEPT = timedelta(days=1)   # how long the daemon answers a request sent again the same
@@ -680,9 +687,9 @@ class Store:
         n = db.execute("SELECT count(*) FROM items WHERE session_id = ? AND kind = ?", (sid, kind)).fetchone()[0]
         ref = f"{KINDS[kind]}{n + 1}"
         db.execute(
-            """INSERT INTO items (session_id, ref, kind, title, body, status, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (sid, ref, kind, title, body, status, now(), now()),
+            """INSERT INTO items (session_id, ref, kind, title, body, status, created_at, updated_at, session_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (sid, ref, kind, title, body, status, now(), now(), now()),
         )
         return ref
 
@@ -741,7 +748,8 @@ class Store:
                     declares: bool = False) -> None:
         """declares: the session's own update (the MCP tool), whose status, on an item the
         person's word awaits a reply on, is its word on it: the item no longer awaits it
-        (a STATUS message, which AWAITING counts as a reply)."""
+        (a STATUS message, which AWAITING counts as a reply). It is word from the session
+        on the item too (session_at), whatever it changes."""
         if self.session(sid) is None:
             raise SessionGone(sid)
         item = self.item(sid, ref)
@@ -753,8 +761,9 @@ class Store:
             self._require(db, sid)
             db.execute(
                 f"""UPDATE items SET status = coalesce(?, status), title = coalesce(?, title),
-                   body = coalesce(?, body), updated_at = ?, {UNDISMISS} WHERE session_id = ? AND ref = ?""",
-                (status, title, body, now(), status, sid, ref),
+                   body = coalesce(?, body), updated_at = ?, {UNDISMISS},
+                   session_at = CASE WHEN ? THEN ? ELSE session_at END WHERE session_id = ? AND ref = ?""",
+                (status, title, body, now(), status, declares, now(), sid, ref),
             )
             if declares and status is not None and db.execute(
                     f"SELECT 1 FROM ({AWAITING}) WHERE session_id = ? AND item_ref = ?", (sid, ref)).fetchone():
@@ -762,10 +771,12 @@ class Store:
             if note:
                 self._said(db, sid, ref, note, "note")
 
-    def reply(self, sid: str, ref: str, text: str, status: str | None = None) -> None:
+    def reply(self, sid: str, ref: str, text: str, status: str | None = None, by_session: bool = False) -> None:
         """The session's answer in an item's conversation, declaring where the item stands.
         On a question the status is required: open (still waiting on the person, a
-        clarification answered included) or answered (the person's input lets it proceed)."""
+        clarification answered included) or answered (the person's input lets it proceed).
+        by_session: the session's own call (the MCP tool), word from it on the item
+        (session_at); the host's replies on its behalf are not."""
         item = self.item(sid, ref)
         if self.session(sid) is None:
             raise SessionGone(sid)
@@ -779,8 +790,9 @@ class Store:
         with self.tx() as db:
             self._require(db, sid)
             self._said(db, sid, ref, text, "reply")
-            db.execute(f"UPDATE items SET status = coalesce(?, status), updated_at = ?, {UNDISMISS} "
-                       "WHERE session_id = ? AND ref = ?", (status, now(), status, sid, ref))
+            db.execute(f"UPDATE items SET status = coalesce(?, status), updated_at = ?, {UNDISMISS}, "
+                       "session_at = CASE WHEN ? THEN ? ELSE session_at END WHERE session_id = ? AND ref = ?",
+                       (status, now(), status, by_session, now(), sid, ref))
 
     def host_reply(self, sid: str, ref: str, text: str, after: int = 0) -> None:
         """A hosted session's chat, posted by its host as the reply on an item the person's
@@ -814,6 +826,29 @@ class Store:
             rows = [r for r in rows if r["status"] not in CLOSED]
         processing = self.processing()
         return sorted(rows, key=lambda r: inbox_rank(r, processing))
+
+    def in_doubt(self, sid: str, at: datetime | None = None) -> list[str]:
+        """The items the wheelhouse doubts are still open, oldest first, each as `T1 running`
+        or `Q2 reply owed`: a task running, blocked or waiting, or a question whose latest
+        word is the person's (awaiting the session's reply), that the session has said
+        nothing on (post_item, update_item, reply: session_at, else created_at) for
+        DOUBT_AFTER or more. Never a todo, a question waiting on the person, an agent,
+        decision or permission, nor anything settled."""
+        cutoff = ((at or datetime.now(timezone.utc)) - DOUBT_AFTER).isoformat(timespec="seconds")
+        rows = self._all(
+            f"""SELECT ref, kind, status FROM items WHERE session_id = ? AND coalesce(session_at, created_at) <= ?
+                AND ((kind = 'task' AND status IN ({','.join('?' * len(TRANSIENT))}))
+                     OR (kind = 'question' AND status = 'open'
+                         AND (session_id, ref) IN ({AWAITING})))
+                ORDER BY id""", (sid, cutoff, *TRANSIENT))
+        return [f"{r['ref']} {'reply owed' if r['kind'] == 'question' else r['status']}" for r in rows]
+
+    def open_items(self, sid: str) -> list[sqlite3.Row]:
+        """What a session is told after a compaction: every task not settled and every open
+        question, as list_items orders them; no agent, decision or permission items."""
+        return [r for r in self.items(sid, include_closed=False)
+                if (r["kind"] == "task" and r["status"] not in SETTLED["task"])
+                or (r["kind"] == "question" and r["status"] == "open")]
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's answer to a permission item: allow, always (allow, and keep the rule

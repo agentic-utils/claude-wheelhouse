@@ -49,12 +49,26 @@ def post_item(kind: str, title: str, body: str = "", status: str | None = None, 
     detail in body, once. A decision (see the protocol) also needs why, one short line: the
     option passed over, the reason, how to undo it. It takes no status. The wheelhouse posts
     agent items for your subagents itself: don't post those. (alternative and reverse are
-    an older protocol's: they join why.)"""
+    an older protocol's: they join why.) Posting a task or question may also list what is
+    still open: correct any of it that's finished."""
     if kind == "permission":   # the host posts these from Claude Code's own permission check
         raise ValueError("kind must be task, question, agent or decision")
     if kind != "decision":   # refused by name: only a decision takes these
-        return _store.post_item(_sid, kind, title, body, status, why=why, alternative=alternative, reverse=reverse)
+        ref = _store.post_item(_sid, kind, title, body, status, why=why, alternative=alternative, reverse=reverse)
+        return ref + still_open() if kind in ("task", "question") else ref
     return _store.post_item(_sid, kind, title, body, status, why=one_why(why, alternative, reverse))
+
+
+# a change of work: a task finished or dropped, a question answered. Its reply lists what is
+# still open (still_open), as posting a task or question does
+FINISHING = {"done", "dropped", "answered"}
+
+
+def still_open() -> str:
+    """The items the wheelhouse doubts are still open (Store.in_doubt), to append to a reply
+    that marks a change of work; nothing when none is in doubt."""
+    doubted = _store.in_doubt(_sid)
+    return f". Still open: {', '.join(doubted)}" if doubted else ""
 
 
 def one_why(why: str, alternative: str = "", reverse: str = "") -> str:
@@ -71,9 +85,10 @@ def update_item(ref: str, status: str | None = None, title: str | None = None,
     """Change an item's status, title or body, and/or append a progress note to its thread.
     In a session the wheelhouse runs itself, this is how you declare a question open or
     answered after the person's message on it (the wheelhouse posts what your turn ends by
-    saying as the reply)."""
+    saying as the reply). Finishing a task, dropping one or answering a question may also
+    list what is still open: correct any of it that's finished."""
     _store.update_item(_sid, ref, status=status, title=title, body=body, note=note, declares=True)
-    return f"{ref} updated"
+    return f"{ref} updated" + (still_open() if status in FINISHING else "")
 
 
 @wheelhouse_tool
@@ -84,9 +99,10 @@ def reply(ref: str, text: str, status: str | None = None) -> str:
     clarification, or need more), "answered" once their input lets you proceed. On a task
     or agent it is optional. In a session the wheelhouse runs itself (no tab), the wheelhouse
     posts what your turn ends by saying as the reply on the ref the person's message was on: don't repeat
-    it here, set the status with update_item instead."""
-    _store.reply(_sid, ref, text, status)
-    return f"replied on {ref}" + (f", now {status}" if status else "")
+    it here, set the status with update_item instead. A reply that finishes a task or
+    answers a question may also list what is still open: correct any of it that's finished."""
+    _store.reply(_sid, ref, text, status, by_session=True)
+    return f"replied on {ref}" + (f", now {status}" if status else "") + (still_open() if status in FINISHING else "")
 
 
 @wheelhouse_tool

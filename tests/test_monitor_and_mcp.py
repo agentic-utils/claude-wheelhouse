@@ -299,3 +299,39 @@ def test_only_a_decision_takes_the_decision_fields(store, sid, fields, named, de
     mcp_server._store, mcp_server._sid = store, sid
     with pytest.raises(Exception, match=f"{named}: only a decision"):
         mcp_server.post_item("task", "x", **fields)
+
+
+@pytest.mark.parametrize("before, call, said, desc", [
+    (["T running"], ("update_item", "T1", {"status": "done"}), "T1 updated",
+     "nothing else in doubt: nothing appended"),
+    (["T running", "T waiting", "T running"], ("update_item", "T2", {"status": "done"}),
+     "T2 updated. Still open: T1 running, T3 running", "closing one of three lists the other two"),
+    (["T running", "T waiting"], ("update_item", "T2", {"note": "halfway"}), "T2 updated",
+     "a note only is no change of work"),
+    (["T waiting", "Q owed"], ("reply", "Q1", {"text": "thanks", "status": "answered"}),
+     "replied on Q1, now answered. Still open: T1 waiting", "a question answered"),
+    (["T waiting"], ("post_item", "task", {"title": "follow-on"}),
+     "T2. Still open: T1 waiting", "a task posted beside one waiting 17 minutes (T81 and T82)"),
+    (["Q owed"], ("post_item", "question", {"title": "next?"}),
+     "Q2. Still open: Q1 reply owed", "a question the person answered is marked reply owed (Q72 and Q73)"),
+    (["T waiting"], ("post_item", "decision", {"title": "chose", "why": "because"}), "D1",
+     "a decision is no change of work"),
+])
+def test_a_change_of_work_lists_what_is_still_open(store, sid, monkeypatch, before, call, said, desc):
+    from datetime import datetime, timedelta, timezone
+
+    from claude_wheelhouse import mcp_server
+    from claude_wheelhouse import store as store_mod
+    mcp_server._store, mcp_server._sid = store, sid
+    t0 = datetime.now(timezone.utc) - timedelta(minutes=17)
+    real_now = store_mod.now
+    monkeypatch.setattr(store_mod, "now", lambda: t0.isoformat(timespec="seconds"))
+    for item in before:
+        kind, status = item.split()
+        ref = store.post_item(sid, "task" if kind == "T" else "question", item,
+                              status=None if status == "owed" else status)
+        if status == "owed":
+            store.send(sid, "yes", ref)
+    monkeypatch.setattr(store_mod, "now", real_now)
+    name, first, kwargs = call
+    assert getattr(mcp_server, name)(first, **kwargs) == said, desc

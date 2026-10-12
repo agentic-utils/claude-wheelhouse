@@ -626,3 +626,82 @@ def test_set_interrupted(store, sid):
     assert store.session(sid)["interrupted_at"] is None
     store.set_interrupted(sid)
     assert store.session(sid)["interrupted_at"] is not None
+
+
+T0 = datetime(2026, 10, 12, 8, 0, tzinfo=timezone.utc)
+
+
+def at(minutes: float) -> datetime:
+    from datetime import timedelta
+    return T0 + timedelta(minutes=minutes)
+
+
+@pytest.fixture
+def written_at(monkeypatch):
+    """The store's writes stamped at a time the test sets, in minutes after T0."""
+    from claude_wheelhouse import store as store_mod
+    when = {"m": 0.0}
+    monkeypatch.setattr(store_mod, "now", lambda: at(when["m"]).isoformat(timespec="seconds"))
+    return when
+
+
+@pytest.mark.parametrize("kind, status, steps, listed, desc", [
+    ("task", "running", [], "T1 running", "a running task"),
+    ("task", "blocked", [], "T1 blocked", "a blocked task"),
+    ("task", "waiting", [], "T1 waiting", "a waiting task"),
+    ("task", "todo", [], None, "a todo task: nothing started to finish"),
+    ("task", "done", [], None, "a done task"),
+    ("task", "dropped", [], None, "a dropped task"),
+    ("question", "open", [], None, "a question waiting on the person"),
+    ("question", "open", ["send"], "Q1 reply owed", "a question awaiting the session's reply"),
+    ("question", "open", ["send", "reply open"], None, "replied: back with the person"),
+    ("question", "answered", ["send"], None, "an answered question, even with a word unreplied"),
+    ("agent", "running", [], None, "an agent, never"),
+    ("decision", None, [], None, "a decision, never"),
+])
+def test_in_doubt_by_status_and_kind(store, sid, written_at, kind, status, steps, listed, desc):
+    ref = (store.post_item(sid, kind, "x", why="because") if kind == "decision"
+           else store.post_item(sid, kind, "x", status=status))
+    for step in steps:
+        {"send": lambda: store.send(sid, "go", ref),
+         "reply open": lambda: store.reply(sid, ref, "which one?", "open", by_session=True)}[step]()
+    assert store.in_doubt(sid, at(60)) == ([listed] if listed else []), desc
+
+
+def test_a_permission_is_never_in_doubt(store, sid, written_at):
+    store.post_item(sid, "permission", "Bash: ls")
+    assert store.in_doubt(sid, at(60)) == []
+
+
+@pytest.mark.parametrize("later, step, now, listed, desc", [
+    (None, None, 14.98, False, "silent 14:59: not yet"),
+    (None, None, 15, True, "silent 15:00: in doubt"),
+    (10, "note", 20, False, "a note from the session at 10 resets it"),
+    (10, "title", 20, False, "so does a new title"),
+    (10, "reply", 20, False, "and a reply"),
+    (10, "note", 25, True, "15 minutes after the note: in doubt again"),
+    (10, "dismiss", 20, True, "the person's Delete doesn't count"),
+    (10, "person answers", 20, True, "nor the person's message"),
+    (10, "host reply", 20, True, "nor the host's reply on the session's behalf"),
+    (10, "old row", 20, True, "a row from before the column: created_at"),
+])
+def test_in_doubt_by_silence(store, sid, written_at, later, step, now, listed, desc):
+    t = store.post_item(sid, "task", "build it", status="running")
+    if step:
+        written_at["m"] = later
+        {"note": lambda: store.update_item(sid, t, note="halfway", declares=True),
+         "title": lambda: store.update_item(sid, t, title="build it all", declares=True),
+         "reply": lambda: store.reply(sid, t, "on it", by_session=True),
+         "dismiss": lambda: store.dismiss(sid, t),
+         "person answers": lambda: store.send(sid, "how's it going?", t),
+         "host reply": lambda: store.host_reply(sid, t, "fine"),
+         "old row": lambda: store._all("UPDATE items SET session_at = NULL WHERE ref = ?", (t,))}[step]()
+    assert (store.in_doubt(sid, at(now)) == ["T1 running"]) == listed, desc
+
+
+def test_open_items_are_the_unsettled_tasks_and_open_questions(store, sid):
+    for kind, status in [("task", "running"), ("task", "todo"), ("task", "done"), ("question", "open"),
+                         ("question", "answered"), ("agent", "running")]:
+        store.post_item(sid, kind, f"{kind} {status}", status=status)
+    store.post_item(sid, "decision", "chose", why="because")
+    assert sorted(r["title"] for r in store.open_items(sid)) == ["question open", "task running", "task todo"]

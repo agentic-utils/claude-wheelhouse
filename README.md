@@ -367,6 +367,18 @@ when the daemon restarts (quit the app, `claude-wheelhouse daemon --stop`, then 
 app again). If the app is given a mode and joins a daemon already running the other, it
 says so once.
 
+## Keeping the item list in step
+
+A session can move on to new work and leave an item it finished showing as still open.
+The wheelhouse names the items it doubts, and the session corrects any that are wrong with
+its ordinary `update_item` and `reply` calls. An item is in doubt when it is a task
+running, blocked or waiting, or a question whose latest word is yours (`reply owed`), and
+the session has said nothing on it for 15 minutes. Nothing ever closes by itself.
+
+- When a session finishes a task, drops one, answers a question or posts a new task or
+  question, the tool's reply lists what is in doubt, as `Still open: T1 waiting, Q2 reply
+  owed`. Nothing is added when nothing is in doubt.
+
 ## Where state lives
 
 Everything the wheelhouse keeps is in `~/.local/state/claude-wheelhouse/` (or the directory

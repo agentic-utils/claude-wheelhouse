@@ -12,3 +12,6 @@
   `/wheelhouse:wheelhouse`). The wheelhouse may ask you to park or end, in a `[wheelhouse]`
   notification; do it as the notification says. If a later one says the request was
   cancelled, carry on as before.
+- While the person is away, the wheelhouse may send a `[wheelhouse] Keepalive` or
+  `[wheelhouse] Check:` notification about every 55 minutes to keep your prompt cache warm.
+  Do as it says and nothing more.

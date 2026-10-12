@@ -20,3 +20,6 @@ to a session: launch.protocol_file drops it. -->
   your items up to date and call `park_session`. To end, first do anything your own
   instructions describe for when a session ends, then call `end_session`. If a later
   message says the request was cancelled, carry on as before.
+- While the person is away, the wheelhouse may send a `[wheelhouse] Keepalive` or
+  `[wheelhouse] Check:` turn about every 55 minutes to keep your prompt cache warm. Do as
+  it says and nothing more.
