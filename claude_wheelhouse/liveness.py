@@ -21,6 +21,8 @@ STALLED_AFTER = 120      # heartbeat age that suggests a stalled session
 CLOCK_JUMP = 30          # wall clock ahead of monotonic by this much means we slept
 WAKE_GRACE = 60          # hold off the stalled hint this long after waking
 KILL_AFTER = 10          # seconds a stopped Claude Code has to exit before its process group is killed
+# the process-group calls stop makes, here so a test can stub them for liveness alone
+getpgid, killpg = os.getpgid, os.killpg
 
 
 def boot_id(proc: Path = PROC) -> str:
@@ -56,7 +58,7 @@ def stop(pid, start, boot, kill_after: float | None = KILL_AFTER, proc: Path = P
     group = None
     if kill_after is not None:
         try:
-            group = os.getpgid(pid)
+            group = getpgid(pid)
         except OSError:
             pass   # gone already: the signal below says so
     try:
@@ -74,7 +76,7 @@ def kill_group(pid, start, boot, group: int, proc: Path = PROC) -> None:
     """SIGKILL the process group of a stopped process that is still alive, as registered."""
     if is_alive(pid, start, boot, proc):
         try:
-            os.killpg(group, signal.SIGKILL)
+            killpg(group, signal.SIGKILL)
         except OSError:
             pass   # gone meanwhile
 

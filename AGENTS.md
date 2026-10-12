@@ -14,7 +14,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `daemon` adds `--address`, `--name` (repeatable) and `--stop`; `tutorial` takes `--yes`.
 - `store.py`: the SQLite store, the only source of truth. Schema, added columns,
   triggers, `PROTOCOL_VERSION`. Every public write is its own committed transaction.
-- `hub.py`: what the wheelhouse knows and does, whatever shows it. Owns liveness and
+- `hub.py`: what the wheelhouse knows and does, whatever shows it. Owns liveness, the session states
+  and their verbs (`VERBS`, `.plan/session-states.md`), and
   Relaunch. Never imports Textual: it tells surfaces what happened as events.
 - `tui.py`: the Textual app. Reads and acts through `self.client` (`client.py`);
   `self.hub` is that same `LocalClient` with `--local`, and None when the app goes
@@ -42,12 +43,16 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   default, 0 for off; `WheelhouseApp.pace` rests it while unfocused with nothing busy). The README's Settings table lists them.
 - `launch.py`: Windows Terminal tabs (`wt.exe` through `cmd.exe`, in the user's own
   window, `window_name`), the `claude` command line, and the protocol text injected into
-  a session.
+  a session. Every launch passes `clean_env()`, which drops a parent Claude Code
+  session's `CLAUDE*` variables: a claude started with them writes no transcript.
 - `mcp_server.py`: the per-session `wheelhouse` MCP server. Each tool's docstring is its
   description to Claude, so it is user-facing text.
 - `monitor.py` and `plugin/`: the tab session's plugin monitor and `/wheelhouse` skill.
 - `adopt.py`: adopting a session the wheelhouse didn't launch.
-- `liveness.py`: whether a session is alive, by its Claude process, never the heartbeat.
+- `liveness.py`: whether a session is alive, by its Claude process, never the heartbeat;
+  and stopping one (`stop`: SIGTERM, guarded by pid, start time and boot id, then SIGKILL to
+  its process group after `KILL_AFTER`). Tests never signal a real process: stub `os.kill`
+  (conftest stubs `os.getpgid` and `os.killpg`).
 - `subagents.py`: A items for subagents, from the files Claude Code writes.
 - `transcript.py`: a session's conversation, read from its Claude Code transcript.
 - `stats.py`, `stats_pane.py`: token stats and charts; the pane is a module (`api.py`).

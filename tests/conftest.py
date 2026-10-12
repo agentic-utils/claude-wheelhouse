@@ -358,6 +358,6 @@ def no_group_kill(monkeypatch):
     """No test kills a real process group: liveness.stop's fallback SIGKILL is recorded, and
     its timer never starts a thread. A test of it reads what was recorded."""
     killed = []
-    monkeypatch.setattr(liveness.os, "getpgid", lambda pid: -pid)
-    monkeypatch.setattr(liveness.os, "killpg", lambda group, sig: killed.append((group, sig)))
+    monkeypatch.setattr(liveness, "getpgid", lambda pid: -pid)
+    monkeypatch.setattr(liveness, "killpg", lambda group, sig: killed.append((group, sig)))
     return killed
