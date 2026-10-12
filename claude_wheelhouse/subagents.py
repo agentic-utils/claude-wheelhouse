@@ -314,7 +314,7 @@ class AgentWatcher:
 
     def uuids_before(self) -> set[bytes]:
         """Every uuid written before where the first read started, read once, in chunks
-        cut at a line's end (a uuid never spans lines): about 15 ms for a 50 MB transcript."""
+        cut at a line's end (a uuid never spans lines): about 100 to 140 ms for a 50 MB transcript."""
         self.loads += 1
         found: set[bytes] = set()
         with open(self.main, "rb") as f:
