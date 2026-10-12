@@ -2132,6 +2132,40 @@ async def test_a_focused_answer_box_shows_a_hot_blinking_cursor(store, sid):
         assert cursor.style.bgcolor.triplet.hex == "#ff2a6d", "a hot pink block, not the pale default"
 
 
+def blinking(box) -> bool:
+    """Whether a text box's cursor blink is running: Textual's own timer, on real time."""
+    return (box.blink_timer if isinstance(box, TextArea) else box._blink_timer)._active.is_set()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("box_id, key, desc", [
+    ("answer", "up", "an arrow in the answer box"),
+    ("answer", "end", "End in the answer box"),
+    ("answer", "x", "typing in the answer box"),
+    ("brief", "left", "an arrow in the new session's brief"),
+    ("name", "home", "Home in a dialog's input, where the cursor can't move"),
+])
+async def test_a_held_key_shows_a_text_box_cursor_solid_until_a_quiet_spell(store, sid, clock, box_id, key, desc):
+    from claude_wheelhouse import tui
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if box_id != "answer":
+            app.push_screen(tui.NewSession())
+            await pilot.pause()
+        box = app.screen.query_one(f"#{box_id}")
+        box.focus()
+        await pilot.pause()
+        for n in range(4):   # a held key's repeats, each sooner than the quiet spell
+            await pilot.press(key)
+            await pilot.pause()
+            assert box._cursor_visible and not blinking(box), f"{desc}: solid at press {n + 1}"
+            clock.advance(tui.QUIET * 0.9)
+        assert box._cursor_visible and not blinking(box), f"{desc}: solid within the quiet spell"
+        clock.advance(tui.QUIET * 0.2)
+        assert blinking(box), f"{desc}: blinking again after the quiet spell"
+
+
 @pytest.mark.anyio
 async def test_unsent_text_stays_with_the_item_it_was_typed_for(store, sid, tmp_path):
     other = store.create_session(str(tmp_path), name="other")

@@ -112,10 +112,10 @@ def sid(store, tmp_path):
 
 class Clock:
     """The app's timers on a clock of the test's own, so what a test asserts of a move or a
-    dwell holds however slowly a loaded run goes: a Sink's moves (Sink.now), the dwell's
-    one-shot timer (WheelhouseApp.dwell_after), and the refresh tick and animation, which
-    run only when a test calls tick or animate. Time moves only by advance. A key's land
-    keeps to real time: it bounds a wait on the app's own queues."""
+    dwell holds however slowly a loaded run goes: a Sink's moves (Sink.now), the one-shot
+    timers of the dwell and a text box's quiet spell (WheelhouseApp.after), and the refresh
+    tick and animation, which run only when a test calls tick or animate. Time moves only by
+    advance. A key's land keeps to real time: it bounds a wait on the app's own queues."""
     HELD = {"tick", "animate"}   # the app's own intervals, which run only when a test calls them
 
     def __init__(self):
@@ -173,7 +173,7 @@ def clock(monkeypatch):
     (tui.DWELL), so a test resting on an item rests that long."""
     clock = Clock()
     monkeypatch.setattr(tui.Sink, "now", staticmethod(clock.now))
-    monkeypatch.setattr(tui.WheelhouseApp, "dwell_after", lambda self, delay, callback: clock.after(delay, callback))
+    monkeypatch.setattr(tui.WheelhouseApp, "after", lambda self, delay, callback: clock.after(delay, callback))
     monkeypatch.setattr(tui, "DWELL", SHIPPED_DWELL)
     every, once = tui.WheelhouseApp.set_interval, tui.WheelhouseApp.set_timer
 

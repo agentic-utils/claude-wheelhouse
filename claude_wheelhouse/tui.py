@@ -67,6 +67,10 @@ UNREACHABLE = Text(" daemon unreachable: reconnecting… ", style="bold #000000 
 # seconds the person must stay on an item, without a break, before it counts as looked at:
 # an unseen decision becomes seen, a tutorial step ticks (dwelt). Passing over it does neither
 DWELL = 1.0
+# seconds with no key before a text box's cursor blinks again (hold_cursor). A terminal sends
+# no key release: a held key repeats after an initial delay of about half a second, then
+# every few tens of ms, so a gap longer than both means every key has been let go
+QUIET = 0.6
 NOTHING_SELECTED = "Select an item, or a session to follow its conversation."
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
@@ -1615,6 +1619,7 @@ class WheelhouseApp(App):
         self.dwelling: tuple | None = None
         self.dwell_gen = 0
         self.dwell_timer = None
+        self.quiet_timer = None   # a text box's cursor shown solid until it runs out (hold_cursor)
         self.picked: tuple | None = None   # the selection the person last made, not the app (saw)
         # where each list's cursor was last left by the app, or settled (settle): a cursor
         # anywhere else is the person's move, not yet acted on
@@ -1763,6 +1768,18 @@ class WheelhouseApp(App):
             self.screen._clear_tooltip()
         if not (await self._check_bindings(event.key, priority=True) or await self._check_bindings(event.key)):
             (self.focused or self.screen)._forward_event(event)
+        if isinstance(self.focused, (TextArea, Input)):   # queued behind the key, which restarts the blink if sent there
+            self.focused.call_later(self.hold_cursor, self.focused)
+
+    def hold_cursor(self, box: TextArea | Input) -> None:
+        """A key pressed in a text box: its cursor shows solid until QUIET passes with no key,
+        so it can be seen while a key is held. Textual restarts the blink only for a key the
+        box itself gets, and a key that moves the cursor is a binding (take_key)."""
+        box._pause_blink(visible=True)
+        if self.quiet_timer is not None:
+            self.quiet_timer.stop()
+        # a box that has lost focus meanwhile keeps the hidden, paused cursor Textual gave it
+        self.quiet_timer = self.after(QUIET, lambda: box.has_focus and box._restart_blink())
 
     async def _on_key(self, event: events.Key) -> None:
         # a key the widgets let through: its bindings were tried as it arrived (take_key)
@@ -1868,10 +1885,11 @@ class WheelhouseApp(App):
             gen = self.dwell_gen
             # fired on the timer's own task: it waits its turn in the app's queue, behind any key
             # being handled, as a key does
-            self.dwell_timer = self.dwell_after(DWELL, lambda: self.call_later(self.dwelt, gen))
+            self.dwell_timer = self.after(DWELL, lambda: self.call_later(self.dwelt, gen))
 
-    def dwell_after(self, delay: float, callback: Callable[[], None]):
-        """The dwell's one-shot timer (look), with stop(): a test runs it on a clock of its own."""
+    def after(self, delay: float, callback: Callable[[], None]):
+        """A one-shot timer with stop(), the dwell's (look) or the quiet spell's (hold_cursor):
+        a test runs it on a clock of its own."""
         return self.set_timer(delay, callback)
 
     def watch_app_focus(self) -> None:
