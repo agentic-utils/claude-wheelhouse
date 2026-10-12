@@ -14,7 +14,6 @@ interactive login shell, giving it the environment of an ordinary WSL tab: a log
 alone stops at ~/.bashrc's interactive guard, which skips anything set below it (brew).
 """
 
-import contextlib
 import getpass
 import json
 import os
@@ -306,21 +305,12 @@ def open_tab(store: Store, sid: str, notice: bool = True) -> None:
         store.notice(sid, JOINED_TEXT)
 
 
-def refuse(text: str) -> None:
-    """run can't start Claude Code: exit saying why (SystemExit carries the text), first, in
-    a terminal, waiting for Enter, as the tab closes once run does (wt_argv)."""
-    if sys.stdin.isatty():
-        with contextlib.suppress(EOFError, KeyboardInterrupt):
-            input(f"{text}\nPress Enter to close this tab. ")
-    sys.exit(text)
-
-
 def run(sid: str) -> None:
     """Runs inside the new tab: final liveness check, then exec Claude."""
     store = Store()
     session = store.session(sid)
     if session is None:
-        refuse(f"claude-wheelhouse: no session {sid} (ended?)")
+        sys.exit(f"claude-wheelhouse: no session {sid} (ended?)")
     env = clean_env(WHEELHOUSE_SESSION_ID=sid, WHEELHOUSE_DB=str(store.path), WHEELHOUSE_PYTHON=sys.executable)
     os.chdir(session["cwd"])
     resume = transcript_exists(sid)
@@ -332,9 +322,9 @@ def run(sid: str) -> None:
     # Check-and-register is one transaction, so two tabs racing can't both get here.
     other = liveness.running_pid(sid)   # e.g. adopted, but its old tab never ran /exit
     if other:
-        refuse(f"claude-wheelhouse: session {session['name'] or sid} is still running (pid {other}): "
+        sys.exit(f"claude-wheelhouse: session {session['name'] or sid} is still running (pid {other}): "
                  "type /exit in its tab, then relaunch it from the wheelhouse")
     pid = os.getpid()
     if not store.register_if_free(sid, pid, liveness.start_time(pid), liveness.boot_id(), liveness.is_alive):
-        refuse(f"claude-wheelhouse: session {session['name'] or sid} is already running in another tab")
+        sys.exit(f"claude-wheelhouse: session {session['name'] or sid} is already running in another tab")
     os.execvpe("claude", argv, env)

@@ -277,15 +277,8 @@ def test_clean_env(base, extra, want, desc):
     assert launch.clean_env(base, **extra) == want, desc
 
 
-@pytest.mark.parametrize("tty, waited, desc", [
-    (True, True, "in a tab: the reason stays up until Enter, as the tab closes once run exits"),
-    (False, False, "no terminal: nothing to wait on"),
-])
-def test_run_refusing_says_why_before_the_tab_closes(monkeypatch, tty, waited, desc):
-    asked = []
-    monkeypatch.setattr(launch.sys.stdin, "isatty", lambda: tty, raising=False)
-    monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt))
+def test_run_refusing_exits_with_its_reason():
+    """A refusal exits non-zero, so the tab stays open on it (wt_argv closes only on a stop)."""
     with pytest.raises(SystemExit) as e:
         launch.run("no-such-session")
-    assert "no session no-such-session" in e.value.code, desc
-    assert [("no session no-such-session" in p) for p in asked] == ([True] if waited else []), desc
+    assert "no session no-such-session" in e.value.code

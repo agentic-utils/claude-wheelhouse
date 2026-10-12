@@ -232,7 +232,7 @@ session.
   session stops, by `/exit` or by the wheelhouse: its shell then exits cleanly, which Windows
   Terminal's default `closeOnExit` takes as the end of the tab. If Claude Code fails instead,
   the tab stays open on its error. If the wheelhouse can't start
-  a session in its tab, the tab says why and waits for Enter. The wheelhouse never deletes
+  a session in its tab, the tab stays open saying why. The wheelhouse never deletes
   anything by itself.
   The buttons stay out of the Tab order, and each has a key: with the list focused, `R` renames, `L` relaunches
   (or unparks), `P` parks (or unparks) and `Delete` or `Backspace` forgets; the rest are under Keys below. `E`, `S`
