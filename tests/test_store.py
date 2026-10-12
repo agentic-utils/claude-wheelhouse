@@ -642,6 +642,7 @@ def written_at(monkeypatch):
     from claude_wheelhouse import store as store_mod
     when = {"m": 0.0}
     monkeypatch.setattr(store_mod, "now", lambda: at(when["m"]).isoformat(timespec="seconds"))
+    monkeypatch.setattr(store_mod, "stamp", lambda: at(when["m"]).isoformat(timespec="microseconds"))
     return when
 
 
@@ -738,10 +739,18 @@ def test_a_session_on_older_code_has_nothing_in_doubt(store, sid, written_at):
     (10, 20, False, "answered 10 minutes ago: not owed yet, though the session was silent 20"),
     (10, 25, True, "15 minutes after the answer: reply owed"),
     (0, 15, True, "answered as it was posted: from then"),
+    ("drafted 0, sent 10", 20, False, "a draft sent at 10: from when it went, not when it was written"),
+    ("drafted 0, sent 10", 25, True, "15 minutes after it went: reply owed"),
 ])
 def test_a_questions_clock_runs_from_the_persons_answer(store, sid, written_at, answered, now, listed, desc):
     store.mark_version(sid)
     q = store.post_item(sid, "question", "which db?")
-    written_at["m"] = answered
-    store.send(sid, "postgres", q)
+    if isinstance(answered, str):
+        store.queue(sid, "postgres", q)
+        written_at["m"] = 10
+        store.dispatch(sid)
+        store.take_pending(sid)   # delivered as it went
+    else:
+        written_at["m"] = answered
+        store.send(sid, "postgres", q)
     assert (store.in_doubt(sid, at(now)) == ["Q1 reply owed"]) == listed, desc

@@ -940,6 +940,7 @@ def notices(store, sid):
     ({"old code": True}, False, "a session on older code, which never records its word on an item"),
     ({"heard": "send"}, False, "the person's message since its last response: its turn may be starting"),
     ({"heard": "deliver"}, False, "an answer queued before it, delivered since: the same"),
+    ({"heard": "dispatch"}, False, "an answer drafted before it, sent since and not yet delivered: the same"),
 ])
 def test_a_tab_sessions_keepalive_is_sent_under_its_conditions(hub, store, sid, state, sent, desc):
     t0 = time.time()
@@ -956,6 +957,11 @@ def test_a_tab_sessions_keepalive_is_sent_under_its_conditions(hub, store, sid, 
         store.send(sid, "go on")
         store.db.execute("UPDATE messages SET created_at = '2000-01-01T00:00:00+00:00' WHERE session_id = ?", (sid,))
         store.take_pending(sid)
+    elif state.get("heard") == "dispatch":   # drafted before the last response, sent and claimed after it
+        store.queue(sid, "go on")
+        store.db.execute("UPDATE messages SET created_at = '2000-01-01T00:00:00+00:00' WHERE session_id = ?", (sid,))
+        store.dispatch(sid)
+        store.claim(sid)
     if state.get("heard"):
         t0 = time.time() - 30   # the transcript's last response, before the message
     snap = stats.Snapshot(context=state.get("context", 200_000), last_at=t0, stop=state.get("stop", "end_turn"),

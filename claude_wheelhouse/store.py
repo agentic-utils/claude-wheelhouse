@@ -850,7 +850,7 @@ class Store:
         rows = self._all(
             f"""SELECT ref, kind, status FROM items i WHERE session_id = ?
                 AND max(coalesce(session_at, created_at), CASE WHEN kind = 'question' THEN coalesce(
-                    (SELECT max(m.created_at) FROM messages m WHERE m.session_id = i.session_id
+                    (SELECT max({REACHED.format(m="m.")}) FROM messages m WHERE m.session_id = i.session_id
                      AND m.item_ref = i.ref AND m.author = 'person' AND m.draft = 0), '') ELSE '' END) <= ?
                 AND ((kind = 'task' AND status IN ({','.join('?' * len(TRANSIENT))}))
                      OR (kind = 'question' AND status = 'open'
@@ -859,11 +859,10 @@ class Store:
         return [f"{r['ref']} {'reply owed' if r['kind'] == 'question' else r['status']}" for r in rows]
 
     def heard_at(self, sid: str) -> str | None:
-        """When the session was last sent anything: the person's latest message sent (a
-        notice included) or the latest delivered to it, whichever is later; None if never."""
-        row = self._one("""SELECT max(coalesce(max(CASE WHEN author = 'person' AND draft = 0 THEN created_at END), ''),
-                                  coalesce(max(CASE WHEN author = 'person' THEN delivered_at END), '')) AS at
-                             FROM messages WHERE session_id = ?""", (sid,))
+        """When the session was last sent anything: the latest a message of the person's (a
+        notice included) was sent, claimed or delivered (REACHED); None if never."""
+        row = self._one(f"""SELECT max(CASE WHEN author = 'person' AND draft = 0 THEN {REACHED.format(m="")} END) AS at
+                              FROM messages WHERE session_id = ?""", (sid,))
         return row["at"] or None
 
     def open_items(self, sid: str) -> list[sqlite3.Row]:
@@ -1087,6 +1086,12 @@ SETTLED_RANK, FINISHED_RANK = 10, 11   # after every active item's rank
 # of status brings back an item the person dismissed
 UNDISMISS = "dismissed = CASE WHEN coalesce(?, status) = status THEN dismissed END"
 
+# when a sent message reached the session, on messages aliased {m}: the latest of when it was
+# written, claimed and delivered. Not created_at alone: a draft keeps the time it was written
+# when dispatch sends it, maybe long after. claimed_at is to the microsecond (stamp): cut to the
+# second, as the others are, so the three compare as strings (all UTC)
+REACHED = ("max({m}created_at, coalesce(substr({m}claimed_at, 1, 19) || '+00:00', ''), "
+           "coalesce({m}delivered_at, ''))")
 # a message's kind for a session's status update on an item awaiting its reply: its word on it
 # (update_item, declares), shown as a note
 STATUS = "status"
