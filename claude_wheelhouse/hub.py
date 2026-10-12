@@ -781,9 +781,12 @@ class Hub:
         sent as a notice, timed from its transcript (the stats snapshot): KEEPALIVE_AFTER
         after its last response, then every KEEPALIVE_AFTER while it stays quiet, until it
         has been quiet the keepalive limit (features.keepalive_hours; 0, never). Only to a
-        live session, not parked, mid-turn (its last response stopped for a tool) or just
-        compacted, over KEEPALIVE_TOKENS, and waiting on the person or with an item in
-        doubt; the check (host.keepalive_body) when any is. A keepalive's own turn restarts
+        live session on current code (needs_relaunch: an older MCP server never records the
+        session's word, so its items would all look in doubt), not parked, mid-turn (its
+        last response stopped for a tool, or anything sent to it since: Store.heard_at,
+        which the transcript doesn't show yet) or just compacted, over KEEPALIVE_TOKENS, and
+        waiting on the person or with an item in doubt; the check (host.keepalive_body) when
+        any is. A keepalive's own turn restarts
         the 55 minutes, not the quiet time."""
         at = time.time() if at is None else at
         for s in self.sessions:
@@ -800,12 +803,15 @@ class Hub:
                     w.quiet = snap.last_at
                 elif snap.stop != "tool_use":
                     w.sent = None   # the keepalive's turn has ended
-            if (self.keepalive_for <= 0 or s["parked"] or self.statuses.get(sid) not in ("live", "stalled")
+            if (self.keepalive_for <= 0 or s["parked"] or needs_relaunch(s)
+                    or self.statuses.get(sid) not in ("live", "stalled")
                     or snap.stop == "tool_use" or snap.context <= KEEPALIVE_TOKENS
                     or (snap.compactions and snap.compactions[-1].at >= snap.last_at)
                     or at - max(snap.last_at, w.sent or 0) < KEEPALIVE_AFTER or at - w.quiet >= self.keepalive_for):
                 continue
             try:
+                if (stats.epoch(self.store.heard_at(sid) or "") or 0) > snap.last_at:
+                    continue   # sent something it hasn't answered yet: its turn may be starting
                 doubted = self.store.in_doubt(sid)
                 if doubted or waits_on_person(self.store, sid):
                     self.store.notice(sid, keepalive_body(doubted))

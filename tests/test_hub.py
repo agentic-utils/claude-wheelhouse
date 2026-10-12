@@ -916,6 +916,7 @@ H, M = 3600, 60
 def warm_hub(hub, store, sid, snap, status="live"):
     """The hub's view of one tab session: its transcript read as snap, its liveness status."""
     from types import SimpleNamespace
+    store.mark_version(sid)
     hub.refresh()
     hub.statuses[sid] = status
     hub.contexts[sid] = SimpleNamespace(ready=True, snap=snap)
@@ -936,9 +937,12 @@ def notices(store, sid):
     ({"waits": False}, False, "nothing waits on the person, nothing in doubt"),
     ({"hours": 0}, False, "0 hours: off"),
     ({"runner": "sdk"}, False, "an SDK session's host keeps its own"),
+    ({"old code": True}, False, "a session on older code, which never records its word on an item"),
+    ({"heard": "send"}, False, "the person's message since its last response: its turn may be starting"),
+    ({"heard": "deliver"}, False, "an answer queued before it, delivered since: the same"),
 ])
 def test_a_tab_sessions_keepalive_is_sent_under_its_conditions(hub, store, sid, state, sent, desc):
-    t0 = 1_000_000.0
+    t0 = time.time()
     if state.get("waits", True):
         store.post_item(sid, "question", "which?")
     if state.get("parked"):
@@ -946,9 +950,21 @@ def test_a_tab_sessions_keepalive_is_sent_under_its_conditions(hub, store, sid, 
     if state.get("runner"):
         store.set_runner(sid, state["runner"])
     hub.keepalive_for = state.get("hours", 8) * H
+    if state.get("heard") == "send":
+        store.send(sid, "go on")
+    elif state.get("heard") == "deliver":   # sent before the last response, delivered after it
+        store.send(sid, "go on")
+        store.db.execute("UPDATE messages SET created_at = '2000-01-01T00:00:00+00:00' WHERE session_id = ?", (sid,))
+        store.take_pending(sid)
+    if state.get("heard"):
+        t0 = time.time() - 30   # the transcript's last response, before the message
     snap = stats.Snapshot(context=state.get("context", 200_000), last_at=t0, stop=state.get("stop", "end_turn"),
                           compactions=[stats.Compaction(t0, "manual", 300_000, 50_000)] if state.get("compacted") else [])
     warm_hub(hub, store, sid, snap, state.get("status", "live"))
+    if state.get("old code"):
+        store.db.execute("UPDATE sessions SET code_version = 10 WHERE id = ?", (sid,))
+        hub.refresh()
+        hub.statuses[sid] = "live"
     hub.keep_warm(t0 + state.get("since", 55 * M))
     assert notices(store, sid) == ([host_mod.KEEPALIVE_BODY] if sent else []), desc
 
@@ -956,7 +972,7 @@ def test_a_tab_sessions_keepalive_is_sent_under_its_conditions(hub, store, sid, 
 def test_a_tab_sessions_keepalive_repeats_every_55_minutes_up_to_the_limit(hub, store, sid):
     """Each keepalive's own turn restarts the 55 minutes but not the quiet time; it is the
     check while an item is in doubt."""
-    t0 = 1_000_000.0
+    t0 = time.time()
     store.post_item(sid, "question", "which?")
     hub.keepalive_for = 2 * H
     snap = stats.Snapshot(context=200_000, last_at=t0, stop="end_turn")
@@ -972,7 +988,7 @@ def test_a_tab_sessions_keepalive_repeats_every_55_minutes_up_to_the_limit(hub, 
 
 
 def test_a_tab_sessions_check_names_the_items_in_doubt(hub, store, sid, monkeypatch):
-    t0 = 1_000_000.0
+    t0 = time.time()
     monkeypatch.setattr(store, "in_doubt", lambda s, at=None: ["T1 waiting"])
     warm_hub(hub, store, sid, stats.Snapshot(context=200_000, last_at=t0, stop="end_turn"))
     hub.keep_warm(t0 + 55 * M)
@@ -981,7 +997,7 @@ def test_a_tab_sessions_check_names_the_items_in_doubt(hub, store, sid, monkeypa
 
 
 def test_a_real_turn_restarts_the_quiet_time(hub, store, sid):
-    t0 = 1_000_000.0
+    t0 = time.time()
     store.post_item(sid, "question", "which?")
     hub.keepalive_for = 1 * H
     snap = stats.Snapshot(context=200_000, last_at=t0, stop="end_turn")
