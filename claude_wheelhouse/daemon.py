@@ -751,8 +751,7 @@ class Daemon:
         the TUI's SDK-only controls follow. The ranking is the client's own."""
         rows = self.store._all("SELECT i.*, s.name AS session_name, s.parked AS session_parked FROM items i "
                                "JOIN sessions s ON s.id = i.session_id")
-        sid = tutorial.session_id(self.store)
-        steps = tutorial.steps(self.store, sid, tutorial.seen(self.store, sid)) if sid else []
+        sid, steps = tutorial.current(self.store) or (None, [])
         return {"items": [{k: v for k, v in dict(r).items() if k not in UNLISTED} for r in rows],
                 "processing": sorted(self.store.processing()), "awaiting": sorted(self.store.awaiting()),
                 "drafts": [{"id": m["id"], "session_id": m["session_id"], "item_ref": m["item_ref"]}

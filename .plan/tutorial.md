@@ -18,7 +18,7 @@ In the order they will meet it:
    opens in a Windows Terminal tab (in SDK mode alone, `.plan/sdk-sessions.md`, it can run
    in the wheelhouse instead).
 2. **Items.** Tasks (`T`), questions (`Q`), decisions (`D`) and subagent statuses (`A`),
-   all in the inbox (`1`), open questions first. `F` shows finished items.
+   all in the inbox, open questions first. `F` shows finished items.
 3. **Answering.** Enter opens a thread; Ctrl+Enter submits. The session's reply declares
    the question's state: `processing` while it's the session's move (D28), `open` when it needs them
    again, `answered` once it can proceed. Delete or Backspace in the item list closes a question (#64).
@@ -66,7 +66,7 @@ B, with the `?` overlay from C. B is the only option that shows the loop working
 proves the install at the same time; A's dead sessions would teach the wrong thing on
 day one. The overlay is cheap and is where people will look once the tutorial is done.
 
-Shape of B:
+Shape of B, as first proposed (superseded: "As built" below is what runs):
 
 - `make tutorial` (and a hint on first run when the database is empty) launches the demo
   session in `~/.local/state/claude-wheelhouse/claude-wheelhouse-tutorial/`, a scratch directory it owns.
@@ -77,9 +77,9 @@ Shape of B:
   the lesson happens in the wheelhouse.
 - Ending the tutorial ends the session and deletes its items, leaving a clean inbox.
 
-The demo session runs on whatever model the tester's Claude Code defaults to, with no
-pin: a few cents of their tokens per run, and it behaves like the sessions they will
-really use.
+The demo session runs on New session's defaults, Sonnet 5.5 at high effort
+(`models.chosen`), pinned however the tester's own Claude Code is set: a few cents of
+their tokens per run.
 
 ## Resolved
 
@@ -95,8 +95,11 @@ really use.
   in a Windows Terminal tab, and the steps cover what tab mode offers: questions and
   answers, decisions, items, End.
 - **Always a tab** (D66): the tutorial is a tab session even with SDK mode on. The
-  permission and conversation steps come back as SDK-only top-ups (below), offered only
-  when SDK mode is on, once the top-up machinery is built.
+  permission step comes back as an SDK-only top-up (below), offered only when SDK mode is
+  on, once the top-up machinery is built.
+- **Two core workflows added** (Q73, option A): watching the session work in its
+  conversation, which a tab has too (it is read from the transcript), after the reply; and
+  starting a session of your own with `N`, last, after End. Nine steps.
 - **Layout improvements**: parked, to come back to separately.
 - **Re-running it** (Q72, option A): launching the demo straight from `make tutorial` while
   the app was open just joined it to the running wheelhouse, which confused. `make tutorial`
@@ -121,9 +124,20 @@ really use.
   while the app is started. An app run with `--local` takes no lock, so it can't be
   detected: run then, the command SIGTERMs that app's tutorial tab and removes its row, and
   the offer shows only at the app's next start. Documented, not guarded.
-- The steps: find the demo in its tab (it ticks once the session has posted, so past any
-  trust prompt), open a question, answer both, send them, see the reply, read and close
-  the decision, end it.
+- The nine steps: find the demo in its tab (it ticks once the session has posted, so past
+  any trust prompt), open a question, answer both, send them, see the reply, watch it work,
+  read and close the decision, end it, start your own.
+- Watch it work ticks when a turn of Claude's (a reply or a tool call, not the person's
+  own words) arrives in the tutorial's conversation while it is shown, the person's own
+  pick (the session followed, or its 💬 Conversation row), never the app's automatic
+  selection. The session has finished by then, so the hint has them ask for a change in
+  the box under the conversation, and the brief has it ask whether they'd like one.
+- Start your own ticks once a session exists that wasn't there as the tutorial started
+  (`prepare` records their ids) and isn't in the tutorial's directory: `N`, or an Adopt.
+  Its hint also says Shift+S (Restore all) brings sessions back after a reboot.
+- The checklist outlives the session for that last step: once the session has ended it
+  shows End, done, and Start your own until that is done too, then goes. Only a record
+  `prepare` wrote (with the ids) is followed past the end, and `make tutorial` clears it.
 - The tutorial session is simply the one whose directory is `claude-wheelhouse-tutorial/`: no schema column.
   So a session of the person's own started in that directory is taken for the tutorial's,
   and ended with it (`stop_earlier`, on taking the offer or on `make tutorial`). The README
@@ -138,12 +152,13 @@ really use.
   one-line offer sits at the top of the screen. Enter starts the tutorial, Esc dismisses
   it; either way the setting is written and it never comes back. `tutorial_offer = reset`
   (from `make tutorial`) shows it once more, sessions or not, and the answer overwrites it.
-- The checklist sits at the top of the right-hand pane while the tutorial session exists.
-  Each step is worked out from the store on the refresh: both questions answered, the
+- The checklist sits at the top of the right-hand pane while the tutorial session exists,
+  and after it ends while Start your own is still to do (above). Each step is worked out from the store on the refresh: both questions answered, the
   answers sent, a reply after they went, the decision closed (not just seen: the app's
-  automatic selection marks a decision seen once it has rested there a second). The one
-  only the screen knows (a question highlighted or opened) is recorded as the person does
-  it (a highlight once they've rested on it a second, the dwell; Enter at once), never by
+  automatic selection marks a decision seen once it has rested there a second). The ones
+  only the screen knows (a question highlighted or opened, a turn watched arriving) are
+  recorded as the person does them (a highlight once they've rested on it a second, the
+  dwell; Enter at once; a turn as it shows), never by
   the app's own automatic selection, and kept in the store (`tutorial_seen`), so a restart
   of the app keeps it. The next step shows how to do it; the rest are one line each.
 - Starting refuses before creating anything if `claude` isn't on PATH. The tab starts
@@ -177,12 +192,12 @@ a '2 new tutorial steps' badge."
 
 ## Where it stands
 
-- `STEPS` in `tutorial.py` is one fixed list of eight `(key, what, how)` tuples, all
+- `STEPS` in `tutorial.py` is one fixed list of nine `(key, what, how)` tuples, all
   taught by one scripted demo session (`BRIEF`).
 - Nothing records a step as done. `steps()` works each one out from the store on every
-  refresh, so the checklist exists only while the tutorial session does: once it ends, its
-  items go with it and there is nothing left to work from. `end` is never done for that
-  reason.
+  refresh, so once the tutorial session ends its items go with it and there is nothing
+  left to work from: the checklist then keeps only End (done, as the session has gone)
+  and Start your own, which need nothing of the session's.
 - Two steps only the screen sees (`open`, `follow`) are kept in the `tutorial_seen`
   setting, a JSON blob tied to one tutorial session id.
 - `tutorial_offer` (unset, `taken`, `dismissed`, `reset`) gates the one-line modal offer
@@ -224,7 +239,7 @@ Step(id="effort", new_in="0.2.0",
 
 - `check` takes a small view (`t`) over the store, the demo session's id if one is
   running, and the screen events `saw()` records. It returns whether the step is done now.
-  The current eight checks move over as they are.
+  The current nine checks move over as they are.
 - `brief`, only for steps that need the demo session: the lines added to the demo's brief
   to set the step up (post a decision, run a command that asks permission). The current
   `BRIEF` splits into a shared preamble plus one fragment per step.
@@ -238,7 +253,7 @@ other step ids:
 |---|---|
 | `demo` | the tutorial's demo session is running; Start launches one |
 | `session` | any running session of the person's, hosted in the wheelhouse |
-| `sdk` | SDK mode is on (`--enable-sdk`, or `enable-sdk=true` in a `.env`): the step is offered only then. The permission and conversation steps, which the tab tutorial leaves out, come back this way |
+| `sdk` | SDK mode is on (`--enable-sdk`, or `enable-sdk=true` in a `.env`): the step is offered only then. The permission step, which the tab tutorial leaves out, comes back this way |
 | a step id | that step is done first (`send` needs `queue`) |
 
 A step whose needs aren't met stays pending and shows in the checklist greyed, with what
@@ -264,8 +279,7 @@ The checklist shows while a run is under way and any of its steps remain. It goe
 they are all done, or when the demo session is ended. Steps still not done stay pending:
 the badge offers them again.
 
-`end` becomes checkable: ending the demo session from the wheelhouse records it before the
-session's rows go.
+`end` is recorded like any other step, once the demo session has gone.
 
 ## The offer
 
@@ -293,15 +307,15 @@ first.
 ## Existing installs
 
 A one-off migration on first open by the new code, recorded by a settings marker like
-`migrated_decisions_close`. It writes rows for the eight steps that exist today, named in
+`migrated_decisions_close`. It writes rows for the nine steps that exist today, named in
 the migration, not picked by `new_in`:
 
 | Today | Becomes |
 |---|---|
-| `tutorial_offer = taken`, no tutorial session left | the eight steps done |
+| `tutorial_offer = taken`, no tutorial session left | the nine steps done |
 | `tutorial_offer = taken`, tutorial session still running | nothing: its checks record steps as the person goes |
-| `tutorial_offer = dismissed` | the eight steps dismissed |
-| unset, sessions exist (installed before the tutorial) | the eight steps dismissed |
+| `tutorial_offer = dismissed` | the nine steps dismissed |
+| unset, sessions exist (installed before the tutorial) | the nine steps dismissed |
 | unset, no sessions | nothing: a fresh install, gets the first-run offer |
 
 So an install that has done the tutorial sees nothing new until a release adds a step,
@@ -332,8 +346,8 @@ Table-driven, one case a line, as `test_tutorial.py` does now:
   back; no demo is launched for it.
 - **SDK-only steps** (Q66): a step that needs SDK mode (`needs=("sdk",)`) is offered only
   when it is on, never pending for a new user. Not built yet: the core tutorial is always a
-  tab (D66), and the permission and conversation steps wait for the `tutorial_steps` table
-  and the badge.
+  tab (D66), and the permission step waits for the `tutorial_steps` table and the badge.
+  Following the conversation needed no SDK: it is a core step (Q73).
 
 ## Open questions
 
@@ -341,4 +355,4 @@ Table-driven, one case a line, as `test_tutorial.py` does now:
    the offer from then on. The other reading is the modal returning at each start until
    Start or Never. Which?
 2. **Installs from before the tutorial** (sessions, no `tutorial_offer`, which is your own)
-   get the eight core steps dismissed. Or should they be offered once, through the badge?
+   get the nine core steps dismissed. Or should they be offered once, through the badge?

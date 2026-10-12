@@ -2,8 +2,12 @@
 person through the loop once (a task, two related questions, a decision) while a checklist
 ticks off each step from what the store records.
 
-It is always a tab, SDK mode or not: the steps only a hosted session has (a permission
-prompt, following the conversation) come back as SDK-only top-ups (.plan/tutorial.md).
+It is always a tab, SDK mode or not: the step only a hosted session has (a permission
+prompt) comes back as an SDK-only top-up (.plan/tutorial.md). Following the conversation is a
+tab's too: it is read from the session's transcript, whichever way it runs.
+
+The checklist outlives the session for its last step: once the session has ended it shows
+End and Start your own until a session of the person's own exists (current).
 
 The tutorial session is the one whose directory is the tutorial's own scratch directory
 (tutorial_dir), next to the database. Starting the tutorial always starts afresh: any
@@ -26,7 +30,7 @@ from .store import Store, runner
 NAME = "tutorial"
 OFFER_KEY = "tutorial_offer"   # settings: unset until the first-run offer is taken or dismissed
 RESET = "reset"   # OFFER_KEY as reset() leaves it: offered at the next start, sessions or not, until answered
-SEEN_KEY = "tutorial_seen"     # settings: the steps only the screen knows about, for the current tutorial
+SEEN_KEY = "tutorial_seen"     # settings: the current tutorial's record (record): its screen-only steps
 STOP_WAIT = 5.0   # seconds an earlier tutorial's host gets to exit before it is told to
 # what the tutorial's directory allows: the wheelhouse's own tools run without a prompt
 SETTINGS = {"permissions": {"allow": ["mcp__wheelhouse__*"]}}
@@ -53,8 +57,9 @@ wheelhouse's own text is British; undo: say so and it's rewritten.
 
 When the answers arrive, reply to each question as the wheelhouse protocol says, marking it \
 answered, with the two-line message as your answer to both. Then mark the task done, and end \
-your turn with the message in chat and one last line saying you're finished and the session \
-can be ended. If they ask for changes, make them."""
+your turn with the message in chat and one last line asking whether they'd like anything \
+changed. When they ask for a change, make it in chat, then say in one line that you're \
+finished and the session can be ended."""
 
 # (key, what to do, how): in the order the tutorial's session makes them possible
 STEPS = (
@@ -62,13 +67,18 @@ STEPS = (
      "wheelhouse's own: if Claude Code asks whether you trust the folder, say yes there, then come back here as "
      "it posts its items"),
     ("open", "Open a question", "highlight Q1 in the item list, or press Enter on it"),
-    ("queue", "Answer both questions", "type in the box, Ctrl+Enter queues each answer"),
+    ("queue", "Answer both questions", "type in the answer box under its thread, Ctrl+Enter queues each answer"),
     ("send", "Send them together", "Ctrl+S, or the Send button under the session list"),
     ("reply", "See the session's reply", "its message shows in each question's thread as it finishes"),
+    ("follow", "Watch it work", "highlight 💬 Conversation (or the session on the left), then ask for a "
+     "change in the box under it: its turns show as it works"),
     ("decision", "Read and close the decision", "highlight D1 to read it, then Delete (or Backspace) in the item list closes it, as it does a question"),
     ("end", "End the session", "highlight it in the session list, then End below: its items go with it, "
      "and its tab can be closed"),
+    ("new", "Start your own", "N opens New: a directory and an opening brief, and it starts in its own "
+     "tab. After a reboot, Shift+S restores your sessions"),
 )
+AFTER_END = ("end", "new")   # the steps the checklist keeps once the session has ended (current)
 
 
 # what has the next start offer the tutorial again (reset), named by every hint (the offer, the
@@ -102,9 +112,12 @@ def should_offer(store: Store) -> bool:
     return offer == RESET or (offer is None and not store.sessions())
 
 
-def steps(store: Store, sid: str, seen: set[str]) -> list[tuple[str, str, str, bool]]:
+def steps(store: Store, sid: str, seen: set[str], before=()) -> list[tuple[str, str, str, bool]]:
     """Each step and whether it's done, from what the store records; `seen` holds the steps
-    only the screen knows about (a question opened)."""
+    only the screen knows about (a question opened, a turn watched arriving), `before` the
+    sessions there were as the tutorial started. Once its session has ended, only the steps
+    after it (AFTER_END), End done."""
+    ended = store.session(sid) is None
     items = {it["ref"]: it for it in store.items(sid)}
     questions = {ref for ref, it in items.items() if it["kind"] == "question"}
     msgs = store.messages(sid)
@@ -118,24 +131,52 @@ def steps(store: Store, sid: str, seen: set[str]) -> list[tuple[str, str, str, b
         "reply": first_sent is not None and any(
             m["author"] == "claude" and m["kind"] == "reply" and m["item_ref"] in questions
             and m["id"] > first_sent for m in msgs),
+        "follow": "follow" in seen,
         # closed, not seen: automatic selection marks a decision seen, but only the person closes one
         "decision": any(it["kind"] == "decision" and it["status"] == "closed" for it in items.values()),
-        "end": False,   # the checklist goes with the session
+        "end": ended,
+        # a session of the person's own: one there wasn't as the tutorial started, outside its directory
+        "new": any(s["id"] not in before and not is_tutorial(store, s) for s in store.sessions()),
     }
-    return [(key, what, how, done[key]) for key, what, how in STEPS]
+    return [(key, what, how, done[key]) for key, what, how in STEPS if not ended or key in AFTER_END]
 
 
-def seen(store: Store, sid: str) -> set[str]:
-    """The steps the person has done that only the screen sees (a question opened). Kept in the store, so a restart keeps them."""
+def record(store: Store) -> dict:
+    """The current tutorial's record (SEEN_KEY): its session (sid), the steps only the screen
+    has seen, and the sessions there were as it started (before, from prepare)."""
     try:
         kept = json.loads(store.setting(SEEN_KEY) or "{}")
     except ValueError:
-        return set()
+        return {}
+    return kept if isinstance(kept, dict) else {}
+
+
+def current(store: Store) -> tuple[str, list] | None:
+    """The checklist, if one shows: the tutorial session's steps, or, once that has ended,
+    End and Start your own, until a session of the person's own exists. Only a tutorial
+    prepare() recorded is followed past its end: an earlier version's record has no before."""
+    sid, kept = session_id(store), record(store)
+    if sid is None and "before" in kept:
+        sid = kept.get("sid")
+    if sid is None:
+        return None
+    found = steps(store, sid, seen(store, sid), kept.get("before", ()) if kept.get("sid") == sid else ())
+    if store.session(sid) is None and all(done for *_, done in found):
+        return None
+    return sid, found
+
+
+def seen(store: Store, sid: str) -> set[str]:
+    """The steps the person has done that only the screen sees (a question opened, a turn
+    watched arriving). Kept in the store, so a restart keeps them."""
+    kept = record(store)
     return set(kept.get("seen", [])) if kept.get("sid") == sid else set()
 
 
 def see(store: Store, sid: str, step: str) -> None:
-    store.set_setting(SEEN_KEY, json.dumps({"sid": sid, "seen": sorted(seen(store, sid) | {step})}))
+    kept = record(store)
+    kept = kept if kept.get("sid") == sid else {"sid": sid}
+    store.set_setting(SEEN_KEY, json.dumps({**kept, "seen": sorted(set(kept.get("seen", [])) | {step})}))
 
 
 def stopped(session) -> str | None:
@@ -177,17 +218,20 @@ def reset(store: Store) -> bool:
     """claude-wheelhouse tutorial: end any tutorial session (stop_earlier: the person's other
     sessions are kept) and have the next start offer the tutorial, sessions or not. Only while
     no wheelhouse runs (cli.py), as the app decides on the offer once, as it starts. Whether
-    a tutorial session was ended."""
+    a tutorial session was ended. Its record goes too, so no checklist stays for it."""
     ended = session_id(store) is not None
     stop_earlier(store)
+    store.clear_setting(SEEN_KEY)
     store.set_setting(OFFER_KEY, RESET)
     return ended
 
 
 def prepare(store: Store) -> str:
     """Start afresh: end any earlier tutorial, recreate its directory with its settings, and
-    create its session, a tab whether SDK mode is on or not. Returns the new session's id."""
+    create its session, a tab whether SDK mode is on or not, recording the sessions there are
+    already (record: none of them is the person's new one). Returns the new session's id."""
     stop_earlier(store)
+    before = [s["id"] for s in store.sessions()]
     path = tutorial_dir(store)
     if path.exists():
         if not (path / MARKER).exists():
@@ -197,8 +241,9 @@ def prepare(store: Store) -> str:
     (path / MARKER).write_text("The wheelhouse tutorial's scratch directory: recreated each time it starts.\n")
     (path / ".claude/settings.json").write_text(json.dumps(SETTINGS, indent=2) + "\n")
     model, effort = models.chosen(None, None)   # New session's defaults: Sonnet 5.5 at high
-    return store.create_session(str(path), name=NAME, brief=BRIEF,
-                                runner="tab", model=model, effort=effort)
+    sid = store.create_session(str(path), name=NAME, brief=BRIEF, runner="tab", model=model, effort=effort)
+    store.set_setting(SEEN_KEY, json.dumps({"sid": sid, "seen": [], "before": before}))
+    return sid
 
 
 def start(store: Store) -> str:
@@ -213,6 +258,7 @@ def start(store: Store) -> str:
         launch.open_session(store, sid)
     except BaseException:
         store.end(sid)   # no dead tutorial session left behind, nor its checklist
+        store.clear_setting(SEEN_KEY)
         raise
     store.set_setting(OFFER_KEY, "taken")
     return sid

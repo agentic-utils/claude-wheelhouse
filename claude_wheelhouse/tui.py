@@ -2198,6 +2198,12 @@ class WheelhouseApp(App):
             self.client.unfollow_agent()
         # a conversation, the session's or a subagent's, shows its newest turn, and follows it
         self.detail_follows = bool(self.viewing or agent)
+        # a turn of Claude's arriving in the conversation shown, the person's own pick: the
+        # tutorial's Watch it work, if it's the tutorial's (saw). Their own words don't count
+        turns = {md for who, md in blocks if who in ("claude", "tool")} if self.viewing else set()
+        (was, before), self._shown_turns = getattr(self, "_shown_turns", (None, set())), (self.viewing, turns)
+        if self.viewing and was == self.viewing and turns - before and self.selected == self.picked:
+            self.saw(self.viewing, None, "follow")
         text = "\n\n".join(md for _, md in blocks)
         if text != getattr(self, "_detail_text", None):
             following = self.detail_follows and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1
@@ -2349,7 +2355,8 @@ class WheelhouseApp(App):
             bar.activity("")
 
     def paint_checklist(self) -> None:
-        """While the tutorial's session exists: its steps, at the top of the right pane."""
+        """While the tutorial's checklist shows (its session exists, or has ended with its last
+        step to do): its steps, at the top of the right pane."""
         found = self.client.tutorial()
         if found is None:
             if self.checklist.display:
@@ -2359,8 +2366,8 @@ class WheelhouseApp(App):
         sid, steps = found
         nxt = next((key for key, *_, done in steps if not done), None)
         text = Text.assemble(("TUTORIAL", "bold #ffd300"), ("  ? lists every key", "#777777"))
-        session = next(s for s in self.sessions if s["id"] == sid)
-        why = tutorial.stopped(session) if not self.running(sid) else None
+        session = next((s for s in self.sessions if s["id"] == sid), None)   # None once ended
+        why = tutorial.stopped(session) if session and not self.running(sid) else None
         if why:
             text.append(f"\n{why}", style="bold #ff2a6d")
             text.append(f"\n{tutorial.AGAIN} at the next start", style="#e8e8e8")
@@ -2379,16 +2386,17 @@ class WheelhouseApp(App):
             self.refit()   # its height may have changed: the answer box below gives or takes
 
     def saw(self, sid: str, ref: str | None, step: str | None = None) -> None:
-        """The person opened something of the tutorial's: a question. Called only from what
-        the person does, never from automatic selection: Enter at once, their own selection
-        once they have looked at it (dwelt)."""
+        """The person opened something of the tutorial's: a question, or watched a turn arrive
+        in its conversation (step "follow", from paint_detail). Called only from what the
+        person does, never from automatic selection: Enter at once, their own selection once
+        they have looked at it (dwelt), their own pick of the conversation."""
         found = self.client.tutorial()
         if found is None or found[0] != sid:
             return
         if step is None and ref is not None:
             item = self.client.item(sid, ref)
             step = {"question": "open"}.get(item and item["kind"])
-        if step:
+        if step and not any(key == step and done for key, *_, done in found[1]):   # once is enough
             self.client.see(sid, step)
             self.paint_checklist()
 
@@ -2542,7 +2550,7 @@ class WheelhouseApp(App):
         pane follows the conversation rather than whichever question comes first."""
         self.filter_sid = sid
         self.selected = (sid, None)
-        self.picked = self.selected   # the conversation followed ticks its step once looked at (dwelt)
+        self.picked = self.selected   # the person's own: a turn arriving in it ticks the tutorial's step (paint_detail)
         self.retarget()
         self.paint_items()
         self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)

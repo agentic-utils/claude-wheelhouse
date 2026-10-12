@@ -100,9 +100,9 @@ class LocalClient(Hub):
             self.store.set_setting(key, value)
 
     def tutorial(self) -> tuple[str, list] | None:
-        """The tutorial's session, if one is listed, and its steps."""
-        sid = next((s["id"] for s in self.sessions if tutorial.is_tutorial(self.store, s)), None)
-        return None if sid is None else (sid, tutorial.steps(self.store, sid, tutorial.seen(self.store, sid)))
+        """The tutorial's session and its steps, while its checklist shows (tutorial.current:
+        its last step outlives the session)."""
+        return tutorial.current(self.store)
 
     def should_offer(self) -> bool:
         return tutorial.should_offer(self.store)
@@ -566,8 +566,8 @@ class RemoteClient:
         self.quietly("/settings", {"key": key, "value": value})
 
     def tutorial(self) -> tuple[str, list] | None:
-        sid = self.tutorial_state.get("sid")
-        if sid is None or sid not in self.by_id:
+        sid = self.tutorial_state.get("sid")   # its session may have ended: its last step outlives it
+        if sid is None:
             return None
         return sid, [tuple(step) for step in self.tutorial_state["steps"]]
 
