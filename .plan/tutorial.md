@@ -122,7 +122,8 @@ their tokens per run.
   it); then it ends any tutorial session as above and sets `tutorial_offer` to `reset`. It
   never opens the app or a tab. The lock is checked again after the y/N, which can wait
   while the app is started. An app run with `--local` takes no lock, so it can't be
-  detected: run then, the command SIGTERMs that app's tutorial tab and removes its row, and
+  detected: run then, the command sends SIGTERM to that tutorial session's Claude Code (its
+  `claude_pid`, not the tab) and removes its row, and
   the offer shows only at the app's next start. Documented, not guarded.
 - The nine steps: find the demo in its tab (it ticks once the session has posted, so past
   any trust prompt), open a question, answer both, send them, see the reply, watch it work,
@@ -142,15 +143,15 @@ their tokens per run.
   So a session of the person's own started in that directory is taken for the tutorial's,
   and ended with it (`stop_earlier`, on taking the offer or on `make tutorial`). The README
   says not to start one there.
-  Its `.claude/settings.json` allows the wheelhouse's own tools (so a tester in default
+  The tutorial directory's `.claude/settings.json` allows the wheelhouse's own tools (so a tester in default
   permission mode isn't asked about each post).
 - The brief has the session post a task, two related questions (tone, and a sign-off that
   depends on the tone) and a decision, then wait. On the answers it replies, writes the
   message in chat, then marks the task done. It's told to touch nothing else and to skip its own session-end routine (no
   memory or handoff notes) when ended.
 - First run: with no sessions and no `tutorial_offer` setting (a new `settings` table), a
-  one-line offer sits at the top of the screen. Enter starts the tutorial, Esc dismisses
-  it; either way the setting is written and it never comes back. `tutorial_offer = reset`
+  one-line offer (wrapped on a narrow screen, so its command is never cut) sits at the top
+  of the screen. Enter starts the tutorial, Esc dismisses it; either way the setting is written and it never comes back. `tutorial_offer = reset`
   (from `make tutorial`) shows it once more, sessions or not, and the answer overwrites it.
 - The checklist sits at the top of the right-hand pane while the tutorial session exists,
   and after it ends while Start your own is still to do (above). Each step is worked out from the store on the refresh: both questions answered, the
@@ -168,7 +169,7 @@ their tokens per run.
   stop reason. The checklist shows it, with the command to start afresh (`tutorial.COMMAND`).
 - Every hint shown in a running app (the offer, `?`, that checklist line, the notice on
   dismissing the offer) says `tutorial.AGAIN`: with the wheelhouse stopped, the command
-  offers it again. The command is refused while the daemon runs, so a hint that left that
+  offers the tutorial again. The command is refused while the daemon runs, so a hint that left that
   out sent the person to a refusal.
 - `?` opens every key, generated from the bindings themselves (a test fails if a binding
   has no description), the mouse, every button and the send-mode rules.

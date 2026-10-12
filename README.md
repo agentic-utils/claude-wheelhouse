@@ -52,8 +52,8 @@ the clipboard.
 make run
 ```
 
-The first time the wheelhouse opens with no sessions it offers the tutorial in one line:
-`Enter` takes it, `Esc` dismisses it. Taking it starts a short demo session in a new
+The first time the wheelhouse opens with no sessions it offers the tutorial in a line at
+the top (wrapped on a narrow screen): `Enter` takes it, `Esc` dismisses it. Taking it starts a short demo session in a new
 Windows Terminal tab that posts a task, two related questions and a decision; a checklist
 at the top of the right-hand pane walks you through answering, sending, watching it work in
 its conversation, ending it and starting a session of your own (`N`): the checklist stays
@@ -76,11 +76,12 @@ make run
 
 `make tutorial` (`uv run claude-wheelhouse tutorial`) asks first (`--yes` skips the
 question), then ends the earlier tutorial session, if there is one, and has the next start
-offer the tutorial even though you have other sessions. Your other sessions are kept. It
-refuses while the daemon runs, since the app decides on the offer only as it starts. An
-app started with `--local` runs no daemon, so it can't be detected: quit it first, or
-`make tutorial` stops its tutorial session and removes it from under it, and the offer
-shows only when the app next starts. The offer, and the app's help, say to run
+offer the tutorial even though you have other sessions. Your other sessions are kept (but
+not one started in the tutorial's directory, as above). It refuses while the daemon runs,
+since the app decides on the offer only as it starts. An app started with `--local` runs no
+daemon, so it can't be detected: quit it first, or `make tutorial` ends the tutorial
+session while that app still shows it (its Claude Code is stopped and its row removed), and
+the offer shows only when the app next starts. The offer, and the app's help, say to run
 `claude-wheelhouse tutorial (make tutorial in a source checkout)` with the wheelhouse
 stopped: in your clone, that is `make tutorial`.
 

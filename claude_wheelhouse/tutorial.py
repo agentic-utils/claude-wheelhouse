@@ -86,7 +86,7 @@ AFTER_END = ("end", "new")   # the steps the checklist keeps once the session ha
 # runs can't be told from here
 COMMAND = "claude-wheelhouse tutorial (make tutorial in a source checkout)"
 # every hint shown in a running app says so: the command is refused while the wheelhouse runs
-AGAIN = f"With the wheelhouse stopped, {COMMAND} offers it again"
+AGAIN = f"With the wheelhouse stopped, {COMMAND} offers the tutorial again"   # named: a notice stands alone
 
 
 MARKER = ".wheelhouse-tutorial"   # written into the directory: only a directory carrying it is ever deleted

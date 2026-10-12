@@ -60,8 +60,8 @@ def tutorial_again(yes: bool) -> None:
     """claude-wheelhouse tutorial: the tutorial offered at the app's next start (tutorial.reset),
     once the person says yes (or --yes). Refused while a daemon runs: the app goes through
     it, and decides on the offer only as it starts. An app run with --local takes no lock,
-    so it can't be seen here: its tutorial session is ended under it (SIGTERM, row removed),
-    and the offer waits for its next start."""
+    so it can't be seen here: its tutorial session is ended under it (the session's Claude
+    Code sent SIGTERM, its row removed), and the offer waits for its next start."""
     from . import tutorial
     from .connect import STOP, holder
     from .store import Store, db_path
@@ -72,8 +72,9 @@ def tutorial_again(yes: bool) -> None:
     refuse_while_running()
     if not yes:
         try:
-            said = input("This ends the tutorial session, if there is one (your other sessions are kept), and the "
-                         "wheelhouse offers the tutorial when it next starts. Go ahead? [y/N] ")
+            said = input("This ends the tutorial session, if there is one, and the wheelhouse offers the tutorial "
+                         "when it next starts. Your other sessions are kept, but one of your own started in the "
+                         "tutorial's directory is taken for the tutorial's and ended too. Go ahead? [y/N] ")
         except EOFError:
             said = ""
         if said.strip().lower() not in ("y", "yes"):
@@ -125,7 +126,9 @@ def main() -> None:
     again = sub.add_parser("tutorial", help="have the app offer the tutorial at its next start, ending any "
                            "earlier tutorial session (run with the app and the daemon stopped)",
                            description="Has the app offer the tutorial at its next start, ending any earlier "
-                           "tutorial session. Run it with the app and the daemon stopped. It refuses while the "
+                           "tutorial session. Your other sessions are kept, but one of your own started in the "
+                           "tutorial's directory is taken for the tutorial's and ended too. "
+                           "Run it with the app and the daemon stopped. It refuses while the "
                            "daemon runs, but an app started with --local has no daemon and can't be detected: "
                            "running this then stops that app's tutorial session and removes it, and the offer "
                            "shows only when the app next starts.")

@@ -1297,11 +1297,12 @@ class RelaunchChoice(Dialog):
 
 
 class TutorialOffer(Dialog):
-    """The first-run offer, one line: Enter takes the tutorial, Esc dismisses it for good."""
+    """The first-run offer, a line that wraps on a narrow screen, so the command it names is
+    never cut: Enter takes the tutorial, Esc dismisses it for good."""
     BINDINGS = [Binding("enter", "answer(True)", show=False), Binding("escape", "answer(False)", show=False)]
 
     def compose(self) -> ComposeResult:
-        yield Label(Text.assemble(("New here? ", "bold #ffd300"), ("Enter", "bold"), ": tutorial · ",
+        yield Label(Text.assemble(("New here? ", "bold #ffd300"), ("Enter", "bold"), ": take the tutorial · ",
                                   ("Esc", "bold"), f": dismiss · {tutorial.AGAIN}"),
                     id="offer")
 
@@ -1558,7 +1559,7 @@ class WheelhouseApp(App):
     #cwd {{ width: 1fr; }}
     #folders {{ height: 20; background: #000000; }}
     TutorialOffer {{ align: center top; }}
-    #offer {{ width: 100%; height: 1; background: #12122a; color: #e8e8e8; padding: 0 1; }}
+    #offer {{ width: 100%; height: auto; background: #12122a; color: #e8e8e8; padding: 0 1; }}
     #keys-dialog {{ width: 100; max-width: 100%; height: 90%; background: #000000; color: {MATRIX};
                     border: thick #ff2a6d; padding: 0 1; }}
     /* selected text black on white: the theme's dark teal hid the characters (#52) */

@@ -638,7 +638,7 @@ async def test_every_hint_names_the_same_fixed_command(store, monkeypatch, fake_
     claude-wheelhouse on PATH but the person's shell can't run it, so every hint names both.
     Each is shown in a running app, where the command is refused, so each says to stop it first."""
     from claude_wheelhouse.hub import Hub
-    said = "With the wheelhouse stopped, claude-wheelhouse tutorial (make tutorial in a source checkout) offers it again"
+    said = "With the wheelhouse stopped, claude-wheelhouse tutorial (make tutorial in a source checkout) offers the tutorial again"
     monkeypatch.setattr(tutorial.shutil, "which", lambda cmd, *a, **k: f"/venv/bin/{cmd}")   # as under uv run
     assert f"{said} at the next start" in keys_help(), "? overlay"
     monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
@@ -647,7 +647,6 @@ async def test_every_hint_names_the_same_fixed_command(store, monkeypatch, fake_
         await pilot.pause()
         offer = app.screen.query_one("#offer")
         assert str(offer.render()).endswith(f"· {said}"), "offer"
-        assert len(str(offer.render())) <= offer.content_region.width, "offer: one line at 160 columns"
     assert [e.text for e in Hub(store).answer_offer(False).notices] == \
         [f"{said}; ? lists every key"], "dismiss notice"
     tutorial.prepare(store)
@@ -655,6 +654,24 @@ async def test_every_hint_names_the_same_fixed_command(store, monkeypatch, fake_
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         assert f"\n{said} at the next start" in app._checklist_text, "checklist"
+
+
+@pytest.mark.parametrize("width, lines, desc", [
+    (200, 1, "one line on a wide screen"),
+    (120, 2, "wrapped at 120 columns, where one line cut off its end"),
+    (80, 3, "wrapped at 80, where one line lost the command itself"),
+])
+@pytest.mark.anyio
+async def test_the_offer_wraps_rather_than_lose_its_command(store, monkeypatch, width, lines, desc):
+    from textual.geometry import Region
+    monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(width, 24)) as pilot:
+        await pilot.pause()
+        offer = app.screen.query_one("#offer")
+        shown = " ".join(s.text.strip() for s in offer.render_lines(Region(0, 0, *offer.size)))
+        assert offer.size.height == lines, f"{desc}: {offer.size}"
+        assert f"Enter: take the tutorial · Esc: dismiss · {tutorial.AGAIN}" in " ".join(shown.split()), desc
 
 
 @pytest.mark.parametrize("how", ["restore", "open"])
