@@ -137,7 +137,8 @@ is the moment it has forgotten them), and no agent, decision or permission items
 - SDK sessions: the host sees the compaction end and sends the list with the next turn's
   prompt, or as a notice if the session is quiet.
 - Tab sessions: the plugin gains `hooks/hooks.json`, a `SessionStart` hook with matcher
-  `compact` running `claude-wheelhouse open-items`, which prints the list for
+  `compact` running `"${WHEELHOUSE_PYTHON}" -m claude_wheelhouse open-items` (as the
+  monitor is run, since `claude-wheelhouse` may not be on the session's path), which prints the list for
   `WHEELHOUSE_SESSION_ID` (nothing when there are none). Claude Code adds a
   `SessionStart` hook's output to the context.
 
@@ -147,8 +148,8 @@ is the moment it has forgotten them), and no agent, decision or permission items
 
 - Command line: `--keepalive-hours N` (`features.KEEPALIVE_FLAG`), on the app and the
   daemon, as `--usage-mode` is.
-- `.env`: `keepalive-hours=N` (`features.KEEPALIVE_KEYS = ("keepalive-hours",
-  "KEEPALIVE_HOURS", "keepalive_hours")`), in the starting directory's `.env` or
+- `.env`: `keepalive-hours=N` (`features.KEEPALIVE_KEYS = ("keepalive-hours",)`, lower
+  case only, as `port` is), in the starting directory's `.env` or
   `~/.config/claude-wheelhouse/.env`.
 - `features.keepalive_hours()`: the flag, else the starting directory's `.env`, else the
   user's, else 8. A positive number, fractions allowed; 0 turns the keepalive off. Any

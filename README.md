@@ -244,8 +244,10 @@ how to work.
 - [The `wheelhouse` MCP server](claude_wheelhouse/mcp_server.py): the tools the session
   posts and reads through. Each tool's description is its docstring.
 - [The monitor](claude_wheelhouse/monitor.py) ([plugin entry](claude_wheelhouse/plugin/monitors/monitors.json))
-  delivers your answers, the End and Park requests, and the note an adopted session gets
-  on joining, as `[wheelhouse]` notifications.
+  delivers your answers, the End and Park requests, the note an adopted session gets
+  on joining, and the keepalive and check messages, as `[wheelhouse]` notifications.
+- [The plugin's hook](claude_wheelhouse/plugin/hooks/hooks.json): after a compaction,
+  the session's open tasks and questions.
 
 `claude-wheelhouse protocol` prints all of it in one go, exactly as a session receives it,
 along with the launch command.
@@ -378,6 +380,19 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
 - When a session finishes a task, drops one, answers a question or posts a new task or
   question, the tool's reply lists what is in doubt, as `Still open: T1 waiting, Q2 reply
   owed`. Nothing is added when nothing is in doubt.
+- While you're away, a session over 150k tokens of context that waits on you or has an
+  item in doubt gets a `[wheelhouse]` message 55 minutes after its last turn, and every 55
+  minutes after that. It keeps the session's prompt cache warm (a cold one is written again
+  whole), and with an item in doubt it is the check, `Check: T1 running, Q2 reply owed`,
+  which the session answers by correcting what's finished. It stops once the session has
+  been quiet 8 hours. `--keepalive-hours N` (on the app or `claude-wheelhouse daemon`), or
+  `keepalive-hours=N` in a `.env` (the one in the directory you start the app from, or
+  `~/.config/claude-wheelhouse/.env`), sets another limit; fractions are allowed and 0
+  turns it off. Each message costs one request, which reads the cached context: for a
+  quiet session that is much cheaper than writing the cache again when you come back.
+- After a compaction, the session is told its open tasks and questions, with their titles,
+  once, by the plugin's hook ([`hooks.json`](claude_wheelhouse/plugin/hooks/hooks.json),
+  which runs `claude-wheelhouse open-items`).
 
 ## Where state lives
 

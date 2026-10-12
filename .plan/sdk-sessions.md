@@ -300,16 +300,18 @@ The hosts' cache writes are the 1 h kind (the transcripts' `ephemeral_1h_input_t
 so an hour's quiet is what turns the cache cold.
 
 - **Keepalive.** A session whose last turn ended over `KEEPALIVE_TOKENS` (150k), with
-  nothing running and waiting on the person (an open question, or an
+  nothing running, not parked, and waiting on the person (an open question, or an
   unseen decision, of its own: a permission or AskUserQuestion waits inside a running turn,
-  so never brings one), gets a tiny turn from the host
+  so never brings one) or with an item in doubt (`Store.in_doubt`, `.plan/item-sync.md`),
+  gets a tiny turn from the host
   `KEEPALIVE_AFTER` (55 min) after its last one, telling it to reply with one word and do
-  nothing else. It leaves the activity line as it found it (an error's or Interrupt's),
+  nothing else, or, with an item in doubt, the check line naming those items. It leaves the activity line as it found it (an error's or Interrupt's),
   unless it fails itself; an interrupted keepalive leaves it too. That keeps the hour's
   cache warm for a few thousand tokens of reads instead of a cold rewrite of the whole
   context. The keepalive's own end restarts the 55 minutes but not the quiet time, so they
-  stop once the session has been quiet `KEEPALIVE_FOR` (8 h): an abandoned session doesn't
-  pay for ever. A host just started (or just back from a shell tab) sends none until a
+  stop once the session has been quiet `features.keepalive_hours()` (8 h unless
+  `--keepalive-hours` or `keepalive-hours=` in a `.env` says otherwise; 0 turns it off,
+  and the hub passes it to each host): an abandoned session doesn't pay for ever. A host just started (or just back from a shell tab) sends none until a
   turn of its own has ended, since it can't know the cache is warm. Compact under way, a
   pending permission and a turn Claude Code started itself all hold it off, and so does a
   last turn that compacted the context: there is no cache to preserve, until a turn ends
