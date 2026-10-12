@@ -1455,8 +1455,8 @@ BUTTONS = {
     "park": ("Park (P in the session list): a running session writes its handoff notes into its items, then stops; "
              "it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark"),
     "end": ("Stop & Forget, or Forget (Delete or Backspace in the session list): a running session does its own end "
-            "steps, then stops and its wheelhouse data is deleted; one not running is deleted at once, once you "
-            "confirm. Adopt brings a forgotten one back"),
+            "steps, then stops and its wheelhouse data is deleted (confirmed first if answers are queued for it); one "
+            "not running is deleted at once, once you confirm. Adopt brings a forgotten one back"),
 }
 # keys for the buttons that have no other: each presses its button on the screen in front,
 # outside a text box (whose letters and digits are typing). 1, 2 and 3 number the
@@ -3282,12 +3282,14 @@ class WheelhouseApp(App):
         if sid:
             n = len(self.client.drafts(sid))
             lost = f" {n} queued answer(s) will be discarded." if n else ""
-            self.lifecycle(sid, "end", f"Forget {self.label(sid)}? Its wheelhouse data is deleted.{lost}")
+            self.lifecycle(sid, "end", f"Forget {self.label(sid)}? Its wheelhouse data is deleted.{lost}",
+                           ask=f"Stop & Forget {self.label(sid)}?{lost}" if n else None)
 
-    def lifecycle(self, sid: str, what: str, act: str) -> None:
+    def lifecycle(self, sid: str, what: str, act: str, ask: str | None = None) -> None:
         """Park or Forget, as hub.VERBS says for the session's state. A running session is
-        asked, without a confirm; one asked already is pressed again to cancel or force. One
-        not running is acted on at once, confirmed first where VERBS says (act)."""
+        asked, confirmed first only with something to lose (ask: Stop & Forget with answers
+        queued, which go with its row); one asked already is pressed again to cancel or force.
+        One not running is acted on at once, confirmed first where VERBS says (act)."""
         if not self.running(sid):
             confirm = VERBS[(self.state(self.row(sid)), what)][1]
             if confirm:
@@ -3297,7 +3299,9 @@ class WheelhouseApp(App):
             return
         pending = self.pending(sid)
         verb = VERBS[("active", what)][0]
-        if pending is None:
+        if pending is None and ask:
+            self.push_screen(Confirm(ask), lambda yes: yes and self.ask(sid, what))
+        elif pending is None:
             self.ask(sid, what)
         elif pending != what:
             self.notify(f"the session has already been asked to {VERBS[('active', pending)][0].lower()}: "

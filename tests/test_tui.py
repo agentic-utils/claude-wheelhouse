@@ -1078,6 +1078,11 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
         for _ in range(3):
             await pilot.pause()
         desc = f"Down, {burst} from the {where} list, {'following A' if filtered else 'unfiltered'}"
+        if (where, burst) == ("sessions", ("delete",)):   # Forget on B, whose answers are queued: confirmed first
+            assert isinstance(app.screen, Confirm) and f"({other[:6]}," in app.screen.prompt \
+                and "2 queued answer(s) will be discarded" in app.screen.prompt, desc
+            await pilot.press("n")
+            await pilot.pause()
         current, target = (sid, (sid, mine)) if (where, filtered) == ("items", True) else \
             (other, (other, theirs) if where == "items" else (other, None))
         if burst != ("delete",):   # which closes the item, the highlight going to another
@@ -1471,8 +1476,8 @@ class Burst:
      ((0, 5), "qb", "items"), "review 14 (6): Up moves the box's cursor, not the items', then Shift+Tab goes to them"),
     ("session-list", "qa", ("r", "down"), lambda b: b.asked(), "alpha", "R renames the session it was on"),
     ("session-list", "qa", ("p", "down"), lambda b: b.requested(), "alpha:park", "P asks the session it was on to park"),
-    ("session-list", "qa", ("delete", "down"), lambda b: b.requested(), "alpha:end",
-     "Delete asks the session it was on to stop and forget"),
+    ("session-list", "qa", ("delete", "down"), lambda b: b.asked(), "alpha",
+     "Delete on the session it was on confirms first, its queued answer at stake"),
     ("items", "qa", ("i", "down"), lambda b: (b.command("alpha"), b.command("bravo")), ("interrupt", None),
      "I interrupts the session of the item it was on"),
     ("items", "qa", ("c", "down"), lambda b: b.asked(), "alpha", "C compacts the session of the item it was on"),

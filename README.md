@@ -224,7 +224,8 @@ session.
   handoff notes into its items, then it parks and stops (its tab closes); on one not running
   it parks at once. On a Parked session, Relaunch is captioned Unpark, and `P` and `L` both
   press it. Forget deletes a session's wheelhouse data: on a running one, Stop & Forget asks it
-  to do its own end steps first, then it stops; on one not running it asks you to confirm. A
+  to do its own end steps first, then it stops (it asks you first only if answers are queued for
+  it, which go with it); on one not running it asks you to confirm. A
   pending Park or Stop & Forget is pressed again to choose: `C` cancels the request, `F` forces
   it (the session is stopped at once, without its steps), `Esc` leaves it be. In the session's
   tab, `/wheelhouse park` and `/wheelhouse end` do the same from there. A tab closes once its

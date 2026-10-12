@@ -36,20 +36,25 @@ async def press(app, pilot, button, *keys):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("button, state, parked, keys, kept, want_parked, end_flag, park_flag, desc", [
-    ("#end", "live", 0, [], True, 0, True, False, "Stop & Forget on an Active session asks it, with no confirm"),
-    ("#end", "stalled", 0, [], True, 0, True, False, "so on a quiet one"),
-    ("#end", "dead", 0, ["y"], False, None, None, None, "Forget on an Available session deletes it, once confirmed"),
-    ("#end", "dead", 0, ["n"], True, 0, False, False, "backed out of at the confirm"),
-    ("#end", "live", 1, [], True, 0, True, False,
+@pytest.mark.parametrize("button, state, parked, queued, keys, kept, want_parked, end_flag, park_flag, desc", [
+    ("#end", "live", 0, 0, [], True, 0, True, False, "Stop & Forget on an Active session asks it, with no confirm"),
+    ("#end", "live", 0, 2, ["y"], True, 0, True, False,
+     "with answers queued, it confirms first, naming how many go: 2 queued answer(s) will be discarded"),
+    ("#end", "live", 0, 2, ["n"], True, 0, False, False, "and backs out, the answers kept"),
+    ("#end", "stalled", 0, 0, [], True, 0, True, False, "so on a quiet one"),
+    ("#end", "dead", 0, 0, ["y"], False, None, None, None, "Forget on an Available session deletes it, once confirmed"),
+    ("#end", "dead", 0, 0, ["n"], True, 0, False, False, "backed out of at the confirm"),
+    ("#end", "live", 1, 0, [], True, 0, True, False,
      "a running row parked under the old rules is unparked at the hub's first start, then asked (round-3 #1)"),
-    ("#end", "dead", 1, ["y"], False, None, None, None, "Forget on a Parked session deletes it, once confirmed"),
-    ("#park", "live", 0, [], True, 0, False, True, "Park on an Active session asks it, with no confirm"),
-    ("#park", "stalled", 0, [], True, 0, False, True, "so on a quiet one"),
-    ("#park", "dead", 0, [], True, 1, False, False, "Park on an Available session parks it at once, asking nothing"),
+    ("#end", "dead", 1, 0, ["y"], False, None, None, None, "Forget on a Parked session deletes it, once confirmed"),
+    ("#park", "live", 0, 0, [], True, 0, False, True, "Park on an Active session asks it, with no confirm"),
+    ("#park", "stalled", 0, 0, [], True, 0, False, True, "so on a quiet one"),
+    ("#park", "dead", 0, 0, [], True, 1, False, False, "Park on an Available session parks it at once, asking nothing"),
 ])
 async def test_buttons_ask_running_sessions_and_act_on_dead_ones(
-        store, sid, monkeypatch, button, state, parked, keys, kept, want_parked, end_flag, park_flag, desc):
+        store, sid, monkeypatch, button, state, parked, queued, keys, kept, want_parked, end_flag, park_flag, desc):
+    for n in range(queued):
+        store.queue(sid, f"answer {n}", None)
     store.set_parked(sid, bool(parked))
     fake_status(monkeypatch, state)
     launched = []
@@ -59,6 +64,7 @@ async def test_buttons_ask_running_sessions_and_act_on_dead_ones(
     async with app.run_test(size=(160, 40)) as pilot:
         prompts = await press(app, pilot, button, *keys)
     assert all("demo" in p for p in prompts), f"{desc}: the confirm names the session"
+    assert not queued or not keys or f"{queued} queued answer(s) will be discarded" in prompts[0], desc
     assert launched == [], f"{desc}: nothing launched"
     s = store.session(sid)
     assert (s is not None) == kept, desc
