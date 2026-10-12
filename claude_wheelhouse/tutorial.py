@@ -7,7 +7,7 @@ prompt) comes back as an SDK-only top-up (.plan/tutorial.md). Following the conv
 tab's too: it is read from the session's transcript, whichever way it runs.
 
 The checklist outlives the session for its last step: once the session has ended it shows
-End and Start your own until a session of the person's own exists, or the app next starts
+Forget and Start your own until a session of the person's own exists, or the app next starts
 (current, drop_ended).
 
 The tutorial session is the one whose directory is the tutorial's own scratch directory
@@ -75,10 +75,10 @@ STEPS = (
      "for a change in the answer box under it: Ctrl+Enter queues it and, as it runs in a tab, Ctrl+S sends "
      "it. Its turns show as it works"),
     ("decision", "Read and close the decision", "highlight D1 to read it, then Delete (or Backspace) in the item list closes it, as it does a question"),
-    ("end", "End the session", "highlight it in the session list, then End below: its items go with it, "
-     "and its tab can be closed"),
+    ("end", "Forget the session", "highlight it in the session list, then Stop & Forget below (or Delete): it "
+     "does its end steps, its items go with it, and its tab closes"),
     ("new", "Start your own", "N opens New: pick a directory, give it an opening brief, and it starts. "
-     "After a reboot, Shift+S restores your sessions"),
+     "After a reboot, Shift+L relaunches your sessions"),
 )
 AFTER_END = ("end", "new")   # the steps the checklist keeps once the session has ended (current)
 
@@ -119,7 +119,7 @@ def steps(store: Store, sid: str, seen: set[str], before=None) -> list[tuple[str
     only the screen knows about (a question opened, a turn watched arriving), `before` the
     sessions there were as the tutorial started (None, from a record without them: Start your
     own can't tick, as every session would look new). Once its session has ended, only the steps
-    after it (AFTER_END), End done."""
+    after it (AFTER_END), Forget done."""
     ended = store.session(sid) is None
     items = {it["ref"]: it for it in store.items(sid)}
     questions = {ref for ref, it in items.items() if it["kind"] == "question"}
@@ -157,7 +157,7 @@ def record(store: Store) -> dict:
 
 def current(store: Store) -> tuple[str, list] | None:
     """The checklist, if one shows: the tutorial session's steps, or, once that has ended,
-    End and Start your own, until a session of the person's own exists (its record is then
+    Forget and Start your own, until a session of the person's own exists (its record is then
     cleared, so ending that session doesn't bring the checklist back) or the app next starts
     (drop_ended). Only a tutorial prepare() recorded is followed past its end: an earlier
     version's record has no before."""

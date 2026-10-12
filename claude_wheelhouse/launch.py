@@ -317,7 +317,7 @@ def run(sid: str) -> None:
     other = liveness.running_pid(sid)   # e.g. adopted, but its old tab never ran /exit
     if other:
         sys.exit(f"claude-wheelhouse: session {session['name'] or sid} is still running (pid {other}): "
-                 "type /exit in its tab, then restore it from the wheelhouse")
+                 "type /exit in its tab, then relaunch it from the wheelhouse")
     pid = os.getpid()
     if not store.register_if_free(sid, pid, liveness.start_time(pid), liveness.boot_id(), liveness.is_alive):
         sys.exit(f"claude-wheelhouse: session {session['name'] or sid} is already running in another tab")

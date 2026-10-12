@@ -104,21 +104,6 @@ async def test_finished_items_toggle_in_and_take_a_message(store, sid):
 
 
 @pytest.mark.anyio
-async def test_restore_all_only_launches_dead_sessions(store, sid, tmp_path, monkeypatch):
-    parked = store.create_session(str(tmp_path), name="parked")
-    store.set_parked(parked, True)
-    launched = []
-    monkeypatch.setattr(launch, "open_tab", lambda s, i: launched.append(i))
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        app.session_list.focus()
-        await pilot.press("S")   # in the footer now, not a button (#62)
-        await pilot.press("y")
-        await pilot.pause()
-    assert launched == [sid]
-
-
-@pytest.mark.anyio
 async def test_timers_keep_running_under_a_dialog(store, sid):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -151,7 +136,7 @@ async def test_sending_to_an_ended_session_does_not_crash(store, sid):
 
 
 @pytest.mark.anyio
-async def test_a_refused_restore_leaves_the_session_parked(store, sid, monkeypatch):
+async def test_a_refused_unpark_leaves_the_session_parked(store, sid, monkeypatch):
     """Review #8: unpark only once the launch has gone through."""
     store.set_parked(sid, True)
 
@@ -161,7 +146,7 @@ async def test_a_refused_restore_leaves_the_session_parked(store, sid, monkeypat
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.click("#restore")
+        await pilot.click("#relaunch")   # Unpark, on a parked session
         await pilot.pause()
     assert store.session(sid)["parked"] == 1
 
@@ -625,7 +610,7 @@ def by_name(monkeypatch, statuses: dict[str, str]) -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("status, left, note, desc", [
-    ("dead", ["a"], "demo isn't running: Restore it first", "a dead session refuses, as its hidden Send, its drafts kept"),
+    ("dead", ["a"], "demo isn't running: Relaunch it first", "a dead session refuses, as its hidden Send, its drafts kept"),
     ("live", [], "sent 1 to demo", "a live session sends its queue"),
     ("stalled", [], "sent 1 to demo", "a stalled session is still running, so it sends too"),
 ])
@@ -658,7 +643,7 @@ ALL_KEPT = {"demo": ["a"], "gone": ["b", "c"], "slow": ["d"]}
     (ALL_DEAD, True, "Send all (0)", ALL_KEPT, "Send all (0): nothing to do",
      "only dead sessions have drafts: Shift+A finds nothing to do"),
     (ALL_DEAD, False, "Send all (0)", ALL_KEPT,
-     "nothing queued for a running session: a dead one's queue waits until it's restored",
+     "nothing queued for a running session: a dead one's queue waits until it's relaunched",
      "only dead sessions have drafts, pressed before the bar repainted: nothing sent, and it says why"),
 ])
 async def test_send_all_skips_dead_sessions(store, sid, tmp_path, monkeypatch, statuses, by_key, label, left, note,
@@ -705,9 +690,9 @@ async def test_the_hint_mentions_ctrl_s_only_where_it_sends(store, sid, monkeypa
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("status, down, note, desc", [
-    ("dead", 1, "queued for Q1, but the session isn't running: Restore it, then Ctrl+S or Send sends its queue",
+    ("dead", 1, "queued for Q1, but the session isn't running: Relaunch it, then Ctrl+S or Send sends its queue",
      "an answer queued for a dead session's question says its queue isn't running"),
-    ("dead", 0, "queued for the session, but the session isn't running: Restore it, then Ctrl+S or Send sends "
+    ("dead", 0, "queued for the session, but the session isn't running: Relaunch it, then Ctrl+S or Send sends "
      "its queue", "a general message queued for a dead session says the same"),
     ("live", 1, "queued for Q1: Ctrl+S or Send sends the session's queue", "a live session's queue just waits"),
 ])
@@ -885,12 +870,10 @@ async def park_live(app, pilot, sid):
     LIVE.add(sid)
     app.refresh_data()
     await pilot.pause()
-    await pilot.click("#park")
-    await pilot.pause()
-    await pilot.press("y")
+    await pilot.click("#park")   # asked at once: no confirm
     await pilot.pause()
     app.store.set_parked(sid, True)
-    LIVE.discard(sid)   # and its host goes: Unpark still shows, on a parked dead session
+    LIVE.discard(sid)   # and it stops: Unpark shows, on a Parked session
     app.refresh_data()
 
 
@@ -899,7 +882,7 @@ async def step(app, pilot, how, sid, other):
     if how == "park":
         await park_live(app, pilot, sid)
     elif how in ("unpark", "end"):
-        await pilot.click("#park" if how != "end" else "#end")
+        await pilot.click("#relaunch" if how == "unpark" else "#end")   # Unpark is Relaunch, captioned
         await pilot.pause()
         if how != "unpark":
             await pilot.press("y")
@@ -982,7 +965,8 @@ async def test_one_current_session_whatever_happens(store, sid, tmp_path, monkey
                                                     filtered_current, desc, filtered):
     """D22, after review 10: the session list's highlight is the current session, and the
     selection, the box, the hint, the modules and the info box never describe another."""
-    some_live(monkeypatch)   # all dead: End deletes at once, on a yes
+    some_live(monkeypatch)   # all dead: Forget deletes at once, on a yes
+    monkeypatch.setattr(launch, "restore_session", lambda *a, **kw: None)   # Unpark relaunches
     store.set_mode(sid, "immediate")
     mine = store.post_item(sid, "question", "A's")
     if "permission" in steps:
@@ -1111,7 +1095,7 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("where, burst, desc", [
-    ("sessions", ("down", "e"), "End, pressed by its key: asks about B"),
+    ("sessions", ("down", "delete"), "Forget, pressed by its key (Delete): asks about B"),
     ("items", ("down", "enter"), "Enter: opens B's question full screen"),
 ])
 @pytest.mark.both
@@ -1447,6 +1431,11 @@ class Burst:
     def sent(self, who: str) -> int:
         return len(self.store.pending(self.sids[who]))
 
+    def requested(self) -> str | None:
+        """The session asked to park or forget, and which: who:what."""
+        return next((f"{who}:{what}" for who, sid in self.sids.items() for what in ("park", "end")
+                     if self.store.session(sid)[f"{what}_requested_at"]), None)
+
     def command(self, who: str) -> str | None:
         return self.store.session(self.sids[who])["host_command"]
 
@@ -1481,8 +1470,9 @@ class Burst:
     ("lines", "qb", ("up", "shift+tab"), lambda b: (b.app.answer.cursor_location, b.cursor(), b.focus()),
      ((0, 5), "qb", "items"), "review 14 (6): Up moves the box's cursor, not the items', then Shift+Tab goes to them"),
     ("session-list", "qa", ("r", "down"), lambda b: b.asked(), "alpha", "R renames the session it was on"),
-    ("session-list", "qa", ("p", "down"), lambda b: b.asked(), "alpha", "P parks the session it was on"),
-    ("session-list", "qa", ("e", "down"), lambda b: b.asked(), "alpha", "E ends the session it was on"),
+    ("session-list", "qa", ("p", "down"), lambda b: b.requested(), "alpha:park", "P asks the session it was on to park"),
+    ("session-list", "qa", ("delete", "down"), lambda b: b.requested(), "alpha:end",
+     "Delete asks the session it was on to stop and forget"),
     ("items", "qa", ("i", "down"), lambda b: (b.command("alpha"), b.command("bravo")), ("interrupt", None),
      "I interrupts the session of the item it was on"),
     ("items", "qa", ("c", "down"), lambda b: b.asked(), "alpha", "C compacts the session of the item it was on"),
@@ -1637,8 +1627,8 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
      "review 16 (3): Enter on Browse opens the picker, and the Esc behind it closes the picker, not New session"),
     ("session-list", "alpha", ("p", "f", "y"), {"stack": ("Screen",), "parked": True},
      "F on the Choice asks to confirm Force, and the Y behind it confirms"),
-    ("session-list", "alpha", ("p", "c", "p"), {"stack": ("Screen", "Confirm"), "pending": None},
-     "C cancels the request before the P behind it, which asks afresh"),
+    ("session-list", "alpha", ("p", "c", "p"), {"stack": ("Screen",), "pending": "park"},
+     "C cancels the request before the P behind it, which asks afresh, with no confirm"),
     ("session-list", "alpha", ("m", "down", "enter"), {"stack": ("Screen",), "model": "claude-sonnet-5-5"},
      "M opens Model, Down moves to the next model before Enter takes it"),
     ("items", "qa", ("m", "enter", "q"), {"stack": ("Screen",), "model": "claude-opus-5-5", "quit": True},
@@ -2115,8 +2105,8 @@ async def test_ctrl_a_copies_all_of_a_long_conversation(store, sid, tmp_path, mo
     assert copied == [expected]
 
 
-async def restore_button(pilot):
-    await pilot.click("#restore")
+async def relaunch_button(pilot):
+    await pilot.click("#relaunch")
 
 
 async def select_in_inbox(pilot):
@@ -2125,7 +2115,7 @@ async def select_in_inbox(pilot):
 
 
 @pytest.mark.parametrize("how, desc", [
-    (restore_button, "the Restore button"),
+    (relaunch_button, "the Relaunch button"),
     (select_in_inbox, "selecting the dead session in the inbox, then y"),
 ])
 @pytest.mark.anyio
@@ -4073,12 +4063,13 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
 @pytest.mark.parametrize("size, half", [((80, 24), False), ((100, 30), True), ((160, 40), True)])
 @pytest.mark.parametrize("status, parked, shown, desc", [
     ("live", True, ["rename", "relaunch", "park", "end", "model", "mode", "send", "interrupt", "compact", "shell"],
-     "a running hosted session, parked and too old to queue: the longest captions"),
+     "a running hosted session too old to queue, parked under the old rules (Active once the hub starts): the "
+     "longest captions"),
     ("live", False, ["rename", "relaunch", "park", "end", "model", "mode", "send", "interrupt", "compact", "shell"],
-     "a running one: no Restore"),
-    ("dead", False, ["restore", "park", "end", "mode"],
-     "a dead one: Restore, Park and End, nothing to interrupt, and no Send: it can't receive (D30)"),
-    ("dead", True, ["restore", "park", "end", "mode"], "a parked dead one: Unpark in Park's place"),
+     "an Active one: Stop & Forget"),
+    ("dead", False, ["relaunch", "park", "end", "mode"],
+     "an Available one: Relaunch, Park and Forget, nothing to interrupt, and no Send: it can't receive (D30)"),
+    ("dead", True, ["relaunch", "end", "mode"], "a Parked one: Unpark in Relaunch's place, no Park, and Forget"),
     ("stalled", False, ["rename", "relaunch", "park", "end", "model", "mode", "send", "interrupt", "compact", "shell"],
      "a stalled one still takes what's sent"),
 ])
@@ -4120,13 +4111,15 @@ async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, half,
         column = app.query_one("#sessions-pane").content_region.height
         info = app.query_one("#session-info").region.height
         assert info == column // 2 if half else 3 <= info <= column // 2, f"{desc}: half the column, or less"
-        if "park" in shown:
-            assert str(app.query_one("#park", Button).label) == ("Unpark" if parked else "Park"), desc
+        captions = {"relaunch": "Unpark" if parked and status == "dead" else "Relaunch", "park": "Park",
+                    "end": "Forget" if status == "dead" else "Stop & Forget"}
+        assert {id_: str(app.query_one(f"#{id_}", Button).label) for id_ in captions if id_ in shown} == \
+            {id_: caption for id_, caption in captions.items() if id_ in shown}, f"{desc}: captioned for its state"
         if status == "live":
             assert str(app.query_one("#mode", Button).label) == "Can't queue: relaunch", desc
         drawn = "".join(seg.text for seg in strips[app.screen.query_one(Footer).region.y])
-        assert size[0] < 100 or all(f"{key} {label}" in drawn for key, label in (("N", "New"), ("A", "Adopt"), ("Shift+S", "Restore all"))), \
-            f"{desc}: New, Adopt and Restore all in the footer (at 80 it scrolls), got {drawn!r}"
+        assert size[0] < 100 or all(f"{key} {label}" in drawn for key, label in (("N", "New"), ("A", "Adopt"), ("Shift+L", "Relaunch all"))), \
+            f"{desc}: New, Adopt and Relaunch all in the footer (at 80 it scrolls), got {drawn!r}"
 
 
 def splitter(app, key: str) -> Splitter:
@@ -4337,12 +4330,12 @@ async def test_parked_sessions_stay_in_the_list_after_the_rest(store, sid, tmp_p
 def test_the_keys_overlay_has_relaunch_and_no_tabs():
     from claude_wheelhouse.tui import keys_help
     text = keys_help(sdk=True)
-    assert "Relaunch (L in the session list):" in text and "Sessions tab" not in text and "Inbox tab" not in text
+    assert "Relaunch / Unpark (L in the session list):" in text and "Sessions tab" not in text and "Inbox tab" not in text
     for key in ("**I**", "**C**", "**H**", "**1**", "**2**", "**3**", "**Shift+A**", "**Tab**", "**Shift+Tab**",
                 "## Tab order"):
         assert text.count(key) == 1, f"{key} listed once (#73)"
     assert text.count("Show or hide finished items") == 1, "F once, though it has two bindings"
-    assert text.count("Shift+S") == 1, "Shift+S once, though it has two bindings"
+    assert text.count("Shift+L") == 1 and "Shift+S" not in text, "Shift+L once, though it has two bindings; Shift+S unbound"
 
 
 def session_names(app) -> list[str]:
@@ -4367,7 +4360,8 @@ async def test_the_cursor_stays_on_a_session_that_moves(store, sid, tmp_path, mo
         app.session_list.move_cursor(row=app.session_list.get_row_index(ids[start]))
         await pilot.pause()
         if parked:
-            await pilot.click("#park")
+            monkeypatch.setattr(launch, "restore_session", lambda *a, **kw: None)
+            await pilot.click("#relaunch")   # Unpark
         else:
             await park_live(app, pilot, ids[start])
         await pilot.pause()
@@ -4398,10 +4392,11 @@ async def test_tab_goes_from_the_session_list_to_the_items(store, sid):
 @pytest.mark.parametrize("key, button, live, desc", [
     ("r", "rename", True, "R renames"),
     ("l", "relaunch", True, "L relaunches"),
-    ("s", "restore", False, "S restores"),
+    ("l", "relaunch", False, "L relaunches one that isn't running"),
     ("p", "park", True, "P parks"),
     ("p", "park", False, "P parks a dead one too"),
-    ("e", "end", True, "E ends"),
+    ("delete", "end", True, "Delete forgets (Stop & Forget)"),
+    ("backspace", "end", False, "so does Backspace, on one that isn't running"),
 ])
 async def test_the_session_lists_keys_press_its_buttons(store, sid, monkeypatch, key, button, live, desc):
     """The buttons are out of the Tab order, so the list's keys keep them on the keyboard.

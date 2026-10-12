@@ -5,7 +5,7 @@ itself, it says as events (Event) to whoever listens.
 
 It owns the sessions' liveness, and Relaunch, from the stop to the start again. Like the
 app before it, it never acts on a session by itself: a host that dies stays dead until
-the person restores it. And it reads the sessions' transcripts: each conversation, each
+the person relaunches it. And it reads the sessions' transcripts: each conversation, each
 context size and each session's subagents, and asks the account's plan usage of a Claude
 Code it keeps in the background (plan_usage), the reading and asking on the owner's worker
 threads (spawn), never on the thread that calls it.
@@ -20,6 +20,7 @@ import json
 import os
 import signal
 import sqlite3
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -31,7 +32,24 @@ from .store import DISMISSABLE, SessionGone, Store, can_queue, mode, needs_relau
 RUNNING = ("live", "stalled", "starting")
 # a hosted session's activity when nothing is under way: errored and stopped count as resting
 RESTING = ("idle", "interrupted", "stopped", "in a shell tab", "error")
-PENDING = {"end": "ending", "park": "parking"}
+PENDING = {"end": "forgetting", "park": "parking"}
+# The four states a session is in (.plan/session-states.md): Active (running), Available
+# (not running, not parked), Parked (not running, by intent) and Forgotten (no row, so never
+# listed: Adopt offers it). Each verb on each state, (state, verb): the caption its button
+# shows and whether the person confirms first ("busy": only while it's mid-turn). Park and
+# Forget on an Active session ask it; Forget is "end" underneath, the store's word
+VERBS = {
+    ("active", "park"): ("Park", False),
+    ("active", "end"): ("Stop & Forget", False),
+    ("active", "relaunch"): ("Relaunch", "busy"),
+    ("available", "park"): ("Park", False),
+    ("available", "end"): ("Forget", True),
+    ("available", "relaunch"): ("Relaunch", False),
+    ("parked", "end"): ("Forget", True),
+    ("parked", "relaunch"): ("Unpark", False),
+}
+# set once the hub has unparked the sessions parked under the old rules but still running
+UNPARKED_RUNNING = "migrated.unparked-running"
 SDK_USAGE_EVERY = 10   # seconds between looks for an SDK session's plan usage reading
 RELAUNCH_WAIT = 30   # seconds a host has to stop for Relaunch before it gives up and says so
 AGENTS_FOLLOWED = 2   # subagent conversations followed at once: the inbox's and a full screen's
@@ -51,6 +69,14 @@ def short(sid: str) -> str:
 
 def display_name(s) -> str:
     return s["name"] or os.path.basename(s["cwd"]) or short(s["id"])
+
+
+def state(status: str, parked) -> str:
+    """A listed session's state (VERBS) from its liveness and its parked flag: running is
+    Active whatever the flag says."""
+    if status in RUNNING:
+        return "active"
+    return "parked" if parked else "available"
 
 
 def requested(s) -> str | None:
@@ -189,7 +215,20 @@ class Hub:
         # the tab sessions' keepalive (keep_warm), by session: as the host keeps its own
         self.warmth: dict[str, Warmth] = {}
         self.keepalive_for = features.keepalive_hours() * 3600   # seconds; 0: no keepalive
+        self.unpark_running()
 
+    def unpark_running(self) -> None:
+        """Once per database, at the first hub on this code: a session parked under the old
+        rules, which left it running in its tab, is unparked, so it shows as Active rather
+        than being stopped by surprise. Each one is logged."""
+        if self.store.setting(UNPARKED_RUNNING):
+            return
+        for s in self.store.sessions():
+            if s["parked"] and liveness.status(s) in RUNNING:
+                self.store.set_parked(s["id"], False)
+                print(f"wheelhouse: {display_name(s)} ({s['id']}) was parked but running: unparked, so it shows "
+                      "as Active", file=sys.stderr, flush=True)
+        self.store.set_setting(UNPARKED_RUNNING, "1")
     # events
 
     def listen(self, listener: Callable[[Event], None]) -> None:
@@ -261,6 +300,10 @@ class Hub:
     def busy(self, sid: str) -> bool:
         return working(self.listed(sid)) and self.statuses.get(sid) in ("live", "stalled")
 
+    def state(self, sid: str) -> str:
+        """The session's state (VERBS): active, available or parked."""
+        return state(self.statuses.get(sid, "dead"), self.listed(sid)["parked"])
+
     # launching and Relaunch
 
     def open_session(self, sid: str, restore: bool = False, may_tab: bool = True, elsewhere: str | None = None) -> Done:
@@ -279,7 +322,8 @@ class Hub:
         return Done()
 
     def relaunch(self, sid: str, may_tab: bool = True, elsewhere: str | None = None) -> Done:
-        """A dead session brought back where it left off, and unparked. Whether it was."""
+        """An Available or Parked session brought back where it left off, and unparked (Relaunch,
+        Unpark). Whether it was."""
         done = self.open_session(sid, restore=True, may_tab=may_tab, elsewhere=elsewhere)
         if done.ok:
             self.store.set_parked(sid, False)
@@ -427,7 +471,7 @@ class Hub:
         session whose registered process is alive, and a new host registers only if free.
         One that another wheelhouse has started meanwhile (a newer pid, alive) is relaunched
         already. A relaunch unparks, as one of a dead session does. One a hub started again
-        found past its deadline (lapsed) is let go, its host not started: Restore is the
+        found past its deadline (lapsed) is let go, its host not started: Relaunch is the
         person's. The hub does this by itself, so what happened goes to every listener."""
         for sid, (deadline, host) in list(self.relaunching.items()):
             s = next((x for x in self.sessions if x["id"] == sid), None)
@@ -437,7 +481,7 @@ class Hub:
                 self.compacting_relaunch(sid, s, host, deadline)
             elif sid in self.lapsed and not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
                 self.relaunch_under_way(sid, None)
-                self.announce(f"{display_name(s)} wasn't relaunched: Restore it", "warning")
+                self.announce(f"{display_name(s)} wasn't relaunched: Relaunch it", "warning")
             elif not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
                 # as it ran: a host again, not WHEELHOUSE_RUNNER's way
                 done = self.open_session(sid, may_tab=self.store.relaunch_may_tab(sid))
@@ -457,30 +501,25 @@ class Hub:
                 self.announce(f"{display_name(s)}'s host didn't stop within {RELAUNCH_WAIT}s, so it wasn't "
                               f"relaunched: see hosts/{sid}.log", "error")
 
-    def restore(self, sid: str, may_tab: bool = True) -> Done:
-        """Restore: only a dead session, brought back where it left off and unparked; one
-        that isn't dead is left as it is, and said so. Whether it was restored. may_tab
-        false: another machine asked, so not in a tab (open_session)."""
-        if self.statuses.get(sid) != "dead":
-            return Done(False).say("only a dead session can be restored", "warning")
-        done = self.open_session(sid, restore=True, may_tab=may_tab)
-        if done.ok:
-            self.store.set_parked(sid, False)
-        return done
+    def relaunchable(self) -> list[str]:
+        """What Relaunch all brings back: every Available session (not running, not parked)."""
+        return [s["id"] for s in self.sessions if self.state(s["id"]) == "available"]
 
-    def restorable(self) -> list[str]:
-        """What Restore all brings back: every dead session that isn't parked."""
-        return [s["id"] for s in self.sessions if self.statuses.get(s["id"]) == "dead" and not s["parked"]]
-
-    def restore_all(self, sids: list[str], may_tab: bool = True) -> Done:
-        """Restore each of the sessions the person was shown: as restore, so only a dead one,
-        and for another machine (may_tab false) not in a tab."""
+    def relaunch_all(self, sids: list[str], may_tab: bool = True) -> Done:
+        """Relaunch each of the sessions the person was shown that is Available still: one that
+        has started or been parked meanwhile is left as it is. For another machine (may_tab
+        false) not in a tab."""
         done, n = Done(), 0
         for sid in sids:
-            one = self.restore(sid, may_tab)
-            done.notices.extend(one.notices)
+            try:
+                if self.state(sid) != "available":
+                    continue
+            except SessionGone:
+                continue
+            one = self.relaunch(sid, may_tab)
+            done.notices.extend(e for e in one.notices if e.text != "relaunching")
             n += one.ok
-        return done.say(f"restoring {n} session(s)")
+        return done.say(f"relaunching {n} session(s)")
 
     def new_session(self, cwd: str, name: str, ticket: str, brief: str, runner: str, model: str | None = None,
                     effort: str | None = None) -> Done:
@@ -497,7 +536,7 @@ class Hub:
         return done
 
     def adoptable(self) -> list[adopt.Candidate]:
-        """The Claude Code sessions on disk that aren't in the wheelhouse yet (adopt.candidates)."""
+        """The Claude Code sessions on disk that have no row: forgotten, or never known (adopt.candidates)."""
         return adopt.candidates(self.store)
 
     @staticmethod
@@ -529,7 +568,7 @@ class Hub:
             return Done(False).say(f"couldn't start the tutorial: {e}", "error")
         return Done().say("tutorial started: follow the checklist on the right")
 
-    # Park and End: a running session is asked; a dead one, or one forced, is acted on
+    # Park and Forget ("end"): a running session is asked; one not running, or one forced, is acted on
 
     def ask(self, sid: str, what: str) -> Done:
         self.store.request(sid, what)
@@ -540,11 +579,11 @@ class Hub:
         return Done().say(f"{what} request cancelled")
 
     def act_on_dead(self, sid: str, what: str) -> Done:
-        """Park or End a dead session now. The confirm may have sat open while it came back:
-        then it's left as it is, and said so. Whether it was acted on."""
+        """Park or Forget a session that isn't running, now. The confirm may have sat open while
+        it came back: then it's left as it is, and said so. Whether it was acted on."""
         if liveness.status(self.row(sid), waking=self.waking) in RUNNING:
-            return Done(False).say(f"the session is running again: press {what.capitalize()} to ask it instead",
-                                   "warning")
+            verb = "Stop & Forget" if what == "end" else "Park"
+            return Done(False).say(f"the session is running again: press {verb} to ask it instead", "warning")
         return self.force(sid, what)
 
     def force(self, sid: str, what: str) -> Done:
@@ -607,7 +646,7 @@ class Hub:
             self.store.queue(target[0], text, target[1])
             if self.dead(target[0]):   # aimed names the item, so say whose queue isn't running
                 done.say(f"queued for {aimed(target)}, but the session isn't running: "
-                         "Restore it, then Ctrl+S or Send sends its queue")
+                         "Relaunch it, then Ctrl+S or Send sends its queue")
             else:
                 done.say(f"queued for {aimed(target)}: Ctrl+S or Send sends the session's queue")
         return done
@@ -624,25 +663,25 @@ class Hub:
     def sent_note(self, sid: str, n: int) -> str:
         s = self.store.session(sid)
         name = (s["name"] or short(sid)) if s else short(sid)
-        late = "" if self.running(sid) else " (not running: delivered when it's restored)"
+        late = "" if self.running(sid) else " (not running: delivered when it's relaunched)"
         return f"{n} to {name}{late}"
 
     def send_queue(self, sid: str) -> Done:
         """A session's queue, sent as one message; a dead one's stays queued (#62)."""
         if self.dead(sid):
-            return Done(False).say(f"{display_name(self.row(sid))} isn't running: Restore it first", "warning")
+            return Done(False).say(f"{display_name(self.row(sid))} isn't running: Relaunch it first", "warning")
         n = self.store.dispatch(sid)
         return Done(bool(n)).say(f"sent {self.sent_note(sid, n)}" if n else "nothing queued for that session")
 
     def send_all(self) -> Done:
-        """Every queue but a dead session's, which stays queued until it's restored (#62)."""
+        """Every queue but a dead session's, which stays queued until it's relaunched (#62)."""
         queued = dict.fromkeys(m["session_id"] for m in self.store.drafts())
         sent = [(sid, n) for sid in queued if not self.dead(sid) and (n := self.store.dispatch(sid))]
         if sent:
             return Done().say("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent))
         if any(self.dead(sid) for sid in queued):
             return Done(False).say("nothing queued for a running session: a dead one's queue waits until "
-                                   "it's restored", "warning")
+                                   "it's relaunched", "warning")
         return Done(False).say("nothing queued")
 
     def toggle_mode(self, sid: str) -> Done:
@@ -785,7 +824,7 @@ class Hub:
 
     def copy_back(self, follower: stats.UsageFollower) -> None:
         """A /model or /effort typed in a tab, carried to the session's columns, so its next
-        Relaunch, Restore or return from a shell tab launches with it (Q56), and the stats
+        Relaunch or return from a shell tab launches with it (Q56), and the stats
         pane shows it: by stats.carry's rule, last write wins. A tab session's on every read;
         a hosted session's while it is out in a shell tab (its host carries once more as it
         takes it back), not while hosted, as its host applies the columns."""

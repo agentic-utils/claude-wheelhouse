@@ -90,7 +90,6 @@ ROUTES = [
     ("POST", "/sessions/{sid}/end", {"how": "force"}, lambda store, sid, r: store.session(sid) is None, "end by force"),
     ("POST", "/sessions/{sid}/interrupt", None, lambda store, sid, r: store.session(sid)["host_command"] == "interrupt",
      "a host command"),
-    ("POST", "/sessions/{sid}/restore", None, lambda store, sid, r: r.json()["ok"], "restore a dead session"),
     ("POST", "/sessions/{sid}/relaunch", None, lambda store, sid, r: told(r) == ["relaunching"],
      "relaunch a dead one"),
     ("POST", "/items/{sid}/P1/permission", {"decision": "allow"},
@@ -874,7 +873,7 @@ async def test_the_host_is_checked_before_the_token(daemon):
 
 NEW_ROUTES = [
     ("GET", "/hello", None, lambda store, sid, r: (r.json()["api"], r.json()["ready"], r.json()["pid"])
-     == (1, False, os.getpid()), "with the token, which daemon: its API, its code, not ready before its first tick"),
+     == (2, False, os.getpid()), "with the token, which daemon: its API, its code, not ready before its first tick"),
     ("GET", "/inbox", None, lambda store, sid, r: (sorted(i["ref"] for i in r.json()["items"]),
                                                    "body" in r.json()["items"][0], r.json()["tutorial"]["sid"])
      == (["P1", "T1"], False, None), "every item, without its body, and the tutorial's state"),
@@ -887,9 +886,9 @@ NEW_ROUTES = [
     ("GET", "/adoptable", None, lambda store, sid, r: isinstance(r.json(), list), "what Adopt offers"),
     ("GET", "/adoptable/{sid}/running", None, lambda store, sid, r: r.json() == {"pid": None}, "whether it runs"),
     ("POST", "/adopt", {"id": "nosuch"}, lambda store, sid, r: r.status_code == 404, "one Adopt doesn't offer"),
-    ("POST", "/restore-all", {"sids": ["{sid}"]}, lambda store, sid, r: told(r) == ["restoring 1 session(s)"],
-     "Restore all, of those the client showed"),
-    ("POST", "/restore-all", {"sids": "x"}, lambda store, sid, r: r.status_code == 400, "a list of them"),
+    ("POST", "/relaunch-all", {"sids": ["{sid}"]}, lambda store, sid, r: told(r) == ["relaunching 1 session(s)"],
+     "Relaunch all, of those the client showed"),
+    ("POST", "/relaunch-all", {"sids": "x"}, lambda store, sid, r: r.status_code == 400, "a list of them"),
     ("GET", "/items/{sid}/{ref}/conversation", None, lambda store, sid, r: r.json() is None,
      "a subagent's conversation: none for a task"),
     ("POST", "/items/{sid}/{ref}/seen", None, lambda store, sid, r: r.json()["ok"] is False,
@@ -909,7 +908,7 @@ NEW_ROUTES = [
 async def test_each_new_route(daemon, store, sid, tmp_path, method, path, body, did, desc):
     store.post_item(sid, "task", "do it")
     store.post_item(sid, "permission", "Bash: ls")
-    if path == "/restore-all":
+    if path == "/relaunch-all":
         await daemon.on_hub(daemon.tick)   # the session dead, as the client showed it
     if path == "/tutorial/drop-ended":
         store.set_setting("tutorial_seen", json.dumps({"sid": "ended", "seen": ["open"], "before": []}))
@@ -1118,18 +1117,12 @@ GONE = "host has stopped: Relaunch it from the daemon's machine"
 
 @pytest.mark.parametrize("sdk, env, path, body, how, peer, status, said, opened_want, desc", [
     (False, "tab", "/sessions/{sid}/relaunch", {}, None, REMOTE, 403, OFF, [], "Relaunch of a dead session: a tab"),
-    (False, "tab", "/restore-all", {"sids": ["{sid}"]}, None, REMOTE, 403, OFF, [], "Restore all: tabs"),
+    (False, "tab", "/relaunch-all", {"sids": ["{sid}"]}, None, REMOTE, 403, OFF, [], "Relaunch all: tabs"),
     (False, "tab", "/adopt", {"id": "adoptee"}, None, REMOTE, 403, OFF, [], "Adopt: a tab"),
     (False, "tab", "/tutorial/offer", {"take": True}, None, REMOTE, 403, OFF, [], "the tutorial: a tab"),
     (False, "tab", "/sessions/{sid}/shell", {}, None, REMOTE, 403, OFF, [], "Shell: the host hands over to a tab"),
-    (False, "tab", "/sessions/{sid}/restore", {}, None, REMOTE, 403, OFF, [], "Restore: a tab"),
-    (True, "tab", "/sessions/{sid}/restore", {}, None, REMOTE, 200, HELD, [], "Restore: held back where it resolves"),
-    (True, "tab", "/sessions/{sid}/restore", {}, "live", REMOTE, 200, "only a dead session can be restored", [],
-     "Restore of a running session: the hub's own answer"),
-    (True, "tab", "/sessions/{sid}/restore", {}, "stale", REMOTE, 200, "only a dead session can be restored", [],
-     "live at the last tick, gone since (review 75): not restored, and no tab"),
-    (True, "tab", "/restore-all", {"sids": ["{sid}"]}, "stale", REMOTE, 200, "only a dead session can be restored",
-     [], "Restore all the same (review 75)"),
+    (True, "tab", "/relaunch-all", {"sids": ["{sid}"]}, "stale", REMOTE, 200, "relaunching 0", [],
+     "live at the last tick, gone since (review 75): not Available as shown, so left, and no tab"),
     (True, "sdk", "/sessions/{sid}/relaunch", {}, "tut", REMOTE, 200, "tut " + HELD, [],
      "SDK mode on: the tutorial is a tab all the same"),
     (True, "sdk", "/tutorial/offer", {"take": True}, None, REMOTE, 403, "it would open in a tab", [],
@@ -1139,8 +1132,8 @@ GONE = "host has stopped: Relaunch it from the daemon's machine"
      "Adopt, the same"),
     (True, "sdk", "/sessions/{sid}/relaunch", {}, None, REMOTE, 200, "relaunching", ["host"], "back by a host"),
     (True, "sdk", "/adopt", {"id": "adoptee"}, None, REMOTE, 200, "adopting", ["host"], "adopted by a host"),
-    (True, "sdk", "/restore-all", {"sids": ["{sid}", "{tut}"]}, None, REMOTE, 200, "tut " + HELD, ["host"],
-     "the rest restored, the tutorial held back"),
+    (True, "sdk", "/relaunch-all", {"sids": ["{sid}", "{tut}"]}, None, REMOTE, 200, "tut " + HELD, ["host"],
+     "the rest relaunched, the tutorial held back"),
     (False, "tab", "/tutorial/offer", {"take": False}, None, REMOTE, 200, "the wheelhouse stopped", [],
      "the offer dismissed: nothing opens"),
     (False, "tab", "/sessions/{sid}/relaunch", GONE_HOST, "host", REMOTE, 200, GONE, [],
@@ -1149,7 +1142,7 @@ GONE = "host has stopped: Relaunch it from the daemon's machine"
      "compacting first, the same"),
     (True, "tab", "/sessions/{sid}/relaunch", GONE_HOST, "host", REMOTE, 200, GONE, [], "SDK mode on, the same"),
     (False, "tab", "/sessions/{sid}/relaunch", {}, None, HERE, 200, "relaunching", ["tab"], "this machine: a tab"),
-    (False, "tab", "/restore-all", {"sids": ["{sid}"]}, None, HERE, 200, "restoring 1", ["tab"], "Restore all here"),
+    (False, "tab", "/relaunch-all", {"sids": ["{sid}"]}, None, HERE, 200, "relaunching 1", ["tab"], "Relaunch all here"),
     (False, "tab", "/adopt", {"id": "adoptee"}, None, HERE, 200, "adopting", ["tab"], "Adopt here"),
     (False, "tab", "/sessions/{sid}/relaunch", GONE_HOST, "host", HERE, 200, "relaunching", ["tab"],
      "a host gone meanwhile, here: back as a tab"),

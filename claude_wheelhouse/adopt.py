@@ -118,10 +118,10 @@ def read_transcript(path: Path) -> Candidate | None:
 
 def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = liveness.SESSIONS,
                proc: Path = liveness.PROC, now: float | None = None) -> list[Candidate]:
-    """Recent interactive sessions not open in a wheelhouse tab, most recently active first.
-    Tracked ones whose process has gone are offered again, keeping their name."""
-    tracked = {s["id"]: s for s in store.sessions()}
-    busy = {sid for sid, s in tracked.items() if liveness.status(s, proc=proc) != "dead"}
+    """Recent interactive sessions with no row in the wheelhouse (forgotten, or never known),
+    most recently active first. A tracked one, running or not, is never offered: Relaunch
+    brings back one that isn't running."""
+    tracked = {s["id"] for s in store.sessions()}
     cutoff = (now or time.time()) - WINDOW_DAYS * 86400
     paths = []
     for p in projects.glob("*/*.jsonl"):   # subagent transcripts sit a level deeper
@@ -129,7 +129,7 @@ def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = livenes
             mtime = p.stat().st_mtime
         except OSError:
             continue
-        if p.stem not in busy and mtime >= cutoff:
+        if p.stem not in tracked and mtime >= cutoff:
             paths.append((mtime, p))
     alive = liveness.running_sessions(sessions, proc)
     found = []
@@ -140,7 +140,6 @@ def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = livenes
             continue
         if c:
             c.running_pid = alive.get(c.id)
-            c.name = tracked[c.id]["name"] if c.id in tracked else ""
             found.append(c)
             if len(found) == LIMIT:
                 break

@@ -130,12 +130,12 @@ def test_candidates(store, projects, sessions, proc):
     transcript(projects, "headless", records=[record(entrypoint="sdk-cli")])
     (projects / adopt.project_folder(REPO) / "newer" / "subagents").mkdir(parents=True)
     (projects / adopt.project_folder(REPO) / "newer/subagents/agent-1.jsonl").write_text(json.dumps(record()))
-    store.create_session(REPO, name="Rare caper", sid="older")   # tracked, its tab failed: offered again
+    store.create_session(REPO, name="Rare caper", sid="older")   # tracked, its tab failed: Relaunch's, not Adopt's
     store.create_session(REPO, sid="open")
     store.register("open", 4242, 1000, "boot-1")                  # open in a wheelhouse tab: not offered
     running(sessions, "newer")
     found = adopt.candidates(store, projects, sessions, proc)
-    assert [(c.id, c.running_pid, c.name) for c in found] == [("older", None, "Rare caper"), ("newer", 4242, "")]
+    assert [(c.id, c.running_pid, c.name) for c in found] == [("newer", 4242, "")]
 
 
 @pytest.mark.parametrize("start, expected, desc", [

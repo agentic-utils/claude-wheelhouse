@@ -391,7 +391,7 @@ async def test_the_checklist_follows_the_tutorial(store, sid, tut):
         store.end(tut)
         app.refresh_data()
         await pilot.pause()
-        assert "✔ End the session\n▶ Start your own: N opens New" in app._checklist_text, \
+        assert "✔ Forget the session\n▶ Start your own: N opens New" in app._checklist_text, \
             "it outlives the session for its last step"
         assert "Open a question" not in app._checklist_text, "the steps that went with the session go too"
         own_session(store, tut, q1, None)

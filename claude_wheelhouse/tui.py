@@ -48,7 +48,7 @@ from textual.widgets import (
 
 from . import api, emoji, features, models, stats, subagents, transcript, tutorial
 from .client import LocalClient, Unreachable
-from .hub import COMPACT_RELAUNCH_WAIT, Done, Event, aimed, display_name, host_context, short
+from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .stats_pane import SessionStats
@@ -61,7 +61,7 @@ SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
 MARKED = Style(bgcolor="#3a1060")   # rows picked to close together
 DECISION = "bold #b967ff"   # an unseen decision: noticeable, not urgent
 STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "#05d9e8",
-                "dead": "bold #ff2a6d", "ending": "bold #d300c5", "parking": "bold #d300c5",
+                "dead": "bold #ff2a6d", "forgetting": "bold #d300c5", "parking": "bold #d300c5",
                 "relaunching": "bold #05d9e8"}
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
 FRAMES = 10   # frames a second that the shimmer, the eyes and the bars are counted in, whatever the rate drawn
@@ -592,11 +592,14 @@ class SessionList(SinkList):
     highlighted row and never take focus, so Tab goes straight on to the items; these keys
     press them instead."""
 
+    # E, S and Shift+S (End, Restore and Restore all before Forget and Relaunch took them
+    # over) are bound to nothing for a release, so muscle memory does nothing rather than
+    # something new. Delete and Backspace forget, as they close an item in the item list
     BINDINGS = [Binding("r", "app.press('rename')", "Rename", show=False),
                 Binding("l", "app.press('relaunch')", "Relaunch", show=False),
-                Binding("s", "app.press('restore')", "Restore", show=False),
                 Binding("p", "app.press('park')", "Park", show=False),
-                Binding("e", "app.press('end')", "End", show=False)]
+                Binding("delete", "app.press('end')", "Forget", show=False),
+                Binding("backspace", "app.press('end')", "Forget", show=False)]
 
     EYE = 8   # the Cylon eye's width (cylon)
 
@@ -807,8 +810,7 @@ class Compose(TextArea):
 
 # the current session's lifecycle buttons, (caption, id), under the session list: each
 # shown only where it applies (#62)
-LIFECYCLE = (("Rename", "rename"), ("Relaunch", "relaunch"), ("Restore", "restore"), ("Park", "park"), ("End", "end"),
-             ("Model", "model"))
+LIFECYCLE = (("Rename", "rename"), ("Relaunch", "relaunch"), ("Park", "park"), ("Forget", "end"), ("Model", "model"))
 # a session's conversation buttons, (caption, id, variant): under those, for the current
 # session, highlighted there (D20); in a full-screen item's bar, for its session
 CONVERSATION = (("Mode", "mode", "default"), ("Send", "send", "primary"), ("Interrupt", "interrupt", "error"),
@@ -818,6 +820,9 @@ CONVERSATION = (("Mode", "mode", "default"), ("Send", "send", "primary"), ("Inte
 # each root's buttons by id, as show_button found them: they live as long as it does, and
 # finding them again each second was a good part of the refresh
 HELD_BUTTONS: weakref.WeakKeyDictionary[Widget, dict[str, Button]] = weakref.WeakKeyDictionary()
+
+
+WIDE_CAPTION = 12   # cells a lifecycle button's caption has in the session pane's three-column grid
 
 
 def show_button(root: Widget, button_id: str, label: str, disabled: bool, shown: bool = True) -> None:
@@ -831,6 +836,8 @@ def show_button(root: Widget, button_id: str, label: str, disabled: bool, shown:
         held[button_id] = button
     if str(button.label) != label:
         button.label = label
+        # a caption past a grid cell's room (Stop & Forget) spans two, as Mode does
+        button.set_class(len(label) > WIDE_CAPTION, "wide")
     button.disabled = disabled
     button.display = shown
 
@@ -1386,13 +1393,13 @@ def key_name(key: str) -> str:
 DESCRIBE = {
     "submit": "Submit what's typed: queued, or sent at once, by the session's mode",
     "app.submit": "Submit what's typed: queued, or sent at once, by the session's mode",
-    "send_session": "Send the current session's queue (a dead one's waits: Restore it first)",
+    "send_session": "Send the current session's queue (a dead one's waits: Relaunch it first)",
     "toggle_mode": "Switch the session between Queued and Immediate",
     "recall": ("Take this item's latest queued answer back into the box; with none queued, in the item list, "
                "reopen the highlighted finished item (or every marked one)"),
     "new_session": "New session",
     "adopt": "Adopt: pick a Claude Code session that isn't in the wheelhouse yet, from those on disk",
-    "restore_all": "Restore all: every dead session that isn't parked",
+    "relaunch_all": "Relaunch all: every Available session (not running, not parked)",
     "clear_filter": "Clear a text selection first, then the marks, else show every session's items again",
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
@@ -1406,10 +1413,9 @@ DESCRIBE = {
     "select_all": "Select all of it, to copy",
     "leave": "Back to the inbox",
     "app.press('rename')": "Rename the highlighted session",
-    "app.press('relaunch')": "Relaunch it",
-    "app.press('restore')": "Restore it, if it's dead",
-    "app.press('park')": "Park or unpark it",
-    "app.press('end')": "End it",
+    "app.press('relaunch')": "Relaunch it, or Unpark a parked one",
+    "app.press('park')": "Park it, or Unpark a parked one",
+    "app.press('end')": "Forget it (Stop & Forget while it's running)",
     "press('interrupt')": "Interrupt the session's current turn",
     "press('compact')": "Compact the session",
     "press('shell')": "Shell: open the session in a Claude Code tab",
@@ -1421,7 +1427,7 @@ DESCRIBE = {
     "press('allow')": "Allow the permission item in context",
     "press('always')": "Always: allow it, and keep the rule",
     "press('deny')": "Deny it, with what's typed in its box as what to do instead",
-    "press('send-all')": "Send all: every running session's queue (a dead one's waits until it's restored)",
+    "press('send-all')": "Send all: every running session's queue (a dead one's waits until it's relaunched)",
     "cursor_up": "Up a row",
     "cursor_down": "Down a row",
     "page_up": "Up a page",
@@ -1435,7 +1441,7 @@ DESCRIBE = {
 BUTTONS = {
     "mode": "Mode (Ctrl+T): the session's send mode, Queued or Immediate",
     "send": "Send (Ctrl+S): send the session's queued answers as one message; its caption counts them",
-    "send-all": "Send all (Shift+A), above the footer: send every running session's queue; a dead one's waits until it's restored",
+    "send-all": "Send all (Shift+A), above the footer: send every running session's queue; a dead one's waits until it's relaunched",
     "allow": "Allow (1; over the answer box, on a permission item): let the tool call run, at once",
     "always": "Always (2): allow it, and keep the rule Claude Code suggests",
     "deny": "Deny (3): refuse it (or type what to do instead and press Ctrl+Enter: denied with that, at once)",
@@ -1443,15 +1449,18 @@ BUTTONS = {
     "compact": "Compact (C): the session says what to keep, then is compacted with that",
     "shell": "Shell (H): open the session in a real Claude Code tab; it comes back when you /exit",
     "model": "Model (M): change the model a session run in the wheelhouse runs on, live; its prompt cache goes with the old one",
-    "relaunch": "Relaunch (L in the session list): stop the session and start it again where it left off (a tab session once it has exited)",
-    "restore": "Restore (S in the session list): bring back a dead session where it left off",
+    "relaunch": ("Relaunch / Unpark (L in the session list): start the session again where it left off, stopping it "
+                 "first if it's running (asked only if it's mid-turn); on a parked one, Unpark (P too)"),
     "rename": "Rename (R in the session list): the session's name in the wheelhouse",
-    "park": "Park / Unpark (P in the session list): drop a session's items off the inbox (it stays, dimmed, at the foot of the list), or bring them back",
-    "end": "End (E in the session list): the session does its own end steps, then its wheelhouse data is deleted",
+    "park": ("Park (P in the session list): a running session writes its handoff notes into its items, then stops; "
+             "it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark"),
+    "end": ("Stop & Forget, or Forget (Delete or Backspace in the session list): a running session does its own end "
+            "steps, then stops and its wheelhouse data is deleted; one not running is deleted at once, once you "
+            "confirm. Adopt brings a forgotten one back"),
 }
 # keys for the buttons that have no other: each presses its button on the screen in front,
 # outside a text box (whose letters and digits are typing). 1, 2 and 3 number the
-# permission answers as Claude Code's own prompt does. Shift+A twice, as Shift+S
+# permission answers as Claude Code's own prompt does. Shift+A twice, as Shift+L
 BUTTON_KEYS = [
     Binding("i", "press('interrupt')", "Interrupt", show=False),
     Binding("c", "press('compact')", "Compact", show=False),
@@ -1482,7 +1491,7 @@ TABS = ("Tab goes round the panes: the session list, the items, the answer box, 
 SEND_RULES = (
     "**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the "
     "session's queue as one message, so related answers arrive together; ✉ counts what's queued. "
-    "A dead session's queue waits: Ctrl+S and Send all leave it until the session is restored. "
+    "A dead session's queue waits: Ctrl+S and Send all leave it until the session is relaunched. "
     "**Immediate**: Ctrl+Enter sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
 MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
@@ -1502,8 +1511,9 @@ SDK_WHOSE = (", Model on one run in the wheelhouse; then Mode, Send on one that 
 HOSTED_WHOSE = ("; then Mode, Send on one that isn't dead, and on one run in the wheelhouse Interrupt, Compact "
                 "and Shell.")   # SDK mode off, with a host's session in context (SDK_WHOSE without Model or the slider)
 WHOSE = ("The buttons under the session list act on the session highlighted there, and only those that "
-         "apply show: Rename and Relaunch on a running one, Restore on a dead one, Park (Unpark on a "
-         "parked one) and End on either{sdk} Hover over one for what it does, and its key is in brackets below. New, Adopt and Restore all are keys in the footer. An item "
+         "apply show: Rename on a running one, Relaunch (Unpark on a parked one) and Forget (Stop & Forget "
+         "on a running one) on any, and Park on one that isn't parked{sdk} Hover over one for what it does, and its "
+         "key is in brackets below. New, Adopt and Relaunch all are keys in the footer. An item "
          "opened full screen has Mode, Send and the rest in its bar, for its own session. Ctrl+S and Ctrl+T "
          "act on the same session: highlighting an item highlights its session there.")
 
@@ -1535,7 +1545,7 @@ def keys_help(sdk: bool = False, shown=()) -> str:
         actions: dict[str, list[str]] = {}
         for b in bindings:
             keys = actions.setdefault(b.action, [])
-            if key_name(b.key) not in keys:   # Shift+S, bound as both S and shift+s
+            if key_name(b.key) not in keys:   # Shift+L, bound as both L and shift+l
                 keys.append(key_name(b.key))
         # dict.fromkeys: one line for a key bound twice, as F is (its footer label changes)
         out += dict.fromkeys(f"- **{' or '.join(keys)}**: {DESCRIBE[action]}" for action, keys in actions.items())
@@ -1608,7 +1618,7 @@ class WheelhouseApp(App):
     #sessions-pane Grid Button:hover {{ background: #5e5e5e; }}
     #sessions-pane Grid Button.-active {{ background: #6e6e6e; }}
     #sessions-pane Grid Button:disabled {{ background: #333333; color: #8c8c8c; }}
-    #conversation-buttons #mode {{ column-span: 2; }}
+    #conversation-buttons #mode, #session-buttons Button.wide {{ column-span: 2; }}
     #dialog {{ width: 80; max-width: 100%; height: auto; max-height: 100%; overflow-y: auto; padding: 1 2;
                background: #000000; color: {MATRIX}; border: thick #ff2a6d; }}
     .dialog-title {{ color: #ffd300; text-style: bold; }}
@@ -1655,12 +1665,12 @@ class WheelhouseApp(App):
         Binding("ctrl+s", "send_session", "Send", key_display="Ctrl+S"),
         Binding("ctrl+t", "toggle_mode", "Mode", key_display="Ctrl+T"),
         Binding("ctrl+r", "recall", "Edit queued", show=False, key_display="Ctrl+R"),
-        # New, Adopt and Restore all act on no one session, so they're here, not buttons (#62)
+        # New, Adopt and Relaunch all act on no one session, so they're here, not buttons (#62)
         Binding("n", "new_session", "New", key_display="N"),
         Binding("a", "adopt", "Adopt", key_display="A"),
-        # Shift+S twice: some terminals send it as S, others as shift+s
-        Binding("S", "restore_all", "Restore all", key_display="Shift+S"),
-        Binding("shift+s", "restore_all", "Restore all", show=False),
+        # Shift+L twice: some terminals send it as L, others as shift+l
+        Binding("L", "relaunch_all", "Relaunch all", key_display="Shift+L"),
+        Binding("shift+l", "relaunch_all", "Relaunch all", show=False),
         Binding("escape", "clear_filter", "All sessions", key_display="Esc"),
         # one key, two bindings: the footer shows the one that applies (check_action)
         Binding("f", "show_finished(True)", "Show finished", key_display="F"),
@@ -2127,7 +2137,7 @@ class WheelhouseApp(App):
     def paint_sessions(self) -> None:
         """Every session: parked ones dimmed, at the foot of the list's room (they fall there
         as they park, and rise as they're unparked: Sink), so the buttons below still reach
-        them (Unpark, Restore, End)."""
+        them (Unpark, Forget)."""
         table = self.session_list
         keep, key = table.final_row(), self.current_session()   # in the final order, as the items' (paint_items)
         pending = key != self.sessions_cursor   # the person's move, not yet settled
@@ -2414,19 +2424,25 @@ class WheelhouseApp(App):
 
     def lifecycle_buttons(self, s) -> list[tuple[str, str, bool, bool]]:
         """A session's lifecycle buttons (LIFECYCLE), as show_button takes them, each shown
-        only where it applies (#62, D26): Rename and Relaunch on a live session, Restore on
-        a dead one, Park or Unpark and End on either (parking a dead one is only its flag, so
-        nothing needs it running), and Model
-        on one running in a wheelhouse host (Q52: never a tab's) while SDK mode is on: out of
-        it, a host's session runs on as it was set (features.py)."""
-        dead = s is not None and self.statuses.get(s["id"]) == "dead"
-        live = s is not None and not dead
-        parked = s is not None and bool(s["parked"])
-        hosted = live and runner(s) == "sdk" and self.running(s["id"]) and not s["shell"]
-        return [("rename", "Rename", False, live), ("relaunch", "Relaunch", False, live),
-                ("restore", "Restore", False, dead),
-                ("park", "Unpark" if parked else "Park", False, s is not None), ("end", "End", False, s is not None),
+        only where it applies (#62, D26), captioned for its state (hub.VERBS): Rename on a
+        running (Active) session; Relaunch on any, captioned Unpark on a Parked one; Park on
+        any that isn't Parked; Forget on any, captioned Stop & Forget on an Active one; and
+        Model on one running in a wheelhouse host (Q52: never a tab's) while SDK mode is on:
+        out of it, a host's session runs on as it was set (features.py)."""
+        if s is None:
+            return [(id_, caption, False, False) for caption, id_ in LIFECYCLE]
+        state = self.state(s)
+        hosted = state == "active" and runner(s) == "sdk" and not s["shell"]
+        caption = {verb: VERBS.get((state, verb), ("", False))[0] for verb in ("relaunch", "park", "end")}
+        return [("rename", "Rename", False, state == "active"),
+                ("relaunch", caption["relaunch"], False, True),
+                ("park", "Park", False, state != "parked"),
+                ("end", caption["end"], False, True),
                 ("model", "Model", False, hosted and self.client.sdk)]
+
+    def state(self, s) -> str:
+        """A session's state (hub.VERBS): active, available or parked."""
+        return hub_state(self.statuses.get(s["id"], "dead"), s["parked"])
 
     def controls(self, s) -> list[tuple[str, str, bool, bool]]:
         """A session's conversation buttons (CONVERSATION), as show_button takes them: (id,
@@ -2678,7 +2694,7 @@ class WheelhouseApp(App):
         said = []
         if stopping:
             said.append(f"Still relaunching {stopping}: its host hasn't stopped yet. Quit anyway, and leave it "
-                        "stopped? (Restore brings it back.)")
+                        "stopped? (Relaunch brings it back.)")
         if compacting:
             said.append(f"{'Also c' if stopping else 'C'}ompacting {compacting} first, to relaunch it once "
                         f"compacted. {'' if stopping else 'Quit anyway? '}It keeps running; it is relaunched "
@@ -3115,6 +3131,9 @@ class WheelhouseApp(App):
         in context says so rather than doing nothing."""
         if isinstance(self.focused, (TextArea, Input)) or self.composing()[0] is None:
             return
+        sid = self.current_session() if button_id == "park" else None
+        if sid and self.state(self.row(sid)) == "parked":   # P presses Unpark, the Relaunch button there
+            button_id = "relaunch"
         button = next(iter(self.screen.query(f"#{button_id}")), None)
         if button is None:   # not on this screen (Model, in a full-screen item's bar): said all the same
             name = next((b.description for b in BUTTON_KEYS if b.action == f"press('{button_id}')"),
@@ -3210,40 +3229,36 @@ class WheelhouseApp(App):
         s = self.row(sid)
         return f"{s['name'] or os.path.basename(s['cwd'])} ({short(sid)}, {s['cwd']})"
 
-    @on(Button.Pressed, "#restore")
-    @session_action
-    def restore_pressed(self) -> None:
-        self.settle()
-        sid = self.current_session()
-        if not sid:
-            return
-        self.told(self.client.restore(sid))
-
-    def action_restore_all(self) -> None:
+    def action_relaunch_all(self) -> None:
+        """Relaunch all: every Available session, once confirmed. Parked and Active ones are
+        left alone."""
         if isinstance(self.focused, (TextArea, Input)):
             return
-        dead = self.client.restorable()
-        if not dead:
-            self.notify("nothing to restore")
+        available = self.client.relaunchable()
+        if not available:
+            self.notify("nothing to relaunch: no session is Available")
             return
-        self.push_screen(Confirm(f"Restore {len(dead)} dead session(s)?"),
-                         lambda yes: yes and self.told(self.client.restore_all(dead)))
+        self.push_screen(Confirm(f"Relaunch {len(available)} Available session(s)?"),
+                         lambda yes: yes and self.told(self.client.relaunch_all(available)))
 
     @on(Button.Pressed, "#park")
     @session_action
     def park_pressed(self) -> None:
+        """Park: an Active session is asked (it writes its handoff notes, then stops); an
+        Available one is parked at once. A Parked one's P is Unpark (action_press)."""
         self.settle()
         sid = self.current_session()
         if not sid:
             return
-        if self.row(sid)["parked"]:
+        s = self.row(sid)
+        if self.state(s) == "parked":
+            self.relaunch_pressed()
+        elif s["parked"]:   # parked under the old rules and still running: only the flag goes
             self.told(self.client.unpark(sid))
-            self.follow(sid)   # as Park: it stays current
+            self.follow(sid)
             self.refresh_data()
-            return
-        self.lifecycle(sid, "park",
-                       ask=f"Ask {self.label(sid)} to park? It brings its items up to date, then parks.",
-                       act=f"Park {self.label(sid)}? It drops off the inbox and Restore all.")
+        else:
+            self.lifecycle(sid, "park", f"Park {self.label(sid)}?")
 
     @on(Button.Pressed, "#rename")
     @session_action
@@ -3261,28 +3276,34 @@ class WheelhouseApp(App):
     @on(Button.Pressed, "#end")
     @session_action
     def end_pressed(self) -> None:
+        """Forget (Stop & Forget on an Active session, which is asked to do its end steps)."""
         self.settle()
         sid = self.current_session()
         if sid:
             n = len(self.client.drafts(sid))
             lost = f" {n} queued answer(s) will be discarded." if n else ""
-            self.lifecycle(sid, "end",
-                           ask=f"Ask {self.label(sid)} to end? Claude does its own session-end steps, then deletes its wheelhouse data.{lost}",
-                           act=f"End {self.label(sid)} and delete its wheelhouse data?{lost}")
+            self.lifecycle(sid, "end", f"Forget {self.label(sid)}? Its wheelhouse data is deleted.{lost}")
 
-    def lifecycle(self, sid: str, what: str, ask: str, act: str) -> None:
-        """Park or End. A running session is only asked; a dead one is acted on at once."""
+    def lifecycle(self, sid: str, what: str, act: str) -> None:
+        """Park or Forget, as hub.VERBS says for the session's state. A running session is
+        asked, without a confirm; one asked already is pressed again to cancel or force. One
+        not running is acted on at once, confirmed first where VERBS says (act)."""
         if not self.running(sid):
-            self.push_screen(Confirm(act), lambda yes: yes and self.act_on_dead(sid, what))
+            confirm = VERBS[(self.state(self.row(sid)), what)][1]
+            if confirm:
+                self.push_screen(Confirm(act), lambda yes: yes and self.act_on_dead(sid, what))
+            else:
+                self.act_on_dead(sid, what)
             return
         pending = self.pending(sid)
+        verb = VERBS[("active", what)][0]
         if pending is None:
-            self.push_screen(Confirm(ask), lambda yes: yes and self.ask(sid, what))
+            self.ask(sid, what)
         elif pending != what:
-            self.notify(f"the session has already been asked to {pending}: cancel that first",
-                        severity="warning")
+            self.notify(f"the session has already been asked to {VERBS[('active', pending)][0].lower()}: "
+                        "cancel that first", severity="warning")
         else:
-            self.push_screen(Choice(f"{self.label(sid)} has been asked to {what} and hasn't yet. "
+            self.push_screen(Choice(f"{self.label(sid)} has been asked to {verb.lower()} and hasn't yet. "
                                     "Cancel the request, or force it?"),
                              lambda choice: self.resolve_request(sid, what, choice))
 
@@ -3305,9 +3326,9 @@ class WheelhouseApp(App):
             self.told(self.client.cancel_request(sid, what))
             self.refresh_data()
         elif choice == "force":
-            warning = ("Deletes its wheelhouse data now, without its session-end steps." if what == "end"
-                       else "Parks it now; it is still running.")
-            self.push_screen(Confirm(f"Force {what} {self.label(sid)}? {warning}"),
+            warning = ("Stops it now and deletes its wheelhouse data, without its session-end steps." if what == "end"
+                       else "Stops it now and parks it, without its handoff notes.")
+            self.push_screen(Confirm(f"Force {VERBS[('active', what)][0]} {self.label(sid)}? {warning}"),
                              lambda yes: yes and self.force(sid, what))
 
     @session_action

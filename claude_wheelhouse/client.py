@@ -25,7 +25,7 @@ from . import adopt, auth, features, plan_usage, stats, tutorial
 from .hub import RUNNING, Done, Event, Hub, host_context, requested
 from .store import SessionGone
 
-TIMEOUT = 10        # seconds a request may take to be answered (a launch, Restore all)
+TIMEOUT = 10        # seconds a request may take to be answered (a launch, Relaunch all)
 CONNECT = 2         # seconds to connect: the daemon is on this machine, or one hop away
 STREAM_READ = 40    # seconds the stream may go quiet: the daemon pings every 15
 BACKOFF = (0.5, 1, 2, 5)   # seconds between tries to reconnect, the last repeated
@@ -498,7 +498,7 @@ class RemoteClient:
     def model_state(s) -> dict:
         return s["model_state"]
 
-    def restorable(self) -> list[str]:
+    def relaunchable(self) -> list[str]:
         return [s["id"] for s in self.sessions if self.dead(s["id"]) and not s["parked"]]
 
     def background(self) -> None:
@@ -609,11 +609,8 @@ class RemoteClient:
         """Whether Relaunch should offer to compact first (Hub.compact_first)."""
         return bool((v := self.view(sid)) and v.get("compact_first"))
 
-    def restore(self, sid: str) -> Done:
-        return self.done(f"/sessions/{sid}/restore")
-
-    def restore_all(self, sids: list[str]) -> Done:
-        return self.done("/restore-all", {"sids": sids})
+    def relaunch_all(self, sids: list[str]) -> Done:
+        return self.done("/relaunch-all", {"sids": sids})
 
     def new_session(self, cwd: str, name: str, ticket: str, brief: str, runner: str, model: str | None = None,
                     effort: str | None = None) -> Done:

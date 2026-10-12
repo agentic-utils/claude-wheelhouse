@@ -1,4 +1,4 @@
-"""Park and End: the wheelhouse never deletes or hides a running session's data behind its back.
+"""Park and Forget: the wheelhouse never deletes or hides a running session's data behind its back.
 
 On a running session the buttons only ask; the session acts, or the person cancels or
 forces. On a dead session they act straight away. Nothing is deleted automatically.
@@ -36,18 +36,20 @@ async def press(app, pilot, button, *keys):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("button, state, parked, kept, want_parked, end_flag, park_flag, desc", [
-    ("#end", "live", 0, True, 0, True, False, "End on a running session only asks it to end"),
-    ("#end", "stalled", 0, True, 0, True, False, "so does End on a quiet one"),
-    ("#end", "dead", 0, False, None, None, None, "End on a dead session deletes it"),
-    ("#end", "live", 1, True, 1, True, False, "a parked flag doesn't make a running session deletable (round-3 #1)"),
-    ("#end", "dead", 1, False, None, None, None, "a dead parked session is deleted"),
-    ("#park", "live", 0, True, 0, False, True, "Park on a running session only asks it to park"),
-    ("#park", "stalled", 0, True, 0, False, True, "so does Park on a quiet one"),
-    ("#park", "dead", 0, True, 1, False, False, "Park on a dead session parks it at once, asking it nothing"),
+@pytest.mark.parametrize("button, state, parked, keys, kept, want_parked, end_flag, park_flag, desc", [
+    ("#end", "live", 0, [], True, 0, True, False, "Stop & Forget on an Active session asks it, with no confirm"),
+    ("#end", "stalled", 0, [], True, 0, True, False, "so on a quiet one"),
+    ("#end", "dead", 0, ["y"], False, None, None, None, "Forget on an Available session deletes it, once confirmed"),
+    ("#end", "dead", 0, ["n"], True, 0, False, False, "backed out of at the confirm"),
+    ("#end", "live", 1, [], True, 0, True, False,
+     "a running row parked under the old rules is unparked at the hub's first start, then asked (round-3 #1)"),
+    ("#end", "dead", 1, ["y"], False, None, None, None, "Forget on a Parked session deletes it, once confirmed"),
+    ("#park", "live", 0, [], True, 0, False, True, "Park on an Active session asks it, with no confirm"),
+    ("#park", "stalled", 0, [], True, 0, False, True, "so on a quiet one"),
+    ("#park", "dead", 0, [], True, 1, False, False, "Park on an Available session parks it at once, asking nothing"),
 ])
 async def test_buttons_ask_running_sessions_and_act_on_dead_ones(
-        store, sid, monkeypatch, button, state, parked, kept, want_parked, end_flag, park_flag, desc):
+        store, sid, monkeypatch, button, state, parked, keys, kept, want_parked, end_flag, park_flag, desc):
     store.set_parked(sid, bool(parked))
     fake_status(monkeypatch, state)
     launched = []
@@ -55,8 +57,8 @@ async def test_buttons_ask_running_sessions_and_act_on_dead_ones(
         monkeypatch.setattr(launch, name, lambda *a, name=name, **kw: launched.append(name))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        prompts = await press(app, pilot, button, "y")
-    assert "demo" in prompts[0], "the confirm names the session"
+        prompts = await press(app, pilot, button, *keys)
+    assert all("demo" in p for p in prompts), f"{desc}: the confirm names the session"
     assert launched == [], f"{desc}: nothing launched"
     s = store.session(sid)
     assert (s is not None) == kept, desc
@@ -65,16 +67,6 @@ async def test_buttons_ask_running_sessions_and_act_on_dead_ones(
         assert bool(s["end_requested_at"]) == end_flag, desc
         assert bool(s["park_requested_at"]) == park_flag, desc
         assert store.pending(sid) == [], "a request is a flag, not a message"
-
-
-@pytest.mark.anyio
-async def test_unpark_is_immediate(store, sid, monkeypatch):
-    store.set_parked(sid, True)
-    fake_status(monkeypatch, "dead")
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await press(app, pilot, "#park")
-    assert store.session(sid)["parked"] == 0
 
 
 @pytest.mark.anyio
@@ -95,9 +87,9 @@ async def test_the_wheelhouse_never_deletes_by_itself(store, sid, monkeypatch, s
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("button, flag, keys, kept, parked, notice, desc", [
-    ("#end", "end", ["c"], True, 0, True, "Cancel clears the end request and tells the session"),
-    ("#end", "end", ["f", "y"], False, None, False, "Force end deletes after a confirm"),
-    ("#end", "end", ["f", "n"], True, 0, False, "Force end can be backed out of"),
+    ("#end", "end", ["c"], True, 0, True, "Cancel clears the forget request and tells the session"),
+    ("#end", "end", ["f", "y"], False, None, False, "Force forget deletes after a confirm"),
+    ("#end", "end", ["f", "n"], True, 0, False, "Force forget can be backed out of"),
     ("#end", "end", ["escape"], True, 0, False, "Escape leaves the request pending"),
     ("#park", "park", ["c"], True, 0, True, "Cancel clears the park request and tells the session"),
     ("#park", "park", ["f", "y"], True, 1, False, "Force park parks it after a confirm"),
@@ -110,7 +102,7 @@ async def test_a_pending_request_can_be_cancelled_or_forced(
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        label = "ending" if flag == "end" else "parking"
+        label = "forgetting" if flag == "end" else "parking"
         assert app._info_text.splitlines()[1].startswith(label), "pending state shows"
         prompts = await press(app, pilot, button, *keys)
     assert all("demo" in p for p in prompts), "every prompt names the session"
@@ -124,37 +116,12 @@ async def test_a_pending_request_can_be_cancelled_or_forced(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("state, parked, launched, desc", [
-    ("dead", 0, True, "a dead session is restored"),
-    ("dead", 1, True, "a dead parked session is restored (and unparked)"),
-    ("live", 1, False, "a running parked session is not restored: no Restore shows (#62), and S does nothing"),
-])
-async def test_restore_goes_by_liveness_not_the_parked_flag(store, sid, monkeypatch, state, parked, launched, desc):
-    store.set_parked(sid, bool(parked))
-    fake_status(monkeypatch, state)
-    calls = []
-    monkeypatch.setattr(launch, "open_tab", lambda s, i: calls.append(i))
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        assert app.query_one("#restore").display == launched, desc
-        if launched:
-            await press(app, pilot, "#restore")
-        else:
-            app.session_list.focus()
-            await pilot.press("s")
-            await pilot.pause()
-    assert bool(calls) == launched, desc
-    if launched:
-        assert store.session(sid)["parked"] == 0, desc
-
-
-@pytest.mark.anyio
 @pytest.mark.both
 @pytest.mark.parametrize("then, launched, parked, desc", [
-    (None, [], 1, "a dead session parked from its button is parked, nothing launched"),
-    ("#park", [], 0, "and Unpark, there in Park's place, unparks it"),
-    ("#restore", ["restore"], 0, "and Restore brings it back where it left off, unparked"),
+    (None, [], 1, "an Available session parked from its button is parked, nothing launched"),
+    ("#relaunch", ["restore"], 0, "Unpark, in Relaunch's place, brings it back where it left off, unparked"),
+    ("p", ["restore"], 0, "P presses Unpark on a Parked session"),
+    ("l", ["restore"], 0, "so does L"),
 ])
 async def test_a_dead_session_parks_then_comes_back(store, sid, monkeypatch, then, launched, parked, desc):
     fake_status(monkeypatch, "dead")
@@ -163,31 +130,78 @@ async def test_a_dead_session_parks_then_comes_back(store, sid, monkeypatch, the
         monkeypatch.setattr(launch, name, lambda *a, name=name, **kw: calls.append(name.split("_")[0]))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await press(app, pilot, "#park", "y")
+        await press(app, pilot, "#park")
         assert store.session(sid)["parked"] == 1, f"{desc}: parked"
-        assert str(app.query_one("#park").label) == "Unpark" and app.query_one("#restore").display, \
-            f"{desc}: Unpark and Restore show"
-        if then:
+        assert (str(app.query_one("#relaunch").label), app.query_one("#park").display,
+                str(app.query_one("#end").label)) == ("Unpark", False, "Forget"), f"{desc}: Unpark and Forget show"
+        if then and then.startswith("#"):
             await press(app, pilot, then)
+        elif then:
+            app.session_list.focus()
+            await pilot.press(then)
+            await pilot.pause()
     s = store.session(sid)
     assert (calls, s["parked"]) == (launched, parked), desc
     assert (s["park_requested_at"], store.pending(sid)) == (None, []), f"{desc}: the session was asked nothing"
 
 
 @pytest.mark.anyio
-async def test_restore_all_skips_parked_sessions(store, sid, tmp_path, monkeypatch):
+@pytest.mark.parametrize("key, desc", [
+    ("s", "S, Restore before, does nothing for a release"),
+    ("S", "nor does Shift+S, Restore all before"),
+    ("e", "nor E, End before: Delete and Backspace forget now"),
+])
+async def test_retired_keys_do_nothing(store, sid, monkeypatch, key, desc):
+    fake_status(monkeypatch, "dead")
+    calls = []
+    for name in ("open_tab", "open_session", "restore_session"):
+        monkeypatch.setattr(launch, name, lambda *a, name=name, **kw: calls.append(name))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.session_list.focus()
+        main = app.screen
+        await pilot.press(key)
+        await pilot.pause()
+        assert app.screen is main, f"{desc}: no dialog"
+    assert calls == [] and store.session(sid) is not None, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key, keys, kept, desc", [
+    ("delete", ["y"], False, "Delete forgets an Available session, once confirmed"),
+    ("backspace", ["y"], False, "so does Backspace"),
+    ("delete", ["n"], True, "and the confirm backs out"),
+])
+async def test_delete_and_backspace_forget(store, sid, monkeypatch, key, keys, kept, desc):
+    fake_status(monkeypatch, "dead")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.session_list.focus()
+        for k in (key, *keys):
+            await pilot.press(k)
+            await pilot.pause()
+    assert (store.session(sid) is not None) == kept, desc
+
+
+@pytest.mark.anyio
+async def test_relaunch_all_picks_available_sessions_only(store, sid, tmp_path, monkeypatch):
     parked = store.create_session(str(tmp_path), name="parked")
     store.set_parked(parked, True)
-    fake_status(monkeypatch, "dead")
+    active = store.create_session(str(tmp_path), name="active")
+    starting = store.create_session(str(tmp_path), name="starting")
+    states = {active: "live", starting: "starting"}
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: states.get(s["id"], "dead"))
     calls = []
     monkeypatch.setattr(launch, "open_tab", lambda s, i: calls.append(i))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        for key in ("S", "y"):   # Restore all is in the footer (#62)
+        for key in ("L", "y"):   # Relaunch all is in the footer (#62)
             await pilot.press(key)
             await pilot.pause()
-    assert calls == [sid]
+    assert calls == [sid], "Available only: not Parked, Active or starting"
 
 
 @pytest.mark.parametrize("steps, expected, desc", [
@@ -327,8 +341,6 @@ def notices(app, monkeypatch):
     ("live", "end", "#end", ["c"], "Cancel after the session ended itself (round-4 #1)"),
     ("live", "end", "#end", ["f"], "Force after the session ended itself (round-4 #2)"),
     ("live", "end", "#end", ["f", "y"], "Force confirmed after the session ended itself"),
-    ("live", None, "#end", ["y"], "the ask confirmed after the session ended itself"),
-    ("live", None, "#park", ["y"], "the park ask confirmed after the session ended itself"),
     ("dead", None, "#end", ["y"], "the dead-session confirm after the row went"),
 ])
 async def test_a_dialog_outliving_its_session_does_not_crash(

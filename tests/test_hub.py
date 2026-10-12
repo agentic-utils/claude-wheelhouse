@@ -152,7 +152,7 @@ def test_a_relaunch_found_past_its_deadline_is_let_go_and_said(store, sid, monke
     hub.refresh()
     hub.finish_relaunches()
     assert calls == [], "never started again by itself"
-    assert heard == [("demo wasn't relaunched: Restore it", "warning")]
+    assert heard == [("demo wasn't relaunched: Relaunch it", "warning")]
     assert sid not in hub.relaunching and store.relaunches() == {} and store.session(sid)["parked"]
 
 
@@ -240,7 +240,7 @@ def test_a_permission_answered_meanwhile_is_not_submitted(hub, store, sid, heard
 
 
 @pytest.mark.parametrize("status, left, said, desc", [
-    ("dead", ["a"], "demo isn't running: Restore it first", "a dead session's queue stays queued (#62)"),
+    ("dead", ["a"], "demo isn't running: Relaunch it first", "a dead session's queue stays queued (#62)"),
     ("live", [], "sent 1 to demo", "a live one's goes, as one message"),
 ])
 def test_send_queue_leaves_a_dead_sessions_queue(hub, store, sid, heard, monkeypatch, status, left, said, desc):
@@ -1031,3 +1031,62 @@ def test_force_stops_the_process_then_acts(hub, store, sid, monkeypatch, what, a
     assert kills == killed, desc
     s = store.session(sid)
     assert (s is None) is gone and (gone or s["parked"] == parked), desc
+
+
+@pytest.mark.parametrize("start, verb, to, caption, confirm, desc", [
+    ("active", "park", "parked", "Park", False, "Park asks an Active session: it writes its notes, parks and stops"),
+    ("active", "end", "forgotten", "Stop & Forget", False, "Stop & Forget asks it: its end steps, then its row goes"),
+    ("active", "relaunch", "active", "Relaunch", "busy", "Relaunch stops it and starts it again; asked first if busy"),
+    ("available", "park", "parked", "Park", False, "Park on an Available session: parked at once"),
+    ("available", "end", "forgotten", "Forget", True, "Forget on an Available session: deleted, once confirmed"),
+    ("available", "relaunch", "active", "Relaunch", False, "Relaunch brings an Available session back"),
+    ("parked", "end", "forgotten", "Forget", True, "Forget on a Parked session: deleted, once confirmed"),
+    ("parked", "relaunch", "active", "Unpark", False, "Unpark is Relaunch, captioned so on a Parked session"),
+])
+def test_transitions(hub, store, sid, monkeypatch, start, verb, to, caption, confirm, desc):
+    assert hub_mod.VERBS[(start, verb)] == (caption, confirm), desc
+    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
+    alive = {"now": start == "active"}
+
+    def set_alive(now):
+        return lambda *a, **kw: alive.update(now=now)
+    monkeypatch.setattr(liveness, "is_alive", lambda *a: alive["now"])
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live" if alive["now"] else "dead")
+    monkeypatch.setattr(hub_mod.os, "kill", set_alive(False))
+    monkeypatch.setattr(launch, "open_session", set_alive(True))
+    monkeypatch.setattr(launch, "restore_session", set_alive(True))
+    store.set_parked(sid, start == "parked")
+    hub.refresh()
+    assert hub.state(sid) == start, desc
+    if start == "active" and verb != "relaunch":
+        assert hub.ask(sid, verb).ok and hub.pending(sid) == verb, desc
+        store.end(sid) if verb == "end" else store.set_parked(sid, True)   # the session's own tool call...
+        alive["now"] = False                                                # ...which stops it
+    elif start == "active":
+        assert hub.stop_host(sid, (4242, 1)).ok, desc
+        hub.refresh()
+        hub.finish_relaunches()
+    elif verb == "relaunch":
+        assert hub.relaunch(sid).ok, desc
+    else:
+        assert hub.act_on_dead(sid, verb).ok, desc
+    if to == "forgotten":
+        assert store.session(sid) is None, desc
+    else:
+        hub.refresh()
+        assert hub.state(sid) == to, desc
+
+
+@pytest.mark.parametrize("status, parked, want, desc", [
+    ("live", 1, 0, "running and parked under the old rules: unparked, so it shows as Active"),
+    ("dead", 1, 1, "dead and parked: stays Parked"),
+    ("live", 0, 0, "running and not parked: untouched"),
+])
+def test_the_first_hub_unparks_running_parked_sessions_once(store, sid, monkeypatch, status, parked, want, desc):
+    store.set_parked(sid, bool(parked))
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
+    Hub(store)
+    assert store.session(sid)["parked"] == want, desc
+    store.set_parked(sid, bool(parked))
+    Hub(store)
+    assert store.session(sid)["parked"] == parked, f"{desc}: once per database only"

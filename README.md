@@ -101,7 +101,7 @@ session.
   and Send (n) do the same, for the same session, and a bar above the footer
   always shows Send all (n), every running session's queue; each Send is greyed out while its
   queue is empty. Send all's key is `Shift+A`: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S
-  as plain Ctrl+S. A dead session's queue waits for it: Ctrl+S on one says to Restore it first,
+  as plain Ctrl+S. A dead session's queue waits for it: Ctrl+S on one says to Relaunch it first,
   its hint leaves Ctrl+S out, and Send all skips it and doesn't count it. Ctrl+R takes a queued answer
   back to edit or drop. Emoji codes work as in chat apps: `:tada:` turns into 🎉, and while
   you type `:gri` the hint line suggests matches (Tab or Enter takes the first). Text you haven't sent stays with the item (or session) you typed it
@@ -191,41 +191,50 @@ session.
   them moves as that changes. The dot before each name, and the
   status in the description, are green when it's live, cyan while it starts or relaunches,
   yellow when stalled (its Claude Code runs, but its wheelhouse MCP server hasn't checked in
-  for 2 minutes), magenta while it's been asked to park or end, red when dead (its Claude
+  for 2 minutes), magenta while it's been asked to park or forget, red when dead (its Claude
   Code isn't running) and grey when parked.
   The highlighted session is the current one: highlighting an item moves the list's
   highlight to the item's session, and moving the list's highlight follows that session.
   The buttons under the description act on it, and only those that apply show, each with
-  a tooltip saying what it does: its lifecycle (Rename and Relaunch on a running
-  session, Restore on a dead one, Park (Unpark on a parked one) and End on either), then its
+  a tooltip saying what it does: its lifecycle (Rename on a running session, Relaunch
+  (Unpark on a parked one) and Forget (Stop & Forget on a running one) on any, and Park on one
+  that isn't parked), then its
   conversation (Mode, and Send on one that isn't dead). New (`N`), Adopt (`A`, a list of the sessions on disk you can adopt) and
-  Restore all (`Shift+S`) act on no one session, so they're keys in the footer. Ctrl+S, Ctrl+T and the
+  Relaunch all (`Shift+L`) act on no one session, so they're keys in the footer. Ctrl+S, Ctrl+T and the
   hint under the answer box act on or describe the same session.
   An item opened full screen has Mode, Send and the rest in its bar, for its own session. New session (directory, optional name, optional ticket, opening brief,
   model and effort) opens Claude in a Windows Terminal tab.
   The model is Sonnet 5.5, Opus 5.5, Haiku 5.5 or Fable 5.1 (Sonnet 5.5 unless changed), and the effort
   any level from low to max, starting at the model's default (high; xhigh for Haiku). Every launch of the
-  session passes both, Restore and Relaunch included; to change them while it runs, use `/model` and
+  session passes both, Relaunch included; to change them while it runs, use `/model` and
   `/effort` in its tab.
   Browse… picks the directory from a tree (Enter opens a folder, Backspace goes up,
   Ctrl+Enter or Choose takes the highlighted one). Rename changes a session's name, and
   is the only way to: a `/rename` in Claude Code isn't picked up, and the next launch
   gives Claude Code the wheelhouse's name again.
-  Restore brings back sessions that died
-  (reboot, crash), one at a time or all at once; selecting a dead (red) session also
-  offers to relaunch it, unless it's parked. A running session relaunches once you've
-  `/exit`ed it in its tab. Nothing restarts on its own, and a resumed session is asked to
-  post the questions and tasks it already had open. Park
-  drops a session's items off the inbox until you unpark or restore it. End deletes its wheelhouse data. On a running
-  session, Park and End only ask the session to do it (press again to choose: `C` cancels
-  the request, `F` forces it, `Esc` leaves it be); on a dead one they act at once, without
-  resuming it. In the session's tab, `/wheelhouse park` and `/wheelhouse end` do the same
-  from there. The wheelhouse never deletes anything by itself.
-  The buttons stay out of the Tab order, and each has a key: with the list focused, `R` renames, `L` relaunches,
-  `S` restores, `P` parks or unparks and `E` ends; the rest are under Keys below.
+  A session is in one of four states. Active: running (starting, stalled, busy and the rest
+  only decorate it). Available: not running and not parked, shown red, as after a reboot or a
+  crash. Parked: not running, by intent, dimmed at the foot of the list. Forgotten: no longer
+  in the wheelhouse at all, which Adopt can bring back. Relaunch starts an Available or Parked
+  session again where it left off; on a running one it stops it (a tab's Claude Code or a
+  host) and starts it again, asking first only if it's mid-turn. Relaunch all (`Shift+L`)
+  brings back every Available session, and selecting an Available session also offers to
+  relaunch it. Nothing restarts on its own, and a resumed session is asked to post the
+  questions and tasks it already had open. Park on a running session asks it to write its
+  handoff notes into its items, then it parks and stops (its tab closes); on one not running
+  it parks at once. On a Parked session, Relaunch is captioned Unpark, and `P` and `L` both
+  press it. Forget deletes a session's wheelhouse data: on a running one, Stop & Forget asks it
+  to do its own end steps first, then it stops; on one not running it asks you to confirm. A
+  pending Park or Stop & Forget is pressed again to choose: `C` cancels the request, `F` forces
+  it (the session is stopped at once, without its steps), `Esc` leaves it be. In the session's
+  tab, `/wheelhouse park` and `/wheelhouse end` do the same from there, and the tab closes. The
+  wheelhouse never deletes anything by itself.
+  The buttons stay out of the Tab order, and each has a key: with the list focused, `R` renames, `L` relaunches
+  (or unparks), `P` parks (or unparks) and `Delete` or `Backspace` forgets; the rest are under Keys below. `E`, `S`
+  and `Shift+S` (End, Restore and Restore all before) do nothing for now.
 - **Adopt.** Brings a session the wheelhouse didn't launch into the wheelhouse: pick it
-  from the recent sessions in `~/.claude/projects` (one whose adoption failed is offered
-  again). If it's still running, type `/exit` in
+  from the recent sessions in `~/.claude/projects` that the wheelhouse has no record of
+  (never known, or forgotten). If it's still running, type `/exit` in
   its tab first (the wheelhouse never kills it), then press Adopt; it reopens in a new tab
   with `claude --resume` and the wheelhouse's flags. Its first notification asks it to
   post the questions it is already waiting on you for and its running tasks, and to set
@@ -254,7 +263,7 @@ how to work.
 - [The `wheelhouse` MCP server](claude_wheelhouse/mcp_server.py): the tools the session
   posts and reads through. Each tool's description is its docstring.
 - [The monitor](claude_wheelhouse/monitor.py) ([plugin entry](claude_wheelhouse/plugin/monitors/monitors.json))
-  delivers your answers, the End and Park requests, the note an adopted session gets
+  delivers your answers, the Park and Stop & Forget requests, the note an adopted session gets
   on joining, and the keepalive and check messages, as `[wheelhouse]` notifications.
 - [The plugin's hook](claude_wheelhouse/plugin/hooks/hooks.json): after a compaction,
   the session's open tasks and questions.
@@ -266,9 +275,9 @@ along with the launch command.
 
 Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision or dismiss a done task or subagent, `N` new session, `A` adopt, `Shift+S` restore all, `Esc` all sessions (or clears a text
+highlighted question or decision or dismiss a done task or subagent, `N` new session, `A` adopt, `Shift+L` relaunch all, `Esc` all sessions (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
-`Ctrl+S` send the session's queue (not a dead one's: Restore it first), `Ctrl+T` switch the session between Queued and
+`Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
 as answered, a decision as seen), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
 A dialog asking yes or no takes `Y` or `N` (`Esc` is no, and so is `Enter`, as No has the focus).
@@ -478,7 +487,7 @@ which the wheelhouse reads.
   them too. Only Claude Code 2.1.287 to 2.1.296 have been checked.
 - Each user's daemon listens on `127.0.0.1:7428`: a second WSL user on the same machine
   needs another port (see "Two wheelhouses on one machine").
-- Nothing restarts after a reboot: Restore brings the sessions back.
+- Nothing restarts after a reboot: Relaunch all (`Shift+L`) brings the sessions back.
 - This is a 0.1 prototype with no releases yet: update with `git pull` and `make install`.
 
 ## Reporting bugs
@@ -499,8 +508,8 @@ The logs hold your directory paths and session ids: look them over before you at
 
 ## Uninstall
 
-1. End your sessions: End each one in the wheelhouse (or `/exit` it in its tab), then
-   close its tab.
+1. End your sessions: Stop & Forget each one in the wheelhouse (its tab closes), or `/exit`
+   it in its tab and close the tab.
 2. Quit the app (`Q`), then in the clone run `make stop`
    (`uv run claude-wheelhouse daemon --stop`).
 3. Delete the clone: `make install` put the wheelhouse in the clone's `.venv`, and nowhere

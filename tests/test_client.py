@@ -53,7 +53,7 @@ def test_a_command_answers_as_the_hub_did(store, sid, served, no_launch):
         c.refresh()
         done = c.submit((sid, None), "hello")
         assert (done.ok, [n.text for n in done.notices]) == (True, [
-            "queued for the session, but the session isn't running: Restore it, then Ctrl+S or Send sends its queue"])
+            "queued for the session, but the session isn't running: Relaunch it, then Ctrl+S or Send sends its queue"])
         assert [m["body"] for m in store.drafts(sid)] == ["hello"]
         assert [d["item_ref"] for d in c.drafts(sid)] == [None], "a command's change is read at once, no refresh needed"
         p = store.post_item(sid, "permission", "Bash: ls")
@@ -246,7 +246,7 @@ def test_a_command_refused_for_its_token_is_said_as_the_stream_says_it(store, si
     d = served(store.path)
     c = RemoteClient(d.url, "not-the-token", why_refused=lambda: "stop it (pid 7)")
     try:
-        done = c.restore(sid)
+        done = c.relaunch(sid)
         assert not done.ok and [(n.text, n.severity) for n in done.notices] == [("stop it (pid 7)", "error")], done
     finally:
         c.disconnect()
