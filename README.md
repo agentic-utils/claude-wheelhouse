@@ -391,8 +391,12 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   turns it off. Each message costs one request, which reads the cached context: for a
   quiet session that is much cheaper than writing the cache again when you come back.
 - After a compaction, the session is told its open tasks and questions, with their titles,
-  once, by the plugin's hook ([`hooks.json`](claude_wheelhouse/plugin/hooks/hooks.json),
-  which runs `claude-wheelhouse open-items`).
+  once. The plugin's `SessionStart` hook does it
+  ([`hooks.json`](claude_wheelhouse/plugin/hooks/hooks.json)): it runs
+  `"${WHEELHOUSE_PYTHON}" -m claude_wheelhouse open-items` with the wheelhouse's own Python,
+  as the monitor is run, and Claude Code adds what it prints to the session's context.
+- The check and the still-open lists only start once a session runs this version: one
+  started on older code shows as needing a relaunch, and gets neither until relaunched.
 
 ## Where state lives
 
