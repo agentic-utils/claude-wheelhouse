@@ -76,25 +76,27 @@ def own_in_its_directory(store, sid, q1, q2):   # taken for the tutorial's, so n
     store.create_session(str(tutorial.tutorial_dir(store)), name="mine")
 
 
-@pytest.mark.parametrize("actions, seen, done, desc", [
-    ([], set(), set(), "nothing done yet"),
-    ([], {"open"}, {"open"}, "opening a question is seen on screen"),
-    ([one_answer], set(), {"open"}, "an answer means a question was opened, but one isn't both"),
-    ([answer], set(), {"open", "queue"}, "both questions answered, still queued"),
-    ([reply_first, answer], set(), {"open", "queue"}, "a reply from before the answers went isn't the reply"),
-    ([answer, send], set(), {"open", "queue", "send"}, "sent"),
-    ([answer, send, reply], set(), {"open", "queue", "send", "reply"}, "the session replied after they went"),
-    ([see_decision], set(), set(), "its seen status doesn't tick it: automatic selection sets that"),
-    ([see_decision, close_decision], set(), {"decision"}, "the person closing the decision does"),
-    ([], {"follow"}, {"follow"}, "a turn watched arriving is seen on screen"),
-    ([own_session], set(), {"new"}, "a session of their own, started after the tutorial, before End too"),
-    ([own_in_its_directory], set(), set(), "one in the tutorial's directory isn't their own"),
+@pytest.mark.parametrize("actions, seen, done, kept, desc", [
+    ([], set(), set(), True, "nothing done yet"),
+    ([], {"open"}, {"open"}, True, "opening a question is seen on screen"),
+    ([one_answer], set(), {"open"}, True, "an answer means a question was opened, but one isn't both"),
+    ([answer], set(), {"open", "queue"}, True, "both questions answered, still queued"),
+    ([reply_first, answer], set(), {"open", "queue"}, True, "a reply from before the answers went isn't the reply"),
+    ([answer, send], set(), {"open", "queue", "send"}, True, "sent"),
+    ([answer, send, reply], set(), {"open", "queue", "send", "reply"}, True, "the session replied after they went"),
+    ([see_decision], set(), set(), True, "its seen status doesn't tick it: automatic selection sets that"),
+    ([see_decision, close_decision], set(), {"decision"}, True, "the person closing the decision does"),
+    ([], {"follow"}, {"follow"}, True, "a turn watched arriving is seen on screen"),
+    ([own_session], set(), {"new"}, True, "a session of their own, started after the tutorial, before End too"),
+    ([own_in_its_directory], set(), set(), True, "one in the tutorial's directory isn't their own"),
+    ([own_session], set(), set(), False, "a record from before the ids were kept: Start your own can't tick"),
 ])
-def test_checklist_steps_come_from_the_store(store, tut, actions, seen, done, desc):
+def test_checklist_steps_come_from_the_store(store, tut, actions, seen, done, kept, desc):
     q1, q2 = setup_items(store, tut)
     for act in actions:
         act(store, tut, q1, q2)
-    got = {key for key, _, _, ok in tutorial.steps(store, tut, seen) if ok}
+    before = tutorial.record(store)["before"] if kept else None
+    got = {key for key, _, _, ok in tutorial.steps(store, tut, seen, before) if ok}
     assert got == done | {"start"}, f"{desc}: started, as it has posted"
 
 
@@ -122,6 +124,9 @@ def test_a_tab_tutorial_has_the_tabs_steps(store, tut, actions, setup, done, des
     (False, True, True, None, None, "ended with a session of their own: nothing left, the checklist goes"),
     (False, False, True, {"seen": ["open"]}, None, "an earlier version's record, without before: it goes with the session"),
     (False, False, True, "reset", None, "claude-wheelhouse tutorial clears its record"),
+    (False, True, False, {"seen": []}, (9, False), "an earlier version's record, without before: their own doesn't tick it"),
+    (False, False, True, "restart", None, "ended, then the app starts again: it goes"),
+    (False, False, False, "restart", (9, False), "running as the app starts again: it stays"),
 ])
 def test_the_checklist_outlives_the_session_for_its_last_step(store, monkeypatch, before, own, end, record, shows, desc):
     if before:
@@ -132,10 +137,12 @@ def test_the_checklist_outlives_the_session_for_its_last_step(store, monkeypatch
     if record == "reset":
         monkeypatch.setattr(tutorial.liveness, "is_alive", lambda pid, start, boot: False)
         tutorial.reset(store)
-    elif record:
+    elif record and record != "restart":
         store.set_setting(tutorial.SEEN_KEY, json.dumps({**record, "sid": tut}))
     if end:
         store.end(tut)
+    if record == "restart":
+        tutorial.drop_ended(store)
     found = tutorial.current(store)
     if shows is None:
         assert found is None, desc
@@ -391,6 +398,26 @@ async def test_the_checklist_follows_the_tutorial(store, sid, tut):
         app.refresh_data()
         await pilot.pause()
         assert not checklist.display, "a session of their own: nothing left, it goes"
+        store.end(store.sessions()[-1]["id"])
+        app.refresh_data()
+        await pilot.pause()
+        assert not checklist.display, "and stays gone once their own session ends too"
+
+
+@pytest.mark.both
+@pytest.mark.anyio
+async def test_an_ended_tutorials_checklist_lasts_the_app_run(store, tut):
+    """D80: kept past End for the rest of that app run, dropped at the next app start."""
+    setup_items(store, tut)
+    store.end(tut)
+    assert tutorial.current(store) is not None, "the app run it ended in still shows it"
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.refresh_data()
+        await pilot.pause()
+        assert not app.query_one("#checklist", Static).display, "the next app start drops it"
+    assert tutorial.record(store) == {}, "its record goes with it"
 
 
 def turn(tmp_path, sid, who: str, text: str) -> None:
@@ -402,19 +429,24 @@ def turn(tmp_path, sid, who: str, text: str) -> None:
         f.write(json.dumps({"type": who, "timestamp": "2026-10-12T10:00:00Z", "message": {"content": content}}) + "\n")
 
 
-@pytest.mark.parametrize("pick, arrives, ticks, desc", [
-    (True, "assistant", True, "their own pick of its conversation, and a turn of Claude's arrives while shown"),
-    (True, "user", False, "their own words arriving don't"),
-    (True, None, False, "shown, with nothing new, doesn't"),
-    (False, "assistant", False, "the app's own selection of it doesn't"),
+@pytest.mark.parametrize("pick, arrives, replied, ticks, desc", [
+    (True, "assistant", True, True, "their own pick of its conversation, and a turn of Claude's arrives while shown"),
+    (True, "user", True, False, "their own words arriving don't"),
+    (True, None, True, False, "shown, with nothing new, doesn't"),
+    (False, "assistant", True, False, "the app's own selection of it doesn't"),
+    (True, "assistant", False, False, "before its reply, the tutorial's first turn running, doesn't"),
 ])
 @pytest.mark.both
 @pytest.mark.anyio
-async def test_watching_it_work_ticks_as_a_turn_arrives(store, tut, tmp_path, monkeypatch, pick, arrives, ticks, desc):
+async def test_watching_it_work_ticks_as_a_turn_arrives(store, tut, tmp_path, monkeypatch, pick, arrives, replied,
+                                                       ticks, desc):
     """Following the conversation is a tab's too: it is read from the transcript (Hub.conversation)."""
     from claude_wheelhouse import transcript
     monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
-    setup_items(store, tut)
+    q1, q2 = setup_items(store, tut)
+    if replied:
+        for act in (answer, send, reply):
+            act(store, tut, q1, q2)
     turn(tmp_path, tut, "assistant", "Waiting on the two questions.")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:

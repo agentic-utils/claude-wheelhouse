@@ -57,7 +57,7 @@ the top (wrapped on a narrow screen): `Enter` takes it, `Esc` dismisses it. Taki
 Windows Terminal tab that posts a task, two related questions and a decision; a checklist
 at the top of the right-hand pane walks you through answering, sending, watching it work in
 its conversation, ending it and starting a session of your own (`N`): the checklist stays
-for that last step once the demo has ended. If
+for that last step once the demo has ended, until you quit the app. If
 Claude Code asks whether you trust the demo's folder, say yes in its tab. It always starts
 afresh (any earlier tutorial is ended), in its own scratch directory,
 `claude-wheelhouse-tutorial/` next to the database. It is a real Claude Code session on

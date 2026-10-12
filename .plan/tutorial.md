@@ -131,14 +131,20 @@ their tokens per run.
 - Watch it work ticks when a turn of Claude's (a reply or a tool call, not the person's
   own words) arrives in the tutorial's conversation while it is shown, the person's own
   pick (the session followed, or its 💬 Conversation row), never the app's automatic
-  selection. The session has finished by then, so the hint has them ask for a change in
-  the box under the conversation, and the brief has it ask whether they'd like one.
+  selection, and only once See the session's reply has ticked: a turn watched while its
+  first turn runs doesn't count. The session has finished by then, so the hint has them
+  highlight the session on the left and ask for a change in the answer box under it
+  (Ctrl+Enter queues it, Ctrl+S sends it to the tab), and the brief has it ask whether
+  they'd like one.
 - Start your own ticks once a session exists that wasn't there as the tutorial started
   (`prepare` records their ids) and isn't in the tutorial's directory: `N`, or an Adopt.
+  A record without the ids (an earlier version's) never ticks it.
   Its hint also says Shift+S (Restore all) brings sessions back after a reboot.
 - The checklist outlives the session for that last step: once the session has ended it
-  shows End, done, and Start your own until that is done too, then goes. Only a record
-  `prepare` wrote (with the ids) is followed past the end, and `make tutorial` clears it.
+  shows End, done, and Start your own for the rest of that app run. It goes once Start
+  your own ticks or at the app's next start (`drop_ended`), whichever comes first, and its
+  record goes with it, so it never comes back. Only a record `prepare` wrote (with the ids)
+  is followed past the end, and `make tutorial` clears it.
 - The tutorial session is simply the one whose directory is `claude-wheelhouse-tutorial/`: no schema column.
   So a session of the person's own started in that directory is taken for the tutorial's,
   and ended with it (`stop_earlier`, on taking the offer or on `make tutorial`). The README
@@ -154,7 +160,7 @@ their tokens per run.
   of the screen. Enter starts the tutorial, Esc dismisses it; either way the setting is written and it never comes back. `tutorial_offer = reset`
   (from `make tutorial`) shows it once more, sessions or not, and the answer overwrites it.
 - The checklist sits at the top of the right-hand pane while the tutorial session exists,
-  and after it ends while Start your own is still to do (above). Each step is worked out from the store on the refresh: both questions answered, the
+  and after it ends, for the rest of that app run, while Start your own is still to do (above). Each step is worked out from the store on the refresh: both questions answered, the
   answers sent, a reply after they went, the decision closed (not just seen: the app's
   automatic selection marks a decision seen once it has rested there a second). The ones
   only the screen knows (a question highlighted or opened, a turn watched arriving) are

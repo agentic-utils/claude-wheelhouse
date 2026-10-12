@@ -1712,6 +1712,7 @@ class WheelhouseApp(App):
         self.eye_col = self.session_list.add_columns("", "session", "ctx", "?", "D", "✉", "")[-1]
         self.checklist = self.query_one("#checklist", Static)
         self.client.start(self.post)   # the daemon's stream, now there's an app to tell
+        self.client.drop_ended_tutorial()   # an ended tutorial's checklist lasts only the app run it ended in
         self.set_interval(0.1, self.animate)
         self.set_interval(1.0, self.tick)
         # a screen over the inbox, or a thread opened, is a break in looking: the dwell restarts
@@ -2397,7 +2398,10 @@ class WheelhouseApp(App):
         if step is None and ref is not None:
             item = self.client.item(sid, ref)
             step = {"question": "open"}.get(item and item["kind"])
-        if step and not any(key == step and done for key, *_, done in found[1]):   # once is enough
+        done = {key for key, *_, ok in found[1] if ok}
+        if step == "follow" and "reply" not in done:   # a turn watched before the first reply is the tutorial's own run
+            return
+        if step and step not in done:   # once is enough
             self.client.see(sid, step)
             self.paint_checklist()
 

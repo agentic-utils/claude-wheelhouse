@@ -73,8 +73,8 @@ def tutorial_again(yes: bool) -> None:
     if not yes:
         try:
             said = input("This ends the tutorial session, if there is one, and the wheelhouse offers the tutorial "
-                         "when it next starts. Your other sessions are kept, but one of your own started in the "
-                         "tutorial's directory is taken for the tutorial's and ended too. Go ahead? [y/N] ")
+                         "when it next starts. Your other sessions are kept, except any you started in the tutorial's "
+                         "own directory: those end too. Go ahead? [y/N] ")
         except EOFError:
             said = ""
         if said.strip().lower() not in ("y", "yes"):
@@ -126,8 +126,8 @@ def main() -> None:
     again = sub.add_parser("tutorial", help="have the app offer the tutorial at its next start, ending any "
                            "earlier tutorial session (run with the app and the daemon stopped)",
                            description="Has the app offer the tutorial at its next start, ending any earlier "
-                           "tutorial session. Your other sessions are kept, but one of your own started in the "
-                           "tutorial's directory is taken for the tutorial's and ended too. "
+                           "tutorial session. Your other sessions are kept, except any you started in the "
+                           "tutorial's own directory: those end too. "
                            "Run it with the app and the daemon stopped. It refuses while the "
                            "daemon runs, but an app started with --local has no daemon and can't be detected: "
                            "running this then stops that app's tutorial session and removes it, and the offer "

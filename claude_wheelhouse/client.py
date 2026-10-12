@@ -110,6 +110,10 @@ class LocalClient(Hub):
     def see(self, sid: str, step: str) -> None:
         tutorial.see(self.store, sid, step)
 
+    def drop_ended_tutorial(self) -> None:
+        """As the app starts: an ended tutorial's checklist is let go (tutorial.drop_ended)."""
+        tutorial.drop_ended(self.store)
+
     def start(self, post=None) -> None:
         pass   # its work runs on the app's own workers (spawn, post)
 
@@ -576,6 +580,9 @@ class RemoteClient:
 
     def see(self, sid: str, step: str) -> None:
         self.quietly("/tutorial/seen", {"sid": sid, "step": step})
+
+    def drop_ended_tutorial(self) -> None:
+        self.quietly("/tutorial/drop-ended", {})
 
     def quietly(self, path: str, body: dict) -> bool:
         """A command nobody waits to hear about (a splitter's size, a tutorial step, a

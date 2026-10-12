@@ -7,7 +7,8 @@ prompt) comes back as an SDK-only top-up (.plan/tutorial.md). Following the conv
 tab's too: it is read from the session's transcript, whichever way it runs.
 
 The checklist outlives the session for its last step: once the session has ended it shows
-End and Start your own until a session of the person's own exists (current).
+End and Start your own until a session of the person's own exists, or the app next starts
+(current, drop_ended).
 
 The tutorial session is the one whose directory is the tutorial's own scratch directory
 (tutorial_dir), next to the database. Starting the tutorial always starts afresh: any
@@ -70,13 +71,14 @@ STEPS = (
     ("queue", "Answer both questions", "type in the answer box under its thread, Ctrl+Enter queues each answer"),
     ("send", "Send them together", "Ctrl+S, or the Send button under the session list"),
     ("reply", "See the session's reply", "its message shows in each question's thread as it finishes"),
-    ("follow", "Watch it work", "highlight 💬 Conversation (or the session on the left), then ask for a "
-     "change in the box under it: its turns show as it works"),
+    ("follow", "Watch it work", "highlight the session on the left (or its 💬 Conversation row), then ask "
+     "for a change in the answer box under it: Ctrl+Enter queues it and, as it runs in a tab, Ctrl+S sends "
+     "it. Its turns show as it works"),
     ("decision", "Read and close the decision", "highlight D1 to read it, then Delete (or Backspace) in the item list closes it, as it does a question"),
     ("end", "End the session", "highlight it in the session list, then End below: its items go with it, "
      "and its tab can be closed"),
-    ("new", "Start your own", "N opens New: a directory and an opening brief, and it starts in its own "
-     "tab. After a reboot, Shift+S restores your sessions"),
+    ("new", "Start your own", "N opens New: pick a directory, give it an opening brief, and it starts. "
+     "After a reboot, Shift+S restores your sessions"),
 )
 AFTER_END = ("end", "new")   # the steps the checklist keeps once the session has ended (current)
 
@@ -112,10 +114,11 @@ def should_offer(store: Store) -> bool:
     return offer == RESET or (offer is None and not store.sessions())
 
 
-def steps(store: Store, sid: str, seen: set[str], before=()) -> list[tuple[str, str, str, bool]]:
+def steps(store: Store, sid: str, seen: set[str], before=None) -> list[tuple[str, str, str, bool]]:
     """Each step and whether it's done, from what the store records; `seen` holds the steps
     only the screen knows about (a question opened, a turn watched arriving), `before` the
-    sessions there were as the tutorial started. Once its session has ended, only the steps
+    sessions there were as the tutorial started (None, from a record without them: Start your
+    own can't tick, as every session would look new). Once its session has ended, only the steps
     after it (AFTER_END), End done."""
     ended = store.session(sid) is None
     items = {it["ref"]: it for it in store.items(sid)}
@@ -136,7 +139,8 @@ def steps(store: Store, sid: str, seen: set[str], before=()) -> list[tuple[str, 
         "decision": any(it["kind"] == "decision" and it["status"] == "closed" for it in items.values()),
         "end": ended,
         # a session of the person's own: one there wasn't as the tutorial started, outside its directory
-        "new": any(s["id"] not in before and not is_tutorial(store, s) for s in store.sessions()),
+        "new": before is not None and any(s["id"] not in before and not is_tutorial(store, s)
+                                          for s in store.sessions()),
     }
     return [(key, what, how, done[key]) for key, what, how in STEPS if not ended or key in AFTER_END]
 
@@ -153,17 +157,27 @@ def record(store: Store) -> dict:
 
 def current(store: Store) -> tuple[str, list] | None:
     """The checklist, if one shows: the tutorial session's steps, or, once that has ended,
-    End and Start your own, until a session of the person's own exists. Only a tutorial
-    prepare() recorded is followed past its end: an earlier version's record has no before."""
+    End and Start your own, until a session of the person's own exists (its record is then
+    cleared, so ending that session doesn't bring the checklist back) or the app next starts
+    (drop_ended). Only a tutorial prepare() recorded is followed past its end: an earlier
+    version's record has no before."""
     sid, kept = session_id(store), record(store)
     if sid is None and "before" in kept:
         sid = kept.get("sid")
     if sid is None:
         return None
-    found = steps(store, sid, seen(store, sid), kept.get("before", ()) if kept.get("sid") == sid else ())
+    found = steps(store, sid, seen(store, sid), kept.get("before") if kept.get("sid") == sid else None)
     if store.session(sid) is None and all(done for *_, done in found):
+        store.clear_setting(SEEN_KEY)
         return None
     return sid, found
+
+
+def drop_ended(store: Store) -> None:
+    """As the app starts: an ended tutorial's checklist (current) stays only for the app run
+    it ended in, so its record goes. A running tutorial's is kept."""
+    if session_id(store) is None and record(store):
+        store.clear_setting(SEEN_KEY)
 
 
 def seen(store: Store, sid: str) -> set[str]:

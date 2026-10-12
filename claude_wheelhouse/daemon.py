@@ -404,6 +404,7 @@ class Daemon:
                 lambda request, body: {"text": self.hub.unqueue(request.path_params["id"])}), methods=["POST"]),
             Route("/tutorial/offer", self.command(self.answer_offer), methods=["POST"]),
             Route("/tutorial/seen", self.command(self.tutorial_seen), methods=["POST"]),
+            Route("/tutorial/drop-ended", self.command(self.tutorial_drop_ended), methods=["POST"]),
             Route("/shutdown", self.command(self.shutdown_requested), methods=["POST"]),
         ], middleware=[Middleware(Guard, daemon=self)], lifespan=self.lifespan)
 
@@ -840,6 +841,11 @@ class Daemon:
         sid, step = text(body, "sid"), text(body, "step")
         self.hub.row(sid)
         tutorial.see(self.store, sid, step)
+        return Done()
+
+    def tutorial_drop_ended(self, request: Request, body: dict) -> Done:
+        """An app starting: an ended tutorial's checklist lasts only the app run it ended in."""
+        tutorial.drop_ended(self.store)
         return Done()
 
     def shutdown_requested(self, request: Request, body: dict) -> Done:
