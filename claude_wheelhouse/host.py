@@ -72,6 +72,15 @@ CHECK_BODY = ("Check: {items}. Correct any that's finished with update_item or r
               "Leave alone any you don't recognise.")
 
 
+def waits_on_person(store: Store, sid: str) -> bool:
+    """Whether the session waits on the person: an open question, an unseen decision or an
+    open permission. The host's keepalive and the hub's (tab sessions) both ask."""
+    return any((i["kind"] == "question" and i["status"] == "open")
+               or (i["kind"] == "decision" and i["status"] == "unseen")
+               or (i["kind"] == "permission" and i["status"] == "open")
+               for i in store.items(sid, include_closed=False))
+
+
 def keepalive_body(doubted: list[str]) -> str:
     """The keepalive's text, without the [wheelhouse] mark: the check on the items in doubt
     if there are any, else the plain keepalive."""
@@ -595,13 +604,11 @@ class Host:
                 and (self.waits_on_person() or bool(self.store.in_doubt(self.sid))))
 
     def waits_on_person(self) -> bool:
-        """Whether the session waits on the person: an open question, an unseen decision or
-        an open permission. A permission or AskUserQuestion waits inside a running turn,
-        where no keepalive is sent (keepalive_due), so in practice it is the questions and decisions the session posts itself that bring one."""
-        return any((i["kind"] == "question" and i["status"] == "open")
-                   or (i["kind"] == "decision" and i["status"] == "unseen")
-                   or (i["kind"] == "permission" and i["status"] == "open")
-                   for i in self.store.items(self.sid, include_closed=False))
+        """Whether the session waits on the person (waits_on_person). A permission or
+        AskUserQuestion waits inside a running turn, where no keepalive is sent
+        (keepalive_due), so in practice it is the questions and decisions the session posts
+        itself that bring one."""
+        return waits_on_person(self.store, self.sid)
 
     def forget_delivered(self) -> None:
         """Drop remembered ids someone else has since recorded as delivered (a shell tab's

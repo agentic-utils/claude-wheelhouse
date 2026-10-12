@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from . import adopt, api, features, launch, liveness, models, plan_usage, stats, subagents, transcript, tutorial
-from .host import AWAITING_NOTES, NO_NOTES
+from .host import AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, NO_NOTES, keepalive_body, waits_on_person
 from .store import DISMISSABLE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
 
 RUNNING = ("live", "stalled", "starting")
@@ -119,6 +119,16 @@ class Done:
         return self
 
 
+@dataclass
+class Warmth:
+    """A tab session's keepalive, as the hub keeps it (keep_warm), all epoch seconds: since
+    when it has been quiet (its last turn not a keepalive's), the latest response seen, and
+    when the keepalive running now was sent (None once its turn has ended)."""
+    quiet: float
+    seen: float
+    sent: float | None = None
+
+
 class Hub:
     """The wheelhouse's service over the store. Its state lives as long as it does."""
 
@@ -177,6 +187,9 @@ class Hub:
         self.usage_due: float | None = None
         self.sdk_usage_due = 0.0   # when the SDK sessions' reading is next looked at
         self.sdk_usage = None      # the last it took, as stored
+        # the tab sessions' keepalive (keep_warm), by session: as the host keeps its own
+        self.warmth: dict[str, Warmth] = {}
+        self.keepalive_for = features.keepalive_hours() * 3600   # seconds; 0: no keepalive
 
     # events
 
@@ -762,6 +775,43 @@ class Hub:
         s = self.store.session(follower.sid)
         if s is not None and (runner(s) == "tab" or s["shell"]):
             stats.carry(self.store, follower.sid, follower.snap)
+
+    def keep_warm(self, at: float | None = None) -> None:
+        """Each tab session's keepalive, as an SDK host sends its own (host.keepalive_due),
+        sent as a notice, timed from its transcript (the stats snapshot): KEEPALIVE_AFTER
+        after its last response, then every KEEPALIVE_AFTER while it stays quiet, until it
+        has been quiet the keepalive limit (features.keepalive_hours; 0, never). Only to a
+        live session, not parked, mid-turn (its last response stopped for a tool) or just
+        compacted, over KEEPALIVE_TOKENS, and waiting on the person or with an item in
+        doubt; the check (host.keepalive_body) when any is. A keepalive's own turn restarts
+        the 55 minutes, not the quiet time."""
+        at = time.time() if at is None else at
+        for s in self.sessions:
+            sid = s["id"]
+            follower = self.contexts.get(sid)
+            snap = follower.snap if follower is not None and follower.ready else None
+            if snap is None or snap.last_at is None or runner(s) != "tab":
+                self.warmth.pop(sid, None)
+                continue
+            w = self.warmth.setdefault(sid, Warmth(snap.last_at, snap.last_at))
+            if snap.last_at != w.seen:   # a response since: the keepalive's own, or a real turn's
+                w.seen = snap.last_at
+                if w.sent is None or snap.last_at < w.sent:
+                    w.quiet = snap.last_at
+                elif snap.stop != "tool_use":
+                    w.sent = None   # the keepalive's turn has ended
+            if (self.keepalive_for <= 0 or s["parked"] or self.statuses.get(sid) not in ("live", "stalled")
+                    or snap.stop == "tool_use" or snap.context <= KEEPALIVE_TOKENS
+                    or (snap.compactions and snap.compactions[-1].at >= snap.last_at)
+                    or at - max(snap.last_at, w.sent or 0) < KEEPALIVE_AFTER or at - w.quiet >= self.keepalive_for):
+                continue
+            try:
+                doubted = self.store.in_doubt(sid)
+                if doubted or waits_on_person(self.store, sid):
+                    self.store.notice(sid, keepalive_body(doubted))
+                    w.sent = at
+            except (SessionGone, sqlite3.OperationalError):   # ended meanwhile, or a locked database: next tick
+                continue
 
     def watch_agents(self) -> None:
         """Each session's subagents brought up to date as A items, on a worker thread: every

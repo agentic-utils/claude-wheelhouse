@@ -53,8 +53,10 @@ class LocalClient(Hub):
     connected = True
 
     def background(self) -> None:
-        """The hub's reading at each tick: context sizes, subagents, the account's usage."""
+        """The hub's reading at each tick: context sizes, the tab sessions' keepalive,
+        subagents, the account's usage."""
         self.read_contexts()
+        self.keep_warm()
         self.watch_agents()
         self.fetch_usage()
 

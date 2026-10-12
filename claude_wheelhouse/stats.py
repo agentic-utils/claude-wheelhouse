@@ -69,6 +69,7 @@ class Turn:
     effort: str | None = None   # the effort it ran at, as Claude Code recorded it
     requested: str | None = None   # the model asked for (a /model's, say), as Claude Code recorded it
     start: float | None = None   # when its turn began (parse): the time its requested model and effort count from
+    stop: str | None = None   # why it stopped (stop_reason): tool_use while its turn runs on
 
 
 @dataclass
@@ -217,7 +218,8 @@ def parse(lines, seen: set, main: bool, settings: list | None = None,
                           msg.get("model"), on_main, usage.get("output_tokens", 0) or 0,
                           rec.get("effort") if isinstance(rec.get("effort"), str) else None,
                           rec.get("requestedModel") if isinstance(rec.get("requestedModel"), str) else None,
-                          start if on_main else None))
+                          start if on_main else None,
+                          msg.get("stop_reason") if isinstance(msg.get("stop_reason"), str) else None))
     return turns, compactions
 
 
@@ -268,6 +270,7 @@ class Snapshot:
     effort: str | None = None      # the main thread's latest response's
     requested: str | None = None   # the model the main thread's latest response asked for
     begun: float | None = None     # when the main thread's latest turn began (parse's start)
+    stop: str | None = None        # why the main thread's latest response stopped: tool_use, mid-turn
     # the latest model (the table's pinned id) and effort, each as (when, value): typed, a
     # /model or /effort Claude Code took; asked, what a main-thread turn ran on, from when it began
     typed: dict = field(default_factory=dict)
@@ -416,7 +419,8 @@ class UsageFollower:
         now = time.time() if now is None else now
         snap = Snapshot(self.snap.model, self.snap.context, self.snap.peak, self.snap.last_at, self.snap.ttl,
                         list(self.snap.compactions), list(self.snap.turns), effort=self.snap.effort,
-                        requested=self.snap.requested, begun=self.snap.begun, typed=dict(self.snap.typed),
+                        requested=self.snap.requested, begun=self.snap.begun, stop=self.snap.stop,
+                        typed=dict(self.snap.typed),
                         asked=dict(self.snap.asked))
         changed = False
         for path in self.paths(now):
@@ -494,6 +498,7 @@ def take(s: Snapshot, turns: list[Turn], compactions: list[Compaction]) -> None:
         s.turns.append(t)
         if t.main:
             s.model, s.context, s.peak, s.last_at = t.model or s.model, t.context, max(s.peak, t.context), t.at
+            s.stop = t.stop
             s.effort, s.requested = t.effort or s.effort, t.requested or s.requested
             begun = t.at if t.start is None else t.start
             s.begun = max(s.begun or begun, begun)

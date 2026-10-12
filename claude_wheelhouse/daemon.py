@@ -459,6 +459,7 @@ class Daemon:
         hub, seen = self.hub, self.marks()   # before the refresh: see publish_moved
         hub.refresh()
         hub.read_contexts()
+        hub.keep_warm()
         hub.watch_agents()
         hub.fetch_usage()
         hub.finish_relaunches()

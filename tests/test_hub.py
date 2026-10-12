@@ -908,3 +908,88 @@ def test_a_copied_back_model_launches(store, tmp_path):
     argv = launch.claude_argv(store.session(sid), python="py", resume=True)
     assert argv[argv.index("--model") + 1] == "claude-opus-5-5"
     store.set_model(sid, store.session(sid)["model"])
+
+
+H, M = 3600, 60
+
+
+def warm_hub(hub, store, sid, snap, status="live"):
+    """The hub's view of one tab session: its transcript read as snap, its liveness status."""
+    from types import SimpleNamespace
+    hub.refresh()
+    hub.statuses[sid] = status
+    hub.contexts[sid] = SimpleNamespace(ready=True, snap=snap)
+
+
+def notices(store, sid):
+    return [m["body"] for m in store.pending(sid) if m["kind"] == "notice"]
+
+
+@pytest.mark.parametrize("state, sent, desc", [
+    ({}, True, "big, quiet 55 minutes, waiting on an open question: kept warm"),
+    ({"since": 54 * M}, False, "54 minutes: not yet"),
+    ({"context": 150_000}, False, "at the line, not past it"),
+    ({"status": "dead"}, False, "never to a dead session"),
+    ({"parked": True}, False, "never to a parked one"),
+    ({"stop": "tool_use"}, False, "never mid-turn"),
+    ({"compacted": True}, False, "its last turn compacted: nothing to keep warm"),
+    ({"waits": False}, False, "nothing waits on the person, nothing in doubt"),
+    ({"hours": 0}, False, "0 hours: off"),
+    ({"runner": "sdk"}, False, "an SDK session's host keeps its own"),
+])
+def test_a_tab_sessions_keepalive_is_sent_under_its_conditions(hub, store, sid, state, sent, desc):
+    t0 = 1_000_000.0
+    if state.get("waits", True):
+        store.post_item(sid, "question", "which?")
+    if state.get("parked"):
+        store.set_parked(sid, True)
+    if state.get("runner"):
+        store.set_runner(sid, state["runner"])
+    hub.keepalive_for = state.get("hours", 8) * H
+    snap = stats.Snapshot(context=state.get("context", 200_000), last_at=t0, stop=state.get("stop", "end_turn"),
+                          compactions=[stats.Compaction(t0, "manual", 300_000, 50_000)] if state.get("compacted") else [])
+    warm_hub(hub, store, sid, snap, state.get("status", "live"))
+    hub.keep_warm(t0 + state.get("since", 55 * M))
+    assert notices(store, sid) == ([host_mod.KEEPALIVE_BODY] if sent else []), desc
+
+
+def test_a_tab_sessions_keepalive_repeats_every_55_minutes_up_to_the_limit(hub, store, sid):
+    """Each keepalive's own turn restarts the 55 minutes but not the quiet time; it is the
+    check while an item is in doubt."""
+    t0 = 1_000_000.0
+    store.post_item(sid, "question", "which?")
+    hub.keepalive_for = 2 * H
+    snap = stats.Snapshot(context=200_000, last_at=t0, stop="end_turn")
+    warm_hub(hub, store, sid, snap)
+    sent_at = []
+    for minute in range(0, 4 * 60):
+        at = t0 + minute * M
+        hub.keep_warm(at)
+        if len(notices(store, sid)) > len(sent_at):
+            sent_at.append(minute)
+            snap.last_at = at + 5   # the session's "ok"
+    assert sent_at == [55, 111], "55 minutes after each last response (the ok, 5 s on), until quiet 2 hours"
+
+
+def test_a_tab_sessions_check_names_the_items_in_doubt(hub, store, sid, monkeypatch):
+    t0 = 1_000_000.0
+    monkeypatch.setattr(store, "in_doubt", lambda s, at=None: ["T1 waiting"])
+    warm_hub(hub, store, sid, stats.Snapshot(context=200_000, last_at=t0, stop="end_turn"))
+    hub.keep_warm(t0 + 55 * M)
+    assert notices(store, sid) == [host_mod.keepalive_body(["T1 waiting"])]
+    assert notices(store, sid)[0].startswith("Check: T1 waiting.")
+
+
+def test_a_real_turn_restarts_the_quiet_time(hub, store, sid):
+    t0 = 1_000_000.0
+    store.post_item(sid, "question", "which?")
+    hub.keepalive_for = 1 * H
+    snap = stats.Snapshot(context=200_000, last_at=t0, stop="end_turn")
+    warm_hub(hub, store, sid, snap)
+    hub.keep_warm(t0 + 55 * M)
+    snap.last_at = t0 + 56 * M   # the keepalive's ok
+    hub.keep_warm(t0 + 57 * M)
+    snap.last_at = t0 + 58 * M   # the person's own turn, after the keepalive's ended
+    hub.keep_warm(t0 + 59 * M)
+    hub.keep_warm(t0 + 113 * M)
+    assert len(notices(store, sid)) == 2, "quiet again from 58 minutes: a second keepalive inside the hour"
