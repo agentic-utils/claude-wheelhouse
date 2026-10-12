@@ -17,7 +17,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `self.hub` is that same `LocalClient` with `--local`, and None when the app goes
   through a daemon (`client.remote`).
 - `daemon.py`: the hub served over HTTP and SSE (`.plan/remote.md`), once per user on
-  `127.0.0.1:7428`. The app goes through it by default; `--local` runs a hub in process.
+  `127.0.0.1:7428` (or `features.port()`). The app goes through it by default; `--local`
+  runs a hub in process.
 - `client.py`: the app's way to the hub, `LocalClient` (in process) or `RemoteClient`
   (the daemon). Both answer the same calls with the same values.
 - `connect.py`: finding, starting, restarting and stopping (`halt`) the local daemon,
@@ -27,8 +28,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   daemon on older code. Bump its `API` when the daemon's routes change incompatibly.
 - `host.py`: a session run through the Claude Agent SDK, one detached process per session.
   Experimental, and off unless `features.sdk_enabled()`: read `features.py` first.
-- `features.py`: SDK mode's switch, `sdk_enabled()`, and the plan usage mode,
-  `usage_mode()` (`--usage-mode`, or `usage-mode` in a `.env`).
+- `features.py`: SDK mode's switch, `sdk_enabled()`, the plan usage mode,
+  `usage_mode()` (`--usage-mode`, or `usage-mode` in a `.env`), and the daemon's port,
+  `port()` (`--port`, `WHEELHOUSE_PORT`, or `port` in a `.env`).
 - `launch.py`: Windows Terminal tabs (`wt.exe` through `cmd.exe`, in the user's own
   window, `window_name`), the `claude` command line, and the protocol text injected into
   a session.
@@ -94,7 +96,8 @@ directory of `WHEELHOUSE_DB`. It holds `wheelhouse.db` (WAL), `daemon.token`,
 `daemon.lock`, `daemon.log`, `launch.log`, the tutorial's scratch directory, and
 `hosts/<id>.log`, each SDK host's output (SDK mode, experimental). A module
 that keeps files of its own gets it as `api.Context.state_dir`. Environment variables:
-`WHEELHOUSE_DB`, `WHEELHOUSE_PORT`, `WHEELHOUSE_TOKEN` (`--connect`), `WHEELHOUSE_DECISIONS=0`,
+`WHEELHOUSE_DB`, `WHEELHOUSE_PORT` (the daemon's port, below `--port` and above `port=` in a
+`.env`), `WHEELHOUSE_TOKEN` (`--connect`), `WHEELHOUSE_DECISIONS=0`,
 `WHEELHOUSE_SESSION_ID` and `WHEELHOUSE_PYTHON`, which a launched session is given,
 `WHEELHOUSE_RUNNER` (`tab` or `sdk`; it never turns SDK mode on by itself), and
 `TEXTUAL_COLOR_SYSTEM`, which overrides the truecolour the app assumes under Windows

@@ -165,3 +165,71 @@ def test_a_bad_usage_mode_flag_is_refused(monkeypatch, capsys):
     with pytest.raises(SystemExit):
         cli.main()
     assert "invalid choice: 'always'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("flag, environ, cwd_env, config_env, port, desc", [
+    (None, None, None, None, 7428, "nothing given: 7428"),
+    (None, None, None, "port=7429", 7429, "the user's .env"),
+    (None, None, "port=7430", "port=7429", 7430, "the starting directory's wins over the user's"),
+    (None, "7431", "port=7430", None, 7431, "WHEELHOUSE_PORT wins over .env"),
+    ("7432", "7431", "port=7430", None, 7432, "the flag wins over all"),
+    (None, None, "PORT=3000", None, 7428, "PORT, a project's own server's, isn't the wheelhouse's"),
+    (None, None, "port=1024", None, 1024, "the lowest port taken"),
+    (None, None, "port=65535", None, 65535, "the highest"),
+])
+def test_port(tmp_path, monkeypatch, flag, environ, cwd_env, config_env, port, desc):
+    cwd, config = tmp_path / "cwd.env", tmp_path / "config.env"
+    monkeypatch.setattr(features, "env_files", lambda: [cwd, config])
+    for path, text in ((cwd, cwd_env), (config, config_env)):
+        if text:
+            path.write_text(text + "\n")
+    if environ:
+        monkeypatch.setenv("WHEELHOUSE_PORT", environ)
+    if flag:
+        features.set_port(flag)
+    assert features.port() == port, desc
+
+
+@pytest.mark.parametrize("flag, environ, config_env, said, desc", [
+    ("80", None, None, "--port is '80': give a port from 1024 to 65535", "the flag, below 1024"),
+    (None, "seven", None, "WHEELHOUSE_PORT is 'seven': give a port from 1024 to 65535", "the variable, not a number"),
+    (None, None, "port=65536", "port= in {config} is '65536': give a port from 1024 to 65535", ".env, naming the file"),
+    (None, None, "port=-1", "port= in {config} is '-1': give a port from 1024 to 65535", "a negative number"),
+])
+def test_a_bad_port_is_refused_naming_where(tmp_path, monkeypatch, flag, environ, config_env, said, desc):
+    config = tmp_path / "config.env"
+    monkeypatch.setattr(features, "env_files", lambda: [tmp_path / "cwd.env", config])
+    if config_env:
+        config.write_text(config_env + "\n")
+    if environ:
+        monkeypatch.setenv("WHEELHOUSE_PORT", environ)
+    if flag:
+        features.set_port(flag)
+    with pytest.raises(features.BadPort) as e:
+        features.port()
+    assert str(e.value) == said.format(config=config), desc
+
+
+@pytest.mark.parametrize("argv, port, desc", [
+    (["daemon"], 7428, "no flag"),
+    (["--port", "7429", "daemon"], 7429, "before the command"),
+    (["daemon", "--port", "7429"], 7429, "after it"),
+])
+def test_the_port_flag_reaches_the_daemon(monkeypatch, argv, port, desc):
+    seen = []
+    monkeypatch.setattr(daemon, "main", lambda address, port, *a: seen.append(port))
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", *argv])
+    cli.main()
+    assert seen == [port], desc
+
+
+@pytest.mark.parametrize("argv, said, desc", [
+    (["--port", "80"], "claude-wheelhouse: --port is '80': give a port from 1024 to 65535", "the app"),
+    (["tui", "--port", "x"], "claude-wheelhouse: --port is 'x': give a port from 1024 to 65535", "the app, after tui"),
+    (["daemon", "--port", "80"], "--port is '80': give a port from 1024 to 65535", "the daemon started by hand"),
+])
+def test_a_bad_port_flag_stops_it_in_a_line(monkeypatch, argv, said, desc):
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", *argv])
+    with pytest.raises(SystemExit) as e:
+        cli.main()
+    assert e.value.code == said, desc

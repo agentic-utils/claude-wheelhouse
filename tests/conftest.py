@@ -51,8 +51,9 @@ def sdk_off(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def usage_mode_default(monkeypatch):
-    """No --usage-mode given, and nothing yet said of a bad one (features.usage_mode)."""
+    """No --usage-mode or --port given, and nothing yet said of a bad usage mode (features.usage_mode)."""
     monkeypatch.setattr(features, "_usage_mode", None)
+    monkeypatch.setattr(features, "_port", None)
     monkeypatch.setattr(features, "_warned", set())
 
 

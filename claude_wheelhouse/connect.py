@@ -21,7 +21,6 @@ from pathlib import Path
 from . import auth, features, fingerprint
 from .client import RemoteClient
 
-PORT = 7428
 START_WAIT = 10   # seconds a daemon started has to take its lock and answer
 HELLO_WAIT = 3    # seconds another machine's daemon has to answer (--connect)
 STOP_WAIT = 10    # seconds a daemon asked to stop has to let go of its lock
@@ -70,10 +69,6 @@ def pid_of(held: str | None) -> int | None:
     return int(match[1]) if match else None
 
 
-def port() -> int:
-    return int(os.environ.get("WHEELHOUSE_PORT") or PORT)
-
-
 def start(state_dir: Path, port: int) -> int:
     """A daemon, on this interpreter and environment (WHEELHOUSE_DB and the rest go with
     it, but for WHEELHOUSE_TOKEN, which nothing it starts should see), init's child rather
@@ -83,7 +78,8 @@ def start(state_dir: Path, port: int) -> int:
     nor the installed one when this one is a copy run from its folder. One that finds
     another holding the lock stops at once, and says so in the log. In SDK mode if this
     process is (features.py): it runs in the state dir, where the starting directory's .env
-    isn't, so it is told with --enable-sdk, and with --usage-mode how to read plan usage.
+    isn't, so it is told with --enable-sdk, with --usage-mode how to read plan usage, and its
+    port with --port.
 
     Returns the read end of a pipe whose write end only the daemon holds (its number given
     as --start-pipe, which the daemon keeps from anything it starts): it reads as ended the
@@ -321,7 +317,10 @@ def local(state_dir: Path, port: int) -> tuple[str, str, list[str]]:
                 continue   # another app's daemon took the lock and is still starting
             failed += 1
             if failed >= 2 or not found:
-                raise NoDaemon(f"the daemon didn't start: {last_line(state_dir) or 'see ' + LOG} "
+                line = last_line(state_dir)
+                if line == features.PORT_TAKEN.format(port=port):   # the daemon's own words (daemon.listener)
+                    raise NoDaemon(line)
+                raise NoDaemon(f"the daemon didn't start: {line or 'see ' + LOG} "
                                f"(in {state_dir}). claude-wheelhouse --local runs without it")
             continue
         url, file = url_of(held), auth.path(state_dir)
@@ -340,6 +339,9 @@ def local(state_dir: Path, port: int) -> tuple[str, str, list[str]]:
         exposed = auth.exposed(file) if found else None   # one started on it would have refused it
         if exposed and f"the daemon runs, but {exposed}" not in said:
             said.append(f"the daemon runs, but {exposed}")
+        elsewhere = elsewhere_said(url, port)   # the lock's address wins over the port asked for
+        if elsewhere and elsewhere not in said:
+            said.append(elsewhere)
         if info is None:
             raise NoDaemon(f"the daemon ({held}) holds its lock but doesn't answer. It's left running: stop it, "
                            "or run claude-wheelhouse --local without it")
@@ -355,6 +357,16 @@ def local(state_dir: Path, port: int) -> tuple[str, str, list[str]]:
                            f"wheelhouse {fingerprint.API}: stop it, or run claude-wheelhouse --local")
         said.append(f"the daemon (pid {info['pid']}) runs other code, from {info['package']}")
         return url, token, said
+
+
+def elsewhere_said(url: str, port: int) -> str | None:
+    """What to say of a running daemon whose lock names another port than the one asked for
+    (one started by hand, or by an app with another setting): joined where it is."""
+    match = re.search(r":(\d+)$", url)
+    if match is None or int(match[1]) == port:
+        return None
+    return (f"the daemon runs on port {match[1]}, not {port} as set here: joined it there. To move it, quit the "
+            f"app, stop it ({STOP}) and start again")
 
 
 class Reviver:
@@ -396,8 +408,9 @@ class Reviver:
 
 
 def local_client(state_dir: Path) -> tuple[RemoteClient, list[str]]:
-    url, token, said = local(state_dir, port())
-    client = RemoteClient(url, token, revive=Reviver(state_dir, port()),
+    port = features.port()
+    url, token, said = local(state_dir, port)
+    client = RemoteClient(url, token, revive=Reviver(state_dir, port),
                           why_refused=lambda: refused_trouble(auth.path(state_dir), holder(state_dir)))
     return client, said
 

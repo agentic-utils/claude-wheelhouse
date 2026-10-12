@@ -25,6 +25,7 @@ can't send a command without it. It must never become optional."""
 
 import asyncio
 import contextlib
+import errno
 import fcntl
 import functools
 import hashlib
@@ -51,11 +52,11 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import auth, fingerprint, liveness, models, stats, tutorial
+from . import auth, features, fingerprint, liveness, models, stats, tutorial
 from .hub import Done, Event, Hub, host_context
 from .store import SessionGone, Store, inbox_rank, mode, runner, standing
 
-ADDRESS, PORT = "127.0.0.1", 7428
+ADDRESS = "127.0.0.1"   # the port is features.port()
 TICK = 1.0           # seconds between the hub's refreshes, as the TUI's tick
 RING = 1024          # events kept for a client that reconnects
 PING = 15            # seconds between keep-alive comments on a quiet stream
@@ -85,6 +86,10 @@ UNLISTED = ("body", "answer", "seq")
 
 class AlreadyRunning(RuntimeError):
     pass
+
+
+class PortTaken(RuntimeError):
+    """The port is another process's: another user's wheelhouse, most likely (features.PORT_TAKEN)."""
 
 
 class Refused(Exception):
@@ -120,6 +125,22 @@ def named(request: Request) -> str:
     """The Host a request names, in lower case: DNS names are case-insensitive, so
     LOCALHOST:7428 names the daemon as localhost:7428 does."""
     return (request.headers.get("host") or "").lower()
+
+
+def listener(address: str, port: int) -> socket.socket:
+    """The socket the daemon listens on, bound here rather than by uvicorn, which would only
+    log the error and exit: PortTaken if another process has the port, said as the app says
+    it (connect.local); ValueError, in a line, if it can't be bound for another reason."""
+    sock = socket.socket(socket.AF_INET6 if ipaddress.ip_address(address).version == 6 else socket.AF_INET)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # as asyncio's own does
+    try:
+        sock.bind((address, port))
+    except OSError as e:
+        sock.close()
+        if e.errno == errno.EADDRINUSE:
+            raise PortTaken(features.PORT_TAKEN.format(port=port)) from None
+        raise ValueError(f"can't listen on {address} port {port}: {e.strerror}") from None
+    return sock
 
 
 def take_lock(state_dir):
@@ -958,7 +979,7 @@ class Server(uvicorn.Server):
         super().handle_exit(sig, frame)
 
 
-def main(address: str = ADDRESS, port: int = PORT, names=(), start_pipe: int | None = None) -> None:
+def main(address: str = ADDRESS, port: int = features.PORT, names=(), start_pipe: int | None = None) -> None:
     """Serve until stopped (Ctrl+C, SIGTERM from systemd, or POST /shutdown): one per user,
     or AlreadyRunning. Its token is made, under the lock, the first time, and reused after.
     start_pipe is the write end of the pipe of the app that started it (connect.start),
@@ -976,6 +997,7 @@ def main(address: str = ADDRESS, port: int = PORT, names=(), start_pipe: int | N
     url = f"http://{address if ipaddress.ip_address(address).version == 4 else f'[{address}]'}:{port}"
     lock = take_lock(store.path.parent)
     try:
+        sock = listener(address, port)   # once the lock is held: a second daemon of this user's is AlreadyRunning
         token, said = auth.ensure(store.path.parent)
         if said:
             print(f"wheelhouse daemon: {said}", flush=True)
@@ -984,6 +1006,6 @@ def main(address: str = ADDRESS, port: int = PORT, names=(), start_pipe: int | N
                         listening=functools.partial(announce, lock, url))
         daemon.stop = functools.partial(server.handle_exit, signal.SIGTERM, None)
         print(f"wheelhouse daemon (pid {os.getpid()}) on {url}, state in {store.path.parent}", flush=True)
-        server.run()
+        server.run(sockets=[sock])
     finally:
         lock.close()

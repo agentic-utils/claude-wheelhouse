@@ -300,8 +300,8 @@ high, have none.
 The app goes through the wheelhouse daemon (`.plan/remote.md`): `claude-wheelhouse` starts
 it if none is running, or joins the one that is, and the daemon carries on when the app
 closes (a Relaunch under way too). It runs once per user, on `127.0.0.1:7428`
-(`WHEELHOUSE_PORT` changes the port; `claude-wheelhouse daemon --address` and `--port` run
-one by hand, never on `0.0.0.0`), its output in `daemon.log` beside the database. If the
+(`claude-wheelhouse daemon --address` runs one by hand on another address, never on
+`0.0.0.0`), its output in `daemon.log` beside the database. If the
 daemon stops under the app, the title bar says so in red and the app starts it again;
 nothing you do is sent meanwhile, and what you'd typed stays in the box. An app started on
 newer code restarts a daemon running older code from the same checkout.
@@ -326,6 +326,28 @@ To stop the daemon, quit the app (`Q`) first, since an open app starts it again,
 token needed, and says what it did ("no wheelhouse daemon is running" if there was none).
 Running sessions carry on in their tabs, and the next `claude-wheelhouse` starts a fresh
 daemon.
+
+The port is 7428 unless you choose another: `--port` (on the app or `claude-wheelhouse
+daemon`), else `WHEELHOUSE_PORT`, else `port=` in a `.env` file (the one in the directory
+you start from, then `~/.config/claude-wheelhouse/.env`), in that order. It must be from
+1024 to 65535; anything else stops the app or daemon with a line naming where it was set.
+The app starts its daemon on that port. If the daemon is already running on another, the
+app joins it where it is and says so; stop it to move it. If another process holds the
+port, the app (or the daemon started by hand) says:
+
+    port 7428 is taken by another process (another user's wheelhouse?): set port= in ~/.config/claude-wheelhouse/.env
+
+### Two wheelhouses on one machine
+
+Each WSL user has a wheelhouse of their own: everything it keeps is under their home, and
+their tabs open in their own Windows Terminal window (`wheelhouse-doug`,
+`wheelhouse-tfu`). Only the port is shared, so give every user after the first another.
+For a second user `tfu`, as `tfu`:
+
+    mkdir -p ~/.config/claude-wheelhouse
+    echo port=7429 >> ~/.config/claude-wheelhouse/.env
+
+Then start each user's app as usual. A daemon started by hand reads the same file.
 
 ## The usage gauges
 
@@ -378,7 +400,7 @@ which the wheelhouse reads.
   alive. The usage gauges parse the wording `/usage` prints, so a change to it can break
   them too. Only Claude Code 2.1.287 to 2.1.296 have been checked.
 - Each user's daemon listens on `127.0.0.1:7428`: a second WSL user on the same machine
-  needs another `WHEELHOUSE_PORT`.
+  needs another port (see "Two wheelhouses on one machine").
 - Nothing restarts after a reboot: Restore brings the sessions back.
 - This is a 0.1 prototype with no releases yet: update with `git pull` and `make install`.
 

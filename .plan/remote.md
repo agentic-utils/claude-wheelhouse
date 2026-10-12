@@ -34,7 +34,12 @@ uvicorn, and the events with sse-starlette, all now declared in `pyproject.toml`
 versions already locked. The TUI is unchanged and still owns its own hub; it becomes a
 client in 2c, and Shell's tmux window comes in 2d. As built:
 
-- **Binding and the lock.** `127.0.0.1:7428` by default; `--address` takes an IP address,
+- **Binding and the lock.** `127.0.0.1:7428` by default (another port as `features.port()`
+  resolves it, so a second user on the machine can run one beside the first; Doug's Q74).
+  The daemon binds its socket itself, once it holds the lock, so a port another process
+  holds is said as such (`PORT_TAKEN`, which the app repeats from `daemon.log`), not as
+  uvicorn's log line. An app whose port differs from the one the lock names joins the
+  daemon there and says so. `--address` takes an IP address,
   never an unspecified one (`0.0.0.0`, `::`). It's meant for the VPN interface's: bound to
   a LAN address, the daemon is open to everyone on that LAN, with nothing but the Host
   check between them and every session. One per user: `daemon.lock` in the state dir
@@ -172,8 +177,9 @@ was before 2c, its hub in process: the way back, at once.
     text, and never stale in a way that matters. The TUI starts one: `python -m
     claude_wheelhouse daemon` on the same interpreter and environment (so `WHEELHOUSE_DB`
     and the rest go with it), in a session of its own (`setsid`), so it outlives the TUI,
-    its output appended to `daemon.log` in the state dir, on port 7428 or
-    `WHEELHOUSE_PORT`. Then it waits up to 10 s for the lock to be held and `/hello` to
+    its output appended to `daemon.log` in the state dir, on the port the app resolved
+    (`features.port()`: `--port`, else `WHEELHOUSE_PORT`, else `port=` in either `.env`,
+    else 7428; Doug's Q74), passed as `--port`. Then it waits up to 10 s for the lock to be held and `/hello` to
     answer. Two TUIs starting at once both start one; the second finds the lock held and
     exits, and both join the first.
   - **Held, but no answer** within 10 s, as long as one just started has (a daemon hung):

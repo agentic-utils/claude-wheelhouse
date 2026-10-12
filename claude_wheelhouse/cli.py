@@ -49,7 +49,7 @@ def run_app(args, store=None) -> None:
             client, said = remote_client(args.connect, given_token(args.token_file))
         else:
             client, said = local_client(db_path().parent)
-    except (NoDaemon, TokenError, OSError) as e:
+    except (NoDaemon, TokenError, OSError, features.BadPort) as e:
         sys.exit(f"claude-wheelhouse: {e}")
     app = WheelhouseApp(client=client)   # which lets go of the client as it closes
     app.said += [(text, "information") for text in said]
@@ -111,11 +111,17 @@ def main() -> None:
     usage.add_argument(features.USAGE_FLAG, dest="usage_mode", choices=features.USAGE_MODES,
                        default=argparse.SUPPRESS, help="how the usage bar reads /usage: a short claude -p every "
                        "5 minutes (oneshot, the default), or one Claude Code kept running (persistent)")
+    # --port: the local daemon's (features.port), before or after the command, for the app,
+    # which starts the daemon on it or warns if the one it joins listens elsewhere, and the daemon
+    port = argparse.ArgumentParser(add_help=False)
+    port.add_argument(features.PORT_FLAG, dest="port", metavar="PORT", default=argparse.SUPPRESS,
+                      help=f"the local daemon's port (default {features.PORT}, or WHEELHOUSE_PORT, or port= in a "
+                      ".env): another for each user on the machine who runs a wheelhouse")
     p = argparse.ArgumentParser(prog="claude-wheelhouse", description="Sidecar for parallel Claude Code sessions",
-                                parents=[sdk, usage])
+                                parents=[sdk, usage, port])
     client_args(p)
     sub = p.add_subparsers(dest="cmd")
-    client_args(sub.add_parser("tui", help="the wheelhouse app (default)", parents=[sdk, usage]), sub=True)
+    client_args(sub.add_parser("tui", help="the wheelhouse app (default)", parents=[sdk, usage, port]), sub=True)
     again = sub.add_parser("tutorial", help="have the app offer the tutorial at its next start, ending any "
                            "earlier tutorial session (run with the app and the daemon stopped)",
                            description="Has the app offer the tutorial at its next start, ending any earlier "
@@ -130,10 +136,9 @@ def main() -> None:
     sub.add_parser("monitor", help="the per-session plugin monitor")
     sub.add_parser("protocol", help="print everything wheelhouse puts into a launched session", parents=[sdk])
     daemon = sub.add_parser("daemon", help="serve the wheelhouse over HTTP (the app starts it, or joins it)",
-                            parents=[sdk, usage])
+                            parents=[sdk, usage, port])
     daemon.add_argument("--address", default=None, help="the IP address to listen on (default 127.0.0.1; "
                         "never 0.0.0.0): the VPN interface's, to reach it from another machine")
-    daemon.add_argument("--port", type=int, default=None, help="the port to listen on (default 7428)")
     daemon.add_argument("--name", action="append", default=[], help="another name clients reach this machine by "
                         "(a VPN's name for it), so their requests are accepted: repeat for more")
     daemon.add_argument("--stop", action="store_true", help="stop the daemon running, by its pid (no token "
@@ -145,6 +150,8 @@ def main() -> None:
         features.enable_sdk()
     if getattr(args, "usage_mode", None):
         features.set_usage_mode(args.usage_mode)
+    if getattr(args, "port", None):
+        features.set_port(args.port)
 
     if args.cmd == "run":
         from .launch import run as run_session
@@ -161,10 +168,10 @@ def main() -> None:
             sys.exit(f"claude-wheelhouse: {e}")
     elif args.cmd == "daemon":
         from .auth import TokenError
-        from .daemon import ADDRESS, PORT, AlreadyRunning, main as daemon_main
+        from .daemon import ADDRESS, AlreadyRunning, PortTaken, main as daemon_main
         try:
-            daemon_main(args.address or ADDRESS, args.port or PORT, args.name, args.start_pipe)
-        except (AlreadyRunning, TokenError, ValueError) as e:
+            daemon_main(args.address or ADDRESS, features.port(), args.name, args.start_pipe)
+        except (AlreadyRunning, PortTaken, TokenError, ValueError) as e:
             sys.exit(str(e))
     elif args.cmd == "protocol":
         from .launch import injected

@@ -140,15 +140,34 @@ def test_a_daemon_that_holds_its_lock_and_never_answers_is_left_alone(state, mon
             connect.local(state_dir, port)
 
 
-def test_a_port_taken_is_said_with_the_daemons_own_words(state, monkeypatch):
+def test_a_port_taken_says_which_and_the_setting_that_moves_it(state, monkeypatch):
     state_dir, port = state
     with socket.socket() as taken:
         taken.bind(("127.0.0.1", port))
         taken.listen()
         with pytest.raises(connect.NoDaemon) as e:
             connect.local(state_dir, port)
-    assert "address already in use" in str(e.value) and "--local runs without it" in str(e.value), str(e.value)
+    assert str(e.value) == (f"port {port} is taken by another process (another user's wheelhouse?): set port= in "
+                            "~/.config/claude-wheelhouse/.env")
     assert connect.holder(state_dir) is None
+
+
+def test_a_daemon_on_another_port_is_joined_where_it_is_and_said(state):
+    state_dir, port = state
+    url, token, _ = connect.local(state_dir, port)
+    asked = free_port()
+    assert connect.local(state_dir, asked) == (url, token, [connect.elsewhere_said(url, asked)])
+    assert f"runs on port {port}, not {asked} as set here: joined it there" in connect.elsewhere_said(url, asked)
+
+
+@pytest.mark.parametrize("url, port, said, desc", [
+    ("http://127.0.0.1:7428", 7428, False, "the port asked for: nothing to say"),
+    ("http://127.0.0.1:7429", 7428, True, "another: said"),
+    ("http://[::1]:7429", 7429, False, "IPv6's, the port asked for"),
+    ("http://100.64.0.7:7428", 7429, True, "a VPN address's, another port"),
+])
+def test_elsewhere_said(url, port, said, desc):
+    assert (connect.elsewhere_said(url, port) is not None) is said, desc
 
 
 def test_a_daemon_gone_under_a_running_tui_is_started_again_a_few_times(state, monkeypatch):

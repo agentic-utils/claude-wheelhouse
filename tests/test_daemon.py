@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import signal
+import socket
 import sqlite3
 import time
 import uuid
@@ -14,7 +15,7 @@ import pytest
 from sse_starlette.sse import AppStatus
 
 from claude_wheelhouse import daemon as daemon_mod, hub as hub_mod, launch, liveness, store as store_mod, transcript
-from claude_wheelhouse.daemon import AlreadyRunning, Daemon, Feed, checked_address, hosts, take_lock
+from claude_wheelhouse.daemon import AlreadyRunning, Daemon, Feed, PortTaken, checked_address, hosts, listener, take_lock
 from claude_wheelhouse.hub import Event
 from claude_wheelhouse.store import SessionGone, Store
 
@@ -345,6 +346,30 @@ def test_the_address_to_bind(address, ok, desc):
     else:
         with pytest.raises(ValueError):
             checked_address(address)
+
+
+@pytest.mark.parametrize("address, taken, error, said, desc", [
+    ("127.0.0.1", False, None, None, "a free port: bound"),
+    ("127.0.0.1", True, PortTaken, "port {port} is taken by another process (another user's wheelhouse?): set port= "
+     "in ~/.config/claude-wheelhouse/.env", "another process's: said as the app says it"),
+    ("192.0.2.1", False, ValueError, "can't listen on 192.0.2.1 port {port}: Cannot assign requested address",
+     "an address not this machine's: another failure, in a line"),
+])
+def test_the_socket_the_daemon_listens_on(address, taken, error, said, desc):
+    with socket.socket() as other:
+        other.bind(("127.0.0.1", 0))
+        port = other.getsockname()[1]
+        if taken:
+            other.listen()
+        else:
+            other.close()
+        if error is None:
+            with listener(address, port) as sock:
+                assert sock.getsockname() == (address, port), desc
+            return
+        with pytest.raises(error) as e:
+            listener(address, port)
+        assert str(e.value) == said.format(port=port), desc
 
 
 def test_main_refuses_every_interface_before_anything_else(monkeypatch):
