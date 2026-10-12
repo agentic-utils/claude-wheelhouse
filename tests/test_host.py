@@ -1483,6 +1483,7 @@ H = 3600
     ({"waits": "permission"}, True, "an open permission waits on the person"),
     ({"waits": "doubt"}, True, "an item in doubt only: the check is due"),
     ({"waits": "question+doubt"}, True, "both"),
+    ({"waits": "doubt", "old code": True}, False, "in doubt only, on older code: no check (its items look silent)"),
     ({"waits": "running"}, False, "a task running but touched 5 minutes ago: not in doubt, nothing waits"),
     ({"parked": True}, False, "parked"),
     ({"quiet": 2 * H, "hours": 2}, False, "past a configured 2 hours"),
@@ -1491,6 +1492,7 @@ H = 3600
 ])
 def test_keepalive_due(host, store, sid, monkeypatch, state, due, desc):
     from claude_wheelhouse import store as store_mod
+    store.mark_version(sid)
     at = 100 * H
     waits = state.get("waits", "question")
     if waits and ("doubt" in waits or waits == "running"):
@@ -1503,6 +1505,8 @@ def test_keepalive_due(host, store, sid, monkeypatch, state, due, desc):
         waits = waits.removesuffix("doubt").rstrip("+")
     if state.get("parked"):
         store.set_parked(sid, True)
+    if state.get("old code"):
+        store.db.execute("UPDATE sessions SET code_version = 10 WHERE id = ?", (sid,))
     host.keepalive_for = state.get("hours", 8) * H
     if waits in ("question", "answered"):
         ref = store.post_item(sid, "question", "which?")

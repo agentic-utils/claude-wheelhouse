@@ -302,6 +302,12 @@ class Store:
                 for kind in DISMISSABLE:
                     db.execute(f"UPDATE items SET dismissed = status WHERE kind = ? AND status IN "
                                f"({','.join('?' * len(SETTLED[kind]))})", (kind, *SETTLED[kind]))
+            if ("items", "session_at") in added:
+                # the session's latest word on each item before the column (a note, reply or
+                # status, author claude), so an item it updated a minute ago isn't in doubt
+                db.execute("""UPDATE items SET session_at = (SELECT max(m.created_at) FROM messages m
+                              WHERE m.session_id = items.session_id AND m.item_ref = items.ref
+                              AND m.author = 'claude')""")
             # a model or effort set before choices were dated counts as chosen when this code
             # first opened the database: never older than a /model typed weeks before (Q56)
             for column in ("model", "effort"):
@@ -832,16 +838,33 @@ class Store:
         or `Q2 reply owed`: a task running, blocked or waiting, or a question whose latest
         word is the person's (awaiting the session's reply), that the session has said
         nothing on (post_item, update_item, reply: session_at, else created_at) for
-        DOUBT_AFTER or more. Never a todo, a question waiting on the person, an agent,
-        decision or permission, nor anything settled."""
+        DOUBT_AFTER or more; on a question, nor the person since their latest message on it,
+        so a fresh answer isn't owed a reply at once. Never a todo, a question waiting on
+        the person, an agent, decision or permission, nor anything settled; nothing at all
+        for a session on older code (needs_relaunch), whose MCP server never writes
+        session_at."""
+        session = self.session(sid)
+        if session is None or needs_relaunch(session):
+            return []
         cutoff = ((at or datetime.now(timezone.utc)) - DOUBT_AFTER).isoformat(timespec="seconds")
         rows = self._all(
-            f"""SELECT ref, kind, status FROM items WHERE session_id = ? AND coalesce(session_at, created_at) <= ?
+            f"""SELECT ref, kind, status FROM items i WHERE session_id = ?
+                AND max(coalesce(session_at, created_at), CASE WHEN kind = 'question' THEN coalesce(
+                    (SELECT max(m.created_at) FROM messages m WHERE m.session_id = i.session_id
+                     AND m.item_ref = i.ref AND m.author = 'person' AND m.draft = 0), '') ELSE '' END) <= ?
                 AND ((kind = 'task' AND status IN ({','.join('?' * len(TRANSIENT))}))
                      OR (kind = 'question' AND status = 'open'
                          AND (session_id, ref) IN ({AWAITING})))
                 ORDER BY id""", (sid, cutoff, *TRANSIENT))
         return [f"{r['ref']} {'reply owed' if r['kind'] == 'question' else r['status']}" for r in rows]
+
+    def heard_at(self, sid: str) -> str | None:
+        """When the session was last sent anything: the person's latest message sent (a
+        notice included) or the latest delivered to it, whichever is later; None if never."""
+        row = self._one("""SELECT max(coalesce(max(CASE WHEN author = 'person' AND draft = 0 THEN created_at END), ''),
+                                  coalesce(max(CASE WHEN author = 'person' THEN delivered_at END), '')) AS at
+                             FROM messages WHERE session_id = ?""", (sid,))
+        return row["at"] or None
 
     def open_items(self, sid: str) -> list[sqlite3.Row]:
         """What a session is told after a compaction: every task not settled and every open

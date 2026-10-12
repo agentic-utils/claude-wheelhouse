@@ -323,6 +323,7 @@ def test_a_change_of_work_lists_what_is_still_open(store, sid, monkeypatch, befo
     from claude_wheelhouse import mcp_server
     from claude_wheelhouse import store as store_mod
     mcp_server._store, mcp_server._sid = store, sid
+    store.mark_version(sid)
     t0 = datetime.now(timezone.utc) - timedelta(minutes=17)
     real_now = store_mod.now
     monkeypatch.setattr(store_mod, "now", lambda: t0.isoformat(timespec="seconds"))

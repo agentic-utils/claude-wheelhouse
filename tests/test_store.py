@@ -660,6 +660,7 @@ def written_at(monkeypatch):
     ("decision", None, [], None, "a decision, never"),
 ])
 def test_in_doubt_by_status_and_kind(store, sid, written_at, kind, status, steps, listed, desc):
+    store.mark_version(sid)
     ref = (store.post_item(sid, kind, "x", why="because") if kind == "decision"
            else store.post_item(sid, kind, "x", status=status))
     for step in steps:
@@ -669,6 +670,7 @@ def test_in_doubt_by_status_and_kind(store, sid, written_at, kind, status, steps
 
 
 def test_a_permission_is_never_in_doubt(store, sid, written_at):
+    store.mark_version(sid)
     store.post_item(sid, "permission", "Bash: ls")
     assert store.in_doubt(sid, at(60)) == []
 
@@ -686,6 +688,7 @@ def test_a_permission_is_never_in_doubt(store, sid, written_at):
     (10, "old row", 20, True, "a row from before the column: created_at"),
 ])
 def test_in_doubt_by_silence(store, sid, written_at, later, step, now, listed, desc):
+    store.mark_version(sid)
     t = store.post_item(sid, "task", "build it", status="running")
     if step:
         written_at["m"] = later
@@ -705,3 +708,40 @@ def test_open_items_are_the_unsettled_tasks_and_open_questions(store, sid):
         store.post_item(sid, kind, f"{kind} {status}", status=status)
     store.post_item(sid, "decision", "chose", why="because")
     assert sorted(r["title"] for r in store.open_items(sid)) == ["question open", "task running", "task todo"]
+
+
+def test_an_older_database_takes_the_sessions_latest_word_on_each_item(db_file, store, sid, written_at):
+    """Before session_at, a session's update or reply on an item left a message (author
+    claude): the column is filled from the latest, so an item touched a minute ago isn't in
+    doubt the moment the database is opened by this code."""
+    t = store.post_item(sid, "task", "build it", status="running")
+    bare = store.post_item(sid, "task", "never touched", status="running")
+    written_at["m"] = 20
+    store.update_item(sid, t, note="halfway")   # an older MCP server: no session_at
+    store.db.execute("ALTER TABLE items DROP COLUMN session_at")
+    reopened = Store(db_file)
+    reopened.mark_version(sid)
+    assert [(r["ref"], r["session_at"]) for r in reopened._all("SELECT ref, session_at FROM items ORDER BY id")] == [
+        (t, at(20).isoformat(timespec="seconds")), (bare, None)]
+    assert reopened.in_doubt(sid, at(30)) == [f"{bare} running"], "the touched one isn't in doubt; the other is"
+
+
+def test_a_session_on_older_code_has_nothing_in_doubt(store, sid, written_at):
+    """Its MCP server never records the session's word: everything would look silent."""
+    store.post_item(sid, "task", "build it", status="running")
+    assert store.in_doubt(sid, at(60)) == [], "never stamped: older code"
+    store.mark_version(sid)
+    assert store.in_doubt(sid, at(60)) == ["T1 running"], "relaunched on this code"
+
+
+@pytest.mark.parametrize("answered, now, listed, desc", [
+    (10, 20, False, "answered 10 minutes ago: not owed yet, though the session was silent 20"),
+    (10, 25, True, "15 minutes after the answer: reply owed"),
+    (0, 15, True, "answered as it was posted: from then"),
+])
+def test_a_questions_clock_runs_from_the_persons_answer(store, sid, written_at, answered, now, listed, desc):
+    store.mark_version(sid)
+    q = store.post_item(sid, "question", "which db?")
+    written_at["m"] = answered
+    store.send(sid, "postgres", q)
+    assert (store.in_doubt(sid, at(now)) == ["Q1 reply owed"]) == listed, desc
