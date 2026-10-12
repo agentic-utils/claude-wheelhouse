@@ -815,7 +815,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 27 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 28 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 
@@ -899,6 +899,8 @@ NEW_ROUTES = [
      "the tutorial offer turned down"),
     ("POST", "/tutorial/seen", {"sid": "{sid}", "step": "open"},
      lambda store, sid, r: json.loads(store.setting("tutorial_seen"))["seen"] == ["open"], "a tutorial step seen"),
+    ("POST", "/tutorial/drop-ended", None, lambda store, sid, r: store.setting("tutorial_seen") is None,
+     "an ended tutorial's checklist let go as an app starts"),
     ("POST", "/shutdown", None, lambda store, sid, r: not r.json()["ok"], "stop: a test's daemon can't"),
 ]
 
@@ -909,6 +911,8 @@ async def test_each_new_route(daemon, store, sid, tmp_path, method, path, body, 
     store.post_item(sid, "permission", "Bash: ls")
     if path == "/restore-all":
         await daemon.on_hub(daemon.tick)   # the session dead, as the client showed it
+    if path == "/tutorial/drop-ended":
+        store.set_setting("tutorial_seen", json.dumps({"sid": "ended", "seen": ["open"], "before": []}))
     r = await call(daemon, method, fill(path, sid, tmp_path), fill(body, sid, tmp_path))
     assert r.status_code < 500 and did(store, sid, r), f"{desc}: {r.status_code} {r.text}"
 
