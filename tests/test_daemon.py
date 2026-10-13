@@ -1203,3 +1203,12 @@ async def test_fork_through_the_daemon(daemon, store, sid, tmp_path, claude_home
     [new] = [s["id"] for s in store.sessions() if s["id"] != sid]
     assert r.json()["ok"] and opened == [(new, False)], r.text
     assert store.session(new)["name"] == "demo (fork)" and store.item(new, "T1")["title"] == "do it", r.text
+
+
+def test_shutdown_takes_away_a_fork_whose_last_part_never_runs(daemon, monkeypatch):
+    from claude_wheelhouse import fork
+    undone = []
+    monkeypatch.setattr(fork, "undo", lambda new, t, branch: undone.append(new))
+    daemon.hub.pending_forks["new-sid"] = (None, None)
+    daemon.shutdown()
+    assert undone == ["new-sid"] and not daemon.hub.pending_forks

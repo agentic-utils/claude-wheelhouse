@@ -124,7 +124,9 @@ def new_worktree(cwd: str, t: Tree, branch: str) -> str:
     r = subprocess.run(["git", "-C", cwd, "worktree", "add", "-b", branch, str(path), "HEAD"],
                        capture_output=True, text=True, timeout=60)
     if r.returncode:
-        if not existed and branch_taken(t, branch):   # git makes the branch before it fails on the path
+        # git makes the branch before it fails on the path: that one goes again. Never one
+        # git refused to make because it was there (another fork's, made just now)
+        if not existed and f"a branch named '{branch}' already exists" not in r.stderr and branch_taken(t, branch):
             git(t.main, "branch", "-D", branch)
         raise ValueError(f"couldn't make a worktree on {branch}: {(r.stderr or r.stdout).strip()}")
     return str(path / inside) if (path / inside).is_dir() else str(path)
@@ -145,10 +147,13 @@ def undo(new: str, t: Tree, branch: str | None) -> None:
 
 def log(store, text: str) -> None:
     """A line in launch.log, beside the database: what a fork made, so anything a wheelhouse
-    stopping half way leaves behind can be found."""
+    stopping half way leaves behind can be found. A log that can't be written is let go."""
     from datetime import datetime, timezone
-    with open(store.path.parent / "launch.log", "a") as f:
-        print(datetime.now(timezone.utc).isoformat(timespec="seconds"), text, file=f)
+    try:
+        with open(store.path.parent / "launch.log", "a") as f:
+            print(datetime.now(timezone.utc).isoformat(timespec="seconds"), text, file=f)
+    except OSError:   # never in the way of the fork's own cleanup or what it says
+        pass
 
 
 def projects_dir() -> Path:

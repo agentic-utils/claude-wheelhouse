@@ -155,3 +155,26 @@ def test_a_failed_worktree_add_leaves_no_new_branch(worktree, had_branch, desc):
     with pytest.raises(ValueError, match="couldn't make a worktree on feat/y"):
         fork.new_worktree(str(wt), fork.tree(str(wt)), "feat/y")
     assert bool(git(main, "branch", "--list", "feat/y")) == had_branch, desc
+
+
+def test_a_failed_worktree_add_never_deletes_another_forks_branch(worktree, monkeypatch):
+    """Two forks choosing one branch: the second saw it free, then git refused it as the first's."""
+    main, wt = worktree
+    t = fork.tree(str(wt))
+    git(main, "branch", "feat/y")   # the first fork's, made after the second looked
+    monkeypatch.setattr(fork, "branch_taken", lambda t, name: False)
+    with pytest.raises(ValueError, match="already exists"):
+        fork.new_worktree(str(wt), t, "feat/y")
+    assert git(main, "branch", "--list", "feat/y"), "the other fork's branch stays"
+
+
+@pytest.mark.parametrize("where, desc", [
+    ("missing", "a state directory that isn't there"),
+    ("a file", "a launch.log that is a directory"),
+])
+def test_log_never_raises(tmp_path, where, desc):
+    from types import SimpleNamespace
+    base = tmp_path / "state"
+    if where == "a file":
+        (base / "launch.log").mkdir(parents=True)
+    fork.log(SimpleNamespace(path=base / "wheelhouse.db"), "x")   # no OSError

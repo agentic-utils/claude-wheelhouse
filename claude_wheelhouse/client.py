@@ -61,8 +61,10 @@ class LocalClient(Hub):
         self.fetch_usage()
 
     def disconnect(self) -> None:
-        """The app is closing: the Claude Code answering /usage goes with it."""
+        """The app is closing: the Claude Code answering /usage goes with it, and any fork
+        not yet taken in (Hub.drop_pending_forks)."""
         self.stop_usage()
+        self.drop_pending_forks()
 
     def status(self, sid: str) -> str | None:
         return self.statuses.get(sid)

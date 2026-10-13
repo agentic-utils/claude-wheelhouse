@@ -1332,3 +1332,25 @@ def test_what_a_fork_makes_is_logged_and_never_left_unsaid(store, sid, tmp_path,
     assert "if no line for" in log and said in log, f"{desc}: {log}"
     if delivered:
         assert events[-1].sid == forks(store, sid)[0]["id"], f"{desc}: the announcement names the fork"
+
+
+@pytest.mark.parametrize("closing, desc", [
+    ("hub", "the owner closing with forked queued but not run: taken away, and forked then does nothing"),
+    ("client", "the app quitting (LocalClient.disconnect) does the same"),
+])
+def test_a_fork_waiting_for_the_hub_is_taken_away_when_its_owner_closes(store, worktree, claude_home, opened, closing,
+                                                                       desc):
+    from conftest import git
+    from claude_wheelhouse.client import LocalClient
+    main, wt = worktree
+    sid = store.create_session(str(wt), name="feat")
+    claude_home(sid, str(wt))
+    queued = []
+    owner = (Hub if closing == "hub" else LocalClient)(store, post=lambda cb: queued.append(cb) or True)
+    assert owner.fork(sid, [], "feat/x-fork").ok and len(queued) == 1, desc
+    owner.drop_pending_forks() if closing == "hub" else owner.disconnect()
+    queued[0]()   # had it run after all
+    assert not forks(store, sid) and not opened, desc
+    assert [p.stem for p in claude_home.projects.glob("*/*.jsonl")] == [sid], f"{desc}: no copy left"
+    assert not (main / ".worktrees/feat-x-fork").exists() and not git(main, "branch", "--list", "feat/x-fork"), desc
+    assert "dropped, the wheelhouse closing" in (store.path.parent / "launch.log").read_text(), desc

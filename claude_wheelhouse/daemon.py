@@ -571,6 +571,7 @@ class Daemon:
         self.hub.stop_usage()
         self.pool.shutdown(wait=False, cancel_futures=True)
         self.worker.shutdown(wait=False, cancel_futures=True)
+        self.hub.drop_pending_forks()   # a forked callback just cancelled never runs
 
     # requests
 

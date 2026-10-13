@@ -21,6 +21,7 @@ import os
 import signal
 import sqlite3
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -170,6 +171,10 @@ class Hub:
         # once by default, as in a test
         self.spawn: Callable[[Callable[[], None], str], None] = spawn or (lambda work, group: work())
         self.post: Callable[[Callable[[], None]], bool | None] = post or (lambda callback: callback())
+        # forks whose worktree and copy are made, waiting for forked on the hub's thread: new
+        # sid to (tree, branch), so an owner closing first takes them away (drop_pending_forks)
+        self.pending_forks: dict[str, tuple] = {}
+        self.forks_lock = threading.Lock()
         self.wake = liveness.WakeDetector()
         self.waking = False
         self.sessions = []
@@ -624,15 +629,19 @@ class Hub:
         # kept in launch.log until forked says otherwise: a wheelhouse stopping before then
         # leaves these behind, to clear up by hand
         fork.log(self.store, f"fork of {sid} made {made}: if no line for {new} follows, they're left over")
+        with self.forks_lock:
+            self.pending_forks[new] = (t, branch)
         if self.post(functools.partial(self.forked, sid, s, name, how, refs, branch, t, cwd, new)) is False:
-            fork.undo(new, t, branch)   # the owner is closing: never to run
-            fork.log(self.store, f"fork {new} dropped, the wheelhouse closing: its {made} taken away again")
+            self.drop_pending_forks()   # the owner is closing: never to run
 
     def forked(self, sid: str, s, name: str, how: str, refs: list[str], branch: str | None, t, cwd: str,
                new: str) -> None:
         """Fork's last part, on the hub's thread: the row, the items moved and what both
         sessions are told, all undone (row, transcript, worktree and branch) if any of it
         fails; then the launch, which failing leaves a whole fork to Relaunch."""
+        with self.forks_lock:
+            if self.pending_forks.pop(new, None) is None:   # taken away already: the owner closing
+                return
         titles = {r: i["title"] for r in refs if (i := self.store.item(sid, r)) is not None}
 
         def tell(moved):
@@ -660,6 +669,15 @@ class Hub:
                       + (f", {len(moved)} item(s) moved to it" if moved else "")
                       + (f"; {', '.join(left)} changed meanwhile, so stayed" if left else ""),
                       "warning" if left else "information", sid=new)
+
+    def drop_pending_forks(self) -> None:
+        """The owner closing (a daemon stopping, the app quitting): each fork made on a worker
+        but not yet taken in by forked, which now never runs, taken away again and logged."""
+        with self.forks_lock:
+            pending, self.pending_forks = self.pending_forks, {}
+        for new, (t, branch) in pending.items():
+            fork.undo(new, t, branch)
+            fork.log(self.store, f"fork {new} dropped, the wheelhouse closing: taken away again")
 
     def answer_offer(self, take: bool) -> Done:
         """The first-run tutorial offer, answered either way: it never comes back. Whether the
