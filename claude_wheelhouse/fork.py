@@ -120,9 +120,12 @@ def new_worktree(cwd: str, t: Tree, branch: str) -> str:
         inside = Path(cwd).resolve().relative_to(Path(t.top).resolve())
     except ValueError:
         inside = Path()
+    existed = branch_taken(t, branch)
     r = subprocess.run(["git", "-C", cwd, "worktree", "add", "-b", branch, str(path), "HEAD"],
                        capture_output=True, text=True, timeout=60)
     if r.returncode:
+        if not existed and branch_taken(t, branch):   # git makes the branch before it fails on the path
+            git(t.main, "branch", "-D", branch)
         raise ValueError(f"couldn't make a worktree on {branch}: {(r.stderr or r.stdout).strip()}")
     return str(path / inside) if (path / inside).is_dir() else str(path)
 
@@ -131,6 +134,21 @@ def drop_worktree(t: Tree, branch: str) -> None:
     """A worktree new_worktree made, and its branch, taken away again: the fork failed after it."""
     git(t.main, "worktree", "remove", "--force", str(worktree_path(t, branch)))
     git(t.main, "branch", "-D", branch)
+
+
+def undo(new: str, t: Tree, branch: str | None) -> None:
+    """A fork's transcript, and its worktree and branch if it had them, taken away again."""
+    drop_copy(new)
+    if branch:
+        drop_worktree(t, branch)
+
+
+def log(store, text: str) -> None:
+    """A line in launch.log, beside the database: what a fork made, so anything a wheelhouse
+    stopping half way leaves behind can be found."""
+    from datetime import datetime, timezone
+    with open(store.path.parent / "launch.log", "a") as f:
+        print(datetime.now(timezone.utc).isoformat(timespec="seconds"), text, file=f)
 
 
 def projects_dir() -> Path:

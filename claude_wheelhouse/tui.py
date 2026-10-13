@@ -2284,12 +2284,14 @@ class WheelhouseApp(App):
         """The hub's work, on a worker thread, never the UI's."""
         self.run_worker(work, thread=True, group=group, exit_on_error=False)
 
-    def post(self, callback) -> None:
-        """From a worker thread: the hub's callback, on the UI thread."""
+    def post(self, callback) -> bool:
+        """From a worker thread: the hub's callback, on the UI thread. False if the app is
+        closing, so it never runs."""
         try:
             self.call_from_thread(callback)
         except RuntimeError:   # the app is closing
-            pass
+            return False
+        return True
 
     def read_landed(self, sid: str) -> None:
         self.paint_sessions()

@@ -416,9 +416,10 @@ class Daemon:
     def spawn(self, work, group: str) -> None:
         self.pool.submit(work)
 
-    def post(self, callback) -> None:
+    def post(self, callback) -> bool:
         """From a worker thread: the hub's callback, on the hub's thread. One that fails is
-        said on stderr, with its traceback, as nothing awaits it."""
+        said on stderr, with its traceback, as nothing awaits it. False if the daemon is
+        stopping, so it never runs."""
         def run():
             try:
                 callback()
@@ -428,7 +429,8 @@ class Daemon:
         try:
             self.worker.submit(run)
         except RuntimeError:   # shut down: the daemon is stopping
-            pass
+            return False
+        return True
 
     async def on_hub(self, work, *args):
         """work(*args) on the hub's thread, awaited."""

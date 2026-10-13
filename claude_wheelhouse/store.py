@@ -705,14 +705,17 @@ class Store:
         )
         return ref
 
-    def move_items(self, sid: str, to: str, refs: list[str], fork: str) -> tuple[list[tuple[str, str]], list[str]]:
+    def move_items(self, sid: str, to: str, refs: list[str], fork: str,
+                   tell=None) -> tuple[list[tuple[str, str]], list[str]]:
         """Items handed to another session, fork (fork.py), in one transaction: each row
         re-owned with its thread, under the next ref of its kind there, and its old ref kept
         here by a finished stand-in (a task dropped and dismissed, a question closed) that says
         where it went (moved_to), as refs are numbered by count (_insert_item), in older code
         too. Only those still MOVABLE as the transaction holds the write lock: the session may
-        have changed one since it was offered. (moved, as (old, new) in the order given, each
-        once; the refs left, gone or no longer movable)."""
+        have changed one since it was offered. tell(moved): the notices that go with the move,
+        (session, body), written in the same transaction, so the items never move untold.
+        (moved, as (old, new) in the order given, each once; the refs left, gone or no longer
+        movable)."""
         moved, left = [], []
         with self.tx() as db:
             self._require(db, sid)
@@ -736,6 +739,9 @@ class Store:
                             status, item["created_at"], now(), status if item["kind"] in DISMISSABLE else None,
                             f"{fork} as {new}"))
                 moved.append((ref, new))
+            for session, body in (tell(moved) if tell else []):
+                db.execute("INSERT INTO messages (session_id, author, body, created_at, kind) "
+                           "VALUES (?, 'person', ?, ?, 'notice')", (session, body, now()))
         return moved, left
 
     @staticmethod

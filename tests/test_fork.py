@@ -140,3 +140,18 @@ def test_copy_takes_its_copy_away_when_it_cant_be_placed(claude_home, tmp_path, 
     with pytest.raises(OSError, match="no room"):
         fork.copy(parent, str(tmp_path), "demo (fork)", str(tmp_path / "elsewhere"))
     assert [p.stem for p in claude_home.projects.glob("*/*.jsonl")] == [parent], "only the parent's left"
+
+
+@pytest.mark.parametrize("had_branch, desc", [
+    (False, "the path taken: git makes the branch, then fails; the branch goes again"),
+    (True, "a branch there before: left as it was"),
+])
+def test_a_failed_worktree_add_leaves_no_new_branch(worktree, had_branch, desc):
+    main, wt = worktree
+    (main / ".worktrees/feat-y").mkdir()
+    (main / ".worktrees/feat-y/x").write_text("x")
+    if had_branch:
+        git(main, "branch", "feat/y")
+    with pytest.raises(ValueError, match="couldn't make a worktree on feat/y"):
+        fork.new_worktree(str(wt), fork.tree(str(wt)), "feat/y")
+    assert bool(git(main, "branch", "--list", "feat/y")) == had_branch, desc

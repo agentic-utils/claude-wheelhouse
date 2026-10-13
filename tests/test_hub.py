@@ -1197,6 +1197,7 @@ def test_fork_refused(hub, store, sid, tmp_path, claude_home, opened, refs, bran
     ("place", "couldn't fork feat: no room", "the copy can't be put in the new worktree's folder"),
     ("parent forgotten", "couldn't fork feat", "the parent forgotten while the copy was made"),
     ("model gone", "couldn't fork feat", "the parent's model no longer offered: the row refused"),
+    ("notice fails", "couldn't fork feat: no ink", "a notice failing: the moves go back with it, nothing lost"),
 ])
 def test_a_fork_that_fails_leaves_nothing_behind(store, worktree, claude_home, opened, monkeypatch, fails, said, desc):
     from conftest import git
@@ -1208,6 +1209,8 @@ def test_a_fork_that_fails_leaves_nothing_behind(store, worktree, claude_home, o
         git(main, "branch", "feat/x-fork")
     if fails == "place":
         monkeypatch.setattr(fork_mod, "place", lambda new, cwd: (_ for _ in ()).throw(OSError("no room")))
+    if fails == "notice fails":
+        monkeypatch.setattr(fork_mod, "opening", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no ink")))
     if fails == "model gone":
         store.db.execute("UPDATE sessions SET model = 'claude-gone-1' WHERE id = ?", (sid,))
     parent_items(store, sid)
@@ -1294,3 +1297,38 @@ def test_fork_plan_offers_open_questions_and_todo_and_blocked_tasks(hub, store, 
     plan = hub.fork_plan(sid)
     assert sorted((ref, status) for ref, _, status, _ in plan.items) == [("Q1", "open"), ("T1", "todo"), ("T3", "blocked")]
     assert (plan.name, plan.tree.linked, plan.branch) == ("demo (fork)", False, "")
+
+
+@pytest.mark.parametrize("branch, desc", [
+    ("feat/x-fork", "the branch's own worktree directory there already"),
+    ("feat-x/fork", "a typed name that maps onto it (/ to -)"),
+])
+def test_fork_refuses_a_worktree_directory_already_there(store, worktree, claude_home, opened, branch, desc):
+    from conftest import git
+    main, wt = worktree
+    (main / ".worktrees/feat-x-fork").mkdir()
+    (main / ".worktrees/feat-x-fork/x").write_text("x")
+    sid = store.create_session(str(wt), name="feat")
+    claude_home(sid, str(wt))
+    done = Hub(store).fork(sid, [], branch)
+    assert not done.ok and "is there already" in done.notices[0].text, f"{desc}: {done.notices}"
+    assert not git(main, "branch", "--list", branch) and not forks(store, sid), f"{desc}: no branch, no fork"
+
+
+@pytest.mark.parametrize("delivered, left, said, desc", [
+    (True, 1, "made, demo (fork)", "made: the log says so after what it made"),
+    (False, 0, "dropped, the wheelhouse closing", "the owner closing before the hub's part: taken away, logged"),
+])
+def test_what_a_fork_makes_is_logged_and_never_left_unsaid(store, sid, tmp_path, claude_home, opened, delivered, left,
+                                                           said, desc):
+    claude_home(sid, str(tmp_path))
+    hub = Hub(store, post=(lambda cb: cb()) if delivered else (lambda cb: False))
+    events = []
+    hub.listen(events.append)
+    assert hub.fork(sid, []).ok, desc
+    copies = [p for p in claude_home.projects.glob("*/*.jsonl") if p.stem != sid]
+    assert len(copies) == left and len(forks(store, sid)) == left, desc
+    log = (store.path.parent / "launch.log").read_text()
+    assert "if no line for" in log and said in log, f"{desc}: {log}"
+    if delivered:
+        assert events[-1].sid == forks(store, sid)[0]["id"], f"{desc}: the announcement names the fork"

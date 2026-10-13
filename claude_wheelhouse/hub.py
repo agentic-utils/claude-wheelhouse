@@ -166,9 +166,10 @@ class Hub:
         self.sdk = features.sdk_enabled() if sdk is None else sdk
         self.listeners: list[Callable[[Event], None]] = []
         # how its owner runs work on a worker thread, by group, and a callback back on its
-        # own thread (a no-op once it's closing): both at once by default, as in a test
+        # own thread (a no-op once it's closing, which post says by returning False): both at
+        # once by default, as in a test
         self.spawn: Callable[[Callable[[], None], str], None] = spawn or (lambda work, group: work())
-        self.post: Callable[[Callable[[], None]], None] = post or (lambda callback: callback())
+        self.post: Callable[[Callable[[], None]], bool | None] = post or (lambda callback: callback())
         self.wake = liveness.WakeDetector()
         self.waking = False
         self.sessions = []
@@ -238,10 +239,10 @@ class Hub:
         for listener in self.listeners:
             listener(event)
 
-    def announce(self, text: str, severity: str = "information") -> None:
+    def announce(self, text: str, severity: str = "information", sid: str | None = None) -> None:
         """To every listener: only for what the hub does by itself. A command's notices go
-        in its Done, to the surface that gave it."""
-        self.emit(Event("notice", text, severity))
+        in its Done, to the surface that gave it. sid: the session it's about (a fork made)."""
+        self.emit(Event("notice", text, severity, sid))
 
     # sessions and their liveness
 
@@ -592,6 +593,8 @@ class Hub:
                                  "under: fork into this worktree")
             if branch and fork.branch_taken(t, branch):
                 raise ValueError(f"there's a branch {branch} already: name another")
+            if branch and fork.worktree_path(t, branch).exists():
+                raise ValueError(f"{fork.worktree_path(t, branch)} is there already: name another branch")
         except ValueError as e:
             return Done(False).say(str(e), "error")
         self.spawn(functools.partial(self.forking, sid, s, name, how, refs, branch, t, may_tab), "fork")
@@ -616,7 +619,14 @@ class Hub:
         except Exception as e:   # git refused the branch, the transcript unreadable...
             self.post(functools.partial(self.announce, f"couldn't fork {display_name(s)}: {e}", "error"))
             return
-        self.post(functools.partial(self.forked, sid, s, name, how, refs, branch, t, cwd, new))
+        made = (f"transcript {new}.jsonl" + (f", worktree {fork.worktree_path(t, branch)} on branch {branch}"
+                                             if branch else ""))
+        # kept in launch.log until forked says otherwise: a wheelhouse stopping before then
+        # leaves these behind, to clear up by hand
+        fork.log(self.store, f"fork of {sid} made {made}: if no line for {new} follows, they're left over")
+        if self.post(functools.partial(self.forked, sid, s, name, how, refs, branch, t, cwd, new)) is False:
+            fork.undo(new, t, branch)   # the owner is closing: never to run
+            fork.log(self.store, f"fork {new} dropped, the wheelhouse closing: its {made} taken away again")
 
     def forked(self, sid: str, s, name: str, how: str, refs: list[str], branch: str | None, t, cwd: str,
                new: str) -> None:
@@ -624,31 +634,32 @@ class Hub:
         sessions are told, all undone (row, transcript, worktree and branch) if any of it
         fails; then the launch, which failing leaves a whole fork to Relaunch."""
         titles = {r: i["title"] for r in refs if (i := self.store.item(sid, r)) is not None}
+
+        def tell(moved):
+            return [*([(sid, fork.told_parent(name, moved, titles))] if moved else []),
+                    (new, fork.opening(display_name(s), name, moved, titles, branch or "", cwd, bool(branch) and t.dirty))]
         try:
             self.store.create_session(cwd, name=name, ticket=s["ticket"], brief=s["brief"], sid=new, runner=how,
                                       model=s["model"], effort=s["effort"])
-            moved, left = self.store.move_items(sid, new, refs, name)
-            if moved:
-                self.store.notice(sid, fork.told_parent(name, moved, titles))
-            self.store.notice(new, fork.opening(display_name(s), name, moved, titles, branch or "", cwd,
-                                                bool(branch) and t.dirty))
+            # the moves and both notices are one transaction: failing, it leaves the fork owning nothing
+            moved, left = self.store.move_items(sid, new, refs, name, tell)
         except Exception as e:   # the parent forgotten meanwhile, a model no longer offered...
-            if self.store.session(new) is not None:
+            if self.store.session(new) is not None and not self.store.items(new):
                 self.store.end(new)
-            fork.drop_copy(new)
-            if branch:
-                fork.drop_worktree(t, branch)
+            fork.undo(new, t, branch)
+            fork.log(self.store, f"fork {new} failed ({e}): taken away again")
             self.announce(f"couldn't fork {display_name(s)}: {e}", "error")
             return
+        fork.log(self.store, f"fork {new} made, {name}, in {cwd}")
         try:
             (launch.open_host if how == "sdk" else launch.open_tab)(self.store, new, notice=False)
         except Exception as e:   # wt.exe missing...: the fork stays, to Relaunch
-            self.announce(f"forked {name}, but it didn't start: {e}. Relaunch it", "error")
+            self.announce(f"forked {name}, but it didn't start: {e}. Relaunch it", "error", sid=new)
             return
         self.announce(f"forked {display_name(s)} as {name}"
                       + (f", {len(moved)} item(s) moved to it" if moved else "")
                       + (f"; {', '.join(left)} changed meanwhile, so stayed" if left else ""),
-                      "warning" if left else "information")
+                      "warning" if left else "information", sid=new)
 
     def answer_offer(self, take: bool) -> Done:
         """The first-run tutorial offer, answered either way: it never comes back. Whether the
