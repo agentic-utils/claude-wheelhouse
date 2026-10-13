@@ -797,7 +797,8 @@ async def test_one_click_on_a_session_follows_it(store, sid, tmp_path, monkeypat
 
 async def session_step(app, pilot, how, ids) -> None:
     """One move on the session list: "click A", "dclick A" (a double-click), "item B" (B's
-    question highlighted in the items), "esc", or a key with the list focused."""
+    question highlighted in the items), "title" (a click on the list's title), "esc", or a
+    key with the list focused."""
     what, _, name = how.partition(" ")
     if what in ("click", "dclick"):
         app._click_chain_last_time = None   # a click of its own, not the last one's second, however soon
@@ -806,6 +807,8 @@ async def session_step(app, pilot, how, ids) -> None:
         key = next(r.key.value for r in app.items_table.ordered_rows
                    if r.key.value.startswith(f"{ids[name]}|") and not r.key.value.endswith("|"))
         app.items_table.move_cursor(row=app.items_table.get_row_index(key))
+    elif what == "title":   # the list's header line
+        raw_click(app, app.session_list, (3, 0), 1)
     elif what == "esc":
         app.items_table.focus()
         await pilot.press("escape")
@@ -826,6 +829,9 @@ async def session_step(app, pilot, how, ids) -> None:
     (["click A", "click A", "click B"], "B", "unselected, a click on another selects it"),
     (["click A", "esc"], None, "Esc unselects, as the click does"),
     (["click A", "esc", "click A"], "A", "after Esc, a click on the one it was on selects it"),
+    (["click A", "title"], None, "a click on the list's title unselects, as Esc does"),
+    (["title"], None, "a click on the title with none selected changes nothing"),
+    (["click A", "title", "click A"], "A", "after the title, a click on the one it was on selects it"),
     (["dclick B"], "B", "a double-click selects, its second click not unselecting"),
     (["click A", "enter"], "A", "Enter on the selected one keeps it"),
     (["item B"], None, "an item highlighted unfiltered brings no highlight back"),

@@ -195,7 +195,7 @@ session.
   for 2 minutes), magenta while it's been asked to park or forget, red when dead (its Claude
   Code isn't running) and grey when parked.
   The selected session, highlighted, is the current one, and the inbox shows its items
-  alone. A click on it, or `Esc`, unselects it: the inbox shows every session's items, the
+  alone. A click on it or on the list's title, or `Esc`, unselects it: the inbox shows every session's items, the
   list has no highlight, the description says All sessions and the buttons under it are
   disabled (as are their keys) until you click a session, Enter or an arrow in the list
   (which picks the session last selected, or the first). Highlighting an item never brings

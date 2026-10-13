@@ -642,8 +642,8 @@ async def select_now(table: DataTable) -> None:
 
 class SessionList(SinkList):
     """The inbox's sessions. One click selects a row: a plain table selects only on a second
-    click, the first just moving the cursor there. A single click on the selected row
-    unselects it (the inbox shows every session's items, as Esc), and with none selected the
+    click, the first just moving the cursor there. A single click on the selected row, or on
+    the list's title, unselects it (the inbox shows every session's items, as Esc), and with none selected the
     highlight is hidden (show_cursor) until a click, Enter or a key that moves it picks one
     (reveal). The buttons under it act on the highlighted row and never take focus, so Tab
     goes straight on to the items; these keys press them instead."""
@@ -752,7 +752,10 @@ class SessionList(SinkList):
             event.prevent_default()
             return
         self.app.settle()   # first what the keys before it moved, as a key's land does
-        if not 0 <= row < self.row_count:   # the header
+        if not 0 <= row < self.row_count:   # the header, its title: all sessions, as Esc
+            if "row" in event.style.meta and self.show_cursor:   # not the room below the rows
+                event.prevent_default()
+                self.app.unfilter()
             return
         if not self.show_cursor:   # none selected: the click selects its row, where DataTable would do nothing
             event.prevent_default()
@@ -1655,8 +1658,8 @@ SEND_RULES = (
     "A dead session's queue waits: Ctrl+S and Send all leave it until the session is relaunched. "
     "**Immediate**: Ctrl+Enter sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
-MOUSE = ("Click selects a row; in the session list, a click on the selected session unselects it, for all "
-         "sessions' items, as Esc does. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
+MOUSE = ("Click selects a row; in the session list, a click on the selected session or the list's title "
+         "unselects it, for all sessions' items, as Esc does. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
          "keep Shift+click for itself: Space and Shift+Up/Down do the same), then Delete or Backspace closes them together "
          "and Ctrl+R reopens the finished ones. "
          "Double-click selects a word. Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
@@ -2985,7 +2988,7 @@ class WheelhouseApp(App):
         self.unfilter()
 
     def unfilter(self) -> None:
-        """All sessions: Esc, or a click on the selected session (SessionList)."""
+        """All sessions: Esc, or a click on the selected session or the session list's title (SessionList)."""
         self.clear_filter()
         self.paint_items()
         self.retarget()
