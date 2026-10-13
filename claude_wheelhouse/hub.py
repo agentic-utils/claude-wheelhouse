@@ -586,11 +586,15 @@ class Hub:
             if branch:
                 if not t.linked:
                     raise ValueError(f"{s['cwd']} isn't in a linked git worktree")
+                if fork.git(s["cwd"], "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}") is not None:
+                    raise ValueError(f"there's a branch {branch} already: name another")
                 cwd = fork.new_worktree(s["cwd"], t, branch)
             new = fork.copy(sid, s["cwd"], name, cwd)
-        except FileNotFoundError:
-            return Done(False).say(f"{display_name(s)} has no conversation to fork yet", "error")
-        except Exception as e:   # git refused the branch, the transcript unreadable...
+        except Exception as e:   # no transcript, git refused the branch...: nothing left behind
+            if cwd != s["cwd"]:
+                fork.drop_worktree(t, branch)
+            if isinstance(e, FileNotFoundError):
+                return Done(False).say(f"{display_name(s)} has no conversation to fork yet", "error")
             return Done(False).say(str(e), "error")
         self.store.create_session(cwd, name=name, ticket=s["ticket"], brief=s["brief"], sid=new, runner=how,
                                   model=s["model"], effort=s["effort"])

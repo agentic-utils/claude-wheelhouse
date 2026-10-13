@@ -102,6 +102,12 @@ def new_worktree(cwd: str, t: Tree, branch: str) -> str:
     return str(path / Path(cwd).resolve().relative_to(Path(t.top).resolve()))
 
 
+def drop_worktree(t: Tree, branch: str) -> None:
+    """A worktree new_worktree made, and its branch, taken away again: the fork failed after it."""
+    git(t.main, "worktree", "remove", "--force", str(worktree_path(t, branch)))
+    git(t.main, "branch", "-D", branch)
+
+
 def copy(sid: str, cwd: str, title: str, to_cwd: str) -> str:
     """The parent's transcript copied under a new session id (the Agent SDK's fork_session),
     in to_cwd's project directory (place). The new id."""

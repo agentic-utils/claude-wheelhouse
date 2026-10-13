@@ -1196,3 +1196,21 @@ def test_fork_runs_as_its_parent(store, sid, tmp_path, claude_home, opened, pare
     new = Hub(store, sdk=sdk).fork(sid, []).sid
     assert opened == [(how, new, False)] and store.session(new)["runner"] == runs, desc
     assert store.session(new)["model"] == "claude-opus-5-5", f"{desc}: with the parent's model"
+
+
+@pytest.mark.parametrize("make_branch, said, desc", [
+    (False, "has no conversation to fork yet", "no transcript: the worktree made for it is taken away again"),
+    (True, "there's a branch feat/x-fork already", "a branch of that name: refused before anything is made"),
+])
+def test_fork_into_a_new_worktree_leaves_nothing_when_refused(hub, store, worktree, claude_home, opened, make_branch,
+                                                              said, desc):
+    from conftest import git
+    main, wt = worktree
+    sid = store.create_session(str(wt), name="feat")
+    if make_branch:
+        claude_home(sid, str(wt))
+        git(main, "branch", "feat/x-fork")
+    done = hub.fork(sid, [], "feat/x-fork")
+    assert not done.ok and said in done.notices[0].text, f"{desc}: {done.notices}"
+    assert not (main / ".worktrees/feat-x-fork").exists(), desc
+    assert bool(git(main, "branch", "--list", "feat/x-fork")) == make_branch, f"{desc}: the branch as it was"
