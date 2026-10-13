@@ -562,55 +562,93 @@ class Hub:
         t = fork.tree(s["cwd"])
         items = [(r["ref"], r["kind"], r["status"], r["title"]) for r in self.store.items(sid, include_closed=False)
                  if r["status"] in fork.MOVABLE.get(r["kind"], ())]
-        return fork.Plan(f"{display_name(s)} (fork)", s["cwd"], t, fork.default_branch(t, s["cwd"]) if t.linked else "",
+        return fork.Plan(f"{display_name(s)} (fork)", s["cwd"], t, fork.default_branch(t, s["cwd"]) if t.can_branch else "",
                          items)
 
     def fork(self, sid: str, refs: list[str], branch: str | None = None, may_tab: bool = True) -> Done:
         """A new session carrying on from this one's conversation (fork.py), named
         "<name> (fork)", run as this one is (a tab out of SDK mode), with its model and effort,
         in the same directory or, given branch, a new worktree on that new branch. The items
-        refs move to it, and this session is told which. Its sid in the Done."""
+        refs move to it, and this session is told which. What can be checked at once is; the
+        worktree and the transcript's copy, which can take a while, are made on a worker
+        thread (forking), and what happened then is announced."""
         s = self.row(sid)
         name = f"{display_name(s)} (fork)"
         how = runner(s) if runner(s) == "tab" or self.sdk else "tab"
         if how == "tab" and not may_tab:   # before anything is made
             return Done(False).say(f"{name} would open in a tab: fork it from the daemon's machine", "warning")
+        refs = list(dict.fromkeys(refs))
         bad = [r for r in refs if (i := self.store.item(sid, r)) is None
                or i["status"] not in fork.MOVABLE.get(i["kind"], ())]
         if bad:
             return Done(False).say(f"{', '.join(bad)} can't move: only a todo or blocked task, or an open "
                                    "question", "error")
-        t = fork.tree(s["cwd"])
+        try:
+            t = fork.tree(s["cwd"])
+            if branch and not t.linked:
+                raise ValueError(f"{s['cwd']} isn't in a linked git worktree")
+            if branch and not t.can_branch:
+                raise ValueError("git can't say where this repository's main checkout is, to put a new worktree "
+                                 "under: fork into this worktree")
+            if branch and fork.branch_taken(t, branch):
+                raise ValueError(f"there's a branch {branch} already: name another")
+        except ValueError as e:
+            return Done(False).say(str(e), "error")
+        self.spawn(functools.partial(self.forking, sid, s, name, how, refs, branch, t, may_tab), "fork")
+        return Done().say(f"forking {display_name(s)} as {name}")
+
+    def forking(self, sid: str, s, name: str, how: str, refs: list[str], branch: str | None, t, may_tab: bool) -> None:
+        """Fork's slow part, on a worker thread: the worktree, then the transcript's copy,
+        each taken away again if what follows fails. The rest is the hub's (forked)."""
         cwd = s["cwd"]
         try:
             if branch:
-                if not t.linked:
-                    raise ValueError(f"{s['cwd']} isn't in a linked git worktree")
-                if fork.git(s["cwd"], "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}") is not None:
-                    raise ValueError(f"there's a branch {branch} already: name another")
                 cwd = fork.new_worktree(s["cwd"], t, branch)
-            new = fork.copy(sid, s["cwd"], name, cwd)
-        except Exception as e:   # no transcript, git refused the branch...: nothing left behind
-            if cwd != s["cwd"]:
+            try:
+                new = fork.copy(sid, s["cwd"], name, cwd)
+            except BaseException:
+                if branch:
+                    fork.drop_worktree(t, branch)
+                raise
+        except FileNotFoundError:
+            self.post(functools.partial(self.announce, f"{display_name(s)} has no conversation to fork yet", "error"))
+            return
+        except Exception as e:   # git refused the branch, the transcript unreadable...
+            self.post(functools.partial(self.announce, f"couldn't fork {display_name(s)}: {e}", "error"))
+            return
+        self.post(functools.partial(self.forked, sid, s, name, how, refs, branch, t, cwd, new))
+
+    def forked(self, sid: str, s, name: str, how: str, refs: list[str], branch: str | None, t, cwd: str,
+               new: str) -> None:
+        """Fork's last part, on the hub's thread: the row, the items moved and what both
+        sessions are told, all undone (row, transcript, worktree and branch) if any of it
+        fails; then the launch, which failing leaves a whole fork to Relaunch."""
+        titles = {r: i["title"] for r in refs if (i := self.store.item(sid, r)) is not None}
+        try:
+            self.store.create_session(cwd, name=name, ticket=s["ticket"], brief=s["brief"], sid=new, runner=how,
+                                      model=s["model"], effort=s["effort"])
+            moved, left = self.store.move_items(sid, new, refs, name)
+            if moved:
+                self.store.notice(sid, fork.told_parent(name, moved, titles))
+            self.store.notice(new, fork.opening(display_name(s), name, moved, titles, branch or "", cwd,
+                                                bool(branch) and t.dirty))
+        except Exception as e:   # the parent forgotten meanwhile, a model no longer offered...
+            if self.store.session(new) is not None:
+                self.store.end(new)
+            fork.drop_copy(new)
+            if branch:
                 fork.drop_worktree(t, branch)
-            if isinstance(e, FileNotFoundError):
-                return Done(False).say(f"{display_name(s)} has no conversation to fork yet", "error")
-            return Done(False).say(str(e), "error")
-        self.store.create_session(cwd, name=name, ticket=s["ticket"], brief=s["brief"], sid=new, runner=how,
-                                  model=s["model"], effort=s["effort"])
-        titles = {r: self.store.item(sid, r)["title"] for r in refs}
-        moved = self.store.move_items(sid, new, refs, fork.MOVED_NOTE.replace("{fork}", name))
-        if moved:
-            self.store.notice(sid, fork.told_parent(name, moved, titles))
-        self.store.notice(new, fork.opening(display_name(s), name, moved, titles, branch or "", cwd,
-                                            bool(branch) and t.dirty))
-        done = Done(sid=new)
+            self.announce(f"couldn't fork {display_name(s)}: {e}", "error")
+            return
         try:
             (launch.open_host if how == "sdk" else launch.open_tab)(self.store, new, notice=False)
         except Exception as e:   # wt.exe missing...: the fork stays, to Relaunch
-            return done.say(f"forked {name}, but it didn't start: {e}. Relaunch it", "error")
-        return done.say(f"forking {display_name(s)} as {name}"
-                        + (f", {len(moved)} item(s) moved to it" if moved else ""))
+            self.announce(f"forked {name}, but it didn't start: {e}. Relaunch it", "error")
+            return
+        self.announce(f"forked {display_name(s)} as {name}"
+                      + (f", {len(moved)} item(s) moved to it" if moved else "")
+                      + (f"; {', '.join(left)} changed meanwhile, so stayed" if left else ""),
+                      "warning" if left else "information")
 
     def answer_offer(self, take: bool) -> Done:
         """The first-run tutorial offer, answered either way: it never comes back. Whether the

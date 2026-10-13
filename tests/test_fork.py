@@ -91,3 +91,52 @@ def test_opening(moved, branch, dirty, has, lacks, desc):
     text = fork.opening("demo", "demo (fork)", moved, {"T3": "fix it"}, branch, "/w" if branch else "", dirty)
     assert all(h in text for h in has) and not any(x in text for x in lacks), f"{desc}: {text}"
     assert "\u2014" not in text, f"{desc}: no em-dash"
+
+
+@pytest.mark.parametrize("layout, desc", [
+    ("bare", "a bare repository with worktrees: its main worktree is the bare directory, not the .git's parent"),
+    ("separate", "--separate-git-dir: git names the git dir, so no main worktree, and no new worktree offered"),
+])
+def test_tree_finds_the_main_worktree(tmp_path, layout, desc):
+    c = ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"]
+    if layout == "bare":
+        main = tmp_path / "repo.git"
+        git(tmp_path, "init", "-q", "--bare", "-b", "main", str(main))
+        seed = tmp_path / "seed"
+        git(tmp_path, "clone", "-q", str(main), str(seed))
+        git(seed, *c, "commit", "-q", "--allow-empty", "-m", "first")
+        git(seed, "push", "-q", "origin", "HEAD:main")
+    else:
+        main = tmp_path / "checkout"
+        git(tmp_path, "init", "-q", "-b", "main", "--separate-git-dir", str(tmp_path / "gitdir"), str(main))
+        git(main, *c, "commit", "-q", "--allow-empty", "-m", "first")
+    wt = tmp_path / "wt"
+    git(main, "worktree", "add", "-q", "-b", "feat", str(wt))
+    t = fork.tree(str(wt))
+    want = str(main.resolve()) if layout == "bare" else ""
+    assert (t.linked, t.main, t.branch, t.can_branch) == (True, want, "feat", bool(want)), desc
+    assert fork.default_branch(t, str(wt)) == ("feat-fork" if want else ""), f"{desc}: a new worktree offered or not"
+
+
+@pytest.mark.parametrize("answers, desc", [
+    ({"rev-parse": "a\nb\nc\nd"}, "four lines from rev-parse (an older git, say): refused, not called plain"),
+    ({"rev-parse": ".git-wt\n/x/.git\n/x/wt", "worktree": "bare\n"}, "worktree list without a main worktree"),
+])
+def test_tree_refuses_output_it_doesnt_expect(monkeypatch, tmp_path, answers, desc):
+    monkeypatch.setattr(fork, "git", lambda cwd, *args: answers.get(args[0]))
+    with pytest.raises(ValueError, match="git "):
+        fork.tree(str(tmp_path))
+
+
+def test_place_says_what_is_missing(claude_home):
+    with pytest.raises(RuntimeError, match="the fork's transcript, nope.jsonl, isn't under"):
+        fork.place("nope", "/x")
+
+
+def test_copy_takes_its_copy_away_when_it_cant_be_placed(claude_home, tmp_path, monkeypatch):
+    parent = "11111111-1111-4111-8111-111111111111"
+    claude_home(parent, str(tmp_path))
+    monkeypatch.setattr(fork, "place", lambda sid, cwd: (_ for _ in ()).throw(OSError("no room")))
+    with pytest.raises(OSError, match="no room"):
+        fork.copy(parent, str(tmp_path), "demo (fork)", str(tmp_path / "elsewhere"))
+    assert [p.stem for p in claude_home.projects.glob("*/*.jsonl")] == [parent], "only the parent's left"

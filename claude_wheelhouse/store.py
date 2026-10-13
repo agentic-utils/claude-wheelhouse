@@ -42,6 +42,9 @@ SETTLED = {"task": {"done", "dropped"}, "question": {"answered"}, "decision": {"
 # kinds whose settled items the person dismisses (Delete), recorded in items.dismissed; a
 # question or a decision is closed instead
 DISMISSABLE = ("task", "agent")
+# what a session may hand to a fork (Store.move_items): an item not under way and the
+# person's to answer, never an agent, decision or permission
+MOVABLE = {"task": ("todo", "blocked"), "question": ("open",)}
 # what a decision records besides its title (what was decided): post_item's keyword name, label.
 # One short line: the option passed over, the reason and how to undo it (#16: once three fields)
 DECISION_FIELDS = (("why", "Why"),)
@@ -198,7 +201,7 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "applied_model", "TEXT"), ("sessions", "applied_effort", "TEXT"),
                  ("sessions", "interrupted_at", "TEXT"), ("sessions", "model_chosen_at", "TEXT"),
                  ("sessions", "effort_chosen_at", "TEXT"), ("sessions", "launched_over", "INTEGER"),
-                 ("items", "session_at", "TEXT")]
+                 ("items", "session_at", "TEXT"), ("items", "moved_to", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -702,20 +705,23 @@ class Store:
         )
         return ref
 
-    def move_items(self, sid: str, to: str, refs: list[str], note: str) -> list[tuple[str, str]]:
-        """Items handed to another session (a fork, fork.py), in one transaction: each row
+    def move_items(self, sid: str, to: str, refs: list[str], fork: str) -> tuple[list[tuple[str, str]], list[str]]:
+        """Items handed to another session, fork (fork.py), in one transaction: each row
         re-owned with its thread, under the next ref of its kind there, and its old ref kept
-        here by a finished stand-in (a task dropped and dismissed, a question closed) whose
-        body is note ({ref} in it, the new ref), as refs are numbered by count (_insert_item), in older code too. The
-        refs as (old, new), in the order given."""
-        moved = []
+        here by a finished stand-in (a task dropped and dismissed, a question closed) that says
+        where it went (moved_to), as refs are numbered by count (_insert_item), in older code
+        too. Only those still MOVABLE as the transaction holds the write lock: the session may
+        have changed one since it was offered. (moved, as (old, new) in the order given, each
+        once; the refs left, gone or no longer movable)."""
+        moved, left = [], []
         with self.tx() as db:
             self._require(db, sid)
             self._require(db, to)
-            for ref in refs:
+            for ref in dict.fromkeys(refs):
                 item = db.execute("SELECT * FROM items WHERE session_id = ? AND ref = ?", (sid, ref)).fetchone()
-                if item is None:
-                    raise KeyError(f"{ref} isn't one of the session's items")
+                if item is None or item["status"] not in MOVABLE.get(item["kind"], ()) or item["moved_to"]:
+                    left.append(ref)
+                    continue
                 n = db.execute("SELECT count(*) FROM items WHERE session_id = ? AND kind = ?",
                                (to, item["kind"])).fetchone()[0]
                 new = f"{KINDS[item['kind']]}{n + 1}"
@@ -725,11 +731,18 @@ class Store:
                            (to, new, sid, ref))
                 status = "dropped" if item["kind"] == "task" else "closed"
                 db.execute("""INSERT INTO items (session_id, ref, kind, title, body, status, created_at, updated_at,
-                              dismissed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                           (sid, ref, item["kind"], item["title"], note.replace("{ref}", new), status, item["created_at"],
-                            now(), status if item["kind"] in DISMISSABLE else None))
+                              dismissed, moved_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           (sid, ref, item["kind"], item["title"], f"Moved to {fork}, a fork of this session, as {new}.",
+                            status, item["created_at"], now(), status if item["kind"] in DISMISSABLE else None,
+                            f"{fork} as {new}"))
                 moved.append((ref, new))
-        return moved
+        return moved, left
+
+    @staticmethod
+    def check_not_moved(item) -> None:
+        """A session's own word on an item it handed to a fork (move_items) is refused, saying where it went."""
+        if item["moved_to"]:
+            raise ValueError(f"{item['ref']} moved to {item['moved_to']}: it is no longer this session's")
 
     # subagents the wheelhouse tracks itself (subagents.py)
 
@@ -793,6 +806,8 @@ class Store:
         item = self.item(sid, ref)
         if item is None:
             raise KeyError(f"no item {ref} in this session")
+        if declares:
+            self.check_not_moved(item)
         if status is not None:
             self._check_session_status(item, status)
         with self.tx() as db:
@@ -820,6 +835,8 @@ class Store:
             raise SessionGone(sid)
         if item is None:
             raise KeyError(f"no item {ref} in this session")
+        if by_session:
+            self.check_not_moved(item)
         if item["kind"] == "question" and status not in ("open", "answered"):
             raise ValueError(f"{ref} is a question: reply with status open (still waiting on the "
                              "person) or answered (you have what you need)")

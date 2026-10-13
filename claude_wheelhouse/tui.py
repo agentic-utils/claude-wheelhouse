@@ -1415,7 +1415,7 @@ class ForkSession(Dialog):
                                     id="fork-items")
             else:
                 yield Label("No open question or todo or blocked task to move.", classes="dialog-prompt")
-            if plan.tree.linked:
+            if plan.tree.linked and plan.branch:   # a new worktree only where git says where the main one is
                 with RadioSet(id="fork-where"):
                     yield RadioButton("A new worktree, on a new branch from this one's last commit:", value=True,
                                       id="fork-new")
@@ -1440,7 +1440,7 @@ class ForkSession(Dialog):
     def go(self) -> None:
         refs = list(self.query_one("#fork-items", SelectionList).selected) if self.plan.items else []
         branch = None
-        if self.plan.tree.linked and self.query_one("#fork-new", RadioButton).value:
+        if self.plan.tree.linked and self.plan.branch and self.query_one("#fork-new", RadioButton).value:
             branch = self.query_one("#fork-branch", Input).value.strip()
             if not branch:
                 self.notify("name the new branch, or choose this worktree", severity="error")

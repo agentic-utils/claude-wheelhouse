@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from claude_wheelhouse import host as host_mod, hub as hub_mod, launch, liveness, models, plan_usage, stats, subagents, transcript, tutorial
+from claude_wheelhouse import fork as fork_mod, host as host_mod, hub as hub_mod, launch, liveness, models, plan_usage, stats, subagents, transcript, tutorial
 from claude_wheelhouse.hub import Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone
 
@@ -1103,84 +1103,171 @@ def opened(monkeypatch):
     return calls
 
 
-@pytest.mark.parametrize("refs, fork_refs, parent_told, desc", [
-    ([], [], False, "nothing ticked: the fork starts with no items, the parent isn't told"),
-    (["T1"], ["T1"], True, "a todo task moves"),
-    (["T3", "Q1"], ["T1", "Q1"], True, "a blocked task and an open question move, numbered afresh there"),
-])
-def test_fork(hub, store, sid, tmp_path, claude_home, opened, refs, fork_refs, parent_told, desc):
-    claude_home(sid, str(tmp_path))
+def forks(store, sid) -> list:
+    return [s for s in store.sessions() if s["id"] != sid]
+
+
+def parent_items(store, sid):
     store.post_item(sid, "task", "todo one")
     store.post_item(sid, "task", "running one", status="running")
     store.post_item(sid, "task", "blocked one", status="blocked")
     store.post_item(sid, "question", "which way?")
+
+
+@pytest.mark.parametrize("refs, fork_refs, parent_told, desc", [
+    ([], [], False, "nothing ticked: the fork starts with no items, the parent isn't told"),
+    (["T1"], ["T1"], True, "a todo task moves"),
+    (["T3", "Q1"], ["Q1", "T1"], True, "a blocked task and an open question move, numbered afresh there"),
+    (["T1", "T1"], ["T1"], True, "a ref given twice moves once, not its stand-in after it"),
+])
+def test_fork(hub, store, sid, tmp_path, claude_home, opened, heard, refs, fork_refs, parent_told, desc):
+    claude_home(sid, str(tmp_path))
+    parent_items(store, sid)
     store.queue(sid, "left", "Q1")
     done = hub.fork(sid, refs)
-    new = done.sid
-    f = store.session(new)
+    [f] = forks(store, sid)
+    new = f["id"]
     assert done.ok and (f["name"], f["cwd"], f["adopted"], f["runner"]) == ("demo (fork)", str(tmp_path), 1, "tab"), desc
     assert list(claude_home.projects.glob(f"*/{new}.jsonl")), f"{desc}: the transcript copied"
     assert opened == [("tab", new, False)], f"{desc}: launched, without JOINED_TEXT"
-    assert sorted(i["ref"] for i in store.items(new)) == sorted(fork_refs), desc
+    assert sorted(i["ref"] for i in store.items(new)) == fork_refs, desc
     assert [m["kind"] for m in store.pending(new)] == ["notice"] and "a fork of demo" in store.pending(new)[0]["body"], desc
     told = [m["body"] for m in store.pending(sid)]
     assert bool(told) == parent_told, desc
-    for old, new_ref in zip(refs, fork_refs):
+    for old in dict.fromkeys(refs):
         stand_in = store.item(sid, old)
-        assert stand_in["status"] in ("dropped", "closed") and f"as {new_ref}" in stand_in["body"], desc
-        assert f"{old} (its {new_ref})" in told[0], desc
+        assert stand_in["status"] in ("dropped", "closed") and stand_in["moved_to"].startswith("demo (fork) as "), desc
+        assert f"{old} (its " in told[0], desc
     if "Q1" in refs:
         assert [m["body"] for m in store.thread(new, "Q1")] == ["left"], f"{desc}: its thread moves with it"
     assert store.post_item(sid, "task", "after") == "T4", f"{desc}: the parent's refs stay numbered"
+    assert heard[-1][0].startswith("forked demo as demo (fork)"), desc
 
 
-@pytest.mark.parametrize("dirty, desc", [
-    (False, "a clean worktree"),
-    (True, "uncommitted changes: the fork is told it won't see them"),
+@pytest.mark.parametrize("dirty, where, desc", [
+    (False, "", "a clean worktree"),
+    (True, "", "uncommitted changes: the fork is told it won't see them"),
+    (False, "kept", "from a committed subdirectory: the same one in the new worktree"),
+    (False, "untracked", "from a subdirectory with nothing committed: the new worktree's top, not a missing one"),
 ])
-def test_fork_into_a_new_worktree(hub, store, worktree, claude_home, opened, dirty, desc):
+def test_fork_into_a_new_worktree(hub, store, worktree, claude_home, opened, dirty, where, desc):
+    from conftest import git
     main, wt = worktree
-    sid = store.create_session(str(wt), name="feat")
-    claude_home(sid, str(wt))
+    for sub in ("kept", "untracked"):
+        (wt / sub).mkdir()
+    (wt / "kept/f").write_text("x")
+    git(wt, "add", "kept")
+    git(wt, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "kept")
+    (wt / "untracked/f").write_text("x")
+    (wt / ".gitignore").write_text("untracked/\n.gitignore\n")   # ignored, so the tree stays clean
     if dirty:
         (wt / "wip.txt").write_text("wip")
+    cwd = wt / where if where else wt
+    sid = store.create_session(str(cwd), name="feat")
+    claude_home(sid, str(cwd))
     plan = hub.fork_plan(sid)
     assert (plan.tree.linked, plan.tree.dirty, plan.branch) == (True, dirty, "feat/x-fork"), desc
-    new = hub.fork(sid, [], plan.branch).sid
-    cwd = str(main.resolve() / ".worktrees" / "feat-x-fork")
-    assert store.session(new)["cwd"] == cwd, desc
+    assert hub.fork(sid, [], plan.branch).ok, desc
+    [f] = forks(store, sid)
+    top = main.resolve() / ".worktrees" / "feat-x-fork"
+    assert f["cwd"] == str(top / "kept" if where == "kept" else top), desc
     from claude_agent_sdk import project_key_for_directory
-    assert list(claude_home.projects.glob(f"*/{new}.jsonl"))[0].parent.name == project_key_for_directory(cwd), desc
-    body = store.pending(new)[0]["body"]
+    assert list(claude_home.projects.glob(f"*/{f['id']}.jsonl"))[0].parent.name == project_key_for_directory(f["cwd"]), desc
+    body = store.pending(f["id"])[0]["body"]
     assert "on a new branch, feat/x-fork" in body and ("regression" in body) == dirty, desc
 
 
-@pytest.mark.parametrize("setup, refs, branch, may_tab, said, desc", [
-    ("transcript", ["T2"], None, True, "T2 can't move", "a running task stays"),
-    ("transcript", ["Q9"], None, True, "Q9 can't move", "an item that isn't there"),
-    ("", [], None, True, "has no conversation to fork yet", "never ran: nothing to copy"),
-    ("transcript", [], "x-fork", True, "isn't in a linked git worktree", "a new worktree outside one"),
-    ("transcript", [], None, False, "fork it from the daemon's machine", "a tab, for another machine"),
+@pytest.mark.parametrize("refs, branch, may_tab, said, desc", [
+    (["T2"], None, True, "T2 can't move", "a running task stays"),
+    (["Q9"], None, True, "Q9 can't move", "an item that isn't there"),
+    ([], "x-fork", True, "isn't in a linked git worktree", "a new worktree outside one"),
+    ([], None, False, "fork it from the daemon's machine", "a tab, for another machine"),
 ])
-def test_fork_refused(hub, store, sid, tmp_path, claude_home, opened, setup, refs, branch, may_tab, said, desc):
-    if setup:
-        claude_home(sid, str(tmp_path))
-    store.post_item(sid, "task", "todo one")
-    store.post_item(sid, "task", "running one", status="running")
+def test_fork_refused(hub, store, sid, tmp_path, claude_home, opened, refs, branch, may_tab, said, desc):
+    claude_home(sid, str(tmp_path))
+    parent_items(store, sid)
     done = hub.fork(sid, refs, branch, may_tab)
     assert not done.ok and said in done.notices[0].text, f"{desc}: {done.notices}"
-    assert [s["id"] for s in store.sessions()] == [sid] and not opened, f"{desc}: nothing made"
-    assert sorted(i["ref"] for i in store.items(sid)) == ["T1", "T2"], desc
+    assert not forks(store, sid) and not opened, f"{desc}: nothing made"
 
 
-def test_fork_plan_offers_open_questions_and_todo_and_blocked_tasks(hub, store, sid):
-    for kind, status in [("task", "todo"), ("task", "running"), ("task", "blocked"), ("task", "done"),
-                         ("question", "open"), ("question", "answered"), ("decision", None)]:
-        kw = {"why": "x"} if kind == "decision" else {}
-        store.post_item(sid, kind, f"{kind} {status}", status=status, **kw)
-    plan = hub.fork_plan(sid)
-    assert sorted((ref, status) for ref, _, status, _ in plan.items) == [("Q1", "open"), ("T1", "todo"), ("T3", "blocked")]
-    assert (plan.name, plan.tree.linked, plan.branch) == ("demo (fork)", False, "")
+@pytest.mark.parametrize("fails, said, desc", [
+    ("no transcript", "has no conversation to fork yet", "never ran: nothing to copy"),
+    ("branch taken", "there's a branch feat/x-fork already", "the branch named exists: refused at once"),
+    ("place", "couldn't fork feat: no room", "the copy can't be put in the new worktree's folder"),
+    ("parent forgotten", "couldn't fork feat", "the parent forgotten while the copy was made"),
+    ("model gone", "couldn't fork feat", "the parent's model no longer offered: the row refused"),
+])
+def test_a_fork_that_fails_leaves_nothing_behind(store, worktree, claude_home, opened, monkeypatch, fails, said, desc):
+    from conftest import git
+    main, wt = worktree
+    sid = store.create_session(str(wt), name="feat")
+    if fails != "no transcript":
+        claude_home(sid, str(wt))
+    if fails == "branch taken":
+        git(main, "branch", "feat/x-fork")
+    if fails == "place":
+        monkeypatch.setattr(fork_mod, "place", lambda new, cwd: (_ for _ in ()).throw(OSError("no room")))
+    if fails == "model gone":
+        store.db.execute("UPDATE sessions SET model = 'claude-gone-1' WHERE id = ?", (sid,))
+    parent_items(store, sid)
+    spawn = (lambda work, group: (store.end(sid), work())) if fails == "parent forgotten" else None
+    hub = Hub(store, spawn=spawn)
+    said_ = []
+    hub.listen(lambda e: said_.append(e.text))
+    done = hub.fork(sid, ["T1"], "feat/x-fork")
+    texts = [n.text for n in done.notices] + said_
+    assert any(said in t for t in texts), f"{desc}: {texts}"
+    assert not forks(store, sid) and not opened, f"{desc}: no row, no launch"
+    assert sorted(p.stem for p in claude_home.projects.glob("*/*.jsonl")) == ([] if fails == "no transcript" else [sid]), \
+        f"{desc}: no copy left"
+    assert not (main / ".worktrees/feat-x-fork").exists(), f"{desc}: no worktree left"
+    assert bool(git(main, "branch", "--list", "feat/x-fork")) == (fails == "branch taken"), f"{desc}: the branch as it was"
+    if fails != "parent forgotten":
+        assert store.item(sid, "T1")["status"] == "todo" and not store.item(sid, "T1")["moved_to"], f"{desc}: T1 stays"
+
+
+@pytest.mark.parametrize("change, status, desc", [
+    ("running", "running", "a todo task started meanwhile stays, said"),
+    ("done", "done", "one finished meanwhile stays, said"),
+])
+def test_an_item_changed_while_forking_stays(store, sid, tmp_path, claude_home, opened, change, status, desc):
+    claude_home(sid, str(tmp_path))
+    parent_items(store, sid)
+    hub = Hub(store, spawn=lambda work, group: (store.update_item(sid, "T1", status=change, declares=True), work()))
+    heard_ = []
+    hub.listen(lambda e: heard_.append((e.text, e.severity)))
+    assert hub.fork(sid, ["T1", "Q1"]).ok, desc
+    [f] = forks(store, sid)
+    assert [i["ref"] for i in store.items(f["id"])] == ["Q1"], f"{desc}: only the question moved"
+    assert store.item(sid, "T1")["status"] == status and not store.item(sid, "T1")["moved_to"], desc
+    assert heard_[-1] == ("forked demo as demo (fork), 1 item(s) moved to it; T1 changed meanwhile, so stayed",
+                          "warning"), desc
+
+
+def test_the_slow_part_runs_on_a_worker(store, sid, tmp_path, claude_home, opened):
+    """git worktree add and the transcript's copy never hold the hub's own thread up."""
+    claude_home(sid, str(tmp_path))
+    queued, posted = [], []
+    hub = Hub(store, spawn=lambda work, group: queued.append((group, work)), post=posted.append)
+    done = hub.fork(sid, [])
+    assert done.ok and [g for g, _ in queued] == ["fork"] and not forks(store, sid), "said at once, nothing made yet"
+    queued[0][1]()
+    assert not forks(store, sid) and len(posted) == 1, "the copy made on the worker, the rest posted back"
+    posted[0]()
+    assert len(forks(store, sid)) == 1 and opened, "made and launched on the hub's thread"
+
+
+@pytest.mark.parametrize("call, desc", [
+    (lambda store, sid: store.update_item(sid, "T1", status="done", declares=True), "update_item"),
+    (lambda store, sid: store.reply(sid, "Q1", "x", "open", by_session=True), "reply"),
+])
+def test_the_parent_cant_act_on_an_item_it_handed_over(hub, store, sid, tmp_path, claude_home, opened, call, desc):
+    claude_home(sid, str(tmp_path))
+    parent_items(store, sid)
+    hub.fork(sid, ["T1", "Q1"])
+    with pytest.raises(ValueError, match=r"moved to demo \(fork\) as (T1|Q1): it is no longer this session's"):
+        call(store, sid)
 
 
 @pytest.mark.parametrize("parent, sdk, how, runs, desc", [
@@ -1193,24 +1280,17 @@ def test_fork_runs_as_its_parent(store, sid, tmp_path, claude_home, opened, pare
     store.set_runner(sid, parent)
     store.set_model(sid, "claude-opus-5-5")
     claude_home(sid, str(tmp_path))
-    new = Hub(store, sdk=sdk).fork(sid, []).sid
-    assert opened == [(how, new, False)] and store.session(new)["runner"] == runs, desc
-    assert store.session(new)["model"] == "claude-opus-5-5", f"{desc}: with the parent's model"
+    Hub(store, sdk=sdk).fork(sid, [])
+    [f] = forks(store, sid)
+    assert opened == [(how, f["id"], False)] and f["runner"] == runs, desc
+    assert f["model"] == "claude-opus-5-5", f"{desc}: with the parent's model"
 
 
-@pytest.mark.parametrize("make_branch, said, desc", [
-    (False, "has no conversation to fork yet", "no transcript: the worktree made for it is taken away again"),
-    (True, "there's a branch feat/x-fork already", "a branch of that name: refused before anything is made"),
-])
-def test_fork_into_a_new_worktree_leaves_nothing_when_refused(hub, store, worktree, claude_home, opened, make_branch,
-                                                              said, desc):
-    from conftest import git
-    main, wt = worktree
-    sid = store.create_session(str(wt), name="feat")
-    if make_branch:
-        claude_home(sid, str(wt))
-        git(main, "branch", "feat/x-fork")
-    done = hub.fork(sid, [], "feat/x-fork")
-    assert not done.ok and said in done.notices[0].text, f"{desc}: {done.notices}"
-    assert not (main / ".worktrees/feat-x-fork").exists(), desc
-    assert bool(git(main, "branch", "--list", "feat/x-fork")) == make_branch, f"{desc}: the branch as it was"
+def test_fork_plan_offers_open_questions_and_todo_and_blocked_tasks(hub, store, sid):
+    for kind, status in [("task", "todo"), ("task", "running"), ("task", "blocked"), ("task", "done"),
+                         ("question", "open"), ("question", "answered"), ("decision", None)]:
+        kw = {"why": "x"} if kind == "decision" else {}
+        store.post_item(sid, kind, f"{kind} {status}", status=status, **kw)
+    plan = hub.fork_plan(sid)
+    assert sorted((ref, status) for ref, _, status, _ in plan.items) == [("Q1", "open"), ("T1", "todo"), ("T3", "blocked")]
+    assert (plan.name, plan.tree.linked, plan.branch) == ("demo (fork)", False, "")

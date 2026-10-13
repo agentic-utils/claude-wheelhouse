@@ -16,11 +16,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# what the Fork dialog offers to move: those not under way (no running task) and the
-# person's to answer, never an agent, decision or permission
-MOVABLE = {"task": ("todo", "blocked"), "question": ("open",)}
-# the parent's stand-in for an item moved (Store.move_items), {ref} its ref in the fork
-MOVED_NOTE = "Moved to {fork}, a fork of this session, as {ref}."
+from .store import MOVABLE   # what the Fork dialog offers to move
 
 
 @dataclass
@@ -33,6 +29,11 @@ class Tree:
     main: str = ""
     branch: str = ""
     dirty: bool = False
+
+    @property
+    def can_branch(self) -> bool:
+        """Whether a fork can have a new worktree: in a linked one whose main worktree is known."""
+        return self.linked and bool(self.main)
 
 
 @dataclass
@@ -57,21 +58,39 @@ def git(cwd: str, *args: str) -> str | None:
 
 
 def tree(cwd: str) -> Tree:
-    """cwd as git sees it: a linked worktree when its git dir differs from the common one."""
-    dirs = git(cwd, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel")
-    if dirs is None or len(dirs.splitlines()) != 3:
+    """cwd as git sees it: a linked worktree when its git dir differs from the common one,
+    whose main worktree is the first `git worktree list` gives (a bare repository's own
+    directory; "" when git can't say, as for --separate-git-dir). Paths git gives
+    relative are cwd's. Raises ValueError on output it doesn't expect, rather than call a
+    worktree a plain directory."""
+    dirs = git(cwd, "rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel")
+    if dirs is None:   # not a repository (or not a work tree): nothing to offer
         return Tree()
-    git_dir, common, top = dirs.splitlines()
-    if Path(git_dir).resolve() == Path(common).resolve():
+    lines = dirs.splitlines()
+    if len(lines) != 3:
+        raise ValueError(f"git rev-parse gave {len(lines)} lines in {cwd}, not 3: {dirs!r}")
+    git_dir, common, top = ((Path(cwd) / line).resolve() for line in lines)
+    if git_dir == common:
         return Tree()
+    listed = (git(cwd, "worktree", "list", "--porcelain") or "").split("\n\n")[0].splitlines()
+    if not listed or not listed[0].startswith("worktree "):
+        raise ValueError(f"git worktree list gave no main worktree in {cwd}: {listed!r}")
+    main = Path(listed[0].removeprefix("worktree ")).resolve()
+    # git names the git dir itself for a --separate-git-dir checkout, which nothing points back
+    # to: main stays unknown, and only this worktree is offered
+    known = "bare" in listed or main != common
     branch = git(cwd, "symbolic-ref", "--quiet", "--short", "HEAD") or ""
-    return Tree(True, top, str(Path(common).parent), branch, bool(git(cwd, "status", "--porcelain")))
+    return Tree(True, str(top), str(main) if known else "", branch, bool(git(cwd, "status", "--porcelain")))
 
 
 def worktree_path(t: Tree, branch: str) -> Path:
-    """Where a new worktree for branch goes: the main checkout's .worktrees, one level, a /
+    """Where a new worktree for branch goes: the main worktree's .worktrees, one level, a /
     in the branch's name a -."""
     return Path(t.main) / ".worktrees" / branch.replace("/", "-")
+
+
+def branch_taken(t: Tree, name: str) -> bool:
+    return git(t.main, "rev-parse", "--verify", "--quiet", f"refs/heads/{name}") is not None
 
 
 def free_branch(t: Tree, base: str) -> str:
@@ -79,27 +98,33 @@ def free_branch(t: Tree, base: str) -> str:
     n = 1
     while True:
         name = base if n == 1 else f"{base}-{n}"
-        if git(t.main, "rev-parse", "--verify", "--quiet", f"refs/heads/{name}") is None \
-                and not worktree_path(t, name).exists():
+        if not branch_taken(t, name) and not worktree_path(t, name).exists():
             return name
         n += 1
 
 
 def default_branch(t: Tree, cwd: str) -> str:
     """The new branch's name as offered: the parent's with -fork, de-duplicated (detached:
-    its worktree's directory name's)."""
+    its worktree's directory name's); "" with no main worktree known to put it under."""
+    if not t.main:
+        return ""
     return free_branch(t, f"{t.branch or Path(t.top or cwd).name}-fork")
 
 
 def new_worktree(cwd: str, t: Tree, branch: str) -> str:
     """A worktree on a new branch made from cwd's HEAD, at worktree_path; the fork's
-    directory in it, cwd's own place under the top level. Raises ValueError with git's words."""
+    directory in it, cwd's own place under the top level, or the top level where that isn't
+    there (nothing committed in it: untracked or ignored). Raises ValueError with git's words."""
     path = worktree_path(t, branch)
+    try:
+        inside = Path(cwd).resolve().relative_to(Path(t.top).resolve())
+    except ValueError:
+        inside = Path()
     r = subprocess.run(["git", "-C", cwd, "worktree", "add", "-b", branch, str(path), "HEAD"],
                        capture_output=True, text=True, timeout=60)
     if r.returncode:
         raise ValueError(f"couldn't make a worktree on {branch}: {(r.stderr or r.stdout).strip()}")
-    return str(path / Path(cwd).resolve().relative_to(Path(t.top).resolve()))
+    return str(path / inside) if (path / inside).is_dir() else str(path)
 
 
 def drop_worktree(t: Tree, branch: str) -> None:
@@ -108,23 +133,40 @@ def drop_worktree(t: Tree, branch: str) -> None:
     git(t.main, "branch", "-D", branch)
 
 
+def projects_dir() -> Path:
+    from claude_agent_sdk._internal.sessions import _get_projects_dir
+    return _get_projects_dir()
+
+
 def copy(sid: str, cwd: str, title: str, to_cwd: str) -> str:
     """The parent's transcript copied under a new session id (the Agent SDK's fork_session),
-    in to_cwd's project directory (place). The new id."""
+    in to_cwd's project directory (place); if it can't be put there, the copy is taken away
+    again. The new id."""
     from claude_agent_sdk import fork_session   # the SDK is heavy: only loaded to fork
     new = fork_session(sid, directory=cwd, title=title).session_id
     if to_cwd != cwd:
-        place(new, to_cwd)
+        try:
+            place(new, to_cwd)
+        except BaseException:
+            drop_copy(new)
+            raise
     return new
+
+
+def drop_copy(sid: str) -> None:
+    """A fork's transcript taken away again, wherever it is: the fork failed after it."""
+    for path in projects_dir().glob(f"*/{sid}.jsonl"):
+        path.unlink(missing_ok=True)
 
 
 def place(sid: str, cwd: str) -> Path:
     """A transcript moved into the project directory Claude Code reads for cwd, as the SDK
     names it (realpath, sanitised, hashed if long)."""
     from claude_agent_sdk import project_key_for_directory
-    from claude_agent_sdk._internal.sessions import _get_projects_dir
-    projects = _get_projects_dir()
-    src = next(projects.glob(f"*/{sid}.jsonl"))
+    projects = projects_dir()
+    src = next(projects.glob(f"*/{sid}.jsonl"), None)
+    if src is None:
+        raise RuntimeError(f"the fork's transcript, {sid}.jsonl, isn't under {projects}")
     dest = projects / project_key_for_directory(cwd) / src.name
     dest.parent.mkdir(parents=True, exist_ok=True)
     src.rename(dest)

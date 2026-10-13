@@ -1200,6 +1200,6 @@ async def test_fork_through_the_daemon(daemon, store, sid, tmp_path, claude_home
     claude_home(sid, str(tmp_path))
     store.post_item(sid, "task", "do it")
     r = await call(daemon, "POST", f"/sessions/{sid}/fork", {"refs": ["T1"], "branch": None})
-    new = r.json()["sid"]
+    [new] = [s["id"] for s in store.sessions() if s["id"] != sid]
     assert r.json()["ok"] and opened == [(new, False)], r.text
     assert store.session(new)["name"] == "demo (fork)" and store.item(new, "T1")["title"] == "do it", r.text

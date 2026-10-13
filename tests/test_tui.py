@@ -5680,7 +5680,7 @@ async def test_fork_dialog(store, tmp_path, worktree, claude_home, monkeypatch, 
     store.post_item(sid, "question", "which way?")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         app.session_list.focus()
         await pilot.press("k")
         await pilot.pause()
@@ -5702,6 +5702,7 @@ async def test_fork_dialog(store, tmp_path, worktree, claude_home, monkeypatch, 
             assert dialog.query_one("#fork-warning").display == (not same), desc
             assert dialog.query_one("#fork-branch", Input).disabled == same, desc
         await pilot.click("#fork-go")
+        await app.workers.wait_for_complete()   # the worktree and the copy are made on a worker
         await pilot.pause()
         forks = [s for s in store.sessions() if s["id"] != sid]
         assert [s["name"] for s in forks] == ["demo (fork)"], desc
