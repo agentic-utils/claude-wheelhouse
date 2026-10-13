@@ -994,7 +994,7 @@ class SendBar(Horizontal):
 class PermissionButtons(Horizontal):
     """In place of the answer box while the item in context is an open permission (P) item:
     the answer is a button, applied at once whatever the session's send mode (#53), and the
-    box doesn't show. Only a host's session posts permission items. EXPERIMENTAL (features.py): SDK mode is not for
+    box doesn't show. Deny first takes an optional reason (DenyReason), in place of these. Only a host's session posts permission items. EXPERIMENTAL (features.py): SDK mode is not for
     use by anyone other than the author until Anthropic's terms are confirmed."""
     DEFAULT_CSS = """
     PermissionButtons { height: 1; display: none; background: #12122a; }
@@ -1010,6 +1010,32 @@ class PermissionButtons(Horizontal):
     def on_mount(self) -> None:
         for button in self.query(Button):
             button.can_focus = False   # a click leaves the answer box, and what's typed, where it was
+
+
+DENY_CAPTION = ("Why deny? (optional) The session reads this as your reason, so it can try something else. "
+                "Enter denies, Esc goes back.")
+
+
+class DenyReason(Vertical):
+    """In place of the permission buttons once Deny is pressed: an optional reason, which the
+    session reads as the denial (host.py), so it can try something else. Enter denies with it
+    (none: a plain deny), Esc gives the buttons back with nothing sent. target: the item it
+    denies while it shows; the item in context changing, or answered elsewhere, takes it away."""
+    DEFAULT_CSS = """
+    DenyReason { height: auto; display: none; background: #12122a; }
+    DenyReason Label { width: 1fr; color: #05d9e8; padding: 0 1; }
+    """
+    BINDINGS = [Binding("escape", "back", show=False)]   # before a full-screen item's Esc
+
+    target: tuple[str, str] | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Label(DENY_CAPTION)
+        yield Input(id="deny-reason", compact=True)
+
+    def action_back(self) -> None:
+        self.target = None
+        self.app.paint_sendbar()
 
 
 # what follows a Compact the wheelhouse asks for (store.THEN), as its question and dialog offer it
@@ -1070,6 +1096,7 @@ class ThreadView(Screen):
         with VerticalScroll(id="thread-scroll", classes="panel"):
             yield Transcript(id="thread")
         yield PermissionButtons()
+        yield DenyReason()
         yield CompactButtons()
         yield Compose(id="thread-answer")
         yield Hint(classes="answer-hint")
@@ -1740,7 +1767,7 @@ DESCRIBE = {
     "effort_end(-1)": "The highest effort",
     "press('allow')": "Allow the permission item in context; on the question suggesting Compact, Compact",
     "press('always')": "Always: allow it, and keep the rule; on the question suggesting Compact, Leave it",
-    "press('deny')": "Deny it; on the question suggesting Compact, just compact after",
+    "press('deny')": "Deny it, with an optional reason (Enter denies); on the question suggesting Compact, just compact after",
     "press('compact-then-send')": "On the question suggesting Compact: send the queued answers after, in the same prompt",
     "press('compact-then-park')": "On the question suggesting Compact: park the session after, sending nothing",
     "press('send-all')": "Send all: every running session's queue (a dead one's waits until it's relaunched)",
@@ -1760,7 +1787,8 @@ BUTTONS = {
     "send-all": "Send all (Shift+A), above the footer: send every running session's queue; a dead one's waits until it's relaunched",
     "allow": "Allow (1; over the answer box, on a permission item): let the tool call run, at once",
     "always": "Always (2): allow it, and keep the rule Claude Code suggests",
-    "deny": "Deny (3): refuse it",
+    "deny": ("Deny (3): refuse it, with a reason if you like: typed in the line that opens, the session reads "
+             "it as why, so it can try something else. Enter denies, Esc goes back"),
     "compact-now": ("Compact (1, over the answer box, on the question suggesting it): compact the session, with the "
                     "instructions typed in the box if any, else it's asked what to keep; then as chosen beside it: "
                     "3 just compact, 4 send the queued answers in the same prompt, 5 park it at once"),
@@ -2103,6 +2131,7 @@ class WheelhouseApp(App):
                     yield Transcript(NOTHING_SELECTED, id="detail")
                 yield Splitter("answer", "#answer", "#detail-scroll", "y")
                 yield PermissionButtons()
+                yield DenyReason()
                 yield CompactButtons()
                 yield Compose(id="answer")
                 yield Hint(classes="answer-hint")
@@ -2819,7 +2848,7 @@ class WheelhouseApp(App):
         held = self.held_bars.get(screen)
         if held is None:
             held = (next(iter(screen.query(SendBar)), None), list(screen.query(Hint)), list(screen.query(PermissionButtons)),
-                    list(screen.query(CompactButtons)), list(screen.query(Compose)))
+                    list(screen.query(CompactButtons)), list(screen.query(Compose)), list(screen.query(DenyReason)))
             if held[0] is not None:
                 self.held_bars[screen] = held
         return held
@@ -2829,10 +2858,14 @@ class WheelhouseApp(App):
         answer box: a permission is answered by its buttons alone), Compact question buttons
         and activity of the session in context there; a full-screen item's bar also has its
         session's conversation buttons."""
-        bar, hints, permission_rows, compact_rows, boxes = self.bar_widgets(self.screen)
+        bar, hints, permission_rows, compact_rows, boxes, reasons = self.bar_widgets(self.screen)
         if bar is None:
             return
         asking = self.asking(self.bar_item(self.screen)) is not None   # first: it settles
+        for r in reasons:   # Deny's reason, for the item in context while it still asks
+            if r.target is not None and not (asking and r.target == self.bar_item(self.screen)):
+                r.target = None
+        denying = any(r.target for r in reasons)
         nudged = self.nudged(self.bar_item(self.screen))
         sessions = {s["id"]: s for s in self.sessions}
         s = sessions.get(self.bar_session(self.screen))
@@ -2845,10 +2878,11 @@ class WheelhouseApp(App):
             h.set_base(PERMISSION_HINT if asking else COMPACT_HINT if nudged
                        else hint(sends, s is not None and self.dead(s["id"])))
         thread = isinstance(self.screen, ThreadView)
-        for rows, shown in ((permission_rows, asking), (compact_rows, nudged), (boxes, not asking)):
+        for rows, shown in ((permission_rows, asking and not denying), (reasons, denying), (compact_rows, nudged),
+                            (boxes, not asking)):
             for row in rows:
                 if row.display != shown:
-                    if not shown and row.has_focus:   # the box goes: its keys with it
+                    if not shown and row.has_focus_within:   # the box goes: its keys with it
                         self.screen.set_focus(None if thread else self.items_table)
                     row.display = shown
                     if shown and thread and isinstance(row, Compose):
@@ -3438,13 +3472,34 @@ class WheelhouseApp(App):
 
     @on(Button.Pressed, "#allow, #always, #deny")
     def permission_pressed(self, event: Button.Pressed) -> None:
-        """Answer a permission item, at once, by its buttons alone: no answer box shows with it."""
+        """Answer a permission item by its buttons: Allow and Always at once; Deny first asks
+        for an optional reason (DenyReason), in place of the buttons."""
         self.settle()
         target = self.bar_item(event.button.screen)
         if not target:
             return
+        if event.button.id == "deny":
+            reason = event.button.screen.query_one(DenyReason)
+            reason.target, box = target, reason.query_one(Input)
+            box.value = ""
+            self.paint_sendbar()
+            event.button.screen.set_focus(box)
+            return
+        self.deny_or_allow(target, event.button.id)
+
+    @on(Input.Submitted, "#deny-reason")
+    def deny_submitted(self, event: Input.Submitted) -> None:
+        """Enter in Deny's reason: denied, with what's typed (none: a plain deny)."""
+        reason = event.input.parent
+        target, reason.target = reason.target, None
+        if target:
+            self.deny_or_allow(target, "deny", emoji.convert(event.value.strip()))
+        else:
+            self.paint_sendbar()
+
+    def deny_or_allow(self, target: tuple[str, str], decision: str, message: str = "") -> None:
         try:
-            self.answer_permission(*target, event.button.id)
+            self.answer_permission(*target, decision, message)
         except (KeyError, SessionGone) as e:   # answered meanwhile, or the session went
             self.notify(str(e.args[0] if e.args else e), severity="warning")
         self.refresh_data()

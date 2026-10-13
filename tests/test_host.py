@@ -190,6 +190,8 @@ async def ask_and_answer(host, store, sid, name, inp, answer, context=None):
     (lambda s, sid, ref: s.answer_permission(sid, ref, "always"), "allow", ["rule"], None, "allow always keeps the rule"),
     (lambda s, sid, ref: s.answer_permission(sid, ref, "deny"), "deny", None,
      "The person denied this in the wheelhouse.", "deny"),
+    (lambda s, sid, ref: s.answer_permission(sid, ref, "deny", "use rg instead"), "deny", None, "use rg instead",
+     "Deny's reason (the TUI's DenyReason) is the denial's message"),
     (lambda s, sid, ref: s.send(sid, "use rg instead", ref), "deny", None, "use rg instead",
      "a message on the item denies with that text"),
 ])

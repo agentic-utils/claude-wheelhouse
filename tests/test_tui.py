@@ -27,7 +27,7 @@ from claude_wheelhouse.splitter import Splitter
 from claude_wheelhouse.store import COMPACT_QUESTION, Store, mode
 from claude_wheelhouse.tui import (BLANK, COMPACT_HINT, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice,
                                    CompactButtons, CompactSession, Confirm, ForgetChoice, ParkSession,
-                                   Folders, Hint, PermissionButtons, RelaunchChoice, RenameSession, SendBar, SessionList,
+                                   DenyReason, Folders, Hint, PermissionButtons, RelaunchChoice, RenameSession, SendBar, SessionList,
                                    ThreadView, Transcript, cylon, fill, hint, render)
 
 
@@ -3766,7 +3766,6 @@ def shown_buttons(app) -> set[str]:
 @pytest.mark.parametrize("press, status, decision, desc", [
     ("#allow", "allowed", "allow", "allow once"),
     ("#always", "allowed", "always", "allow, and keep the rule"),
-    ("#deny", "denied", "deny", "deny"),
 ])
 @pytest.mark.both
 async def test_permission_buttons(store, tmp_path, press, status, decision, desc):
@@ -3781,6 +3780,44 @@ async def test_permission_buttons(store, tmp_path, press, status, decision, desc
         assert not {"allow", "always", "deny"} & shown_buttons(app), f"{desc}: answered, the buttons go"
     item = store.item(sid, ref)
     assert item["status"] == status and json.loads(item["answer"])["decision"] == decision, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("where, press, typed, then, status, message, desc", [
+    ("inbox", "3", "use rg", "enter", "denied", "use rg", "Deny, a reason, Enter: denied with it"),
+    ("inbox", "#deny", "use rg", "enter", "denied", "use rg", "the Deny button, as its key"),
+    ("inbox", "3", "", "enter", "denied", "", "Deny then Enter: a plain deny"),
+    ("inbox", "3", "use rg", "escape", "open", None, "Deny then Esc: nothing sent, the buttons back"),
+    ("inbox", "1", "", None, "allowed", "", "Allow: at once, no reason asked"),
+    ("thread", "3", "use rg", "enter", "denied", "use rg", "in a full-screen item, denied with it"),
+    ("thread", "3", "use rg", "escape", "open", None, "Esc there: the buttons back, the item still open"),
+])
+@pytest.mark.both
+async def test_denys_optional_reason(store, tmp_path, where, press, typed, then, status, message, desc):
+    """Doug: Deny shows a one-line box for an optional reason, its caption saying what it's for;
+    Enter sends it (empty: a plain deny), Esc goes back. Allow stays one press."""
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    ref = store.post_item(sid, "permission", "Bash: rm -rf build")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        if where == "thread":
+            app.push_screen(ThreadView(sid, ref))
+            await pilot.pause()
+        await (pilot.click(press) if press.startswith("#") else pilot.press(press))
+        await pilot.pause()
+        reason, buttons = app.screen.query_one(DenyReason), app.screen.query_one(PermissionButtons)
+        if then:
+            assert reason.display and not buttons.display, f"{desc}: the reason in place of the buttons"
+            assert app.focused is reason.query_one(Input) and "Why deny?" in str(reason.query_one(Label).content), desc
+            await pilot.press(*[k if k != " " else "space" for k in typed], then)
+            await pilot.pause()
+        assert not reason.display, f"{desc}: the reason gone"
+        assert buttons.display == (status == "open"), f"{desc}: the buttons back while it asks"
+        assert isinstance(app.screen, ThreadView) == (where == "thread"), f"{desc}: Esc leaves only the reason"
+    item = store.item(sid, ref)
+    assert item["status"] == status, desc
+    assert (json.loads(item["answer"])["message"] if item["answer"] else None) == message, desc
 
 
 @pytest.mark.anyio
@@ -3859,7 +3896,7 @@ async def test_the_compact_question(store, tmp_path, monkeypatch, typed, then, p
 @pytest.mark.anyio
 @pytest.mark.parametrize("key, desc", [
     ("1", "allowed: the box back, and the focus in it"),
-    ("3", "denied: the same"),
+    ("3,enter", "denied: the same"),
 ])
 async def test_a_threads_box_takes_the_focus_back_after_a_permission(store, tmp_path, key, desc):
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
@@ -3871,7 +3908,7 @@ async def test_a_threads_box_takes_the_focus_back_after_a_permission(store, tmp_
         await pilot.pause()
         await pilot.pause()
         assert not app.screen.box.display and app.screen.focused is not app.screen.box, f"{desc}: no box while it asks"
-        await pilot.press(key)
+        await pilot.press(*key.split(","))
         for _ in range(3):
             await pilot.pause()
         assert app.screen.box.display and app.screen.focused is app.screen.box, desc

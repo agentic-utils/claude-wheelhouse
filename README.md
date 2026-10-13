@@ -447,7 +447,9 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   instructions for the compaction (none: the session is asked what to keep) and what follows
   it: just compact, send its queued answers in the same one prompt as that reminder (the
   default), or park it at once, sending nothing more, so nothing writes the compacted context
-  to the cache until it is unparked. Permission items are answered with buttons alone. The plugin's `SessionStart` hook does it
+  to the cache until it is unparked. Permission items are answered with buttons: Allow and Always at once, while Deny opens a
+  one-line box for an optional reason (the session reads it as why, so it can try something
+  else); Enter denies, empty or not, and Esc goes back to the buttons. The plugin's `SessionStart` hook does it
   ([`hooks.json`](claude_wheelhouse/plugin/hooks/hooks.json)): it runs
   `"${WHEELHOUSE_PYTHON}" -m claude_wheelhouse open-items` with the wheelhouse's own Python,
   as the monitor is run, and Claude Code adds what it prints to the session's context.

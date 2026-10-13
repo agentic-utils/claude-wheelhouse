@@ -166,7 +166,8 @@ def permission_body(name: str, inp: dict, ctx) -> str:
     else:
         lines.append(f"```json\n{json.dumps(inp, indent=2, ensure_ascii=False)}\n```")
     lines.append("Allow, Always (keep the rule Claude Code suggests) or Deny, with the buttons over the "
-                 "answer box. Anything typed in the box goes with a denial, as what to do instead.")
+                 "answer box. Deny asks for an optional reason, which the session reads as why, so it can try "
+                 "something else.")
     return "\n\n".join(lines)
 
 
