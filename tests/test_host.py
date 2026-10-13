@@ -1475,10 +1475,13 @@ def asked(store, sid):
     ([220_000, ("compacted", 40_000)], [("closed", "context 220k: compact?")], "compacted: it closes by itself"),
     ([220_000, ("compacted", 210_000)], [("closed", "context 220k: compact?")],
      "compacted, if still past 200k: it closes too"),
-    ([220_000, 180_000], [("open", "context 220k: compact?")], "under 200k but not compacted: it stays"),
-    ([220_000, 180_000, 230_000], [("open", "context 220k: compact?")],
-     "hovering about 200k: one question, not one per crossing"),
-    ([220_000, 140_000], [("closed", "context 220k: compact?")], "back under 150k by itself: it closes"),
+    ([220_000, 180_000], [("closed", "context 220k: compact?")], "back under 200k by itself: it closes"),
+    ([220_000, 180_000, 230_000], [("open", "context 230k: compact?"), ("closed", "context 220k: compact?")],
+     "under 200k, then past it again: asked again"),
+    ([220_000, ("compacted", 210_000), 230_000], [("closed", "context 220k: compact?")],
+     "compacted but still past 200k: not asked again until it has been under"),
+    ([220_000, ("compacted", 210_000), 180_000, 230_000],
+     [("open", "context 230k: compact?"), ("closed", "context 220k: compact?")], "then under, then past: asked again"),
     ([220_000, ("compacted", 40_000), 210_000], [("open", "context 210k: compact?"), ("closed", "context 220k: compact?")],
      "a second crossing asks again"),
     ([220_000, "leave", 240_000], [("closed", "context 220k: compact?")],
@@ -1556,6 +1559,81 @@ def test_park_compacts_first(host, store, sid, compact, sent, desc):
     assert run(host.poll()) is False, f"{desc}: the host stops"
     assert host.client.queries[1:] == sent, f"{desc}: no prompt after the compaction"
     assert not store.session(sid)["park_compact"], desc
+
+
+@pytest.mark.parametrize("then, desc", [
+    ("park", "park: a message sent during the compaction stays queued, never sent or confirmed"),
+    ("park-first", "Park's Compact first: the same"),
+])
+def test_parking_compaction_holds_messages_and_requests(host, store, sid, then, desc):
+    if then == "park":
+        store.command(sid, "compact", "keep Q1", "park")
+    else:
+        store.request(sid, "park", True)
+        run(host.poll())
+        store.set_parked(sid, True)
+        finish_at(host, 220_000)
+    run(host.poll())
+    host.client.queries.clear()
+    store.send(sid, "one more thing")
+    store.request(sid, "end")
+    run(host.poll())
+    assert host.client.queries == [], f"{desc}: nothing queued behind /compact"
+    finish_at(host, 40_000, compacted=True)
+    assert run(host.poll()) is False and host.client.queries == [], f"{desc}: parked, nothing sent"
+    assert [m["body"] for m in store.pending(sid)] == ["one more thing"], f"{desc}: still undelivered"
+
+
+@pytest.mark.parametrize("step, desc", [
+    ("interrupt", "Interrupt during Park's compaction: interrupted, and the host stops"),
+    ("late", "the park comes after PARK_COMPACT_WITHIN: no compaction, its flag dropped"),
+])
+def test_parks_compact_first_gives_way(host, store, sid, monkeypatch, step, desc):
+    store.request(sid, "park", True)
+    run(host.poll())
+    if step == "late":
+        host.park_told -= host_mod.PARK_COMPACT_WITHIN + 1
+        run(host.poll())
+        assert not store.session(sid)["park_compact"], desc
+    store.set_parked(sid, True)
+    finish_at(host, 220_000)
+    if step == "interrupt":
+        assert run(host.poll()), desc
+        store.command(sid, "interrupt")
+        interrupted = []
+
+        async def interrupt():
+            interrupted.append(True)
+        host.client.interrupt = interrupt
+        assert run(host.poll()) is False and interrupted == [True], desc
+    else:
+        assert run(host.poll()) is False and host.client.queries == [REQUEST_TEXT["park"]], desc
+
+
+def test_the_reminder_after_a_compaction_never_lists_the_compact_question(host, store, sid):
+    store.post_item(sid, "question", "which db?")
+    finish_at(host, 220_000)
+    store.command(sid, "compact", "keep it", "compact")
+    run(host.poll())
+    finish_at(host, 40_000, compacted=True)
+    told = [m["body"] for m in store.pending(sid) if m["kind"] == "notice"]
+    assert len(told) == 1 and "which db?" in told[0] and "compact?" not in told[0], told
+
+
+def test_an_earlier_turn_compacting_by_itself_leaves_the_plan_for_the_compact_turn(host, store, sid):
+    """Claude Code auto-compacting a turn queued ahead of /compact: what follows waits for
+    the wheelhouse's own /compact turn to end."""
+    store.queue(sid, "use Postgres", store.post_item(sid, "question", "which db?"))
+    run(host.turn("a long one"))
+    store.command(sid, "compact", "keep Q1", "park")
+    run(host.poll())
+    ahead, compact = list(host.sent)
+    host.sent.pop(ahead)
+    host.compacted_from = 300_000
+    run(host.finished(SimpleNamespace(result="", is_error=False, subtype="success")))
+    assert not store.session(sid)["parked"] and host.compact_then == "park", "the auto-compacted turn: not yet"
+    finish_at(host, 40_000, compacted=True)
+    assert store.session(sid)["parked"], "the /compact turn ended: parked"
 
 
 H = 3600

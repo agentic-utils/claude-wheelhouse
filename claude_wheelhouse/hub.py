@@ -834,7 +834,15 @@ class Hub:
     def host_command(self, sid: str, what: str, notes: str | None = None, then: str | None = None) -> Done:
         """Interrupt, Compact or Shell, for the session's host to carry out. A Compact may
         carry instructions and what follows it (Store.command). Interrupt also cancels a
-        Relaunch compacting first, whichever wheelhouse began it (the store's)."""
+        Relaunch compacting first, whichever wheelhouse began it (the store's). Compact is
+        refused for a session whose host isn't running: left in the store, the next host
+        would carry it out, on a cold cache."""
+        try:
+            s = self.listed(sid)
+        except SessionGone:
+            return Done(False)
+        if what == "compact" and (runner(s) != "sdk" or s["shell"] or not self.running(sid)):
+            return Done(False).say(f"{display_name(s)} isn't running in the wheelhouse: nothing to {what}", "warning")
         try:
             self.store.command(sid, what, notes, then)
         except SessionGone:

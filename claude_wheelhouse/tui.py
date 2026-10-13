@@ -1086,7 +1086,9 @@ class ThreadView(Screen):
         app.paint_sendbar()   # its hint and bar now, not at the next refresh
         # one Tab stop for the thread, the transcript: its scroll keys reach the scroll as an ancestor's
         self.query_one("#thread-scroll").can_focus = False
-        self.set_focus(self.box)   # at once, not after a refresh as focus() does: keys behind Enter go there
+        # at once, not after a refresh as focus() does: keys behind Enter go there. Not on a
+        # permission, which shows no box (paint_sendbar gives it back once answered)
+        self.set_focus(self.box if self.box.display else None)
 
     def action_leave(self) -> None:
         self.app.keep_unsent(self.box, (self.sid, self.ref), None)
@@ -1109,8 +1111,9 @@ class ThreadView(Screen):
 
 
 PERMISSION_HINT = "Allow, Always or Deny above (1, 2, 3), at once"
-COMPACT_HINT = ("Compact or Leave it above · type instructions for the compaction here if you like "
-                "(none: the session is asked what to keep): Ctrl+Enter compacts with them")
+COMPACT_HINT = ("1 Compact or 2 Leave it, then 3 just compact, 4 send the queue or 5 park (outside the box) · "
+                "type instructions for the compaction here if you like (none: the session is asked what to keep): "
+                "Ctrl+Enter compacts with them")
 
 
 def hint(sends: str, dead: bool = False) -> str:
@@ -1691,9 +1694,11 @@ DESCRIBE = {
     "effort(1)": "A higher effort, applied live",
     "effort_end(0)": "The lowest effort",
     "effort_end(-1)": "The highest effort",
-    "press('allow')": "Allow the permission item in context",
-    "press('always')": "Always: allow it, and keep the rule",
-    "press('deny')": "Deny it, with what's typed in its box as what to do instead",
+    "press('allow')": "Allow the permission item in context; on the question suggesting Compact, Compact",
+    "press('always')": "Always: allow it, and keep the rule; on the question suggesting Compact, Leave it",
+    "press('deny')": "Deny it; on the question suggesting Compact, just compact after",
+    "press('compact-then-send')": "On the question suggesting Compact: send the queued answers after, in the same prompt",
+    "press('compact-then-park')": "On the question suggesting Compact: park the session after, sending nothing",
     "press('send-all')": "Send all: every running session's queue (a dead one's waits until it's relaunched)",
     "cursor_up": "Up a row",
     "cursor_down": "Down a row",
@@ -1712,9 +1717,10 @@ BUTTONS = {
     "allow": "Allow (1; over the answer box, on a permission item): let the tool call run, at once",
     "always": "Always (2): allow it, and keep the rule Claude Code suggests",
     "deny": "Deny (3): refuse it",
-    "compact-now": ("Compact (over the answer box, on the question suggesting it): compact the session, with the "
-                    "instructions typed in the box if any, else it's asked what to keep; then as chosen beside it"),
-    "leave-it": "Leave it: close the question; it isn't asked again until the context has dropped back and passes 200k again",
+    "compact-now": ("Compact (1, over the answer box, on the question suggesting it): compact the session, with the "
+                    "instructions typed in the box if any, else it's asked what to keep; then as chosen beside it: "
+                    "3 just compact, 4 send the queued answers in the same prompt, 5 park it at once"),
+    "leave-it": "Leave it (2): close the question; it isn't asked again until the context has been under 200k and passes it again",
     "interrupt": "Interrupt (I): stop the session's current turn, like Esc in Claude Code",
     "compact": ("Compact (C): compact the session with instructions of your own, or with what it says to keep; "
                 "then just that, its queued answers sent in the same prompt (the default), or parked at once"),
@@ -1743,9 +1749,14 @@ BUTTON_KEYS = [
     Binding("1", "press('allow')", "Allow", show=False),
     Binding("2", "press('always')", "Always", show=False),
     Binding("3", "press('deny')", "Deny", show=False),
+    Binding("4", "press('compact-then-send')", "Then send the queued answers", show=False),
+    Binding("5", "press('compact-then-park')", "Then park it", show=False),
     Binding("A", "press('send-all')", "Send all", show=False),
     Binding("shift+a", "press('send-all')", "Send all", show=False),
 ]
+# the permission keys, 1 to 3, on the question suggesting Compact: Compact, Leave it and the
+# first then-choice; 4 and 5 (BUTTON_KEYS) the other two
+NUDGE_KEYS = {"allow": "compact-now", "always": "leave-it", "deny": "compact-then-compact"}
 # the inbox's Tab order (WheelhouseApp.cycle_focus): the answer box straight after the
 # items, so Ctrl+Enter (which goes back to the items), Down and Tab answer the next one.
 # Any other pane that takes focus (a module's) comes after these
@@ -1779,7 +1790,8 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
 # mode is on (features.py, EXPERIMENTAL: the author's alone until Anthropic's terms are
 # confirmed) or the screen shows them (a host's session, which runs on with it off). Out of
 # it, a key of one that doesn't show says it doesn't apply, as any other button's does
-SDK_BUTTONS = ("interrupt", "compact", "shell", "model", "allow", "always", "deny", "compact-now", "leave-it")
+SDK_BUTTONS = ("interrupt", "compact", "shell", "model", "allow", "always", "deny", "compact-now", "leave-it",
+               "compact-then-send", "compact-then-park")
 SDK_WHOSE = (", Model on one run in the wheelhouse; then Mode, Send on one that isn't dead, "
              "and on one run in the wheelhouse Interrupt, Compact and Shell. Its effort is the slider at the top of "
              "the stats pane.")
@@ -1794,8 +1806,8 @@ WHOSE = ("The buttons under the session list act on the session highlighted ther
 
 
 def showing(button) -> bool:
-    """Whether a button shows: it, and the bar it sits in."""
-    return bool(button and button.display and button.parent.display)
+    """Whether a button shows: it, and what it sits in (a then-choice: its set and its row)."""
+    return bool(button and all(w.display for w in (button, *button.ancestors[:3 if isinstance(button, RadioButton) else 1])))
 
 
 def keys_help(sdk: bool = False, shown=()) -> str:
@@ -2775,7 +2787,7 @@ class WheelhouseApp(App):
         if bar is None:
             return
         asking = self.asking(self.bar_item(self.screen)) is not None   # first: it settles
-        nudged = self.client.compact_question(self.bar_item(self.screen)) is not None
+        nudged = self.nudged(self.bar_item(self.screen))
         sessions = {s["id"]: s for s in self.sessions}
         s = sessions.get(self.bar_session(self.screen))
         if bar.conversation:
@@ -2786,12 +2798,15 @@ class WheelhouseApp(App):
         for h in hints:
             h.set_base(PERMISSION_HINT if asking else COMPACT_HINT if nudged
                        else hint(sends, s is not None and self.dead(s["id"])))
+        thread = isinstance(self.screen, ThreadView)
         for rows, shown in ((permission_rows, asking), (compact_rows, nudged), (boxes, not asking)):
             for row in rows:
                 if row.display != shown:
                     if not shown and row.has_focus:   # the box goes: its keys with it
-                        self.screen.set_focus(self.items_table if self.screen is self.screen_stack[0] else None)
+                        self.screen.set_focus(None if thread else self.items_table)
                     row.display = shown
+                    if shown and thread and isinstance(row, Compose):
+                        self.screen.set_focus(row)   # the thread's box back: its place to type
                     self.refit()   # a row more or less over the answer box
         show_button(bar, "send-all", f"Send all ({total})", not total)
         if s is not None and runner(s) == "sdk":
@@ -3252,7 +3267,7 @@ class WheelhouseApp(App):
         """Ctrl+Enter: queued or sent at once, by the session's mode."""
         self.settle()
         box, target = self.composing()
-        if box is not None and target and self.client.compact_question(target) is not None:
+        if box is not None and target and self.nudged(target):
             self.compact_now(target)   # the box holds its instructions, if anything
             return
         box, target, text = self.typed()
@@ -3413,13 +3428,21 @@ class WheelhouseApp(App):
         instructions (compact_now), or Leave it, which closes it."""
         self.settle()
         target = self.bar_item(event.button.screen)
-        if not target or self.client.compact_question(target) is None:
+        if not target or not self.nudged(target):
             return
         if event.button.id == "leave-it":
             self.told(self.client.close(*target, True))
             self.refresh_data()
         else:
             self.compact_now(target)
+
+    def nudged(self, target) -> bool:
+        """Whether the item in context is the question suggesting Compact, of a session whose
+        host is running: the conversation's own Compact button shows only then too."""
+        if self.client.compact_question(target) is None:
+            return False
+        s = next((x for x in self.sessions if x["id"] == target[0]), None)
+        return s is not None and runner(s) == "sdk" and self.running(s["id"]) and not s["shell"]
 
     def compact_now(self, target: tuple[str, str]) -> None:
         """Compact from its question: the box's text, if any, the instructions, and the
@@ -3495,6 +3518,8 @@ class WheelhouseApp(App):
         sid = self.current_session() if button_id == "park" else None
         if sid and self.state(self.row(sid)) == "parked":   # P presses Unpark, the Relaunch button there
             button_id = "relaunch"
+        if button_id in NUDGE_KEYS and any(showing(r) for r in self.screen.query(CompactButtons)):
+            button_id = NUDGE_KEYS[button_id]   # 1 to 3 on the question suggesting Compact: its own
         button = next(iter(self.screen.query(f"#{button_id}")), None)
         if button is None:   # not on this screen (Model, in a full-screen item's bar): said all the same
             name = next((b.description for b in BUTTON_KEYS if b.action == f"press('{button_id}')"),
@@ -3507,6 +3532,8 @@ class WheelhouseApp(App):
             self.notify(f"{button.label} doesn't apply to {whose}", severity="warning")
         elif button.disabled:
             self.notify(f"{button.label}: nothing to do", severity="warning")
+        elif isinstance(button, RadioButton):
+            button.value = True   # a then-choice: pressed in its set
         else:
             # handled now, as the key arrived (take_key): press() posts it to the button, from
             # where it reaches the app behind the keys typed after it, an arrow moving what it acts on

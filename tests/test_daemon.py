@@ -1221,7 +1221,11 @@ def test_shutdown_takes_away_a_fork_whose_last_part_never_runs(daemon, monkeypat
     ("park", {"how": "ask", "compact": True}, 200, (None, None), 1, "Park, compacting first"),
     ("park", {"how": "ask"}, 200, (None, None), 0, "Park without"),
 ])
-async def test_compact_and_park_carry_their_options(daemon, store, sid, path, body, status, plan, park_compact, desc):
+async def test_compact_and_park_carry_their_options(daemon, store, sid, monkeypatch, path, body, status, plan,
+                                                   park_compact, desc):
+    store.set_runner(sid, "sdk")
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    daemon.tick()
     r = await call(daemon, "POST", f"/sessions/{sid}/{path}", body)
     assert r.status_code == status, f"{desc}: {r.text}"
     assert (store.compact_plan(sid), store.session(sid)["park_compact"]) == (plan, park_compact), desc
@@ -1234,3 +1238,16 @@ async def test_the_compact_question_is_marked_in_the_inbox(daemon, store, sid):
     items = (await call(daemon, "GET", "/inbox")).json()["items"]
     assert sorted((i["title"], i["compact_question"]) for i in items) == [("context 220k: compact?", True),
                                                                           ("which db?", False)]
+
+
+@pytest.mark.parametrize("runner_, live, ok, desc", [
+    ("sdk", True, True, "a running host: Compact is left for it"),
+    ("sdk", False, False, "a host not running: refused, so no later host compacts on a cold cache"),
+    ("tab", True, False, "a tab: the wheelhouse can't compact it"),
+])
+async def test_compact_needs_a_running_host(daemon, store, sid, monkeypatch, runner_, live, ok, desc):
+    store.set_runner(sid, runner_)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live" if live else "dead")
+    daemon.tick()
+    r = await call(daemon, "POST", f"/sessions/{sid}/compact", {"notes": None, "then": "send"})
+    assert r.json()["ok"] is ok and (store.session(sid)["host_command"] == "compact") is ok, desc

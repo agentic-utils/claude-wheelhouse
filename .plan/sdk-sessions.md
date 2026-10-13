@@ -303,8 +303,10 @@ so an hour's quiet is what turns the cache cold.
   the host posts one question item, `context 220k: compact?`, marked in its answer column
   (`store.COMPACT_QUESTION`), answered with buttons: Compact and Leave it, a choice of what
   follows, and the answer box for optional instructions. It is one per crossing: neither a
-  restarted host nor Leave it brings a second. Once a turn ends compacted, or under
-  `NUDGE_RESET_TOKENS` (150k), it closes with a note, and the next crossing asks afresh. It
+  restarted host nor Leave it brings a second. Once a turn ends compacted, or under 200k, it
+  closes with a note; the next crossing asks afresh only once the context has been under
+  200k, so a compaction that leaves it past 200k brings no new question. Keys: 1 Compact,
+  2 Leave it, 3 to 5 the choice of what follows. Compact needs the host running. It
   never counts as the session waiting on the person (keepalive). Hosts only: the wheelhouse
   can't compact a tab (D89).
 - **What follows a Compact.** The Compact button's dialog and the question both offer it
@@ -313,7 +315,8 @@ so an hour's quiet is what turns the cache cold.
   once, sending nothing, so no prompt writes the compacted context to the cache. Instructions
   typed are sent as `/compact <them>`, without asking the session. Park on a hosted session
   offers Compact first, ticked while the cache is warm: the park turn, then `/compact`, then
-  the host stops.
+  the host stops. While a compaction that parks runs, the person's messages and requests
+  stay queued. Compact first lapses if the session hasn't parked within the hour.
 - **Keepalive.** A session whose last turn ended over `KEEPALIVE_TOKENS` (150k), with
   nothing running, not parked, and waiting on the person (an open question, or an
   unseen decision, of its own: a permission or AskUserQuestion waits inside a running turn,

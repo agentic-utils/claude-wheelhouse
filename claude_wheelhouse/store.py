@@ -491,9 +491,13 @@ class Store:
             self._require(db, sid)
             db.execute("UPDATE sessions SET host_command = ?, compact_plan = ? WHERE id = ?", (what, plan, sid))
 
-    def compact_plan(self, sid: str) -> tuple[str | None, str | None]:
-        """The Compact command's instructions and what follows it (command), as last pressed."""
-        row = self._one("SELECT compact_plan FROM sessions WHERE id = ?", (sid,))
+    def compact_plan(self, sid: str, take: bool = False) -> tuple[str | None, str | None]:
+        """The Compact command's instructions and what follows it (command), as last pressed;
+        taken (cleared) by the host as it carries it out (take)."""
+        with self.tx() as db:
+            row = db.execute("SELECT compact_plan FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if take:
+                db.execute("UPDATE sessions SET compact_plan = NULL WHERE id = ?", (sid,))
         plan = json.loads(row[0]) if row and row[0] else {}
         return plan.get("notes"), plan.get("then")
 
@@ -645,7 +649,8 @@ class Store:
                 db.execute("UPDATE sessions SET park_compact = ? WHERE id = ?", (int(compact), sid))
 
     def take_park_compact(self, sid: str) -> bool:
-        """The host takes the Park's Compact first (request), once."""
+        """The host takes the Park's Compact first (request), once: to compact, or to drop it
+        (the park not done in time)."""
         with self.tx() as db:
             return db.execute("UPDATE sessions SET park_compact = 0 WHERE id = ? AND park_compact = 1",
                               (sid,)).rowcount == 1
@@ -727,6 +732,15 @@ class Store:
         with self.tx() as db:
             self._require(db, sid)
             return self._insert_item(db, sid, kind, title, body, status)
+
+    def post_compact_question(self, sid: str, title: str, body: str) -> str:
+        """The host's question suggesting Compact, marked (COMPACT_QUESTION) as it is posted:
+        one transaction, so no reader sees it unmarked."""
+        with self.tx() as db:
+            self._require(db, sid)
+            ref = self._insert_item(db, sid, "question", title, body, INITIAL_STATUS["question"])
+            db.execute("UPDATE items SET answer = ? WHERE session_id = ? AND ref = ?", (COMPACT_QUESTION, sid, ref))
+        return ref
 
     @staticmethod
     def _insert_item(db, sid, kind, title, body, status) -> str:
@@ -959,7 +973,7 @@ class Store:
         question, as list_items orders them; no agent, decision or permission items."""
         return [r for r in self.items(sid, include_closed=False)
                 if (r["kind"] == "task" and r["status"] not in SETTLED["task"])
-                or (r["kind"] == "question" and r["status"] == "open")]
+                or (r["kind"] == "question" and r["status"] == "open" and r["answer"] != COMPACT_QUESTION)]
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's answer to a permission item: allow, always (allow, and keep the rule

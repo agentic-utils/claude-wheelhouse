@@ -3784,16 +3784,21 @@ async def test_permission_buttons(store, tmp_path, press, status, decision, desc
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("kind, answer, box, permission, compact, hint_, desc", [
-    ("permission", None, False, True, False, PERMISSION_HINT, "a permission: its buttons alone, no answer box"),
-    ("question", COMPACT_QUESTION, True, False, True, COMPACT_HINT,
+@pytest.mark.parametrize("kind, answer, live, box, permission, compact, hint_, desc", [
+    ("permission", None, True, False, True, False, PERMISSION_HINT, "a permission: its buttons alone, no answer box"),
+    ("question", COMPACT_QUESTION, True, True, False, True, COMPACT_HINT,
      "the question suggesting Compact: its buttons, and the box for its instructions"),
-    ("question", None, True, False, False, None, "any other question: the box alone"),
+    ("question", COMPACT_QUESTION, False, True, False, False, None,
+     "its host not running: no Compact, as the conversation's own button"),
+    ("question", None, True, True, False, False, None, "any other question: the box alone"),
 ])
 @pytest.mark.both
-async def test_what_shows_over_the_answer_box(store, tmp_path, kind, answer, box, permission, compact, hint_, desc):
+async def test_what_shows_over_the_answer_box(store, tmp_path, monkeypatch, kind, answer, live, box, permission, compact,
+                                              hint_, desc):
     """Doug: a permission is answered by its buttons, with no text area; the Compact question
     keeps one, for custom instructions."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live" if live else "dead")
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
     ref = store.post_item(sid, kind, "Bash: rm -rf build" if kind == "permission" else "context 220k: compact?")
     if answer:
@@ -3809,6 +3814,9 @@ async def test_what_shows_over_the_answer_box(store, tmp_path, kind, answer, box
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("typed, then, press, command, plan, status, desc", [
+    ("", None, "keys:5,1", "compact", (None, "park"), "open", "keys, outside the box: 5 chooses park, 1 compacts"),
+    ("", None, "keys:3,1", "compact", (None, "compact"), "open", "3 chooses just compact"),
+    ("", None, "keys:2", None, (None, None), "closed", "2 leaves it"),
     ("", None, "#compact-now", "compact", (None, "send"), "open",
      "Compact: the session is asked what to keep, then its queued answers go with the reminder (the default)"),
     ("keep the PR list", "#compact-then-park", "#compact-now", "compact", ("keep the PR list", "park"), "open",
@@ -3818,7 +3826,9 @@ async def test_what_shows_over_the_answer_box(store, tmp_path, kind, answer, box
     ("", None, "#leave-it", None, (None, None), "closed", "Leave it closes it, and nothing is sent"),
 ])
 @pytest.mark.both
-async def test_the_compact_question(store, tmp_path, typed, then, press, command, plan, status, desc):
+async def test_the_compact_question(store, tmp_path, monkeypatch, typed, then, press, command, plan, status, desc):
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
     ref = store.post_item(sid, "question", "context 220k: compact?")
     store.set_answer(sid, ref, COMPACT_QUESTION)
@@ -3830,6 +3840,11 @@ async def test_the_compact_question(store, tmp_path, typed, then, press, command
             await pilot.click(then)
         if press.startswith("#"):
             await pilot.click(press)
+        elif press.startswith("keys:"):
+            app.items_table.focus()
+            for key in press[5:].split(","):
+                await pilot.press(key)
+                await pilot.pause()
         else:
             app.answer.focus()
             await pilot.press(press)
@@ -3839,6 +3854,27 @@ async def test_the_compact_question(store, tmp_path, typed, then, press, command
     assert store.item(sid, ref)["status"] == status, desc
     assert store.drafts(sid) == [] and store.pending(sid) == [], f"{desc}: nothing queued or sent to the session"
     assert left == ("" if command and typed else typed), f"{desc}: the instructions leave the box"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key, desc", [
+    ("1", "allowed: the box back, and the focus in it"),
+    ("3", "denied: the same"),
+])
+async def test_a_threads_box_takes_the_focus_back_after_a_permission(store, tmp_path, key, desc):
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    ref = store.post_item(sid, "permission", "Bash: rm -rf build")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(ThreadView(sid, ref))
+        await pilot.pause()
+        await pilot.pause()
+        assert not app.screen.box.display and app.screen.focused is not app.screen.box, f"{desc}: no box while it asks"
+        await pilot.press(key)
+        for _ in range(3):
+            await pilot.pause()
+        assert app.screen.box.display and app.screen.focused is app.screen.box, desc
 
 
 @pytest.mark.anyio
