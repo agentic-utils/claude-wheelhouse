@@ -28,7 +28,7 @@ from typing import Callable
 
 from . import adopt, api, features, fork, launch, liveness, models, plan_usage, stats, subagents, transcript, tutorial
 from .host import AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, NO_NOTES, keepalive_body, waits_on_person
-from .store import DISMISSABLE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
+from .store import COMPACT_QUESTION, DISMISSABLE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
 
 RUNNING = ("live", "stalled", "starting")
 # a hosted session's activity when nothing is under way: errored and stopped count as resting
@@ -385,6 +385,17 @@ class Hub:
         return (runner(s) == "sdk" and not s["shell"] and self.running(sid)
                 and (s["context_tokens"] or 0) > COMPACT_FIRST_TOKENS)
 
+    def warm(self, sid: str) -> bool:
+        """Whether the session's prompt cache is warm: its last response within the cache's
+        lifetime (stats.Snapshot.warm), as the stats pane shows it."""
+        follower = self.contexts.get(sid)
+        return bool(follower and follower.ready and follower.snap.warm(time.time()))
+
+    def compact_question(self, target):
+        """The item in context, if it is the host's open question suggesting Compact."""
+        item = target and target[1] and self.store.item(*target)
+        return item if item and item["status"] == "open" and item["answer"] == COMPACT_QUESTION else None
+
     def compact_then_relaunch(self, sid: str, host: tuple, may_tab: bool = True) -> Done:
         """Relaunch, compacting first: the host is asked to Compact (unless a Compact is
         under way already), and once the session is compacted and idle, finish_relaunches
@@ -694,9 +705,10 @@ class Hub:
 
     # Park and Forget ("end"): a running session is asked; one not running, or one forced, is acted on
 
-    def ask(self, sid: str, what: str) -> Done:
-        self.store.request(sid, what)
-        return Done().say(f"asked the session to {what}")
+    def ask(self, sid: str, what: str, compact: bool = False) -> Done:
+        """A running session asked to Park or Forget; a Park, to compact once parked (compact)."""
+        self.store.request(sid, what, compact and what == "park")
+        return Done().say(f"asked the session to {what}" + (", then compact" if compact and what == "park" else ""))
 
     def cancel_request(self, sid: str, what: str) -> Done:
         self.store.cancel_request(sid, what)
@@ -819,14 +831,16 @@ class Hub:
             done.say(f"{n} answer(s) still queued for {name}: Ctrl+S or Send sends them")
         return done
 
-    def host_command(self, sid: str, what: str) -> Done:
-        """Interrupt, Compact or Shell, for the session's host to carry out. Interrupt also
-        cancels a Relaunch compacting first, whichever wheelhouse began it (the store's)."""
+    def host_command(self, sid: str, what: str, notes: str | None = None, then: str | None = None) -> Done:
+        """Interrupt, Compact or Shell, for the session's host to carry out. A Compact may
+        carry instructions and what follows it (Store.command). Interrupt also cancels a
+        Relaunch compacting first, whichever wheelhouse began it (the store's)."""
         try:
-            self.store.command(sid, what)
+            self.store.command(sid, what, notes, then)
         except SessionGone:
             return Done(False)
-        done = Done().say({"interrupt": "interrupting", "compact": "compacting: asking what to keep",
+        done = Done().say({"interrupt": "interrupting",
+                           "compact": "compacting with your instructions" if notes else "compacting: asking what to keep",
                            "shell": "opening a terminal tab"}[what])
         stored = self.store.relaunches().get(sid)
         if what == "interrupt" and stored is not None and stored[2] is not None:

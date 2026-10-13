@@ -17,7 +17,7 @@ from sse_starlette.sse import AppStatus
 from claude_wheelhouse import daemon as daemon_mod, hub as hub_mod, launch, liveness, store as store_mod, transcript
 from claude_wheelhouse.daemon import AlreadyRunning, Daemon, Feed, PortTaken, checked_address, hosts, listener, take_lock
 from claude_wheelhouse.hub import Event
-from claude_wheelhouse.store import SessionGone, Store
+from claude_wheelhouse.store import COMPACT_QUESTION, SessionGone, Store
 
 pytestmark = pytest.mark.anyio
 URL = "http://127.0.0.1:7428"
@@ -1212,3 +1212,25 @@ def test_shutdown_takes_away_a_fork_whose_last_part_never_runs(daemon, monkeypat
     daemon.hub.pending_forks["new-sid"] = (None, None)
     daemon.shutdown()
     assert undone == ["new-sid"] and not daemon.hub.pending_forks
+
+
+@pytest.mark.parametrize("path, body, status, plan, park_compact, desc", [
+    ("compact", {"notes": "keep Q3", "then": "park"}, 200, ("keep Q3", "park"), 0, "Compact with instructions, then park"),
+    ("compact", {}, 200, (None, None), 0, "Compact as before: asked what to keep, nothing chosen after"),
+    ("compact", {"then": "later"}, 400, (None, None), 0, "an unknown then is refused"),
+    ("park", {"how": "ask", "compact": True}, 200, (None, None), 1, "Park, compacting first"),
+    ("park", {"how": "ask"}, 200, (None, None), 0, "Park without"),
+])
+async def test_compact_and_park_carry_their_options(daemon, store, sid, path, body, status, plan, park_compact, desc):
+    r = await call(daemon, "POST", f"/sessions/{sid}/{path}", body)
+    assert r.status_code == status, f"{desc}: {r.text}"
+    assert (store.compact_plan(sid), store.session(sid)["park_compact"]) == (plan, park_compact), desc
+
+
+async def test_the_compact_question_is_marked_in_the_inbox(daemon, store, sid):
+    """The inbox serves no answers: the question suggesting Compact is marked instead."""
+    store.set_answer(sid, store.post_item(sid, "question", "context 220k: compact?"), COMPACT_QUESTION)
+    store.post_item(sid, "question", "which db?")
+    items = (await call(daemon, "GET", "/inbox")).json()["items"]
+    assert sorted((i["title"], i["compact_question"]) for i in items) == [("context 220k: compact?", True),
+                                                                          ("which db?", False)]

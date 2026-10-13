@@ -547,6 +547,14 @@ class RemoteClient:
         item = target and target[1] and self.item(*target)
         return item if item and item["kind"] == "permission" and item["status"] == "open" else None
 
+    def compact_question(self, target):
+        """As Hub.compact_question: the daemon marks the item, as it serves no answers."""
+        item = target and target[1] and self.item(*target)
+        return item if item and item["status"] == "open" and item.get("compact_question") else None
+
+    def warm(self, sid: str) -> bool:
+        return bool((v := self.view(sid)) and v.get("warm"))
+
     def adoptable(self) -> list[adopt.Candidate]:
         try:
             return [adopt.Candidate(**c) for c in self.get("/adoptable")]
@@ -636,8 +644,8 @@ class RemoteClient:
     def answer_offer(self, take: bool) -> Done:
         return self.done("/tutorial/offer", {"take": take})
 
-    def ask(self, sid: str, what: str) -> Done:
-        return self.done(f"/sessions/{sid}/{what}", {"how": "ask"})
+    def ask(self, sid: str, what: str, compact: bool = False) -> Done:
+        return self.done(f"/sessions/{sid}/{what}", {"how": "ask", "compact": compact})
 
     def cancel_request(self, sid: str, what: str) -> Done:
         return self.done(f"/sessions/{sid}/{what}", {"how": "cancel"})
@@ -676,8 +684,8 @@ class RemoteClient:
     def toggle_mode(self, sid: str) -> Done:
         return self.done(f"/sessions/{sid}/mode")
 
-    def host_command(self, sid: str, what: str) -> Done:
-        return self.done(f"/sessions/{sid}/{what}")
+    def host_command(self, sid: str, what: str, notes: str | None = None, then: str | None = None) -> Done:
+        return self.done(f"/sessions/{sid}/{what}", {"notes": notes, "then": then} if what == "compact" else None)
 
     def set_model(self, sid: str, model: str) -> Done:
         return self.done(f"/sessions/{sid}/model", {"model": model})

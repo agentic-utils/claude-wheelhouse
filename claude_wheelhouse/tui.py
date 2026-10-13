@@ -58,7 +58,7 @@ from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, 
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .stats_pane import SessionStats
-from .store import (DISMISSABLE, FINISHED_RANK, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
+from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     inbox_rank, mode, runner, standing)
 from .unsent import Unsent
 
@@ -992,10 +992,9 @@ class SendBar(Horizontal):
 
 
 class PermissionButtons(Horizontal):
-    """Over the answer box while the item in context is an open permission (P) item: the
-    answer is a button, applied at once whatever the session's send mode (#53). Text
-    typed in the box below is optional: Ctrl+Enter denies with it, also at once. Only a
-    host's session posts permission items. EXPERIMENTAL (features.py): SDK mode is not for
+    """In place of the answer box while the item in context is an open permission (P) item:
+    the answer is a button, applied at once whatever the session's send mode (#53), and the
+    box doesn't show. Only a host's session posts permission items. EXPERIMENTAL (features.py): SDK mode is not for
     use by anyone other than the author until Anthropic's terms are confirmed."""
     DEFAULT_CSS = """
     PermissionButtons { height: 1; display: none; background: #12122a; }
@@ -1013,6 +1012,50 @@ class PermissionButtons(Horizontal):
             button.can_focus = False   # a click leaves the answer box, and what's typed, where it was
 
 
+# what follows a Compact the wheelhouse asks for (store.THEN), as its question and dialog offer it
+THEN_CHOICES = (("compact", "Just compact"), ("send", "Then send the queued answers"), ("park", "Then park it"))
+
+
+def then_choice(radios: "RadioSet") -> str:
+    """The THEN a set of THEN_CHOICES' radio buttons has pressed: its ids end with it."""
+    pressed = radios.pressed_button
+    return pressed.id.rsplit("-", 1)[1] if pressed is not None and pressed.id else DEFAULT_THEN
+
+
+def then_radios(id_: str) -> "RadioSet":
+    """THEN_CHOICES as radio buttons, DEFAULT_THEN pressed."""
+    return RadioSet(*[RadioButton(label, value=then == DEFAULT_THEN, id=f"{id_}-{then}") for then, label in THEN_CHOICES],
+                    id=id_)
+
+
+class CompactButtons(Horizontal):
+    """Over the answer box while the item in context is the host's open question suggesting
+    Compact (host.nudge): Compact and Leave it, and what follows the compaction (THEN_CHOICES).
+    Text typed in the box below is optional: the compaction's instructions, used instead of
+    asking the session what to keep; Ctrl+Enter compacts with it too. Only a host's session
+    is asked. EXPERIMENTAL (features.py), as PermissionButtons."""
+    DEFAULT_CSS = """
+    CompactButtons { height: 1; display: none; background: #12122a; }
+    CompactButtons Button { min-width: 12; margin: 0 1 0 0; padding: 0 1; }
+    CompactButtons RadioSet { layout: horizontal; width: auto; height: 1; border: none; padding: 0;
+                              background: #12122a; }
+    CompactButtons RadioButton { height: 1; padding: 0 1 0 0; background: #12122a; }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Button("Compact", "success", id="compact-now", compact=True, tooltip=BUTTONS["compact-now"])
+        yield Button("Leave it", id="leave-it", compact=True, tooltip=BUTTONS["leave-it"])
+        yield then_radios("compact-then")
+
+    def on_mount(self) -> None:
+        for widget in (*self.query(Button), *self.query(RadioSet)):
+            widget.can_focus = False   # a click leaves the answer box, and what's typed, where it was
+
+    @property
+    def then(self) -> str:
+        return then_choice(self.query_one(RadioSet))
+
+
 class ThreadView(Screen):
     """One item full screen: its detail, the whole conversation and a compose box. The app's
     refresh tick repaints it, so a reply shows up while it's open; typed text is untouched."""
@@ -1027,6 +1070,7 @@ class ThreadView(Screen):
         with VerticalScroll(id="thread-scroll", classes="panel"):
             yield Transcript(id="thread")
         yield PermissionButtons()
+        yield CompactButtons()
         yield Compose(id="thread-answer")
         yield Hint(classes="answer-hint")
         yield SendBar(conversation=True)
@@ -1064,7 +1108,9 @@ class ThreadView(Screen):
                 scroll.scroll_end(animate=False)
 
 
-PERMISSION_HINT = "Allow, Always or Deny above, at once · or type what to do instead: Ctrl+Enter denies with it"
+PERMISSION_HINT = "Allow, Always or Deny above (1, 2, 3), at once"
+COMPACT_HINT = ("Compact or Leave it above · type instructions for the compaction here if you like "
+                "(none: the session is asked what to keep): Ctrl+Enter compacts with them")
 
 
 def hint(sends: str, dead: bool = False) -> str:
@@ -1455,6 +1501,66 @@ class ForkSession(Dialog):
         self.action_answer(None)
 
 
+class CompactSession(Dialog):
+    """Compact a session run in the wheelhouse: instructions for the compaction (optional: none,
+    and the session is asked what to keep) and what follows it (THEN_CHOICES). Answers
+    {"notes", "then"}, or None."""
+    BINDINGS = [Binding("escape", "answer", show=False)]
+
+    def __init__(self, name: str):
+        super().__init__()
+        self.name_ = name
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(f"COMPACT {self.name_}", classes="dialog-title")
+            yield Label("Instructions for the compaction (optional: leave it empty and the session is asked "
+                        "what to keep):", classes="dialog-prompt")
+            yield TextArea(id="compact-notes")
+            yield then_radios("compact-dialog-then")
+            with Horizontal(classes="buttons"):
+                # ids of their own: the app's host buttons (#compact) answer a press that bubbles up
+                yield Button("Compact", variant="success", id="compact-go")
+                yield Button("Cancel", id="compact-cancel")
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        event.stop()   # answered here: not the app's too
+        if event.button.id != "compact-go":
+            self.action_answer(None)
+            return
+        notes = self.query_one("#compact-notes", TextArea).text.strip()
+        self.action_answer({"notes": emoji.convert(notes) or None, "then": then_choice(self.query_one(RadioSet))})
+
+
+class ParkSession(Dialog):
+    """Park a session run in the wheelhouse: it writes its handoff notes and parks, then with
+    Compact first ticked it is compacted before its host stops, nothing sent after. Ticked by
+    default while its prompt cache is warm: a compaction reads the whole context, so a cold
+    cache saves nothing. Answers {"compact"}, or None."""
+    BINDINGS = [Binding("escape", "answer", show=False)]
+
+    def __init__(self, name: str, warm: bool):
+        super().__init__()
+        self.name_, self.warm = name, warm
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(f"Park {self.name_}? It writes its handoff notes into its items, then stops.",
+                        classes="dialog-prompt")
+            yield Checkbox("Compact first, while its prompt cache is " + ("warm" if self.warm else "cold, which saves nothing"),
+                           self.warm, id="park-compact")
+            with Horizontal(classes="buttons"):
+                yield Button("Park", variant="warning", id="park-go")
+                yield Button("Cancel", id="park-cancel")
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        event.stop()   # answered here: not the app's Park too
+        self.action_answer({"compact": self.query_one("#park-compact", Checkbox).value}
+                           if event.button.id == "park-go" else None)
+
+
 class Confirm(Dialog):
     BINDINGS = [Binding("y", "answer(True)", show=False), Binding("n", "answer(False)", show=False),
                 Binding("escape", "answer(False)", show=False)]
@@ -1605,9 +1711,13 @@ BUTTONS = {
     "send-all": "Send all (Shift+A), above the footer: send every running session's queue; a dead one's waits until it's relaunched",
     "allow": "Allow (1; over the answer box, on a permission item): let the tool call run, at once",
     "always": "Always (2): allow it, and keep the rule Claude Code suggests",
-    "deny": "Deny (3): refuse it (or type what to do instead and press Ctrl+Enter: denied with that, at once)",
+    "deny": "Deny (3): refuse it",
+    "compact-now": ("Compact (over the answer box, on the question suggesting it): compact the session, with the "
+                    "instructions typed in the box if any, else it's asked what to keep; then as chosen beside it"),
+    "leave-it": "Leave it: close the question; it isn't asked again until the context has dropped back and passes 200k again",
     "interrupt": "Interrupt (I): stop the session's current turn, like Esc in Claude Code",
-    "compact": "Compact (C): the session says what to keep, then is compacted with that",
+    "compact": ("Compact (C): compact the session with instructions of your own, or with what it says to keep; "
+                "then just that, its queued answers sent in the same prompt (the default), or parked at once"),
     "shell": "Shell (H): open the session in a real Claude Code tab; it comes back when you /exit",
     "model": "Model (M): change the model a session run in the wheelhouse runs on, live; its prompt cache goes with the old one",
     "relaunch": ("Relaunch / Unpark (L in the session list): start the session again where it left off, stopping it "
@@ -1669,7 +1779,7 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
 # mode is on (features.py, EXPERIMENTAL: the author's alone until Anthropic's terms are
 # confirmed) or the screen shows them (a host's session, which runs on with it off). Out of
 # it, a key of one that doesn't show says it doesn't apply, as any other button's does
-SDK_BUTTONS = ("interrupt", "compact", "shell", "model", "allow", "always", "deny")
+SDK_BUTTONS = ("interrupt", "compact", "shell", "model", "allow", "always", "deny", "compact-now", "leave-it")
 SDK_WHOSE = (", Model on one run in the wheelhouse; then Mode, Send on one that isn't dead, "
              "and on one run in the wheelhouse Interrupt, Compact and Shell. Its effort is the slider at the top of "
              "the stats pane.")
@@ -1935,6 +2045,7 @@ class WheelhouseApp(App):
                     yield Transcript(NOTHING_SELECTED, id="detail")
                 yield Splitter("answer", "#answer", "#detail-scroll", "y")
                 yield PermissionButtons()
+                yield CompactButtons()
                 yield Compose(id="answer")
                 yield Hint(classes="answer-hint")
         yield SendBar()
@@ -2643,24 +2754,28 @@ class WheelhouseApp(App):
         return [("mode", *mode_, True), ("send", f"Send ({n})", not n, not dead),
                 *[(b, b.capitalize(), False, hosted) for b in ("interrupt", "compact", "shell")]]
 
-    def bar_widgets(self, screen: Screen) -> tuple[SendBar | None, list[Hint], list[PermissionButtons]]:
-        """A screen's send bar, answer hints and permission buttons: held once its bar is
-        there, as they're composed with it and live as long as the screen."""
+    def bar_widgets(self, screen: Screen) -> tuple:
+        """A screen's send bar, answer hints, permission buttons, Compact question buttons and
+        answer boxes: held once its bar is there, as they're composed with it and live as long
+        as the screen."""
         held = self.held_bars.get(screen)
         if held is None:
-            held = (next(iter(screen.query(SendBar)), None), list(screen.query(Hint)), list(screen.query(PermissionButtons)))
+            held = (next(iter(screen.query(SendBar)), None), list(screen.query(Hint)), list(screen.query(PermissionButtons)),
+                    list(screen.query(CompactButtons)), list(screen.query(Compose)))
             if held[0] is not None:
                 self.held_bars[screen] = held
         return held
 
     def paint_sendbar(self) -> None:
-        """The bar on the screen in front: Send all, and the hint, permission buttons and
-        activity of the session in context there; a full-screen item's bar also has its
+        """The bar on the screen in front: Send all, and the hint, permission buttons (with no
+        answer box: a permission is answered by its buttons alone), Compact question buttons
+        and activity of the session in context there; a full-screen item's bar also has its
         session's conversation buttons."""
-        bar, hints, permission_rows = self.bar_widgets(self.screen)
+        bar, hints, permission_rows, compact_rows, boxes = self.bar_widgets(self.screen)
         if bar is None:
             return
         asking = self.asking(self.bar_item(self.screen)) is not None   # first: it settles
+        nudged = self.client.compact_question(self.bar_item(self.screen)) is not None
         sessions = {s["id"]: s for s in self.sessions}
         s = sessions.get(self.bar_session(self.screen))
         if bar.conversation:
@@ -2669,11 +2784,15 @@ class WheelhouseApp(App):
         total = sum(x["drafts"] for x in self.sessions if not self.dead(x["id"]))   # Send all skips the dead
         sends = "send" if s is not None and (mode(s) == "immediate" or self.sends_now(s["id"])) else "queue"
         for h in hints:
-            h.set_base(PERMISSION_HINT if asking else hint(sends, s is not None and self.dead(s["id"])))
-        for row in permission_rows:
-            if row.display != asking:
-                row.display = asking
-                self.refit()   # a row more or less over the answer box
+            h.set_base(PERMISSION_HINT if asking else COMPACT_HINT if nudged
+                       else hint(sends, s is not None and self.dead(s["id"])))
+        for rows, shown in ((permission_rows, asking), (compact_rows, nudged), (boxes, not asking)):
+            for row in rows:
+                if row.display != shown:
+                    if not shown and row.has_focus:   # the box goes: its keys with it
+                        self.screen.set_focus(self.items_table if self.screen is self.screen_stack[0] else None)
+                    row.display = shown
+                    self.refit()   # a row more or less over the answer box
         show_button(bar, "send-all", f"Send all ({total})", not total)
         if s is not None and runner(s) == "sdk":
             bar.activity("in a shell tab" if s["shell"] else (s["activity"] or "") if self.running(s["id"]) else "")
@@ -3132,6 +3251,10 @@ class WheelhouseApp(App):
     def action_submit(self) -> None:
         """Ctrl+Enter: queued or sent at once, by the session's mode."""
         self.settle()
+        box, target = self.composing()
+        if box is not None and target and self.client.compact_question(target) is not None:
+            self.compact_now(target)   # the box holds its instructions, if anything
+            return
         box, target, text = self.typed()
         if not box:
             return
@@ -3254,21 +3377,15 @@ class WheelhouseApp(App):
 
     @on(Button.Pressed, "#allow, #always, #deny")
     def permission_pressed(self, event: Button.Pressed) -> None:
-        """Answer a permission item, at once. Deny takes what's typed in the box below, if
-        anything, as what to do instead."""
+        """Answer a permission item, at once, by its buttons alone: no answer box shows with it."""
         self.settle()
         target = self.bar_item(event.button.screen)
         if not target:
             return
-        box, aimed_at = self.composing()
-        reason = emoji.convert(box.text.strip()) if box is not None and aimed_at == target and event.button.id == "deny" else ""
         try:
-            self.answer_permission(*target, event.button.id, reason)
+            self.answer_permission(*target, event.button.id)
         except (KeyError, SessionGone) as e:   # answered meanwhile, or the session went
             self.notify(str(e.args[0] if e.args else e), severity="warning")
-        else:
-            if reason:
-                box.text = ""
         self.refresh_data()
 
     @on(Button.Pressed, "#interrupt, #compact, #shell")
@@ -3280,14 +3397,40 @@ class WheelhouseApp(App):
         what = event.button.id
         if what == "interrupt":
             self.host_command(sid, what)
-            return
-        ask = {"compact": f"Compact {self.label(sid)}? It's asked for what to keep, then compacted with that.",
-               "shell": f"Open {self.label(sid)} in a terminal tab? The wheelhouse hands it over, and takes "
-                        "it back when you /exit the tab."}[what]
-        self.push_screen(Confirm(ask), lambda yes: yes and self.host_command(sid, what))
+        elif what == "compact":
+            self.push_screen(CompactSession(self.label(sid)), lambda plan: plan and self.host_command(sid, what, **plan))
+        else:
+            self.push_screen(Confirm(f"Open {self.label(sid)} in a terminal tab? The wheelhouse hands it over, "
+                                     "and takes it back when you /exit the tab."),
+                             lambda yes: yes and self.host_command(sid, what))
 
-    def host_command(self, sid: str, what: str) -> None:
-        self.told(self.client.host_command(sid, what))
+    def host_command(self, sid: str, what: str, notes: str | None = None, then: str | None = None) -> None:
+        self.told(self.client.host_command(sid, what, notes, then))
+
+    @on(Button.Pressed, "#compact-now, #leave-it")
+    def compact_question_pressed(self, event: Button.Pressed) -> None:
+        """The question suggesting Compact: Compact, with what's typed in the box below as its
+        instructions (compact_now), or Leave it, which closes it."""
+        self.settle()
+        target = self.bar_item(event.button.screen)
+        if not target or self.client.compact_question(target) is None:
+            return
+        if event.button.id == "leave-it":
+            self.told(self.client.close(*target, True))
+            self.refresh_data()
+        else:
+            self.compact_now(target)
+
+    def compact_now(self, target: tuple[str, str]) -> None:
+        """Compact from its question: the box's text, if any, the instructions, and the
+        question's choice what follows. The question closes itself once compacted (host.nudge)."""
+        box, aimed_at = self.composing()
+        notes = emoji.convert(box.text.strip()) if box is not None and aimed_at == target else ""
+        rows = self.bar_widgets(self.screen)[3]
+        then = rows[0].then if rows else DEFAULT_THEN
+        if self.told(self.client.host_command(target[0], "compact", notes or None, then)).ok and notes:
+            box.text = ""
+        self.refresh_data()
 
     @on(Button.Pressed, "#model")
     @session_action
@@ -3475,6 +3618,10 @@ class WheelhouseApp(App):
             self.told(self.client.unpark(sid))
             self.follow(sid)
             self.refresh_data()
+        elif runner(s) == "sdk" and not s["shell"] and self.running(sid) and self.pending(sid) is None:
+            # a host's session: it may be compacted once parked, offered while its cache is warm
+            self.push_screen(ParkSession(self.label(sid), self.client.warm(sid)),
+                             lambda form: form and self.ask(sid, "park", form["compact"]))
         else:
             self.lifecycle(sid, "park", f"Park {self.label(sid)}?")
 
@@ -3551,8 +3698,8 @@ class WheelhouseApp(App):
                              lambda choice: self.resolve_request(sid, what, choice))
 
     @session_action
-    def ask(self, sid: str, what: str) -> None:
-        self.told(self.client.ask(sid, what))
+    def ask(self, sid: str, what: str, compact: bool = False) -> None:
+        self.told(self.client.ask(sid, what, compact))
         self.keep_current(sid, what)
         self.refresh_data()
 

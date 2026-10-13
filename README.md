@@ -227,7 +227,8 @@ session.
   relaunch it. Nothing restarts on its own, and a resumed session is asked to post the
   questions and tasks it already had open. Park on a running session asks it to write its
   handoff notes into its items, then it parks and stops (its tab closes); on one not running
-  it parks at once. On a Parked session, Relaunch is captioned Unpark, and `P` and `L` both
+  it parks at once. On one run in the wheelhouse, Park asks first, offering to compact it once
+  parked, before it stops (ticked while its prompt cache is warm: a cold one saves nothing). On a Parked session, Relaunch is captioned Unpark, and `P` and `L` both
   press it. Forget deletes a session's wheelhouse data: on a running one, Stop & Forget asks it
   to do its own end steps first, then it stops (it asks you first only if answers are queued for
   it, which go with it); on one not running it asks you to confirm. Fork (`K` in the session list)
@@ -438,7 +439,12 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   turns it off. Each message costs one request, which reads the cached context: for a
   quiet session that is much cheaper than writing the cache again when you come back.
 - After a compaction, the session is told its open tasks and questions, with their titles,
-  once. The plugin's `SessionStart` hook does it
+  once. A session run in the wheelhouse has a Compact button, and past 200k of context a
+  question suggesting it, answered with buttons (Compact, Leave it); both take optional
+  instructions for the compaction (none: the session is asked what to keep) and what follows
+  it: just compact, send its queued answers in the same one prompt as that reminder (the
+  default), or park it at once, sending nothing more, so nothing writes the compacted context
+  to the cache until it is unparked. Permission items are answered with buttons alone. The plugin's `SessionStart` hook does it
   ([`hooks.json`](claude_wheelhouse/plugin/hooks/hooks.json)): it runs
   `"${WHEELHOUSE_PYTHON}" -m claude_wheelhouse open-items` with the wheelhouse's own Python,
   as the monitor is run, and Claude Code adds what it prints to the session's context.

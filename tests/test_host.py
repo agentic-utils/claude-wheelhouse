@@ -12,7 +12,7 @@ import pytest
 from claude_wheelhouse import features, host as host_mod, launch
 from claude_wheelhouse.host import (AWAITING_NOTES, CANCELLED, COMPACT_ASK, HOST_QUESTION, NO_NOTES, Host, format_turn,
                                     keep_notes, question_answers, question_item, tool_summary)
-from claude_wheelhouse.store import SessionGone
+from claude_wheelhouse.store import COMPACT_QUESTION, COMPACT_QUESTION_DONE, SessionGone
 from claude_wheelhouse.monitor import REQUEST_TEXT
 
 pytestmark = pytest.mark.usefixtures("sdk_on")   # hosts are SDK mode's
@@ -1464,6 +1464,100 @@ def finish_at(h, tokens, compacted=False):
                    bool(ended) and all(t.keepalive for t in ended)))
 
 
+def asked(store, sid):
+    return [(i["status"], i["title"]) for i in store.items(sid) if i["answer"] in (COMPACT_QUESTION, COMPACT_QUESTION_DONE)]
+
+
+@pytest.mark.parametrize("steps, expected, desc", [
+    ([150_000], [], "under the line: no question"),
+    ([220_000], [("open", "context 220k: compact?")], "past it: one question suggesting Compact"),
+    ([220_000, 240_000, 260_000], [("open", "context 220k: compact?")], "one per crossing, not one per turn"),
+    ([220_000, ("compacted", 40_000)], [("closed", "context 220k: compact?")], "compacted: it closes by itself"),
+    ([220_000, ("compacted", 210_000)], [("closed", "context 220k: compact?")],
+     "compacted, if still past 200k: it closes too"),
+    ([220_000, 180_000], [("open", "context 220k: compact?")], "under 200k but not compacted: it stays"),
+    ([220_000, 180_000, 230_000], [("open", "context 220k: compact?")],
+     "hovering about 200k: one question, not one per crossing"),
+    ([220_000, 140_000], [("closed", "context 220k: compact?")], "back under 150k by itself: it closes"),
+    ([220_000, ("compacted", 40_000), 210_000], [("open", "context 210k: compact?"), ("closed", "context 220k: compact?")],
+     "a second crossing asks again"),
+    ([220_000, "leave", 240_000], [("closed", "context 220k: compact?")],
+     "Leave it: not asked again until it has been under"),
+    ([220_000, "leave", 140_000, 230_000], [("open", "context 230k: compact?"), ("closed", "context 220k: compact?")],
+     "Leave it, then back under and past again: asked again"),
+    ([220_000, "restart", 240_000], [("open", "context 220k: compact?")], "a host started again remembers the crossing"),
+])
+def test_the_compact_question(host, store, sid, steps, expected, desc):
+    """Raised by the host alone: the wheelhouse can't compact a tab (D89), and the hub's
+    keepalive for tabs posts nothing."""
+    h = host
+    for step in steps:
+        if step == "leave":
+            ref = next(i["ref"] for i in store.items(sid) if i["answer"] == COMPACT_QUESTION)
+            store.update_item(sid, ref, status="closed")
+        elif step == "restart":
+            h = Host(store, sid, client_factory=FakeClient, person="doug")
+            run(h.connect())
+        elif isinstance(step, tuple):
+            finish_at(h, step[1], compacted=True)
+        else:
+            finish_at(h, step)
+    assert asked(store, sid) == expected, desc
+
+
+@pytest.mark.parametrize("compacted, note, desc", [
+    (True, "Compacted: the context is 40k now.", "compacted"),
+    (False, "The context is 40k now.", "back under by itself"),
+])
+def test_the_compact_question_closes_saying_so(host, store, sid, compacted, note, desc):
+    finish_at(host, 220_000)
+    finish_at(host, 40_000, compacted=compacted)
+    ref = store.items(sid)[0]["ref"]
+    assert [m["body"] for m in store.thread(sid, ref)] == [note], desc
+
+
+@pytest.mark.parametrize("notes, then, prompts, drafts, parked, desc", [
+    ("keep Q1", "compact", ["[wheelhouse] After the compaction"], 1, False,
+     "just compact: its open items told, the queue left for a second prompt"),
+    ("keep Q1", "send", ["[wheelhouse] After the compaction", "[wheelhouse] from doug on Q1:\nuse Postgres"], 0, False,
+     "send: the open items and the queued answer in one prompt"),
+    ("keep Q1", "park", [], 1, True, "park: nothing sent after the compaction, and the host stops"),
+    ("keep Q1", None, ["[wheelhouse] After the compaction"], 1, False, "no plan (Relaunch's Compact first): as before"),
+])
+def test_what_follows_the_wheelhouses_compaction(host, store, sid, notes, then, prompts, drafts, parked, desc):
+    """Doug: one prompt after compacting with answers queued (send), none when parking."""
+    ref = store.post_item(sid, "question", "which db?")
+    store.queue(sid, "use Postgres", ref)
+    store.command(sid, "compact", notes, then)
+    assert run(host.poll()), desc
+    assert host.client.queries == [f"/compact {notes}"], f"{desc}: instructions given, the session isn't asked"
+    finish_at(host, 40_000, compacted=True)
+    going = run(host.poll())
+    after = host.client.queries[1:]
+    assert len(after) == (1 if prompts else 0), f"{desc}: prompts after the compaction, {after}"
+    assert all(part in after[0] for part in prompts) if prompts else True, f"{desc}: {after}"
+    assert (len(store.drafts(sid)), bool(store.session(sid)["parked"]), going) == (drafts, parked, not parked), desc
+
+
+@pytest.mark.parametrize("compact, sent, desc", [
+    (True, ["/compact"], "Compact first: once the park's turn has ended, compacted, then nothing more"),
+    (False, [], "without: the host stops once parked"),
+])
+def test_park_compacts_first(host, store, sid, compact, sent, desc):
+    store.post_item(sid, "question", "which db?")
+    store.request(sid, "park", compact)
+    run(host.poll())   # the park request goes as a turn
+    assert host.client.queries == [REQUEST_TEXT["park"]], desc
+    store.set_parked(sid, True)   # park_session, mid-turn
+    assert run(host.poll()) == compact, f"{desc}: the park's turn still running"
+    finish_at(host, 220_000)
+    assert run(host.poll()) == compact, desc
+    finish_at(host, 40_000, compacted=compact)
+    assert run(host.poll()) is False, f"{desc}: the host stops"
+    assert host.client.queries[1:] == sent, f"{desc}: no prompt after the compaction"
+    assert not store.session(sid)["park_compact"], desc
+
+
 H = 3600
 
 
@@ -1481,6 +1575,7 @@ H = 3600
     ({"waits": "answered"}, False, "its question answered: nothing waits on the person"),
     ({"waits": "decision"}, True, "an unseen decision waits on the person"),
     ({"waits": "permission"}, True, "an open permission waits on the person"),
+    ({"waits": "nudge"}, False, "only the host's own Compact question: not the session waiting"),
     ({"waits": "doubt"}, True, "an item in doubt only: the check is due"),
     ({"waits": "question+doubt"}, True, "both"),
     ({"waits": "doubt", "old code": True}, False, "in doubt only, on older code: no check (its items look silent)"),
@@ -1516,6 +1611,8 @@ def test_keepalive_due(host, store, sid, monkeypatch, state, due, desc):
         store.post_item(sid, "decision", "used SQLite", why="over Postgres: no server; undo: swap the DSN")
     elif waits == "permission":
         store.post_item(sid, "permission", "Bash: ls")
+    elif waits == "nudge":
+        store.set_answer(sid, store.post_item(sid, "question", "context 220k: compact?"), COMPACT_QUESTION)
     host.tokens = state.get("tokens", 200_000)
     host.last_turn = at - state.get("last", 55 * 60)
     quiet = state.get("quiet", 2 * H)

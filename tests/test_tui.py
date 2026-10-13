@@ -24,8 +24,9 @@ from claude_wheelhouse import features, launch, stats, transcript, tui
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
-from claude_wheelhouse.store import Store, mode
-from claude_wheelhouse.tui import (BLANK, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice, Confirm,
+from claude_wheelhouse.store import COMPACT_QUESTION, Store, mode
+from claude_wheelhouse.tui import (BLANK, COMPACT_HINT, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice,
+                                   CompactButtons, CompactSession, Confirm, ParkSession,
                                    Folders, Hint, PermissionButtons, RelaunchChoice, RenameSession, SendBar, SessionList,
                                    ThreadView, Transcript, cylon, fill, hint, render)
 
@@ -955,10 +956,12 @@ def assert_one_current(app, desc):
     in_context = box_target
     item = in_context and in_context[1] and app.store.item(*in_context)
     asking = bool(item) and item["kind"] == "permission" and item["status"] == "open"
+    nudged = bool(item) and item["status"] == "open" and item["answer"] == COMPACT_QUESTION
     s = app.row(app.bar_session(app.screen)) if app.bar_session(app.screen) else None
     sends = "send" if s and (mode(s) == "immediate" or app.sends_now(s["id"])) else "queue"
     dead = bool(s) and app.dead(s["id"])
-    assert [h.base for h in app.screen.query(Hint)] == [PERMISSION_HINT if asking else hint(sends, dead)], f"{desc}: the hint"
+    assert [h.base for h in app.screen.query(Hint)] == [PERMISSION_HINT if asking else COMPACT_HINT if nudged
+                                                        else hint(sends, dead)], f"{desc}: the hint"
     assert [p.display for p in app.screen.query(PermissionButtons)] == [asking], f"{desc}: the permission buttons"
     if not thread:
         buttons = [(b.id, str(b.label), b.disabled, b.display) for b in app.conversation_buttons.query(Button)]
@@ -1583,9 +1586,10 @@ class Burst:
 
     def asked(self) -> str | None:
         """The session the dialog in front asks about, by name: Rename's box holds it, a
-        Confirm's prompt names it."""
+        Confirm's prompt names it, as Compact's and Park's dialogs do."""
         s = self.app.screen
-        text = s.current if isinstance(s, RenameSession) else s.prompt if isinstance(s, Confirm) else ""
+        text = (s.current if isinstance(s, RenameSession) else s.prompt if isinstance(s, Confirm)
+                else s.name_ if isinstance(s, (CompactSession, ParkSession)) else "")
         return next((who for who in self.sids if who in text), None)
 
 
@@ -1603,7 +1607,8 @@ class Burst:
     ("lines", "qb", ("up", "shift+tab"), lambda b: (b.app.answer.cursor_location, b.cursor(), b.focus()),
      ((0, 5), "qb", "items"), "review 14 (6): Up moves the box's cursor, not the items', then Shift+Tab goes to them"),
     ("session-list", "qa", ("r", "down"), lambda b: b.asked(), "alpha", "R renames the session it was on"),
-    ("session-list", "qa", ("p", "down"), lambda b: b.requested(), "alpha:park", "P asks the session it was on to park"),
+    ("session-list", "qa", ("p", "down"), lambda b: b.asked(), "alpha",
+     "P on a session run in the wheelhouse asks first, about the session it was on (Compact first)"),
     ("session-list", "qa", ("delete", "down"), lambda b: b.asked(), "alpha",
      "Delete on the session it was on confirms first, its queued answer at stake"),
     ("items", "qa", ("i", "down"), lambda b: (b.command("alpha"), b.command("bravo")), ("interrupt", None),
@@ -1646,7 +1651,7 @@ async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch,
         for _ in range(6):
             await pilot.pause()
         assert seen(b) == want, f"{desc}: got {seen(b)}"
-        if isinstance(app.screen, (RenameSession, Confirm)):
+        if isinstance(app.screen, (RenameSession, Confirm, CompactSession, ParkSession)):
             await pilot.press("escape")
             await pilot.pause()
         assert_one_current(app, desc)
@@ -1670,7 +1675,7 @@ async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch,
      "review 15 (2): a second N once the dialog has closed is the inbox's: New session"),
     ("session-list", "alpha", ("p", "c", "q"), ("Screen", "", [], True, None),
      "review 15 (2): P on a session asked to park offers the Choice, C cancels the request, then Q quits"),
-    ("session-list", "alpha", ("p", "c", "c"), ("Confirm", "", [], False, None),
+    ("session-list", "alpha", ("p", "c", "c"), ("CompactSession", "", [], False, None),
      "review 15 (2): a second C once the Choice has closed is the inbox's: Compact"),
     ("items", "qa", ("question_mark", "q"), ("Screen", "", [], False, "park"),
      "? opens the keys, and Q behind it closes them rather than quitting"),
@@ -1762,8 +1767,8 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
      "review 16 (3): Enter on Browse opens the picker, and the Esc behind it closes the picker, not New session"),
     ("session-list", "alpha", ("p", "f", "y"), {"stack": ("Screen",), "parked": True},
      "F on the Choice asks to confirm Force, and the Y behind it confirms"),
-    ("session-list", "alpha", ("p", "c", "p"), {"stack": ("Screen",), "pending": "park"},
-     "C cancels the request before the P behind it, which asks afresh, with no confirm"),
+    ("session-list", "alpha", ("p", "c", "p"), {"stack": ("Screen", "ParkSession"), "pending": None},
+     "C cancels the request before the P behind it, which asks afresh: Park's dialog, as alpha runs in the wheelhouse"),
     ("session-list", "alpha", ("m", "down", "enter"), {"stack": ("Screen",), "model": "claude-sonnet-5-5"},
      "M opens Model, Down moves to the next model before Enter takes it"),
     ("items", "qa", ("m", "enter", "q"), {"stack": ("Screen",), "model": "claude-opus-5-5", "quit": True},
@@ -3779,32 +3784,112 @@ async def test_permission_buttons(store, tmp_path, press, status, decision, desc
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("mode_, how, desc", [
-    ("queued", "ctrl+enter", "Ctrl+Enter in Queued mode: denied at once, never queued"),
-    ("immediate", "ctrl+enter", "Ctrl+Enter in Immediate mode: denied the same way"),
-    ("queued", "#deny", "Deny takes what's typed as the reason"),
+@pytest.mark.parametrize("kind, answer, box, permission, compact, hint_, desc", [
+    ("permission", None, False, True, False, PERMISSION_HINT, "a permission: its buttons alone, no answer box"),
+    ("question", COMPACT_QUESTION, True, False, True, COMPACT_HINT,
+     "the question suggesting Compact: its buttons, and the box for its instructions"),
+    ("question", None, True, False, False, None, "any other question: the box alone"),
 ])
 @pytest.mark.both
-async def test_a_message_on_a_permission_denies_it_at_once(store, tmp_path, mode_, how, desc):
-    """Doug (#53): permissions are answered with buttons and don't need to be queued; a
-    typed message stays as an optional reason to deny."""
+async def test_what_shows_over_the_answer_box(store, tmp_path, kind, answer, box, permission, compact, hint_, desc):
+    """Doug: a permission is answered by its buttons, with no text area; the Compact question
+    keeps one, for custom instructions."""
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
-    store.set_mode(sid, mode_)
-    ref = store.post_item(sid, "permission", "Bash: rm -rf build")
+    ref = store.post_item(sid, kind, "Bash: rm -rf build" if kind == "permission" else "context 220k: compact?")
+    if answer:
+        store.set_answer(sid, ref, answer)
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
         await pilot.pause()
-        assert app.selected == (sid, ref)
-        assert "Ctrl+Enter denies" in str(app.query_one(Hint).render()), f"{desc}: the hint says so"
-        app.answer.text = "use make clean instead"
-        await (pilot.press(how) if how.startswith("ctrl") else pilot.click(how))
+        assert app.selected == (sid, ref), desc
+        shown = (app.answer.display, app.query_one(PermissionButtons).display, app.query_one(CompactButtons).display)
+        assert shown == (box, permission, compact), desc
+        assert (app.query_one(Hint).base == hint_) if hint_ else app.query_one(Hint).base not in (PERMISSION_HINT, COMPACT_HINT), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("typed, then, press, command, plan, status, desc", [
+    ("", None, "#compact-now", "compact", (None, "send"), "open",
+     "Compact: the session is asked what to keep, then its queued answers go with the reminder (the default)"),
+    ("keep the PR list", "#compact-then-park", "#compact-now", "compact", ("keep the PR list", "park"), "open",
+     "instructions typed, and park chosen"),
+    ("keep the PR list", "#compact-then-compact", "ctrl+enter", "compact", ("keep the PR list", "compact"), "open",
+     "Ctrl+Enter compacts with the box's text, just compact chosen"),
+    ("", None, "#leave-it", None, (None, None), "closed", "Leave it closes it, and nothing is sent"),
+])
+@pytest.mark.both
+async def test_the_compact_question(store, tmp_path, typed, then, press, command, plan, status, desc):
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    ref = store.post_item(sid, "question", "context 220k: compact?")
+    store.set_answer(sid, ref, COMPACT_QUESTION)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        app.answer.text = typed
+        if then:
+            await pilot.click(then)
+        if press.startswith("#"):
+            await pilot.click(press)
+        else:
+            app.answer.focus()
+            await pilot.press(press)
         await pilot.pause()
         left = app.answer.text
-    item = store.item(sid, ref)
-    assert item["status"] == "denied", desc
-    assert json.loads(item["answer"])["message"] == "use make clean instead", desc
-    assert store.drafts(sid) == [] and store.pending(sid) == [], f"{desc}: nothing queued or sent as a turn"
-    assert left == "", f"{desc}: the box is cleared"
+    assert (store.session(sid)["host_command"], store.compact_plan(sid)) == (command, plan), desc
+    assert store.item(sid, ref)["status"] == status, desc
+    assert store.drafts(sid) == [] and store.pending(sid) == [], f"{desc}: nothing queued or sent to the session"
+    assert left == ("" if command and typed else typed), f"{desc}: the instructions leave the box"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("typed, then, plan, desc", [
+    ("", None, (None, "send"), "nothing typed: the session is asked what to keep; its queue sent after (the default)"),
+    ("keep Q3", "#compact-dialog-then-park", ("keep Q3", "park"), "instructions, then park"),
+    ("", "#compact-dialog-then-compact", (None, "compact"), "just compact"),
+])
+async def test_the_compact_button_asks_how(store, tmp_path, monkeypatch, typed, then, plan, desc):
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.post_item(sid, "task", "work")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pick(app, pilot, sid)
+        await pilot.click("#compact")
+        await pilot.pause()
+        assert isinstance(app.screen, CompactSession), desc
+        app.screen.query_one("#compact-notes", TextArea).text = typed
+        if then:
+            await pilot.click(then)
+        await pilot.click("#compact-go")
+        await pilot.pause()
+    assert (store.session(sid)["host_command"], store.compact_plan(sid)) == ("compact", plan), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("warm, untick, compact, desc", [
+    (True, False, True, "a warm cache: Compact first ticked"),
+    (False, False, False, "a cold one: unticked, as compacting saves nothing"),
+    (True, True, False, "unticked by hand: parked without compacting"),
+])
+async def test_park_offers_to_compact_first_by_cache_warmth(store, tmp_path, monkeypatch, warm, untick, compact, desc):
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    app = WheelhouseApp(store)
+    monkeypatch.setattr(app.client, "warm", lambda s: warm)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pick(app, pilot, sid)
+        await pilot.click("#park")
+        await pilot.pause()
+        assert isinstance(app.screen, ParkSession), desc
+        assert app.screen.query_one("#park-compact", Checkbox).value == warm, f"{desc}: ticked by warmth"
+        if untick:
+            await pilot.click("#park-compact")
+        await pilot.click("#park-go")
+        await pilot.pause()
+    row = store.session(sid)
+    assert (bool(row["park_requested_at"]), bool(row["park_compact"])) == (True, compact), desc
 
 
 @pytest.mark.anyio

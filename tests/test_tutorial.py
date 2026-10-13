@@ -334,7 +334,7 @@ async def test_the_first_run_offer_takes_one_key(store, monkeypatch, fake_claude
 @pytest.mark.anyio
 @pytest.mark.parametrize("permission, desc", [
     (False, "80 by 24: the checklist scrolls, the answer box below it gives way"),
-    (True, "and with the permission buttons over the box too"),
+    (True, "and with the permission buttons, which show in place of the box"),
 ])
 async def test_the_answer_box_stays_on_screen_under_the_checklist(store, tut, permission, desc):
     """Review 9: the checklist's 19 rows pushed the answer box off an 80 by 24 screen, and
@@ -352,7 +352,11 @@ async def test_the_answer_box_stays_on_screen_under_the_checklist(store, tut, pe
         await pilot.pause()
         assert app.query_one("PermissionButtons").display is permission, desc
         box, hint = app.query_one("#answer").region, app.query_one(".answer-hint").region
-        assert box.height >= 3 and box.bottom <= hint.y and hint.bottom <= pane.bottom, f"{desc}: {box}, {hint}"
+        if permission:   # buttons alone: no answer box
+            buttons = app.query_one("PermissionButtons").region
+            assert box.height == 0 and buttons.bottom <= hint.y and hint.bottom <= pane.bottom, f"{desc}: {buttons}, {hint}"
+        else:
+            assert box.height >= 3 and box.bottom <= hint.y and hint.bottom <= pane.bottom, f"{desc}: {box}, {hint}"
         own_session(store, tut, "Q1", "Q2")   # its last step done, so the checklist goes with the session
         store.end(tut)
         app.refresh_data()

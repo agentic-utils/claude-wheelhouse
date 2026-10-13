@@ -299,6 +299,21 @@ an hour idle waiting on the person cost $10.60, and one host restart rewrote 429
 The hosts' cache writes are the 1 h kind (the transcripts' `ephemeral_1h_input_tokens`),
 so an hour's quiet is what turns the cache cold.
 
+- **Compact question.** When a turn ends with the context at `NUDGE_TOKENS` (200k) or more,
+  the host posts one question item, `context 220k: compact?`, marked in its answer column
+  (`store.COMPACT_QUESTION`), answered with buttons: Compact and Leave it, a choice of what
+  follows, and the answer box for optional instructions. It is one per crossing: neither a
+  restarted host nor Leave it brings a second. Once a turn ends compacted, or under
+  `NUDGE_RESET_TOKENS` (150k), it closes with a note, and the next crossing asks afresh. It
+  never counts as the session waiting on the person (keepalive). Hosts only: the wheelhouse
+  can't compact a tab (D89).
+- **What follows a Compact.** The Compact button's dialog and the question both offer it
+  (`store.THEN`): just compact (the open-items reminder goes, as after any compaction); send
+  the queued answers with that reminder, one prompt rather than two (the default); or park at
+  once, sending nothing, so no prompt writes the compacted context to the cache. Instructions
+  typed are sent as `/compact <them>`, without asking the session. Park on a hosted session
+  offers Compact first, ticked while the cache is warm: the park turn, then `/compact`, then
+  the host stops.
 - **Keepalive.** A session whose last turn ended over `KEEPALIVE_TOKENS` (150k), with
   nothing running, not parked, and waiting on the person (an open question, or an
   unseen decision, of its own: a permission or AskUserQuestion waits inside a running turn,

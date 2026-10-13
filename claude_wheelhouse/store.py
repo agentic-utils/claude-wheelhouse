@@ -77,6 +77,15 @@ DEFAULT_RUNNER = "tab"
 SDK_DEFAULT_RUNNER = "sdk"
 # What the person can ask a running host to do, handed over in sessions.host_command
 HOST_COMMANDS = ("interrupt", "shell", "compact")
+# what a host does once its Compact has compacted the session: tell it its open items, as
+# after any compaction; that and send its queued answers, in the same one prompt; or park it
+# at once, sending nothing more, so no prompt writes the compacted context to the cache
+THEN = ("compact", "send", "park")
+DEFAULT_THEN = "send"
+# an item's answer column marks the host's question suggesting Compact, past 200k context,
+# until the context is back under that; then it is marked done, and the next crossing asks again
+COMPACT_QUESTION = '{"from": "context nudge"}'
+COMPACT_QUESTION_DONE = '{"from": "context nudge", "done": true}'
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -201,7 +210,8 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "applied_model", "TEXT"), ("sessions", "applied_effort", "TEXT"),
                  ("sessions", "interrupted_at", "TEXT"), ("sessions", "model_chosen_at", "TEXT"),
                  ("sessions", "effort_chosen_at", "TEXT"), ("sessions", "launched_over", "INTEGER"),
-                 ("items", "session_at", "TEXT"), ("items", "moved_to", "TEXT")]
+                 ("items", "session_at", "TEXT"), ("items", "moved_to", "TEXT"), ("sessions", "compact_plan", "TEXT"),
+                 ("sessions", "park_compact", "INTEGER NOT NULL DEFAULT 0")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -467,14 +477,25 @@ class Store:
             db.execute("UPDATE sessions SET context_tokens = ?, context_max = ?, context_at = ? WHERE id = ?",
                        (tokens, max_tokens, stamp(), sid))
 
-    def command(self, sid: str, what: str) -> None:
+    def command(self, sid: str, what: str, notes: str | None = None, then: str | None = None) -> None:
         """Ask the session's host to interrupt, hand over to a shell tab, or compact. A newer
-        command replaces one the host hasn't taken yet."""
+        command replaces one the host hasn't taken yet. A Compact may carry the person's
+        instructions for it (notes: the session isn't asked what to keep) and what follows it
+        (THEN; None, as before: its open items, as after any compaction)."""
         if what not in HOST_COMMANDS:
             raise ValueError(f"command must be one of {', '.join(HOST_COMMANDS)}, not {what!r}")
+        if then is not None and then not in THEN:
+            raise ValueError(f"then must be one of {', '.join(THEN)}, not {then!r}")
+        plan = json.dumps({"notes": notes or None, "then": then}) if what == "compact" else None
         with self.tx() as db:
             self._require(db, sid)
-            db.execute("UPDATE sessions SET host_command = ? WHERE id = ?", (what, sid))
+            db.execute("UPDATE sessions SET host_command = ?, compact_plan = ? WHERE id = ?", (what, plan, sid))
+
+    def compact_plan(self, sid: str) -> tuple[str | None, str | None]:
+        """The Compact command's instructions and what follows it (command), as last pressed."""
+        row = self._one("SELECT compact_plan FROM sessions WHERE id = ?", (sid,))
+        plan = json.loads(row[0]) if row and row[0] else {}
+        return plan.get("notes"), plan.get("then")
 
     def take_command(self, sid: str, only: str | None = None) -> str | None:
         """The host takes the pending command, once. With `only`, it is taken only if it is
@@ -611,14 +632,23 @@ class Store:
     def request_park(self, sid: str) -> None:
         self.request(sid, "park")
 
-    def request(self, sid: str, what: str) -> None:
+    def request(self, sid: str, what: str, compact: bool = False) -> None:
         """The person pressed End or Park on a running session; its monitor passes this on.
-        Nothing happens to the data until the session acts, or the person forces it."""
+        Nothing happens to the data until the session acts, or the person forces it. A Park
+        may ask a host to compact the session once it has parked, before it stops (compact)."""
         assert what in REQUESTS
         with self.tx() as db:
             self._require(db, sid)
             db.execute(f"UPDATE sessions SET {what}_requested_at = coalesce({what}_requested_at, ?) "
                        "WHERE id = ?", (stamp(), sid))
+            if what == "park":
+                db.execute("UPDATE sessions SET park_compact = ? WHERE id = ?", (int(compact), sid))
+
+    def take_park_compact(self, sid: str) -> bool:
+        """The host takes the Park's Compact first (request), once."""
+        with self.tx() as db:
+            return db.execute("UPDATE sessions SET park_compact = 0 WHERE id = ? AND park_compact = 1",
+                              (sid,)).rowcount == 1
 
     def tell_request(self, sid: str, what: str, asked: str) -> bool:
         """The monitor is about to pass a request on: record that, only if it is still the
@@ -640,6 +670,8 @@ class Store:
             told = db.execute(f"SELECT {what}_told_at FROM sessions WHERE id = ?", (sid,)).fetchone()[0]
             db.execute(f"UPDATE sessions SET {what}_requested_at = NULL, {what}_told_at = NULL "
                        "WHERE id = ?", (sid,))
+            if what == "park":
+                db.execute("UPDATE sessions SET park_compact = 0 WHERE id = ?", (sid,))
             if told:
                 db.execute(
                     "INSERT INTO messages (session_id, author, body, created_at) VALUES (?, 'person', ?, ?)",
@@ -664,11 +696,13 @@ class Store:
             db.execute("UPDATE sessions SET send_mode = ? WHERE id = ?", (mode, sid))
 
     def set_parked(self, sid: str, parked: bool) -> None:
-        """Parking (by the session or by force) also settles any pending park request."""
+        """Parking (by the session or by force) also settles any pending park request, all
+        but its Compact first, which the host takes once the session has parked; unparking
+        drops that too."""
         with self.tx() as db:
             self._require(db, sid)
-            db.execute("UPDATE sessions SET parked = ?, park_requested_at = NULL, park_told_at = NULL "
-                       "WHERE id = ?", (int(parked), sid))
+            db.execute("UPDATE sessions SET parked = ?, park_requested_at = NULL, park_told_at = NULL, "
+                       "park_compact = park_compact * ? WHERE id = ?", (int(parked), int(parked), sid))
 
     def end(self, sid: str) -> None:
         with self.tx() as db:

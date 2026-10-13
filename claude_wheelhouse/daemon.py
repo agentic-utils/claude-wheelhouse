@@ -55,7 +55,7 @@ from starlette.routing import Route
 
 from . import auth, features, fingerprint, liveness, models, stats, tutorial
 from .hub import Done, Event, Hub, host_context
-from .store import SessionGone, Store, inbox_rank, mode, runner, standing
+from .store import COMPACT_QUESTION, THEN, SessionGone, Store, inbox_rank, mode, runner, standing
 
 ADDRESS = "127.0.0.1"   # the port is features.port()
 TICK = 1.0           # seconds between the hub's refreshes, as the TUI's tick
@@ -669,6 +669,7 @@ class Daemon:
                 "running_model": running and running.model, "running_effort": running and running.effort,
                 "stale": self.hub.stale(sid), "sends_now": self.hub.sends_now(sid),
                 "compact_first": self.hub.compact_first(sid), "compacting": sid in self.hub.compacting,
+                "warm": self.hub.warm(sid),
                 "context": {"tokens": snap.context, "window": snap.window, "estimate": snap.estimate}
                 if snap and snap.context else None}
 
@@ -760,7 +761,8 @@ class Daemon:
         rows = self.store._all("SELECT i.*, s.name AS session_name, s.parked AS session_parked FROM items i "
                                "JOIN sessions s ON s.id = i.session_id")
         sid, steps = tutorial.current(self.store) or (None, [])
-        return {"items": [{k: v for k, v in dict(r).items() if k not in UNLISTED} for r in rows],
+        return {"items": [{**{k: v for k, v in dict(r).items() if k not in UNLISTED},
+                            "compact_question": r["answer"] == COMPACT_QUESTION} for r in rows],
                 "processing": sorted(self.store.processing()), "awaiting": sorted(self.store.awaiting()),
                 "drafts": [{"id": m["id"], "session_id": m["session_id"], "item_ref": m["item_ref"]}
                            for m in self.store.drafts()],
@@ -894,6 +896,8 @@ class Daemon:
             how = body.get("how")
             if how not in HOW:
                 raise Refused(400, f"how must be one of {', '.join(HOW)}")
+            if how == "ask":
+                return hub.ask(sid, action, body.get("compact") is True)
             return HOW[how](hub, sid, action)
         if action == "relaunch":
             host = body.get("host")
@@ -931,7 +935,12 @@ class Daemon:
             return hub.set_effort(sid, models.check_effort(text(body, "effort")))
         if action == "shell":   # the host hands the session to a tab
             self.no_remote_tab(request, "tab")
-        if action in ("interrupt", "compact", "shell"):
+        if action == "compact":
+            then = text(body, "then", False)
+            if then is not None and then not in THEN:
+                raise Refused(400, f"then must be one of {', '.join(THEN)}")
+            return hub.host_command(sid, action, text(body, "notes", False), then)
+        if action in ("interrupt", "shell"):
             return hub.host_command(sid, action)
         commands = {"unpark": hub.unpark, "dispatch": hub.send_queue}
         if action not in commands:
