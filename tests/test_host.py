@@ -1576,7 +1576,6 @@ def test_parking_compaction_holds_messages_and_requests(host, store, sid, then, 
     run(host.poll())
     host.client.queries.clear()
     store.send(sid, "one more thing")
-    store.request(sid, "end")
     run(host.poll())
     assert host.client.queries == [], f"{desc}: nothing queued behind /compact"
     finish_at(host, 40_000, compacted=True)
@@ -1634,6 +1633,84 @@ def test_an_earlier_turn_compacting_by_itself_leaves_the_plan_for_the_compact_tu
     assert not store.session(sid)["parked"] and host.compact_then == "park", "the auto-compacted turn: not yet"
     finish_at(host, 40_000, compacted=True)
     assert store.session(sid)["parked"], "the /compact turn ended: parked"
+
+
+def setup_parking(host, store, sid, how):
+    """A compaction that parks under way: Compact's then park, or Park's Compact first."""
+    if how == "park":
+        store.command(sid, "compact", "keep Q1", "park")
+    else:
+        store.request(sid, "park", True)
+        run(host.poll())
+        store.set_parked(sid, True)
+        finish_at(host, 220_000)
+    run(host.poll())
+    host.client.queries.clear()
+
+
+@pytest.mark.parametrize("how, desc", [
+    ("park", "then park: Stop & Forget is told after the compaction, not parked"),
+    ("park-first", "Park's Compact first: the same, the session unparked for it"),
+])
+def test_stop_and_forget_wins_over_parking(host, store, sid, how, desc):
+    setup_parking(host, store, sid, how)
+    store.request(sid, "end")
+    assert run(host.poll()), desc
+    finish_at(host, 40_000, compacted=True)
+    run(host.poll())
+    row = store.session(sid)
+    assert REQUEST_TEXT["end"] in host.client.queries[-1] and not row["parked"] and not row["park_compact"], desc
+
+
+@pytest.mark.parametrize("how, desc", [
+    ("park", "then park: a hold past COMPACT_TIMEOUT lets messages go, and says so"),
+    ("park-first", "Park's Compact first: the hold goes, and the parked host stops"),
+])
+def test_a_parking_compaction_that_never_ends_lets_messages_go(host, store, sid, how, desc):
+    setup_parking(host, store, sid, how)
+    store.send(sid, "one more thing")
+    host.compact_sent -= host_mod.COMPACT_TIMEOUT + 1
+    going = run(host.poll())
+    assert host.compact_then is None, desc
+    if how == "park":
+        assert going and host.client.queries == ["[wheelhouse] from doug (general):\none more thing"], desc
+    else:
+        assert going is False and store.pending(sid), f"{desc}: left queued for when it's resumed"
+
+
+def test_an_answer_to_a_waiting_call_goes_while_parking_holds(host, store, sid):
+    """AskUserQuestion during the ask before a parking compaction: its answer reaches the
+    call; only new turns and requests are held."""
+    store.command(sid, "compact", None, "park")
+    run(host.poll())
+    ref = store.post_item(sid, "question", "save first?")
+    fut = asyncio.new_event_loop().create_future()
+    host.waiting[ref] = fut
+    store.send(sid, "yes", ref)
+    store.send(sid, "and another thing")
+    run(host.poll())
+    assert fut.result() == "yes" and len(host.client.queries) == 1, "the answer handed over, the rest held"
+
+
+@pytest.mark.parametrize("pending, desc", [
+    (True, "during the park's own turn: interrupted, no compaction, the host stops"),
+    (False, "parked and idle: taken, not left for the next host"),
+])
+def test_an_interrupt_while_parking_is_taken(host, store, sid, pending, desc):
+    store.request(sid, "park", True)
+    run(host.poll())
+    store.set_parked(sid, True)
+    if not pending:
+        host.sent.clear()
+    store.command(sid, "interrupt")
+    calls = []
+
+    async def interrupt():
+        calls.append(True)
+    host.client.interrupt = interrupt
+    assert run(host.poll()) is False, desc
+    row = store.session(sid)
+    assert (calls == [True]) == pending and not row["host_command"] and not row["park_compact"], desc
 
 
 H = 3600

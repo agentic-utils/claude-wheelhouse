@@ -315,8 +315,9 @@ so an hour's quiet is what turns the cache cold.
   once, sending nothing, so no prompt writes the compacted context to the cache. Instructions
   typed are sent as `/compact <them>`, without asking the session. Park on a hosted session
   offers Compact first, ticked while the cache is warm: the park turn, then `/compact`, then
-  the host stops. While a compaction that parks runs, the person's messages and requests
-  stay queued. Compact first lapses if the session hasn't parked within the hour.
+  the host stops. While a compaction that parks runs, new turns and requests stay queued
+  (an answer to a call waiting on the person still goes), for up to `COMPACT_TIMEOUT`;
+  Stop & Forget pressed meanwhile wins, told once the compaction's turn ends. Compact first lapses if the session hasn't parked within the hour.
 - **Keepalive.** A session whose last turn ended over `KEEPALIVE_TOKENS` (150k), with
   nothing running, not parked, and waiting on the person (an open question, or an
   unseen decision, of its own: a permission or AskUserQuestion waits inside a running turn,

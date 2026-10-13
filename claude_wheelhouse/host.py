@@ -56,6 +56,8 @@ HOST_QUESTION = '{"from": "AskUserQuestion"}'   # an item's answer column marks 
 NO_NOTES = (f"idle · Compact got no notes back in {COMPACT_TIMEOUT // 60} quiet minutes, "
             "so nothing was compacted")
 AWAITING_NOTES = "idle · Compact is waiting for the session's notes (Interrupt cancels it)"
+HOLD_EXPIRED = (f"compacting for {COMPACT_TIMEOUT // 60}+ minutes: it won't park after all, and your "
+                "messages are no longer held")
 COMPACTED = "idle · compacted"   # how the activity line starts once a compaction's turn has ended
 # A context past this many tokens gets one question item suggesting Compact, per crossing
 # (COMPACT_QUESTION): every turn re-reads the whole context from the prompt cache
@@ -253,6 +255,7 @@ class Host:
         self.compact_then: str | None = None
         self.compact_key: str | None = None
         self.park_told: float | None = None   # when the park request went to the session (monotonic)
+        self.compact_sent = 0.0   # when the /compact turn went (monotonic): a hold lasts COMPACT_TIMEOUT at most
         self.turn_text: list[str] = []   # this turn's text so far, where Compact's block may straddle blocks
         # this turn's text since its last tool call: what it ends by saying, posted as the
         # reply on the refs it answered (the protocol asks the session for the status alone)
@@ -552,16 +555,22 @@ class Host:
         session = self.store.session(self.sid)
         if session is None:
             return False
+        if self.ending_wins(session):
+            session = self.store.session(self.sid)
+        self.hold_expired()
         if session["parked"]:
-            return await self.compact_parked(session)
+            if not await self.compact_parked(session):
+                return False
+            await self.deliver(session, hold=True)   # an answer to a call the park's turn waits on still goes
+            return True
         if self.park_told is not None and time.monotonic() - self.park_told > PARK_COMPACT_WITHIN:
             self.park_told = None   # the park asked for never came: its Compact first goes
             self.store.take_park_compact(self.sid)
         if self.unsaid is not None:   # a locked database kept it from the line: written now
             self.store.set_activity(self.sid, self.unsaid)
             self.unsaid = None
-        if self.compact_then != "park":   # held while parking compacts: queued for when it's resumed
-            await self.deliver(session)
+        # while parking compacts, new turns and requests are held: queued for when it's resumed
+        await self.deliver(session, hold=self.compact_then == "park")
         if (self.compact_nonce and not self.pending and self.compact_idle is not None
                 and time.monotonic() - self.compact_idle > COMPACT_TIMEOUT):   # quiet all that time: nothing to overwrite
             self.end_compact()
@@ -583,6 +592,7 @@ class Host:
             if notes:   # the person's own instructions: the session isn't asked
                 self.end_compact()
                 self.compact_key = await self.turn(f"/compact {notes}")
+                self.compact_sent = time.monotonic()
                 self.store.set_activity(self.sid, "compacting")
             else:
                 nonce = secrets.token_hex(4)
@@ -593,9 +603,10 @@ class Host:
             await self.shell()
         return not self.stopping
 
-    async def deliver(self, session) -> None:
+    async def deliver(self, session, hold: bool = False) -> None:
         """The person's messages, as one turn (or to the call waiting on one), and End and
-        Park requests."""
+        Park requests. Held (hold): only what a call waiting on the person takes goes; the
+        rest is left unclaimed, and no request is told."""
         msgs = self.store.claim(self.sid)
         self.forget_delivered()
         handed = {m["id"]: ref for ref, m in self.handed.items()}
@@ -619,7 +630,9 @@ class Host:
             item = self.store.item(self.sid, ref)
             if (item is None or item["status"] == "closed") and not fut.done():
                 fut.set_result(None)
-        if turn:
+        if turn and hold:
+            self.store.release(turn)
+        elif turn:
             refs = {}
             for m in turn:
                 if m["item_ref"]:
@@ -630,22 +643,46 @@ class Host:
                 self.store.release(turn)
                 raise
             await self.confirm(turn)
-        for what, text in REQUEST_TEXT.items():
+        for what, text in () if hold else REQUEST_TEXT.items():
             asked = session[f"{what}_requested_at"]
             if asked and session[f"{what}_told_at"] != asked and self.store.tell_request(self.sid, what, asked):
                 await self.turn(text)
                 if what == "park":
                     self.park_told = time.monotonic()
 
+    def ending_wins(self, session) -> bool:
+        """Stop & Forget pressed while parking compacts (or is about to): the park's plan goes,
+        and the end request is told once the compaction's turn ends, as the next turn. A parked
+        session is unparked for it. Whether the row changed."""
+        asked = session["end_requested_at"]
+        parking = self.compact_then == "park" or (session["parked"] and session["park_compact"])
+        if not (asked and session["end_told_at"] != asked and parking):
+            return False
+        if self.compact_then == "park":
+            self.compact_then = None
+        if session["parked"]:
+            self.store.set_parked(self.sid, False)   # its Compact first goes with it
+        return True
+
+    def hold_expired(self) -> None:
+        """A /compact turn that parks and never ends: after COMPACT_TIMEOUT its hold on the
+        person's messages and requests goes, said on the activity line."""
+        if (self.compact_then == "park" and self.compact_key in self.sent
+                and time.monotonic() - self.compact_sent > COMPACT_TIMEOUT):
+            self.compact_then = None
+            self.store.set_activity(self.sid, HOLD_EXPIRED)
+
     async def compact_parked(self, session) -> bool:
         """The session has parked. Parked with Compact first (Store.request), it is compacted
         once its park's turn has ended, and nothing is sent after: the host stops once that
         ends. Whether the host carries on meanwhile."""
-        if self.compact_then == "park":   # its compaction under way, unless interrupted
-            if self.store.take_command(self.sid, only="interrupt"):
+        if self.store.take_command(self.sid, only="interrupt"):   # its turn or its compaction: stopped, not compacted
+            if self.pending:
                 await self.client.interrupt()
-                self.drop_plan()
-                return False
+            self.drop_plan()
+            self.store.take_park_compact(self.sid)
+            return False
+        if self.compact_then == "park":   # its compaction under way
             return True
         if not session["park_compact"]:
             return False
@@ -658,6 +695,7 @@ class Host:
             return False
         self.compact_then = "park"
         self.compact_key = await self.turn("/compact")
+        self.compact_sent = time.monotonic()
         self.store.set_activity(self.sid, "compacting before it stops")
         return True
 
@@ -814,6 +852,7 @@ class Host:
             if notes is not None:
                 self.end_compact()
                 self.compact_key = await self.turn(f"/compact {notes}".rstrip())
+                self.compact_sent = time.monotonic()
                 self.store.set_activity(self.sid, "compacting")
                 return
         self.compacted_last = self.compacted_from is not None
