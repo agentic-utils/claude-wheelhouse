@@ -27,10 +27,13 @@ from textual.cache import LRUCache
 from textual.message import Message
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
+from textual.geometry import Offset
 from textual.screen import ModalScreen, Screen
 from textual.scrollbar import ScrollBar
+from textual.selection import SELECT_ALL, Selection
 from textual.strip import Strip
 from textual.widget import Widget
+from textual.widgets.text_area import Selection as Span
 from textual.worker import get_current_worker
 from textual.widgets import (
     Button,
@@ -296,8 +299,9 @@ def agreed(a: list, b: list) -> int:
 
 class Transcript(Widget, can_focus=True):
     """A conversation or a thread: one widget drawing cached lines, as Blocks does, and
-    selectable. Drag selects, Ctrl+A selects it all, Ctrl+C copies (Textual's screen binding,
-    which copies through the terminal: OSC 52, which Windows Terminal supports)."""
+    selectable. Drag selects, a double click a word (select_word), Ctrl+A selects it all,
+    Ctrl+C copies (Textual's screen binding, which copies through the terminal: OSC 52,
+    which Windows Terminal supports)."""
     ALLOW_SELECT = True
     DEFAULT_CSS = "Transcript { height: auto; }"
     BINDINGS = [Binding("ctrl+a", "select_all", "Select all", show=False)]
@@ -381,6 +385,34 @@ class Transcript(Widget, can_focus=True):
 
     def action_select_all(self) -> None:
         self.text_select_all()
+
+
+WORD = re.compile(r"\w+|\s+|.")   # what a double click selects: a word, a run of spaces, or one other character
+
+
+def select_word(screen: Screen, x: int, y: int) -> None:
+    """A double click at (x, y) on the screen: the word under it selected, as in an editor or
+    a terminal. Textual's own double click selects the whole widget, already done when this
+    runs (it's the widget's, this the app's), so this narrows it, and only then: a widget it
+    left alone (not selectable) stays so. Past a line's end, nothing is selected. An answer
+    box keeps a selection of its own, in its text, about where the click put its cursor."""
+    widget, at = screen.get_widget_and_offset_at(x, y)
+    if widget is None or widget not in screen.selections:
+        return
+    if isinstance(widget, TextArea):   # no offsets in what it draws: its cursor is where the click was
+        row, col = widget.cursor_location
+        found = next((m for m in WORD.finditer(widget.document.get_line(row)) if m.start() <= col < m.end()), None)
+        screen.clear_selection()
+        if found:
+            widget.selection = Span((row, found.start()), (row, found.end()))
+        return
+    if at is None:
+        return
+    got = widget.get_selection(SELECT_ALL)
+    lines = got[0].splitlines() if got else []
+    line = lines[at.y] if at.y < len(lines) else ""
+    found = next((m for m in WORD.finditer(line) if m.start() <= at.x < m.end()), None)
+    screen.selections = {widget: Selection(Offset(found.start(), at.y), Offset(found.end(), at.y))} if found else {}
 
 
 BLANK = "\x00blank"   # a blank row's key, with its place after it: no session id or item key starts so
@@ -1497,7 +1529,7 @@ SEND_RULES = (
 MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
          "keep Shift+click for itself: Space and Shift+Up/Down do the same), then Delete or Backspace closes them together "
          "and Ctrl+R reopens the finished ones. "
-         "Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
+         "Double-click selects a word. Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back.")
 # the SDK-only buttons' keys, and those buttons, which the ? overlay leaves out unless SDK
@@ -1828,6 +1860,10 @@ class WheelhouseApp(App):
     def refit(self) -> None:
         """Fit again once laid out: a pane's content changed height, not the terminal."""
         self.call_after_refresh(self.fit_layout)
+
+    def on_click(self, event: events.Click) -> None:
+        if event.chain == 2:
+            select_word(self.screen, event.screen_x, event.screen_y)
 
     # right-click, as in a terminal
 

@@ -2092,6 +2092,56 @@ async def test_a_changed_transcript_keeps_a_scrolled_up_place(blocks, top, new, 
         assert grown is None or after[keep] == grown, f"{desc}: what grew, below"
 
 
+class WordTranscript(OneTranscript):
+    on_click = WheelhouseApp.on_click
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("at, chain, selected, desc", [
+    ("beta", 2, "beta", "a double click on a word selects that word"),
+    ("-g", 2, "-", "on punctuation, that character alone"),
+    ("  d", 2, "  ", "on spaces, the run of them"),
+    ("delta", 1, None, "a single click selects nothing"),
+    ("delta", 3, None, "a triple click selects the whole conversation, as before"),
+])
+async def test_a_double_click_selects_the_word_under_it(at, chain, selected, desc):
+    async with WordTranscript().run_test(size=(100, 20)) as pilot:
+        t = pilot.app.query_one(Transcript)
+        t.update([("you", "alpha beta-gamma  delta"), ("claude", "the reply")])
+        await pilot.pause()
+        texts = t._layout(t.size.width)[1]
+        y = next(i for i, line in enumerate(texts) if "alpha" in line)
+        await pilot.click(t, offset=(texts[y].index(at), y), times=chain)
+        await pilot.pause()
+        got = pilot.app.screen.get_selected_text()
+        if chain == 3:
+            assert "alpha" in got and "the reply" in got, desc
+        else:
+            assert got == selected, desc
+
+
+class OneBox(App):
+    on_click = WheelhouseApp.on_click
+
+    def compose(self) -> ComposeResult:
+        yield TextArea("first line\nalpha beta-gamma  delta")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("at, chain, selected, desc", [
+    ("beta", 2, "beta", "a double click in an answer box selects the word"),
+    ("-g", 2, "-", "on punctuation, that character alone"),
+    ("delta", 1, "", "a single click only moves the cursor"),
+])
+async def test_a_double_click_in_an_answer_box_selects_the_word(at, chain, selected, desc):
+    async with OneBox().run_test(size=(60, 10)) as pilot:
+        box = pilot.app.query_one(TextArea)
+        await pilot.click(box, offset=(box.gutter.left + "alpha beta-gamma  delta".index(at), box.gutter.top + 1),
+                          times=chain)
+        await pilot.pause()
+        assert box.selected_text == selected, desc
+
+
 @pytest.mark.anyio
 async def test_ctrl_a_copies_all_of_a_long_conversation(store, sid, tmp_path, monkeypatch):
     long_conversation(sid, tmp_path, monkeypatch)
