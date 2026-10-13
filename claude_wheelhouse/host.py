@@ -255,6 +255,7 @@ class Host:
         self.compact_then: str | None = None
         self.compact_key: str | None = None
         self.park_told: float | None = None   # when the park request went to the session (monotonic)
+        self.parked_it = False   # parked after its compaction: Stop & Forget before it stops still wins
         self.compact_sent = 0.0   # when the /compact turn went (monotonic): a hold lasts COMPACT_TIMEOUT at most
         self.turn_text: list[str] = []   # this turn's text so far, where Compact's block may straddle blocks
         # this turn's text since its last tool call: what it ends by saying, posted as the
@@ -557,7 +558,7 @@ class Host:
             return False
         if self.ending_wins(session):
             session = self.store.session(self.sid)
-        self.hold_expired()
+        self.hold_expired(session)
         if session["parked"]:
             if not await self.compact_parked(session):
                 return False
@@ -651,23 +652,26 @@ class Host:
                     self.park_told = time.monotonic()
 
     def ending_wins(self, session) -> bool:
-        """Stop & Forget pressed while parking compacts (or is about to): the park's plan goes,
+        """Stop & Forget pressed while parking compacts (or is about to, or has just parked
+        after one, before the host stops): the park's plan goes,
         and the end request is told once the compaction's turn ends, as the next turn. A parked
         session is unparked for it. Whether the row changed."""
         asked = session["end_requested_at"]
-        parking = self.compact_then == "park" or (session["parked"] and session["park_compact"])
+        parking = self.compact_then == "park" or (session["parked"] and (session["park_compact"] or self.parked_it))
         if not (asked and session["end_told_at"] != asked and parking):
             return False
+        self.parked_it = False
         if self.compact_then == "park":
-            self.compact_then = None
+            self.compact_then = "end"   # its turn ends with no reminder: the end request is the next prompt
         if session["parked"]:
             self.store.set_parked(self.sid, False)   # its Compact first goes with it
         return True
 
-    def hold_expired(self) -> None:
+    def hold_expired(self, session) -> None:
         """A /compact turn that parks and never ends: after COMPACT_TIMEOUT its hold on the
-        person's messages and requests goes, said on the activity line."""
-        if (self.compact_then == "park" and self.compact_key in self.sent
+        person's messages and requests goes, said on the activity line. Not once parked
+        (Park's Compact first): the session has parked already, and the host waits it out."""
+        if (self.compact_then == "park" and not session["parked"] and self.compact_key in self.sent
                 and time.monotonic() - self.compact_sent > COMPACT_TIMEOUT):
             self.compact_then = None
             self.store.set_activity(self.sid, HOLD_EXPIRED)
@@ -866,7 +870,8 @@ class Host:
             self.nudge(tokens, compacted=self.compacted_last)   # closed first: the reminder never lists it
         if self.compacted_last and then == "park":   # nothing more sent: the host stops at its next poll
             self.store.set_parked(self.sid, True)
-        elif self.compacted_last:
+            self.parked_it = True
+        elif self.compacted_last and then != "end":
             if reminder := after_compaction(self.store, self.sid):
                 # once per compaction, its open items: the next turn carries them, or it is one
                 self.store.notice(self.sid, reminder)

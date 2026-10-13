@@ -1653,29 +1653,44 @@ def setup_parking(host, store, sid, how):
     ("park-first", "Park's Compact first: the same, the session unparked for it"),
 ])
 def test_stop_and_forget_wins_over_parking(host, store, sid, how, desc):
+    store.post_item(sid, "question", "which db?")   # an open item: a reminder would be due
     setup_parking(host, store, sid, how)
     store.request(sid, "end")
     assert run(host.poll()), desc
     finish_at(host, 40_000, compacted=True)
-    run(host.poll())
+    assert run(host.poll()), desc
     row = store.session(sid)
-    assert REQUEST_TEXT["end"] in host.client.queries[-1] and not row["parked"] and not row["park_compact"], desc
+    assert host.client.queries == [REQUEST_TEXT["end"]], f"{desc}: the end request alone, no reminder"
+    assert not row["parked"] and not row["park_compact"], desc
+
+
+def test_stop_and_forget_after_a_parking_compaction_parked_it_still_wins(host, store, sid):
+    """End pressed once then park has parked the session, before the host's next poll."""
+    setup_parking(host, store, sid, "park")
+    finish_at(host, 40_000, compacted=True)
+    store.request(sid, "end")
+    assert run(host.poll()), "not stopped: unparked to be told"
+    assert host.client.queries == [REQUEST_TEXT["end"]] and not store.session(sid)["parked"]
 
 
 @pytest.mark.parametrize("how, desc", [
     ("park", "then park: a hold past COMPACT_TIMEOUT lets messages go, and says so"),
-    ("park-first", "Park's Compact first: the hold goes, and the parked host stops"),
+    ("park-first", "Park's Compact first: parked already, so the host waits the compaction out"),
 ])
-def test_a_parking_compaction_that_never_ends_lets_messages_go(host, store, sid, how, desc):
+def test_a_parking_compaction_that_never_ends_lets_messages_go(host, store, sid, monkeypatch, how, desc):
     setup_parking(host, store, sid, how)
+    said = []
+    set_activity = store.set_activity
+    monkeypatch.setattr(store, "set_activity", lambda s, text: (said.append(text), set_activity(s, text)))
     store.send(sid, "one more thing")
     host.compact_sent -= host_mod.COMPACT_TIMEOUT + 1
     going = run(host.poll())
-    assert host.compact_then is None, desc
     if how == "park":
+        assert host.compact_then is None and host_mod.HOLD_EXPIRED in said, desc
         assert going and host.client.queries == ["[wheelhouse] from doug (general):\none more thing"], desc
     else:
-        assert going is False and store.pending(sid), f"{desc}: left queued for when it's resumed"
+        assert going and host.compact_then == "park" and host.client.queries == [], desc
+        assert host_mod.HOLD_EXPIRED not in said and store.pending(sid), desc
 
 
 def test_an_answer_to_a_waiting_call_goes_while_parking_holds(host, store, sid):
