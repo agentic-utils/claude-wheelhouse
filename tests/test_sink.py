@@ -321,6 +321,7 @@ async def test_a_parked_session_falls_to_the_foot_and_rises_back(store, sid, tmp
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         app.refresh_data()   # laid out: the list knows its room
+        app.follow(sid)   # selected: with none, no highlight to ride its row (#16)
         await pilot.pause()
         table = app.session_list
         room = table.scrollable_content_region.height - table.header_height
@@ -365,7 +366,8 @@ async def moving(clock, tmp_path, where, keys, typed, count=3, start=None) -> di
             await pilot.pause()
             if where == "sessions":
                 app.session_list.focus()
-                app.session_list.move_cursor(row=[*ids.values()].index(start or "alpha"))
+                # selected, as a click: with none, an arrow picks one (#16)
+                app.follow({n: i for i, n in ids.items()}[start or "alpha"])
                 await pilot.pause()
                 store.set_parked(bravo, True)
             else:
@@ -400,13 +402,14 @@ async def moving(clock, tmp_path, where, keys, typed, count=3, start=None) -> di
     ("sessions", ("down",), "charlie", None, "Down on alpha as bravo falls: charlie, its next in the final order"),
     ("sessions", ("down", "down"), "bravo", None, "Down, Down: bravo, at the foot"),
     ("sessions", ("down", "down", "up"), "charlie", None, "and back up: charlie, never a blank row"),
-    ("items", ("down",), "alpha", "three", "Down on two as one sinks: three"),
-    ("items", ("up",), "alpha", "two", "Up on two as one sinks: two is first now, so it stays"),
-    ("items", ("down", "down"), "alpha", "one", "Down, Down: one, at the foot"),
+    ("items", ("down",), None, "three", "Down on two as one sinks: three"),
+    ("items", ("up",), None, "two", "Up on two as one sinks: two is first now, so it stays"),
+    ("items", ("down", "down"), None, "one", "Down, Down: one, at the foot"),
 ])
 async def test_keys_typed_during_a_move_end_as_typed_slowly(tmp_path, clock, where, keys, current, selected, desc):
     """Arrows step through the final order, never a frame's, so a burst typed during a move
-    ends as the same keys typed slowly do (and D22 holds while it moves)."""
+    ends as the same keys typed slowly do (and D22 holds while it moves). In the items the
+    inbox is unfiltered: no current session (#16)."""
     raw = await moving(clock, tmp_path / "raw", where, keys, "raw")
     slow = await moving(clock, tmp_path / "slow", where, keys, "slow")
     assert raw.pop("early") and slow.pop("early"), f"{desc}: the keys landed mid-move"
@@ -415,14 +418,14 @@ async def test_keys_typed_during_a_move_end_as_typed_slowly(tmp_path, clock, whe
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("where, start, keys, current, selected, marked, desc", [
-    ("items", "two", ("shift+up",), "alpha", "two", ["two"], "Shift+Up on two as one sinks: two is first, so only it"),
-    ("items", "four", ("shift+down",), "alpha", "one", ["four", "one"], "Shift+Down on four: one, below it now"),
-    ("items", "four", ("down", "shift+up"), "alpha", "four", ["four", "one"], "Down then Shift+Up: back to four"),
-    ("items", "three", ("pageup",), "alpha", "two", [], "PageUp on three: two, the top now"),
-    ("items", "two", ("pagedown",), "alpha", "one", [], "PageDown on two: one, the foot now"),
-    ("items", "three", ("ctrl+home",), "alpha", "two", [], "Ctrl+Home: two, the top now"),
-    ("items", "two", ("ctrl+end",), "alpha", "one", [], "Ctrl+End: one, the foot now"),
-    ("items", "three", ("home", "end"), "alpha", "three", [], "Home and End scroll sideways, the cursor stays"),
+    ("items", "two", ("shift+up",), None, "two", ["two"], "Shift+Up on two as one sinks: two is first, so only it"),
+    ("items", "four", ("shift+down",), None, "one", ["four", "one"], "Shift+Down on four: one, below it now"),
+    ("items", "four", ("down", "shift+up"), None, "four", ["four", "one"], "Down then Shift+Up: back to four"),
+    ("items", "three", ("pageup",), None, "two", [], "PageUp on three: two, the top now"),
+    ("items", "two", ("pagedown",), None, "one", [], "PageDown on two: one, the foot now"),
+    ("items", "three", ("ctrl+home",), None, "two", [], "Ctrl+Home: two, the top now"),
+    ("items", "two", ("ctrl+end",), None, "one", [], "Ctrl+End: one, the foot now"),
+    ("items", "three", ("home", "end"), None, "three", [], "Home and End scroll sideways, the cursor stays"),
     ("sessions", "alpha", ("ctrl+end",), "bravo", None, [], "Ctrl+End as bravo falls: bravo, at the foot"),
     ("sessions", "alpha", ("pagedown",), "bravo", None, [], "PageDown: bravo, at the foot"),
     ("sessions", "alpha", ("pagedown", "pageup"), "alpha", None, [], "and PageUp: alpha, never a blank row"),

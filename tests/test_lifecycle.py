@@ -25,6 +25,9 @@ def fake_status(monkeypatch, state):
 
 async def press(app, pilot, button, *keys):
     await pilot.pause()
+    if app.filter_sid is None:   # demo selected first, as a click on it: with none, its buttons are disabled (#16)
+        app.follow(app.sessions[0]["id"])
+        await pilot.pause()
     await pilot.click(button)
     await pilot.pause()
     prompts = []
@@ -108,6 +111,8 @@ async def test_a_pending_request_can_be_cancelled_or_forced(
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
+        app.follow(sid)   # selected: with none, the info box says All sessions (#16)
+        await pilot.pause()
         label = "forgetting" if flag == "end" else "parking"
         assert app._info_text.splitlines()[1].startswith(label), "pending state shows"
         prompts = await press(app, pilot, button, *keys)
@@ -184,6 +189,7 @@ async def test_delete_and_backspace_forget(store, sid, monkeypatch, key, keys, k
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
+        app.follow(sid)   # selected: with none, the keys do nothing (#16)
         app.session_list.focus()
         for k in (key, *keys):
             await pilot.press(k)
@@ -378,6 +384,8 @@ async def test_a_button_on_a_vanished_row_does_not_crash(store, sid, monkeypatch
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         seen = notices(app, monkeypatch)
+        await pilot.pause()
+        app.follow(sid)   # selected: with none, its buttons are disabled (#16)
         await pilot.pause()
         stale = store.sessions()
         store.end(sid)

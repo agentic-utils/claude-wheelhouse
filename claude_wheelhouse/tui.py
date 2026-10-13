@@ -561,7 +561,11 @@ class SinkList(DataTable):
         background, and with the foreground's priority on the CSS, DataTable laid it over
         every cell, so every status went green under the mouse. The cursor's row still takes
         the cursor's colour. Cached as DataTable's is, which it clears by this name when its
-        looks change: DataTable's own, unwrapped, so there is the one cache to clear."""
+        looks change: DataTable's own, unwrapped, so there is the one cache to clear. With the
+        cursor hidden (the session list with none selected, #16) no row is the cursor's, but the
+        mouse's is still shaded, where DataTable would shade none."""
+        if not rest[0]:   # show_cursor
+            cursor, rest = False, (True, *rest[1:])
         style, post = DataTable._get_styles_to_render_cell.__wrapped__(
             self, is_header_cell, is_row_label_cell, is_fixed_style_cell, hover, cursor, *rest)
         if hover and not cursor:
@@ -635,9 +639,11 @@ async def select_now(table: DataTable) -> None:
 
 class SessionList(SinkList):
     """The inbox's sessions. One click selects a row: a plain table selects only on a second
-    click, the first just moving the cursor there. The buttons under it act on the
-    highlighted row and never take focus, so Tab goes straight on to the items; these keys
-    press them instead."""
+    click, the first just moving the cursor there. A single click on the selected row
+    unselects it (the inbox shows every session's items, as Esc), and with none selected the
+    highlight is hidden (show_cursor) until a click, Enter or a key that moves it picks one
+    (reveal). The buttons under it act on the highlighted row and never take focus, so Tab
+    goes straight on to the items; these keys press them instead."""
 
     # E, S and Shift+S (End, Restore and Restore all before Forget and Relaunch took them
     # over) are bound to nothing for a release, so muscle memory does nothing rather than
@@ -698,8 +704,27 @@ class SessionList(SinkList):
         eye = Strip([Segment(seg.text, base + seg.style + post) for seg in cylon(self.eye_frame).render(self.app.console)])
         return Strip.join([strip.crop(0, lo), eye.crop(lo - x, hi - x), strip.crop(hi)])
 
+    def reveal(self) -> str | None:
+        """With none selected, the session a key picks: the one last followed if it's still
+        listed, else the first. The cursor moved there unseen, so nothing settles it as the
+        person's move; the caller follows it."""
+        rows = self.final()
+        last = self.app.followed
+        key = last if last and last in rows else next((k for k in rows if k), None)   # a blank row is None
+        if key is not None:
+            with self.prevent(DataTable.RowHighlighted):
+                self.move_cursor(row=self.get_row_index(key), animate=False)
+        return key
+
+    def go(self, where, page: int = 0) -> None:
+        if self.show_cursor:
+            super().go(where, page)
+        elif key := self.reveal():   # none selected: a key that moves the highlight brings it back, followed
+            self.app.follow(key)
+
     async def action_select_cursor(self) -> None:
-        await select_now(self)
+        if self.show_cursor or self.reveal():   # none selected: Enter picks as a moving key does
+            await select_now(self)
 
     def on_resize(self) -> None:
         if getattr(self.app, "session_list", None) is self:   # its room: the parked sessions keep to its foot
@@ -708,14 +733,34 @@ class SessionList(SinkList):
     def watch_show_horizontal_scrollbar(self, shown: bool) -> None:
         self.on_resize()   # a long name's scrollbar takes the room's last line
 
+    def _on_mouse_move(self, event) -> None:
+        # as _on_click, DataTable's runs after this one: it moves the mouse's shade only while
+        # the cursor shows, so with none selected it is moved here, a hint that a click selects
+        meta = event.style.meta
+        if not self.show_cursor and "row" in meta and "column" in meta:
+            self.hover_coordinate = Coordinate(meta["row"], meta["column"])
+
     async def _on_click(self, event) -> None:
         # Textual runs every class's _on_click in turn, DataTable's after this one, so don't
         # call it here too: that made one click select twice and open two relaunch prompts
-        if self.blank(event.style.meta.get("row", -1)):   # the gap above the parked sessions
+        row = event.style.meta.get("row", -1)
+        if self.blank(row):   # the gap above the parked sessions
             event.prevent_default()
             return
         self.app.settle()   # first what the keys before it moved, as a key's land does
-        self.call_next(self._after_click, self.cursor_coordinate)
+        if not 0 <= row < self.row_count:   # the header
+            return
+        if not self.show_cursor:   # none selected: the click selects its row, where DataTable would do nothing
+            event.prevent_default()
+            self._set_hover_cursor(True)
+            with self.prevent(DataTable.RowHighlighted):
+                self.move_cursor(row=row, animate=False)
+            self._post_selected_message()
+        elif event.chain == 1 and row == self.cursor_row:   # the selected one: unselected, as Esc. Not on
+            event.prevent_default()   # a double-click's second click, which selects it again
+            self.app.unfilter()
+        else:
+            self.call_next(self._after_click, self.cursor_coordinate)
 
     def _after_click(self, before) -> None:
         if self.cursor_coordinate.row != before.row:   # the table selects it itself if unmoved
@@ -856,10 +901,10 @@ class Compose(TextArea):
 
 
 # the current session's lifecycle buttons, (caption, id), under the session list: each
-# shown only where it applies (#62)
+# shown only where it applies (#62), and with none selected all but Model shown disabled (D20)
 LIFECYCLE = (("Rename", "rename"), ("Relaunch", "relaunch"), ("Park", "park"), ("Forget", "end"), ("Model", "model"))
 # a session's conversation buttons, (caption, id, variant): under those, for the current
-# session, highlighted there (D20); in a full-screen item's bar, for its session
+# session, highlighted there (D20; none while unfiltered); in a full-screen item's bar, for its session
 CONVERSATION = (("Mode", "mode", "default"), ("Send", "send", "primary"), ("Interrupt", "interrupt", "error"),
                 ("Compact", "compact", "default"), ("Shell", "shell", "default"))
 
@@ -1541,7 +1586,8 @@ SEND_RULES = (
     "A dead session's queue waits: Ctrl+S and Send all leave it until the session is relaunched. "
     "**Immediate**: Ctrl+Enter sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
-MOUSE = ("Click selects a row. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
+MOUSE = ("Click selects a row; in the session list, a click on the selected session unselects it, for all "
+         "sessions' items, as Esc does. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
          "keep Shift+click for itself: Space and Shift+Up/Down do the same), then Delete or Backspace closes them together "
          "and Ctrl+R reopens the finished ones. "
          "Double-click selects a word. Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
@@ -1744,6 +1790,7 @@ class WheelhouseApp(App):
         self.half_frame = 0   # the frame // 2 the eyes and panes last moved on (animate)
         self.animating = True   # whether it runs: paused while unfocused with nothing busy (pace)
         self.filter_sid: str | None = None
+        self.followed: str | None = None   # the session last followed, which a key picks again (SessionList.reveal)
         # the dwell (DWELL): what the person is looking at, (selection, screen), its generation,
         # bumped whenever that changes, and its one-shot timer, running only while they rest
         self.dwelling: tuple | None = None
@@ -1790,7 +1837,7 @@ class WheelhouseApp(App):
         with Columns(id="main"):
             # the sessions, the highlighted one's description, and what can be done to it
             with Vertical(id="sessions-pane", classes="panel"):
-                yield SessionList(id="session-list", cursor_type="row")
+                yield SessionList(id="session-list", cursor_type="row", show_cursor=False)   # none selected (D20)
                 yield Splitter("session-info", "#session-info", "#session-list", "y")
                 with Vertical(id="session-info"):
                     with VerticalScroll(id="session-info-scroll"):
@@ -2451,9 +2498,8 @@ class WheelhouseApp(App):
                 widget.remove()
 
     def focus_sid(self) -> str | None:
-        """The session in context, for the modules: followed, else the highlighted item's
-        (the current session then, D20). With neither, None: the stats pane shows every
-        running session."""
+        """The session in context, for the modules: followed (the current session, D20), else
+        the highlighted item's. With neither, None: the stats pane shows every running session."""
         sid = self.filter_sid or (self.selected[0] if self.selected else None)
         return sid if any(s["id"] == sid for s in self.sessions) else None
 
@@ -2480,8 +2526,8 @@ class WheelhouseApp(App):
         any that isn't Parked; Forget on any, captioned Stop & Forget on an Active one; and
         Model on one running in a wheelhouse host (Q52: never a tab's) while SDK mode is on:
         out of it, a host's session runs on as it was set (features.py)."""
-        if s is None:
-            return [(id_, caption, False, False) for caption, id_ in LIFECYCLE]
+        if s is None:   # none selected: shown, disabled, but Model, which few sessions have
+            return [(id_, caption, True, id_ != "model") for caption, id_ in LIFECYCLE]
         state = self.state(s)
         hosted = state == "active" and runner(s) == "sdk" and not s["shell"]
         caption = {verb: VERBS.get((state, verb), ("", False))[0] for verb in ("relaunch", "park", "end")}
@@ -2497,12 +2543,12 @@ class WheelhouseApp(App):
 
     def controls(self, s) -> list[tuple[str, str, bool, bool]]:
         """A session's conversation buttons (CONVERSATION), as show_button takes them: (id,
-        caption, disabled, shown). s: the session's row, or None with no session: then none
-        shows. Mode applies to any session, its queue kept for it while it's dead; Send only
-        to one that isn't dead, which can't receive (D30); Interrupt, Compact and Shell only
-        to one running in a wheelhouse host (#62)."""
+        caption, disabled, shown). s: the session's row, or None with no session: then Mode
+        and Send show, disabled, and the rest don't. Mode applies to any session, its queue
+        kept for it while it's dead; Send only to one that isn't dead, which can't receive
+        (D30); Interrupt, Compact and Shell only to one running in a wheelhouse host (#62)."""
         if s is None:
-            return [(id_, label, True, False) for label, id_, _ in CONVERSATION]
+            return [(id_, label, True, id_ in ("mode", "send")) for label, id_, _ in CONVERSATION]
         if self.sends_now(s["id"]):   # its old monitor would deliver a draft at once anyway
             mode_ = ("Can't queue: relaunch", True)
         else:
@@ -2604,7 +2650,7 @@ class WheelhouseApp(App):
         states: Park's, and the conversation buttons' (D20)."""
         sid = self.current_session()
         s = next((x for x in self.sessions if x["id"] == sid), None)
-        text = self.describe(s) if s else Text("Select a session to see its description.", style="#777777")
+        text = self.describe(s) if s else self.describe_all()
         if text.plain != getattr(self, "_info_text", None):
             self._info_text = text.plain
             self.session_info.update(text)
@@ -2622,6 +2668,18 @@ class WheelhouseApp(App):
             grid.display = any(shown for *_, shown in buttons)   # none: no blank row for it either
         if [b.display for b in self.session_controls] != before:
             self.refit()   # rows of buttons more or less under the description
+
+    def describe_all(self) -> Text:
+        """With no session selected: what the inbox shows, every session's items, in counts."""
+        states = [self.state(s) for s in self.sessions]
+        t = Text("All sessions", style="bold #ffd300")
+        n = len(states)
+        counts = [f"{n} session{'' if n == 1 else 's'}"] + [f"{k} {what}" for what in ("active", "parked")
+                                                             if (k := states.count(what))]
+        t.append("\n" + " · ".join(counts), style="#777777")
+        t.append("\n\nThe inbox shows every session's items. Click a session to filter to it "
+                 "and act on it; click it again, or Esc, for all sessions.")
+        return t
 
     def describe(self, s) -> Text:
         """A session's description: what the old Sessions tab's row and synopsis showed."""
@@ -2754,10 +2812,19 @@ class WheelhouseApp(App):
 
     def follow(self, sid: str) -> None:
         """Filter the items to the session and highlight its conversation row, so the right
-        pane follows the conversation rather than whichever question comes first."""
-        self.filter_sid = sid
+        pane follows the conversation rather than whichever question comes first. The
+        session list's highlight shows again if none was selected (D20)."""
+        self.filter_sid = self.followed = sid
         self.selected = (sid, None)
         self.picked = self.selected   # the person's own: a turn arriving in it ticks the tutorial's step (paint_detail)
+        table = self.session_list
+        if not table.show_cursor:
+            with table.prevent(DataTable.RowHighlighted):   # the app's move, as highlight_session's
+                if sid in table.rows:
+                    table.move_cursor(row=table.get_row_index(sid), animate=False)
+                table.show_cursor = True
+            self.sessions_cursor = self.current_session()
+            self.paint_session_info()
         self.retarget()
         self.paint_items()
         self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
@@ -2819,9 +2886,10 @@ class WheelhouseApp(App):
 
     def highlight_session(self, sid: str | None) -> None:
         """Keep the session list's highlight on the session in context: one current session
-        (D20). The app's move, not the person's: it filters nothing."""
+        (D20). The app's move, not the person's: it filters nothing. With none selected
+        (unfiltered) there is no highlight to move, whatever item is selected."""
         table = self.session_list
-        if sid in table.rows and sid != self.current_session():
+        if table.show_cursor and sid in table.rows and sid != self.current_session():
             with table.prevent(DataTable.RowHighlighted):
                 table.move_cursor(row=table.get_row_index(sid), animate=False)
             self.sessions_cursor = sid
@@ -2839,14 +2907,23 @@ class WheelhouseApp(App):
         if self.items_table.marked:   # Esc drops a multi-selection first
             self.items_table.set_marks(set())
             return
+        self.unfilter()
+
+    def unfilter(self) -> None:
+        """All sessions: Esc, or a click on the selected session (SessionList)."""
         self.clear_filter()
         self.paint_items()
         self.retarget()
 
     def clear_filter(self) -> None:
+        """No session selected: every session's items, and no highlight in the session list,
+        so no current session for its buttons and keys (D20) until one is picked again."""
         self.filter_sid = None
         if self.viewing:   # its row goes with the filter; the highlight lands on an item
             self.selected = None
+        self.session_list.show_cursor = False
+        self.sessions_cursor = None
+        self.paint_session_info()
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         """F's two bindings: only the one that applies shows in the footer, and runs."""
@@ -3019,11 +3096,11 @@ class WheelhouseApp(App):
 
     def bar_session(self, screen) -> str | None:
         """The session in context on a screen, which its keys, buttons, hint and activity line
-        all act on or describe: the thread's, else the current session, highlighted in the
-        session list (D20), which follows the filter or the selected item's session."""
+        all act on or describe: the thread's, else the followed session, highlighted in the
+        session list (D20), or with none selected the selected item's (focus_sid)."""
         if isinstance(screen, ThreadView):
             return screen.sid
-        return self.current_session()
+        return self.focus_sid()
 
     def bar_item(self, screen) -> tuple[str, str] | None:
         """The item in context on a screen: the thread's, else the inbox's selected item."""
@@ -3151,9 +3228,10 @@ class WheelhouseApp(App):
     # the session area: the list's highlighted session, and its buttons
 
     def current_session(self) -> str | None:
-        """The current session: the one highlighted in the session list (D20)."""
+        """The current session: the one highlighted in the session list (D20). None with
+        none selected, the highlight hidden (clear_filter)."""
         table = self.session_list
-        if not table.row_count or table.blank(table.cursor_row):   # a blank row only as a rebuild lands
+        if not table.show_cursor or not table.row_count or table.blank(table.cursor_row):   # blank: as a rebuild lands
             return None
         return table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value
 
@@ -3182,6 +3260,9 @@ class WheelhouseApp(App):
         in context says so rather than doing nothing."""
         if isinstance(self.focused, (TextArea, Input)) or self.composing()[0] is None:
             return
+        inbox = self.screen is self.screen_stack[0]
+        if inbox and button_id in dict(LIFECYCLE).values() and self.current_session() is None:
+            return   # none selected: its buttons are disabled, and their keys do nothing (D20)
         sid = self.current_session() if button_id == "park" else None
         if sid and self.state(self.row(sid)) == "parked":   # P presses Unpark, the Relaunch button there
             button_id = "relaunch"

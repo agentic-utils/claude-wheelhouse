@@ -149,7 +149,8 @@ session.
   processing.
 - **Follow a session.** Click a session in the inbox's list (or move to it, or Enter on it): its items
   list gains a pinned first row, 💬 Conversation, highlighted, and drops its session column (it shows
-  only while the list has every session's items, after `Esc`), and the right-hand pane
+  only while the list has every session's items, after `Esc` or a click on the selected session, which
+  unselects it), and the right-hand pane
   follows its conversation, read live from its transcript: your prompts and general
   messages (in green, line breaks kept, without the `[wheelhouse] from …` prefix, and in
   full even when the notification that delivered one was cut short) and Claude's replies
@@ -184,7 +185,7 @@ session.
   linear scale: an eighth for each 125k begun, so the cell is full past 875k.
 - **Sessions.** The left-hand column lists every session (parked ones dimmed, at the
   foot of the list's room: they fall there as you park them, and rise back as you unpark
-  them). Under it, a description of the highlighted one: its status, ticket, directory
+  them). Under it, a description of the selected one: its status, ticket, directory
   and counts, and its synopsis, which the session keeps up to date itself (its brief until
   it sets one), in a box that takes half the column. The box's last two rows always show
   what a session run in the wheelhouse is doing now, cropped to fit, so nothing above
@@ -193,15 +194,19 @@ session.
   yellow when stalled (its Claude Code runs, but its wheelhouse MCP server hasn't checked in
   for 2 minutes), magenta while it's been asked to park or forget, red when dead (its Claude
   Code isn't running) and grey when parked.
-  The highlighted session is the current one: highlighting an item moves the list's
-  highlight to the item's session, and moving the list's highlight follows that session.
-  The buttons under the description act on it, and only those that apply show, each with
+  The selected session, highlighted, is the current one, and the inbox shows its items
+  alone. A click on it, or `Esc`, unselects it: the inbox shows every session's items, the
+  list has no highlight, the description says All sessions and the buttons under it are
+  disabled (as are their keys) until you click a session, Enter or an arrow in the list
+  (which picks the session last selected, or the first). Highlighting an item never brings
+  the highlight back. The buttons under the description act on the selected session, and
+  only those that apply show, each with
   a tooltip saying what it does: its lifecycle (Rename on a running session, Relaunch
   (Unpark on a parked one) and Forget (Stop & Forget on a running one) on any, and Park on one
   that isn't parked), then its
   conversation (Mode, and Send on one that isn't dead). New (`N`), Adopt (`A`, a list of the sessions on disk you can adopt) and
   Relaunch all (`Shift+L`) act on no one session, so they're keys in the footer. Ctrl+S, Ctrl+T and the
-  hint under the answer box act on or describe the same session.
+  hint under the answer box act on or describe the same session (with none selected, the highlighted item's).
   An item opened full screen has Mode, Send and the rest in its bar, for its own session. New session (directory, optional name, optional ticket, opening brief,
   model and effort) opens Claude in a Windows Terminal tab.
   The model is Sonnet 5.5, Opus 5.5, Haiku 5.5 or Fable 5.1 (Sonnet 5.5 unless changed), and the effort
@@ -280,7 +285,7 @@ along with the launch command.
 
 Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision or dismiss a done task or subagent, `N` new session, `A` adopt, `Shift+L` relaunch all, `Esc` all sessions (or clears a text
+highlighted question or decision or dismiss a done task or subagent, `N` new session, `A` adopt, `Shift+L` relaunch all, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question

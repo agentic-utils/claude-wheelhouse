@@ -301,8 +301,7 @@ async def test_ctrl_t_switches_the_sessions_mode(store, sid, tmp_path):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        app.query_one("#items", DataTable).move_cursor(row=0)
-        await pilot.pause()
+        await pick(app, pilot, sid)
         mode_label = lambda: str(app.screen.query_one("#mode").label)
         assert mode_label() == "Mode: Queued"
         await pilot.press("ctrl+t")
@@ -347,6 +346,13 @@ async def refresh(pilot, sid: str) -> None:
     assert str(pilot.app.session_list.get_row(sid)[1]) == name, "the refresh ran"
 
 
+async def pick(app, pilot, sid: str) -> None:
+    """The session selected, as a click on it does: unfiltered none is, and its buttons, keys
+    and description wait for one (#16)."""
+    app.follow(sid)
+    await pilot.pause()
+
+
 @pytest.fixture
 def live(monkeypatch):
     """Every session running: Rename and Relaunch show only on a live one (#62)."""
@@ -364,7 +370,7 @@ async def test_send_bar_and_session_buttons_follow_the_queues(store, sid, tmp_pa
     store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         bar = lambda: {b.id: (str(b.label), b.disabled) for b in app.screen.query("SendBar Button") if b.display}
         assert bar() == {"send-all": ("Send all (0)", True)}, "the inbox's bar: only Send all (D20)"
         assert session_buttons(app) == {"mode": ("Mode: Queued", False), "send": ("Send (0)", True)}, \
@@ -404,7 +410,8 @@ async def test_one_current_session_for_the_buttons_and_keys(store, sid, tmp_path
                                                             acts):
     """D20, as revised in review 8: the session list's highlight is the current session, so
     the buttons under it, Ctrl+S and Ctrl+T, the hint and the activity line all act on or
-    describe the same one, however the person got there."""
+    describe the same one, however the person got there. Unfiltered (#16) none is
+    highlighted: the keys act on the highlighted item's session, the buttons on none."""
     from claude_wheelhouse import tutorial
     monkeypatch.setattr(tutorial, "tutorial_dir", lambda store: tmp_path / "tut")
     mine = store.post_item(sid, "question", "which db?")
@@ -419,17 +426,20 @@ async def test_one_current_session_for_the_buttons_and_keys(store, sid, tmp_path
         # by key: the inbox sorts newest first to the second, so either question may lead (review 9)
         app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{mine}"))
         await pilot.pause()
-        assert app.current_session() == sid, f"{desc}: demo's item highlighted, so demo is current"
+        assert app.bar_session(app.screen) == sid, f"{desc}: demo's item highlighted, so demo is in context"
         if nav == "list":
+            await pick(app, pilot, sid)
             app.session_list.move_cursor(row=app.session_list.get_row_index(target))
         else:
             app.items_table.move_cursor(row=app.items_table.get_row_index(f"{target}|{q}"))
         await pilot.pause()
-        assert app.current_session() == app.bar_session(app.screen) == target, desc
+        current = target if nav == "list" else None   # unfiltered, none is highlighted
+        assert (app.current_session(), app.bar_session(app.screen)) == (current, target), desc
         await (pilot.click(how) if how.startswith("#") else pilot.press(how))
         await pilot.pause()
     got = {i for i in (sid, target) if (store.pending(i) if acts == "send" else store.session(i)["send_mode"])}
-    assert got == {target}, f"{desc}: {how} acts on the current session"
+    want = set() if how.startswith("#") and nav != "list" else {target}   # the buttons disabled with none selected
+    assert got == want, f"{desc}: {how} acts on the session in context"
 
 
 @pytest.mark.anyio
@@ -500,9 +510,7 @@ async def test_the_session_description_box(store, sid, tmp_path, synopsis, brief
     store.db.execute("UPDATE sessions SET brief = ?", (brief,))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        app.query_one("#session-list", DataTable).move_cursor(row=0)
-        await pilot.pause()
+        await pick(app, pilot, sid)
         lines = app._info_text.splitlines()
         assert lines[:4] == ["demo", "dead · tab · queued", "#7", str(tmp_path)], f"{desc}: name, status, ticket, cwd"
         assert shown in app._info_text, desc
@@ -530,7 +538,7 @@ async def test_the_activity_has_its_own_rows(store, tmp_path, monkeypatch, runne
     store.set_activity(sid, activity)
     app = WheelhouseApp(store)
     async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         box, scroll = app.query_one("#session-info"), app.query_one("#session-info-scroll")
         line, text = app.query_one("#session-activity"), app.query_one("#session-info-text")
         assert (app._activity_text, bool(activity) and activity in app._info_text) == (after, False), desc
@@ -542,7 +550,7 @@ async def test_the_activity_has_its_own_rows(store, tmp_path, monkeypatch, runne
     store.set_activity(sid, "")
     app = WheelhouseApp(store)
     async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         scroll, text = app.query_one("#session-info-scroll"), app.query_one("#session-info-text")
         assert (scroll.region, scroll.virtual_size, text.region, scroll.vertical_scrollbar.display) == geometry, \
             f"{desc}: the same as with no activity"
@@ -553,7 +561,7 @@ async def test_end_names_the_queued_answers_it_discards(store, sid):
     store.queue(sid, "a", "Q1")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         await pilot.click("#end")
         await pilot.pause()
         assert "1 queued answer(s) will be discarded" in app.screen.prompt
@@ -575,9 +583,9 @@ async def test_a_session_on_older_code_cannot_queue(store, sid, monkeypatch, ver
     q = store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         assert app._info_text.splitlines()[1].split(" · tab")[0] == label, desc
-        app.query_one("#items", DataTable).move_cursor(row=0)
+        app.query_one("#items", DataTable).move_cursor(row=app.items_table.get_row_index(f"{sid}|{q}"))
         await pilot.pause()
         assert str(app.query_one("#mode", Button).label) == bar, desc
         app.query_one("#answer", TextArea).text = "SQLite"
@@ -620,7 +628,7 @@ async def test_ctrl_s_on_a_dead_session_says_restore_it_first(store, sid, monkey
     store.queue(sid, "a")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         assert app.current_session() == sid, f"{desc}: demo is current"
         notes = []
         monkeypatch.setattr(app, "notify", lambda text, **kw: notes.append(text))
@@ -682,7 +690,7 @@ async def test_the_hint_mentions_ctrl_s_only_where_it_sends(store, sid, monkeypa
     store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         base = app.screen.query_one(Hint).base
     assert base == hint("queue", status == "dead"), f"{desc}: {base}"
     assert ("Ctrl+S" in base) is ctrl_s, f"{desc}: {base}"
@@ -787,6 +795,101 @@ async def test_one_click_on_a_session_follows_it(store, sid, tmp_path, monkeypat
         assert follows == [other]
 
 
+async def session_step(app, pilot, how, ids) -> None:
+    """One move on the session list: "click A", "dclick A" (a double-click), "item B" (B's
+    question highlighted in the items), "esc", or a key with the list focused."""
+    what, _, name = how.partition(" ")
+    if what in ("click", "dclick"):
+        app._click_chain_last_time = None   # a click of its own, not the last one's second, however soon
+        raw_click(app, app.session_list, (3, 1 + app.session_list.get_row_index(ids[name])), 1 + (what == "dclick"))
+    elif what == "item":
+        key = next(r.key.value for r in app.items_table.ordered_rows
+                   if r.key.value.startswith(f"{ids[name]}|") and not r.key.value.endswith("|"))
+        app.items_table.move_cursor(row=app.items_table.get_row_index(key))
+    elif what == "esc":
+        app.items_table.focus()
+        await pilot.press("escape")
+    else:
+        app.session_list.focus()
+        await pilot.press(what)
+    for _ in range(4):
+        await pilot.pause()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("steps, current, desc", [
+    ([], None, "at the start none is selected"),
+    (["click A"], "A", "a click selects a session"),
+    (["click A", "click A"], None, "a click on the selected one unselects it"),
+    (["click A", "click A", "click A"], "A", "clicking the one just unselected selects it again"),
+    (["click A", "click B"], "B", "a click on another selects that"),
+    (["click A", "click A", "click B"], "B", "unselected, a click on another selects it"),
+    (["click A", "esc"], None, "Esc unselects, as the click does"),
+    (["click A", "esc", "click A"], "A", "after Esc, a click on the one it was on selects it"),
+    (["dclick B"], "B", "a double-click selects, its second click not unselecting"),
+    (["click A", "enter"], "A", "Enter on the selected one keeps it"),
+    (["item B"], None, "an item highlighted unfiltered brings no highlight back"),
+    (["click A", "esc", "item B", "item A"], None, "nor do items highlighted after Esc"),
+    (["click A", "esc", "down"], "A", "Down brings the highlight back on the one last followed"),
+    (["click B", "esc", "up"], "B", "Up does the same"),
+    (["down"], "A", "Down with none ever followed: the first"),
+    (["enter"], "A", "Enter with none selected picks as Down does"),
+])
+async def test_a_click_on_the_selected_session_unselects_it(store, sid, tmp_path, monkeypatch, steps, current, desc):
+    """Doug: click the selected session to unselect it, so the inbox shows every session's
+    items; with none selected no highlight, the session buttons and their keys disabled, and
+    the info box says All sessions (D20)."""
+    other = store.create_session(str(tmp_path), name="other")
+    ids = {"A": sid, "B": other}
+    by_name(monkeypatch, {"demo": "live", "other": "live"})
+    store.post_item(sid, "question", "A's")
+    store.post_item(other, "question", "B's")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        for _ in range(3):
+            await pilot.pause()
+        for how in steps:
+            await session_step(app, pilot, how, ids)
+        app.refresh_data()   # a refresh brings no highlight back either
+        await pilot.pause()
+        want = ids.get(current)
+        got = (app.filter_sid, app.session_list.show_cursor, app.current_session())
+        assert got == (want, want is not None, want), f"{desc}: (filter, highlight, current) {got}"
+        lifecycle = [(b.id, b.disabled) for b in app.session_buttons.query(Button) if b.display]
+        assert all(disabled for _, disabled in lifecycle) == (want is None) and lifecycle, f"{desc}: {lifecycle}"
+        assert app._info_text.startswith("All sessions" if want is None else "demo" if want == sid else "other"), \
+            f"{desc}: {app._info_text!r}"
+        shown = {r.key.value.split("|")[0] for r in app.items_table.ordered_rows}
+        assert shown == ({want} if want else {sid, other}), f"{desc}: the items"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key, desc", [
+    ("l", "L: Relaunch"),
+    ("p", "P: Park"),
+    ("delete", "Delete: Forget"),
+    ("backspace", "Backspace: Forget"),
+    ("r", "R: Rename"),
+])
+async def test_session_keys_do_nothing_with_none_selected(store, sid, tmp_path, monkeypatch, key, desc):
+    other = store.create_session(str(tmp_path), name="other")
+    by_name(monkeypatch, {"demo": "dead", "other": "dead"})
+    launched = []
+    monkeypatch.setattr(Hub, "open_session", lambda self, s, restore=False, **k: launched.append(s) or Done())
+    q = store.post_item(other, "question", "B's")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{other}|{q}"))   # an item's session in context
+        await pilot.pause()
+        app.session_list.focus()
+        await pilot.press(key)
+        await pilot.pause()
+        assert [type(s).__name__ for s in app.screen_stack] == ["Screen"], f"{desc}: no dialog"
+        assert [n.message for n in app._notifications] == [], f"{desc}: nothing said"
+        assert (launched, [bool(store.session(s)["parked"]) for s in (sid, other)]) == ([], [False, False]), desc
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("status, clicks, keys, stack, opened, desc", [
     ("dead", 1, (), ["Screen", "Confirm"], 0, "a click on a dead session offers to relaunch it"),
@@ -822,17 +925,22 @@ def assert_one_current(app, desc):
     or describes a session agrees on it: the buttons, Ctrl+S, Ctrl+T and the hint
     (bar_session), the modules (focus_sid), the selection and the answer box's target, whose
     session's mode Ctrl+Enter answers by, and the session info. Each may be None, where
-    nothing is in context (an empty inbox selects nothing), but never another session. And
-    what shows agrees: the items' cursor is on the selection, the hint and the permission
+    nothing is in context (an empty inbox selects nothing), but never another session.
+    Unfiltered none is selected (#16): no highlight and no current session, the session
+    buttons disabled, and the rest agree on the session in context, the selected item's.
+    And what shows agrees: the items' cursor is on the selection, the hint and the permission
     buttons are for the item in context, the conversation buttons for the current session."""
     current = app.current_session()
     thread = isinstance(app.screen, ThreadView)
+    assert (app.filter_sid, app.session_list.show_cursor) == (current, current is not None), \
+        f"{desc}: highlighted only while followed, the followed session"
     box_target = (app.screen.sid, app.screen.ref) if thread else app.box_target   # a thread's box answers it
     said = {"bar": app.bar_session(app.screen), "focus_sid": app.focus_sid(),
             "selected": app.selected and app.selected[0], "box_target": box_target and box_target[0]}
-    assert {k: v for k, v in said.items() if v not in (None, current)} == {}, f"{desc}: current {current}, {said}"
+    context = current or said["bar"]
+    assert {k: v for k, v in said.items() if v not in (None, context)} == {}, f"{desc}: in context {context}, {said}"
     assert box_target == app.selected, f"{desc}: the box answers what the pane shows"
-    info = app.display_name(app.row(current)) if current else "Select a session to see its description."
+    info = app.display_name(app.row(current)) if current else "All sessions"
     assert app._info_text.split("\n")[0] == info, f"{desc}: the session info"
     table = app.items_table
     if app.selected:
@@ -879,6 +987,9 @@ async def park_live(app, pilot, sid):
 
 async def step(app, pilot, how, sid, other):
     """One thing the person (or, for ended elsewhere and refresh, the world) does."""
+    if how in ("park", "unpark", "end") and app.filter_sid is None:   # its buttons need it selected (#16)
+        app.follow(sid)
+        await pilot.pause()
     if how == "park":
         await park_live(app, pilot, sid)
     elif how in ("unpark", "end"):
@@ -932,10 +1043,11 @@ async def step(app, pilot, how, sid, other):
         app.screen.focus_next()   # off its box, so Esc closes it
     elif how == "back":
         await pilot.press("escape")
-    elif how == "burst":   # typed for A's item, then at once: Down, Ctrl+Enter, Ctrl+S
+    elif how == "burst":   # typed for A's item, then at once: Down (twice: unfiltered, the first
+        # picks A), Ctrl+Enter, Ctrl+S
         app.answer.text = "burst"
         app.session_list.focus()
-        await pilot.press("down", "ctrl+j", "ctrl+s")
+        await pilot.press("down", "down", "ctrl+j", "ctrl+s")
     await pilot.pause()
 
 
@@ -945,20 +1057,20 @@ async def step(app, pilot, how, sid, other):
 @pytest.mark.parametrize("steps, unfiltered_current, filtered_current, desc", [
     (["park", "unpark"], "A", "A", "Park follows the session (review 10): it stays current, Unpark one press away"),
     (["park", "up"], "B", "B", "then arrowing onto the other session follows it (review 10, bug 2)"),
-    (["delete"], "B", "A", "closing A's only item: unfiltered, the next item's session is current, list and all"),
-    (["end"], "B", "B", "End"),
-    (["ended elsewhere"], "B", "B", "the current session ending elsewhere"),
-    (["down"], "B", "B", "an arrow in the session list"),
+    (["delete"], None, "A", "closing A's only item: unfiltered, still none selected"),
+    (["end"], None, None, "End: the filter goes with it, none selected"),
+    (["ended elsewhere"], None, None, "the current session ending elsewhere"),
+    (["down"], "A", "B", "an arrow in the session list: unfiltered, it picks the first (#16)"),
     (["click"], "B", "B", "a click in the session list"),
     (["esc"], None, None, "Esc: whichever item is then highlighted"),
-    (["refresh"], "A", "A", "a refresh bringing a new item"),
+    (["refresh"], None, "A", "a refresh bringing a new item"),
     (["permission", "park"], "A", "A", "Park with A's permission item highlighted (review 11, bug 1)"),
     (["park", "permission", "unpark"], "A", "A", "Unpark with A's permission item highlighted"),
     (["permission", "enter"], "A", "A", "Enter on A's row with its permission item highlighted"),
     (["question", "enter"], "A", "A", "Enter on A's row with its question highlighted"),
-    (["mark delete"], "A", "A", "closing A's and B's questions together"),
-    (["thread", "back"], "A", "A", "a thread open, then Esc"),
-    (["permission", "thread", "back"], "A", "A", "a permission item's thread open, then Esc"),
+    (["mark delete"], None, "A", "closing A's and B's questions together"),
+    (["thread", "back"], None, "A", "a thread open, then Esc"),
+    (["permission", "thread", "back"], None, "A", "a permission item's thread open, then Esc"),
     (["burst"], "B", "B", "Down, Ctrl+Enter and Ctrl+S at once: all on B (review 11, P1)"),
 ])
 async def test_one_current_session_whatever_happens(store, sid, tmp_path, monkeypatch, steps, unfiltered_current,
@@ -993,7 +1105,7 @@ async def test_one_current_session_whatever_happens(store, sid, tmp_path, monkey
         for how in steps:
             await step(app, pilot, how, sid, other)
             assert_one_current(app, f"{desc}: after {how}")
-        assert expect is None or app.current_session() == expect, desc
+        assert app.current_session() == expect, desc
         if steps[-1] == "unpark":
             assert not store.session(sid)["parked"] and app.filter_sid == sid, desc
         if steps == ["burst"]:   # the text stays with A's item, unsent; B's queue went, not A's
@@ -1042,7 +1154,9 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
     """Q35, review 12: Down then at once an action key (or Allow) acts on where the cursor
     went, never on the row it left, from either list, following a session or not: every
     action settles the lists' cursors first. With "typed" in the box for A's permission,
-    Down moves the box off it, so Ctrl+Enter has nothing to send and nothing is denied."""
+    Down moves the box off it, so Ctrl+Enter has nothing to send and nothing is denied.
+    Unfiltered (#16), Down in the session list picks the first session, A, and in the items
+    there is no current session: the keys act on the item's."""
     store.set_mode(sid, "queued")
     other = store.create_session(str(tmp_path), name="other")
     store.set_mode(other, "queued")
@@ -1078,21 +1192,27 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
         for _ in range(3):
             await pilot.pause()
         desc = f"Down, {burst} from the {where} list, {'following A' if filtered else 'unfiltered'}"
-        if (where, burst) == ("sessions", ("delete",)):   # Forget on B, whose answers are queued: confirmed first
-            assert isinstance(app.screen, Confirm) and f"({other[:6]}," in app.screen.prompt \
-                and "2 queued answer(s) will be discarded" in app.screen.prompt, desc
+        # the session acted on: following A, Down goes to B; unfiltered, the list's Down picks A
+        ctx = sid if (where, filtered) in (("items", True), ("sessions", False)) else other
+        if (where, burst) == ("sessions", ("delete",)):   # Forget on it, its answers queued: confirmed first
+            queued = 2 if ctx == other else 1
+            assert isinstance(app.screen, Confirm) and f"({ctx[:6]}," in app.screen.prompt \
+                and f"{queued} queued answer(s) will be discarded" in app.screen.prompt, desc
             await pilot.press("n")
             await pilot.pause()
-        current, target = (sid, (sid, mine)) if (where, filtered) == ("items", True) else \
-            (other, (other, theirs) if where == "items" else (other, None))
+        target = (sid, mine) if (where, filtered) == ("items", True) else \
+            (ctx, theirs) if where == "items" else (ctx, None)
+        current = None if (where, filtered) == ("items", False) else ctx
         if burst != ("delete",):   # which closes the item, the highlight going to another
             assert (app.current_session(), app.selected) == (current, target), desc
         assert_one_current(app, desc)
         after = burst_state(store, (sid, other))
         changed = {k for k in after if after[k] != before[k]}
-        assert changed <= {(current, "mode"), (current, "sent"), (current, "drafts"), target}, \
+        assert changed <= {(ctx, "mode"), (ctx, "sent"), (ctx, "drafts"), target}, \
             f"{desc}: only the cursor's session and item, got {changed}"
-        assert bool(changed) == (hits and (where, burst) != ("sessions", ("delete",))), \
+        # Ctrl+R on A's conversation: A has no general message queued to take back
+        acted = hits and (where, burst) != ("sessions", ("delete",)) and (burst, target) != (("ctrl+r",), (sid, None))
+        assert bool(changed) == acted, \
             f"{desc}: {'acted' if hits else 'nothing to act on'}, got {changed}"
         assert after[(sid, perm)] == "open" and not store._all("SELECT 1 FROM messages WHERE body = 'typed'"), \
             f"{desc}: A's permission untouched, the typed text unsent"
@@ -1114,6 +1234,8 @@ async def test_a_raw_burst_opens_what_the_cursor_is_on(store, sid, tmp_path, whe
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
+        if where == "sessions":   # A selected: unfiltered, Down would pick the first, A (#16)
+            await pick(app, pilot, sid)
         app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{mine}"))
         await pilot.pause()
         (app.items_table if where == "items" else app.session_list).focus()
@@ -1128,7 +1250,7 @@ async def test_a_raw_burst_opens_what_the_cursor_is_on(store, sid, tmp_path, whe
             await pilot.press("n")
             await pilot.pause()
             assert_one_current(app, desc)
-        assert app.current_session() == other, desc
+        assert app.current_session() == (other if where == "sessions" else None), desc   # unfiltered: none (#16)
 
 
 @pytest.mark.anyio
@@ -1505,7 +1627,9 @@ async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch,
         b = Burst(app, store, sids, refs)
         table = app.items_table
         assert [b.keys[k] for k in table.keys()] == ["qa", "qb", "pa"], desc
-        table.move_cursor(row=["qa", "qb", "pa"].index(at))
+        if burst[0] in ("r", "p", "delete", "i", "c", "h"):   # a session's keys: alpha selected first (#16)
+            await pick(app, pilot, sids["alpha"])
+        table.move_cursor(row=table.get_row_index(next(k for k, name in b.keys.items() if name == at)))
         await pilot.pause()
         app.query_one("#answer" if focus == "lines" else f"#{focus}").focus()
         await pilot.pause()
@@ -1581,8 +1705,8 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
             await pilot.pause()
             app.follow(alpha)
             app.items_table.move_cursor(row=app.items_table.keys().index(f"{alpha}|{qa if at == 'qa' else ''}"))
-        else:
-            app.session_list.move_cursor(row=app.session_list.get_row_index(alpha if at == "alpha" else gone))
+        else:   # selected, as a click: with none, the list's keys do nothing (#16)
+            app.follow(alpha if at == "alpha" else gone)
         await pilot.pause()
         app.query_one(f"#{focus}").focus()
         await pilot.pause()
@@ -2161,6 +2285,7 @@ async def test_ctrl_a_copies_all_of_a_long_conversation(store, sid, tmp_path, mo
 
 
 async def relaunch_button(pilot):
+    await pick(pilot.app, pilot, pilot.app.sessions[0]["id"])   # its buttons need it selected (#16)
     await pilot.click("#relaunch")
 
 
@@ -3514,8 +3639,7 @@ async def test_a_cursor_move_draws_only_the_rows_it_leaves_and_lands_on(store, s
         t = app.session_list
         assert any(t.blank(row) for row in range(t.row_count))
         t.focus()
-        t.move_cursor(row=0)
-        await pilot.pause()
+        await pick(app, pilot, t.ordered_rows[0].key.value)   # the cursor shown, on the first row
         lines = range(t.size.height)
         for y in lines:
             t.render_line(y)
@@ -3682,7 +3806,7 @@ async def test_host_buttons(store, tmp_path, monkeypatch, runner_, live, shown, 
     store.set_activity(sid, "running Bash: make test")
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         assert ({"interrupt", "compact", "shell"} <= shown_buttons(app)) == shown, desc
         activity = str(app.screen.query_one("#activity", Label).content)
         assert (activity == "running Bash: make test") == shown, desc
@@ -3845,7 +3969,7 @@ async def test_browse_fills_in_the_working_directory(store, tmp_path):
 async def test_rename_a_session(store, sid, live, typed, keys, expected, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         await pilot.click("#rename")
         await pilot.pause()
         box = app.screen.query_one("#new-name", Input)
@@ -3864,7 +3988,7 @@ async def test_rename_a_session(store, sid, live, typed, keys, expected, desc):
 async def test_enter_in_rename_renames_only_to_a_new_name(store, sid, live, typed, said, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         await pilot.click("#rename")
         await pilot.pause()
         if typed:
@@ -3883,7 +4007,7 @@ async def test_enter_in_rename_renames_only_to_a_new_name(store, sid, live, type
 async def test_renaming_a_session_that_has_gone_says_so(store, sid, live, monkeypatch, ends, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         if ends == "before the button":   # pressed before the app's next tick hides the button
             store.end(sid)
             monkeypatch.setattr(app, "current_session", lambda: sid)   # the row still showing it
@@ -4142,7 +4266,7 @@ async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, half,
     app = WheelhouseApp(store)
     desc = f"{desc}, at {size[0]} columns"
     async with app.run_test(size=size) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         buttons = [b for b in app.query("#sessions-pane Grid Button") if b.display]
         assert [b.id for b in buttons] == shown, desc
         strips = app.screen._compositor.render_strips()
@@ -4442,9 +4566,7 @@ async def test_the_cursor_stays_on_a_session_that_moves(store, sid, tmp_path, mo
         store.set_parked(ids[name], True)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        app.session_list.move_cursor(row=app.session_list.get_row_index(ids[start]))
-        await pilot.pause()
+        await pick(app, pilot, ids[start])
         if parked:
             monkeypatch.setattr(launch, "restore_session", lambda *a, **kw: None)
             await pilot.click("#relaunch")   # Unpark
@@ -4491,7 +4613,7 @@ async def test_the_session_lists_keys_press_its_buttons(store, sid, monkeypatch,
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live" if live else "dead")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         pressed = presses(app)
         app.session_list.focus()
         await pilot.press(key)
@@ -4512,8 +4634,8 @@ async def test_selecting_a_dead_session_offers_a_relaunch_unless_parked(store, s
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.click("#session-list", offset=(4, 1))
-        await pilot.press("enter")
+        app.session_list.focus()
+        await pilot.press("enter")   # none selected: Enter picks the first, its only session (#16)
         await pilot.pause()
         assert isinstance(app.screen, Confirm) == prompted, desc
         assert app.viewing == sid, f"{desc}: it follows the session either way"
@@ -4782,6 +4904,10 @@ async def test_the_button_keys(store, keyed, key, button, where, pressed):
     async with app.run_test(size=(180, 40)) as pilot:
         await pilot.pause()
         assert app.selected == (sid, ref), desc
+        await pick(app, pilot, sid)   # selected, for its buttons (#16), then its permission again
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{ref}"))
+        await pilot.pause()
+        assert app.selected == (sid, ref), desc
         if where == "thread":
             app.push_screen(ThreadView(sid, ref))
             await pilot.pause()
@@ -4819,6 +4945,8 @@ async def test_a_button_key_that_does_not_apply_says_so(store, tmp_path, monkeyp
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
         await pilot.pause()
+        if key in ("r", "m"):   # a session's own keys: it selected first, as with none they do nothing (#16)
+            await pick(app, pilot, sid)
         (app.session_list if key == "r" else app.items_table).focus()
         await pilot.pause()
         got, notes = presses(app), []
@@ -5228,7 +5356,7 @@ async def test_relaunch_offers_to_compact_a_big_session_first(store, sid, monkey
                         lambda self, sid, host, may_tab=True: calls.append(("compact", host)) or hub_mod.Done())
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
+        await pick(app, pilot, sid)
         app.session_list.focus()
         main = type(app.screen).__name__
         await pilot.press("l")
