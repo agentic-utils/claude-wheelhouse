@@ -4368,6 +4368,37 @@ async def test_a_lost_release_ends_the_drag(store, sid):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("status,desc", [
+    ("live", "Live: green"),
+    ("dead", "Available: red, not the table's green"),
+    ("stalled", "Stalled: yellow"),
+    ("starting", "Starting: cyan"),
+    ("relaunching", "Relaunching: cyan"),
+    ("forgetting", "Forgetting: magenta"),
+    ("parking", "Parking: magenta"),
+])
+async def test_a_hovered_sessions_dot_keeps_its_status_colour(store, sid, tmp_path, monkeypatch, status, desc):
+    """#16: the mouse over a session's row (not the cursor's) shades it, and its dot keeps its
+    status's colour: the hover style's foreground, the table's green, was laid over it."""
+    other = store.create_session(str(tmp_path), name="other")
+    monkeypatch.setattr(WheelhouseApp, "shown_status", lambda self, s: status if s == other else "live")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        t = app.query_one("#session-list", DataTable)
+        row = t.get_row_index(other)
+        t.move_cursor(row=t.get_row_index(sid))
+        y = t.header_height + row
+        await pilot.hover(t, offset=(20, y))
+        await pilot.pause()
+        assert t.hover_coordinate.row == row, f"{desc}: the mouse is on the row"
+        dot = next(s.style for s in t._render_line(y, 0, t.size.width, t.rich_style) if "●" in s.text)
+        hover = t.get_component_rich_style("datatable--hover")
+        assert (dot.color.name, dot.bgcolor) == (tui.STATUS_STYLE[status].split()[-1], hover.bgcolor), \
+            f"{desc}: its own colour, on the hover's shade"
+
+
+@pytest.mark.anyio
 async def test_parked_sessions_stay_in_the_list_after_the_rest(store, sid, tmp_path):
     """#58: with the Sessions tab gone, the list is the only way to a parked session (Unpark,
     Restore, End): it stays, dimmed, at the foot."""
