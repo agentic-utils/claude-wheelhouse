@@ -43,6 +43,9 @@ from textual.widgets import (
     Footer,
     Input,
     Label,
+    RadioButton,
+    RadioSet,
+    SelectionList,
     OptionList,
     Select,
     Static,
@@ -651,6 +654,7 @@ class SessionList(SinkList):
     BINDINGS = [Binding("r", "app.press('rename')", "Rename", show=False),
                 Binding("l", "app.press('relaunch')", "Relaunch", show=False),
                 Binding("p", "app.press('park')", "Park", show=False),
+                Binding("k", "app.press('fork')", "Fork", show=False),
                 Binding("delete", "app.press('end')", "Forget", show=False),
                 Binding("backspace", "app.press('end')", "Forget", show=False)]
 
@@ -902,7 +906,8 @@ class Compose(TextArea):
 
 # the current session's lifecycle buttons, (caption, id), under the session list: each
 # shown only where it applies (#62), and with none selected all but Model shown disabled (D20)
-LIFECYCLE = (("Rename", "rename"), ("Relaunch", "relaunch"), ("Park", "park"), ("Forget", "end"), ("Model", "model"))
+LIFECYCLE = (("Rename", "rename"), ("Relaunch", "relaunch"), ("Park", "park"), ("Forget", "end"), ("Model", "model"),
+             ("Fork", "fork"))
 # a session's conversation buttons, (caption, id, variant): under those, for the current
 # session, highlighted there (D20; none while unfiltered); in a full-screen item's bar, for its session
 CONVERSATION = (("Mode", "mode", "default"), ("Send", "send", "primary"), ("Interrupt", "interrupt", "error"),
@@ -1387,6 +1392,66 @@ class AdoptSession(Dialog):
 
 
 
+class ForkSession(Dialog):
+    """Fork a session (Hub.fork): which of its items move to the fork, all unticked, and
+    where its directory is in a linked git worktree, whether the fork works in a new one on a
+    new branch (the default; uncommitted changes, if any, stay behind, and it says so) or the
+    same one. Answers {"refs", "branch"}, branch None for the same directory."""
+    BINDINGS = [Binding("escape", "answer", show=False)]
+
+    def __init__(self, plan):
+        super().__init__()
+        self.plan = plan
+
+    def compose(self) -> ComposeResult:
+        plan = self.plan
+        with Vertical(id="dialog", classes="wide"):
+            yield Label(f"FORK AS {plan.name}", classes="dialog-title")
+            yield Label("A new session carrying on from this conversation so far; this one carries on too.",
+                        classes="dialog-prompt")
+            if plan.items:
+                yield Label("Tick the items that move to it (they stop being this session's):", classes="dialog-prompt")
+                yield SelectionList(*[(f"{ref} [{status}] {title}", ref) for ref, _, status, title in plan.items],
+                                    id="fork-items")
+            else:
+                yield Label("No open question or todo or blocked task to move.", classes="dialog-prompt")
+            if plan.tree.linked:
+                with RadioSet(id="fork-where"):
+                    yield RadioButton("A new worktree, on a new branch from this one's last commit:", value=True,
+                                      id="fork-new")
+                    yield RadioButton(f"This worktree, {plan.cwd}", id="fork-same")
+                yield Input(value=plan.branch, placeholder="new branch", id="fork-branch")
+                if plan.tree.dirty:
+                    yield Label("This worktree has uncommitted changes: a fork in a new worktree won't see them.",
+                                classes="dialog-prompt", id="fork-warning")
+            with Horizontal(classes="buttons"):
+                yield Button("Fork", variant="success", id="fork-go")
+                yield Button("Cancel", id="cancel")
+
+    @on(RadioSet.Changed, "#fork-where")
+    def where_changed(self, event: RadioSet.Changed) -> None:
+        new = event.pressed.id == "fork-new"
+        self.query_one("#fork-branch", Input).disabled = not new
+        for warning in self.query("#fork-warning"):
+            warning.display = new
+
+    @on(Input.Submitted, "#fork-branch")
+    @on(Button.Pressed, "#fork-go")
+    def go(self) -> None:
+        refs = list(self.query_one("#fork-items", SelectionList).selected) if self.plan.items else []
+        branch = None
+        if self.plan.tree.linked and self.query_one("#fork-new", RadioButton).value:
+            branch = self.query_one("#fork-branch", Input).value.strip()
+            if not branch:
+                self.notify("name the new branch, or choose this worktree", severity="error")
+                return
+        self.action_answer({"refs": refs, "branch": branch})
+
+    @on(Button.Pressed, "#cancel")
+    def cancel(self) -> None:
+        self.action_answer(None)
+
+
 class Confirm(Dialog):
     BINDINGS = [Binding("y", "answer(True)", show=False), Binding("n", "answer(False)", show=False),
                 Binding("escape", "answer(False)", show=False)]
@@ -1508,6 +1573,7 @@ DESCRIBE = {
     "app.press('relaunch')": "Relaunch it, or Unpark a parked one",
     "app.press('park')": "Park it, or Unpark a parked one",
     "app.press('end')": "Forget it (Stop & Forget while it's running)",
+    "app.press('fork')": "Fork it: a new session carrying on from its conversation",
     "press('interrupt')": "Interrupt the session's current turn",
     "press('compact')": "Compact the session",
     "press('shell')": "Shell: open the session in a Claude Code tab",
@@ -1544,6 +1610,9 @@ BUTTONS = {
     "relaunch": ("Relaunch / Unpark (L in the session list): start the session again where it left off, stopping it "
                  "first if it's running (asked only if it's mid-turn); on a parked one, Unpark (P too)"),
     "rename": "Rename (R in the session list): the session's name in the wheelhouse",
+    "fork": ("Fork (K in the session list): a new session, \"<name> (fork)\", carrying on from this one's "
+             "conversation so far, which carries on too. Ticked items move to it; in a linked git worktree, it "
+             "works in a new one on a new branch from the last commit (uncommitted changes stay behind), or this one"),
     "park": ("Park (P in the session list): a running session writes its handoff notes into its items, then stops; "
              "it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark"),
     "end": ("Stop & Forget, or Forget (Delete or Backspace in the session list): a running session does its own end "
@@ -1604,8 +1673,8 @@ SDK_WHOSE = (", Model on one run in the wheelhouse; then Mode, Send on one that 
 HOSTED_WHOSE = ("; then Mode, Send on one that isn't dead, and on one run in the wheelhouse Interrupt, Compact "
                 "and Shell.")   # SDK mode off, with a host's session in context (SDK_WHOSE without Model or the slider)
 WHOSE = ("The buttons under the session list act on the session highlighted there, and only those that "
-         "apply show: Rename on a running one, Relaunch (Unpark on a parked one) and Forget (Stop & Forget "
-         "on a running one) on any, and Park on one that isn't parked{sdk} Hover over one for what it does, and its "
+         "apply show: Rename on a running one, Relaunch (Unpark on a parked one), Forget (Stop & Forget "
+         "on a running one) and Fork on any, and Park on one that isn't parked{sdk} Hover over one for what it does, and its "
          "key is in brackets below. New, Adopt and Relaunch all are keys in the footer. An item "
          "opened full screen has Mode, Send and the rest in its bar, for its own session. Ctrl+S and Ctrl+T "
          "act on the same session: highlighting an item highlights its session there.")
@@ -1693,7 +1762,7 @@ class WheelhouseApp(App):
     .answer-hint {{ color: #777777; height: 1; }}
     #thread-scroll {{ height: 1fr; }}
     #session-list {{ height: 1fr; min-height: 5; }}   /* on a short terminal the description gives way first */
-    #session-info {{ height: 50%; min-height: 5; background: #000000; padding: 0 1; }}
+    #session-info {{ height: 50%; min-height: 3; background: #000000; padding: 0 1; }}
     #session-info-text {{ color: #e8e8e8; }}
     #session-info-scroll {{ height: 1fr; }}
     /* the activity's own two rows under the description, always there and never taller, so
@@ -1722,7 +1791,10 @@ class WheelhouseApp(App):
     #dialog.wide {{ width: 120; }}
     #adopt-list {{ height: 16; }}
     #adopt-hint {{ color: #ffd300; }}
-    NewSession, PickDirectory, Confirm, Choice, AdoptSession, KeysHelp, ChooseModel {{ align: center middle; }}
+    #fork-items {{ height: auto; max-height: 12; background: #000000; }}
+    #fork-where {{ background: #000000; }}
+    #fork-warning {{ color: #ffd300; }}
+    NewSession, PickDirectory, Confirm, Choice, AdoptSession, ForkSession, KeysHelp, ChooseModel {{ align: center middle; }}
     #model-row {{ height: auto; }}
     #model-row Select {{ width: 1fr; }}
     #models {{ height: auto; max-height: 8; background: #000000; }}
@@ -2523,8 +2595,8 @@ class WheelhouseApp(App):
         """A session's lifecycle buttons (LIFECYCLE), as show_button takes them, each shown
         only where it applies (#62, D26), captioned for its state (hub.VERBS): Rename on a
         running (Active) session; Relaunch on any, captioned Unpark on a Parked one; Park on
-        any that isn't Parked; Forget on any, captioned Stop & Forget on an Active one; and
-        Model on one running in a wheelhouse host (Q52: never a tab's) while SDK mode is on:
+        any that isn't Parked; Forget on any, captioned Stop & Forget on an Active one; Fork
+        on any; and Model on one running in a wheelhouse host (Q52: never a tab's) while SDK mode is on:
         out of it, a host's session runs on as it was set (features.py)."""
         if s is None:   # none selected: shown, disabled, but Model, which few sessions have
             return [(id_, caption, True, id_ != "model") for caption, id_ in LIFECYCLE]
@@ -2535,7 +2607,8 @@ class WheelhouseApp(App):
                 ("relaunch", caption["relaunch"], False, True),
                 ("park", "Park", False, state != "parked"),
                 ("end", caption["end"], False, True),
-                ("model", "Model", False, hosted and self.client.sdk)]
+                ("model", "Model", False, hosted and self.client.sdk),
+                ("fork", "Fork", False, True)]
 
     def state(self, s) -> str:
         """A session's state (hub.VERBS): active, available or parked."""
@@ -3403,6 +3476,27 @@ class WheelhouseApp(App):
     @session_action
     def rename(self, sid: str, name: str | None) -> None:
         if self.told(self.client.rename(sid, name)).ok:   # not if cancelled, or unchanged
+            self.refresh_data()
+
+    @on(Button.Pressed, "#fork")
+    @session_action
+    def fork_pressed(self) -> None:
+        """Fork: the dialog (ForkSession), then the fork, which the list follows."""
+        self.settle()
+        sid = self.current_session()
+        if not sid:
+            return
+        try:
+            plan = self.client.fork_plan(sid)
+        except (OSError, RuntimeError, ValueError) as e:   # the daemon unreachable or refusing
+            self.notify(f"can't fork: {e}", severity="error")
+            return
+        self.push_screen(ForkSession(plan), lambda form: form and self.fork(sid, form))
+
+    @session_action
+    def fork(self, sid: str, form: dict) -> None:
+        done = self.told(self.client.fork(sid, form["refs"], form["branch"]))
+        if done.ok:
             self.refresh_data()
 
     @on(Button.Pressed, "#end")

@@ -202,7 +202,7 @@ session.
   the highlight back. The buttons under the description act on the selected session, and
   only those that apply show, each with
   a tooltip saying what it does: its lifecycle (Rename on a running session, Relaunch
-  (Unpark on a parked one) and Forget (Stop & Forget on a running one) on any, and Park on one
+  (Unpark on a parked one), Forget (Stop & Forget on a running one) and Fork on any, and Park on one
   that isn't parked), then its
   conversation (Mode, and Send on one that isn't dead). New (`N`), Adopt (`A`, a list of the sessions on disk you can adopt) and
   Relaunch all (`Shift+L`) act on no one session, so they're keys in the footer. Ctrl+S, Ctrl+T and the
@@ -230,7 +230,15 @@ session.
   it parks at once. On a Parked session, Relaunch is captioned Unpark, and `P` and `L` both
   press it. Forget deletes a session's wheelhouse data: on a running one, Stop & Forget asks it
   to do its own end steps first, then it stops (it asks you first only if answers are queued for
-  it, which go with it); on one not running it asks you to confirm. A
+  it, which go with it); on one not running it asks you to confirm. Fork (`K` in the session list)
+  makes a new session, "<name> (fork)", that carries on from a copy of the session's conversation
+  so far, run as the session is, on its model and effort; the session itself carries on too. The
+  dialog lists the session's open questions and its todo and blocked tasks, unticked: the ticked
+  ones move to the fork (the session is told they're no longer its own, and keeps a closed
+  stand-in for each). In a linked git worktree it offers a new worktree for the fork (the
+  default), at `<main checkout>/.worktrees/<branch>`, on a new branch from the session's last
+  commit (`<branch>-fork` unless changed), or this one. Uncommitted changes stay where they are:
+  the dialog warns when there are any, and the fork is told it won't see them. A
   pending Park or Stop & Forget is pressed again to choose: `C` cancels the request, `F` forces
   it (the session is stopped at once, without its steps), `Esc` leaves it be. In the session's
   tab, `/wheelhouse park` and `/wheelhouse end` do the same from there. A tab closes once its
@@ -274,7 +282,7 @@ how to work.
   posts and reads through. Each tool's description is its docstring.
 - [The monitor](claude_wheelhouse/monitor.py) ([plugin entry](claude_wheelhouse/plugin/monitors/monitors.json))
   delivers your answers, the Park and Stop & Forget requests, the note an adopted session gets
-  on joining, and the keepalive and check messages, as `[wheelhouse]` notifications.
+  on joining, the notes a fork and its parent get ([`fork.py`](claude_wheelhouse/fork.py)), and the keepalive and check messages, as `[wheelhouse]` notifications.
 - [The plugin's hook](claude_wheelhouse/plugin/hooks/hooks.json): after a compaction,
   the session's open tasks and questions.
 
@@ -285,7 +293,7 @@ along with the launch command.
 
 Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision or dismiss a done task or subagent, `N` new session, `A` adopt, `Shift+L` relaunch all, `Esc` all sessions, unselecting the session (or clears a text
+highlighted question or decision or dismiss a done task or subagent, `N` new session, `A` adopt, `Shift+L` relaunch all, `K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question

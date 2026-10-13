@@ -1,6 +1,9 @@
 import functools
 import itertools
+import json
+import subprocess
 import time
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -361,3 +364,39 @@ def no_group_kill(monkeypatch):
     monkeypatch.setattr(liveness, "getpgid", lambda pid: -pid)
     monkeypatch.setattr(liveness, "killpg", lambda group, sig: killed.append((group, sig)))
     return killed
+
+
+@pytest.fixture
+def claude_home(tmp_path, monkeypatch):
+    """Claude Code's config directory in the test's own (CLAUDE_CONFIG_DIR, which the Agent
+    SDK's fork_session reads), and a way to write a session's transcript there: say(sid, cwd)."""
+    home = tmp_path / "claude-home"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    from claude_agent_sdk import project_key_for_directory
+
+    def say(sid: str, cwd: str, text: str = "hello") -> Path:
+        path = home / "projects" / project_key_for_directory(cwd) / f"{sid}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"type": "user", "uuid": str(uuid.uuid4()), "parentUuid": None, "sessionId": sid,
+                                    "cwd": cwd, "timestamp": "2026-01-01T00:00:00Z",
+                                    "message": {"role": "user", "content": text}}) + "\n")
+        return path
+    say.projects = home / "projects"
+    return say
+
+
+def git(cwd, *args) -> str:
+    return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True).stdout.strip()
+
+
+@pytest.fixture
+def worktree(tmp_path):
+    """A real git repository, main, with one commit, and a linked worktree of it on branch
+    feat/x at main/.worktrees/feat-x: (main, the worktree)."""
+    main = tmp_path / "repo"
+    main.mkdir()
+    git(main, "init", "-q", "-b", "main")
+    git(main, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "first")
+    linked = main / ".worktrees" / "feat-x"
+    git(main, "worktree", "add", "-q", "-b", "feat/x", str(linked))
+    return main, linked

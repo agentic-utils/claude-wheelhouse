@@ -49,6 +49,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   description to Claude, so it is user-facing text.
 - `monitor.py` and `plugin/`: the tab session's plugin monitor and `/wheelhouse` skill.
 - `adopt.py`: adopting a session the wheelhouse didn't launch.
+- `fork.py`: forking a session (`Hub.fork`): its transcript copied by the Agent SDK's
+  `fork_session`, a new worktree when the parent's in a linked one, and what the fork and
+  its parent are told.
 - `liveness.py`: whether a session is alive, by its Claude process, never the heartbeat;
   and stopping one (`stop`: SIGTERM, guarded by pid, start time and boot id, then SIGKILL to
   its process group after `KILL_AFTER`). Tests never signal a real process: stub `os.kill`

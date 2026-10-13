@@ -25,6 +25,7 @@ can't send a command without it. It must never become optional."""
 
 import asyncio
 import contextlib
+import dataclasses
 import errno
 import fcntl
 import functools
@@ -376,6 +377,8 @@ class Daemon:
             Route("/sessions", self.query(self.sessions, run=None)),
             Route("/sessions", self.command(self.new_session), methods=["POST"]),
             Route("/sessions/{sid}/conversation", self.query(self.conversation)),
+            Route("/sessions/{sid}/fork", self.query(
+                lambda request: dataclasses.asdict(self.hub.fork_plan(request.path_params["sid"])))),
             Route("/sessions/{sid}/{action}", self.command(self.session_command), methods=["POST"]),
             Route("/dispatch", self.command(lambda request, body: self.hub.send_all()), methods=["POST"]),
             Route("/items", self.query(self.items)),
@@ -911,6 +914,14 @@ class Daemon:
             return hub.submit((sid, text(body, "ref", False)), text(body, "text"))
         if action == "rename":
             return hub.rename(sid, text(body, "name"))
+        if action == "fork":
+            refs, branch = body.get("refs", []), body.get("branch")
+            if not (isinstance(refs, list) and all(isinstance(r, str) for r in refs)):
+                raise Refused(400, "refs must be a list of item refs")
+            if branch is not None and not isinstance(branch, str):
+                raise Refused(400, "branch must be a branch name or null")
+            self.remote_needs_sdk(request)
+            return hub.fork(sid, refs, branch or None, this_machine(request))
         if action == "model":
             return hub.set_model(sid, models.check_model(text(body, "model")))
         if action == "effort":

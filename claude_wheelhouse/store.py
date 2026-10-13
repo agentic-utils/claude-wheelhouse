@@ -702,6 +702,35 @@ class Store:
         )
         return ref
 
+    def move_items(self, sid: str, to: str, refs: list[str], note: str) -> list[tuple[str, str]]:
+        """Items handed to another session (a fork, fork.py), in one transaction: each row
+        re-owned with its thread, under the next ref of its kind there, and its old ref kept
+        here by a finished stand-in (a task dropped and dismissed, a question closed) whose
+        body is note ({ref} in it, the new ref), as refs are numbered by count (_insert_item), in older code too. The
+        refs as (old, new), in the order given."""
+        moved = []
+        with self.tx() as db:
+            self._require(db, sid)
+            self._require(db, to)
+            for ref in refs:
+                item = db.execute("SELECT * FROM items WHERE session_id = ? AND ref = ?", (sid, ref)).fetchone()
+                if item is None:
+                    raise KeyError(f"{ref} isn't one of the session's items")
+                n = db.execute("SELECT count(*) FROM items WHERE session_id = ? AND kind = ?",
+                               (to, item["kind"])).fetchone()[0]
+                new = f"{KINDS[item['kind']]}{n + 1}"
+                db.execute("UPDATE items SET session_id = ?, ref = ?, updated_at = ? WHERE id = ?",
+                           (to, new, now(), item["id"]))
+                db.execute("UPDATE messages SET session_id = ?, item_ref = ? WHERE session_id = ? AND item_ref = ?",
+                           (to, new, sid, ref))
+                status = "dropped" if item["kind"] == "task" else "closed"
+                db.execute("""INSERT INTO items (session_id, ref, kind, title, body, status, created_at, updated_at,
+                              dismissed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           (sid, ref, item["kind"], item["title"], note.replace("{ref}", new), status, item["created_at"],
+                            now(), status if item["kind"] in DISMISSABLE else None))
+                moved.append((ref, new))
+        return moved
+
     # subagents the wheelhouse tracks itself (subagents.py)
 
     def agent_links(self, sid: str) -> dict[str, tuple[str, str]]:

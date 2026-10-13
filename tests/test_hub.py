@@ -1090,3 +1090,109 @@ def test_the_first_hub_unparks_running_parked_sessions_once(store, sid, monkeypa
     store.set_parked(sid, bool(parked))
     Hub(store)
     assert store.session(sid)["parked"] == parked, f"{desc}: once per database only"
+
+
+# Fork (fork.py): a new session carrying on from a session's conversation
+
+@pytest.fixture
+def opened(monkeypatch):
+    """The launches the hub makes, (how, sid, notice), none run."""
+    calls = []
+    for how in ("tab", "host"):
+        monkeypatch.setattr(launch, f"open_{how}", lambda store, sid, notice=True, how=how: calls.append((how, sid, notice)))
+    return calls
+
+
+@pytest.mark.parametrize("refs, fork_refs, parent_told, desc", [
+    ([], [], False, "nothing ticked: the fork starts with no items, the parent isn't told"),
+    (["T1"], ["T1"], True, "a todo task moves"),
+    (["T3", "Q1"], ["T1", "Q1"], True, "a blocked task and an open question move, numbered afresh there"),
+])
+def test_fork(hub, store, sid, tmp_path, claude_home, opened, refs, fork_refs, parent_told, desc):
+    claude_home(sid, str(tmp_path))
+    store.post_item(sid, "task", "todo one")
+    store.post_item(sid, "task", "running one", status="running")
+    store.post_item(sid, "task", "blocked one", status="blocked")
+    store.post_item(sid, "question", "which way?")
+    store.queue(sid, "left", "Q1")
+    done = hub.fork(sid, refs)
+    new = done.sid
+    f = store.session(new)
+    assert done.ok and (f["name"], f["cwd"], f["adopted"], f["runner"]) == ("demo (fork)", str(tmp_path), 1, "tab"), desc
+    assert list(claude_home.projects.glob(f"*/{new}.jsonl")), f"{desc}: the transcript copied"
+    assert opened == [("tab", new, False)], f"{desc}: launched, without JOINED_TEXT"
+    assert sorted(i["ref"] for i in store.items(new)) == sorted(fork_refs), desc
+    assert [m["kind"] for m in store.pending(new)] == ["notice"] and "a fork of demo" in store.pending(new)[0]["body"], desc
+    told = [m["body"] for m in store.pending(sid)]
+    assert bool(told) == parent_told, desc
+    for old, new_ref in zip(refs, fork_refs):
+        stand_in = store.item(sid, old)
+        assert stand_in["status"] in ("dropped", "closed") and f"as {new_ref}" in stand_in["body"], desc
+        assert f"{old} (its {new_ref})" in told[0], desc
+    if "Q1" in refs:
+        assert [m["body"] for m in store.thread(new, "Q1")] == ["left"], f"{desc}: its thread moves with it"
+    assert store.post_item(sid, "task", "after") == "T4", f"{desc}: the parent's refs stay numbered"
+
+
+@pytest.mark.parametrize("dirty, desc", [
+    (False, "a clean worktree"),
+    (True, "uncommitted changes: the fork is told it won't see them"),
+])
+def test_fork_into_a_new_worktree(hub, store, worktree, claude_home, opened, dirty, desc):
+    main, wt = worktree
+    sid = store.create_session(str(wt), name="feat")
+    claude_home(sid, str(wt))
+    if dirty:
+        (wt / "wip.txt").write_text("wip")
+    plan = hub.fork_plan(sid)
+    assert (plan.tree.linked, plan.tree.dirty, plan.branch) == (True, dirty, "feat/x-fork"), desc
+    new = hub.fork(sid, [], plan.branch).sid
+    cwd = str(main.resolve() / ".worktrees" / "feat-x-fork")
+    assert store.session(new)["cwd"] == cwd, desc
+    from claude_agent_sdk import project_key_for_directory
+    assert list(claude_home.projects.glob(f"*/{new}.jsonl"))[0].parent.name == project_key_for_directory(cwd), desc
+    body = store.pending(new)[0]["body"]
+    assert "on a new branch, feat/x-fork" in body and ("regression" in body) == dirty, desc
+
+
+@pytest.mark.parametrize("setup, refs, branch, may_tab, said, desc", [
+    ("transcript", ["T2"], None, True, "T2 can't move", "a running task stays"),
+    ("transcript", ["Q9"], None, True, "Q9 can't move", "an item that isn't there"),
+    ("", [], None, True, "has no conversation to fork yet", "never ran: nothing to copy"),
+    ("transcript", [], "x-fork", True, "isn't in a linked git worktree", "a new worktree outside one"),
+    ("transcript", [], None, False, "fork it from the daemon's machine", "a tab, for another machine"),
+])
+def test_fork_refused(hub, store, sid, tmp_path, claude_home, opened, setup, refs, branch, may_tab, said, desc):
+    if setup:
+        claude_home(sid, str(tmp_path))
+    store.post_item(sid, "task", "todo one")
+    store.post_item(sid, "task", "running one", status="running")
+    done = hub.fork(sid, refs, branch, may_tab)
+    assert not done.ok and said in done.notices[0].text, f"{desc}: {done.notices}"
+    assert [s["id"] for s in store.sessions()] == [sid] and not opened, f"{desc}: nothing made"
+    assert sorted(i["ref"] for i in store.items(sid)) == ["T1", "T2"], desc
+
+
+def test_fork_plan_offers_open_questions_and_todo_and_blocked_tasks(hub, store, sid):
+    for kind, status in [("task", "todo"), ("task", "running"), ("task", "blocked"), ("task", "done"),
+                         ("question", "open"), ("question", "answered"), ("decision", None)]:
+        kw = {"why": "x"} if kind == "decision" else {}
+        store.post_item(sid, kind, f"{kind} {status}", status=status, **kw)
+    plan = hub.fork_plan(sid)
+    assert sorted((ref, status) for ref, _, status, _ in plan.items) == [("Q1", "open"), ("T1", "todo"), ("T3", "blocked")]
+    assert (plan.name, plan.tree.linked, plan.branch) == ("demo (fork)", False, "")
+
+
+@pytest.mark.parametrize("parent, sdk, how, runs, desc", [
+    ("tab", False, "tab", "tab", "a tab's fork is a tab"),
+    ("sdk", True, "host", "sdk", "a host's, in SDK mode, a host"),
+    ("sdk", False, "tab", "tab", "a host's out of SDK mode a tab, as a restore would be"),
+    ("tab", True, "tab", "tab", "a tab's stays a tab in SDK mode"),
+])
+def test_fork_runs_as_its_parent(store, sid, tmp_path, claude_home, opened, parent, sdk, how, runs, desc):
+    store.set_runner(sid, parent)
+    store.set_model(sid, "claude-opus-5-5")
+    claude_home(sid, str(tmp_path))
+    new = Hub(store, sdk=sdk).fork(sid, []).sid
+    assert opened == [(how, new, False)] and store.session(new)["runner"] == runs, desc
+    assert store.session(new)["model"] == "claude-opus-5-5", f"{desc}: with the parent's model"

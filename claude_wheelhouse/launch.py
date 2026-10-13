@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import features, liveness, models, tutorial
+from . import features, fork, liveness, models, tutorial
 from .transcript import NO_BRIEF
 from .store import Store, db_path, default_runner, now, runner
 
@@ -187,7 +187,13 @@ def injected(sdk: bool | None = None) -> str:
     tools = "\n\n".join(f"{t.__name__}\n    {t.__doc__.strip()}" for t in mcp_server.TOOLS)
     notices = "\n".join([monitor.format_message({"body": "<message>", "item_ref": "Q1"}),
                          *monitor.REQUEST_TEXT.values(), GONE_TEXT,
-                         monitor.format_message({"body": JOINED_TEXT, "item_ref": None, "kind": "notice"})])
+                         monitor.format_message({"body": JOINED_TEXT, "item_ref": None, "kind": "notice"}),
+                         # a fork's, and its parent's once items move (fork.py): whole, though
+                         # the monitor cuts one this long short, pointing to get_input for the rest
+                         *("[wheelhouse] " + body for body in (
+                             fork.opening("<parent>", "<parent> (fork)", [("T3", "T1")], {"T3": "<title>"},
+                                          "<branch>", "<new worktree>", dirty=True),
+                             fork.told_parent("<parent> (fork)", [("T3", "T1")], {"T3": "<title>"})))])
     return "\n\n".join([
         f"== protocol.md, protocol_tab.md and protocol_decisions.md (appended to the system prompt) ==\n\n{PROTOCOL}",
         *(["== protocol_sdk.md (in place of protocol_tab.md for a session run in the wheelhouse) ==\n\n"
@@ -195,7 +201,7 @@ def injected(sdk: bool | None = None) -> str:
         f"== /wheelhouse skill ({PLUGIN_DIR / 'skills/wheelhouse/SKILL.md'}) ==\n\n{skill}",
         f"== MCP server \"wheelhouse\" ==\n\n{mcp_server.server.instructions}\n\n{tools}",
         f"== Notifications from the wheelhouse monitor ==\n\n{notices}",
-        "== Launch command (new session; Restore and Adopt use --resume, and Adopt adds "
+        "== Launch command (new session; Restore, Adopt and Fork use --resume, and Adopt and Fork add "
         "--system-prompt-snapshot off) ==\n\n"
         + "".join(f" \\\n    {a}" if a.startswith("-") else f" {shlex.quote(a)}" for a in argv).lstrip(),
     ])
@@ -258,11 +264,12 @@ def check_free(session) -> None:
         raise RuntimeError(f"session {session['name'] or sid} is still starting")
 
 
-def open_host(store: Store, sid: str) -> None:
+def open_host(store: Store, sid: str, notice: bool = True) -> None:
     """Start the session's SDK host, detached so that the TUI closing never takes it down.
     EXPERIMENTAL (features.py): SDK mode is not for use by anyone other than the author until
     Anthropic's terms are confirmed. It starts a host for a session already recorded as one;
-    only SDK mode creates such sessions."""
+    only SDK mode creates such sessions. notice=False: a resumed session isn't sent
+    JOINED_TEXT (a fork, told otherwise)."""
     session = store.session(sid)
     if session is None:
         raise KeyError(sid)
@@ -280,13 +287,14 @@ def open_host(store: Store, sid: str) -> None:
                         features.KEEPALIVE_FLAG, f"{features.keepalive_hours():g}"],
                        cwd=session["cwd"], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                        env=clean_env(WHEELHOUSE_DB=str(store.path)), check=True)
-    if resuming:
+    if notice and resuming:
         store.notice(sid, JOINED_TEXT)
 
 
 def open_tab(store: Store, sid: str, notice: bool = True) -> None:
     """Launch (or restore) a session in a new tab. Refuses if it is already running.
-    notice=False for a host handing its session over: it already knows the wheelhouse."""
+    notice=False for a host handing its session over: it already knows the wheelhouse; and
+    for a fork, told otherwise (fork.opening)."""
     session = store.session(sid)
     if session is None:
         raise KeyError(sid)

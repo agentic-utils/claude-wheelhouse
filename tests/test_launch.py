@@ -34,6 +34,8 @@ def test_wt_argv(over, title, cwd, desc):
      "Session started from the wheelhouse. Wait for instructions.", "bare launch"),
     ({"adopted": 1}, True, ["--resume", "--system-prompt-snapshot"], ["--session-id"], None,
      "an adopted session renders the prompt fresh, so it sees the protocol"),
+    ({"adopted": 1, "name": "demo (fork)"}, True, ["--resume", "--system-prompt-snapshot"], ["--session-id"], None,
+     "a fork (a row made for its copy's id, as adopted) renders it fresh: the copy carries the parent's"),
 ])
 def test_claude_argv(over, resume, has, lacks, last, desc):
     argv = launch.claude_argv(row(**over), python="/py", resume=resume)
@@ -180,15 +182,16 @@ def test_login_shell(monkeypatch, env_shell, pw_shell, expected, desc):
     assert launch.login_shell() == expected, desc
 
 
-@pytest.mark.parametrize("resuming, notices, desc", [
-    (True, 1, "a tab resuming a conversation (adopt, Restore, relaunch) asks it to post its open work"),
-    (False, 0, "a fresh session has no open work to post"),
+@pytest.mark.parametrize("resuming, notice, notices, desc", [
+    (True, True, 1, "a tab resuming a conversation (adopt, Restore, relaunch) asks it to post its open work"),
+    (False, True, 0, "a fresh session has no open work to post"),
+    (True, False, 0, "a fork resumes its copy, but is told otherwise (fork.opening)"),
 ])
-def test_open_tab_sends_the_join_notice_only_on_resume(store, sid, monkeypatch, resuming, notices, desc):
+def test_open_tab_sends_the_join_notice_only_on_resume(store, sid, monkeypatch, resuming, notice, notices, desc):
     monkeypatch.setattr(launch.liveness, "is_alive", lambda *a: False)
     monkeypatch.setattr(launch.subprocess, "Popen", lambda argv, **kw: None)
     monkeypatch.setattr(launch, "transcript_exists", lambda sid: resuming)
-    launch.open_tab(store, sid)
+    launch.open_tab(store, sid, notice=notice)
     got = [(m["kind"], m["body"]) for m in store.pending(sid)]
     assert got == [("notice", launch.JOINED_TEXT)] * notices, desc
 

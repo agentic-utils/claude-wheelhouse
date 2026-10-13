@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import adopt, api, features, launch, liveness, models, plan_usage, stats, subagents, transcript, tutorial
+from . import adopt, api, features, fork, launch, liveness, models, plan_usage, stats, subagents, transcript, tutorial
 from .host import AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, NO_NOTES, keepalive_body, waits_on_person
 from .store import DISMISSABLE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
 
@@ -554,6 +554,59 @@ class Hub:
         except Exception as e:   # came back to life, wt.exe missing...
             return Done(False).say(str(e), "error")
         return Done().say(f"adopting {name or short(candidate.id)}")
+
+    def fork_plan(self, sid: str) -> fork.Plan:
+        """What Fork offers for a session (fork.Plan): its items that may move, and where its
+        directory is a linked git worktree, the new branch's name."""
+        s = self.row(sid)
+        t = fork.tree(s["cwd"])
+        items = [(r["ref"], r["kind"], r["status"], r["title"]) for r in self.store.items(sid, include_closed=False)
+                 if r["status"] in fork.MOVABLE.get(r["kind"], ())]
+        return fork.Plan(f"{display_name(s)} (fork)", s["cwd"], t, fork.default_branch(t, s["cwd"]) if t.linked else "",
+                         items)
+
+    def fork(self, sid: str, refs: list[str], branch: str | None = None, may_tab: bool = True) -> Done:
+        """A new session carrying on from this one's conversation (fork.py), named
+        "<name> (fork)", run as this one is (a tab out of SDK mode), with its model and effort,
+        in the same directory or, given branch, a new worktree on that new branch. The items
+        refs move to it, and this session is told which. Its sid in the Done."""
+        s = self.row(sid)
+        name = f"{display_name(s)} (fork)"
+        how = runner(s) if runner(s) == "tab" or self.sdk else "tab"
+        if how == "tab" and not may_tab:   # before anything is made
+            return Done(False).say(f"{name} would open in a tab: fork it from the daemon's machine", "warning")
+        bad = [r for r in refs if (i := self.store.item(sid, r)) is None
+               or i["status"] not in fork.MOVABLE.get(i["kind"], ())]
+        if bad:
+            return Done(False).say(f"{', '.join(bad)} can't move: only a todo or blocked task, or an open "
+                                   "question", "error")
+        t = fork.tree(s["cwd"])
+        cwd = s["cwd"]
+        try:
+            if branch:
+                if not t.linked:
+                    raise ValueError(f"{s['cwd']} isn't in a linked git worktree")
+                cwd = fork.new_worktree(s["cwd"], t, branch)
+            new = fork.copy(sid, s["cwd"], name, cwd)
+        except FileNotFoundError:
+            return Done(False).say(f"{display_name(s)} has no conversation to fork yet", "error")
+        except Exception as e:   # git refused the branch, the transcript unreadable...
+            return Done(False).say(str(e), "error")
+        self.store.create_session(cwd, name=name, ticket=s["ticket"], brief=s["brief"], sid=new, runner=how,
+                                  model=s["model"], effort=s["effort"])
+        titles = {r: self.store.item(sid, r)["title"] for r in refs}
+        moved = self.store.move_items(sid, new, refs, fork.MOVED_NOTE.replace("{fork}", name))
+        if moved:
+            self.store.notice(sid, fork.told_parent(name, moved, titles))
+        self.store.notice(new, fork.opening(display_name(s), name, moved, titles, branch or "", cwd,
+                                            bool(branch) and t.dirty))
+        done = Done(sid=new)
+        try:
+            (launch.open_host if how == "sdk" else launch.open_tab)(self.store, new, notice=False)
+        except Exception as e:   # wt.exe missing...: the fork stays, to Relaunch
+            return done.say(f"forked {name}, but it didn't start: {e}. Relaunch it", "error")
+        return done.say(f"forking {display_name(s)} as {name}"
+                        + (f", {len(moved)} item(s) moved to it" if moved else ""))
 
     def answer_offer(self, take: bool) -> Done:
         """The first-run tutorial offer, answered either way: it never comes back. Whether the

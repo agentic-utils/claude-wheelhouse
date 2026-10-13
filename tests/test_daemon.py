@@ -814,7 +814,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 28 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 29 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 
@@ -889,6 +889,11 @@ NEW_ROUTES = [
     ("POST", "/relaunch-all", {"sids": ["{sid}"]}, lambda store, sid, r: told(r) == ["relaunching 1 session(s)"],
      "Relaunch all, of those the client showed"),
     ("POST", "/relaunch-all", {"sids": "x"}, lambda store, sid, r: r.status_code == 400, "a list of them"),
+    ("GET", "/sessions/{sid}/fork", None, lambda store, sid, r: (r.json()["name"], r.json()["items"], r.json()["tree"]["linked"])
+     == ("demo (fork)", [["T1", "task", "todo", "do it"]], False), "what Fork offers: the items that may move"),
+    ("POST", "/sessions/{sid}/fork", {"refs": "T1"}, lambda store, sid, r: r.status_code == 400, "refs, a list"),
+    ("POST", "/sessions/{sid}/fork", {"refs": [], "branch": 3}, lambda store, sid, r: r.status_code == 400,
+     "branch, a name or null"),
     ("GET", "/items/{sid}/{ref}/conversation", None, lambda store, sid, r: r.json() is None,
      "a subagent's conversation: none for a task"),
     ("POST", "/items/{sid}/{ref}/seen", None, lambda store, sid, r: r.json()["ok"] is False,
@@ -1187,3 +1192,14 @@ async def test_another_machine_opens_no_tab(store, tmp_path, monkeypatch, sdk, e
     words = [r.json()["error"]] if status == 403 else told(r)
     assert any(said in t for t in words), f"{desc}: {words}"
     assert opened == opened_want, f"{desc}: {opened}"
+
+
+async def test_fork_through_the_daemon(daemon, store, sid, tmp_path, claude_home, monkeypatch):
+    opened = []
+    monkeypatch.setattr(launch, "open_tab", lambda store, sid, notice=True: opened.append((sid, notice)))
+    claude_home(sid, str(tmp_path))
+    store.post_item(sid, "task", "do it")
+    r = await call(daemon, "POST", f"/sessions/{sid}/fork", {"refs": ["T1"], "branch": None})
+    new = r.json()["sid"]
+    assert r.json()["ok"] and opened == [(new, False)], r.text
+    assert store.session(new)["name"] == "demo (fork)" and store.item(new, "T1")["title"] == "do it", r.text

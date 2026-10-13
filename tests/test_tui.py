@@ -4241,15 +4241,15 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
 @pytest.mark.anyio
 @pytest.mark.parametrize("size, half", [((80, 24), False), ((100, 30), True), ((160, 40), True)])
 @pytest.mark.parametrize("status, parked, shown, desc", [
-    ("live", True, ["rename", "relaunch", "park", "end", "model", "mode", "send", "interrupt", "compact", "shell"],
+    ("live", True, ["rename", "relaunch", "park", "end", "model", "fork", "mode", "send", "interrupt", "compact", "shell"],
      "a running hosted session too old to queue, parked under the old rules (Active once the hub starts): the "
      "longest captions"),
-    ("live", False, ["rename", "relaunch", "park", "end", "model", "mode", "send", "interrupt", "compact", "shell"],
+    ("live", False, ["rename", "relaunch", "park", "end", "model", "fork", "mode", "send", "interrupt", "compact", "shell"],
      "an Active one: Stop & Forget"),
-    ("dead", False, ["relaunch", "park", "end", "mode"],
+    ("dead", False, ["relaunch", "park", "end", "fork", "mode"],
      "an Available one: Relaunch, Park and Forget, nothing to interrupt, and no Send: it can't receive (D30)"),
-    ("dead", True, ["relaunch", "end", "mode"], "a Parked one: Unpark in Relaunch's place, no Park, and Forget"),
-    ("stalled", False, ["rename", "relaunch", "park", "end", "model", "mode", "send", "interrupt", "compact", "shell"],
+    ("dead", True, ["relaunch", "end", "fork", "mode"], "a Parked one: Unpark in Relaunch's place, no Park, and Forget"),
+    ("stalled", False, ["rename", "relaunch", "park", "end", "model", "fork", "mode", "send", "interrupt", "compact", "shell"],
      "a stalled one still takes what's sent"),
 ])
 async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, half, status, parked, shown, desc):
@@ -4265,6 +4265,9 @@ async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, half,
     store.set_parked(sid, parked)
     app = WheelhouseApp(store)
     desc = f"{desc}, at {size[0]} columns"
+    # Model and Fork make a third row of a hosted Active session's lifecycle buttons: at 30
+    # rows the description gives way to it
+    half = half and not ("model" in shown and size[1] <= 30)
     async with app.run_test(size=size) as pilot:
         await pick(app, pilot, sid)
         buttons = [b for b in app.query("#sessions-pane Grid Button") if b.display]
@@ -4605,6 +4608,8 @@ async def test_tab_goes_from_the_session_list_to_the_items(store, sid):
     ("p", "park", False, "P parks a dead one too"),
     ("delete", "end", True, "Delete forgets (Stop & Forget)"),
     ("backspace", "end", False, "so does Backspace, on one that isn't running"),
+    ("k", "fork", True, "K forks"),
+    ("k", "fork", False, "one that isn't running too"),
 ])
 async def test_the_session_lists_keys_press_its_buttons(store, sid, monkeypatch, key, button, live, desc):
     """The buttons are out of the Tab order, so the list's keys keep them on the keyboard.
@@ -5651,3 +5656,55 @@ async def test_a_refresh_with_nothing_new_draws_nothing_again(store, sid, monkey
                 lambda w, refresh, *a, **k: (drawn.append(w), refresh(*a, **k))[1], w, refresh))
         app.refresh_data()
         assert drawn == [], "nothing changed, nothing drawn"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("where, dirty, tick, same, want_cwd, desc", [
+    ("plain", False, ["T1"], False, "plain", "not a worktree: no choice, the same directory, a ticked task moves"),
+    ("linked", True, ["Q1", "T1"], False, "new", "a worktree: a new one by default, the uncommitted warning shown"),
+    ("linked", True, [], True, "linked", "this worktree chosen: no branch, the warning hidden"),
+])
+async def test_fork_dialog(store, tmp_path, worktree, claude_home, monkeypatch, where, dirty, tick, same, want_cwd, desc):
+    from textual.widgets import RadioButton, SelectionList
+    monkeypatch.setattr(launch, "open_tab", lambda s, i, notice=True: None)
+    main, wt = worktree
+    (tmp_path / "plain").mkdir()
+    cwd = str(wt if where == "linked" else tmp_path / "plain")
+    sid = store.create_session(cwd, name="demo")
+    claude_home(sid, cwd)
+    if dirty:
+        (wt / "wip.txt").write_text("wip")
+    store.post_item(sid, "task", "todo one")
+    store.post_item(sid, "task", "running one", status="running")
+    store.post_item(sid, "question", "which way?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.session_list.focus()
+        await pilot.press("k")
+        await pilot.pause()
+        dialog = app.screen
+        assert type(dialog).__name__ == "ForkSession", desc
+        offered = dialog.query_one("#fork-items", SelectionList)
+        assert sorted(offered.get_option_at_index(i).value for i in range(offered.option_count)) == ["Q1", "T1"], \
+            f"{desc}: open questions and todo or blocked tasks, not running ones"
+        assert offered.selected == [], f"{desc}: all unticked"
+        for ref in tick:
+            offered.select(ref)
+        assert bool(dialog.query("#fork-where")) == (where == "linked"), desc
+        if where == "linked":
+            assert dialog.query_one("#fork-new", RadioButton).value, f"{desc}: a new worktree by default"
+            assert dialog.query_one("#fork-branch", Input).value == "feat/x-fork", desc
+            if same:
+                dialog.query_one("#fork-same", RadioButton).value = True
+                await pilot.pause()
+            assert dialog.query_one("#fork-warning").display == (not same), desc
+            assert dialog.query_one("#fork-branch", Input).disabled == same, desc
+        await pilot.click("#fork-go")
+        await pilot.pause()
+        forks = [s for s in store.sessions() if s["id"] != sid]
+        assert [s["name"] for s in forks] == ["demo (fork)"], desc
+        want = {"plain": cwd, "linked": cwd, "new": str(main.resolve() / ".worktrees/feat-x-fork")}[want_cwd]
+        assert forks[0]["cwd"] == want, desc
+        assert sorted(i["ref"] for i in store.items(forks[0]["id"])) == sorted(tick), f"{desc}: the ticked moved"

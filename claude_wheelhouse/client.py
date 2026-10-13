@@ -21,7 +21,7 @@ import time
 import uuid
 from typing import Callable, NamedTuple
 
-from . import adopt, auth, features, plan_usage, stats, tutorial
+from . import adopt, auth, features, fork, plan_usage, stats, tutorial
 from .hub import RUNNING, Done, Event, Hub, host_context, requested
 from .store import SessionGone
 
@@ -551,6 +551,14 @@ class RemoteClient:
         except (Unreachable, Refused, self.httpx.TransportError):
             return []
 
+    def fork_plan(self, sid: str) -> fork.Plan:
+        """What Fork offers (Hub.fork_plan). Raises what the daemon answered, or Unreachable."""
+        try:
+            data = self.get(f"/sessions/{sid}/fork")
+        except Refused as e:
+            raise hub_error(e) from None
+        return fork.Plan(**{**data, "tree": fork.Tree(**data["tree"]), "items": [tuple(i) for i in data["items"]]})
+
     def running_pid(self, sid: str) -> int | None:
         try:
             return self.get(f"/adoptable/{sid}/running")["pid"]
@@ -619,6 +627,9 @@ class RemoteClient:
 
     def adopt(self, candidate: adopt.Candidate, name: str) -> Done:
         return self.done("/adopt", {"id": candidate.id, "name": name})
+
+    def fork(self, sid: str, refs: list[str], branch: str | None = None) -> Done:
+        return self.done(f"/sessions/{sid}/fork", {"refs": refs, "branch": branch})
 
     def answer_offer(self, take: bool) -> Done:
         return self.done("/tutorial/offer", {"take": take})
