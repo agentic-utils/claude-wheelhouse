@@ -3414,9 +3414,18 @@ async def test_the_stats_pane_follows_the_session_in_context(store, sid, tmp_pat
     folder.joinpath(f"{sid}.jsonl").write_text(json.dumps(rec) + "\n")
     monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
     app = WheelhouseApp(store)
+    other = store.create_session(str(tmp_path), name="other")
+    q = store.post_item(other, "question", "B's")
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert "no sessions running" in app.query_one("#stats").render().plain, "nothing in context and none running"
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{other}|{q}"))   # another's item highlighted
+        app.refresh_data()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        shown = app.query_one("#stats").render().plain
+        assert "all sessions · 2" in shown, f"none selected: every session's totals, running or not, not the item's: {shown}"
+        assert "context" not in shown.replace("context assembly", ""), "and no context: each session has its own"
+        assert "context assembly" in shown, "the charts show their activity"
         app.follow(sid)
         app.refresh_data()
         await app.workers.wait_for_complete()

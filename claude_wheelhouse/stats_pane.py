@@ -28,7 +28,7 @@ def looks(rows: list[Text]) -> list[tuple]:
 class SessionStats(Widget):
     """A bordered panel of the context, session and weekly gauges and the cache and
     compaction rows, then charts of the last two hours' context assembly and output; with
-    no session in context, the running sessions' totals. Transcripts are read on worker
+    no session in context, every session's totals. Transcripts are read on worker
     threads, never on the UI thread: a first read of a big one takes a while, and even a
     steady one stats every subagent file. Each session's follower is shared with the
     session list's context bars (stats.follower), so a transcript is read once for both. The panel and the charts' columns are rebuilt on
@@ -97,11 +97,12 @@ class SessionStats(Widget):
     # reading
 
     def shown(self, sessions: list[dict]) -> list[str]:
-        """The sessions shown: the one in context, else every running one."""
+        """The sessions shown: the one in context, else every one, running or not: the charts
+        show all their activity."""
         sid = self.ctx.focus()
         if any(s["id"] == sid for s in sessions):
             return [sid]
-        return [s["id"] for s in sessions if s["running"]]
+        return [s["id"] for s in sessions]
 
     def read(self, follower: stats.UsageFollower, now: float) -> None:
         """On a worker thread: one read of a session's transcripts, then a repaint if it

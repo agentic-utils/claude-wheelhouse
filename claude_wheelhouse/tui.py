@@ -1895,7 +1895,7 @@ class WheelhouseApp(App):
         self.modules = api.load()
         # the state dir: the database's, for a module that keeps files of its own
         state_dir = self.store.path.parent if self.store else db_path().parent
-        self.ctx = api.Context(state_dir, self.module_sessions, self.focus_sid, usage=self.client.usage,
+        self.ctx = api.Context(state_dir, self.module_sessions, self.stats_sid, usage=self.client.usage,
                                set_effort=self.set_effort)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
         self.module_ids: dict[str, str] = {}   # each pane's widget id: the module that has it
@@ -2580,6 +2580,12 @@ class WheelhouseApp(App):
         sid = self.filter_sid or (self.selected[0] if self.selected else None)
         return sid if any(s["id"] == sid for s in self.sessions) else None
 
+    def stats_sid(self) -> str | None:
+        """The session the stats pane shows: the selected one alone. With none selected, not
+        the highlighted item's (focus_sid), whose context would read as every session's: the
+        pane shows all sessions' totals then."""
+        return self.filter_sid if any(s["id"] == self.filter_sid for s in self.sessions) else None
+
     def module_sessions(self) -> list[dict]:
         return [{"id": s["id"], "name": s["name"] or short(s["id"]), "running": self.running(s["id"]),
                  "context": host_context(s), **self.client.model_state(s)} for s in self.sessions]
@@ -2905,6 +2911,7 @@ class WheelhouseApp(App):
             self.paint_session_info()
         self.retarget()
         self.paint_items()
+        self.each_pane("tick")   # the stats pane: this session's alone now (stats_sid)
         self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 
     @on(DataTable.RowHighlighted, "#items")
@@ -2992,6 +2999,7 @@ class WheelhouseApp(App):
         self.clear_filter()
         self.paint_items()
         self.retarget()
+        self.each_pane("tick")   # the stats pane: every session's totals now (stats_sid)
 
     def clear_filter(self) -> None:
         """No session selected: every session's items, and no highlight in the session list,

@@ -620,7 +620,7 @@ def cache_lines(snap: Snapshot, now: float) -> list[str]:
 
 @dataclass
 class Totals:
-    """The pane with no session in context: every running session's, added up."""
+    """The pane with no session in context: every session's, added up."""
     sessions: int
     context: int
     warm: int
@@ -662,7 +662,8 @@ def meter(name: str, pct: float, colour: tuple, width: int, tail: str) -> Text:
 
 def gauges(view, usage: "plan_usage.AccountUsage", now: float, width: int) -> list[Text]:
     """The context, session and weekly gauges, at one bar width so they line up. Across
-    every running session the context is a sum with no one window: a number, not a gauge."""
+    every session there is no context to show: each has its own window, and a sum of them
+    means nothing, so the totals show the account's gauges alone."""
     bars = []   # (name, percent, colour, tail)
     if isinstance(view, Snapshot):
         bars.append(("context", view.context * 100 / view.window, grade(view.context),
@@ -676,9 +677,6 @@ def gauges(view, usage: "plan_usage.AccountUsage", now: float, width: int) -> li
             bars.append((name, pct, flash(colour, flashing, now), f" {resets(at, now)}" if at else ""))
     width = max(4, width - LABEL - 5 - max((len(b[3]) for b in bars), default=0))
     out = [meter(name, pct, colour, width, tail) for name, pct, colour, tail in bars]
-    if isinstance(view, Totals):
-        out.insert(0, label("context") + Text(f"{approx(view)}{tokens(view.context)} across {view.sessions}",
-                                              style=hexc(TEXT)))
     age = usage.age(now, shown)
     if age is None:
         out.append(Text("usage unavailable" if usage.failed else "usage loading…", style=hexc(DIM)))
@@ -724,7 +722,7 @@ def titled(view, name: str, setting: dict | None = None, room: int = 0) -> tuple
     the title has no room, it gives up the window's word, then the window, then the name,
     then the effort: the model is the last to go."""
     if isinstance(view, Totals):
-        return f"all running sessions · {view.sessions}", False
+        return f"all sessions · {view.sessions}", False
     setting = setting or {}
     model = setting.get("model") or view.requested or view.model
     effort = effort_of(view, setting)
