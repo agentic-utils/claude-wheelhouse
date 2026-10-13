@@ -1564,6 +1564,50 @@ class ParkSession(Dialog):
                            if event.button.id == "park-go" else None)
 
 
+class ForgetChoice(Dialog):
+    """Stop & Forget on a running session: Let it know (the end request, its end steps as
+    any session's) or Just stop it (stopped now and its row deleted, nothing sent to it).
+    The default, focused for Enter, is to let it know while its prompt cache is warm, and to
+    just stop it once cold: its end steps would re-read the whole context, which a session
+    used for a quick look isn't worth. Answers "tell", "stop", or None."""
+    BINDINGS = [Binding("l", "answer('tell')", show=False), Binding("j", "answer('stop')", show=False),
+                Binding("escape", "answer", show=False)]
+
+    def __init__(self, prompt: str, warm: bool):
+        super().__init__()
+        self.prompt, self.warm = prompt, warm
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(self.prompt, classes="dialog-prompt")
+            with Horizontal(classes="buttons"):
+                yield Button(Text("[L]et it know"), variant="success", id="forget-tell")
+                yield Button(Text("[J]ust stop it"), variant="error", id="forget-stop")
+                yield Button(Text("Cancel [Esc]"), id="forget-cancel")
+
+    def on_mount(self) -> None:
+        self.set_focus(self.query_one("#forget-tell" if self.warm else "#forget-stop", Button))
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        event.stop()   # answered here: not the app's Forget too
+        self.action_answer({"forget-tell": "tell", "forget-stop": "stop"}.get(event.button.id))
+
+
+def forget_prompt(name: str, warm: bool, expires: float | None, context: int, queued: int) -> str:
+    """ForgetChoice's question: which choice is the default, and why, from the cache's warmth."""
+    if warm:
+        why = f"Its prompt cache is warm until {stats.clock(expires)}, so its end steps are cheap: " \
+              "let it know (the default)." if expires else "Its prompt cache is warm: let it know (the default)."
+    else:
+        since = f"cold since {stats.clock(expires)}" if expires else "cold"
+        cost = f": its end steps would re-read ~{stats.tokens(context)}" if context else ""
+        why = f"Its prompt cache is {since}{cost}, so just stop it (the default)."
+    lost = f" {queued} queued answer(s) will be discarded." if queued else ""
+    return (f"Stop & Forget {name}? Let it know and it does its end steps (memory, handoff) before it stops; "
+            f"just stop it and it stops now, told nothing. Its wheelhouse data is deleted either way.{lost}\n\n{why}")
+
+
 class Confirm(Dialog):
     BINDINGS = [Binding("y", "answer(True)", show=False), Binding("n", "answer(False)", show=False),
                 Binding("escape", "answer(False)", show=False)]
@@ -1734,9 +1778,11 @@ BUTTONS = {
              "works in a new one on a new branch from the last commit (uncommitted changes stay behind), or this one"),
     "park": ("Park (P in the session list): a running session writes its handoff notes into its items, then stops; "
              "it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark"),
-    "end": ("Stop & Forget, or Forget (Delete or Backspace in the session list): a running session does its own end "
-            "steps, then stops and its wheelhouse data is deleted (confirmed first if answers are queued for it); one "
-            "not running is deleted at once, once you confirm. Adopt brings a forgotten one back"),
+    "end": ("Stop & Forget, or Forget (Delete or Backspace in the session list): a running session asks first, "
+            "Let it know (L: it does its own end steps, then stops) or Just stop it (J: stopped now, told nothing), "
+            "the first by default while its prompt cache is warm, the second once cold, as its end steps would "
+            "re-read its whole context; its wheelhouse data is deleted either way, queued answers with it. One not "
+            "running is deleted at once, once you confirm. Adopt brings a forgotten one back"),
 }
 # keys for the buttons that have no other: each presses its button on the screen in front,
 # outside a text box (whose letters and digits are typing). 1, 2 and 3 number the
@@ -3689,20 +3735,38 @@ class WheelhouseApp(App):
     @on(Button.Pressed, "#end")
     @session_action
     def end_pressed(self) -> None:
-        """Forget (Stop & Forget on an Active session, which is asked to do its end steps)."""
+        """Forget. Stop & Forget on an Active session not yet asked offers ForgetChoice: let
+        it know (it does its end steps) or just stop it, by its cache's warmth."""
         self.settle()
         sid = self.current_session()
-        if sid:
-            n = len(self.client.drafts(sid))
+        if not sid:
+            return
+        n = len(self.client.drafts(sid))
+        if self.running(sid) and self.pending(sid) is None:
+            warm = self.client.warm(sid)
+            prompt = forget_prompt(self.label(sid), warm, self.client.cache_expires(sid),
+                                   self.client.context_tokens(sid), n)
+            self.push_screen(ForgetChoice(prompt, warm), lambda choice: choice and self.forget(sid, choice))
+        else:
             lost = f" {n} queued answer(s) will be discarded." if n else ""
-            self.lifecycle(sid, "end", f"Forget {self.label(sid)}? Its wheelhouse data is deleted.{lost}",
-                           ask=f"Stop & Forget {self.label(sid)}?{lost}" if n else None)
+            self.lifecycle(sid, "end", f"Forget {self.label(sid)}? Its wheelhouse data is deleted.{lost}")
 
-    def lifecycle(self, sid: str, what: str, act: str, ask: str | None = None) -> None:
+    @session_action
+    def forget(self, sid: str, choice: str) -> None:
+        """ForgetChoice's answer: the end request, or stopped and forgotten now (force). The
+        dialog may have sat open while the session stopped or was asked: lifecycle again."""
+        if not self.running(sid) or self.pending(sid) is not None:
+            self.lifecycle(sid, "end", f"Forget {self.label(sid)}? Its wheelhouse data is deleted.")
+        elif choice == "tell":
+            self.ask(sid, "end")
+        else:
+            self.force(sid, "end")
+
+    def lifecycle(self, sid: str, what: str, act: str) -> None:
         """Park or Forget, as hub.VERBS says for the session's state. A running session is
-        asked, confirmed first only with something to lose (ask: Stop & Forget with answers
-        queued, which go with its row); one asked already is pressed again to cancel or force.
-        One not running is acted on at once, confirmed first where VERBS says (act)."""
+        asked (Forget's choice is ForgetChoice's, before this); one asked already is pressed
+        again to cancel or force. One not running is acted on at once, confirmed first where
+        VERBS says (act)."""
         if not self.running(sid):
             confirm = VERBS[(self.state(self.row(sid)), what)][1]
             if confirm:
@@ -3712,9 +3776,7 @@ class WheelhouseApp(App):
             return
         pending = self.pending(sid)
         verb = VERBS[("active", what)][0]
-        if pending is None and ask:
-            self.push_screen(Confirm(ask), lambda yes: yes and self.ask(sid, what))
-        elif pending is None:
+        if pending is None:
             self.ask(sid, what)
         elif pending != what:
             self.notify(f"the session has already been asked to {VERBS[('active', pending)][0].lower()}: "

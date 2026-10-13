@@ -555,6 +555,12 @@ class RemoteClient:
     def warm(self, sid: str) -> bool:
         return bool((v := self.view(sid)) and v.get("warm"))
 
+    def cache_expires(self, sid: str) -> float | None:
+        return (v := self.view(sid)) and v.get("cache_expires")
+
+    def context_tokens(self, sid: str) -> int:
+        return ((v := self.view(sid)) and (v.get("context") or {}).get("tokens")) or 0
+
     def adoptable(self) -> list[adopt.Candidate]:
         try:
             return [adopt.Candidate(**c) for c in self.get("/adoptable")]

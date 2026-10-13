@@ -40,14 +40,14 @@ async def press(app, pilot, button, *keys):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("button, state, parked, queued, keys, kept, want_parked, end_flag, park_flag, desc", [
-    ("#end", "live", 0, 0, [], True, 0, True, False, "Stop & Forget on an Active session asks it, with no confirm"),
-    ("#end", "live", 0, 2, ["y"], True, 0, True, False,
-     "with answers queued, it confirms first, naming how many go: 2 queued answer(s) will be discarded"),
-    ("#end", "live", 0, 2, ["n"], True, 0, False, False, "and backs out, the answers kept"),
-    ("#end", "stalled", 0, 0, [], True, 0, True, False, "so on a quiet one"),
+    ("#end", "live", 0, 0, ["l"], True, 0, True, False, "Stop & Forget on an Active session: L lets it know, asked"),
+    ("#end", "live", 0, 2, ["l"], True, 0, True, False,
+     "with answers queued, the choice names how many go: 2 queued answer(s) will be discarded"),
+    ("#end", "live", 0, 2, ["escape"], True, 0, False, False, "and backs out, the answers kept"),
+    ("#end", "stalled", 0, 0, ["l"], True, 0, True, False, "so on a quiet one"),
     ("#end", "dead", 0, 0, ["y"], False, None, None, None, "Forget on an Available session deletes it, once confirmed"),
     ("#end", "dead", 0, 0, ["n"], True, 0, False, False, "backed out of at the confirm"),
-    ("#end", "live", 1, 0, [], True, 0, True, False,
+    ("#end", "live", 1, 0, ["l"], True, 0, True, False,
      "a running row parked under the old rules is unparked at the hub's first start, then asked (round-3 #1)"),
     ("#end", "dead", 1, 0, ["y"], False, None, None, None, "Forget on a Parked session deletes it, once confirmed"),
     ("#park", "live", 0, 0, [], True, 0, False, True, "Park on an Active session asks it, with no confirm"),

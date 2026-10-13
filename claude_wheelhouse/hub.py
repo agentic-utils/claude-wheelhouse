@@ -391,6 +391,17 @@ class Hub:
         follower = self.contexts.get(sid)
         return bool(follower and follower.ready and follower.snap.warm(time.time()))
 
+    def cache_expires(self, sid: str) -> float | None:
+        """When the session's prompt cache goes (or went) cold: stats.Snapshot.expires, the
+        "warm until" or "cold since" the stats pane shows. None with no cache written yet."""
+        follower = self.contexts.get(sid)
+        return follower.snap.expires if follower and follower.ready else None
+
+    def context_tokens(self, sid: str) -> int:
+        """The session's context as the stats pane sizes it: what a cold cache re-reads."""
+        follower = self.contexts.get(sid)
+        return stats.current(follower.snap, host_context(self.listed(sid))).context if follower and follower.ready else 0
+
     def compact_question(self, target):
         """The item in context, if it is the host's open question suggesting Compact."""
         item = target and target[1] and self.store.item(*target)

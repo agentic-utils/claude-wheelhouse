@@ -26,7 +26,7 @@ from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
 from claude_wheelhouse.store import COMPACT_QUESTION, Store, mode
 from claude_wheelhouse.tui import (BLANK, COMPACT_HINT, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice,
-                                   CompactButtons, CompactSession, Confirm, ParkSession,
+                                   CompactButtons, CompactSession, Confirm, ForgetChoice, ParkSession,
                                    Folders, Hint, PermissionButtons, RelaunchChoice, RenameSession, SendBar, SessionList,
                                    ThreadView, Transcript, cylon, fill, hint, render)
 
@@ -1203,11 +1203,11 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
         desc = f"Down, {burst} from the {where} list, {'following A' if filtered else 'unfiltered'}"
         # the session acted on: following A, Down goes to B; unfiltered, the list's Down picks A
         ctx = sid if (where, filtered) in (("items", True), ("sessions", False)) else other
-        if (where, burst) == ("sessions", ("delete",)):   # Forget on it, its answers queued: confirmed first
+        if (where, burst) == ("sessions", ("delete",)):   # Stop & Forget on it, its answers queued: asked first
             queued = 2 if ctx == other else 1
-            assert isinstance(app.screen, Confirm) and f"({ctx[:6]}," in app.screen.prompt \
+            assert isinstance(app.screen, ForgetChoice) and f"({ctx[:6]}," in app.screen.prompt \
                 and f"{queued} queued answer(s) will be discarded" in app.screen.prompt, desc
-            await pilot.press("n")
+            await pilot.press("escape")
             await pilot.pause()
         target = (sid, mine) if (where, filtered) == ("items", True) else \
             (ctx, theirs) if where == "items" else (ctx, None)
@@ -1588,7 +1588,7 @@ class Burst:
         """The session the dialog in front asks about, by name: Rename's box holds it, a
         Confirm's prompt names it, as Compact's and Park's dialogs do."""
         s = self.app.screen
-        text = (s.current if isinstance(s, RenameSession) else s.prompt if isinstance(s, Confirm)
+        text = (s.current if isinstance(s, RenameSession) else s.prompt if isinstance(s, (Confirm, ForgetChoice))
                 else s.name_ if isinstance(s, (CompactSession, ParkSession)) else "")
         return next((who for who in self.sids if who in text), None)
 
@@ -1610,7 +1610,7 @@ class Burst:
     ("session-list", "qa", ("p", "down"), lambda b: b.asked(), "alpha",
      "P on a session run in the wheelhouse asks first, about the session it was on (Compact first)"),
     ("session-list", "qa", ("delete", "down"), lambda b: b.asked(), "alpha",
-     "Delete on the session it was on confirms first, its queued answer at stake"),
+     "Delete on the session it was on asks first (Let it know or Just stop it), its queued answer at stake"),
     ("items", "qa", ("i", "down"), lambda b: (b.command("alpha"), b.command("bravo")), ("interrupt", None),
      "I interrupts the session of the item it was on"),
     ("items", "qa", ("c", "down"), lambda b: b.asked(), "alpha", "C compacts the session of the item it was on"),
@@ -1651,7 +1651,7 @@ async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch,
         for _ in range(6):
             await pilot.pause()
         assert seen(b) == want, f"{desc}: got {seen(b)}"
-        if isinstance(app.screen, (RenameSession, Confirm, CompactSession, ParkSession)):
+        if isinstance(app.screen, (RenameSession, Confirm, CompactSession, ParkSession, ForgetChoice)):
             await pilot.press("escape")
             await pilot.pause()
         assert_one_current(app, desc)
@@ -3926,6 +3926,70 @@ async def test_park_offers_to_compact_first_by_cache_warmth(store, tmp_path, mon
         await pilot.pause()
     row = store.session(sid)
     assert (bool(row["park_requested_at"]), bool(row["park_compact"])) == (True, compact), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("runner_, warm, keys, asked, stopped, desc", [
+    ("sdk", True, ("enter",), 1, 0, "hosted, a warm cache: Let it know by default, the end request"),
+    ("sdk", False, ("enter",), 0, 1, "hosted, a cold one: Just stop it by default, stopped and forgotten"),
+    ("tab", True, ("enter",), 1, 0, "a tab, a warm cache: Let it know by default"),
+    ("tab", False, ("enter",), 0, 1, "a tab, a cold one: Just stop it by default"),
+    ("sdk", False, ("l",), 1, 0, "L lets it know, the cache cold"),
+    ("tab", True, ("j",), 0, 1, "J just stops it, the cache warm"),
+    ("sdk", True, ("click:#forget-stop",), 0, 1, "Just stop it clicked"),
+    ("tab", False, ("click:#forget-tell",), 1, 0, "Let it know clicked"),
+    ("sdk", True, ("escape",), 0, 0, "Esc: neither, the session left be"),
+])
+async def test_stop_and_forget_offers_a_choice_by_cache_warmth(store, tmp_path, monkeypatch, runner_, warm, keys,
+                                                               asked, stopped, desc):
+    """Stop & Forget on a running session asks: Let it know (the end request, its end steps)
+    or Just stop it (stopped now, its row deleted, nothing asked of it), the default by the
+    prompt cache's warmth, as Park's Compact first is. The queued-answers warning stays."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="forgettable", runner=runner_)
+    store.queue(sid, "an answer")
+    app = WheelhouseApp(store)
+    stops = []
+    monkeypatch.setattr(app.client, "warm", lambda s: warm)
+    monkeypatch.setattr(app.client, "cache_expires", lambda s: 1_800_000_000.0)
+    monkeypatch.setattr(app.client, "context_tokens", lambda s: 180_000)
+    monkeypatch.setattr(app.client, "stop_process", lambda s: stops.append(s["id"]) or True)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pick(app, pilot, sid)
+        await pilot.click("#end")
+        await pilot.pause()
+        assert isinstance(app.screen, ForgetChoice), desc
+        prompt = app.screen.prompt
+        assert "1 queued answer(s) will be discarded" in prompt, f"{desc}: the queued-answers warning"
+        why = "warm until" if warm else "cold since"
+        assert why in prompt and ("let it know (the default)" if warm else "re-read ~180k") in prompt, \
+            f"{desc}: the default and why: {prompt}"
+        assert focused_id(app) == ("forget-tell" if warm else "forget-stop"), f"{desc}: Enter takes the default"
+        for key in keys:
+            await (pilot.click(key.removeprefix("click:")) if key.startswith("click:") else pilot.press(key))
+        await pilot.pause()
+    row = store.session(sid)
+    got = (int(bool(row and row["end_requested_at"])), len(stops), row is None)
+    assert got == (asked, stopped, bool(stopped)), f"{desc}: (end requests, stops, forgotten) {got}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("runner_, desc", [
+    ("sdk", "hosted: a pending end request pressed again offers C cancel / F force, not ForgetChoice"),
+    ("tab", "a tab: the same"),
+])
+async def test_stop_and_forget_pending_keeps_its_choice(store, tmp_path, monkeypatch, runner_, desc):
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="asked", runner=runner_)
+    store.request(sid, "end")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pick(app, pilot, sid)
+        await pilot.click("#end")
+        await pilot.pause()
+        assert isinstance(app.screen, Choice), desc
 
 
 @pytest.mark.anyio

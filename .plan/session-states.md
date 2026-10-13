@@ -52,7 +52,7 @@ Parked show "Forget". It is one action underneath (Q84).
 | From      | Verb (key)                  | To        | Caption shown      | Confirm                    |
 |-----------|-----------------------------|-----------|--------------------|----------------------------|
 | Active    | Park (P)                    | Parked    | Park               | no; asks the session       |
-| Active    | Forget (Del)                | Forgotten | Stop & Forget      | no; asks the session       |
+| Active    | Forget (Del)                | Forgotten | Stop & Forget      | asks: let it know, or stop |
 | Active    | Relaunch (L)                | Active    | Relaunch           | if busy (kills the turn)   |
 | Available | Park (P)                    | Parked    | Park               | no                         |
 | Available | Forget (Del)                | Forgotten | Forget             | yes (deletes its data)     |
@@ -77,9 +77,15 @@ forces. Forcing on an Active session stops the process now, without the session'
 
 **Park on Available.** Sets `parked = 1` at once. There is no process to ask for notes.
 
-**Forget on Active (Stop & Forget).** Today's End steps: the request, the session's own
+**Forget on Active (Stop & Forget).** A dialog first (`ForgetChoice`): Let it know (`L`)
+or Just stop it (`J`). Let it know is today's End steps: the request, the session's own
 end steps (memory, handoff), then `end_session` deletes the row. Then the process stops,
-the same way as Park. A forced Forget stops the process first, then deletes the row.
+the same way as Park. Just stop it is the forced Forget: it stops the process first, then
+deletes the row, with nothing sent to the session. The default follows the prompt cache,
+as Park's Compact first does (`Snapshot.warm`): Let it know while warm, Just stop it once
+cold, since the end steps would re-read the whole context (a session used for a quick
+document scan isn't worth it). The dialog says which and why, and how many queued answers
+go with the row. A pending forget request pressed again keeps its `C`/`F` choice.
 
 **Forget on Available or Parked.** `store.end(sid)` at once, after the confirm. The
 confirm keeps today's guard (`act_on_dead`): if the session came back meanwhile, nothing

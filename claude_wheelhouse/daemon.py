@@ -670,6 +670,7 @@ class Daemon:
                 "stale": self.hub.stale(sid), "sends_now": self.hub.sends_now(sid),
                 "compact_first": self.hub.compact_first(sid), "compacting": sid in self.hub.compacting,
                 "warm": self.hub.warm(sid),
+                "cache_expires": self.hub.cache_expires(sid),
                 "context": {"tokens": snap.context, "window": snap.window, "estimate": snap.estimate}
                 if snap and snap.context else None}
 

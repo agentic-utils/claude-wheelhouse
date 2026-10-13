@@ -229,9 +229,12 @@ session.
   handoff notes into its items, then it parks and stops (its tab closes); on one not running
   it parks at once. On one run in the wheelhouse, Park asks first, offering to compact it once
   parked, before it stops (ticked while its prompt cache is warm: a cold one saves nothing). On a Parked session, Relaunch is captioned Unpark, and `P` and `L` both
-  press it. Forget deletes a session's wheelhouse data: on a running one, Stop & Forget asks it
-  to do its own end steps first, then it stops (it asks you first only if answers are queued for
-  it, which go with it); on one not running it asks you to confirm. Fork (`K` in the session list)
+  press it. Forget deletes a session's wheelhouse data: on a running one, Stop & Forget asks you
+  first, Let it know (`L`: it does its own end steps, then stops) or Just stop it (`J`: it stops
+  now, told nothing, which costs no tokens). The default is to let it know while its prompt cache
+  is warm and to just stop it once cold, since its end steps would re-read its whole context: the
+  dialog says which, and why. Answers queued for it go with it, and the dialog says how many. On
+  one not running it asks you to confirm. Fork (`K` in the session list)
   makes a new session, "<name> (fork)", that carries on from a copy of the session's conversation
   so far, run as the session is, on its model and effort; the session itself carries on too. The
   dialog lists the session's open questions and its todo and blocked tasks, unticked: the ticked
