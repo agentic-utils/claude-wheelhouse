@@ -6852,14 +6852,18 @@ async def test_drag_within_the_band_keeps_the_sort_and_across_turns_it_off(store
         app.refresh_data()
         await pilot.pause()
         assert item_refs(app) == [q, t3, t1, t2, done], "its status changed: in by status, after the question"
-        await drag_row(pilot, table, 2, 4)
-        assert item_refs(app) == [q, t3, t2, done, t1], "t1 into the settled band: across"
+        store.update_item(sid, t3, status="running")
+        app.refresh_data()
+        await pilot.pause()
+        assert item_refs(app) == [q, t1, t2, t3, done], "back to running: by status, not where it was dropped"
+        await drag_row(pilot, table, 1, 4)
+        assert item_refs(app) == [q, t2, t3, done, t1], "t1 into the settled band: across"
         assert [str(c.label) for c in table.ordered_columns] == ["session", "ref", "status", "title"], "no marker"
         assert store.setting("layout.sort.items") == ""
         store.update_item(sid, t2, status="todo")
         app.refresh_data()
         await pilot.pause()
-        assert item_refs(app) == [q, t3, t2, done, t1], "ordering off: a status change moves nothing"
+        assert item_refs(app) == [q, t2, t3, done, t1], "ordering off: a status change moves nothing"
 
 
 @pytest.mark.anyio

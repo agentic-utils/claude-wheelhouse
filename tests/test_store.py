@@ -911,3 +911,18 @@ def test_sessions_subqueries_use_an_index(store, sid, sql, index, desc):
     """sessions() runs each tick: 1.9 s a call with 300k messages before these (T114 review)."""
     plan = " ".join(r[-1] for r in store.db.execute(f"EXPLAIN QUERY PLAN {sql}", (sid,)))
     assert index in plan, f"{desc}: {plan}"
+
+
+@pytest.mark.parametrize("group, status, kept, desc", [
+    ("status*|0|1", "running", False, "placed under Status *: a status change lets it go (T121)"),
+    ("status▲|0|0", "running", False, "under Status ▲ too"),
+    ("status*|0|1", "blocked", True, "the same status written again: still placed"),
+    ("manual", "running", True, "ordering off: nothing moves by itself"),
+    ("title▲|0|'x'", "running", True, "another column's sort: its status leaves it alone"),
+])
+def test_a_status_change_ends_a_status_placement(store, sid, group, status, kept, desc):
+    ref = store.post_item(sid, "task", "x", status="blocked")
+    store.set_item_order(group, [(sid, ref)])
+    store.update_item(sid, ref, status=status)
+    row = store.item(sid, ref)
+    assert ((row["pos"], row["pos_group"]) == (0, group)) == kept, desc

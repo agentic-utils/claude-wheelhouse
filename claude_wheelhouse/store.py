@@ -195,6 +195,13 @@ TRIGGERS_VERSION = 1
 TRIGGER_BODIES = {f"{table}_marked_{op.lower()}": f"AFTER {op} ON {table} "
                   f"BEGIN UPDATE marks SET n = n + 1 WHERE kind = '{table}'; END"
                   for table in MARKED for op in ("INSERT", "UPDATE", "DELETE")}
+# A row the person placed under a Status sort (pos_group status*, status▲, status▼) is placed
+# only until its status changes, whoever writes it: from then on it goes by status, until
+# dragged again (T121). Not with ordering off (manual), where nothing moves by itself, nor
+# under another column's sort, which its status leaves alone
+TRIGGER_BODIES["items_unplaced_on_status"] = (
+    "AFTER UPDATE OF status ON items WHEN OLD.status IS NOT NEW.status AND NEW.pos_group LIKE 'status%' "
+    "BEGIN UPDATE items SET pos = NULL, pos_group = NULL WHERE id = NEW.id; END")
 OUR_TRIGGER = re.compile(rf"^(?:{'|'.join(TRIGGER_BODIES)})(?:_v(\d+))?$")
 # retired, every version dropped on open: items_seq_* numbered each write of updated_at in
 # items.seq (#70, 2bbb99a), with the unique index items_seq (INDEXES drops it). Ties now go
