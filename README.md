@@ -194,7 +194,8 @@ session.
   it sets one), in a box that takes half the column. The box's last two rows always show
   what a session run in the wheelhouse is doing now, cropped to fit, so nothing above
   them moves as that changes. The dot before each name, and the
-  status in the description, are green when it's live, cyan while it starts or relaunches,
+  status in the description, are green when it's live (the dot amber once its context reaches 200k tokens, the size at
+  which a session run in the wheelhouse is asked whether to Compact), cyan while it starts or relaunches,
   yellow when stalled (its Claude Code runs, but its wheelhouse MCP server hasn't checked in
   for 2 minutes), magenta while it's been asked to park or forget, red when dead (its Claude
   Code isn't running) and grey when parked. A row selected or under the mouse keeps its dot's colour, and an

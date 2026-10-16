@@ -3810,6 +3810,42 @@ async def test_the_session_list_shows_context_size(store, sid, tmp_path, monkeyp
     assert str(cell) == chars, desc
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("context, status, parked, colour, desc", [
+    (None, "live", False, "#00ff41", "live, no transcript yet: green"),
+    (199_999, "live", False, "#00ff41", "live, just under the Compact question's size: green"),
+    (tui.NUDGE_TOKENS, "live", False, "#ff9f1c", "live, at the Compact question's size: amber"),
+    (350_000, "live", False, "#ff9f1c", "live, past it: amber"),
+    (350_000, "dead", False, "#ff2a6d", "dead, however large: red"),
+    (350_000, "stalled", False, "#ffd300", "stalled, however large: yellow"),
+    (350_000, "live", True, "#777777", "parked, however large: grey"),
+])
+@pytest.mark.both
+async def test_a_live_sessions_dot_is_amber_with_a_large_context(store, sid, tmp_path, monkeypatch, context, status,
+                                                                 parked, colour, desc):
+    """Doug (#16): "status icon green for active, red for dead - good. But let's add amber for
+    large context. Same threshold as the current prompt to compact, currently 200k." """
+    if context is not None:
+        folder = tmp_path / "projects/-home-u-repo"
+        folder.mkdir(parents=True)
+        rec = {"type": "assistant", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 60)),
+               "message": {"id": "m1", "model": "claude-opus-5-5", "content": [],
+                           "usage": {"input_tokens": 10, "cache_read_input_tokens": context - 10, "output_tokens": 5}}}
+        folder.joinpath(f"{sid}.jsonl").write_text(json.dumps(rec) + "\n")
+    if parked:
+        store.set_parked(sid, True)
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    monkeypatch.setattr(WheelhouseApp, "shown_status", lambda self, s: status)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        app.refresh_data()
+        await pilot.pause()
+        dot = app.query_one("#session-list", DataTable).get_row(sid)[0]   # by key: a parked row sinks
+    assert dot.style.split()[-1] == colour, desc
+
+
 def shown_buttons(app) -> set[str]:
     return {b.id for b in app.screen.query("SendBar Button, PermissionButtons Button, #conversation-buttons Button")
             if b.display and b.parent.display}

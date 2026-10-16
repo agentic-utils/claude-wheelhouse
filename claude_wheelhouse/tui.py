@@ -54,6 +54,7 @@ from textual.widgets import (
 
 from . import api, emoji, features, models, stats, subagents, transcript, tutorial
 from .client import LocalClient, Unreachable
+from .host import NUDGE_TOKENS
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
@@ -69,6 +70,7 @@ DECISION = "bold #b967ff"   # an unseen decision: noticeable, not urgent
 STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "#05d9e8",
                 "dead": "bold #ff2a6d", "forgetting": "bold #d300c5", "parking": "bold #d300c5",
                 "relaunching": "bold #05d9e8"}
+LARGE_CONTEXT = "bold #ff9f1c"   # a live session's dot at or past the Compact question's size (NUDGE_TOKENS)
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
 FRAMES = 10   # frames a second that the shimmer, the eyes and the bars are counted in, whatever the rate drawn
 SHIMMER_PERIOD = 2 * len(SHIMMER)   # the title's frames before its colours come round again (shimmer)
@@ -2503,6 +2505,15 @@ class WheelhouseApp(App):
         self.paint_sessions()
         self.each_pane("landed", sid)   # a repaint, not a tick: a tick would start another read
 
+    def dot_style(self, s, st: str) -> str:
+        """A session's dot: grey when parked, amber when live with a context at or past the size
+        a host's session is asked to Compact at (NUDGE_TOKENS), else its status's colour."""
+        if s["parked"]:
+            return "#777777"
+        if st == "live" and (self.client.context_size(s) or 0) >= NUDGE_TOKENS:
+            return LARGE_CONTEXT
+        return STATUS_STYLE[st]
+
     def context_cell(self, s) -> Text | str:
         size = self.client.context_size(s)
         return stats.context_bar(size) if size else ""
@@ -2524,7 +2535,7 @@ class WheelhouseApp(App):
         for s in sorted(self.sessions, key=lambda s: s["parked"]):   # stable: creation order within each
             st = self.shown_status(s["id"])
             busy = Text(" " * SessionList.EYE) if s["id"] in table.eyes else Text("")   # the eye's room (sweep)
-            dot = Text("●", style="#777777" if s["parked"] else STATUS_STYLE[st])
+            dot = Text("●", style=self.dot_style(s, st))
             name = Text(self.display_name(s), style="dim" if s["parked"] else "")
             if self.stale(s["id"]):
                 name.append(" ⟳", style="bold #ff2a6d")
