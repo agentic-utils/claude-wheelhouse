@@ -3445,13 +3445,16 @@ async def test_the_stats_pane_follows_the_session_in_context(store, sid, tmp_pat
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("size, shown", [((200, 60), True), ((160, 40), True),
+                                         ((80, 24), False)])   # an 11x9 pane: no charts, so no zoom
 @pytest.mark.parametrize("selected, desc", [
     (True, "a session selected"),
     (False, "none selected: every session's totals"),
 ])
-async def test_the_zoom_buttons_zoom_both_charts(store, sid, tmp_path, monkeypatch, selected, desc):
+async def test_the_zoom_buttons_zoom_both_charts(store, sid, tmp_path, monkeypatch, size, shown, selected, desc):
     """+ and -, clicked at the right of the hour ticks: one level for both charts, held
-    through a repaint, and going no further than the ladder's ends."""
+    through a repaint, and going no further than the ladder's ends. At every size the
+    charts show at, the line they're on is inside the pane."""
     folder = tmp_path / "projects/-home-u-repo"
     folder.mkdir(parents=True)
     rec = {"type": "assistant", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
@@ -3460,7 +3463,8 @@ async def test_the_zoom_buttons_zoom_both_charts(store, sid, tmp_path, monkeypat
     folder.joinpath(f"{sid}.jsonl").write_text(json.dumps(rec) + "\n")
     monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
     app = WheelhouseApp(store)
-    async with app.run_test(size=(200, 60)) as pilot:
+    desc = f"{desc} at {size[0]}x{size[1]}"
+    async with app.run_test(size=size) as pilot:
         if selected:
             app.follow(sid)
         app.refresh_data()
@@ -3473,15 +3477,18 @@ async def test_the_zoom_buttons_zoom_both_charts(store, sid, tmp_path, monkeypat
             start = next(start for start, end, _ in stats.zoom_spans(pane.span, pane.size.width)
                          if pane.render().plain.split("\n")[-1][start:end].strip() == button)
             top = pane.content_region.offset - pane.region.offset
+            assert pane.line_ys(pane.size.width)[-1] < pane.size.height, f"{desc}: the buttons are inside the pane"
             await pilot.click("#stats", offset=(top.x + start + 1, top.y + pane.line_ys(pane.size.width)[-1]))
             await pilot.pause()
 
-        assert len(pane.charts) == 2 and pane.span == stats.SPAN, f"{desc}: both charts, at the default"
+        assert bool(pane.charts) == shown and pane.span == stats.SPAN, f"{desc}: the charts, at the default"
+        if not shown:
+            return
         for button, span in (("+", 3600), ("+", 1800), ("+", 900), ("-", 1800)):
             await click(button)
             app.refresh_data()
             await pilot.pause()
-            assert [c.span for c in pane.charts] == [span, span], f"{desc}: {button} to {span}"
+            assert pane.charts and {c.span for c in pane.charts} == {span}, f"{desc}: {button} to {span}"
         assert pane.render().plain.split("\n")[-1].endswith("30m  -   + "), desc
         await click("-")
         await click("-")

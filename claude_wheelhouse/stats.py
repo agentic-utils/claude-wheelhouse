@@ -1054,7 +1054,7 @@ class Chart:
     span: float
     kind: str = "assembly"
     gap: bool = False   # a blank line above it
-    hour: int = 0   # its series' tokens in the last hour, on its legend's line
+    recent: int = 0   # its series' tokens over its span, on its legend's line
 
 
 def chart(turns: list[Turn], now: float, width: int, height: int, kind: str = "assembly", span: int = SPAN,
@@ -1070,14 +1070,14 @@ def chart(turns: list[Turn], now: float, width: int, height: int, kind: str = "a
         return [build_column([(CO[k], b[k]) for k in keys], t, maxt, height) for b, t in zip(bs, totals)], maxt
     # the columns, made once for each window and its turns (Series): only the hour's total moves between
     built, maxt = s.kept(("chart", kind, columns, span, height, start, s.upto(now)), bars)
-    return Chart(built, maxt, height, start, span, kind, gap, last_hour(turns, now, keys))
+    return Chart(built, maxt, height, start, span, kind, gap, recent(turns, now, keys, span))
 
 
-def last_hour(turns: list[Turn], now: float, keys: list[str]) -> int:
-    """The tokens of the series `keys`, the bars' own, in turns from an hour before `now` to
+def recent(turns: list[Turn], now: float, keys: list[str], span: int = SPAN) -> int:
+    """The tokens of the series `keys`, the bars' own, in turns from `span` before `now` to
     `now`, both included: by timestamp, not the chart's buckets, whose oldest starts earlier."""
     s = series(turns)
-    return sum(s.total(k, now - 3600, now) for k in keys)
+    return sum(s.total(k, now - span, now) for k in keys)
 
 
 def charts(turns: list[Turn], now: float, width: int, room: int, height: int, span: int = SPAN) -> list[Chart]:
@@ -1170,17 +1170,23 @@ def chart_lines(c: Chart, frame: int, ticks: bool = True) -> list[Text]:
     hourly ticks under it. The shimmer and gradient are the dashboard's."""
     name, series = CHARTS[c.kind]
     head = Text("▸ ", style=f"bold {hexc(ACCENT)}") + Text(name, style=f"bold {hexc(TEXT)}")
-    # the last hour's tokens at the right, a five-character number's room kept (tokens() never
+    # the span's tokens at the right, a five-character number's room kept (tokens() never
     # needs more) so the count's size never changes which keys show. The keys sit a space apart,
-    # and those that don't fit beside it are left out whole, the first ones first (D82)
-    note = Text(f"{tokens(c.hour):>5} tokens/last hr", style=hexc(DIM))
+    # and those that don't fit beside it are left out whole, the first ones first (D82). Short of
+    # room the note shortens, then goes, then the name is cut: the line never wraps
     width = MARGIN + len(c.columns)
-    keys = [Text("▆", style=hexc(CO[k])) + Text(" " + legend, style=hexc(DIM)) for k, legend in series]
+    count, since = tokens(c.recent), span_name(c.span)
+    full = f"{count:>5} tokens/last {since}"
+    note = Text(next((n for n in (full, f"{count}/{since}") if head.cell_len + 2 + len(n) <= width), ""),
+                style=hexc(DIM))
+    keys = [Text("▆", style=hexc(CO[k])) + Text(" " + legend, style=hexc(DIM)) for k, legend in series
+            if note.plain == full]   # beside the full note only, so a shortened one never brings keys back
     while keys and head.cell_len + 2 + sum(k.cell_len + 1 for k in keys) - 1 + 2 + note.cell_len > width:
         keys.pop(0)
     if keys:
         head += Text("  ") + Text(" ").join(keys)
-    head += Text(" " * max(width - head.cell_len - note.cell_len, 2)) + note
+    head += Text(" " * max(width - head.cell_len - note.cell_len, 2 if note else 0)) + note
+    head.truncate(width)
     out = ([Text()] if c.gap else []) + [head]
     for row in range(c.height - 1, -1, -1):
         line = bar_label(c, row)

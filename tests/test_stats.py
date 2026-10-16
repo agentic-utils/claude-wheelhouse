@@ -315,34 +315,48 @@ def test_the_output_chart_stacks_output_tokens():
     assert stats.chart_lines(c, 0, ticks=False)[-1].plain.strip().startswith("0 └"), "no hour ticks: they go under the last"
 
 
-@pytest.mark.parametrize("ago, kind, hour, desc", [
-    (60, "assembly", 123, "context assembly: cache read, new and miss, the bars' own series"),
-    (60, "output", 7, "output: its output tokens"),
-    (3600, "assembly", 123, "a turn exactly an hour ago counts"),
-    (3601, "assembly", 0, "a second older doesn't, though the chart still draws it"),
-    (-1, "assembly", 0, "nor one after now, which the bars leave out too"),
+@pytest.mark.parametrize("ago, kind, span, total, desc", [
+    (60, "assembly", stats.SPAN, 123, "context assembly: cache read, new and miss, the bars' own series"),
+    (60, "output", stats.SPAN, 7, "output: its output tokens"),
+    (7200, "assembly", stats.SPAN, 123, "a turn exactly the span ago counts"),
+    (3600, "assembly", 3600, 123, "zoomed to an hour: a turn exactly an hour ago counts"),
+    (3601, "assembly", 3600, 0, "a second older doesn't, though the chart may still draw it"),
+    (-1, "assembly", stats.SPAN, 0, "nor one after now, which the bars leave out too"),
 ])
-def test_each_chart_sums_its_last_hour(ago, kind, hour, desc):
+def test_each_chart_sums_its_span(ago, kind, span, total, desc):
     turn = Turn(EVEN - ago, 100, 20, 3, 0, None, None, True, output=7)
-    assert stats.chart([turn], EVEN, width=56, height=4, kind=kind).hour == hour, desc
+    assert stats.chart([turn], EVEN, width=56, height=4, kind=kind, span=span).recent == total, desc
+
+
+@pytest.mark.parametrize("width, span, head, desc", [
+    (40, 900, "▸ context assembly  950/15m", "15m's longer note at 40: shortened"),
+    (39, stats.SPAN, "▸ context assembly  950/2h", "short of the full note's room: the short note"),
+    (26, stats.SPAN, "▸ context assembly  950/2h", "the short note, just"),
+    (25, stats.SPAN, "▸ context assembly", "then no note"),
+    (13, stats.SPAN, "▸ context ass", "then the name is cut"),
+])
+def test_the_caption_never_wraps(width, span, head, desc):
+    c = stats.chart([Turn(NOW - 60, 950, 0, 0, 0, None, None, True)], NOW, width=width, height=4, span=span)
+    line = stats.chart_lines(c, 0)[0]
+    assert line.plain.split() == head.split() and line.cell_len <= width, f"{desc}: {line.plain!r}"
 
 
 @pytest.mark.parametrize("width, tokens, keys, note, desc", [
-    (80, 950, ["cache", "new", "miss"], "950 tokens/last hr", "every key, and the count at the right"),
-    (80, 0, ["cache", "new", "miss"], "0 tokens/last hr", "none"),
-    (80, 340_000, ["cache", "new", "miss"], "340k tokens/last hr", "thousands as k"),
-    (80, 1_234_567, ["cache", "new", "miss"], "1.2M tokens/last hr", "millions to one place"),
-    (64, 950, ["cache", "new", "miss"], "950 tokens/last hr", "every key, a space apart, at 64"),
-    (62, 950, ["cache", "new", "miss"], "950 tokens/last hr", "every key, just"),
-    (61, 950, ["new", "miss"], "950 tokens/last hr", "cache is left out first, whole"),
-    (56, 950, ["new", "miss"], "950 tokens/last hr", "new and miss at 56"),
-    (54, 950, ["new", "miss"], "950 tokens/last hr", "new and miss, just"),
-    (53, 950, ["miss"], "950 tokens/last hr", "then new: miss stays longest"),
-    (48, 950, ["miss"], "950 tokens/last hr", "miss, just"),
-    (47, 950, [], "950 tokens/last hr", "then no key"),
-    (40, 12_300_000, [], "12.3M tokens/last hr", "no key at the narrowest that holds the caption and count"),
-    (40, 123_400_000, [], "123M tokens/last hr", "100M or more still fits at 40"),
-    (40, 999_600, [], "1M tokens/last hr", "999.6k rolls over to 1M"),
+    (80, 950, ["cache", "new", "miss"], "950 tokens/last 2h", "every key, and the count at the right"),
+    (80, 0, ["cache", "new", "miss"], "0 tokens/last 2h", "none"),
+    (80, 340_000, ["cache", "new", "miss"], "340k tokens/last 2h", "thousands as k"),
+    (80, 1_234_567, ["cache", "new", "miss"], "1.2M tokens/last 2h", "millions to one place"),
+    (64, 950, ["cache", "new", "miss"], "950 tokens/last 2h", "every key, a space apart, at 64"),
+    (62, 950, ["cache", "new", "miss"], "950 tokens/last 2h", "every key, just"),
+    (61, 950, ["new", "miss"], "950 tokens/last 2h", "cache is left out first, whole"),
+    (56, 950, ["new", "miss"], "950 tokens/last 2h", "new and miss at 56"),
+    (54, 950, ["new", "miss"], "950 tokens/last 2h", "new and miss, just"),
+    (53, 950, ["miss"], "950 tokens/last 2h", "then new: miss stays longest"),
+    (48, 950, ["miss"], "950 tokens/last 2h", "miss, just"),
+    (47, 950, [], "950 tokens/last 2h", "then no key"),
+    (40, 12_300_000, [], "12.3M tokens/last 2h", "no key at the narrowest that holds the caption and count"),
+    (40, 123_400_000, [], "123M tokens/last 2h", "100M or more still fits at 40"),
+    (40, 999_600, [], "1M tokens/last 2h", "999.6k rolls over to 1M"),
 ])
 def test_the_last_hour_is_on_the_caption_row(width, tokens, keys, note, desc):
     c = stats.chart([Turn(NOW - 60, tokens, 0, 0, 0, None, None, True)], NOW, width=width, height=4)
@@ -499,8 +513,10 @@ def test_ticks_sit_on_their_zooms_steps(span, step, desc):
     assert labels, f"{desc}: at least one tick labelled"
     for m in labels:
         local = time.localtime(c.start + m.start() / len(c.columns) * c.span)
-        on = round((local.tm_min * 60 + local.tm_sec) / step) * step % 3600
-        assert int(m[2]) * 60 == on and on % step == 0, f"{desc}: {m[0]} at {local.tm_min}:{local.tm_sec:02d}"
+        assert int(m[2]) % (step // 60) == 0, f"{desc}: {m[0]} is on a {step // 60}-minute step"
+        off = ((local.tm_min - int(m[2])) % 60) * 60 + local.tm_sec
+        assert min(off, 3600 - off) <= c.span / len(c.columns) + 30, \
+            f"{desc}: {m[0]} drawn at {local.tm_min}:{local.tm_sec:02d}"
 
 
 @pytest.mark.parametrize("width, buttons, desc", [
@@ -907,7 +923,7 @@ def fresh_chart(turns, now, kind):
     bs = stats._buckets(turns, now, 56 - stats.MARGIN, stats.SPAN)
     totals = [sum(b[k] for k in keys) for b in bs]
     maxt = stats.nice(max(totals, default=0))
-    hour = sum(getattr(t, k) for t in turns if now - 3600 <= t.at <= now for k in keys)
+    hour = sum(getattr(t, k) for t in turns if now - stats.SPAN <= t.at <= now for k in keys)
     return [stats.build_column([(stats.CO[k], b[k]) for k in keys], t, maxt, 4) for b, t in zip(bs, totals)], maxt, hour
 
 
@@ -928,7 +944,7 @@ def test_a_kept_chart_is_the_one_made_afresh_at_every_second(later, kind, desc):
              Turn(NOW + 4, 9, 9, 9, 9, None, None, True, output=9)]   # a clock ahead: shown once it's past
     for now in (NOW, NOW + later):   # the first fills the cache the second may reuse
         c = stats.chart(list(turns), now, width=56, height=4, kind=kind)
-        assert (c.columns, c.maxt, c.hour) == fresh_chart(turns, now, kind), f"{desc}, at +{now - NOW:g}s"
+        assert (c.columns, c.maxt, c.recent) == fresh_chart(turns, now, kind), f"{desc}, at +{now - NOW:g}s"
 
 
 @pytest.mark.parametrize("change, kept, desc", [
@@ -945,11 +961,11 @@ def test_a_charts_columns_are_made_once_for_a_window_and_its_turns(change, kept,
 
 
 @pytest.mark.parametrize("later, hour, desc", [
-    (0, 6, "the turn, a minute old, is in the hour"),
-    (3540, 6, "an hour to the second after it"),
-    (3541, 0, "a second later it has gone: the total still follows the clock"),
+    (0, 6, "the turn, a minute old, is in the span"),
+    (7140, 6, "the span to the second after it"),
+    (7141, 0, "a second later it has gone: the total still follows the clock"),
 ])
-def test_the_hours_total_follows_the_clock_with_the_turns_unchanged(later, hour, desc):
+def test_the_spans_total_follows_the_clock_with_the_turns_unchanged(later, hour, desc):
     turns = [Turn(EVEN - 60, 5, 1, 0, 6, None, None, True)]
     stats.chart(turns, EVEN, width=56, height=4)   # kept
-    assert stats.chart(turns, EVEN + later, width=56, height=4).hour == hour, desc
+    assert stats.chart(turns, EVEN + later, width=56, height=4).recent == hour, desc
