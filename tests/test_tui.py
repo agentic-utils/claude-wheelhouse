@@ -6450,3 +6450,52 @@ def test_items_from_an_older_daemon_have_no_parents():
     items = [{"session_id": "s", "ref": "T1", "kind": "task"}, {"session_id": "s", "ref": "A1", "kind": "agent"}]
     rows, counts = tui.item_rows([items, [], []], {"s": "demo"})
     assert [(it["ref"], place) for it, place, _ in rows] == [("T1", None), ("A1", 0)] and counts == {}
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+async def test_delete_on_marked_rows_asks_once_and_takes_the_children(store, sid, tmp_path):
+    (tmp_path / "plan.md").write_text("# Plan\n")
+    with one_second():
+        t = store.post_item(sid, "task", "tidy up", status="done")
+        q = store.post_item(sid, "question", "which db?")
+    store.track_agent(sid, "agent-1", f"{q}: look into it", "", datetime.now(timezone.utc))
+    agent = store.agent_links(sid)["agent-1"][0]
+    doc = store.post_doc(sid, "the plan", str(tmp_path / "plan.md"), q)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        app.items_table.set_marks({f"{sid}|{q}", f"{sid}|{t}"})
+        await pilot.pause()
+        await pilot.press("delete")
+        await pilot.pause()
+        assert isinstance(app.screen, Confirm), "a marked parent asks first"
+        assert app.screen.prompt.startswith(f"Delete the 2 marked rows and the 2 children of {q}? "
+                                            "1 still open and 1 unread."), app.screen.prompt
+        await pilot.press("y")
+        await pilot.pause()
+        store.agent_status(sid, "agent-1", "done", "finished")
+        await refresh(pilot, sid)
+        assert item_list_rows(app) == [], "both rows and the children gone, the subagent finishing too"
+
+
+@pytest.mark.anyio
+async def test_a_long_doc_renders_off_the_loop(store, sid):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        long = "\n\n".join(f"## Section {i}\n\nprose **bold** `code`\n\n| a | b |\n|---|---|\n| 1 | 2 |" for i in range(400))
+        detail = app.detail
+        detail.update([("head", "## M1"), ("doc", long)])
+        started = time.perf_counter()
+        lines = detail._layout(detail.size.width)[1]
+        assert time.perf_counter() - started < 0.2, "laid out without rendering it on the loop"
+        assert any("rendering…" in line for line in lines), "a placeholder meanwhile"
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        lines = detail._layout(detail.size.width)[1]
+        assert any("Section 399" in line for line in lines), "then the doc"
+        key = ("doc", long, detail.size.width + 3)
+        detail.rendered(key)   # rendered for a width since left
+        assert key not in detail.warm, "a stale render dropped"

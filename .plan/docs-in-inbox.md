@@ -19,8 +19,9 @@ always did.
 ## Agents
 
 An A item's parent comes first from the session's own word: the first ref of one of its
-tasks, questions or decisions named in the subagent's description, else in its prompt
-(`store.agent_parent`). The protocol asks sessions to start a description with the item's
+tasks, questions or decisions named anywhere in the subagent's description, else the ref
+its prompt starts with (`store.agent_parent`): further into a prompt a ref may be one it is
+told to leave alone ("unlike T2"). The protocol asks sessions to start a description with the item's
 ref (`T3: review the store`). A session that posts T1 to T5 and then dispatches five agents
 is the usual pattern, and only the refs can tell those apart.
 
@@ -82,8 +83,12 @@ and how many unread (a decision unseen, a doc new or updated). Yes closes or dis
 parent and every child, whatever its status; No or Esc takes nothing. A parent that can't be
 closed (a running task) still says so, as before.
 
+Delete on marked rows asks the same, once for the whole selection, whenever any marked row
+has children, and deletes each such row with its children.
+
 Children deleted this way stay deleted (`Hub.delete_family`, one daemon route): each is
-marked `items.dismissed = 'deleted'` (`store.DELETED`), which `standing` counts as finished
+marked `items.dismissed = 'deleted'` (`store.DELETED`), finished ones included (one
+already dismissed would otherwise come back when posted again), which `standing` counts as finished
 whatever the status, and which a status change, a doc posted again or a subagent finishing
 leaves in place, where an ordinary dismissal clears. The confirm says so. Ctrl+R on one
 brings it back. A session still on older code clears the mark when it changes the item's
@@ -116,4 +121,18 @@ tables and code blocks:
 | 42 KB | 1.8 s | 2.0 s | 0.05 s (0.26 s full screen) |
 
 Moving between tasks costs about 0.05 s, and back to a doc already shown about 0.1 s. A
-change to the file renders it again, at the first-show cost.
+change to the file, or to the pane's width, renders it again.
+
+A doc over 2000 characters is rendered on a worker thread (`Transcript.render_off_loop`),
+showing "rendering…" meanwhile; a render for a width or text since left is dropped, and the
+block laid out again. The loop's worst stall while showing a doc fell from 743 ms to 334 ms
+at 42 KB, and from 168 ms to 85 ms at 8 KB (a width change: 793 to 188 ms, 184 to 70 ms).
+What is left is the render thread holding the interpreter lock.
+
+## Mixed versions
+
+Old code has no `doc` kind in `store.SETTLED`, so an app on old code with its hub in
+process fails on every refresh once a session relaunched on new code posts a doc. The
+fingerprint restart only covers a daemon. Nothing the MCP server can read says what code
+the person's app runs, so the README asks for the app to be restarted straight after an
+update.

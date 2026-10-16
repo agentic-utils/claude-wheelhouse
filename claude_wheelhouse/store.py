@@ -1053,21 +1053,19 @@ class Store:
             raise KeyError(f"no task or subagent {ref} in this session")
 
     def delete_children(self, sid: str, ref: str) -> list[str]:
-        """The person deleted an item with its children: each child of it not yet finished
-        marked deleted (DELETED), whatever its status, a question or decision closed too, so
+        """The person deleted an item with its children: each child of it marked deleted
+        (DELETED), whatever its status, finished ones included, a question or decision closed too, so
         it stays off the inbox when its session or subagent changes it. Ctrl+R on one
         (undelete) brings it back. Returns the refs deleted."""
         with self.tx() as db:
             self._require(db, sid)
             rows = db.execute("SELECT session_id, ref, kind, status, dismissed FROM items WHERE session_id = ? AND parent_ref = ?",
                               (sid, ref)).fetchall()
-            done = [r["ref"] for r in rows if standing(r) != "finished"]
-            for r in rows:
-                if r["ref"] in done:
-                    closed = "closed" if r["kind"] in ("question", "decision") else r["status"]
-                    db.execute("UPDATE items SET status = ?, dismissed = ?, updated_at = ? WHERE session_id = ? AND ref = ?",
-                               (closed, DELETED, now(), sid, r["ref"]))
-        return done
+            for r in rows:   # a finished one too: one dismissed already would come back on a change
+                closed = "closed" if r["kind"] in ("question", "decision") else r["status"]
+                db.execute("UPDATE items SET status = ?, dismissed = ?, updated_at = ? WHERE session_id = ? AND ref = ?",
+                           (closed, DELETED, now(), sid, r["ref"]))
+        return [r["ref"] for r in rows]
 
     def undelete(self, sid: str, ref: str) -> None:
         with self.tx() as db:
@@ -1311,19 +1309,22 @@ PARENTS = ("task", "question", "decision")
 
 
 REF = re.compile(r"\b([TQD]\d+)\b")   # an item's ref, named in a subagent's description or prompt
+LEADING_REF = re.compile(r"\W*(?:[TQD]\d+\b)?")   # the ref a prompt starts with, if any
 
 
 def agent_parent(db, sid: str, started: datetime, title: str = "", prompt: str = "") -> str | None:
     """The item a subagent was dispatched for. First the session's own word: the first ref
-    of one of its tasks, questions or decisions named in the subagent's description, else in
-    its prompt (the protocol asks for it). Else a guess: the one its session last posted,
+    of one of its tasks, questions or decisions named in the subagent's description, else the
+    ref its prompt starts with (the protocol asks for it in the description). Else a guess: the one its session last posted,
     updated or replied on (created_at, session_at, its own messages on it) at or before the
     subagent started, within that second the first posted. None if it had said nothing on
     any: the agent then sits in its session's group. Made once, as the item is, so later
     words move nothing."""
     kinds = ",".join("?" * len(PARENTS))
-    for text in (title, prompt):
-        for ref in dict.fromkeys(REF.findall(text or "")):
+    # anywhere in the description, but only leading the prompt, where a ref further on may be
+    # one it's told to leave alone ("unlike T2")
+    for refs in (REF.findall(title or ""), REF.findall(LEADING_REF.match(prompt or "")[0])):
+        for ref in dict.fromkeys(refs):
             if db.execute(f"SELECT 1 FROM items WHERE session_id = ? AND ref = ? AND kind IN ({kinds}) "
                           "AND moved_to IS NULL", (sid, ref, *PARENTS)).fetchone():
                 return ref

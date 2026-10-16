@@ -838,7 +838,8 @@ def test_a_docs_status_is_the_persons(store, sid, tmp_path):
 @pytest.mark.parametrize("title, prompt, parent, desc", [
     ("T2: review the store", "", "T2", "the ref its description names"),
     ("review T3, then T2", "", "T3", "the first named"),
-    ("review the store", "Work on Q1 for me.", "Q1", "else the first its prompt names"),
+    ("review the store", "Q1: work on it.", "Q1", "else the ref its prompt starts with"),
+    ("review the store", "Fix the store, unlike T2.", "T5", "a ref further into the prompt counts for nothing"),
     ("T2: review", "Q1 first", "T2", "the description before the prompt"),
     ("T9: review", "A1 and T7", "T5", "no such item, nor an agent: the guess, the last posted"),
     ("T2:review,T3", "", "T2", "a ref against punctuation"),
@@ -862,11 +863,15 @@ def test_a_child_deleted_with_its_parent_stays_deleted(store, sid, tmp_path):
     doc = store.post_doc(sid, "the plan", str(tmp_path / "plan.md"), t)
     q = store.post_item(sid, "question", "which?")
     store.db.execute("UPDATE items SET parent_ref = ? WHERE ref = ?", (t, q))
-    assert sorted(store.delete_children(sid, t)) == sorted([agent, doc, q])
+    (tmp_path / "notes.md").write_text("# Notes\n")
+    old = store.post_doc(sid, "the old notes", str(tmp_path / "notes.md"), t)
+    store.dismiss(sid, old)   # dismissed already, before its parent went
+    assert sorted(store.delete_children(sid, t)) == sorted([agent, doc, q, old])
     store.agent_status(sid, "agent-1", "done", "finished")
     store.post_doc(sid, "the plan, v2", str(tmp_path / "plan.md"))
     store.update_item(sid, q, status="answered", declares=False)
-    assert [standing(store.item(sid, r)) for r in (agent, doc, q)] == ["finished"] * 3, \
+    store.post_doc(sid, "the old notes, v2", str(tmp_path / "notes.md"))
+    assert [standing(store.item(sid, r)) for r in (agent, doc, q, old)] == ["finished"] * 4, \
         "a subagent finishing, a doc posted again, a question changed: all still deleted"
     store.undelete(sid, agent)
     assert standing(store.item(sid, agent)) == "settled", "Ctrl+R brings one back"

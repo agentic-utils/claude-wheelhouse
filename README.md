@@ -36,8 +36,11 @@ make install
 `make install` runs `uv sync --reinstall-package claude-wheelhouse` (plain `uv sync` does
 for a first install), which builds a `.venv` inside the clone: the wheelhouse installs
 nothing outside it (uv keeps its own cache of downloads, and any Python it fetched). To
-update, `git pull`, `make install` again, then quit and reopen the app. Running sessions
-show "needs relaunch" when an update changes what they're told.
+update, `git pull`, `make install` again, then quit and reopen the app straight away
+(with `--local` too, and on every machine that opens this database): a session relaunched
+on the new code can post items the old app can't show, such as docs, and an old app with
+its hub in process breaks on them until it is restarted. Running sessions show "needs
+relaunch" when an update changes what they're told.
 
 The `claude-wheelhouse` command lives in that `.venv`, so from the clone run it as
 `uv run claude-wheelhouse …` (this README writes it plain). `make` on its own lists the

@@ -89,7 +89,11 @@ QUIET = 0.6
 NOTHING_SELECTED = "Select an item, or a session to follow its conversation."
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
-         "warn": "bold #ffd300", "note": "#777777", "tool": "#777777"}
+         "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8"}
+# a doc block (doc_blocks) longer than this is rendered on a thread (Transcript._layout): a
+# 42 KB one takes Rich a second or two, which the loop would otherwise stall for
+RENDER_OFF_LOOP = 2000
+RENDERING = ("note", "_rendering…_")
 CLOSABLE = {"question": "answered", "decision": "seen"}   # what Delete closes, and what Ctrl+R reopening makes it
 
 
@@ -240,13 +244,20 @@ def unread(item) -> bool:
     return (item["kind"], item["status"]) in {("decision", "unseen"), ("doc", "new"), ("doc", "updated")}
 
 
-def family_prompt(item, family: list) -> str:
-    """Delete on a parent: what it takes with it, and how much of that is open or unread."""
+def family_prompt(parents: list, family: list, marked: int = 1) -> str:
+    """Delete on parents (one highlighted, or among `marked` rows): what they take with them,
+    and how much of that is open or unread."""
     n = len(family)
     said = [f"{k} {what}" for k, what in ((sum(map(still_open, family)), "still open"),
                                           (sum(map(unread, family)), "unread")) if k]
-    return (f"Delete {item['ref']} ({item['title']}) and its {n} {'child' if n == 1 else 'children'}?"
-            + (f" {' and '.join(said)}." if said else "")
+    kids = f"{n} {'child' if n == 1 else 'children'}"
+    if marked == 1:
+        item = parents[0]
+        ask = f"Delete {item['ref']} ({item['title']}) and its {kids}?"
+    else:
+        ask = (f"Delete the {marked} marked rows and the {kids} of "
+               f"{', '.join(it['ref'] for it in parents)}?")
+    return (ask + (f" {' and '.join(said)}." if said else "")
             + f" {'It stays' if n == 1 else 'They stay'} deleted, even once finished or changed.")
 
 
@@ -401,6 +412,8 @@ class Transcript(Widget, can_focus=True):
         super().__init__(**kwargs)
         self.blocks: list[tuple[str, str]] = [("note", placeholder)] if placeholder else []
         self._laid: tuple | None = None
+        self.warm: set[tuple] = set()   # long doc blocks rendered on a thread, by (who, md, width)
+        self.warming: set[tuple] = set()   # ... and those under way
 
     def update(self, content: "Blocks | list[tuple[str, str]]") -> None:
         """New blocks. Scrolled up to read (not at the end, which follows), the block at the top
@@ -433,12 +446,41 @@ class Transcript(Widget, can_focus=True):
         if self._laid is None or self._laid[0] != width:
             strips, texts, starts = [], [], []
             for who, md in self.blocks:
+                if who == "doc" and len(md) > RENDER_OFF_LOOP and (who, md, width) not in self.warm:
+                    self.render_off_loop((who, md, width))
+                    who, md = RENDERING   # until it's ready
                 s, t = _block_strips(who, md, width, self.app.console)
                 starts.append(len(strips))
                 strips.extend(s)
                 texts.extend(t)
             self._laid = (width, strips, texts, starts)
         return self._laid[1:]
+
+    def render_off_loop(self, key: tuple) -> None:
+        """A long doc block rendered at a width on a thread (_block_strips keeps it), then laid
+        out on the loop (rendered); once only for each, however often it's asked for."""
+        if key in self.warming:
+            return
+        self.warming.add(key)
+        console = self.app.console
+
+        def work() -> None:
+            _block_strips(*key, console)
+            self.app.call_from_thread(self.rendered, key)
+        self.run_worker(work, thread=True, group="render", exit_on_error=False)
+
+    def rendered(self, key: tuple) -> None:
+        """A block rendered off the loop: shown, unless the blocks have moved on since it was
+        asked for, or the width (a resize, a splitter dragged), when it's dropped and the block
+        laid out again, which asks for it at the new width."""
+        self.warming.discard(key)
+        who, md, width = key
+        if (who, md) not in self.blocks:
+            return
+        if width == self.size.width:
+            self.warm = {k for k in self.warm if (k[0], k[1]) in self.blocks} | {key}
+        self._laid = None   # at another width, laid out again, which asks for this one
+        self.refresh(layout=True)
 
     def get_content_width(self, container, viewport) -> int:
         return container.width
@@ -1295,7 +1337,7 @@ def doc_blocks(item, doc) -> list[tuple[str, str]]:
         out.append(("warn", f"The file {'has gone' if doc['gone'] == 'gone' else 'is not a regular file'}: "
                             + ("this is the last text read." if doc["text"] else "nothing was read.")))
     if doc and doc["text"]:
-        out.append(("claude", doc["text"]))
+        out.append(("doc", doc["text"]))
     return out
 
 
@@ -3509,15 +3551,19 @@ class WheelhouseApp(App):
         if standing(item) == "finished" and self.show_finished:
             self.notify(f"{item['ref']} is {verb} already: Ctrl+R reopens it")
             return
-        family = [it for it in self.client.inbox(item["session_id"]).items
-                  if parent_of(it) == item["ref"] and standing(it) != "finished"]
+        family = self.family(item)
         if family:   # it goes with its children, once the person says so
-            self.push_screen(Confirm(family_prompt(item, family)),
+            self.push_screen(Confirm(family_prompt([item], family)),
                              lambda yes: yes and self.close_family(item, family))
             return
         self.close(item, True)
         self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
         self.refresh_data()
+
+    def family(self, item) -> list:
+        """An item's children not yet finished: what Delete on it takes with it."""
+        return [it for it in self.client.inbox(item["session_id"]).items
+                if parent_of(it) == item["ref"] and standing(it) != "finished"]
 
     def close_family(self, item, family: list) -> None:
         """Delete confirmed on a parent: each of its children deleted, whatever its status, and
@@ -3570,15 +3616,32 @@ class WheelhouseApp(App):
             return (not finished or not self.show_finished) if closed else finished
         picked = [it for key in self.items_table.final() if key in self.items_table.marked   # as they'll stand
                   if (it := self.client.item(*key.split("|"))) and closable(it)]
+        families = {item_key(it): self.family(it) for it in filter(acts, picked)} if closed else {}
+        if any(families.values()):   # the children go with their parents, once the person says so
+            kids = [c for f in families.values() for c in f]
+            parents = [it for it in filter(acts, picked) if families[item_key(it)]]
+            self.push_screen(Confirm(family_prompt(parents, kids, len(families))),
+                             lambda yes: yes and self.close_picked(list(filter(acts, picked)), families))
+            return
         if not picked or not any(acts(it) for it in picked):
             self.notify("the marked rows are finished already: Ctrl+R reopens them" if picked and closed else
                         f"nothing among the marked rows to {'close' if closed else 'reopen'}", severity="warning")
             return
+        self.close_picked(list(filter(acts, picked)), {}, closed)
+
+    def close_picked(self, picked: list, families: dict, closed: bool = True) -> None:
+        """The marked rows closed (or reopened), each with its children deleted if it has any
+        (families, by row key, confirmed): as Delete does them one at a time."""
         done = []
-        for it in filter(acts, picked):
+        for it in picked:
             try:
-                self.close(it, closed)
-            except SessionGone:   # ended meanwhile: the rest still go
+                if families.get(item_key(it)):
+                    self.item_sink.jump()
+                    self.repin.add(item_key(it))
+                    self.told(self.client.delete_family(it["session_id"], it["ref"]))
+                else:
+                    self.close(it, closed)
+            except (SessionGone, KeyError):   # ended or gone meanwhile: the rest still go
                 continue
             done.append(it)
         self.items_table.set_marks(set())
