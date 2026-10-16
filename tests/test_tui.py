@@ -3473,13 +3473,7 @@ async def test_the_zoom_buttons_zoom_both_charts(store, sid, tmp_path, monkeypat
         pane = app.query_one("#stats")
 
         async def click(button):
-            await pilot.pause()   # drawn, so where the buttons are is known
-            start = next(start for start, end, _ in stats.zoom_spans(pane.span, pane.size.width)
-                         if pane.render().plain.split("\n")[-1][start:end].strip() == button)
-            top = pane.content_region.offset - pane.region.offset
-            assert pane.line_ys(pane.size.width)[-1] < pane.size.height, f"{desc}: the buttons are inside the pane"
-            await pilot.click("#stats", offset=(top.x + start + 1, top.y + pane.line_ys(pane.size.width)[-1]))
-            await pilot.pause()
+            await click_zoom(pilot, pane, button, desc)
 
         assert bool(pane.charts) == shown and pane.span == stats.SPAN, f"{desc}: the charts, at the default"
         if not shown:
@@ -3492,9 +3486,159 @@ async def test_the_zoom_buttons_zoom_both_charts(store, sid, tmp_path, monkeypat
         assert pane.render().plain.split("\n")[-1].endswith("30m  -   + "), desc
         await click("-")
         await click("-")
-        assert pane.span == stats.SPAN and not any(
-            pane.render().plain.split("\n")[-1][start:end] == " - "
-            for start, end, _ in stats.zoom_spans(pane.span, pane.size.width)), f"{desc}: - goes no wider"
+        assert pane.span == stats.SPAN and not zoomable(pane, "-"), f"{desc}: a transcript all in the span: - goes no wider"
+
+
+async def click_zoom(pilot, pane, button, desc):
+    """A click on the charts' zoom's - or +, where it's drawn."""
+    await pilot.pause()   # drawn, so where the buttons are is known
+    start = next(start for start, end, _ in stats.zoom_spans(pane.span, pane.size.width, pane.more)
+                 if pane.render().plain.split("\n")[-1][start:end].strip() == button)
+    top = pane.content_region.offset - pane.region.offset
+    assert pane.line_ys(pane.size.width)[-1] < pane.size.height, f"{desc}: the buttons are inside the pane"
+    await pilot.click("#stats", offset=(top.x + start + 1, top.y + pane.line_ys(pane.size.width)[-1]))
+    await pilot.pause()
+
+
+def zoomable(pane, button) -> bool:
+    """Whether the zoom's - or + goes anywhere, as drawn."""
+    line = pane.render().plain.split("\n")[-1]
+    return any(line[start:end].strip() == button for start, end, _ in stats.zoom_spans(pane.span, pane.size.width, pane.more))
+
+
+def usage_rec(mid, ago, read):
+    return {"type": "assistant", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - ago)),
+            "message": {"id": mid, "model": "claude-opus-5-5", "content": [],
+                        "usage": {"input_tokens": 2, "cache_read_input_tokens": read, "output_tokens": 10}}}
+
+
+def prompt_rec(ago):
+    return {"type": "user", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - ago)),
+            "message": {"role": "user", "content": "go on"}}
+
+
+def transcript_of(folder, sid, *recs):
+    folder.mkdir(parents=True, exist_ok=True)
+    folder.joinpath(f"{sid}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
+
+
+def caption(pane) -> str:
+    """The context assembly chart's caption's note, its short form however wide the pane."""
+    line = next(line for line in pane.render().plain.split("\n") if "context assembly" in line)
+    return line.replace(" tokens/last ", "/").split()[-1]
+
+
+class HeldLoads:
+    """UsageFollower.load held until let go, so a test sees the charts while they fill."""
+
+    def __init__(self, monkeypatch):
+        import threading
+        self.go, real = threading.Event(), stats.UsageFollower.load
+        monkeypatch.setattr(stats.UsageFollower, "load", lambda f, cutoff: self.go.wait(10) and real(f, cutoff))
+
+
+DAY = 86400
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size", [(200, 60), (160, 40)])   # the zoom test's sizes the charts show at
+@pytest.mark.parametrize("selected, desc", [
+    (True, "a session selected"),
+    (False, "none selected: every session's totals"),
+])
+async def test_zooming_out_fills_the_charts_from_older_history(store, sid, tmp_path, monkeypatch, clock, size,
+                                                              selected, desc):
+    """- past two hours reads the older history on a worker, the charts saying loading…
+    meanwhile, and goes on until the span covers the oldest turn."""
+    transcript_of(tmp_path / "projects/-home-u-repo", sid, usage_rec("m1", 3 * DAY, 2000), prompt_rec(2.9 * DAY),
+                  usage_rec("m2", 3 * 3600, 1000), prompt_rec(2.5 * 3600), usage_rec("m3", 60, 82_000))
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    held = HeldLoads(monkeypatch)
+    app = WheelhouseApp(store)
+    desc = f"{desc} at {size[0]}x{size[1]}"
+    async with app.run_test(size=size) as pilot:
+        if selected:
+            app.follow(sid)
+        clock.tick(app)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        pane = app.query_one("#stats")
+        follower = pane.followers[sid]
+        assert not follower.snap.history and zoomable(pane, "-"), f"{desc}: 2h read at start, older left for later"
+        assert caption(pane) == "82k/2h", desc
+        await click_zoom(pilot, pane, "-", desc)
+        assert pane.span == 4 * 3600 and caption(pane) == "loading…", f"{desc}: loading… while it fills"
+        held.go.set()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert caption(pane) == "83k/4h" and follower.snap.history, f"{desc}: the 3h-old turn, as history"
+        for _ in range(8):
+            if not zoomable(pane, "-"):
+                break
+            await click_zoom(pilot, pane, "-", desc)
+            await app.workers.wait_for_complete()
+            clock.tick(app)
+            await pilot.pause()
+        assert pane.span == 4 * DAY and not zoomable(pane, "-"), f"{desc}: - goes until the oldest turn is covered"
+        assert caption(pane) == "85k/4d" and follower.done, f"{desc}: every turn in"
+        assert [t.context for t in follower.snap.turns] == [82_002], f"{desc}: turns for the last 2h only"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size", [(200, 60), (160, 40)])
+async def test_sessions_that_start_and_end_while_zoomed_out(store, sid, tmp_path, monkeypatch, clock, size):
+    """With every session's totals zoomed out: a new session's history is read to the span
+    too, and one that ends takes its own with it, loading or not."""
+    folder = tmp_path / "projects/-home-u-repo"
+    transcript_of(folder, sid, usage_rec("a1", 3 * DAY, 2000), prompt_rec(2.9 * DAY), usage_rec("a2", 60, 82_000))
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    app = WheelhouseApp(store)
+    desc = f"at {size[0]}x{size[1]}"
+    async with app.run_test(size=size) as pilot:
+        clock.tick(app)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        pane = app.query_one("#stats")
+        for _ in range(8):
+            if not zoomable(pane, "-"):
+                break
+            await click_zoom(pilot, pane, "-", desc)
+            await app.workers.wait_for_complete()
+            clock.tick(app)
+            await pilot.pause()
+        assert pane.span == 4 * DAY and caption(pane) == "84k/4d", f"{desc}: {caption(pane)}"
+        new = store.create_session(str(tmp_path), name="new")
+        transcript_of(folder, new, usage_rec("n1", 0.8 * DAY, 5000), prompt_rec(0.7 * DAY), usage_rec("n2", 30, 1000))
+        for _ in range(3):   # listed, its follower read, then its history: each a tick
+            clock.tick(app)
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+        assert caption(pane) == "90k/4d" and not zoomable(pane, "-"), \
+            f"{desc}: the new session's day of history in, 4d still covering every turn: {caption(pane)}"
+        held = HeldLoads(monkeypatch)
+        await click_zoom(pilot, pane, "+", desc)
+        await click_zoom(pilot, pane, "+", desc)   # 1d: the new one's history is in, the old one's too
+        assert pane.span == DAY and zoomable(pane, "-"), desc
+        later = store.create_session(str(tmp_path), name="later")
+        transcript_of(folder, later, usage_rec("l1", 8 * 3600, 700), prompt_rec(7 * 3600), usage_rec("l2", 30, 300))
+        clock.tick(app)
+        await app.workers.wait_for_complete()
+        clock.tick(app)   # its first read done: its history, held, loading
+        await pilot.pause()
+        assert caption(pane) == "loading…", desc
+        store.end(later)
+        clock.tick(app)
+        await pilot.pause()
+        assert caption(pane) != "loading…" and later not in pane.followers, \
+            f"{desc}: ended while loading: its load no longer waited on: {caption(pane)}"
+        store.end(sid)
+        clock.tick(app)
+        await pilot.pause()
+        held.go.set()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert caption(pane) == "6k/1d" and not zoomable(pane, "-"), \
+            f"{desc}: the ended session's history gone with it, - now as far as the new one's: {caption(pane)}"
 
 
 @pytest.mark.anyio

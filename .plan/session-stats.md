@@ -177,6 +177,16 @@ names against a live transcript (`~/.claude/projects/-home-doug/<id>.jsonl`, 8 O
     of the span: it seeks to the byte offset of the first record inside the window, found
     by a backwards scan that goes no further back than the main thread's latest response.
     Before that offset only compactions are picked out, by a byte search.
+  - **Older history, on demand:** zoomed out past the 2 hours (`stats.SPANS`, then
+    doubling past a week), the pane has a worker read the history the first read left:
+    the main transcript backwards from that offset to the zoom's start (`stats.earlier`,
+    stopping at a line that isn't a response's, so a response's lines are never split
+    between two reads), and once it's read to its start the subagent files skipped as
+    finished. It's kept as 5-minute sums (`stats.History`, `BUCKET`), not turns, and turns
+    that age past the 2 hours are folded into it, so the last 2 hours stay turn by turn.
+    `-` dims once everything is read and the span covers the oldest turn. Start-up is
+    unchanged: on the 136 transcripts in `~/.claude/projects` (2.5 GB) the first reads
+    took 0.85 s, and reading all their history 12.5 s, off the UI thread, for 4,856 sums.
   - **Off the UI thread:** every read runs on a worker thread and swaps in a new snapshot
     when done; until a session's first read lands the pane says "reading …". Measured on
     a 159 MB transcript with 1,683 subagent files: the first read went from 3.3 s (on the

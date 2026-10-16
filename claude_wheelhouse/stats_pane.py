@@ -28,7 +28,8 @@ def looks(rows: list[Text]) -> list[tuple]:
 class SessionStats(Widget):
     """A bordered panel of the context, session and weekly gauges and the cache and
     compaction rows, then charts of the last two hours' context assembly and output (zoomed
-    by the - and + under them, both together, for as long as the app runs); with
+    by the - and + under them, both together, for as long as the app runs: out past two
+    hours, the older history is read on a worker, and kept); with
     no session in context, every session's totals. Transcripts are read on worker
     threads, never on the UI thread: a first read of a big one takes a while, and even a
     steady one stats every subagent file. Each session's follower is shared with the
@@ -54,7 +55,9 @@ class SessionStats(Widget):
         self.can_focus = False
         self.rows: list[Text] = []
         self.charts: list[stats.Chart] = []
-        self.span = stats.SPAN   # the charts' zoom (stats.SPANS)
+        self.span = stats.SPAN   # the charts' zoom (stats.SPANS, stats.wider)
+        self.loading = False     # the shown sessions' older history is still being read for it
+        self.more = True         # there's older history than it covers (stats.zoom_parts)
         self.frame = 0
         self.drawn: list[Strip] = []   # the lines as last drawn whole (render_line), and what for
         self.drawn_for: tuple | None = None
@@ -80,6 +83,7 @@ class SessionStats(Widget):
                 follower.reading = True
                 self.run_worker(functools.partial(self.read, follower, now), thread=True, group="stats",
                                 exit_on_error=False)
+        self.fill(now)
         self.repaint(now)
 
     def landed(self, sid: str) -> None:
@@ -116,9 +120,32 @@ class SessionStats(Widget):
             except RuntimeError:   # the app is closing
                 pass
 
+    def fill(self, now: float) -> None:
+        """Zoomed out past what a shown session's follower holds: its older history read on a
+        worker (stats.UsageFollower.load), once at a time. A new session's too, once read."""
+        cutoff = now - self.span
+        for sid in self.shown(self.ctx.sessions()) if self.span > stats.SPAN else ():
+            follower = self.followers.get(sid)
+            if follower and follower.short(cutoff) and not follower.loading:
+                follower.loading = True
+                self.run_worker(functools.partial(self.load, follower, cutoff), thread=True, group="stats",
+                                exit_on_error=False)
+
+    def load(self, follower: stats.UsageFollower, cutoff: float) -> None:
+        """On a worker thread: a follower's older history, then a repaint."""
+        stats.load_safely(follower, cutoff)
+        try:
+            self.app.call_from_thread(self.repaint)
+        except RuntimeError:   # the app is closing
+            pass
+
     def repaint(self, now: float | None = None) -> None:
         now = time.time() if now is None else now
         sessions = self.ctx.sessions()
+        # the history shown: the session in context's, else every session's
+        cutoff, shown = now - self.span, [self.followers[sid] for sid in self.shown(sessions) if sid in self.followers]
+        self.loading = self.span > stats.SPAN and any(f.short(cutoff) for f in shown)
+        self.more = not all(f.done for f in shown) or any(f.oldest is not None and f.oldest < cutoff for f in shown)
         names = {s["id"]: s["name"] for s in sessions}
         host = {s["id"]: s.get("context") for s in sessions}
         sid = self.ctx.focus()
@@ -147,7 +174,7 @@ class SessionStats(Widget):
         self.can_focus = self.slider() is not None and self.ctx.set_effort is not None
         rows, charts = stats.layout(self.view, self.name_, self.note, self.usage, self.now,
                                     self.size.width, self.size.height, self.setting, self.has_focus,
-                                    span=self.span)
+                                    span=self.span, loading=self.loading, more=self.more)
         if (looks(rows), charts) != (looks(self.rows), self.charts):   # each tick builds them again, mostly the same
             self.rows, self.charts = rows, charts
             self.drawn_for = None
@@ -195,11 +222,12 @@ class SessionStats(Widget):
         content = self.content_region
         x, y = event.screen_x - content.x - 1, event.screen_y - content.y   # 1: the panel's left border
         if self.charts and y == self.line_ys(self.size.width)[-1]:   # the hour ticks', under the last chart
-            to = next((to for start, end, to in stats.zoom_spans(self.span, self.size.width) if start <= x + 1 < end),
-                      None)
+            to = next((to for start, end, to in stats.zoom_spans(self.span, self.size.width, self.more)
+                       if start <= x + 1 < end), None)
             if to is not None:
                 self.span = to
-                self.rebuild()
+                self.fill(time.time())
+                self.repaint()
             return
         if self.slider() is None or y != stats.SLIDER_ROW:
             return

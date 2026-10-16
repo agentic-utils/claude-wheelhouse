@@ -17,10 +17,11 @@ import math
 import os
 import re
 import textwrap
+import threading
 import time
 import weakref
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from rich.color import Color
@@ -30,9 +31,15 @@ from rich.text import Text
 from . import models, plan_usage, transcript
 from .store import runner
 
-SPAN = 2 * 3600                    # the charts' last two hours, and all the followers keep
-SPANS = (900, 1800, 3600, SPAN)    # the charts' zoom levels, finest first: none wider than SPAN
-TICK = {900: 300, 1800: 600, 3600: 900, SPAN: 3600}   # each level's axis ticks, on local clock
+HOUR, DAY, WEEK = 3600, 86400, 7 * 86400
+SPAN = 2 * HOUR                    # the charts' default, and what the followers keep turn by turn
+# the charts' zoom levels, finest first; past a week each doubles (wider), as far as the history goes
+SPANS = (900, 1800, HOUR, SPAN, 4 * HOUR, 8 * HOUR, 12 * HOUR, DAY, 2 * DAY, 4 * DAY, WEEK)
+BUCKET = 300                       # older history is kept as these sums, not turns (UsageFollower.load)
+# the axis ticks' steps, on the local clock: each span's finest is TICK's (else an eighth of
+# it), and a coarser one where the labels would crowd (axis_ticks)
+TICK = {900: 300, 1800: 600, HOUR: 900, SPAN: HOUR}
+STEPS = (300, 600, 900, 1800, HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, DAY, 2 * DAY, WEEK)
 TTL = {"1h": 3600, "5m": 300}
 WRITE_PRICE = {"1h": 2.0, "5m": 1.25}   # cache write, times the base input price
 MARGIN = 6                         # the charts' Y-axis labels
@@ -279,6 +286,7 @@ class Snapshot:
     # /model or /effort Claude Code took; asked, what a main-thread turn ran on, from when it began
     typed: dict = field(default_factory=dict)
     asked: dict = field(default_factory=dict)
+    history: "History" = field(default_factory=lambda: History())   # older than the span: BUCKET sums (fold)
 
     @property
     def window(self) -> int:
@@ -379,6 +387,67 @@ def before(f, end: int) -> tuple[list[Compaction], list[Setting], float | None]:
     return compactions, [x for x in settings if x.model or x.effort], last_prompt(f, end)
 
 
+def earlier(f, end: int, cutoff: float, take) -> int:
+    """The lines before `end` (a line's start), read backwards and given to `take` a chunk at
+    a time, back to the first older than `cutoff` and on to the first that isn't a response's,
+    so a response written as several lines is never split between two loads. Where the lines
+    left unread end: 0 once the file's start is reached."""
+    pos, carry, older = end, b"", False
+    while pos > 0:
+        step = min(CHUNK, pos)
+        pos -= step
+        f.seek(pos)
+        buf, lines = f.read(step) + carry, []
+        stop = len(buf)
+        while stop > 0:
+            start = buf.rfind(b"\n", 0, stop - 1) + 1
+            if start == 0 and pos > 0:
+                carry = buf[:stop]   # cut by the chunk boundary: finished with the next chunk
+                break
+            line = buf[start:stop]
+            if not older and (m := STAMP.search(line)) and (at := epoch(m[1].decode())) is not None:
+                older = at < cutoff
+            if older and MAIN_REPLY.search(line) is None:
+                take(lines)
+                return pos + stop
+            lines.append(line)
+            stop = start
+        else:
+            carry = b""
+        take(lines)
+    return 0
+
+
+class History(dict):
+    """Turns older than the span, as sums: each BUCKET's start, to its turns' SERIES in order.
+    Never changed once made (fold makes another), so its serial stands for what it holds in
+    the charts' caches."""
+    serials = itertools.count()
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.serial = next(History.serials)
+
+
+def add(sums: dict, turns) -> dict:
+    """The turns added into BUCKET sums, in place."""
+    for t in turns:
+        b = int(t.at // BUCKET * BUCKET)
+        old = sums.get(b)
+        new = tuple(getattr(t, k) for k in SERIES)
+        sums[b] = tuple(map(sum, zip(old, new))) if old else new
+    return sums
+
+
+def fold(history: History, turns, sums: dict | None = None) -> History:
+    """A new history: this one with the turns and other sums added."""
+    out = add(History(history), turns)
+    for b, new in (sums or {}).items():
+        old = out.get(b)
+        out[b] = tuple(map(sum, zip(old, new))) if old else new
+    return out
+
+
 class UsageFollower:
     """One session's usage, read incrementally: each file's new bytes, when its size or
     modification time has changed. The main transcript, and its subagents' beside it.
@@ -400,6 +469,25 @@ class UsageFollower:
         self.subagents: list[Path] = []
         self.listed: tuple | None = None   # (the subagents folder's mtime, when listed)
         self.dormant: set[Path] = set()    # read to the end and older than the span
+        # the history before what the first read took, read only when a chart zooms out past
+        # it (load): where the main transcript's unread start ends (0 once it's all read), the
+        # subagents' files it skipped as finished before the span, and the time from which
+        # every turn is in the snapshot, as turns or as history
+        self.lock = threading.Lock()       # a read and a load take turns at the snapshot
+        self.back = 0
+        self.skipped: list[Path] = []
+        self.since = -math.inf
+        self.oldest: float | None = None   # the oldest turn read, whenever it was
+        self.loading = False               # a load is in flight (set and cleared by the app)
+
+    @property
+    def done(self) -> bool:
+        """Every turn the transcripts hold has been read."""
+        return self.ready and not self.back and not self.skipped
+
+    def short(self, cutoff: float) -> bool:
+        """Whether some turns from `cutoff` on are still unread (load)."""
+        return self.ready and not self.done and self.since > cutoff
 
     def paths(self, now: float) -> list[Path]:
         """The main transcript, and the subagents' that may still grow. The folder is
@@ -419,13 +507,17 @@ class UsageFollower:
         return [self.main, *(p for p in self.subagents if p not in self.dormant)]
 
     def read(self, now: float | None = None) -> bool:
-        """Takes in what's been appended since the last read. True if anything was."""
-        now = time.time() if now is None else now
+        """Takes in what's been appended since the last read. True if anything was. Turns
+        older than the span are folded into the history."""
+        with self.lock:
+            return self._read(time.time() if now is None else now)
+
+    def _read(self, now: float) -> bool:
         snap = Snapshot(self.snap.model, self.snap.context, self.snap.peak, self.snap.last_at, self.snap.ttl,
                         list(self.snap.compactions), list(self.snap.turns), effort=self.snap.effort,
                         requested=self.snap.requested, begun=self.snap.begun, stop=self.snap.stop,
                         typed=dict(self.snap.typed),
-                        asked=dict(self.snap.asked))
+                        asked=dict(self.snap.asked), history=self.snap.history)
         changed = False
         for path in self.paths(now):
             try:
@@ -440,10 +532,12 @@ class UsageFollower:
             if path != self.main and offset == 0 and st.st_mtime < now - SPAN:
                 self.files[path] = (st.st_size, (st.st_size, st.st_mtime_ns))   # finished before the span
                 self.dormant.add(path)
+                self.skipped.append(path)
                 continue
             with open(path, "rb") as f:
                 if path == self.main and offset == 0:
                     offset = window_start(f, st.st_size, now - SPAN)
+                    self.back, self.since = offset, now - SPAN if offset else -math.inf
                     early, typed, prompt = before(f, offset)
                     if prompt is not None:   # the turn under way at the span began then, not at its first response read
                         snap.begun = max(snap.begun or prompt, prompt)
@@ -459,11 +553,58 @@ class UsageFollower:
             turns, compactions = parse(data[:end].splitlines(), self.seen, path == self.main, settings,
                                        snap.begun if path == self.main else None)
             take(snap, turns, compactions)
+            self.saw(turns)
             changed = chose(snap, settings) or changed
             changed = changed or bool(turns or compactions)
-        snap.turns = [t for t in snap.turns if t.at >= now - SPAN]
+        if old := [t for t in snap.turns if t.at < now - SPAN]:
+            snap.history = fold(snap.history, old)
+            snap.turns = [t for t in snap.turns if t.at >= now - SPAN]
         self.snap, self.ready = snap, True
         return changed
+
+    def saw(self, turns: list[Turn]) -> None:
+        if turns:
+            self.oldest = min(self.oldest or math.inf, min(t.at for t in turns))
+
+    def load(self, cutoff: float) -> bool:
+        """On a worker thread, after the first read: the turns from `cutoff` on that it left
+        unread, taken into the history as BUCKET sums. The main transcript is read backwards
+        from where the first read started (earlier); once it's read to its start, the
+        subagents' files the first read skipped are read whole, else those that changed since
+        `cutoff`. Reads and the snapshot carry on meanwhile. True if it brought any."""
+        with self.lock:
+            back, skipped, seen = self.back, list(self.skipped), set(self.seen)
+            ends = {p: self.files[p][0] for p in skipped}
+        sums: dict = {}
+        found: list[float] = []
+
+        def taken(lines: list[bytes], main: bool) -> None:
+            turns = parse(lines, seen, main)[0]
+            add(sums, turns)
+            found.extend([min(t.at for t in turns)] if turns else [])
+
+        if back and self.main is not None:
+            with open(self.main, "rb") as f:
+                back = earlier(f, back, cutoff, lambda lines: taken(lines, True))
+        if not back:
+            cutoff = -math.inf   # the main transcript read to its start: every subagent's too
+        rest = []
+        for path in skipped:
+            try:
+                if path.stat().st_mtime < cutoff:
+                    rest.append(path)
+                    continue
+                with open(path, "rb") as f:
+                    data = f.read(ends[path])
+            except OSError:
+                continue   # gone: nothing more to read of it
+            taken(data[:data.rfind(b"\n") + 1].splitlines(), False)
+        with self.lock:
+            self.back, self.skipped, self.since = back, rest, min(self.since, cutoff)
+            if sums:
+                self.snap = dataclasses.replace(self.snap, history=fold(self.snap.history, (), sums))
+                self.oldest = min(self.oldest or math.inf, *found)
+        return bool(sums)
 
     def take(self, turns: list[Turn], compactions: list[Compaction]) -> None:
         take(self.snap, turns, compactions)
@@ -494,6 +635,16 @@ def read_safely(f: UsageFollower, now: float | None = None) -> bool:
     finally:
         f.reading = False
     return changed
+
+
+def load_safely(f: UsageFollower, cutoff: float) -> None:
+    """On a worker thread: one load of older history (UsageFollower.load), as read_safely."""
+    try:
+        f.load(cutoff)
+    except Exception as e:
+        f.error = f"couldn't read the transcript's history: {e}"[:120]
+    finally:
+        f.loading = False
 
 
 def take(s: Snapshot, turns: list[Turn], compactions: list[Compaction]) -> None:
@@ -629,6 +780,7 @@ class Totals:
     next_cold: tuple[float, str] | None   # when, and whose
     turns: list[Turn]
     estimate: bool = False                # some session's context is the host's estimate
+    histories: list[History] = field(default_factory=list)   # each session's older history
 
 
 def combine(snaps: dict[str, Snapshot], names: dict[str, str], now: float) -> Totals:
@@ -637,7 +789,13 @@ def combine(snaps: dict[str, Snapshot], names: dict[str, str], now: float) -> To
     return Totals(len(snaps), sum(s.context for s in snaps.values()), len(warm),
                   (warm[soonest].expires, names.get(soonest, soonest)) if soonest else None,
                   sorted((t for s in snaps.values() for t in s.turns), key=lambda t: t.at),
-                  any(s.estimate for s in snaps.values()))
+                  any(s.estimate for s in snaps.values()), [s.history for s in snaps.values() if s.history])
+
+
+def histories(view) -> list[History]:
+    if isinstance(view, Totals):
+        return view.histories
+    return [view.history] if view.history else []
 
 
 def hexc(c: tuple) -> str:
@@ -858,11 +1016,12 @@ def spaced(rows: list[Text]) -> list[Text]:
 
 def layout(view, name: str, note: str | None, usage: "plan_usage.AccountUsage", now: float, width: int,
            height: int, setting: dict | None = None, focused: bool = False,
-           span: int = SPAN) -> tuple[list[Text], list["Chart"]]:
+           span: int = SPAN, loading: bool = False, more: bool = True) -> tuple[list[Text], list["Chart"]]:
     """The pane at a size: a bordered panel of the gauges (a blank line above them and
     under each) and the cache and compaction rows, then as many of the charts as fit under it.
     A session run by a host (setting: Hub.model_state) has the effort slider above the
-    gauges, on SLIDER_ROW. The charts cover `span`, one of SPANS (zoom)."""
+    gauges, on SLIDER_ROW. The charts cover `span` (zoom), its older part from the history,
+    `loading` while that's still being read, and `more` if there's older history to zoom out to."""
     if view is None:
         body = said(note or "no sessions running", width - 2) + [Text()] + spaced(gauges(None, usage, now, width - 2))
         return panel("stats", body, width), []
@@ -878,7 +1037,7 @@ def layout(view, name: str, note: str | None, usage: "plan_usage.AccountUsage", 
     if note:   # beside a view: something went wrong reading it
         body += said(note, width - 2)
     rows = panel(head, body, width)
-    return rows, charts(view.turns, now, width, height - len(rows), height, span)
+    return rows, charts(view.turns, now, width, height - len(rows), height, span, histories(view), loading, more)
 
 
 def has_slider(view, setting: dict | None) -> bool:
@@ -1055,22 +1214,30 @@ class Chart:
     kind: str = "assembly"
     gap: bool = False   # a blank line above it
     recent: int = 0   # its series' tokens over its span, on its legend's line
+    loading: bool = False   # its older history is still being read
+    more: bool = True   # there's older history to zoom out to
 
 
 def chart(turns: list[Turn], now: float, width: int, height: int, kind: str = "assembly", span: int = SPAN,
-          gap: bool = False) -> Chart:
+          gap: bool = False, history: list[History] = (), loading: bool = False, more: bool = True) -> Chart:
+    """A chart of the turns over `span`, and wider than SPAN of the history (older) too."""
     keys = [k for k, _ in CHARTS[kind][1]]
     s, columns = series(turns), max(width - MARGIN, 0)
-    start, _ = window(now, columns, span)
+    start, step = window(now, columns, span)
+    history = list(history) if span > SPAN else []
+    serials = tuple(h.serial for h in history)
 
     def bars() -> tuple[list, float]:
         bs = buckets(turns, now, columns, span)
+        if history:
+            bs = [{k: b[k] + o[i] for i, k in enumerate(SERIES)} for b, o in zip(bs, older(history, start, step, columns))]
         totals = [sum(b[k] for k in keys) for b in bs]
         maxt = nice(max(totals, default=0))
         return [build_column([(CO[k], b[k]) for k in keys], t, maxt, height) for b, t in zip(bs, totals)], maxt
-    # the columns, made once for each window and its turns (Series): only the hour's total moves between
-    built, maxt = s.kept(("chart", kind, columns, span, height, start, s.upto(now)), bars)
-    return Chart(built, maxt, height, start, span, kind, gap, recent(turns, now, keys, span))
+    # the columns, made once for each window, its turns (Series) and history: only the span's total moves between
+    built, maxt = s.kept(("chart", kind, columns, span, height, start, s.upto(now), serials), bars)
+    return Chart(built, maxt, height, start, span, kind, gap,
+                 recent(turns, now, keys, span) + older_total(history, now - span, keys), loading, more)
 
 
 def recent(turns: list[Turn], now: float, keys: list[str], span: int = SPAN) -> int:
@@ -1080,7 +1247,49 @@ def recent(turns: list[Turn], now: float, keys: list[str], span: int = SPAN) -> 
     return sum(s.total(k, now - span, now) for k in keys)
 
 
-def charts(turns: list[Turn], now: float, width: int, room: int, height: int, span: int = SPAN) -> list[Chart]:
+HISTORY_KEPT: dict[tuple, object] = {}   # what was made of the histories charted lately (older, older_total)
+
+
+def kept_history(key: tuple, make):
+    if key not in HISTORY_KEPT:
+        while len(HISTORY_KEPT) >= 16:
+            del HISTORY_KEPT[next(iter(HISTORY_KEPT))]
+        HISTORY_KEPT[key] = make()
+    return HISTORY_KEPT[key]
+
+
+def older(history: list[History], start: float, step: float, columns: int) -> list[list[float]]:
+    """The histories' SERIES sums in each of the window's columns, oldest first: a BUCKET
+    shared among the columns it overlaps, by how much of it each covers."""
+    width = BUCKET / step   # a bucket's width in columns
+
+    def make():
+        out = [[0.0] * columns for _ in SERIES]   # by series, then column
+        for h in history:
+            for b, sums in h.items():
+                lo = (b - start) / step
+                i, hi = max(math.floor(lo), 0), min(lo + width, columns)
+                while i < hi:
+                    share = (min(hi, i + 1) - max(lo, i)) / width
+                    for k, y in enumerate(sums):
+                        out[k][i] += share * y
+                    i += 1
+        return list(zip(*out))
+    return kept_history(("older", tuple(h.serial for h in history), start, step, columns), make)
+
+
+def older_total(history: list[History], since: float, keys: list[str]) -> int:
+    """The tokens of the series `keys` in the histories' BUCKETs from `since` on."""
+    if not history:
+        return 0
+    first = math.ceil(since / BUCKET) * BUCKET
+    at = [SERIES.index(k) for k in keys]
+    return kept_history(("total", tuple(h.serial for h in history), first, tuple(keys)), lambda: sum(
+        sums[i] for h in history for b, sums in h.items() if b >= first for i in at))
+
+
+def charts(turns: list[Turn], now: float, width: int, room: int, height: int, span: int = SPAN,
+           history: list[History] = (), loading: bool = False, more: bool = True) -> list[Chart]:
     """Both charts if they fit in `room` rows, else the context assembly alone, else none.
     Each is CHART_SHARE of the height the one chart had before #43 (the pane less six text
     rows and its own three), and no taller than fits."""
@@ -1091,7 +1300,8 @@ def charts(turns: list[Turn], now: float, width: int, room: int, height: int, sp
         bars = min(target, (room - fixed) // n)
         if bars >= CHART_MIN:
             gap = room - fixed - n * bars >= n - 1   # a blank line between them, room permitting
-            return [chart(turns, now, width, bars, kind, span, bool(i) and gap) for i, kind in enumerate(kinds)]
+            return [chart(turns, now, width, bars, kind, span, bool(i) and gap, history, loading, more)
+                    for i, kind in enumerate(kinds)]
     return []
 
 
@@ -1176,8 +1386,9 @@ def chart_lines(c: Chart, frame: int, ticks: bool = True) -> list[Text]:
     # room the note shortens, then goes, then the name is cut: the line never wraps
     width = MARGIN + len(c.columns)
     count, since = tokens(c.recent), span_name(c.span)
-    full = f"{count:>5} tokens/last {since}"
-    note = Text(next((n for n in (full, f"{count}/{since}") if head.cell_len + 2 + len(n) <= width), ""),
+    full = "loading…" if c.loading else f"{count:>5} tokens/last {since}"   # the total waits for the history
+    note = Text(next((n for n in (full, full if c.loading else f"{count}/{since}")
+                      if head.cell_len + 2 + len(n) <= width), ""),
                 style=hexc(DIM))
     keys = [Text("▆", style=hexc(CO[k])) + Text(" " + legend, style=hexc(DIM)) for k, legend in series
             if note.plain == full]   # beside the full note only, so a shortened one never brings keys back
@@ -1197,43 +1408,85 @@ def chart_lines(c: Chart, frame: int, ticks: bool = True) -> list[Text]:
     out.append(Text("0".rjust(MARGIN - 1) + " ", style=hexc(DIM)) + Text("└" + "─" * max(n - 1, 0), style=hexc(DIM2)))
     if not ticks:
         return out
-    buttons = zoom(c.span) if n >= ZOOM_MIN else Text()   # the zoom's, at the right, room permitting
+    buttons = zoom(c.span, c.more) if n >= ZOOM_MIN else Text()   # the zoom's, at the right, room permitting
     room = n - buttons.cell_len - bool(buttons)
     axis, free = [" "] * room, 0
-    lt, step = time.localtime(c.start), TICK.get(c.span, 3600)
-    hour = int(c.start) - lt.tm_min * 60 - lt.tm_sec   # the local hour's start: not UTC's, which is off by half an hour in some zones
-    tick = hour + ((int(c.start) - hour) // step + 1) * step   # the next tick on the local clock
-    while tick <= c.start + c.span and n:
-        local = time.localtime(tick)
-        lab = f"{local.tm_hour}:{local.tm_min:02d}"
+    for tick, lab in axis_ticks(c.start, c.span, n):
         pos = round((tick - c.start) / c.span * n)
         if free <= pos and pos + len(lab) <= room:   # a label that doesn't fit at its tick is left out, not moved off it
             axis[pos:pos + len(lab)], free = lab, pos + len(lab) + 1
-        tick += step
     out.append(Text(" " * MARGIN + "".join(axis) + " " * bool(buttons), style=hexc(DIM)) + buttons)
     return out
 
 
+def tick_label(at: float, span: int) -> str:
+    """A tick's label: its time; at 12 hours and up, with its weekday; from a day up, its date
+    at midnight (Fri 16, or past a week 16 Oct), else its time."""
+    lt = time.localtime(at)
+    hm = f"{lt.tm_hour}:{lt.tm_min:02d}"
+    if span >= DAY:
+        if lt.tm_hour or lt.tm_min:
+            return hm
+        return time.strftime(f"%a {lt.tm_mday}" if span <= WEEK else f"{lt.tm_mday} %b", lt)
+    return time.strftime(f"%a {hm}", lt) if span >= 12 * HOUR else hm
+
+
+def axis_ticks(start: float, span: int, columns: int) -> list[tuple[float, str]]:
+    """The axis ticks over a chart's span, each as (when, its label), on the local clock: at
+    the span's finest step (TICK, else an eighth of the span) or, where their labels would
+    crowd at this width, the next of STEPS (then weeks doubling) that leaves room for them."""
+    end, longest = start + span, 6 if span >= DAY else 9 if span >= 12 * HOUR else 5
+    steps = [*STEPS, *(WEEK << k for k in range(1, max(span // WEEK, 1).bit_length() + 1))]
+    finest = TICK.get(span, span / 8)
+    step = next((x for x in steps if x >= finest and x / span * columns >= longest + 2), steps[-1])
+    if step < HOUR:   # from the local hour's start: not UTC's, which is off by half an hour in some zones
+        lt = time.localtime(start)
+        hour = int(start) - lt.tm_min * 60 - lt.tm_sec
+        at = [hour + k * step for k in range((int(start) - hour) // step + 1, int(end - hour) // step + 1)]
+    else:   # on local hours or midnights, through any change of the clocks
+        day, at = date.fromtimestamp(start), []
+        while (midnight := time.mktime((day.year, day.month, day.day, 0, 0, 0, 0, 0, -1))) <= end:
+            n = day.toordinal() - 1   # 0 on a Monday
+            if step < DAY:
+                at += [time.mktime((day.year, day.month, day.day, h, 0, 0, 0, 0, -1)) for h in range(0, 24, step // HOUR)]
+            elif n % (step // DAY) == 0 if step < WEEK else n % 7 == 0 and n // 7 % (step // WEEK) == 0:
+                at.append(midnight)   # every day, every other day, or Mondays
+            day = date.fromordinal(day.toordinal() + 1)
+    return [(t, tick_label(t, span)) for t in at if start < t <= end]
+
+
 # the charts' zoom: - and + at the right of the hour ticks, one level for both charts
 
+def wider(span: int) -> int:
+    """The zoom level out from `span`: the next of SPANS, past a week twice as wide."""
+    return next((x for x in SPANS if x > span), None) or span * 2
+
+
+def finer(span: int) -> int | None:
+    """The zoom level in from `span`, None from the finest."""
+    return span // 2 if span > WEEK else next((x for x in reversed(SPANS) if x < span), None)
+
+
 def span_name(span: int) -> str:
-    return f"{span // 3600}h" if span % 3600 == 0 else f"{span // 60}m"
+    for unit, name in ((WEEK, "w"), (DAY, "d"), (HOUR, "h"), (60, "m")):
+        if span % unit == 0:
+            return f"{span // unit}{name}"
+    return f"{span}s"
 
 
-def zoom_parts(span: int) -> list[tuple[str, int | None, bool]]:
+def zoom_parts(span: int, more: bool = True) -> list[tuple[str, int | None, bool]]:
     """The zoom's pieces, left to right: each one's text, the span a click on it goes to
-    (None for none) and whether it's a button."""
-    i = SPANS.index(span) if span in SPANS else SPANS.index(SPAN)
-    wider = SPANS[i + 1] if i + 1 < len(SPANS) else None
-    finer = SPANS[i - 1] if i else None
-    return [(span_name(span).rjust(3) + " ", None, False), (" - ", wider, True), (" ", None, False),
-            (" + ", finer, True)]
+    (None for none) and whether it's a button. - goes wider while there's `more` history, and
+    always back out to the default."""
+    return [(span_name(span).rjust(3) + " ", None, False),
+            (" - ", wider(span) if more or span < SPAN else None, True),
+            (" ", None, False), (" + ", finer(span), True)]
 
 
-def zoom(span: int) -> Text:
+def zoom(span: int, more: bool = True) -> Text:
     """The zoom: the span shown, then - and +, each dimmed where it can go no further."""
     out = Text()
-    for text, to, button in zoom_parts(span):
+    for text, to, button in zoom_parts(span, more):
         style = (f"bold {hexc(TEXT)} on {hexc(DIM2)}" if to else hexc(DIM2)) if button else hexc(DIM)
         out.append(text, style=style)
     return out
@@ -1242,13 +1495,13 @@ def zoom(span: int) -> Text:
 ZOOM_MIN = 2 * zoom(SPAN).cell_len   # the columns below which the ticks keep the line to themselves
 
 
-def zoom_spans(span: int, width: int) -> list[tuple[int, int, int]]:
+def zoom_spans(span: int, width: int, more: bool = True) -> list[tuple[int, int, int]]:
     """Where the zoom's buttons are on the hour ticks' line at a width, from its left: each
     one's (first cell, past its last, the span it goes to), for those that go anywhere."""
     if width - MARGIN < ZOOM_MIN:
         return []
-    out, x = [], width - sum(len(text) for text, _, _ in zoom_parts(span))
-    for text, to, _ in zoom_parts(span):
+    out, x = [], width - sum(len(text) for text, _, _ in zoom_parts(span, more))
+    for text, to, _ in zoom_parts(span, more):
         if to:
             out.append((x, x + len(text), to))
         x += len(text)

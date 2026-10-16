@@ -452,6 +452,66 @@ def test_finished_subagents_are_not_looked_at_again(tmp_path):
     assert old in follower.paths(NOW + stats.REGLOB), "and every file is looked at again now and then"
 
 
+def prompt(ago):
+    return {"type": "user", "timestamp": at(ago), "message": {"role": "user", "content": "go on"}}
+
+
+H, D = stats.HOUR, stats.DAY
+# a session three days old: one response written as two lines, prompts between, a subagent
+# that finished two days ago, and the span's one response. Each turn's tokens (read + new):
+# m1 1002, m2 302, m3 52, o1 9, m4 40_002
+HISTORY = (response("m1", ago=3 * D, read=1000), prompt(2.9 * D), response("m2", ago=5 * H + 1, read=300),
+           response("m2", ago=5 * H, read=300), prompt(4.5 * H), response("m3", ago=3 * H, read=50),
+           response("m4", ago=60, read=40_000))
+
+
+@pytest.mark.parametrize("cutoffs, total, done, desc", [
+    ([], 0, False, "the first read: the span alone, the rest left unread"),
+    ([4 * H], 52, False, "4h: back to the first prompt older than that"),
+    ([6 * H], 354, False, "6h: a response written as two lines counts once"),
+    ([5 * H + 0.5], 354, False, "a response whose lines straddle the cutoff is taken whole"),
+    ([5 * H + 0.5, 4 * D], 1365, True, "and not again by the next load"),
+    ([1 * D], 354, False, "1d: the subagent finished before it isn't read"),
+    ([4 * H, 6 * H, 4 * D], 1365, True, "a level at a time: nothing counted twice"),
+    ([4 * D], 1365, True, "read to the start: the skipped subagent with it, and everything is in"),
+    ([float("inf")], 1365, True, "everything"),
+])
+@pytest.mark.parametrize("chunk", [64, 4 << 20])
+def test_zooming_out_reads_the_history_back(tmp_path, monkeypatch, cutoffs, total, done, desc, chunk):
+    monkeypatch.setattr(stats, "CHUNK", chunk)   # small chunks cut lines at every boundary
+    folder = tmp_path / "-home-u-repo"
+    (folder / "s/subagents").mkdir(parents=True)
+    write(folder / "s.jsonl", *HISTORY)
+    old = folder / "s/subagents/agent-old.jsonl"
+    write(old, response("o1", ago=2 * D, read=7, isSidechain=True))
+    os.utime(old, (NOW - 2 * D, NOW - 2 * D))
+    follower = stats.UsageFollower("s", tmp_path)
+    follower.read(NOW)
+    for ago in cutoffs:
+        follower.load(NOW - ago)
+    history = follower.snap.history
+    assert sum(sum(sums[:3]) for sums in history.values()) == total, desc
+    assert all(b % stats.BUCKET == 0 for b in history), f"{desc}: kept as {stats.BUCKET}s sums"
+    assert [t.context for t in follower.snap.turns] == [40_002], f"{desc}: the span's turns, as turns"
+    assert follower.done == done and follower.short(NOW - 4 * D) != done, desc
+    assert (follower.oldest == NOW - 3 * D) == done, f"{desc}: the oldest turn known once everything is read"
+
+
+def test_turns_that_age_past_the_span_are_kept_as_history(tmp_path):
+    folder = tmp_path / "-home-u-repo"
+    folder.mkdir()
+    write(folder / "s.jsonl", response("m1", ago=60, read=40_000))
+    follower = stats.UsageFollower("s", tmp_path)
+    follower.read(NOW)
+    assert follower.snap.turns and not follower.snap.history
+    follower.read(NOW + stats.SPAN)
+    assert not follower.snap.turns and list(follower.snap.history.values()) == [(40_000, 2, 0, 10)], \
+        "folded into its bucket, not dropped"
+    c = stats.chart(follower.snap.turns, NOW + stats.SPAN, width=56, height=4, span=4 * H,
+                    history=[follower.snap.history])
+    assert c.recent == 40_002 and any(col[0][0] for col in c.columns), "a wider chart draws it, and counts it"
+
+
 @pytest.mark.parametrize("zone, desc", [
     ("Europe/London", "a whole-hour zone"),
     ("Asia/Kolkata", "a half-hour zone: ticks on its own hours, not UTC's"),
@@ -482,17 +542,32 @@ def test_hour_ticks_sit_on_local_hours(monkeypatch, zone, desc):
         time.tzset()
 
 
-@pytest.mark.parametrize("span, name, goes, desc", [
-    (900, "15m", {"-": 1800}, "the finest: + does nothing"),
-    (1800, "30m", {"-": 3600, "+": 900}, "between: both go a level"),
-    (3600, "1h", {"-": 7200, "+": 1800}, "between: both go a level"),
-    (stats.SPAN, "2h", {"+": 3600}, "the default, the widest: as far back as the followers keep, so - does nothing"),
+W = stats.WEEK
+
+
+@pytest.mark.parametrize("span, more, name, goes, desc", [
+    (900, True, "15m", {"-": 1800}, "the finest: + does nothing"),
+    (900, False, "15m", {"-": 1800}, "below the default - always goes back out"),
+    (1800, True, "30m", {"-": 3600, "+": 900}, "between: both go a level"),
+    (3600, True, "1h", {"-": 2 * H, "+": 1800}, "between: both go a level"),
+    (2 * H, True, "2h", {"-": 4 * H, "+": 3600}, "the default: older history to go back to"),
+    (2 * H, False, "2h", {"+": 3600}, "the default, covering the oldest turn: - does nothing"),
+    (4 * H, True, "4h", {"-": 8 * H, "+": 2 * H}, "4h"),
+    (8 * H, True, "8h", {"-": 12 * H, "+": 4 * H}, "8h"),
+    (12 * H, True, "12h", {"-": D, "+": 8 * H}, "12h"),
+    (D, True, "1d", {"-": 2 * D, "+": 12 * H}, "a day"),
+    (2 * D, True, "2d", {"-": 4 * D, "+": D}, "two days"),
+    (4 * D, True, "4d", {"-": W, "+": 2 * D}, "four days"),
+    (W, True, "1w", {"-": 2 * W, "+": 4 * D}, "a week"),
+    (2 * W, True, "2w", {"-": 4 * W, "+": W}, "then doubling"),
+    (8 * W, True, "8w", {"-": 16 * W, "+": 4 * W}, "and on"),
+    (8 * W, False, "8w", {"+": 4 * W}, "as far as the oldest turn"),
 ])
-def test_the_zoom_buttons(span, name, goes, desc):
-    c = stats.chart([Turn(NOW - 60, 5, 1, 0, 6, None, None, True)], NOW, width=56, height=4, span=span)
+def test_the_zoom_buttons(span, more, name, goes, desc):
+    c = stats.chart([Turn(NOW - 60, 5, 1, 0, 6, None, None, True)], NOW, width=56, height=4, span=span, more=more)
     line = stats.chart_lines(c, 0)[-1]
     assert line.cell_len == 56 and line.plain.endswith(f"{name}  -   + "), f"{desc}: {line.plain!r}"
-    found = {line.plain[start:end].strip(): to for start, end, to in stats.zoom_spans(span, 56)}
+    found = {line.plain[start:end].strip(): to for start, end, to in stats.zoom_spans(span, 56, more)}
     assert found == goes, desc
     lit = {line.plain[sp.start:sp.end].strip() for sp in line.spans if " on " in str(sp.style)}
     assert lit == set(goes), f"{desc}: a button lit only where it goes somewhere"
@@ -517,6 +592,54 @@ def test_ticks_sit_on_their_zooms_steps(span, step, desc):
         off = ((local.tm_min - int(m[2])) % 60) * 60 + local.tm_sec
         assert min(off, 3600 - off) <= c.span / len(c.columns) + 30, \
             f"{desc}: {m[0]} drawn at {local.tm_min}:{local.tm_sec:02d}"
+
+
+DAYS = "(Mon|Tue|Wed|Thu|Fri|Sat|Sun)"
+
+
+@pytest.mark.parametrize("span, label, date, desc", [
+    (4 * H, r"\d+:\d\d", None, "4h: times"),
+    (8 * H, r"\d+:00", None, "8h: on the hour"),
+    (12 * H, DAYS + r" \d+:00", None, "12h: the weekday and hour"),
+    (D, r"\d+:00|" + DAYS + r" \d+", DAYS + r" \d+", "a day: the date at midnight, between it the hours"),
+    (2 * D, r"\d+:00|" + DAYS + r" \d+", DAYS + r" \d+", "two days"),
+    (4 * D, r"12:00|" + DAYS + r" \d+", DAYS + r" \d+", "four days"),
+    (W, DAYS + r" \d+", DAYS + r" \d+", "a week: dates"),
+    (2 * W, r"\d+ [A-Z][a-z]{2}", r"\d+ [A-Z][a-z]{2}", "wider: day and month"),
+    (8 * W, r"\d+ [A-Z][a-z]{2}", r"\d+ [A-Z][a-z]{2}", "eight weeks"),
+])
+@pytest.mark.parametrize("columns", [50, 120, 190])
+def test_wide_ticks_read_well(monkeypatch, span, label, date, desc, columns):
+    """Every label in its span's form, on its own local time, apart enough to read, and
+    drawn where its time falls; from a day up, at least one date."""
+    monkeypatch.setenv("TZ", "Europe/London")
+    time.tzset()
+    try:
+        now = 1791460800 + 7 * 60
+        start, _ = stats.window(now, columns, span)
+        found = stats.axis_ticks(start, span, columns)
+        desc = f"{desc} at {columns}"
+        assert len(found) >= 2, f"{desc}: {found}"
+        assert all(re.fullmatch(label, lab) for _, lab in found), f"{desc}: {found}"
+        assert date is None or any(re.fullmatch(date, lab) for _, lab in found), f"{desc}: a date shows"
+        for at, lab in found:
+            lt = time.localtime(at)
+            assert lt.tm_min == 0 or span < 8 * H, f"{desc}: {lab} on the hour"
+            assert not re.fullmatch(date or "$^", lab) or (lt.tm_hour, lt.tm_min) == (0, 0), f"{desc}: {lab} at midnight"
+        gaps = [(b - a) / span * columns for (a, _), (b, _) in zip(found, found[1:])]
+        assert min(gaps) >= max(len(lab) for _, lab in found) + 1, f"{desc}: apart enough to read: {found}"
+        c = stats.chart([], now, width=stats.MARGIN + columns, height=4, span=span)
+        axis = stats.chart_lines(c, 0)[-1].plain[stats.MARGIN:][:columns - stats.zoom(span).cell_len - 1]
+        drawn, line = [], [" "] * len(axis)
+        for t, lab in found:
+            pos = round((t - c.start) / span * columns)
+            if axis[pos:pos + len(lab)] == lab:
+                drawn.append(lab)
+                line[pos:pos + len(lab)] = lab
+        assert drawn and "".join(line) == axis, f"{desc}: each label drawn where its time falls: {axis!r}"
+    finally:
+        monkeypatch.delenv("TZ")
+        time.tzset()
 
 
 @pytest.mark.parametrize("width, buttons, desc", [
