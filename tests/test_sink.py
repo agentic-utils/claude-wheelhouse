@@ -510,9 +510,9 @@ async def test_delete_on_a_row_still_sinking_ends_as_typed_slowly(tmp_path, cloc
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("keys, rows, selected, status, desc", [
-    (("delete",), ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0"], "Bash: P2",
-     "closed", "Delete on D held in sight as its session closed it (F off): it goes now, as if closed here"),
-    (("backspace",), ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0"], "Bash: P2", "closed", "as does Backspace"),
+    (("delete",), ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0"], "Q2",
+     "closed", "Delete on D held in sight as its session closed it (F off): it goes now, as if closed here, the highlight to the row above"),
+    (("backspace",), ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0"], "Q2", "closed", "as does Backspace"),
     (("ctrl+r",), ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0", "D"], "D",
      "answered", "Ctrl+R on it reopens it as answered: with the settled, still selected"),
     (("ctrl+r", "delete"), ["Q2", "Bash: P2", "Bash: P1", "Q", "t1", "t0"], "t0", "closed", "and Delete closes it again, from the foot"),
