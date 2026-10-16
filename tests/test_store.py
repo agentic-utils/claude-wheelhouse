@@ -719,6 +719,7 @@ def test_an_older_database_takes_the_sessions_latest_word_on_each_item(db_file, 
     bare = store.post_item(sid, "task", "never touched", status="running")
     written_at["m"] = 20
     store.update_item(sid, t, note="halfway")   # an older MCP server: no session_at
+    store.db.execute("DROP INDEX items_session_at")   # an older database has neither (T114's index)
     store.db.execute("ALTER TABLE items DROP COLUMN session_at")
     reopened = Store(db_file)
     reopened.mark_version(sid)
@@ -892,13 +893,18 @@ def test_last_at_is_the_latest_word(store, sid):
     store.db.execute("UPDATE sessions SET created_at = '2026-01-01T00:00:00+00:00' WHERE id = ?", (sid,))
     assert store.sessions()[0]["last_at"] == "2026-01-01T00:00:00+00:00"
     ref = store.post_item(sid, "task", "a")
-    store.db.execute("UPDATE items SET updated_at = '2026-02-01T00:00:00+00:00' WHERE ref = ?", (ref,))
-    assert store.sessions()[0]["last_at"] == "2026-02-01T00:00:00+00:00"
+    store.db.execute("UPDATE items SET created_at = '2026-02-01T00:00:00+00:00', session_at = NULL, "
+                     "updated_at = '2026-05-01T00:00:00+00:00' WHERE ref = ?", (ref,))
+    assert store.sessions()[0]["last_at"] == "2026-02-01T00:00:00+00:00", "the person's acts (updated_at) aren't its"
+    store.db.execute("UPDATE items SET session_at = '2026-03-01T00:00:00+00:00' WHERE ref = ?", (ref,))
+    assert store.sessions()[0]["last_at"] == "2026-03-01T00:00:00+00:00", "its latest word on an item"
 
 
 @pytest.mark.parametrize("sql, index, desc", [
-    ("SELECT max(created_at) FROM messages WHERE session_id = ?", "messages_session_created", "a session's latest message"),
-    ("SELECT max(updated_at) FROM items WHERE session_id = ?", "items_session_updated", "its latest item"),
+    ("SELECT max(created_at) FROM messages WHERE session_id = ? AND author = 'claude'", "messages_session_author",
+     "a session's latest message"),
+    ("SELECT max(session_at) FROM items WHERE session_id = ?", "items_session_at", "its latest word on an item"),
+    ("SELECT max(created_at) FROM items WHERE session_id = ?", "items_session_created", "its latest item"),
     ("SELECT count(*) FROM messages WHERE session_id = ? AND draft = 1", "messages_drafts", "its drafts"),
 ])
 def test_sessions_subqueries_use_an_index(store, sid, sql, index, desc):

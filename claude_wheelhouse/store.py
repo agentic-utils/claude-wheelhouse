@@ -174,9 +174,12 @@ DROP INDEX IF EXISTS messages_pending;
 CREATE INDEX IF NOT EXISTS messages_unsent
     ON messages (session_id) WHERE delivered_at IS NULL AND draft = 0;
 DROP INDEX IF EXISTS items_seq;
--- sessions(), each tick: each session's latest message and item (last_at) and its drafts
-CREATE INDEX IF NOT EXISTS messages_session_created ON messages (session_id, created_at);
-CREATE INDEX IF NOT EXISTS items_session_updated ON items (session_id, updated_at);
+-- sessions(), each tick: each session's latest word and item (last_at) and its drafts
+DROP INDEX IF EXISTS messages_session_created;
+DROP INDEX IF EXISTS items_session_updated;
+CREATE INDEX IF NOT EXISTS messages_session_author ON messages (session_id, author, created_at);
+CREATE INDEX IF NOT EXISTS items_session_at ON items (session_id, session_at);
+CREATE INDEX IF NOT EXISTS items_session_created ON items (session_id, created_at);
 CREATE INDEX IF NOT EXISTS messages_drafts ON messages (session_id) WHERE draft = 1;
 """
 # Triggers fire for any connection: in the schema, so a writer running older code fires
@@ -597,9 +600,13 @@ class Store:
                     AND i.kind = 'decision' AND i.status = 'unseen') AS unseen_decisions,
                  (SELECT count(*) FROM agent_items a JOIN items i ON i.session_id = a.session_id
                     AND i.ref = a.item_ref WHERE a.session_id = s.id AND i.status = 'running') AS running_agents,
+                 -- the session's own latest activity (ordering.py): its words, not the person's
+                 -- (a decision seen, an answer queued), so their own acts never re-sort the list
                  max(s.created_at, coalesce(s.launched_at, ''),
-                     coalesce((SELECT max(m.created_at) FROM messages m WHERE m.session_id = s.id), ''),
-                     coalesce((SELECT max(i.updated_at) FROM items i WHERE i.session_id = s.id), '')) AS last_at
+                     coalesce((SELECT max(m.created_at) FROM messages m WHERE m.session_id = s.id
+                               AND m.author = 'claude'), ''),
+                     coalesce((SELECT max(i.session_at) FROM items i WHERE i.session_id = s.id), ''),
+                     coalesce((SELECT max(i.created_at) FROM items i WHERE i.session_id = s.id), '')) AS last_at
                FROM sessions s ORDER BY s.created_at, s.rowid"""   # created_at ties: to the second
         )
 

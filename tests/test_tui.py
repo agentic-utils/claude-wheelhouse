@@ -1052,11 +1052,16 @@ async def step(app, pilot, how, sid, other):
         app.screen.focus_next()   # off its box, so Esc closes it
     elif how == "back":
         await pilot.press("escape")
-    elif how == "burst":   # typed for A's item, then at once: Down (twice: unfiltered, the first
-        # picks A), Ctrl+Enter, Ctrl+S
+    elif how == "burst":   # typed for A's item, then at once: the arrows onto B (unfiltered, the
+        # first Down picks the first row), Ctrl+Enter, Ctrl+S. B runs, so * (T114) lists it first
         app.answer.text = "burst"
         app.session_list.focus()
-        await pilot.press("down", "down", "ctrl+j", "ctrl+s")
+        rows = [k for k in app.session_list.final() if k]
+        if app.session_list.show_cursor:
+            arrows = ["up" if rows.index(other) < rows.index(sid) else "down"]
+        else:
+            arrows = ["down"] if rows[0] == other else ["down", "down"]
+        await pilot.press(*arrows, "ctrl+j", "ctrl+s")
     await pilot.pause()
 
 
@@ -1089,20 +1094,20 @@ async def test_one_current_session_whatever_happens(store, sid, tmp_path, monkey
     some_live(monkeypatch)   # all dead: Forget deletes at once, on a yes
     monkeypatch.setattr(launch, "restore_session", lambda *a, **kw: None)   # Unpark relaunches
     store.set_mode(sid, "immediate")
-    mine = store.post_item(sid, "question", "A's")
-    if "permission" in steps:
-        store.post_item(sid, "permission", "Bash: rm -rf build")
-    other = store.create_session(str(tmp_path), name="other")
-    store.set_mode(other, "queued")
-    store.post_item(other, "question", "B's")
-    store.queue(sid, "A's draft")
-    store.queue(other, "B's draft")
+    with one_second():   # one second for all of it: under * (T114) A, made first, stays first
+        mine = store.post_item(sid, "question", "A's")
+        if "permission" in steps:
+            store.post_item(sid, "permission", "Bash: rm -rf build")
+        other = store.create_session(str(tmp_path), name="other")
+        store.set_mode(other, "queued")
+        store.post_item(other, "question", "B's")
+        store.queue(sid, "A's draft")
+        store.queue(other, "B's draft")
     if steps == ["burst"]:   # B running: Ctrl+S refuses a dead session (#62)
         LIVE.add(other)
         store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
     expect = {"A": sid, "B": other, None: None}[filtered_current if filtered else unfiltered_current]
     desc = f"{desc}, {'following A' if filtered else 'the inbox unfiltered'}"
-    store.set_setting("layout.sort.sessions", "")   # the sessions in creation order: they hold still (T114)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -1180,7 +1185,6 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
     store.queue(other, "B's draft")
     store.queue(other, "B's answer", theirs)
     store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
-    store.set_setting("layout.sort.sessions", "")   # the sessions in creation order: they hold still (T114)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -1341,12 +1345,11 @@ async def two_lists(clock, tmp_path, where, steps, slow, counts=(2, 2), tick=Fal
     focus. D22 holds either way. With tick, a raw burst has the refresh tick fall due as each
     key's binding acts, behind what it set in motion, so it fires as the next key lands."""
     store = Store(tmp_path / f"{'slow' if slow else 'raw'}.db")
-    a, b = (store.create_session(str(tmp_path), name=n) for n in ("alpha", "bravo"))
-    with one_second():
+    with one_second():   # the sessions too: under * (T114) a second between them would put B first
+        a, b = (store.create_session(str(tmp_path), name=n) for n in ("alpha", "bravo"))
         for s, count in zip((a, b), counts):
             for title in ("one", "two", "three", "four")[:count]:
                 store.post_item(s, "decision", title, why="over x: y; undo: z")
-    store.set_setting("layout.sort.sessions", "")   # the sessions in creation order: they hold still (T114)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -6890,7 +6893,7 @@ async def test_header_clicks_cycle_the_markers(store, sid):
 async def test_session_dot_header_sorts_and_drag_turns_it_off(store, sid, tmp_path):
     other = store.create_session(str(tmp_path), name="later")
     store.post_item(other, "task", "fresh", status="running")   # the latest activity
-    store.db.execute("UPDATE items SET updated_at = '2999-01-01T00:00:00+00:00' WHERE session_id = ?", (other,))
+    store.db.execute("UPDATE items SET created_at = '2999-01-01T00:00:00+00:00' WHERE session_id = ?", (other,))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -6953,3 +6956,39 @@ async def test_a_drag_not_written_changes_nothing(store, sid):
         assert "status *" in [str(c.label) for c in app.items_table.ordered_columns]
         assert app.item_sort == "status*" and store.setting("layout.sort.items") is None
         assert item_refs(app) == [q, t]
+
+
+@pytest.mark.anyio
+async def test_the_selected_session_holds_its_place_under_the_sort(store, sid, tmp_path):
+    """D113: with * on, a session with new activity rises, but the selected one holds its
+    place until the selection leaves it, then settles into its sorted place."""
+    busy, held = (store.create_session(str(tmp_path), name=n) for n in ("busy", "held"))
+    stamp = lambda s, at: store.db.execute("UPDATE sessions SET created_at = ? WHERE id = ?", (at, s))
+    for s, at in ((sid, "2026-01-03"), (busy, "2026-01-02"), (held, "2026-01-01")):
+        stamp(s, f"{at}T00:00:00+00:00")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.session_list
+        real = lambda: [k for k in table.final() if k]
+        assert real() == [sid, busy, held], "*: the latest activity first"
+        async def click(row):
+            await pilot.click(table, offset=(3, table.header_height + row))
+            await pilot.pause()
+            if isinstance(app.screen, Confirm):   # the offer to relaunch a dead session
+                await pilot.press("n")
+                await pilot.pause()
+
+        await click(2)
+        assert app.current_session() == held
+        stamp(held, "2026-02-01T00:00:00+00:00")
+        stamp(busy, "2026-01-05T00:00:00+00:00")
+        app.refresh_data()
+        await pilot.pause()
+        assert real() == [busy, sid, held], "the unselected one moved; the selected one held"
+        assert app.current_session() == held, "and the cursor stays on it"
+        await click(0)   # the selection leaves it, for busy
+        assert app.current_session() == busy
+        app.refresh_data()
+        await pilot.pause()
+        assert real() == [held, busy, sid], "settled into its sorted place"

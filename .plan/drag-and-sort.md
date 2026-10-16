@@ -79,11 +79,17 @@ TEXT, `sessions.pos` REAL, `sessions.pos_group` TEXT. NULL is "not placed".
 - `Store.set_item_order(group, keys)` and `Store.set_session_order(group, sids)`: `pos = i`,
   `pos_group = group` for each, one transaction. `updated_at` stays (it drives the ranking).
   Item writes fire the `marks` triggers, so every client repaints.
-- `Store.sessions` gains `last_at`: the latest of `created_at`, `launched_at`, the newest
-  message and the newest item update. Not `heartbeat_at`, which moves every few seconds.
-  It runs each tick, so `INDEXES` adds `messages (session_id, created_at)`, `items
-  (session_id, updated_at)` and, for the drafts count beside it, `messages (session_id)
-  WHERE draft = 1`: 0.4 ms a call with 300k messages, from 1.9 s.
+- `Store.sessions` gains `last_at`, the session's own latest activity: the latest of
+  `created_at`, `launched_at`, its newest message of its own (author claude), its newest
+  item and its latest word on any item (`session_at`). Not the person's acts (a decision
+  seen, an answer queued: `updated_at`), so those never re-sort the list, and not
+  `heartbeat_at`, which moves every few seconds. It runs each tick, so `INDEXES` adds
+  `messages (session_id, author, created_at)`, `items (session_id, session_at)`, `items
+  (session_id, created_at)` and, for the drafts count beside it, `messages (session_id)
+  WHERE draft = 1`: 0.6 ms a call with 300k messages, from 1.9 s.
+- Under `*` the selected session is pinned (D113), as the selected item is: it keeps the
+  key it was shown with while it stays selected, and settles into its place once the
+  selection leaves it. Park and Unpark, and a drop, move it at once.
 - Hub `reorder_items` and `reorder_sessions` return `Done`; daemon `POST /order/items`
   (`{group, keys: [[sid, ref], ...]}`) and `POST /order/sessions` (`{group, sids}`), not
   under `/sessions/`, where `{sid}/{action}` lives. The remote client holds the new places

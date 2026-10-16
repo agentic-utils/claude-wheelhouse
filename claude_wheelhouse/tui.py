@@ -2499,6 +2499,11 @@ class WheelhouseApp(App):
         # the selected item's key and its rank as it was shown when selected: it keeps that
         # place while selected, re-sorting once the selection moves on (ranked)
         self.pin: tuple[str, tuple] | None = None
+        # the selected session's, as the item's (D113): its sort key as shown when selected,
+        # held while it stays selected, so its own activity never moves it under the cursor
+        self.session_pin: tuple[str, tuple] | None = None
+        self.session_ranks: dict[str, tuple] = {}
+        self.session_repin: set[str] = set()
         # items the person just closed or reopened (close), or whose permission they answered
         # (answer_permission): pinned where they go
         self.repin: set[str] = set()
@@ -2962,7 +2967,7 @@ class WheelhouseApp(App):
         pending = key != self.sessions_cursor   # the person's move, not yet settled
         rows, table.eyes = [], {s["id"] for s in self.sessions if self.busy(s["id"])}
         self.pace()   # a session busy, or none now: the animation runs, or may rest
-        keyed = self.session_keys()
+        keyed = self.pinned_session_keys()
         for s in sorted(self.sessions, key=lambda s: keyed[s["id"]][0]):
             st = self.shown_status(s["id"])
             busy = Text(" " * SessionList.EYE) if s["id"] in table.eyes else Text("")   # the eye's room (sweep)
@@ -3130,6 +3135,28 @@ class WheelhouseApp(App):
         return {s["id"]: ordering.session_key(self.session_sort, s, self.running(s["id"]), at)
                 for at, s in enumerate(self.sessions)}
 
+    def pinned_session_keys(self) -> dict[str, tuple]:
+        """session_keys, but for the selected session, pinned (D113) as ranked_keyed pins the
+        selected item: it keeps the key it was shown with when selected, and re-sorts once
+        the selection leaves it. A drop the person makes (drop_row) moves it at once."""
+        keyed = self.session_keys()
+        key = self.current_session()
+        if self.session_pin is None or self.session_pin[0] != key:
+            self.session_pin = (key, self.session_ranks[key]) if key in self.session_ranks else None
+        if self.session_sort and self.session_pin and self.session_pin[0] in keyed:   # off: activity moves nothing
+            sid = self.session_pin[0]
+            (band, (parked, idle), *rest), token = keyed[sid]
+            held = self.session_pin[1]
+            if sid in self.session_repin:
+                self.session_pin = (sid, keyed[sid][0])
+            elif held[1][0] == parked:   # Park and Unpark are the person's: those move it at once
+                keyed[sid] = (held, f"{self.session_sort}|{held[1]!r}")
+            else:
+                self.session_pin = (sid, keyed[sid][0])
+        self.session_repin = set()
+        self.session_ranks = {sid: k for sid, (k, _) in keyed.items()}
+        return keyed
+
     def kept_sort(self, which: str) -> str:
         """A list's sort as this TUI last left it, else its default."""
         spec = self.client.setting(ordering.SORT_KEYS[which])
@@ -3142,7 +3169,7 @@ class WheelhouseApp(App):
         if which == "items":
             self.item_sort, self.pin, self.ranks = spec, None, {}
         else:
-            self.session_sort = spec
+            self.session_sort, self.session_pin, self.session_ranks = spec, None, {}
             self.paint_session_header()
         self.client.set_setting(ordering.SORT_KEYS[which], spec)
 
@@ -3203,6 +3230,8 @@ class WheelhouseApp(App):
             # the person's own act: every row it placed goes at once, the selected one too
             # if the drag moved another past it (ranked_keyed's pin)
             self.repin.update(new)
+        else:
+            self.session_repin.update(new)
         self.paint_items() if which == "items" else self.paint_sessions()
 
     def keep_unsent(self, box, old, new) -> None:
