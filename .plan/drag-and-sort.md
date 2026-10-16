@@ -43,9 +43,11 @@ element: `status*|<band>|<tier>`), and stays where it was dropped until its stat
 changes. Then the placement ends for good: a trigger (`items_unplaced_on_status`, so any
 writer's change counts) clears `pos` and `pos_group` from a row placed under a Status sort,
 and it goes by status until dragged again, even if its status comes back. A row not placed
-(new, or its status changed) goes in by status: straight after the last placed row of its
-tier or a more urgent one, else at the head of the band (`ordering.arrange`). So a low row
-dragged to the top never pulls later urgent arrivals above the more urgent. Doug's example: A and B in one status, C and D in another, E and F in
+(new, or its status changed) goes in by status (`ordering.arrange`): straight before the
+first placed row of its own tier; else straight after the last placed row of a more urgent
+one; else at the head of the band. Rows going into one spot keep the sort's own order
+there, newest first. So the newest of a status still shows first, and a low row dragged to
+the top never pulls later urgent arrivals above the more urgent. Doug's example: A and B in one status, C and D in another, E and F in
 a third. B dragged between E and F keeps `*` on and stays there; when B's status next
 changes it goes in by status. `/order/items` takes each key's own group as a third element.
 

@@ -143,9 +143,11 @@ def arrange(spec: str, raw: dict) -> dict:
     """Each row's rank from its item_key (raw: key -> (rank, token)). Under Status * (T121) a
     band keeps the person's order: the rows placed in it by pos (each placed with its tier at
     the drop; the store lets a placement go once the row's status changes), and each row not
-    placed (new, or its status changed since) put in by status: straight after the last
-    placed row of its tier or a more urgent one, else at the head of the band. So a low row
-    dragged to the top never pulls the urgent ones that arrive later above the more urgent.
+    placed (new, or its status changed since) put in by status: straight before the first
+    placed row of its own tier; else straight after the last placed row of a more urgent
+    one; else at the head of the band. Rows going into one spot keep the sort's own order
+    there (newest first). So the newest of a status shows first, as without a drag, and a
+    low row dragged to the top never pulls later urgent ones above the more urgent.
     The ranks hold for any subset (one session's view), as they go by the placed rows of the
     whole list. Other sorts: their ranks as they are."""
     if spec != ITEMS_DEFAULT:
@@ -162,8 +164,15 @@ def arrange(spec: str, raw: dict) -> dict:
         if flag:
             out[k] = (band, x, 1)
         else:
-            after = [pos for pos, t in placed.get(band, ()) if t <= tier]
-            out[k] = (band, after[-1], 2, tier, x) if after else (band, float("-inf"), 0, tier, x)
+            rows = placed.get(band, ())
+            same = next((pos for pos, t in rows if t == tier), None)
+            above = [pos for pos, t in rows if t < tier]
+            if same is not None:   # before the first of its own status
+                out[k] = (band, same, 0, tier, x)
+            elif above:   # after the last of a more urgent one
+                out[k] = (band, above[-1], 2, tier, x)
+            else:
+                out[k] = (band, float("-inf"), 0, tier, x)
     return out
 
 
