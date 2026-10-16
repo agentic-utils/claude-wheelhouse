@@ -6335,3 +6335,59 @@ async def test_delete_on_an_item_with_no_children_asks_nothing(store, sid):
         await pilot.pause()
         assert not isinstance(app.screen, Confirm)
     assert store.item(sid, q)["status"] == "closed"
+
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+async def test_a_doc_sits_under_its_parent_and_opens_rendered(store, sid, tmp_path):
+    doc = tmp_path / "plan.md"
+    doc.write_text("# The plan\n\nBuild it **well**.\n")
+    t = store.post_item(sid, "task", "design it", status="running")
+    m = store.post_doc(sid, "the plan", str(doc), t)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert item_list_rows(app) == [["demo", t], ["", f"└ {m}"]], "the doc under its parent"
+        app.items_table.move_cursor(row=1)
+        await pilot.pause()
+        assert app.selected == (sid, m)
+        pane = app.query_one("#doc-pane")
+        assert pane.display and not app.query_one("#detail-scroll").display, "the doc in place of the thread"
+        assert not app.query_one("#answer").display, "no answer box on a doc"
+        assert str(doc) in str(app.query_one("#doc-head").render())
+        assert "Build it" in app.query_one("#doc-view").document.source
+        dwell(app)
+        assert store.item(sid, m)["status"] == "read", "in sight for the dwell: read"
+        doc.write_text("# The plan\n\nBuild it twice.\n")
+        app.refresh_data()
+        await pilot.pause()
+        assert "twice" in app.query_one("#doc-view").document.source, "a change to the file shows"
+        app.items_table.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, tui.DocView), "Enter opens it full screen"
+        assert not app.screen.query(TextArea), "with no answer box"
+        assert "twice" in app.screen.query_one("#docview").document.source
+        doc.unlink()
+        app.refresh_data()
+        await pilot.pause()
+        assert "The file has gone" in str(app.screen.query_one("#docview-head").render()), "a clear line"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, tui.DocView)
+        app.items_table.move_cursor(row=0)
+        await pilot.pause()
+        assert app.query_one("#answer").display and not app.query_one("#doc-pane").display, "the box back on a task"
+
+
+@pytest.mark.anyio
+async def test_a_doc_with_no_parent_sits_in_its_sessions_group(store, sid, tmp_path):
+    (tmp_path / "notes.md").write_text("# Notes\n")
+    q = store.post_item(sid, "question", "which db?")
+    m = store.post_doc(sid, "the notes", str(tmp_path / "notes.md"))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert item_list_rows(app) == [["demo", q], ["demo", f"└ {m}"]]
+        assert str(app.query_one("#items", DataTable).get_row_at(1)[2]) == "new"

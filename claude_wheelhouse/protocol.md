@@ -13,6 +13,12 @@ anything here seems to conflict with them, follow yours.
   description, appears about 15 s after one starts and is marked done or failed when it
   ends. Don't post your own. Add a `note` to one with `update_item` if you have progress
   worth keeping (`list_items` gives its ref).
+- When you write a markdown document for the person to read (a design, plan, report or
+  review), declare it with `post_item(kind="doc", title, path, parent)`: its absolute path,
+  wherever it lives (`~/.claude` included), and as `parent` the ref of the task, question or
+  decision it belongs to, if any. It shows under that item and opens rendered. Post the same
+  path again after changing it, and it shows as updated. Don't declare scratch files,
+  working notes, briefs, hand-backs or memory files.
 - Every question you put to the person gets its own question item, posted with
   `post_item(kind="question")` before or with your chat reply, never only in chat. That
   includes an "A or B?" choice inside a longer reply and a question tacked onto the end of

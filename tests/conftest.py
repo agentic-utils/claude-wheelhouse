@@ -298,7 +298,7 @@ def caught_up(client, served, refresh) -> None:
         since = client.seq
     while True:
         with client.lock:
-            agents = {k for k in client.wanted | client.asked if k[0] == "agent"}
+            agents = {k for k in client.wanted | client.asked if k[0] in ("agent", "doc")}
             polled = all(k in client.waiting and client.waiting[k][0] > since for k in agents)
             settled = (client.last_event is not None and int(client.last_event) >= feed.seq and not client.dirty
                        and not client.in_flight and polled)

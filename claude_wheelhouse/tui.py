@@ -44,6 +44,7 @@ from textual.widgets import (
     Footer,
     Input,
     Label,
+    MarkdownViewer,
     RadioButton,
     RadioSet,
     SelectionList,
@@ -68,6 +69,7 @@ MATRIX = "#00ff41"
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
 MARKED = Style(bgcolor="#3a1060")   # rows picked to close together
 DECISION = "bold #b967ff"   # an unseen decision: noticeable, not urgent
+UNREAD = ("unseen", "new", "updated")   # a decision or doc the person hasn't looked at yet, in DECISION
 STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "#05d9e8",
                 "dead": "bold #ff2a6d", "forgetting": "bold #d300c5", "parking": "bold #d300c5",
                 "relaunching": "bold #05d9e8"}
@@ -93,9 +95,10 @@ CLOSABLE = {"question": "answered", "decision": "seen"}   # what Delete closes, 
 
 
 def closable(item) -> bool:
-    """What Delete acts on: a question or decision whatever its status, a task or subagent
+    """What Delete acts on: a question, decision or doc whatever its status, a task or subagent
     once it has settled (store.SETTLED), dismissed or not."""
-    return item["kind"] in CLOSABLE or (item["kind"] in DISMISSABLE and item["status"] in SETTLED[item["kind"]])
+    return item["kind"] in CLOSABLE or item["kind"] == "doc" or (
+        item["kind"] in DISMISSABLE and item["status"] in SETTLED[item["kind"]])
 # where each module slot (api.SLOTS) is mounted: at the end of this container
 SLOT_PARENTS = {"inbox.side": "#items-pane"}
 LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of its parent
@@ -181,7 +184,7 @@ def session_action(method):
 
 
 CHILD = "child"   # item_rows: a row nested under its parent item
-GROUPED = ("agent",)   # the kinds that sit in their session's group when no parent of theirs shows
+GROUPED = ("agent", "doc")   # the kinds that sit in their session's group when no parent of theirs shows
 TOGGLE = Style(color="#e8e8e8", bgcolor="#555555")   # a parent row's + / - at its right-hand end
 
 
@@ -225,8 +228,8 @@ def still_open(item) -> bool:
 
 
 def unread(item) -> bool:
-    """Whether a child is something the person hasn't looked at yet: a decision unseen."""
-    return item["kind"] == "decision" and item["status"] == "unseen"
+    """Whether a child is something the person hasn't looked at yet: a decision unseen, a doc new or updated."""
+    return (item["kind"], item["status"]) in {("decision", "unseen"), ("doc", "new"), ("doc", "updated")}
 
 
 def family_prompt(item, family: list) -> str:
@@ -1268,6 +1271,81 @@ class ThreadView(Screen):
                 scroll.scroll_end(animate=False)
 
 
+class DocViewer(MarkdownViewer):
+    """A doc's markdown, rendered. Its links: a web link opens in the browser, an anchor
+    scrolls to its heading, and a file is never loaded from this machine's disk, as the doc
+    itself came through the hub (Hub.document)."""
+
+    async def _on_markdown_link_clicked(self, message) -> None:
+        message.stop()
+        message.prevent_default()   # not MarkdownViewer's, which loads the file
+        href = message.href
+        if href.startswith("#"):
+            self.document.goto_anchor(href[1:])
+        elif href.startswith(("http://", "https://", "mailto:")):
+            self.app.open_url(href)
+        else:
+            self.notify(f"{href}: links to files aren't followed", severity="warning")
+
+
+def doc_head(item, doc) -> Text:
+    """A doc's lines above it: its ref, title and status, its path, and a clear line if its file has gone."""
+    head = Text.assemble((f"{item['ref']} · {item['title']}", "bold #05d9e8"), " · ",
+                         (item["status"], DECISION if item["status"] in UNREAD else "dim"),
+                         ("\n" + (doc["path"] if doc else item["body"]), "#777777"))
+    if doc and doc["gone"]:
+        head.append("\nThe file has gone: " + ("this is the last text read" if doc["text"] else "nothing was read"),
+                    style=VOICE["warn"])
+    return head
+
+
+def show_doc(holder, head: Static, viewer: DocViewer, item, doc) -> None:
+    """A doc in a head and a viewer, each updated only when it changes (the viewer mounts a
+    widget per block, so not each refresh); back at the top for another doc."""
+    key = (item["session_id"], item["ref"])
+    text = doc["text"] if doc else ""
+    shown = getattr(holder, "_doc_shown", None)
+    head_text = doc_head(item, doc)
+    if shown is None or shown[1] != head_text.plain:
+        head.update(head_text)
+    if shown is None or shown[0] != key or shown[2] != text:
+        viewer.document.update(text)
+        if shown is None or shown[0] != key:
+            viewer.scroll_home(animate=False)
+    holder._doc_shown = (key, head_text.plain, text)
+
+
+class DocView(Screen):
+    """One doc full screen: rendered, with its contents alongside, and no answer box. The
+    app's refresh tick repaints it, so a change to the file shows while it's open."""
+    BINDINGS = [Binding("escape", "leave", "Back", key_display="Esc")]
+
+    def __init__(self, sid: str, ref: str):
+        super().__init__()
+        self.sid, self.ref = sid, ref
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="docview-pane", classes="panel"):
+            yield Static(id="docview-head", classes="doc-head")
+            yield DocViewer(id="docview", show_table_of_contents=True)
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.paint()
+        self.set_focus(self.query_one("#docview", DocViewer))
+
+    def action_leave(self) -> None:
+        self.app.pop_screen()
+        self.app.retarget()
+
+    def paint(self) -> None:
+        item = self.app.client.item(self.sid, self.ref)
+        if item is None:
+            return
+        show_doc(self, self.query_one("#docview-head", Static), self.query_one("#docview", DocViewer),
+                 item, self.app.client.document(self.sid, self.ref))
+
+
 PERMISSION_HINT = "Allow, Always or Deny above (1, 2, 3), at once"
 DENY_HINT = "Enter denies with the reason above (empty: a plain deny) · Esc goes back to Allow, Always or Deny"
 COMPACT_HINT = ("1 Compact or 2 Leave it, then 3 just compact, 4 send the queue or 5 park (outside the box) · "
@@ -1875,7 +1953,7 @@ DESCRIBE = {
     "clear_filter": "Clear a text selection first, then the marks, else show every session's items again",
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
-    "app.close_question": ("Close the highlighted question or decision, or dismiss a done task or subagent "
+    "app.close_question": ("Close the highlighted question or decision, or dismiss a done task or subagent, or a doc "
                            "(or every marked one); it never reopens one: Ctrl+R does. On an item with children it "
                            "asks first, saying how many are still open or unread, then takes them all"),
     "help": "This list",
@@ -1989,7 +2067,7 @@ SEND_RULES = (
 MOUSE = ("Click selects a row; in the session list, a click on the selected session or the list's title "
          "unselects it, for all sessions' items, as Esc does. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
          "keep Shift+click for itself: Space and Shift+Up/Down do the same), then Delete or Backspace closes them together "
-         "and Ctrl+R reopens the finished ones. An item with children (its subagents, under it) has a - at the "
+         "and Ctrl+R reopens the finished ones. An item with children (its subagents and docs, under it) has a - at the "
          "right-hand end of its row: a click there hides them, and the + it becomes shows them again. "
          "Double-click selects a word. Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
@@ -2032,6 +2110,7 @@ def keys_help(sdk: bool = False, shown=()) -> str:
                 ("The item list", ItemList.BINDINGS),
                 ("An answer box", Compose.BINDINGS), ("The conversation pane", Transcript.BINDINGS),
                 ("An item opened full screen", ThreadView.BINDINGS),
+                ("A doc opened full screen", DocView.BINDINGS),
                 *([("The stats pane, with a session run in the wheelhouse in context", SessionStats.BINDINGS)]
                   if sdk else [])]
     out = ["# Keys"]
@@ -2089,6 +2168,9 @@ class WheelhouseApp(App):
     .-split {{ border-top: none; min-height: 3; }}   /* the first module pane under the items: the splitter is its line */
     #detail-pane {{ width: 2fr; min-width: 24; }}
     #detail-scroll {{ height: 1fr; min-height: 3; }}
+    #doc-pane, #docview-pane {{ height: 1fr; }}
+    .doc-head {{ height: auto; padding: 0 1; }}
+    DocViewer {{ height: 1fr; background: #000000; }}
     #answer {{ min-height: 3; }}
     #detail, #thread {{ background: #000000; color: {MATRIX}; }}
     #answer, #thread-answer {{ height: 8; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
@@ -2267,6 +2349,9 @@ class WheelhouseApp(App):
                     yield Static(id="checklist")
                 with VerticalScroll(id="detail-scroll"):
                     yield Transcript(NOTHING_SELECTED, id="detail")
+                with Vertical(id="doc-pane"):   # a doc selected, in place of the detail
+                    yield Static(id="doc-head", classes="doc-head")
+                    yield DocViewer(id="doc-view", show_table_of_contents=False)
                 yield Splitter("answer", "#answer", "#detail-scroll", "y")
                 yield PermissionButtons()
                 yield DenyReason()
@@ -2283,6 +2368,10 @@ class WheelhouseApp(App):
         self.items_table = self.query_one("#items", ItemList)
         self.detail = self.query_one("#detail", Transcript)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
+        self.doc_pane = self.query_one("#doc-pane", Vertical)
+        self.doc_pane.display = False
+        self.doc_head, self.doc_view = self.query_one("#doc-head", Static), self.query_one("#doc-view", DocViewer)
+        self.answer_splitter = self.query_one("#detail-pane > Splitter", Splitter)   # held: a query walks every doc block
         self.answer = self.query_one("#answer", Compose)
         self.session_list = self.query_one("#session-list", SessionList)
         self.session_list.sink, self.items_table.sink = self.session_sink, self.item_sink
@@ -2485,7 +2574,7 @@ class WheelhouseApp(App):
         self.paint_session_info()
         self.paint_sendbar()
         self.paint_checklist()
-        if isinstance(self.screen, ThreadView) and self.screen.is_mounted:   # not before its widgets exist
+        if isinstance(self.screen, (ThreadView, DocView)) and self.screen.is_mounted:   # not before its widgets exist
             self.screen.paint()   # an action here (queue, take back) shows at once
 
     @property
@@ -2546,7 +2635,7 @@ class WheelhouseApp(App):
         sid, ref = self.selected
         screen = self.screen
         if not (screen is self.screen_stack[0]
-                or isinstance(screen, ThreadView) and (screen.sid, screen.ref) == (sid, ref)):
+                or isinstance(screen, (ThreadView, DocView)) and (screen.sid, screen.ref) == (sid, ref)):
             return
         if self.selected == self.picked:
             self.saw(sid, ref)
@@ -2554,7 +2643,7 @@ class WheelhouseApp(App):
             self.paint_sessions()   # its D count
             self.paint_items()   # it keeps its place while selected (ranked), and sinks once left
             self.paint_detail()
-            if isinstance(screen, ThreadView) and screen.is_mounted:
+            if isinstance(screen, (ThreadView, DocView)) and screen.is_mounted:
                 screen.paint()
 
     @property
@@ -2739,7 +2828,7 @@ class WheelhouseApp(App):
             status = it["status"] if where != "active" else "queued" if key in queued \
                 else "processing" if key in processing else it["status"]
             style = "dim" if where != "active" else "bold #05d9e8" if status == "queued" \
-                else "bold #ffd300" if status == "open" else DECISION if status == "unseen" \
+                else "bold #ffd300" if status == "open" else DECISION if status in UNREAD \
                 else "bold #ff2a6d" if status in ("blocked", "waiting") else MATRIX
             name = names.get(it["session_id"], "")[:14]
             if status == "processing" or key in awaiting and status != "queued":
@@ -2849,7 +2938,19 @@ class WheelhouseApp(App):
         agent = self.client.agent_conversation(sid, ref)
         return thread_blocks(self.client.thread(sid, ref), session_name) + (agent or []), agent is not None
 
+    def selected_doc(self):
+        """The selected item, if it's a doc."""
+        item = self.selected and self.selected[1] and self.client.item(*self.selected)
+        return item if item and item["kind"] == "doc" else None
+
     def paint_detail(self) -> None:
+        doc = self.selected_doc()
+        if self.doc_pane.display != bool(doc):
+            self.doc_pane.display, self.detail_scroll.display = bool(doc), not doc
+        if doc:   # rendered, in place of the thread
+            self.client.unfollow_agent()
+            show_doc(self, self.doc_head, self.doc_view, doc, self.client.document(*self.selected))
+            return
         agent = False
         if self.viewing:
             blocks = self.conversation(self.viewing)
@@ -3039,8 +3140,10 @@ class WheelhouseApp(App):
             h.set_base(DENY_HINT if denying else PERMISSION_HINT if asking else COMPACT_HINT if nudged
                        else hint(sends, s is not None and self.dead(s["id"])))
         thread = isinstance(self.screen, ThreadView)
+        reading = not thread and self.selected_doc() is not None   # a doc: nothing to answer, no box
+        splitters = [] if thread else [self.answer_splitter]
         for rows, shown in ((permission_rows, asking and not denying), (reasons, denying), (compact_rows, nudged),
-                            (boxes, not asking)):
+                            (boxes, not asking and not reading), (hints, not reading), (splitters, not reading)):
             for row in rows:
                 if row.display != shown:
                     if not shown and row.has_focus_within:   # the box goes: its keys with it
@@ -3340,7 +3443,8 @@ class WheelhouseApp(App):
         sid, ref = event.row_key.value.split("|")
         self.saw(sid, ref or None)
         if ref:
-            self.push_screen(ThreadView(sid, ref))
+            item = self.client.item(sid, ref)
+            self.push_screen(DocView(sid, ref) if item is not None and item["kind"] == "doc" else ThreadView(sid, ref))
         else:   # the conversation is already in the pane: Enter goes to its box, at once
             self.screen.set_focus(self.answer)
 

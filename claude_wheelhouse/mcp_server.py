@@ -45,16 +45,27 @@ def wheelhouse_tool(fn):
 
 @wheelhouse_tool
 def post_item(kind: str, title: str, body: str = "", status: str | None = None, why: str = "",
-              alternative: str = "", reverse: str = "") -> str:
-    """Create a task, question, agent or decision item in the wheelhouse. kind: task |
-    question | agent | decision. Returns the item's ref (T1, Q1, A1, D1...). Write the full
-    detail in body, once. A decision (see the protocol) also needs why, one short line: the
-    option passed over, the reason, how to undo it. It takes no status. The wheelhouse posts
-    agent items for your subagents itself: don't post those. (alternative and reverse are
-    an older protocol's: they join why.) Posting a task or question may also list what is
-    still open: correct any of it that's finished."""
+              alternative: str = "", reverse: str = "", path: str = "", parent: str = "") -> str:
+    """Create a task, question, agent, decision or doc item in the wheelhouse. kind: task |
+    question | agent | decision | doc. Returns the item's ref (T1, Q1, A1, D1, M1...). Write
+    the full detail in body, once. A decision (see the protocol) also needs why, one short
+    line: the option passed over, the reason, how to undo it. It takes no status. The
+    wheelhouse posts agent items for your subagents itself: don't post those. (alternative and
+    reverse are an older protocol's: they join why.) Posting a task or question may also list
+    what is still open: correct any of it that's finished.
+    A doc is a markdown document you wrote for the person to read: a design, plan, report or
+    review, wherever it lives, ~/.claude included. Not your scratch, working notes, briefs,
+    hand-backs or memory files. Give its absolute path (the file must exist) and a short
+    title, and parent, the ref of the task, question or decision it belongs to, if any.
+    Post the same path again when you've changed the doc: the person sees it marked updated."""
     if kind == "permission":   # the host posts these from Claude Code's own permission check
-        raise ValueError("kind must be task, question, agent or decision")
+        raise ValueError("kind must be task, question, agent, decision or doc")
+    if kind == "doc":
+        if body or status or why or alternative or reverse:
+            raise ValueError("a doc takes title, path and parent only: the file is its content")
+        return _store.post_doc(_sid, title, path, parent or None)
+    if path or parent:
+        raise ValueError("path and parent: only a doc takes these")
     if kind != "decision":   # refused by name: only a decision takes these
         ref = _store.post_item(_sid, kind, title, body, status, why=why, alternative=alternative, reverse=reverse)
         return ref + still_open() if kind in ("task", "question") else ref

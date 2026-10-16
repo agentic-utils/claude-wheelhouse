@@ -22,7 +22,8 @@ DEFAULT_DB = Path.home() / ".local/state/claude-wheelhouse/wheelhouse.db"
 
 # permission: a tool call waiting for the person's approval, posted by a session's SDK host
 # (never by the session itself). Allow or Deny answer it; a message on it denies with that text.
-KINDS = {"task": "T", "question": "Q", "agent": "A", "decision": "D", "permission": "P"}
+# doc: a markdown document the session declares for the person to read (post_doc), M for markdown
+KINDS = {"task": "T", "question": "Q", "agent": "A", "decision": "D", "permission": "P", "doc": "M"}
 STATUSES = {
     "task": {"todo", "running", "blocked", "waiting", "done", "dropped"},
     "question": {"open", "answered", "closed"},
@@ -30,18 +31,20 @@ STATUSES = {
     # the person's state, never the session's: seen once viewed, closed when they close it
     "decision": {"unseen", "seen", "closed"},
     "permission": {"open", "allowed", "denied"},
+    # the person's too: new until viewed, read once viewed, updated when posted again after that
+    "doc": {"new", "updated", "read"},
 }
 INITIAL_STATUS = {"task": "todo", "question": "open", "agent": "running", "decision": "unseen",
-                  "permission": "open"}
+                  "permission": "open", "doc": "new"}
 CLOSED = {"done", "dropped", "closed", "failed", "allowed", "denied"}
 # Where an item stands in the inbox (standing), one table for every kind (T71). Active: ranked
 # as it has always been. Settled: done with, but kept in sight: dimmed, after the rest. Finished:
 # off the inbox until F shows it (closed, a permission answered, or dismissed by the person).
 SETTLED = {"task": {"done", "dropped"}, "question": {"answered"}, "decision": {"seen"},
-           "agent": {"done", "failed"}, "permission": set()}
+           "agent": {"done", "failed"}, "permission": set(), "doc": {"read"}}
 # kinds whose settled items the person dismisses (Delete), recorded in items.dismissed; a
 # question or a decision is closed instead
-DISMISSABLE = ("task", "agent")
+DISMISSABLE = ("task", "agent", "doc")
 # what a session may hand to a fork (Store.move_items): an item not under way and the
 # person's to answer, never an agent, decision or permission
 MOVABLE = {"task": ("todo", "blocked"), "question": ("open",)}
@@ -61,7 +64,8 @@ DECISION_FIELDS = (("why", "Why"),)
 # protocol asks the session to correct any that's finished.
 # 12: park_session and end_session stop the session's Claude Code once they return, and
 # park asks for handoff notes: an older session's tab stays open, parked but running.
-PROTOCOL_VERSION = 12
+# 13: doc items (M), which the protocol asks a session to declare for docs meant for the person.
+PROTOCOL_VERSION = 13
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.
@@ -722,6 +726,8 @@ class Store:
         is the person's (unseen until they view it)."""
         if kind not in KINDS:
             raise ValueError(f"kind must be one of {sorted(KINDS)}")
+        if kind == "doc":
+            raise ValueError("a doc is posted with its path (post_doc)")
         if kind == "decision":
             body = decision_body(body, status, decision)
             status = None
@@ -732,6 +738,34 @@ class Store:
         with self.tx() as db:
             self._require(db, sid)
             return self._insert_item(db, sid, kind, title, body, status)
+
+    def post_doc(self, sid: str, title: str, path: str, parent: str | None = None) -> str:
+        """A markdown document the session declares for the person to read: its absolute path,
+        a file that exists, kept as the item's body; parent, a task, question or decision of
+        the session's, to list it under. The same path posted again by the same session is the
+        same item: its title (and parent, if given) updated, and once read, marked updated,
+        never new again. Returns the item's ref."""
+        if not path or not os.path.isabs(path):
+            raise ValueError(f"path must be absolute (the full path from /), not {path!r}")
+        path = os.path.normpath(path)
+        if not os.path.isfile(path):
+            raise ValueError(f"no file at {path}: write the doc first, then post it")
+        with self.tx() as db:
+            self._require(db, sid)
+            if parent:
+                row = db.execute("SELECT kind FROM items WHERE session_id = ? AND ref = ?", (sid, parent)).fetchone()
+                if row is None or row["kind"] not in PARENTS:
+                    raise ValueError(f"parent {parent} is not a task, question or decision of this session")
+            row = db.execute("SELECT ref FROM items WHERE session_id = ? AND kind = 'doc' AND body = ? ORDER BY id LIMIT 1",
+                             (sid, path)).fetchone()
+            if row is None:
+                ref = self._insert_item(db, sid, "doc", title, path, INITIAL_STATUS["doc"])
+                db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ?", (parent, sid, ref))
+                return ref
+            db.execute("""UPDATE items SET title = ?, parent_ref = coalesce(?, parent_ref), updated_at = ?, session_at = ?,
+                          status = CASE WHEN status = 'new' THEN 'new' ELSE 'updated' END, dismissed = NULL
+                          WHERE session_id = ? AND ref = ?""", (title, parent, now(), now(), sid, row["ref"]))
+            return row["ref"]
 
     def post_compact_question(self, sid: str, title: str, body: str) -> str:
         """The host's question suggesting Compact, marked (COMPACT_QUESTION) as it is posted:
@@ -992,7 +1026,8 @@ class Store:
             raise KeyError(f"no open permission {ref} in this session")
 
     def mark_seen(self, sid: str, ref: str) -> bool:
-        """The person has viewed a decision: True if it was unseen until now."""
+        """The person has viewed a decision or a doc: True if it was unseen (a doc new or
+        updated) until now."""
         with self.tx() as db:
             return self._mark_seen(db, sid, ref)
 
@@ -1002,8 +1037,9 @@ class Store:
         dwell. In the answer's own transaction, so a command that fails between the two never
         leaves one done without the other."""
         return ref is not None and db.execute(
-            "UPDATE items SET status = 'seen', updated_at = ? WHERE session_id = ? AND ref = ? "
-            "AND kind = 'decision' AND status = 'unseen'", (now(), sid, ref)).rowcount > 0
+            "UPDATE items SET status = CASE kind WHEN 'decision' THEN 'seen' ELSE 'read' END, updated_at = ? "
+            "WHERE session_id = ? AND ref = ? AND ((kind = 'decision' AND status = 'unseen') "
+            "OR (kind = 'doc' AND status IN ('new', 'updated')))", (now(), sid, ref)).rowcount > 0
 
     def dismiss(self, sid: str, ref: str, dismissed: bool = True) -> None:
         """The person dismisses a settled task or subagent (Delete), or brings it back (Ctrl+R). Kept as
@@ -1029,6 +1065,9 @@ class Store:
         if item["kind"] == "decision":
             raise ValueError(f"{item['ref']} is a decision: whether it has been seen is the person's, "
                              "set when they view it. Reply without a status.")
+        if item["kind"] == "doc":
+            raise ValueError(f"{item['ref']} is a doc: whether it has been read is the person's. Post its "
+                             "path again to say it changed.")
         cls._check_status(item["kind"], status)
 
     @staticmethod

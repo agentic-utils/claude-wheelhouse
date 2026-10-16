@@ -54,6 +54,8 @@ UNPARKED_RUNNING = "migrated.unparked-running"
 SDK_USAGE_EVERY = 10   # seconds between looks for an SDK session's plan usage reading
 RELAUNCH_WAIT = 30   # seconds a host has to stop for Relaunch before it gives up and says so
 AGENTS_FOLLOWED = 2   # subagent conversations followed at once: the inbox's and a full screen's
+DOCS_KEPT = 4   # docs whose last read the hub keeps (Hub.document), the newest asked for
+DOC_CAP = 1 << 20   # bytes of a doc read at most: the rest is left out, and said to be
 # A host's restart writes its whole context to the prompt cache again: past this many
 # tokens, Relaunch offers to compact first, and waits up to COMPACT_RELAUNCH_WAIT seconds
 # for the compaction before it gives up, and says so
@@ -208,6 +210,8 @@ class Hub:
         # of the hundreds a session can have (the inbox's and a full screen's), and none once
         # none is shown. Oldest asked first
         self.agent_followers: dict[tuple[str, str], transcript.AgentFollower] = {}
+        # the docs shown (document), by (session, ref): their last read, as (path, stamp, text)
+        self.docs: dict[tuple[str, str], tuple[str, str, str]] = {}
         # the account's plan usage, for every surface: asked of one Claude Code, every
         # plan_usage.EVERY seconds, and taken from SDK sessions' readings in the store
         self.usage = plan_usage.AccountUsage()
@@ -1146,6 +1150,37 @@ class Hub:
         if follower.blocks_key != follower.seen or follower.blocks is None:   # parsed once per change
             follower.blocks_key, follower.blocks = follower.seen, transcript.agent_blocks(recs, prompt=follower.prompt)
         return follower.blocks
+
+    def document(self, sid: str, ref: str) -> dict | None:
+        """A doc item's file, read from the path the session posted (never one a client
+        sends), at most DOC_CAP bytes: {path, text, stamp, gone}. Read again only when its
+        mtime or size has changed (stamp), so asked each refresh it follows the file. A file
+        that has gone says so, with the last text read, if any. None if the item isn't a doc,
+        or has gone."""
+        item = self.store.item(sid, ref)
+        if item is None or item["kind"] != "doc":
+            return None
+        path, key = item["body"], (sid, ref)
+        kept = self.docs.pop(key, None)
+        if kept and kept[0] != path:
+            kept = None
+        try:
+            st = os.stat(path)
+            stamp = f"{st.st_mtime_ns}:{st.st_size}"
+            if kept is None or kept[1] != stamp:
+                with open(path, "rb") as f:
+                    data = f.read(DOC_CAP + 1)
+                text = data[:DOC_CAP].decode("utf-8", errors="replace")
+                if len(data) > DOC_CAP:
+                    text += f"\n\n_(only the first {DOC_CAP >> 20} MB is shown)_"
+                kept = (path, stamp, text)
+            gone = False
+        except OSError:
+            kept, gone = (path, "gone", kept[2] if kept else ""), True
+        self.docs[key] = kept
+        while len(self.docs) > DOCS_KEPT:
+            del self.docs[next(iter(self.docs))]
+        return {"path": path, "text": kept[2], "stamp": kept[1], "gone": gone}
 
     def unfollow_agent(self) -> None:
         """No surface shows a subagent's conversation now: no transcript of one is read."""

@@ -69,6 +69,8 @@ ROUTES = [
      "one session's, with the finished"),
     ("GET", "/items/{sid}/{ref}/thread", None, lambda store, sid, r: r.json()["item"]["title"] == "do it",
      "an item and its messages"),
+    ("GET", "/items/{sid}/{ref}/document", None, lambda store, sid, r: r.json() is None,
+     "a doc's file: none for an item that isn't a doc"),
     ("GET", "/fs?path={tmp}", None, lambda store, sid, r: r.json()["dirs"] == ["sub"], "a directory's folders"),
     ("POST", "/sessions", {"cwd": "{tmp}", "name": "new"},
      lambda store, sid, r: store.session(r.json()["sid"])["name"] == "new", "a new session, named in the answer"),
@@ -814,7 +816,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 29 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 30 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 

@@ -364,3 +364,26 @@ def test_park_and_forget_stop_the_session_after_replying(store, sid, monkeypatch
     assert stopped == ([(4242, 1, "b")] if stops else []), desc
     assert [d for d, *_ in timers] == ([mcp_server.STOP_AFTER] if stops else []), desc
     assert (store.session(sid) is None) is gone, desc
+
+
+@pytest.mark.parametrize("call, refused, desc", [
+    (dict(kind="doc", title="plan", path="{doc}", body="text"), "title, path and parent only", "a doc with a body"),
+    (dict(kind="task", title="build", path="{doc}"), "only a doc takes", "a task with a path"),
+    (dict(kind="question", title="which?", parent="T1"), "only a doc takes", "a question with a parent"),
+])
+def test_post_item_keeps_path_and_parent_to_docs(store, sid, tmp_path, call, refused, desc):
+    from claude_wheelhouse import mcp_server
+    (tmp_path / "plan.md").write_text("# Plan\n")
+    mcp_server._store, mcp_server._sid = store, sid
+    with pytest.raises(Exception, match=refused):   # the tool's ToolError, with the store's words
+        mcp_server.post_item(**{k: v.format(doc=tmp_path / "plan.md") for k, v in call.items()})
+    assert store.items(sid) == [], desc
+
+
+def test_post_item_declares_a_doc(store, sid, tmp_path):
+    from claude_wheelhouse import mcp_server
+    (tmp_path / "plan.md").write_text("# Plan\n")
+    mcp_server._store, mcp_server._sid = store, sid
+    t = mcp_server.post_item(kind="task", title="design it").split(".")[0]
+    assert mcp_server.post_item(kind="doc", title="the plan", path=str(tmp_path / "plan.md"), parent=t) == "M1"
+    assert store.item(sid, "M1")["parent_ref"] == t

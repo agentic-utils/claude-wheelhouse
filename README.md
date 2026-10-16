@@ -137,6 +137,15 @@ session.
   click it to hide them, and the `+` it turns into to show them again (for as long as the
   app runs). `Delete` on an item with children asks first, saying how many it takes and
   how many of them are still open or unread, then closes or dismisses it and all of them.
+- **Docs.** A session declares each markdown document it writes for you to read (a design,
+  plan, report or review, wherever it lives, `~/.claude` included) as a doc item (`M1`),
+  under the task, question or decision it belongs to, or under the session's name if none.
+  Its scratch and working notes stay out. A doc shows `new` until it has been in sight for
+  a second, then `read`; when the session changes it and posts it again it shows
+  `updated`, never new again. Select one and the right-hand pane shows its path and the
+  file rendered (Textual's markdown viewer), with no answer box; `Enter` opens it full
+  screen with its contents alongside. The file is read again whenever it changes, and if
+  it has gone the pane says so. `Delete` dismisses one.
 - **Decisions.** If your own instructions let a session decide some things without asking
   you, it reports each one as a decision (`D1`): what it decided, and one short line with
   the alternative, why, and how to reverse it. Decisions block nothing. Each session
@@ -313,7 +322,7 @@ along with the launch command.
 
 Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision or dismiss a done task or subagent, `N` new session, `A` adopt, `Shift+L` relaunch all, `K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
+highlighted question or decision or dismiss a done task or subagent or a doc, `N` new session, `A` adopt, `Shift+L` relaunch all, `K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question

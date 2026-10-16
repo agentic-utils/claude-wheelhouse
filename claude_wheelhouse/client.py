@@ -193,7 +193,7 @@ class RemoteClient:
         # the terminal's: a bad .env value is said there, not under the TUI
         self.usage_chosen = features.usage_mode_given()
         # the threads, conversations and subagents' conversations shown, by key: ("thread",
-        # sid, ref), ("conversation", sid), ("agent", sid, ref)
+        # sid, ref), ("conversation", sid), ("agent", sid, ref), ("doc", sid, ref)
         self.cache: dict[tuple, object] = {}
         self.shown_seq: dict[tuple, int] = {}   # each key's fetch as shown: a later one replaces it
         self.waiting: dict[tuple, tuple[int, object]] = {}   # fetched in the background, for the next refresh
@@ -382,6 +382,9 @@ class RemoteClient:
                 return self.get(f"/items/{key[1]}/{key[2]}/thread")
             if kind == "conversation":
                 return self.get(f"/sessions/{key[1]}/conversation")
+            if kind == "doc":
+                have = (self.cache.get(key) or {}).get("stamp")
+                return self.get(f"/items/{key[1]}/{key[2]}/document", {"have": have} if have else None)
             return self.get(f"/items/{key[1]}/{key[2]}/conversation")
         except Refused as e:
             if e.status == 404:   # gone
@@ -419,7 +422,7 @@ class RemoteClient:
             self.usage.read = data.get("read") or {}   # an older daemon's has none: taken as fresh
             self.usage.limits = {k: tuple(v) for k, v in data["limits"].items()}
             self.usage.failed = data["failed"]
-        else:
+        elif not (kind == "doc" and data and data.get("same")):   # a doc unchanged keeps what it has
             self.cache[key] = data
 
     def shown(self, key: tuple):
@@ -443,7 +446,7 @@ class RemoteClient:
                     self.lock.notify_all()
             else:
                 self.refused(self.refusal_of(e))
-            return [] if key[0] != "thread" else None
+            return [] if key[0] not in ("thread", "doc") else None
         with self.lock:
             if seq > self.shown_seq.get(key, -1):
                 self.apply(key, data, seq)
@@ -542,6 +545,13 @@ class RemoteClient:
 
     def unfollow_agent(self) -> None:
         pass   # the daemon follows the last two asked for, whoever asked
+
+    def document(self, sid: str, ref: str) -> dict | None:
+        """A doc item's file, as Hub.document reads it; None, unasked, for any other item."""
+        item = self.item(sid, ref)
+        if item is None or item["kind"] != "doc":
+            return None
+        return self.shown(("doc", sid, ref))
 
     def asking(self, target):
         item = target and target[1] and self.item(*target)
@@ -819,7 +829,7 @@ class RemoteClient:
     def fetching(self) -> None:
         """What the events marked, fetched, each into waiting for the next refresh: the
         sessions and the inbox always, a thread or conversation only while it's shown. A
-        subagent's conversation shown is fetched each second, and the usage each minute."""
+        subagent's conversation or a doc shown is fetched each second, and the usage each minute."""
         polled = usage = 0.0
         while True:
             with self.lock:
@@ -833,7 +843,7 @@ class RemoteClient:
                 now = time.monotonic()
                 if now - polled >= AGENT_POLL:
                     polled = now
-                    self.dirty |= {k for k in self.wanted | self.asked if k[0] == "agent"}
+                    self.dirty |= {k for k in self.wanted | self.asked if k[0] in ("agent", "doc")}
                 if now - usage >= USAGE_POLL:
                     usage = now
                     self.dirty.add(("usage",))
@@ -841,7 +851,7 @@ class RemoteClient:
                 shown = self.wanted | self.asked
                 self.in_flight = True
             for key in sorted(todo):
-                if key[0] in ("thread", "conversation", "agent") and key not in shown:
+                if key[0] in ("thread", "conversation", "agent", "doc") and key not in shown:
                     continue
                 seq = self.next_seq()
                 try:

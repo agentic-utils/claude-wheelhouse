@@ -400,6 +400,7 @@ class Daemon:
             Route("/adopt", self.command(self.adopt), methods=["POST"]),
             Route("/relaunch-all", self.command(self.relaunch_all), methods=["POST"]),
             Route("/items/{sid}/{ref}/conversation", self.query(self.agent_conversation)),
+            Route("/items/{sid}/{ref}/document", self.query(self.document)),
             Route("/items/{sid}/{ref}/seen", self.command(
                 lambda request, body: Done(self.hub.mark_seen(request.path_params["sid"], request.path_params["ref"]))),
                 methods=["POST"]),
@@ -790,6 +791,18 @@ class Daemon:
         with self.agent_lock:
             blocks = self.hub.agent_conversation(sid, ref)
         return None if blocks is None else [{"who": who, "text": markdown} for who, markdown in blocks]
+
+    def document(self, request: Request) -> dict | None:
+        """A doc item's file, as Hub.document reads it; {"same": true} if its stamp is still
+        the one the client has (?have=), so a doc followed each second isn't sent each time.
+        None if the item isn't a doc."""
+        sid, ref = request.path_params["sid"], request.path_params["ref"]
+        self.item(sid, ref)
+        with self.agent_lock:
+            doc = self.hub.document(sid, ref)
+        if doc is not None and doc["stamp"] == request.query_params.get("have"):
+            return {"same": True}
+        return doc
 
     # commands
 

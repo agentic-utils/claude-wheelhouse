@@ -782,3 +782,48 @@ def test_an_agent_sits_under_what_its_session_last_spoke_on(store, sid, words, p
     ref = store.agent_links(sid)["agent-1"][0]
     assert store.item(sid, ref)["parent_ref"] == parent, desc
 
+
+
+@pytest.mark.parametrize("path, parent, refused, desc", [
+    ("plan.md", None, "must be absolute", "a relative path"),
+    ("{tmp}/missing.md", None, "no file at", "a file that isn't there"),
+    ("{tmp}", None, "no file at", "a directory"),
+    ("{tmp}/plan.md", "Q9", "not a task, question or decision", "a parent that isn't there"),
+    ("{tmp}/plan.md", "A1", "not a task, question or decision", "an agent as parent"),
+])
+def test_a_doc_is_refused_saying_why(store, sid, tmp_path, path, parent, refused, desc):
+    (tmp_path / "plan.md").write_text("# Plan\n")
+    store.post_item(sid, "agent", "helper")
+    with pytest.raises(ValueError, match=refused):
+        store.post_doc(sid, "the plan", path.format(tmp=tmp_path), parent)
+    assert not [i for i in store.items(sid) if i["kind"] == "doc"], desc
+
+
+@pytest.mark.parametrize("read, dismissed, status, desc", [
+    (False, False, "new", "not yet read: still new"),
+    (True, False, "updated", "read: marked updated, not new"),
+    (True, True, "updated", "dismissed: back, marked updated"),
+])
+def test_a_doc_posted_again_is_the_same_row(store, sid, tmp_path, read, dismissed, status, desc):
+    doc = tmp_path / "plan.md"
+    doc.write_text("# Plan\n")
+    t = store.post_item(sid, "task", "design it")
+    ref = store.post_doc(sid, "the plan", str(doc))
+    assert ref == "M1" and store.item(sid, ref)["parent_ref"] is None
+    if read:
+        assert store.mark_seen(sid, ref) and store.item(sid, ref)["status"] == "read"
+    if dismissed:
+        store.dismiss(sid, ref)
+    assert store.post_doc(sid, "the plan, v2", str(tmp_path / "." / "plan.md"), t) == ref, desc
+    item = store.item(sid, ref)
+    assert (item["title"], item["status"], item["parent_ref"], item["dismissed"]) == ("the plan, v2", status, t, None), desc
+    assert len([i for i in store.items(sid) if i["kind"] == "doc"]) == 1, desc
+
+
+def test_a_docs_status_is_the_persons(store, sid, tmp_path):
+    (tmp_path / "plan.md").write_text("# Plan\n")
+    ref = store.post_doc(sid, "the plan", str(tmp_path / "plan.md"))
+    with pytest.raises(ValueError, match="is a doc"):
+        store.update_item(sid, ref, status="read", declares=True)
+    with pytest.raises(ValueError, match="post_doc"):
+        store.post_item(sid, "doc", "the plan", str(tmp_path / "plan.md"))

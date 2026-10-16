@@ -1354,3 +1354,28 @@ def test_a_fork_waiting_for_the_hub_is_taken_away_when_its_owner_closes(store, w
     assert [p.stem for p in claude_home.projects.glob("*/*.jsonl")] == [sid], f"{desc}: no copy left"
     assert not (main / ".worktrees/feat-x-fork").exists() and not git(main, "branch", "--list", "feat/x-fork"), desc
     assert "dropped, the wheelhouse closing" in (store.path.parent / "launch.log").read_text(), desc
+
+
+def test_a_doc_is_read_again_only_once_its_file_changes(hub, store, sid, tmp_path, monkeypatch):
+    doc = tmp_path / "plan.md"
+    doc.write_text("# Plan\n")
+    ref = store.post_doc(sid, "the plan", str(doc))
+    reads = []
+    real = open
+    monkeypatch.setattr("builtins.open", lambda p, *a, **k: (reads.append(p), real(p, *a, **k))[1])
+    first = hub.document(sid, ref)
+    assert (first["text"], first["gone"], first["path"]) == ("# Plan\n", False, str(doc))
+    assert hub.document(sid, ref) == first and len(reads) == 1, "unchanged: not read again"
+    doc.write_text("# Plan\n\nmore\n")
+    assert hub.document(sid, ref)["text"].endswith("more\n") and len(reads) == 2, "changed: read again"
+    doc.unlink()
+    gone = hub.document(sid, ref)
+    assert gone["gone"] and gone["text"].endswith("more\n"), "gone: said, with the last text read"
+    assert hub.document(sid, store.post_item(sid, "task", "x")) is None, "not a doc"
+
+
+def test_a_long_doc_is_cut_at_the_cap(hub, store, sid, tmp_path, monkeypatch):
+    monkeypatch.setattr("claude_wheelhouse.hub.DOC_CAP", 10)
+    (tmp_path / "long.md").write_text("x" * 50)
+    text = hub.document(sid, store.post_doc(sid, "long", str(tmp_path / "long.md")))["text"]
+    assert text.startswith("x" * 10 + "\n") and "only the first" in text
