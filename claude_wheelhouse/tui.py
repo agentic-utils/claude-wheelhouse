@@ -278,13 +278,30 @@ def same(a, b) -> bool:
     return a == b and getattr(a, "style", None) == getattr(b, "style", None)
 
 
-def fill(table: DataTable, rows: list[tuple[str, tuple]]) -> bool:
+def cell_width(cell) -> int:
+    """A table cell's width: Text or a plain string."""
+    return cell.cell_len if isinstance(cell, Text) else cell_len(str(cell))
+
+
+def cut(name: Text, room: int) -> Text:
+    """A name cut to `room` cells with an ellipsis, as it is if it fits: its text cut, never
+    the ⟳ after it, which says the session needs relaunching."""
+    if name.cell_len <= room:
+        return name
+    mark = 2 if name.plain.endswith(" ⟳") else 0
+    head, tail = name[:len(name) - mark], name[len(name) - mark:]
+    head.truncate(max(room - mark, 1), overflow="ellipsis")
+    return Text.assemble(head, tail) if mark else head
+
+
+def fill(table: DataTable, rows: list[tuple[str, tuple]], rebuild: bool = False) -> bool:
     """Show rows, (key, cells), in a table. With the same keys in the same order only the
-    changed cells are updated, so the cursor stays put. Otherwise the table is rebuilt
+    changed cells are updated, so the cursor stays put, unless it's to `rebuild`: a column's
+    new width shows only in a rebuilt table. Otherwise the table is rebuilt
     without posting RowHighlighted: clear() puts the cursor on row 0 and the first new row
     highlights it, which made every refresh look like the person picking row 0 and back.
     Returns whether it rebuilt; the caller then puts the cursor back."""
-    if [r.key.value for r in table.ordered_rows] == [k for k, _ in rows]:
+    if not rebuild and [r.key.value for r in table.ordered_rows] == [k for k, _ in rows]:
         columns = list(table.columns)
         for key, cells in rows:
             for col, new, old in zip(columns, cells, table.get_row(key)):
@@ -676,6 +693,7 @@ class SessionList(SinkList):
                 Binding("backspace", "app.press('end')", "Forget", show=False)]
 
     EYE = 8   # the Cylon eye's width (cylon)
+    NAME_MIN = 6   # a name's fewest cells, ⟳ and all, however narrow the pane (name_room)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -683,6 +701,15 @@ class SessionList(SinkList):
         self.eye_frame = 0
         self.swept: tuple | None = None   # the busy rows and the eye's place as last drawn again (sweep)
         self.blinked = False   # whether the busy rows' dots were last drawn dimmed (sweep)
+
+    def name_room(self, rows: list[tuple]) -> int:
+        """The cells a name may have, ⟳ and all: the pane's width less every other column's as
+        it will be drawn, padding and all. Those only grow (DataTable keeps a column's widest),
+        so this is the least the name can be left with: ?, D and ✉ always in sight (#51)."""
+        others = [max([c.content_width, *(cell_width(cells[i]) for cells in rows)])
+                  for i, c in enumerate(self.ordered_columns) if i != 1]
+        room = self.scrollable_content_region.width - sum(others) - 2 * self.cell_padding * len(self.ordered_columns)
+        return max(room, self.NAME_MIN)
 
     def sweep(self, frame: int) -> None:
         """The busy rows' eyes to `frame`: drawn over their blank cell as each line is drawn
@@ -1986,7 +2013,7 @@ class WheelhouseApp(App):
     DataTable > .datatable--header {{ background: #12122a; color: #05d9e8; text-style: bold; }}
     DataTable > .datatable--cursor {{ background: #003b0f; color: #ffffff; }}
     /* the splitters' defaults, and the least each pane keeps when one is dragged (Splitter) */
-    #sessions-pane {{ width: 39; min-width: 39; }}   /* names keep their 16 cells beside the context bar (#51); every button its caption */
+    #sessions-pane {{ width: 39; min-width: 39; }}   /* every button its caption; names take the room the other columns leave (name_room) */
     #items-pane {{ width: 1fr; min-width: 12; }}   /* 39 + 12 + 24 + the splitters: three columns on 80 */
     #items {{ height: 1fr; min-height: 3; }}   /* the top half; the stats the bottom */
     .-split {{ border-top: none; min-height: 3; }}   /* the first module pane under the items: the splitter is its line */
@@ -2578,11 +2605,19 @@ class WheelhouseApp(App):
             unseen = Text(str(s["unseen_decisions"]), style=DECISION) if s["unseen_decisions"] else ""
             q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
             rows.append((s["id"], (dot, name, self.context_cell(s), q, unseen, queued, busy)))
+        # a long name widened its column and pushed ? and D past the pane's edge, scrolled out
+        # of sight: it is cut to the room the others leave, at whatever width the pane is (#51)
+        fits = table.name_room([cells for _, cells in rows])
+        rows = [(k, (first, cut(name, fits), *rest)) for k, (first, name, *rest) in rows]
+        names = table.ordered_columns[1]
+        width = min(fits, max([names.label.cell_len, *(cells[1].cell_len for _, cells in rows)]))
+        resized = names.auto_width or names.width != width   # a column's width shows only once it's rebuilt
+        names.auto_width, names.width = False, width
         cells = dict(rows)
         room = table.scrollable_content_region.height - table.header_height   # above any scrollbar
         laid = self.session_sink.lay(self, list(cells), {s["id"] for s in self.sessions if s["parked"]}, room)
         rows = [(k, cells[k]) if k else (f"{BLANK}{i}", ("",) * len(table.columns)) for i, k in enumerate(laid)]
-        if fill(table, rows) and table.row_count:
+        if fill(table, rows, rebuild=resized) and table.row_count:
             # by key: Park and Unpark move the row, and the cursor goes with it. Not the person
             # moving it, so it changes nothing else (settle)
             with table.prevent(DataTable.RowHighlighted):

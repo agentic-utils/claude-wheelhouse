@@ -3774,6 +3774,33 @@ async def test_the_stats_pane_shows_account_usage(store, sid):
 
 
 @pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("name, stale, width, shown, desc", [
+    ("Fiskaly", False, 39, "Fiskaly", "a short name as it is"),
+    ("Fiskaly", False, 30, "Fiskaly", "a short name as it is in a narrower pane"),
+    ("Check use of Creditsafe bulk data", False, 39, "Check use of Cr…", "a long name cut to the room left"),
+    ("Check use of Creditsafe bulk data", False, 30, "Check …", "cut further in a narrower pane"),
+    ("Check use of Creditsafe bulk data", False, 60, "Check use of Creditsafe bulk data", "whole in a wider one"),
+    ("Check use of Creditsafe bulk data", True, 39, "Check use of … ⟳", "the text cut, never its ⟳"),
+])
+async def test_the_session_list_keeps_its_counts_in_sight(store, tmp_path, via, monkeypatch, name, stale, width, shown, desc):
+    sid = store.create_session(str(tmp_path), name=name, ticket="#16", brief="b")
+    store.post_item(sid, "question", "which db?")
+    store.post_item(sid, "decision", "chose sqlite", why="local, swap later")
+    app = WheelhouseApp(store)
+    monkeypatch.setattr(app, "stale", lambda s: stale)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        pane = app.query_one("#sessions-pane")
+        pane.styles.width = pane.styles.min_width = width   # resized after the first paint at 39
+        await pilot.pause()
+        await pilot.pause()
+        table = app.query_one("#session-list", SessionList)
+        assert table.virtual_size.width <= table.scrollable_content_region.width, desc
+        assert table.render_line(0).text.split() == ["session", "ctx", "?", "D", "✉"], desc
+        assert table.render_line(1).text.split() == ["●", *shown.split(), "1", "1"], desc
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("context, compact, runner, chars, desc", [
     (None, False, "tab", "", "no transcript yet: no bar"),
     (350_000, False, "tab", "▃", "350k: into the third 125k"),

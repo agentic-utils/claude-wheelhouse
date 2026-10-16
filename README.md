@@ -189,7 +189,8 @@ session.
   linear scale: an eighth for each 125k begun, so the cell is full past 875k.
 - **Sessions.** The left-hand column lists every session (parked ones dimmed, at the
   foot of the list's room: they fall there as you park them, and rise back as you unpark
-  them). Under it, a description of the selected one: its status, ticket, directory
+  them). A name too long for the column is cut short with `…` (never its `⟳`), so the
+  `?`, `D` and `✉` counts after it stay in sight at whatever width you drag the column to. Under it, a description of the selected one: its status, ticket, directory
   and counts, and its synopsis, which the session keeps up to date itself (its brief until
   it sets one), in a box that takes half the column. The box's last two rows always show
   what a session run in the wheelhouse is doing now, cropped to fit, so nothing above
