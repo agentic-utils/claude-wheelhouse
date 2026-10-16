@@ -497,6 +497,36 @@ def test_zooming_out_reads_the_history_back(tmp_path, monkeypatch, cutoffs, tota
     assert (follower.oldest == NOW - 3 * D) == done, f"{desc}: the oldest turn known once everything is read"
 
 
+def test_a_transcript_all_in_the_span_still_reads_its_skipped_subagents(tmp_path):
+    folder = tmp_path / "-home-u-repo"
+    (folder / "s/subagents").mkdir(parents=True)
+    write(folder / "s.jsonl", response("m4", ago=60, read=40_000))
+    old = folder / "s/subagents/agent-old.jsonl"
+    write(old, response("o1", ago=2 * D, read=7, isSidechain=True))
+    os.utime(old, (NOW - 2 * D, NOW - 2 * D))
+    follower = stats.UsageFollower("s", tmp_path)
+    follower.read(NOW)
+    assert not follower.done and follower.short(NOW - 4 * H), "the subagent finished before the span is still to read"
+    follower.load(NOW - 4 * H)
+    assert follower.done and sum(sum(x[:3]) for x in follower.snap.history.values()) == 9 and \
+        follower.oldest == NOW - 2 * D, "read whole, so - can dim"
+
+
+@pytest.mark.parametrize("offset, desc", [
+    (0, "a bucket at the window's start"),
+    (100, "one the start cuts: the part the bars show"),
+    (299, "nearly all of it before the start"),
+])
+def test_the_caption_counts_the_history_as_the_bars_do(offset, desc):
+    span, columns = 4 * H, 50
+    start, step = stats.window(EVEN, columns, span)
+    bucket = start - offset
+    history = stats.History({bucket: (1000, 0, 0, 0)})
+    c = stats.chart([], EVEN, width=stats.MARGIN + columns, height=4, span=span, history=[history])
+    shown = sum(col[0] for col in stats.older([history], start, step, columns))
+    assert c.recent == round(1000 * (stats.BUCKET - offset) / stats.BUCKET) == round(shown), desc
+
+
 def test_turns_that_age_past_the_span_are_kept_as_history(tmp_path):
     folder = tmp_path / "-home-u-repo"
     folder.mkdir()

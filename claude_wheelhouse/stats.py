@@ -301,6 +301,7 @@ class Snapshot:
 
 
 CHUNK = 4 << 20                    # bytes a first read takes at a time
+RETRY = 60                         # seconds before a failed load of older history is tried again
 REGLOB = 10                        # seconds between re-listing the subagent files (a worker's job, off the UI)
 STAMP = re.compile(rb'"timestamp":\s*"([^"]+)"')
 MAIN_REPLY = re.compile(rb'"type":\s*"assistant"')
@@ -479,6 +480,8 @@ class UsageFollower:
         self.since = -math.inf
         self.oldest: float | None = None   # the oldest turn read, whenever it was
         self.loading = False               # a load is in flight (set and cleared by the app)
+        self.failed: float | None = None   # when the last load failed: none is tried again until RETRY after
+        self.history_error: str | None = None   # why, shown until a load succeeds
 
     @property
     def done(self) -> bool:
@@ -486,8 +489,13 @@ class UsageFollower:
         return self.ready and not self.back and not self.skipped
 
     def short(self, cutoff: float) -> bool:
-        """Whether some turns from `cutoff` on are still unread (load)."""
-        return self.ready and not self.done and self.since > cutoff
+        """Whether some turns from `cutoff` on are still unread (load): the main transcript's,
+        or, with it all read, the subagents' its first read skipped."""
+        return self.ready and not self.done and (self.since > cutoff or not self.back)
+
+    def resting(self, now: float) -> bool:
+        """A load failed less than RETRY ago: not tried again yet, nor shown as loading."""
+        return self.failed is not None and now - self.failed < RETRY
 
     def paths(self, now: float) -> list[Path]:
         """The main transcript, and the subagents' that may still grow. The folder is
@@ -641,8 +649,9 @@ def load_safely(f: UsageFollower, cutoff: float) -> None:
     """On a worker thread: one load of older history (UsageFollower.load), as read_safely."""
     try:
         f.load(cutoff)
+        f.failed = f.history_error = None
     except Exception as e:
-        f.error = f"couldn't read the transcript's history: {e}"[:120]
+        f.failed, f.history_error = time.time(), f"couldn't read the transcript's history: {e}"[:120]
     finally:
         f.loading = False
 
@@ -1237,7 +1246,7 @@ def chart(turns: list[Turn], now: float, width: int, height: int, kind: str = "a
     # the columns, made once for each window, its turns (Series) and history: only the span's total moves between
     built, maxt = s.kept(("chart", kind, columns, span, height, start, s.upto(now), serials), bars)
     return Chart(built, maxt, height, start, span, kind, gap,
-                 recent(turns, now, keys, span) + older_total(history, now - span, keys), loading, more)
+                 recent(turns, now, keys, span) + older_total(history, start, step, columns, keys), loading, more)
 
 
 def recent(turns: list[Turn], now: float, keys: list[str], span: int = SPAN) -> int:
@@ -1278,14 +1287,13 @@ def older(history: list[History], start: float, step: float, columns: int) -> li
     return kept_history(("older", tuple(h.serial for h in history), start, step, columns), make)
 
 
-def older_total(history: list[History], since: float, keys: list[str]) -> int:
-    """The tokens of the series `keys` in the histories' BUCKETs from `since` on."""
+def older_total(history: list[History], start: float, step: float, columns: int, keys: list[str]) -> int:
+    """The tokens of the series `keys` in the histories, as the bars have them (older): a
+    BUCKET the window's start cuts counted for the part of it the bars show."""
     if not history:
         return 0
-    first = math.ceil(since / BUCKET) * BUCKET
     at = [SERIES.index(k) for k in keys]
-    return kept_history(("total", tuple(h.serial for h in history), first, tuple(keys)), lambda: sum(
-        sums[i] for h in history for b, sums in h.items() if b >= first for i in at))
+    return round(sum(col[i] for col in older(history, start, step, columns) for i in at))
 
 
 def charts(turns: list[Turn], now: float, width: int, room: int, height: int, span: int = SPAN,

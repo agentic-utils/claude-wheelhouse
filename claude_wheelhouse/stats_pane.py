@@ -126,7 +126,7 @@ class SessionStats(Widget):
         cutoff = now - self.span
         for sid in self.shown(self.ctx.sessions()) if self.span > stats.SPAN else ():
             follower = self.followers.get(sid)
-            if follower and follower.short(cutoff) and not follower.loading:
+            if follower and follower.short(cutoff) and not follower.loading and not follower.resting(now):
                 follower.loading = True
                 self.run_worker(functools.partial(self.load, follower, cutoff), thread=True, group="stats",
                                 exit_on_error=False)
@@ -144,8 +144,10 @@ class SessionStats(Widget):
         sessions = self.ctx.sessions()
         # the history shown: the session in context's, else every session's
         cutoff, shown = now - self.span, [self.followers[sid] for sid in self.shown(sessions) if sid in self.followers]
-        self.loading = self.span > stats.SPAN and any(f.short(cutoff) for f in shown)
-        self.more = not all(f.done for f in shown) or any(f.oldest is not None and f.oldest < cutoff for f in shown)
+        self.loading = self.span > stats.SPAN and any(f.short(cutoff) and not f.resting(now) for f in shown)
+        start, _ = stats.window(now, max(self.size.width - stats.MARGIN, 0), self.span)   # the charts' left edge
+        self.more = not all(f.done for f in shown) or any(f.oldest is not None and f.oldest < start for f in shown)
+        failed = next((f.history_error for f in shown if f.history_error), None) if self.span > stats.SPAN else None
         names = {s["id"]: s["name"] for s in sessions}
         host = {s["id"]: s.get("context") for s in sessions}
         sid = self.ctx.focus()
@@ -153,7 +155,7 @@ class SessionStats(Widget):
             self.setting = next(s for s in sessions if s["id"] == sid)
             follower = self.followers.get(sid)
             if follower and follower.ready:
-                self.show(stats.current(follower.snap, host[sid]), names[sid], now, follower.error)
+                self.show(stats.current(follower.snap, host[sid]), names[sid], now, follower.error or failed)
             else:
                 self.show(None, names[sid], now, (follower and follower.error)
                           or f"reading {names[sid]}'s transcript…")
@@ -162,7 +164,7 @@ class SessionStats(Widget):
         sids = [sid for sid in self.shown(sessions) if sid in self.followers]
         snaps = {sid: stats.current(self.followers[sid].snap, host[sid]) for sid in sids if self.followers[sid].ready}
         self.show(stats.combine(snaps, names, now) if snaps else None, "", now,
-                  "reading transcripts…" if len(snaps) < len(sids) else None)
+                  "reading transcripts…" if len(snaps) < len(sids) else failed)
 
     # drawing
 

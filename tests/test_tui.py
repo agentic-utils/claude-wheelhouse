@@ -3586,6 +3586,44 @@ async def test_zooming_out_fills_the_charts_from_older_history(store, sid, tmp_p
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("size", [(200, 60), (160, 40)])
+@pytest.mark.parametrize("selected", [True, False])
+async def test_a_failed_load_is_tried_once_a_backoff(store, sid, tmp_path, monkeypatch, clock, size, selected):
+    """A load that fails isn't started again on every tick: its error shows, steadily, and
+    it's tried again once stats.RETRY has passed."""
+    transcript_of(tmp_path / "projects/-home-u-repo", sid, usage_rec("m1", 3 * DAY, 2000), prompt_rec(2.9 * DAY),
+                  usage_rec("m2", 60, 82_000))
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    tries = []
+
+    def failing(f, cutoff):
+        tries.append(cutoff)
+        raise OSError("disk on fire")
+    monkeypatch.setattr(stats.UsageFollower, "load", failing)
+    app = WheelhouseApp(store)
+    desc = f"{'selected' if selected else 'totals'} at {size[0]}x{size[1]}"
+    async with app.run_test(size=size) as pilot:
+        if selected:
+            app.follow(sid)
+        clock.tick(app)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        pane = app.query_one("#stats")
+        await click_zoom(pilot, pane, "-", desc)
+        for _ in range(5):
+            await app.workers.wait_for_complete()
+            clock.tick(app)
+            await pilot.pause()
+            shown = " ".join(pane.render().plain.translate(str.maketrans("│╭╮╰╯─", "      ")).split())
+            assert "transcript's history: disk on fire" in shown and caption(pane) != "loading…", f"{desc}: the error, steadily: {shown}"
+        assert len(tries) == 1, f"{desc}: one try, not one a tick: {len(tries)}"
+        pane.followers[sid].failed -= stats.RETRY
+        clock.tick(app)
+        await app.workers.wait_for_complete()
+        assert len(tries) == 2, f"{desc}: tried again after the backoff"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size", [(200, 60), (160, 40)])
 async def test_sessions_that_start_and_end_while_zoomed_out(store, sid, tmp_path, monkeypatch, clock, size):
     """With every session's totals zoomed out: a new session's history is read to the span
     too, and one that ends takes its own with it, loading or not."""
