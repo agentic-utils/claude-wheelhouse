@@ -175,6 +175,9 @@ session.
   each with its total over the last hour at the right of its caption (`340k tokens/last hr`).
   Each bar covers a fixed stretch of clock (about 2 minutes at 60 columns), the rightmost
   the current one, and the scale steps 1, 2, 5, 10 so the bars hold still between turns.
+  The `+` and `-` at the bottom right zoom both charts together, from two hours to one,
+  30 or 15 minutes (finer bars, and ticks every 15, 10 or 5 minutes) and back; two hours is
+  as far back as the pane reads, so `-` stops there. The zoom lasts until the wheelhouse closes.
   A short pane drops the output chart first, then both. With no session selected, every
   session's totals, with no context gauge (each session has its own). The charts' shimmer, and the session list's Cylon eyes, rest while you type in an answer box. The
   colours need 24-bit colour: Windows Terminal draws it but doesn't tell WSL, so the

@@ -30,7 +30,9 @@ from rich.text import Text
 from . import models, plan_usage, transcript
 from .store import runner
 
-SPAN = 2 * 3600                    # the charts' last two hours
+SPAN = 2 * 3600                    # the charts' last two hours, and all the followers keep
+SPANS = (900, 1800, 3600, SPAN)    # the charts' zoom levels, finest first: none wider than SPAN
+TICK = {900: 300, 1800: 600, 3600: 900, SPAN: 3600}   # each level's axis ticks, on local clock
 TTL = {"1h": 3600, "5m": 300}
 WRITE_PRICE = {"1h": 2.0, "5m": 1.25}   # cache write, times the base input price
 MARGIN = 6                         # the charts' Y-axis labels
@@ -855,11 +857,12 @@ def spaced(rows: list[Text]) -> list[Text]:
 
 
 def layout(view, name: str, note: str | None, usage: "plan_usage.AccountUsage", now: float, width: int,
-           height: int, setting: dict | None = None, focused: bool = False) -> tuple[list[Text], list["Chart"]]:
+           height: int, setting: dict | None = None, focused: bool = False,
+           span: int = SPAN) -> tuple[list[Text], list["Chart"]]:
     """The pane at a size: a bordered panel of the gauges (a blank line above them and
     under each) and the cache and compaction rows, then as many of the charts as fit under it.
     A session run by a host (setting: Hub.model_state) has the effort slider above the
-    gauges, on SLIDER_ROW."""
+    gauges, on SLIDER_ROW. The charts cover `span`, one of SPANS (zoom)."""
     if view is None:
         body = said(note or "no sessions running", width - 2) + [Text()] + spaced(gauges(None, usage, now, width - 2))
         return panel("stats", body, width), []
@@ -875,7 +878,7 @@ def layout(view, name: str, note: str | None, usage: "plan_usage.AccountUsage", 
     if note:   # beside a view: something went wrong reading it
         body += said(note, width - 2)
     rows = panel(head, body, width)
-    return rows, charts(view.turns, now, width, height - len(rows), height)
+    return rows, charts(view.turns, now, width, height - len(rows), height, span)
 
 
 def has_slider(view, setting: dict | None) -> bool:
@@ -1058,7 +1061,7 @@ def chart(turns: list[Turn], now: float, width: int, height: int, kind: str = "a
           gap: bool = False) -> Chart:
     keys = [k for k, _ in CHARTS[kind][1]]
     s, columns = series(turns), max(width - MARGIN, 0)
-    start, step = window(now, columns, span)
+    start, _ = window(now, columns, span)
 
     def bars() -> tuple[list, float]:
         bs = buckets(turns, now, columns, span)
@@ -1067,7 +1070,7 @@ def chart(turns: list[Turn], now: float, width: int, height: int, kind: str = "a
         return [build_column([(CO[k], b[k]) for k in keys], t, maxt, height) for b, t in zip(bs, totals)], maxt
     # the columns, made once for each window and its turns (Series): only the hour's total moves between
     built, maxt = s.kept(("chart", kind, columns, span, height, start, s.upto(now)), bars)
-    return Chart(built, maxt, height, start, step * columns, kind, gap, last_hour(turns, now, keys))
+    return Chart(built, maxt, height, start, span, kind, gap, last_hour(turns, now, keys))
 
 
 def last_hour(turns: list[Turn], now: float, keys: list[str]) -> int:
@@ -1077,7 +1080,7 @@ def last_hour(turns: list[Turn], now: float, keys: list[str]) -> int:
     return sum(s.total(k, now - 3600, now) for k in keys)
 
 
-def charts(turns: list[Turn], now: float, width: int, room: int, height: int) -> list[Chart]:
+def charts(turns: list[Turn], now: float, width: int, room: int, height: int, span: int = SPAN) -> list[Chart]:
     """Both charts if they fit in `room` rows, else the context assembly alone, else none.
     Each is CHART_SHARE of the height the one chart had before #43 (the pane less six text
     rows and its own three), and no taller than fits."""
@@ -1088,7 +1091,7 @@ def charts(turns: list[Turn], now: float, width: int, room: int, height: int) ->
         bars = min(target, (room - fixed) // n)
         if bars >= CHART_MIN:
             gap = room - fixed - n * bars >= n - 1   # a blank line between them, room permitting
-            return [chart(turns, now, width, bars, kind, gap=bool(i) and gap) for i, kind in enumerate(kinds)]
+            return [chart(turns, now, width, bars, kind, span, bool(i) and gap) for i, kind in enumerate(kinds)]
     return []
 
 
@@ -1188,14 +1191,59 @@ def chart_lines(c: Chart, frame: int, ticks: bool = True) -> list[Text]:
     out.append(Text("0".rjust(MARGIN - 1) + " ", style=hexc(DIM)) + Text("└" + "─" * max(n - 1, 0), style=hexc(DIM2)))
     if not ticks:
         return out
-    axis = [" "] * n
-    lt = time.localtime(c.start)
-    tick = int(c.start) - lt.tm_min * 60 - lt.tm_sec + 3600   # the next local hour: not UTC's, which is off by half an hour in some zones
+    buttons = zoom(c.span) if n >= ZOOM_MIN else Text()   # the zoom's, at the right, room permitting
+    room = n - buttons.cell_len - bool(buttons)
+    axis, free = [" "] * room, 0
+    lt, step = time.localtime(c.start), TICK.get(c.span, 3600)
+    hour = int(c.start) - lt.tm_min * 60 - lt.tm_sec   # the local hour's start: not UTC's, which is off by half an hour in some zones
+    tick = hour + ((int(c.start) - hour) // step + 1) * step   # the next tick on the local clock
     while tick <= c.start + c.span and n:
-        lab = f"{time.localtime(tick).tm_hour}:00"
+        local = time.localtime(tick)
+        lab = f"{local.tm_hour}:{local.tm_min:02d}"
         pos = round((tick - c.start) / c.span * n)
-        if pos + len(lab) <= n:   # a label that doesn't fit at its hour is left out, not moved off it
-            axis[pos:pos + len(lab)] = lab
-        tick += 3600
-    out.append(Text(" " * MARGIN + "".join(axis), style=hexc(DIM)))
+        if free <= pos and pos + len(lab) <= room:   # a label that doesn't fit at its tick is left out, not moved off it
+            axis[pos:pos + len(lab)], free = lab, pos + len(lab) + 1
+        tick += step
+    out.append(Text(" " * MARGIN + "".join(axis) + " " * bool(buttons), style=hexc(DIM)) + buttons)
+    return out
+
+
+# the charts' zoom: - and + at the right of the hour ticks, one level for both charts
+
+def span_name(span: int) -> str:
+    return f"{span // 3600}h" if span % 3600 == 0 else f"{span // 60}m"
+
+
+def zoom_parts(span: int) -> list[tuple[str, int | None, bool]]:
+    """The zoom's pieces, left to right: each one's text, the span a click on it goes to
+    (None for none) and whether it's a button."""
+    i = SPANS.index(span) if span in SPANS else SPANS.index(SPAN)
+    wider = SPANS[i + 1] if i + 1 < len(SPANS) else None
+    finer = SPANS[i - 1] if i else None
+    return [(span_name(span).rjust(3) + " ", None, False), (" - ", wider, True), (" ", None, False),
+            (" + ", finer, True)]
+
+
+def zoom(span: int) -> Text:
+    """The zoom: the span shown, then - and +, each dimmed where it can go no further."""
+    out = Text()
+    for text, to, button in zoom_parts(span):
+        style = (f"bold {hexc(TEXT)} on {hexc(DIM2)}" if to else hexc(DIM2)) if button else hexc(DIM)
+        out.append(text, style=style)
+    return out
+
+
+ZOOM_MIN = 2 * zoom(SPAN).cell_len   # the columns below which the ticks keep the line to themselves
+
+
+def zoom_spans(span: int, width: int) -> list[tuple[int, int, int]]:
+    """Where the zoom's buttons are on the hour ticks' line at a width, from its left: each
+    one's (first cell, past its last, the span it goes to), for those that go anywhere."""
+    if width - MARGIN < ZOOM_MIN:
+        return []
+    out, x = [], width - sum(len(text) for text, _, _ in zoom_parts(span))
+    for text, to, _ in zoom_parts(span):
+        if to:
+            out.append((x, x + len(text), to))
+        x += len(text)
     return out

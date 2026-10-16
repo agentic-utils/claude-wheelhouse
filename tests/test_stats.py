@@ -468,6 +468,56 @@ def test_hour_ticks_sit_on_local_hours(monkeypatch, zone, desc):
         time.tzset()
 
 
+@pytest.mark.parametrize("span, name, goes, desc", [
+    (900, "15m", {"-": 1800}, "the finest: + does nothing"),
+    (1800, "30m", {"-": 3600, "+": 900}, "between: both go a level"),
+    (3600, "1h", {"-": 7200, "+": 1800}, "between: both go a level"),
+    (stats.SPAN, "2h", {"+": 3600}, "the default, the widest: as far back as the followers keep, so - does nothing"),
+])
+def test_the_zoom_buttons(span, name, goes, desc):
+    c = stats.chart([Turn(NOW - 60, 5, 1, 0, 6, None, None, True)], NOW, width=56, height=4, span=span)
+    line = stats.chart_lines(c, 0)[-1]
+    assert line.cell_len == 56 and line.plain.endswith(f"{name}  -   + "), f"{desc}: {line.plain!r}"
+    found = {line.plain[start:end].strip(): to for start, end, to in stats.zoom_spans(span, 56)}
+    assert found == goes, desc
+    lit = {line.plain[sp.start:sp.end].strip() for sp in line.spans if " on " in str(sp.style)}
+    assert lit == set(goes), f"{desc}: a button lit only where it goes somewhere"
+
+
+@pytest.mark.parametrize("span, step, desc", [
+    (900, 300, "15 minutes: ticks every 5"),
+    (1800, 600, "30 minutes: every 10"),
+    (3600, 900, "an hour: every 15"),
+    (stats.SPAN, 3600, "two hours: on the hour, as before the zoom"),
+])
+def test_ticks_sit_on_their_zooms_steps(span, step, desc):
+    hour = 1791460800
+    c = stats.chart([], hour + 7 * 60, width=stats.MARGIN + 120, height=4, span=span)
+    assert c.span == span, desc
+    axis = stats.chart_lines(c, 0)[-1].plain[stats.MARGIN:]
+    labels = list(re.finditer(r"(\d+):(\d\d)", axis))
+    assert labels, f"{desc}: at least one tick labelled"
+    for m in labels:
+        local = time.localtime(c.start + m.start() / len(c.columns) * c.span)
+        on = round((local.tm_min * 60 + local.tm_sec) / step) * step % 3600
+        assert int(m[2]) * 60 == on and on % step == 0, f"{desc}: {m[0]} at {local.tm_min}:{local.tm_sec:02d}"
+
+
+@pytest.mark.parametrize("width, buttons, desc", [
+    (stats.MARGIN + stats.ZOOM_MIN, True, "room enough: the buttons"),
+    (stats.MARGIN + stats.ZOOM_MIN - 1, False, "too narrow: the ticks alone, and nothing to click"),
+])
+def test_a_narrow_chart_leaves_the_zoom_out(width, buttons, desc):
+    c = stats.chart([], NOW, width=width, height=4)
+    assert stats.chart_lines(c, 0)[-1].plain.endswith(" + ") == buttons, desc
+    assert bool(stats.zoom_spans(stats.SPAN, width)) == buttons, desc
+
+
+def test_both_charts_take_the_zoom():
+    _, shown = stats.layout(snap(83_000, 600), "holly", None, usage(session=23), NOW, 56, 60, span=1800)
+    assert [c.span for c in shown] == [1800, 1800]
+
+
 @pytest.mark.parametrize("view, note, desc", [
     (None, "couldn't read the transcript: transcript gone", "a failed read with nothing to show"),
     (snap(83_000, 600), "couldn't read the transcript: transcript gone", "a failed read beside what was read before"),

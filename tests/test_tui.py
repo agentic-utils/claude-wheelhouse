@@ -3445,6 +3445,52 @@ async def test_the_stats_pane_follows_the_session_in_context(store, sid, tmp_pat
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("selected, desc", [
+    (True, "a session selected"),
+    (False, "none selected: every session's totals"),
+])
+async def test_the_zoom_buttons_zoom_both_charts(store, sid, tmp_path, monkeypatch, selected, desc):
+    """+ and -, clicked at the right of the hour ticks: one level for both charts, held
+    through a repaint, and going no further than the ladder's ends."""
+    folder = tmp_path / "projects/-home-u-repo"
+    folder.mkdir(parents=True)
+    rec = {"type": "assistant", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+           "message": {"id": "m1", "model": "claude-opus-5-5", "content": [],
+                       "usage": {"input_tokens": 2, "cache_read_input_tokens": 82_000, "output_tokens": 10}}}
+    folder.joinpath(f"{sid}.jsonl").write_text(json.dumps(rec) + "\n")
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(200, 60)) as pilot:
+        if selected:
+            app.follow(sid)
+        app.refresh_data()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        pane = app.query_one("#stats")
+
+        async def click(button):
+            await pilot.pause()   # drawn, so where the buttons are is known
+            start = next(start for start, end, _ in stats.zoom_spans(pane.span, pane.size.width)
+                         if pane.render().plain.split("\n")[-1][start:end].strip() == button)
+            top = pane.content_region.offset - pane.region.offset
+            await pilot.click("#stats", offset=(top.x + start + 1, top.y + pane.line_ys(pane.size.width)[-1]))
+            await pilot.pause()
+
+        assert len(pane.charts) == 2 and pane.span == stats.SPAN, f"{desc}: both charts, at the default"
+        for button, span in (("+", 3600), ("+", 1800), ("+", 900), ("-", 1800)):
+            await click(button)
+            app.refresh_data()
+            await pilot.pause()
+            assert [c.span for c in pane.charts] == [span, span], f"{desc}: {button} to {span}"
+        assert pane.render().plain.split("\n")[-1].endswith("30m  -   + "), desc
+        await click("-")
+        await click("-")
+        assert pane.span == stats.SPAN and not any(
+            pane.render().plain.split("\n")[-1][start:end] == " - "
+            for start, end, _ in stats.zoom_spans(pane.span, pane.size.width)), f"{desc}: - goes no wider"
+
+
+@pytest.mark.anyio
 async def test_the_stats_pane_never_reads_on_the_ui_thread(store, sid, monkeypatch):
     import threading
     from claude_wheelhouse import stats
@@ -5845,9 +5891,9 @@ async def test_focusing_the_slider_lays_it_out_focused_at_once(store, tmp_path, 
         focused = []
         real = stats.layout
 
-        def spy(*args):
+        def spy(*args, **kwargs):
             focused.append(args[-1])
-            return real(*args)
+            return real(*args, **kwargs)
         monkeypatch.setattr(stats, "layout", spy)
         monkeypatch.setattr(type(pane), "tick", lambda self: None)   # no tick to catch it up
         pane.focus()

@@ -27,7 +27,8 @@ def looks(rows: list[Text]) -> list[tuple]:
 
 class SessionStats(Widget):
     """A bordered panel of the context, session and weekly gauges and the cache and
-    compaction rows, then charts of the last two hours' context assembly and output; with
+    compaction rows, then charts of the last two hours' context assembly and output (zoomed
+    by the - and + under them, both together, for as long as the app runs); with
     no session in context, every session's totals. Transcripts are read on worker
     threads, never on the UI thread: a first read of a big one takes a while, and even a
     steady one stats every subagent file. Each session's follower is shared with the
@@ -53,6 +54,7 @@ class SessionStats(Widget):
         self.can_focus = False
         self.rows: list[Text] = []
         self.charts: list[stats.Chart] = []
+        self.span = stats.SPAN   # the charts' zoom (stats.SPANS)
         self.frame = 0
         self.drawn: list[Strip] = []   # the lines as last drawn whole (render_line), and what for
         self.drawn_for: tuple | None = None
@@ -144,7 +146,8 @@ class SessionStats(Widget):
     def rebuild(self) -> None:
         self.can_focus = self.slider() is not None and self.ctx.set_effort is not None
         rows, charts = stats.layout(self.view, self.name_, self.note, self.usage, self.now,
-                                    self.size.width, self.size.height, self.setting, self.has_focus)
+                                    self.size.width, self.size.height, self.setting, self.has_focus,
+                                    span=self.span)
         if (looks(rows), charts) != (looks(self.rows), self.charts):   # each tick builds them again, mostly the same
             self.rows, self.charts = rows, charts
             self.drawn_for = None
@@ -187,9 +190,17 @@ class SessionStats(Widget):
 
     def on_click(self, event: events.Click) -> None:
         """A click on a level picks it, or on an arrow the level it steps to: whichever form
-        the slider is drawn in at this width (stats.slider_spans)."""
+        the slider is drawn in at this width (stats.slider_spans). One on the charts' - or +
+        zooms them both out or in (stats.zoom_spans)."""
         content = self.content_region
         x, y = event.screen_x - content.x - 1, event.screen_y - content.y   # 1: the panel's left border
+        if self.charts and y == self.line_ys(self.size.width)[-1]:   # the hour ticks', under the last chart
+            to = next((to for start, end, to in stats.zoom_spans(self.span, self.size.width) if start <= x + 1 < end),
+                      None)
+            if to is not None:
+                self.span = to
+                self.rebuild()
+            return
         if self.slider() is None or y != stats.SLIDER_ROW:
             return
         spans = stats.slider_spans(stats.effort_of(self.view, self.setting), self.size.width - 2)
@@ -205,14 +216,17 @@ class SessionStats(Widget):
         super().selection_updated(selection)
 
     def bars_at(self, width: int) -> dict[int, tuple[stats.Chart, int, int]]:
-        """Where the charts' bars are drawn, by line: (chart, row, render's line).
-        Textual wraps a line too long for the pane onto the next (a legend, in a narrow pane);
-        the bars just fit."""
+        """Where the charts' bars are drawn, by line (line_ys): (chart, row, render's line)."""
+        bars = stats.bar_lines(self.rows, self.charts)
+        return {y: (*bar, n) for n, (y, bar) in enumerate(zip(self.line_ys(width), bars)) if bar}
+
+    def line_ys(self, width: int) -> list[int]:
+        """Where each of render's lines is drawn. Textual wraps a line too long for the pane
+        onto the next (a legend, in a narrow pane); the bars just fit."""
         lines = stats.render(self.rows, self.charts, self.frame).split("\n")
-        out, y = {}, 0
-        for n, (line, bar) in enumerate(zip(lines, stats.bar_lines(self.rows, self.charts))):
-            if bar:
-                out[y] = (*bar, n)
+        out, y = [], 0
+        for line, bar in zip(lines, stats.bar_lines(self.rows, self.charts)):
+            out.append(y)
             y += 1 if bar or line.cell_len <= width else len(
                 Visual.to_strips(self, visualize(self, line), width, None, self.visual_style))
         return out
