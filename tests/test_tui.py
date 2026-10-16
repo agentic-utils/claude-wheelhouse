@@ -369,6 +369,7 @@ def session_buttons(app) -> dict[str, tuple[str, bool]]:
 async def test_send_bar_and_session_buttons_follow_the_queues(store, sid, tmp_path, live):
     other = store.create_session(str(tmp_path), name="other")
     store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
+    same_second(store)   # in creation order under * (T114), however slowly they were made
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pick(app, pilot, sid)
@@ -1243,9 +1244,11 @@ async def test_a_raw_burst_opens_what_the_cursor_is_on(store, sid, tmp_path, whe
     """Review 12's probes: a burst ending in a key that opens something opens it for the row
     the cursor went to."""
     mine = store.post_item(sid, "question", "A's")
-    other = store.create_session(str(tmp_path), name="other")
-    theirs = store.post_item(other, "question", "B's")
+    with one_second():   # B made and posted in one past second, so A shows first under * (T114)
+        other = store.create_session(str(tmp_path), name="other")
+        theirs = store.post_item(other, "question", "B's")
     store.db.execute("UPDATE items SET updated_at = ? WHERE session_id = ?", ("2026-10-09T10:00:00+00:00", other))
+    same_second(store)   # in creation order under * (T114), however slowly they were made
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -1289,6 +1292,7 @@ async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp
         for s in (sid, other):
             for title in ("two", "one"):
                 store.post_item(s, "decision", title, **extra)
+    same_second(store)   # in creation order under * (T114), however slowly they were made
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -1314,6 +1318,12 @@ async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp
         await pilot.pause()
         assert marked() == dwelt, f"{desc}: seen once rested on, got {marked()}"
         assert_one_current(app, desc)
+
+
+def same_second(store) -> None:
+    """Every session made as if in one second, the fixture's too: under * (T114) a second
+    between two puts the later first, so a test that counts on creation order holds it."""
+    store.db.execute("UPDATE sessions SET created_at = (SELECT min(created_at) FROM sessions)")
 
 
 def one_second():
@@ -5227,6 +5237,7 @@ async def test_parked_sessions_stay_in_the_list_after_the_rest(store, sid, tmp_p
     first = store.create_session(str(tmp_path), name="first")
     other = store.create_session(str(tmp_path), name="other")
     store.set_parked(sid, True)
+    same_second(store)   # in creation order under * (T114), however slowly they were made
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -5262,6 +5273,7 @@ async def test_the_cursor_stays_on_a_session_that_moves(store, sid, tmp_path, mo
     ids = {"demo": sid, **{n: store.create_session(str(tmp_path), name=n) for n in ("bee", "sea")}}
     for name in parked:
         store.set_parked(ids[name], True)
+    same_second(store)   # in creation order under * (T114), however slowly they were made
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pick(app, pilot, ids[start])

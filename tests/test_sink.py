@@ -5,7 +5,7 @@ import pytest
 
 from claude_wheelhouse.store import Store, standing
 from claude_wheelhouse.tui import BLANK, Sink, WheelhouseApp
-from test_tui import assert_one_current, dwell, one_second, raw_keys
+from test_tui import assert_one_current, dwell, one_second, raw_keys, same_second
 
 DECIDED = {"why": "over Postgres: no server; undo: swap the DSN"}
 
@@ -233,7 +233,8 @@ async def test_a_parked_session_shows_at_the_foot(tmp_path, monkeypatch, clock, 
     width of its names, never under its scrollbar."""
     from claude_wheelhouse import liveness
     store = Store(tmp_path / "w.db")
-    ids = [store.create_session(str(tmp_path), name=n) for n in names]
+    with one_second():   # under * (T114) a second between them would reorder them
+        ids = [store.create_session(str(tmp_path), name=n) for n in names]
     store.set_parked(ids[0], True)
     # Parked is not running: a running parked one is unparked as the hub starts (session-states)
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead" if s["id"] == ids[0] else "live")
@@ -317,6 +318,7 @@ async def test_a_parked_session_falls_to_the_foot_and_rises_back(store, sid, tmp
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     other = store.create_session(str(tmp_path), name="other")
+    same_second(store)   # under * (T114): other after the fixture's, as made
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -352,7 +354,8 @@ async def moving(clock, tmp_path, where, keys, typed, count=3, start=None) -> di
     from unittest import mock
     from claude_wheelhouse import liveness
     store = Store(tmp_path / "w.db")
-    ids = {store.create_session(str(tmp_path), name=n): n for n in ("alpha", "bravo", "charlie")}
+    with one_second():   # under * (T114) a second between them would put charlie first
+        ids = {store.create_session(str(tmp_path), name=n): n for n in ("alpha", "bravo", "charlie")}
     alpha, bravo, _ = ids
     with one_second():   # the last posted first: one at the top
         refs_ = {store.post_item(alpha, "question", t): t for t in reversed(("one", "two", "three", "four")[:count])}
