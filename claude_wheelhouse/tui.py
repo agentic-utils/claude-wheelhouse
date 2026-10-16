@@ -2278,7 +2278,8 @@ SEND_RULES = (
     "queued answer back to edit.")
 MOUSE = ("Click selects a row; in the session list, a click on the selected session or the list's title "
          "unselects it, for all sessions' items, as Esc does. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
-         "keep Shift+click for itself: Space and Shift+Up/Down do the same), then Delete or Backspace closes them together "
+         "keep Shift+click for itself: Space and Shift+Up/Down do the same), then Delete or Backspace "
+         "closes them together, the highlight going to the row above the topmost one taken, "
          "and Ctrl+R reopens the finished ones. An item with children (its subagents and docs, under it) has a - at the "
          "right-hand end of its row: a click there hides them, and the + it becomes shows them again. "
          "Double-click selects a word. Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
@@ -2514,6 +2515,8 @@ class WheelhouseApp(App):
         # items the person just closed or reopened (close), or whose permission they answered
         # (answer_permission): pinned where they go
         self.repin: set[str] = set()
+        # the rows Delete just took, children included: a highlight they took goes above them (above_deleted)
+        self.deleted: set[str] = set()
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
         self.show_finished = False   # finished items (store.standing), after the rest
         self.collapsed: set[str] = set()   # the parent rows whose children are hidden, for this run alone
@@ -3028,6 +3031,7 @@ class WheelhouseApp(App):
         # in the final order, not the frame's: a burst's keys land between frames, so a row that
         # goes falls to the neighbour it has once moves end, as typed slowly (SinkList)
         keep = table.final_row()
+        before = [k for k in table.final() if k]   # the rows as they stood, for above_deleted
         rows_out = []
         names = self.session_names()
         found, processing, queued, awaiting = self.client.inbox(self.filter_sid)
@@ -3094,7 +3098,10 @@ class WheelhouseApp(App):
                 if key != table.cursor_key():
                     table.move_cursor(row=table.get_row_index(key), animate=False)
             elif rebuilt and table.row_count:
-                table.move_cursor(row=min(keep, table.row_count - 1), animate=False)
+                above = self.above_deleted(before) if arrow in self.deleted else None
+                table.move_cursor(row=min(keep, table.row_count - 1) if above is None else above, animate=False)
+        if rebuilt:
+            self.deleted = set()
         if not pending:   # where the app put it; an arrow pending stays pending
             self.items_cursor = table.cursor_key()
         if rebuilt and key not in table.rows and table.row_count:   # its item went: take the one now
@@ -3105,6 +3112,17 @@ class WheelhouseApp(App):
         if self.selected is None and self.box_target is not None:   # nor the box aimed at what went
             self.retarget(move_list=False)
         self.paint_detail()
+
+    def above_deleted(self, before: list[str]) -> int | None:
+        """Delete took the highlighted row: the row the highlight goes to, the one immediately
+        above the topmost row it took (or the nearest above that's still shown), or with none
+        above the first. Not the row that slid into the highlighted one's place, which with
+        several marked was a row below them all. None if it took no row shown before."""
+        table = self.items_table
+        took = [i for i, k in enumerate(before) if k in self.deleted and k not in table.rows]
+        if not took:
+            return None
+        return next((table.get_row_index(k) for k in reversed(before[:took[0]]) if k in table.rows), 0)
 
     def ranked(self, items, processing, busy=frozenset()) -> list:
         """Items in inbox order (ranked_keyed)."""
@@ -3918,6 +3936,7 @@ class WheelhouseApp(App):
         Delete is (close)."""
         self.item_sink.jump()
         self.repin.add(item_key(item))
+        self.deleted |= {item_key(it) for it in [item, *family]}
         try:
             self.told(self.client.delete_family(item["session_id"], item["ref"]))
         except (SessionGone, KeyError) as e:   # ended or gone meanwhile
@@ -3947,6 +3966,8 @@ class WheelhouseApp(App):
         (ranked). One finished already only goes, from where it was held while selected."""
         self.item_sink.jump()
         self.repin.add(item_key(item))
+        if closed:
+            self.deleted.add(item_key(item))
         return self.told(self.client.close(item["session_id"], item["ref"], closed))
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
@@ -3987,6 +4008,7 @@ class WheelhouseApp(App):
                 if families.get(item_key(it)):
                     self.item_sink.jump()
                     self.repin.add(item_key(it))
+                    self.deleted |= {item_key(c) for c in [it, *families[item_key(it)]]}
                     acted = self.told(self.client.delete_family(it["session_id"], it["ref"]))
                 else:
                     acted = self.close(it, closed)

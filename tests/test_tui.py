@@ -3218,6 +3218,70 @@ async def test_marking_rows(store, sid, steps, marked, desc):
         assert [str(r) for r in shaded] == marked, f"{desc}: marked rows are shaded"
 
 
+async def five_questions(store, sid, pilot, steps) -> None:
+    """Q1-Q5, newest first under the rows clicked so Q1 tops the list, the item list focused,
+    then the steps: a key, or a plain, Ctrl or Shift click on a row."""
+    app = pilot.app
+    await pilot.pause()
+    app.items_table.focus()
+    for how, arg in steps:
+        if how == "key":
+            await pilot.press(arg)
+        else:
+            await pilot.click("#items", offset=(20, 1 + arg), control=how == "ctrl", shift=how == "shift")
+        await pilot.pause()
+
+
+def post_five(store, sid) -> None:
+    for at, title in zip("54321", "abcde"):
+        with mock.patch("claude_wheelhouse.store.now", lambda: f"2026-10-08T10:00:0{at}+00:00"):
+            store.post_item(sid, "question", title)
+
+
+@pytest.mark.parametrize("steps, lands, desc", [
+    ([("click", 1), ("ctrl", 2), ("key", "delete")], "Q1", "Q2 and Q3 marked: the row above Q2, not Q5 in Q3's place"),
+    ([("shift", 2), ("key", "delete")], "Q4", "Q1-Q3 marked from the top: the new first row"),
+    ([("click", 1), ("ctrl", 3), ("key", "delete")], "Q1", "Q2 and Q4 marked: above the topmost, Q2"),
+    ([("click", 3), ("ctrl", 1), ("key", "delete")], "Q1", "marked bottom first: still above the topmost"),
+    ([("click", 2), ("key", "delete")], "Q2", "one row, unmarked: the row above it"),
+    ([("key", "delete")], "Q2", "the first row: the new first row"),
+    ([("key", "f"), ("click", 2), ("key", "delete")], "Q3", "F on: the row stays in sight, the highlight with it"),
+])
+@pytest.mark.anyio
+async def test_delete_puts_the_highlight_above_the_topmost_row_it_took(store, sid, steps, lands, desc):
+    post_five(store, sid)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await five_questions(store, sid, pilot, steps)
+        await pilot.pause()
+        refs = {k: str(app.items_table.get_row(k)[1]) for k in app.items_table.rows}
+        assert refs[app.items_table.cursor_key()] == lands, desc
+        assert app.selected == tuple(app.items_table.cursor_key().split("|")), f"{desc}: selected there too"
+
+
+@pytest.mark.parametrize("modifier, desc", [
+    ({"control": True}, "Ctrl held: a mark, never a drag"),
+    ({"shift": True}, "Shift held: a range, never a drag"),
+])
+@pytest.mark.anyio
+async def test_a_modified_press_starts_no_drag(store, sid, modifier, desc):
+    post_five(store, sid)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        table.focus()
+        await pilot.mouse_down(table, offset=(2, 1 + 3), **modifier)
+        x, y = table.content_region.x + 2, table.content_region.y + 1
+        pilot.app.post_message(events.MouseMove(None, x, y, 0, -3, button=1, shift=False, meta=False,
+                                                ctrl=False, screen_x=x, screen_y=y))
+        await pilot.pause()
+        assert table.dragging is None, desc
+        await pilot.mouse_up(table, offset=(2, 1))
+        await pilot.pause()
+        assert item_refs(app) == ["Q1", "Q2", "Q3", "Q4", "Q5"], f"{desc}: nothing moved"
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("queued, where, box, status, desc", [
     (True, "items", "a word", "closed", "a word queued on it: Ctrl+R takes it back, the item stays closed"),
