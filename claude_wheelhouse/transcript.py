@@ -52,6 +52,9 @@ FORK = re.compile(r"<fork-boilerplate>.*?</fork-boilerplate>\s*(?:Your directive
 SKILL_ARGS = "\n\nARGUMENTS: "
 # and where it lives, its name the folder's: what it shows as when it was asked nothing
 SKILL_BASE = re.compile(r"^Base directory for this skill: (.+)$", re.M)
+# a prompt that reached the session mid-turn: Claude Code folds it into the running turn as an
+# attachment of this type, not a user record of its own (its commandMode is the origin)
+QUEUED = "queued_command"
 # stands in the tail for a newest record too large to read within it (tail_records)
 OVERSIZE = "wheelhouse-oversize"
 
@@ -162,6 +165,21 @@ def tool_line(name: str, args) -> str:
     return line if len(line) <= TOOL_WIDTH else line[:TOOL_WIDTH - 1] + "…"
 
 
+def persons(text: str, origin: str | None, full=None) -> str | None:
+    """What the person said in a prompt the session took (origin: how it came), as
+    entries shows it; None for what isn't theirs to show here."""
+    if origin == "task-notification" or text.startswith("<task-notification>"):
+        event = EVENT.search(text)
+        return general_text(event.group(1).strip(), full) if event else None
+    if text.startswith("[wheelhouse]"):   # a host's turn: the person's messages, or a notice
+        return general_text(text, full)
+    if text and not text.startswith("<"):
+        if OPENING.fullmatch(text):   # its ticket line stays; the default sentence goes
+            text = text[:-len(NO_BRIEF)].strip()
+        return text or None
+    return None
+
+
 def entries(recs: list[dict], full=None, agent: bool = False) -> list[Entry]:
     """full: the person's message by id, for one a notification cut short (general_text).
     agent: a subagent's transcript, whose fork prompt keeps its directive (FORK)."""
@@ -179,19 +197,11 @@ def entries(recs: list[dict], full=None, agent: bool = False) -> list[Entry]:
             text = _text(msg.get("content")).strip()
             if agent and text.startswith("<fork-boilerplate>"):
                 text = FORK.sub("", text, count=1).strip()
-            origin = (rec.get("origin") or {}).get("kind")
-            if origin == "task-notification" or text.startswith("<task-notification>"):
-                event = EVENT.search(text)
-                if event and (said := general_text(event.group(1).strip(), full)):
-                    out.append(Entry("you", said, at))
-            elif text.startswith("[wheelhouse]"):   # a host's turn: the person's messages, or a notice
-                if said := general_text(text, full):
-                    out.append(Entry("you", said, at))
-            elif text and not text.startswith("<"):
-                if OPENING.fullmatch(text):   # its ticket line stays; the default sentence goes
-                    text = text[:-len(NO_BRIEF)].strip()
-                if text:
-                    out.append(Entry("you", text, at))
+            if said := persons(text, (rec.get("origin") or {}).get("kind"), full):
+                out.append(Entry("you", said, at))
+        elif kind == "attachment" and (queued := rec.get("attachment") or {}).get("type") == QUEUED:
+            if said := persons(_text(queued.get("prompt")).strip(), queued.get("commandMode"), full):
+                out.append(Entry("you", said, at))
         elif kind == "assistant":
             for part in msg.get("content") or []:
                 if not isinstance(part, dict):

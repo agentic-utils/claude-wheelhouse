@@ -24,6 +24,13 @@ def notification(body):
     return user(body, origin={"kind": "task-notification"})
 
 
+def queued(prompt, mode="prompt"):
+    """What Claude Code writes for a message that reaches a session mid-turn: folded into
+    the running turn as an attachment, not a user record of its own."""
+    return {"type": "attachment", "timestamp": AT,
+            "attachment": {"type": "queued_command", "prompt": prompt, "commandMode": mode, "timestamp": AT}}
+
+
 TEXT = {"type": "text", "text": "On it."}
 CUT_7 = "[cut short, full text: get_input(message_id=7)] "
 BASH = {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "make test", "description": "Run tests"}}
@@ -63,6 +70,14 @@ BASH = {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ma
      "Claude's wheelhouse tool calls are hidden"),
     ([notification("<task-notification><summary>Agent finished</summary></task-notification>")], [],
      "other task notifications are hidden"),
+    ([queued("[wheelhouse] from doug (general):\nkeep going")], [Entry("you", "keep going", AT)],
+     "a host's turn that reached the session mid-turn"),
+    ([queued(event("[wheelhouse] from doug (general): yes ⏎ fix it"), "task-notification")],
+     [Entry("you", "yes\nfix it", AT)], "a monitor line that reached the session mid-turn"),
+    ([queued("[wheelhouse] from doug on Q1:\nyes")], [], "an answer on an item that reached it mid-turn: its thread has it"),
+    ([queued("also check the tests")], [Entry("you", "also check the tests", AT)],
+     "a prompt typed in the tab mid-turn"),
+    ([queued(event("Agent finished"), "task-notification")], [], "other task notifications mid-turn are hidden"),
     ([assistant({"type": "thinking", "thinking": "hmm"}, TEXT)], [Entry("claude", "On it.", AT)],
      "thinking is hidden"),
     ([assistant(TEXT), assistant({"type": "text", "text": "Done."})], [Entry("claude", "On it.\n\nDone.", AT)],
