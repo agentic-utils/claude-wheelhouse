@@ -3568,6 +3568,8 @@ async def test_zooming_out_fills_the_charts_from_older_history(store, sid, tmp_p
         assert caption(pane) == "82k/2h", desc
         await click_zoom(pilot, pane, "-", desc)
         assert pane.span == 4 * 3600 and caption(pane) == "loading…", f"{desc}: loading… while it fills"
+        assert not app.query("LoadingIndicator") and pane.size.height, \
+            f"{desc}: the caption says so, and Textual's own loading cover doesn't hide the pane"
         held.go.set()
         await app.workers.wait_for_complete()
         await pilot.pause()

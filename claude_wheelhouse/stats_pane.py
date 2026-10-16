@@ -56,7 +56,7 @@ class SessionStats(Widget):
         self.rows: list[Text] = []
         self.charts: list[stats.Chart] = []
         self.span = stats.SPAN   # the charts' zoom (stats.SPANS, stats.wider)
-        self.loading = False     # the shown sessions' older history is still being read for it
+        self.filling = False     # the shown sessions' older history is still being read for it (not Widget.loading, which covers the pane)
         self.more = True         # there's older history than it covers (stats.zoom_parts)
         self.frame = 0
         self.drawn: list[Strip] = []   # the lines as last drawn whole (render_line), and what for
@@ -144,7 +144,7 @@ class SessionStats(Widget):
         sessions = self.ctx.sessions()
         # the history shown: the session in context's, else every session's
         cutoff, shown = now - self.span, [self.followers[sid] for sid in self.shown(sessions) if sid in self.followers]
-        self.loading = self.span > stats.SPAN and any(f.short(cutoff) and not f.resting(now) for f in shown)
+        self.filling = self.span > stats.SPAN and any(f.short(cutoff) and not f.resting(now) for f in shown)
         start, _ = stats.window(now, max(self.size.width - stats.MARGIN, 0), self.span)   # the charts' left edge
         self.more = not all(f.done for f in shown) or any(f.oldest is not None and f.oldest < start for f in shown)
         failed = next((f.history_error for f in shown if f.history_error), None) if self.span > stats.SPAN else None
@@ -176,7 +176,7 @@ class SessionStats(Widget):
         self.can_focus = self.slider() is not None and self.ctx.set_effort is not None
         rows, charts = stats.layout(self.view, self.name_, self.note, self.usage, self.now,
                                     self.size.width, self.size.height, self.setting, self.has_focus,
-                                    span=self.span, loading=self.loading, more=self.more)
+                                    span=self.span, loading=self.filling, more=self.more)
         if (looks(rows), charts) != (looks(self.rows), self.charts):   # each tick builds them again, mostly the same
             self.rows, self.charts = rows, charts
             self.drawn_for = None
