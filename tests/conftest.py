@@ -265,6 +265,8 @@ class ServedDaemon:
             self.server.handle_exit(signal.SIGTERM, None)   # as systemd stops it: the streams end first
             self.thread.join(10)
             self.daemon.watch.close()
+        from sse_starlette.sse import AppStatus
+        AppStatus.should_exit = False   # left set by the stop, it ended the next test's streams at once (test_daemon)
 
 
 @pytest.fixture
