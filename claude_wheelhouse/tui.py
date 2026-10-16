@@ -1122,12 +1122,13 @@ class ItemList(SinkList):
     """The inbox's items, with a multi-selection to close questions in one go, by row key
     so it survives refreshes. Ctrl+click toggles a row, Shift+click takes the range from the
     last one toggled; Space and Shift+Up/Down do the same from the keyboard, for terminals
-    that keep Shift+click for their own text selection."""
+    that keep Shift+click for their own text selection. Ctrl+A marks the finished rows."""
 
     # here only, not the app's: in an answer box Backspace and Delete edit the text (#64)
     BINDINGS = [Binding("delete", "app.close_question", "Close", key_display="Del"),
                 Binding("backspace", "app.close_question", "Close", show=False),
                 Binding("space", "toggle_mark", "Mark", show=False),
+                Binding("ctrl+a", "app.mark_finished", "Mark finished", show=False),
                 Binding("shift+up", "extend(-1)", "Extend up", show=False),
                 Binding("shift+down", "extend(1)", "Extend down", show=False)]
 
@@ -2171,6 +2172,7 @@ DESCRIBE = {
     "help": "This list",
     "quit": "Quit the wheelhouse (sessions carry on without it)",
     "toggle_mark": "Mark or unmark the highlighted row",
+    "app.mark_finished": "Mark every finished (dimmed) row shown, for Delete to clear them together",
     "extend(-1)": "Extend the marks up",
     "extend(1)": "Extend the marks down",
     "select_all": "Select all of it, to copy",
@@ -2278,8 +2280,8 @@ SEND_RULES = (
     "queued answer back to edit.")
 MOUSE = ("Click selects a row; in the session list, a click on the selected session or the list's title "
          "unselects it, for all sessions' items, as Esc does. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
-         "keep Shift+click for itself: Space and Shift+Up/Down do the same), then Delete or Backspace "
-         "closes them together, the highlight going to the row above the topmost one taken, "
+         "keep Shift+click for itself: Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or "
+         "Backspace closes them together, the highlight going to the row above the topmost one taken, "
          "and Ctrl+R reopens the finished ones. An item with children (its subagents and docs, under it) has a - at the "
          "right-hand end of its row: a click there hides them, and the + it becomes shows them again. "
          "Double-click selects a word. Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
@@ -3998,6 +4000,19 @@ class WheelhouseApp(App):
                         f"nothing among the marked rows to {'close' if closed else 'reopen'}", severity="warning")
             return
         self.close_picked(list(filter(acts, picked)), families, closed)
+
+    def action_mark_finished(self) -> None:
+        """Ctrl+A in the item list: every finished row shown marked, the dimmed ones (settled,
+        or finished and shown) that Delete can act on, for it to clear them together."""
+        self.settle()
+        found, _, queued, awaiting = self.client.inbox(self.filter_sid)
+        by_key = {item_key(it): it for it in found}
+        marks = {k for k in self.items_table.final() if (it := by_key.get(k)) and closable(it)
+                 and standing(it, queued | awaiting) != "active"}
+        if not marks:
+            self.notify("no finished rows to mark", severity="warning")
+            return
+        self.items_table.set_marks(marks)
 
     def close_picked(self, picked: list, families: dict, closed: bool = True) -> None:
         """The marked rows closed (or reopened), each with its children deleted if it has any

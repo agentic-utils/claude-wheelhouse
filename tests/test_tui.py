@@ -3259,6 +3259,29 @@ async def test_delete_puts_the_highlight_above_the_topmost_row_it_took(store, si
         assert app.selected == tuple(app.items_table.cursor_key().split("|")), f"{desc}: selected there too"
 
 
+@pytest.mark.parametrize("finished, focus, marked, desc", [
+    (False, "items", ["T2", "Q2"], "the settled rows, not the open, running or hidden ones"),
+    (True, "items", ["T2", "Q2", "Q3"], "F on: the finished rows shown too"),
+    (False, "answer", [], "in the answer box Ctrl+A is its own"),
+])
+@pytest.mark.anyio
+async def test_ctrl_a_marks_the_finished_rows(store, sid, finished, focus, marked, desc):
+    with one_second():
+        for kind, status in [("question", "open"), ("task", "running"), ("task", "done"),
+                             ("question", "answered"), ("question", "closed")]:
+            store.post_item(sid, kind, kind, status=status)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if finished:
+            await pilot.press("f")
+        app.query_one(f"#{focus}").focus()
+        await pilot.pause()
+        await pilot.press("ctrl+a")
+        await pilot.pause()
+        assert sorted(k.split("|")[1] for k in app.items_table.marked) == sorted(marked), desc
+
+
 @pytest.mark.parametrize("modifier, desc", [
     ({"control": True}, "Ctrl held: a mark, never a drag"),
     ({"shift": True}, "Shift held: a range, never a drag"),
