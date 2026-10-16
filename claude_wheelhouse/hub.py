@@ -949,6 +949,21 @@ class Hub:
             self.store.update_item(sid, ref, status="closed" if closed else "answered")
         return Done()
 
+    def all_items(self) -> list:
+        """Every item, parked sessions' too, for the person's order (ordering.py)."""
+        return self.store.all_items()
+
+    def reorder_items(self, group: str, keys: list[tuple[str, str]]) -> Done:
+        """The person's order for a group of items (a drag): each placed in it."""
+        self.store.set_item_order(group, keys)
+        return Done()
+
+    def reorder_sessions(self, group: str, sids: list[str]) -> Done:
+        """The person's order for a group of sessions (a drag), read again at once."""
+        self.store.set_session_order(group, sids)
+        self.refresh()
+        return Done()
+
     def delete_family(self, sid: str, ref: str) -> Done:
         """Delete on an item with children, confirmed: its children deleted (Store.delete_children),
         so they stay off the inbox when they change, then the item closed as Delete closes it."""

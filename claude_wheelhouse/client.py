@@ -718,6 +718,30 @@ class RemoteClient:
     def delete_family(self, sid: str, ref: str) -> Done:
         return self.done(f"/items/{sid}/{ref}/delete-family", {})
 
+    def all_items(self) -> list[dict]:
+        """Every item, parked sessions' too, for the person's order (ordering.py)."""
+        self.catch_up()
+        return self.items
+
+    def reorder_items(self, group: str, keys: list[tuple[str, str]]) -> Done:
+        """Written, and the rows held here in their new places at once: the list repaints in
+        the new order, not the old until the daemon's next answer."""
+        done = self.done("/order/items", {"group": group, "keys": [list(k) for k in keys]})
+        if done.ok:
+            for i, key in enumerate(keys):
+                if (it := self.by_key.get(tuple(key))) is not None:
+                    it["pos"], it["pos_group"] = i, group
+        return done
+
+    def reorder_sessions(self, group: str, sids: list[str]) -> Done:
+        done = self.done("/order/sessions", {"group": group, "sids": sids})
+        if done.ok:
+            place = {sid: i for i, sid in enumerate(sids)}
+            for s in self.views:
+                if s["id"] in place:
+                    s["pos"], s["pos_group"] = place[s["id"]], group
+        return done
+
     # the stream and the fetching, on threads of their own
 
     def lost(self) -> None:

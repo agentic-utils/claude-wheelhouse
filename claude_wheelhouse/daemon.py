@@ -388,6 +388,8 @@ class Daemon:
             Route("/items/{sid}/{ref}/delete-family", self.command(
                 lambda request, body: self.hub.delete_family(request.path_params["sid"], request.path_params["ref"])),
                 methods=["POST"]),
+            Route("/order/items", self.command(self.order_items), methods=["POST"]),
+            Route("/order/sessions", self.command(self.order_sessions), methods=["POST"]),
             Route("/fs", self.query(self.folders)),
             Route("/models", self.query(lambda request: models.catalogue(), run=None)),
             Route("/events", self.events),
@@ -974,6 +976,28 @@ class Daemon:
             return self.hub.answer_permission(sid, ref, text(body, "decision"), text(body, "message", False) or "")
         except KeyError:
             raise Refused(409, f"{ref} has been decided already") from None
+
+    @staticmethod
+    def group_of(body: dict) -> str:
+        group = body.get("group")
+        if not isinstance(group, str):
+            raise Refused(400, "group must be a string")
+        return group
+
+    def order_items(self, request: Request, body: dict) -> Done:
+        """The person's order for a group of items: {group, keys: [[session, ref], ...]}."""
+        keys = body.get("keys")
+        if not (isinstance(keys, list) and all(isinstance(k, list) and len(k) == 2
+                                                and all(isinstance(p, str) for p in k) for k in keys)):
+            raise Refused(400, "keys must be a list of [session, ref] pairs")
+        return self.hub.reorder_items(self.group_of(body), [tuple(k) for k in keys])
+
+    def order_sessions(self, request: Request, body: dict) -> Done:
+        """The person's order for a group of sessions: {group, sids: [...]}."""
+        sids = body.get("sids")
+        if not (isinstance(sids, list) and all(isinstance(sid, str) for sid in sids)):
+            raise Refused(400, "sids must be a list of session ids")
+        return self.hub.reorder_sessions(self.group_of(body), sids)
 
     def close(self, request: Request, body: dict) -> Done:
         closed = body.get("closed", True)

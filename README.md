@@ -349,6 +349,22 @@ stops, its answer box and its thread. Keys typed ahead of the screen end as if t
 before it has done all it does, so the ones behind a key that opens a thread or a dialog go to it, and the ones behind a
 dialog's answer go to the screen it uncovers.
 
+Ordering the lists: click a column header in the inbox to sort by it. Status cycles `*`
+(the inbox's own order: open questions first, then blocked, running and the rest, newest
+first, settled and finished below), `▲` (by urgency: blocked, waiting, open, running, todo,
+then the settled and finished, newest first within each) and `▼` (the reverse). The other
+columns cycle `▲`, `▼`, then back to Status `*`. The marker shows on the column in force.
+In the session list, the dot column's header sorts running sessions first, then by their
+latest activity (`*`); a second click goes back to your own order. The other headers there
+still show every session's items, as `Esc` does. Drag a row with the mouse, or move the
+highlighted one with `Alt+Up` and `Alt+Down`, to reorder. A move among rows that share its
+sort key (the same status, under Status `*`) keeps the sort, and your order breaks the tie
+until the row's key changes. A move past them turns ordering off: the marker goes, the order
+as it shows becomes yours, and nothing moves by itself (not even a task finishing) until you
+click a header again; new rows then arrive at the top. A row's children move with it.
+`Esc` during a drag puts it back. Each TUI remembers its sort for its next start; the order
+itself is in the database, shared by every TUI.
+
 Closing several questions or decisions at once: in the item list, `Ctrl`+click marks or unmarks a row
 and `Shift`+click marks the range from the last one marked; from the keyboard, `Space`
 marks or unmarks the highlighted row and `Shift+Up`/`Shift+Down` extend the range (Windows

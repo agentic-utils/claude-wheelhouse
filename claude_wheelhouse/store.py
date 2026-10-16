@@ -216,7 +216,10 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "interrupted_at", "TEXT"), ("sessions", "model_chosen_at", "TEXT"),
                  ("sessions", "effort_chosen_at", "TEXT"), ("sessions", "launched_over", "INTEGER"),
                  ("items", "session_at", "TEXT"), ("items", "moved_to", "TEXT"), ("sessions", "compact_plan", "TEXT"),
-                 ("sessions", "park_compact", "INTEGER NOT NULL DEFAULT 0"), ("items", "parent_ref", "TEXT")]
+                 ("sessions", "park_compact", "INTEGER NOT NULL DEFAULT 0"), ("items", "parent_ref", "TEXT"),
+                 # the person's order (ordering.py): a row's place, and the group it was placed in
+                 ("items", "pos", "REAL"), ("items", "pos_group", "TEXT"),
+                 ("sessions", "pos", "REAL"), ("sessions", "pos_group", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -589,7 +592,10 @@ class Store:
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id
                     AND i.kind = 'decision' AND i.status = 'unseen') AS unseen_decisions,
                  (SELECT count(*) FROM agent_items a JOIN items i ON i.session_id = a.session_id
-                    AND i.ref = a.item_ref WHERE a.session_id = s.id AND i.status = 'running') AS running_agents
+                    AND i.ref = a.item_ref WHERE a.session_id = s.id AND i.status = 'running') AS running_agents,
+                 max(s.created_at, coalesce(s.launched_at, ''),
+                     coalesce((SELECT max(m.created_at) FROM messages m WHERE m.session_id = s.id), ''),
+                     coalesce((SELECT max(i.updated_at) FROM items i WHERE i.session_id = s.id), '')) AS last_at
                FROM sessions s ORDER BY s.created_at, s.rowid"""   # created_at ties: to the second
         )
 
@@ -972,6 +978,24 @@ class Store:
             rows = [r for r in rows if r["status"] not in CLOSED]
         processing = self.processing()
         return sorted(rows, key=lambda r: inbox_rank(r, processing))
+
+    def all_items(self) -> list[sqlite3.Row]:
+        """Every item, parked sessions' too: what the person's order is laid over (ordering.py)."""
+        return self._all("SELECT i.*, s.name AS session_name, s.parked AS session_parked FROM items i "
+                         "JOIN sessions s ON s.id = i.session_id")
+
+    def set_item_order(self, group: str, keys: list[tuple[str, str]]) -> None:
+        """The person's order for a group of items, (session, ref) in order: each placed in
+        it. updated_at stays: it is what the inbox ranks by."""
+        with self.tx() as db:
+            db.executemany("UPDATE items SET pos = ?, pos_group = ? WHERE session_id = ? AND ref = ?",
+                           [(i, group, sid, ref) for i, (sid, ref) in enumerate(keys)])
+
+    def set_session_order(self, group: str, sids: list[str]) -> None:
+        """The person's order for a group of sessions, each placed in it."""
+        with self.tx() as db:
+            db.executemany("UPDATE sessions SET pos = ?, pos_group = ? WHERE id = ?",
+                           [(i, group, sid) for i, sid in enumerate(sids)])
 
     def in_doubt(self, sid: str, at: datetime | None = None) -> list[str]:
         """The items the wheelhouse doubts are still open, oldest first, each as `T1 running`

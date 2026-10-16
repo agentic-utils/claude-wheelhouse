@@ -53,7 +53,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, emoji, features, models, stats, subagents, transcript, tutorial
+from . import api, emoji, features, models, ordering, stats, subagents, transcript, tutorial
 from .client import LocalClient, Unreachable
 from .host import NUDGE_TOKENS
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
@@ -637,10 +637,153 @@ class SinkList(DataTable):
     (final), never a moving frame's, so keys typed during a move act as they would after it;
     the cursor steps off a blank row the way it was going. Home and End scroll sideways."""
 
+    BINDINGS = [Binding("alt+up", "move_row(-1)", "Move up", show=False),
+                Binding("alt+down", "move_row(1)", "Move down", show=False)]
+    DROP_UNDER, DROP_OVER = Style(underline=True), Style(overline=True)
+    CREEP = 0.05   # seconds between rows, while a drag holds the pointer at an edge
+
     def __init__(self, **kwargs):
         self.blank_lines: LRUCache[tuple, Strip] = LRUCache(1000)   # _render_line
         super().__init__(**kwargs)
         self.sink: Sink | None = None
+        # a drag (T114): the rows that can be dragged, and those that go with the one above
+        # (an item's children); the press, the row dragged, where it would drop (before, after)
+        # and the line marking it (row, over), the pointer, and whether the next click is the drag's
+        self.draggable: set[str] = set()
+        self.followers: set[str] = set()
+        self.press: tuple[str, int] | None = None
+        self.dragging: str | None = None
+        self.drop_at: tuple | None = None
+        self.drop_line: tuple[int, bool] | None = None
+        self.pointer_y = 0
+        self.creeping = None
+        self.dragged = False
+
+    # dragging a row (T114): within its group a sort stays, across groups ordering goes off (ordering.py)
+
+    def units(self) -> list[tuple[str, int, int]]:
+        """What a drag moves, in order: each draggable row's key, its first row and its last,
+        its children's (followers) included."""
+        out: list[list] = []
+        for i, k in enumerate(self.keys()):
+            if k in self.draggable:
+                out.append([k, i, i])
+            elif k in self.followers and out and out[-1][2] == i - 1:
+                out[-1][2] = i
+        return [tuple(u) for u in out]
+
+    def target(self, row: int, moved: str) -> tuple | None:
+        """Where a drag pointing at `row` drops `moved`: (before, after), one a unit's key and
+        the other None; None where it already is."""
+        units = self.units()
+        keys = [k for k, _, _ in units]
+        if moved not in keys:
+            return None
+        at = next((n for n, (_, a, b) in enumerate(units) if a <= row <= b), None)
+        if at is None:   # a row no drag moves (a gap, a session's subagents): the unit above it
+            above = [n for n, (_, a, _) in enumerate(units) if a <= row]
+            at = above[-1] if above else 0
+        here = keys.index(moved)
+        if at == here:
+            return None
+        return (keys[at], None) if at < here else (None, keys[at])
+
+    def line_for(self, at: tuple | None) -> tuple[int, bool] | None:
+        """The line marking a drop: under the row above the gap, or over the first row."""
+        if at is None:
+            return None
+        spans = {k: (a, b) for k, a, b in self.units()}
+        before, after = at
+        if after is not None:
+            return spans[after][1], False
+        first = spans[before][0]
+        return (first - 1, False) if first > 0 else (first, True)
+
+    def row_at(self, screen_y: int) -> int:
+        header = self.header_height if self.show_header else 0
+        line = screen_y - self.content_region.y - header + int(self.scroll_y)
+        return max(0, min(line, self.row_count - 1))
+
+    def edge(self) -> int:
+        """-1 with the pointer on the header or above, 1 on the last line or below: scroll there."""
+        top = self.content_region.y + (self.header_height if self.show_header else 0)
+        bottom = self.scrollable_content_region.y + self.scrollable_content_region.height - 1
+        return -1 if self.pointer_y < top else 1 if self.pointer_y >= bottom else 0
+
+    def aim(self) -> None:
+        at = self.target(self.row_at(self.pointer_y), self.dragging)
+        if at != self.drop_at:
+            self.drop_at, self.drop_line = at, self.line_for(at)
+            self.refresh()
+
+    def creep(self) -> None:
+        if self.dragging is None or not (step := self.edge()):
+            return
+        self.scroll_relative(y=step, animate=False)
+        self.aim()
+
+    def _on_mouse_down(self, event) -> None:
+        self.dragged = False
+        meta = event.style.meta
+        row = meta.get("row", -1)
+        self.press = None
+        if event.button != 1 or event.ctrl or event.shift or event.meta or "toggle" in meta:
+            return
+        if 0 <= row < self.row_count and (key := self.keys()[row]) in self.draggable:
+            self.press = (key, event.screen_y)
+
+    def _on_mouse_move(self, event) -> None:
+        if self.press is None:
+            return
+        if not event.button:   # the release never arrived (outside the terminal, say): nothing moves
+            self.end_drag(drop=False)
+            return
+        key, y = self.press
+        if self.dragging is None:
+            if event.screen_y == y:   # not yet off its row: still a click
+                return
+            self.dragging = key
+            self.capture_mouse()
+        self.pointer_y = event.screen_y
+        self.aim()
+        if self.edge() and self.creeping is None:
+            self.creeping = self.set_interval(self.CREEP, self.creep)
+
+    def _on_mouse_up(self, event) -> None:
+        if self.dragging is not None:
+            self.end_drag(drop=True)
+        self.press = None
+
+    def end_drag(self, drop: bool) -> None:
+        moved, at = self.dragging, self.drop_at
+        self.press = self.dragging = self.drop_at = self.drop_line = None
+        if self.creeping is not None:
+            self.creeping.stop()
+            self.creeping = None
+        self.release_mouse()
+        self.dragged = moved is not None   # the click Textual makes of the release is the drag's
+        self.refresh()
+        if drop and moved is not None and at is not None:
+            self.app.drop_row(self, moved, *at)
+
+    def swallowed(self, event) -> bool:
+        """The click after a drag's release: it selects and opens nothing."""
+        if not self.dragged:
+            return False
+        self.dragged = False
+        event.prevent_default()
+        event.stop()
+        return True
+
+    def action_move_row(self, step: int) -> None:
+        """Alt+Up and Alt+Down: the highlighted row one place up or down, as a drag would."""
+        if not self.show_cursor:
+            return
+        keys = [k for k, _, _ in self.units()]
+        here = self.cursor_key()
+        if here not in keys or not 0 <= (j := keys.index(here) + step) < len(keys):
+            return
+        self.app.drop_row(self, here, *((keys[j], None) if step < 0 else (None, keys[j])))
 
     def keys(self) -> list[str]:
         return [r.key.value for r in self.ordered_rows]
@@ -725,6 +868,20 @@ class SinkList(DataTable):
         return 0 <= row < self.row_count and self.ordered_rows[row].key.value.startswith(BLANK)
 
     def _render_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
+        """The line, and under a drag the line marking where it would drop (drop_line)."""
+        strip = self._kept_line(y, x1, x2, base_style)
+        if self.drop_line is None:
+            return strip
+        try:
+            row_key, line = self._get_offsets(y)
+        except LookupError:
+            return strip
+        row, over = self.drop_line
+        if row_key is not self._header_row_key and self._row_locations.get(row_key) == row:
+            strip = strip.apply_style(self.DROP_OVER if over else self.DROP_UNDER)
+        return strip
+
+    def _kept_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
         """DataTable's line, kept by whether the cursor and the mouse are on its row, not by
         where they are, as DataTable keeps it: a cursor move draws again the two rows it
         leaves and lands on, not every row. In DataTable's own line cache, which it clears
@@ -920,7 +1077,11 @@ class SessionList(SinkList):
     async def _on_click(self, event) -> None:
         # Textual runs every class's _on_click in turn, DataTable's after this one, so don't
         # call it here too: that made one click select twice and open two relaunch prompts
+        if self.swallowed(event):
+            return
         row = event.style.meta.get("row", -1)
+        if row == -1 and event.style.meta.get("column") == 0:   # the dot column's header: its sort (sort_by)
+            return
         if self.blank(row):   # the gap above the parked sessions
             event.prevent_default()
             return
@@ -1011,6 +1172,8 @@ class ItemList(SinkList):
         self.set_marks(set(keys[lo:hi + 1]), anchor)
 
     async def _on_click(self, event) -> None:
+        if self.swallowed(event):
+            return
         meta = event.style.meta
         if "toggle" in meta:   # a parent's + / -: its children shown or hidden, the row not selected
             event.prevent_default()
@@ -2342,6 +2505,8 @@ class WheelhouseApp(App):
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
         self.show_finished = False   # finished items (store.standing), after the rest
         self.collapsed: set[str] = set()   # the parent rows whose children are hidden, for this run alone
+        # each list's sort (ordering.py), kept per TUI under layout.sort.*: read as the app starts
+        self.item_sort, self.session_sort = ordering.ITEMS_DEFAULT, ordering.SESSIONS_DEFAULT
         # each list's rows that change sides (an item settling, a session parked) fall or rise
         # there (T66, T71): a frame repaints the list, but not while a key lands (tick)
         self.session_sink = Sink(lambda: self.landing or not self.screen_stack or self.paint_sessions())
@@ -2427,6 +2592,9 @@ class WheelhouseApp(App):
             if (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
                 splitter.apply(stored)
         self.eye_col = self.session_list.add_columns("", "session", "ctx", "?", "D", "✉", "")[-1]
+        self.item_sort = self.kept_sort("items")
+        self.session_sort = self.kept_sort("sessions")
+        self.paint_session_header()
         self.checklist = self.query_one("#checklist", Static)
         self.client.start(self.post)   # the daemon's stream, now there's an app to tell
         self.client.drop_ended_tutorial()   # an ended tutorial's checklist lasts only the app run it ended in
@@ -2491,6 +2659,10 @@ class WheelhouseApp(App):
             return
         if self.focused is not None:
             self.screen._clear_tooltip()
+        if event.key == "escape" and (lists := [t for t in (getattr(self, "items_table", None), getattr(self, "session_list", None))
+                                            if t is not None and t.dragging]):
+            lists[0].end_drag(drop=False)   # a drag let go: nothing moves, and Esc does nothing else
+            return
         if not (await self._check_bindings(event.key, priority=True) or await self._check_bindings(event.key)):
             (self.focused or self.screen)._forward_event(event)
         if isinstance(self.focused, (TextArea, Input)):   # queued behind the key, which restarts the blink if sent there
@@ -2790,7 +2962,8 @@ class WheelhouseApp(App):
         pending = key != self.sessions_cursor   # the person's move, not yet settled
         rows, table.eyes = [], {s["id"] for s in self.sessions if self.busy(s["id"])}
         self.pace()   # a session busy, or none now: the animation runs, or may rest
-        for s in sorted(self.sessions, key=lambda s: s["parked"]):   # stable: creation order within each
+        keyed = self.session_keys()
+        for s in sorted(self.sessions, key=lambda s: keyed[s["id"]][0]):
             st = self.shown_status(s["id"])
             busy = Text(" " * SessionList.EYE) if s["id"] in table.eyes else Text("")   # the eye's room (sweep)
             dot = Text("●", style=self.dot_style(s, st))
@@ -2812,7 +2985,9 @@ class WheelhouseApp(App):
         names.auto_width, names.width = False, width
         cells = dict(rows)
         room = table.scrollable_content_region.height - table.header_height   # above any scrollbar
-        laid = self.session_sink.lay(self, list(cells), {s["id"] for s in self.sessions if s["parked"]}, room)
+        table.draggable = set(cells)
+        sunk = ordering.sunk_keys(list(cells), {s["id"] for s in self.sessions if s["parked"]})
+        laid = self.session_sink.lay(self, list(cells), sunk, room)
         rows = [(k, cells[k]) if k else (f"{BLANK}{i}", ("",) * len(table.columns)) for i, k in enumerate(laid)]
         if fill(table, rows, rebuild=resized) and table.row_count:
             # by key: Park and Unpark move the row, and the cursor goes with it. Not the person
@@ -2830,24 +3005,31 @@ class WheelhouseApp(App):
         they settle (Sink) once they aren't selected (ranked), then with F the finished. The
         session column shows only where the inbox has every session's items (D31)."""
         table = self.items_table
-        columns = ("ref", "status", "title") if self.filter_sid else ("session", "ref", "status", "title")
+        names_of = ("ref", "status", "title") if self.filter_sid else ("session", "ref", "status", "title")
+        # the column in force carries its marker (D97): a sort changed rebuilds the columns
+        columns = tuple(f"{c} {m}" if (m := ordering.marker(self.item_sort, c)) else c for c in names_of)
         if tuple(str(c.label) for c in table.ordered_columns) != columns:
             with table.prevent(DataTable.RowHighlighted):
                 table.clear(columns=True)
-                table.add_columns(*columns)
+                for name, label in zip(names_of, columns):
+                    table.add_column(label, key=name)
         # in the final order, not the frame's: a burst's keys land between frames, so a row that
         # goes falls to the neighbour it has once moves end, as typed slowly (SinkList)
         keep = table.final_row()
         rows_out = []
-        names = {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
+        names = self.session_names()
         found, processing, queued, awaiting = self.client.inbox(self.filter_sid)
         busy = queued | awaiting
-        keyed = self.ranked_keyed(found, processing, busy)
+        keyed = self.ranked_keyed(found, processing, busy, names)
         key_of = {id(it): key for key, it in keyed}   # each item's row key, made once
         active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
         for key, it in keyed:
-            bands[band(self.ranks[key])].append(it)
+            # ordering off: one band, nothing moves between them, but the finished still wait for F
+            if self.item_sort or self.show_finished or standing(it, busy) != "finished":
+                bands[self.ranks[key][0]].append(it)
         rows, counts = item_rows([active, settled, finished if self.show_finished else []], names, self.collapsed)
+        table.draggable = {key_of[id(it)] for it, nested, _ in rows if nested is None}
+        table.followers = {key_of[id(it)] for it, nested, _ in rows if nested == CHILD}
         table.toggles = {key: key in self.collapsed for key in counts}
         sunk = {key_of[id(it)] for it, _, n in rows if n}
         if self.filter_sid:   # the session's own conversation, pinned first
@@ -2916,8 +3098,9 @@ class WheelhouseApp(App):
         """Items in inbox order (ranked_keyed)."""
         return [it for _, it in self.ranked_keyed(items, processing, busy)]
 
-    def ranked_keyed(self, items, processing, busy=frozenset()) -> list[tuple[str, dict]]:
-        """Items in inbox order (inbox_rank), but for the selected item, pinned: it keeps the
+    def ranked_keyed(self, items, processing, busy=frozenset(), names=None) -> list[tuple[str, dict]]:
+        """Items in the inbox's order (ordering.item_key: the sort in force, inbox_rank by
+        default, the person's order inside it), but for the selected item, pinned: it keeps the
         rank it was shown with when it was selected, so its own change (a decision seen, a
         question answered, a task done) never moves it under the person. It re-sorts once the
         selection moves on, and a settled item then sinks (Sink). The exceptions are the person's
@@ -2929,7 +3112,7 @@ class WheelhouseApp(App):
         if self.pin is None or self.pin[0] != key:
             self.pin = (key, self.ranks[key]) if key in self.ranks else None
         keyed = [(item_key(it), it) for it in items]   # (row key, item): each key made once
-        ranks = {key: inbox_rank(it, processing, busy) for key, it in keyed}
+        ranks = {key: ordering.item_key(self.item_sort, it, processing, busy, names)[0] for key, it in keyed}
         if self.pin and self.pin[0] in ranks:
             if self.pin[0] in self.repin:   # Delete, Ctrl+R or a permission answered: at once, and held there
                 self.pin = (self.pin[0], ranks[self.pin[0]])
@@ -2938,6 +3121,82 @@ class WheelhouseApp(App):
         self.repin = set()
         self.ranks = ranks
         return sorted(keyed, key=lambda pair: ranks[pair[0]])
+
+    def session_names(self) -> dict[str, str]:
+        return {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
+
+    def session_keys(self) -> dict[str, tuple]:
+        """Each session's sort key and group (ordering.session_key), by id."""
+        return {s["id"]: ordering.session_key(self.session_sort, s, self.running(s["id"]), at)
+                for at, s in enumerate(self.sessions)}
+
+    def kept_sort(self, which: str) -> str:
+        """A list's sort as this TUI last left it, else its default."""
+        spec = self.client.setting(ordering.SORT_KEYS[which])
+        return spec if spec in ordering.SPECS[which] else ordering.DEFAULTS[which]
+
+    def set_sort(self, which: str, spec: str) -> None:
+        """A list's sort changed (a header clicked, or a drag across groups turned it off): kept
+        for this TUI's next start. The selected item's held place is let go, as it was held in
+        the old sort's terms."""
+        if which == "items":
+            self.item_sort, self.pin, self.ranks = spec, None, {}
+        else:
+            self.session_sort = spec
+            self.paint_session_header()
+        self.client.set_setting(ordering.SORT_KEYS[which], spec)
+
+    def paint_session_header(self) -> None:
+        col = self.session_list.ordered_columns[0]
+        want = ordering.marker(self.session_sort, "dot")
+        if str(col.label) != want:
+            col.label = Text(want)
+            self.session_list._clear_caches()
+            self.session_list.refresh()
+
+    @on(DataTable.HeaderSelected)
+    def sort_by(self, event: DataTable.HeaderSelected) -> None:
+        """A column's header clicked: the inbox's sorts cycle (ordering.next_item_sort); the
+        session list's dot column has its one (ordering.next_session_sort)."""
+        event.stop()
+        self.settle()
+        if event.data_table is self.items_table:
+            self.set_sort("items", ordering.next_item_sort(self.item_sort, event.column_key.value))
+            self.paint_items()
+        elif event.data_table is self.session_list and event.column_index == 0:
+            self.set_sort("sessions", ordering.next_session_sort(self.session_sort))
+            self.paint_sessions()
+
+    def drop_row(self, table, moved: str, before: str | None, after: str | None) -> None:
+        """A row dragged, or moved by Alt+Up or Alt+Down, before or after another
+        (ordering.drop): within its group the sort stays and the group takes the new order;
+        across groups ordering goes off, and every row takes the order as it now shows."""
+        self.settle()
+        if table is self.items_table:
+            _, processing, queued, awaiting = self.client.inbox(self.filter_sid)
+            names = self.session_names()
+            keyed = {item_key(it): ordering.item_key(self.item_sort, it, processing, queued | awaiting, names)
+                     for it in self.client.all_items()}
+        else:
+            keyed = self.session_keys()
+        if moved not in keyed or (before or after) not in keyed:   # gone meanwhile
+            return
+        order = sorted(keyed, key=lambda k: keyed[k][0])
+        group, new = ordering.drop(order, {k: v[1] for k, v in keyed.items()}, moved, before, after)
+        if not new:
+            return
+        which = "items" if table is self.items_table else "sessions"
+        if group is None:
+            group = ordering.MANUAL
+            self.set_sort(which, "")
+        if which == "items":
+            done = self.client.reorder_items(group, [tuple(k.split("|", 1)) for k in new])
+            self.repin.add(moved)   # the person's own act: the selected item goes at once
+        else:
+            done = self.client.reorder_sessions(group, new)
+        if not done.ok or done.notices:
+            self.told(done)
+        self.paint_items() if which == "items" else self.paint_sessions()
 
     def keep_unsent(self, box, old, new) -> None:
         """Park what's typed for the old target and bring back what was typed for the new one."""
