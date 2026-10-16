@@ -268,7 +268,7 @@ def session_dir() -> Path:
     if (setting := given(None, "", SESSION_DIR_KEY)) is None:
         return default
     value, where = setting
-    if (path := (Path.home() / Path(value).expanduser()).resolve()).is_dir():
+    if (path := Path(os.path.abspath(Path.home() / Path(value).expanduser()))).is_dir():
         return path
     _say(f"claude-wheelhouse: {where} is {value!r}, not a directory: new sessions start in {default}")
     return default
