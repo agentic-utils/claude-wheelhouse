@@ -161,9 +161,17 @@ goes to the block's first source line, and the editor scrolls so that line sits 
 vertical middle. The viewer keeps the clicked block where it was on screen if it still
 shows, else scrolls it into view.
 
-**Live re-render.** The viewer renders the editor's buffer, not the file, while the editor is
-open: 1 s after typing pauses, and at least every 2 s while it continues. After each render
-the block holding the cursor keeps its row on screen.
+**Re-render on Ctrl+Enter, as answers send (Doug, after Q106).** The editor follows the send
+modes the answer box already has, and nothing re-renders on a timer. While the editor is open
+the viewer renders the editor's buffer, not the file.
+
+- **Queued mode:** Ctrl+Enter re-renders the viewer from the buffer, as it queues an answer.
+  Ctrl+S saves, as it sends the queue.
+- **Immediate mode:** Ctrl+Enter re-renders and saves in one go. Ctrl+S also saves.
+- **Which mode applies:** a doc item uses its session's send mode. A doc opened from the
+  Decisions pane belongs to no session, so it behaves as Queued.
+- While the editor has focus, Ctrl+S saves the doc and doesn't send the session's queue.
+- After each render, the block holding the cursor keeps its row on screen.
 
 **Keeping step, both ways.**
 
@@ -182,7 +190,7 @@ the block holding the cursor keeps its row on screen.
 
 **Saving and leaving.**
 
-- Ctrl+S saves. Esc closes the editor; with unsaved edits it first asks **Save**,
+- Ctrl+S saves (and Ctrl+Enter in Immediate mode, above). Esc closes the editor; with unsaved edits it first asks **Save**,
   **Discard** or **Keep editing**. The pane title shows `edited` while there are unsaved
   edits.
 - Saving goes through the daemon, which owns the files: `POST /docs/write` with `{path,
@@ -210,7 +218,7 @@ Each stage lands, is reviewed and is usable on its own.
 5. **Module routes, doc roots, `show_doc`, `modules disable`.** Protocol only, tested with a
    test module.
 6. **Design module.** The scan, the Decisions pane in `middle.bottom`, viewing in Detail.
-7. **Editor.** Open on click, the split, re-render timing, both syncs and the loop guard,
+7. **Editor.** Open on click, the split, Ctrl+Enter re-render, both syncs and the loop guard,
    Esc. Saving behind it, stage 8, so this stage shows the editor but Ctrl+S says "saving
    comes next".
 8. **Saving.** `POST /docs/write`, the path allow-list, the mtime check and its prompts.
@@ -223,7 +231,7 @@ Pilot tests per stage: the default slots and a collapsing empty slot; a title dr
 survives a restart; Esc cancels; Reset layout. Block map: a click on each kind of block
 (heading, list, code fence, table) puts the cursor on its first line; a row between blocks
 takes the nearest. Sync: viewer scroll moves the editor and not its cursor; arrowing into the
-next block scrolls the viewer; a fake clock checks 1 s and 2 s re-render and that one sync
+next block scrolls the viewer; Ctrl+Enter re-renders in Queued and re-renders and saves in Immediate; one sync
 causes exactly one scroll on each side. Daemon: write refused outside the allow-list, 409 on a
 changed mtime, `force` overwrites, the write is atomic.
 
