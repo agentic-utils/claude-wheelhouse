@@ -283,8 +283,9 @@ def share(stored: str | None) -> float | None:
 
 def thread_blocks(found, session_name: str = "") -> list[tuple[str, str]]:
     """An item's detail and conversation, oldest first, as (who, markdown) blocks, from the
-    item and its messages (client.thread): the person's messages (queued ones marked), the
-    session's replies, and its progress notes as quieter quotes."""
+    item and its messages (client.thread): the person's messages (queued ones marked, and
+    sent ones until the session has them), the session's replies, and its progress notes as
+    quieter quotes."""
     if found is None:
         return [("note", "_gone_")]
     item, msgs = found
@@ -296,7 +297,8 @@ def thread_blocks(found, session_name: str = "") -> list[tuple[str, str]]:
            ("claude", item["body"] or "_no detail_")]
     for m in msgs:
         if m["author"] == "person":
-            out.append(("you", f"**you{' · queued' if m['draft'] else ''}** · {m['created_at']}\n\n"
+            out.append(("you", f"**you{' · queued' if m['draft'] else ' · sending' if not m['delivered_at'] else ''}** · "
+                               f"{m['created_at']}\n\n"
                                f"{transcript.hard_breaks(m['body'])}"))
         elif m["kind"] == "reply":
             out.append(("claude", f"**claude** · {m['created_at']}\n\n{m['body']}"))

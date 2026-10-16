@@ -219,6 +219,31 @@ def entries(recs: list[dict], full=None, agent: bool = False) -> list[Entry]:
     return out[-MAX_ENTRIES:]
 
 
+def held(recs: list[dict], full=None) -> list[str]:
+    """What the person said in prompts Claude Code holds for the session but hasn't taken up
+    yet, oldest first: its queue as the transcript keeps it (queue-operation records: enqueue
+    joins it, dequeue takes the first, remove and popAll take theirs). A prompt the session
+    is seen to take, as a turn of its own or folded into one (QUEUED), is taken whatever
+    the queue's records say: they don't always balance."""
+    queue = []
+    for rec in recs:
+        kind, attached = rec.get("type"), rec.get("attachment") or {}
+        if kind == "user" or (kind == "attachment" and attached.get("type") == QUEUED):
+            taken = _text((rec.get("message") or {}).get("content") if kind == "user" else attached.get("prompt"))
+            queue = [q for q in queue if q != taken.strip()]
+        elif kind == "queue-operation":
+            op, text = rec.get("operation"), _text(rec.get("content")).strip()
+            if op == "enqueue":
+                queue.append(text)
+            elif op == "dequeue":
+                queue = queue[1:]
+            elif op == "remove" and text in queue:
+                queue.remove(text)
+            elif op == "popAll":
+                queue = []
+    return [said for text in queue if (said := persons(text, None, full))]
+
+
 def waiting_in_tab(recs: list[dict]) -> str | None:
     """What the session is waiting on the person for in its own tab, if the transcript shows it."""
     answered, asked = set(), None
@@ -243,9 +268,12 @@ def _hhmm(at: str) -> str:
     return f" · {at[11:16]}Z" if len(at) >= 16 else ""
 
 
-def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=None) -> list[tuple[str, str]]:
-    """The conversation as (who, markdown) blocks, then the person's general messages still
-    queued for it. who is head, warn, note, tool, you or claude: the app colours
+def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=None,
+           sending=()) -> list[tuple[str, str]]:
+    """The conversation as (who, markdown) blocks, then the person's general messages on
+    their way: sent, but not yet taken up by the session, Claude Code holding them (held)
+    or the wheelhouse not yet passing them on (sending); then those still queued for it.
+    who is head, warn, note, tool, you or claude: the app colours
     the person's words apart from Claude's. tab None: the session runs in the wheelhouse,
     where its permission prompts and questions are items, so there's no tab to wait in.
     full: the person's message by id (entries)."""
@@ -258,6 +286,9 @@ def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=
     elif tab and (waiting := waiting_in_tab(recs)):
         out.append(("warn", f"> ⚠ **Waiting for you in its tab:** {waiting}."))
     out += [entry_block(e) for e in entries(recs or [], full)]
+    on_way = held(recs or [], full)   # one passed on as these were read is Claude Code's already: shown once
+    on_way += [body for body in sending if body not in on_way]
+    out += [("you", f"**you · sending**\n\n{hard_breaks(body)}") for body in on_way]
     out += [("you", f"**you · queued**\n\n{hard_breaks(body)}") for body in queued]
     return out
 

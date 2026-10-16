@@ -193,6 +193,33 @@ def test_a_conversation_is_none_once_its_session_has_gone(hub, store, sid):
     assert hub.conversation(sid) is None
 
 
+def test_a_general_message_shows_from_queued_to_taken(hub, store, sid, projects):
+    """Queued, then sending from Ctrl+S until the session takes it up, through Claude Code
+    holding it, then the person's words in the conversation: never gone in between."""
+    path = projects / "projects" / "demo" / f"{sid}.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text("")
+
+    def write(*recs):
+        with path.open("a") as f:
+            f.writelines(json.dumps(r) + "\n" for r in recs)
+
+    def mine():
+        return [md.split("\n\n", 1) for who, md in hub.conversation(sid) if who == "you"]
+
+    store.queue(sid, "ship it")
+    assert mine() == [["**you · queued**", "ship it"]]
+    store.dispatch(sid)
+    assert mine() == [["**you · sending**", "ship it"]], "sent, not yet passed on"
+    store.confirm(store.claim(sid))
+    turn = "[wheelhouse] from doug (general):\nship it"
+    write({"type": "queue-operation", "operation": "enqueue", "content": turn})
+    assert mine() == [["**you · sending**", "ship it"]], "passed on, Claude Code holding it"
+    write({"type": "attachment", "attachment": {"type": "queued_command", "prompt": turn, "commandMode": "prompt"}},
+          {"type": "queue-operation", "operation": "remove", "content": turn})
+    assert mine() == [["**you**", "ship it"]], "taken up mid-turn: the person's words"
+
+
 def test_usage_is_asked_every_five_minutes(hub, monkeypatch):
     now, groups = [1000.0], []
     monkeypatch.setattr(hub_mod.time, "time", lambda: now[0])

@@ -142,6 +142,32 @@ def test_markdown_flags_a_wait_and_shows_queued_messages():
     assert text.rstrip().endswith("**you · queued**\n\nSQLite")
 
 
+def op(operation, content=None):
+    return {"type": "queue-operation", "operation": operation, "timestamp": AT} | (
+        {"content": content} if content is not None else {})
+
+
+GENERAL = "[wheelhouse] from doug (general):\nship it"
+
+
+@pytest.mark.parametrize("recs, sending, expected, desc", [
+    ([], ["ship it"], ["ship it"], "sent, not yet passed on"),
+    ([op("enqueue", GENERAL)], [], ["ship it"], "passed on, Claude Code holding it"),
+    ([op("enqueue", event("[wheelhouse] from doug (general): ship it"))], [], ["ship it"],
+     "a monitor line Claude Code is holding"),
+    ([op("enqueue", GENERAL)], ["ship it"], ["ship it"], "passed on as it was read: shown once"),
+    ([op("enqueue", GENERAL), op("dequeue"), user(GENERAL)], [], [], "taken as a turn of its own"),
+    ([op("enqueue", GENERAL), queued(GENERAL), op("remove", GENERAL)], [], [], "folded into a running turn"),
+    ([op("enqueue", GENERAL), queued(GENERAL)], [], [], "seen taken, though no record says it left the queue"),
+    ([op("enqueue", GENERAL), op("popAll")], [], [], "the queue emptied"),
+    ([op("enqueue", "older"), op("enqueue", GENERAL), op("dequeue")], [], ["ship it"], "dequeue takes the first"),
+    ([op("enqueue", "[wheelhouse] from doug on Q1:\nyes")], [], [], "an answer on an item: its thread has it"),
+])
+def test_a_message_on_its_way_shows_as_sending(recs, sending, expected, desc):
+    shown = [md for who, md in transcript.blocks("demo", None, recs, sending=sending) if "you · sending" in md]
+    assert shown == [f"**you · sending**\n\n{body}" for body in expected], desc
+
+
 def test_follower_rereads_only_when_the_file_changes(tmp_path):
     folder = tmp_path / "-home-u-repo"
     folder.mkdir()

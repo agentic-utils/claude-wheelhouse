@@ -106,7 +106,10 @@ session.
   queue is empty. Send all's key is `Shift+A`: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S
   as plain Ctrl+S. A dead session's queue waits for it: Ctrl+S on one says to Relaunch it first,
   its hint leaves Ctrl+S out, and Send all skips it and doesn't count it. Ctrl+R takes a queued answer
-  back to edit or drop. Emoji codes work as in chat apps: `:tada:` turns into 🎉, and while
+  back to edit or drop. A sent answer shows as `you · sending`, as a queued one shows as
+  `you · queued`, until the session takes it up: in an item's thread until the wheelhouse
+  has passed it on, and in the conversation until the session has it, which may wait for
+  its turn to end. Emoji codes work as in chat apps: `:tada:` turns into 🎉, and while
   you type `:gri` the hint line suggests matches (Tab or Enter takes the first). Text you haven't sent stays with the item (or session) you typed it
   for: moving to another clears the box, and coming back restores it. Each session shows
   its queued count (`✉ 3`). Sending doesn't change a question's status: the session's

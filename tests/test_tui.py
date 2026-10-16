@@ -729,7 +729,7 @@ async def test_queueing_for_a_dead_session_says_to_restore_it(store, sid, monkey
 def test_a_general_message_cut_short_shows_whole_in_the_conversation(store, sid, tmp_path, monkeypatch):
     long = " ".join(["word"] * 200)
     store.send(sid, long)
-    [m] = store.pending(sid)
+    [m] = store.take_pending(sid)   # the monitor printed it, cut short, and the session took it up
     line = f"[wheelhouse] from doug (general): [cut short, full text: get_input(message_id={m['id']})] word word…"
     folder = tmp_path / "projects/-home-u-repo"
     folder.mkdir(parents=True)
@@ -7075,3 +7075,14 @@ async def test_a_drop_beside_the_pinned_item_goes_by_what_shows(store, sid):
         await drag_row(pilot, table, 2, 1)
         assert item_refs(app) == [c, a, b], "a swap, as it showed"
         assert "status *" in [str(col.label) for col in table.ordered_columns], "the sort stays"
+
+
+@pytest.mark.parametrize("draft, delivered_at, head, desc", [
+    (1, None, "**you · queued** · 10:00", "queued"),
+    (0, None, "**you · sending** · 10:00", "sent, the session not yet given it"),
+    (0, "10:01", "**you** · 10:00", "the session has it"),
+])
+def test_an_answer_in_its_thread_is_marked_until_the_session_has_it(draft, delivered_at, head, desc):
+    item = {"ref": "Q1", "title": "which db?", "kind": "question", "status": "open", "updated_at": "10:00", "body": "?"}
+    msg = {"author": "person", "draft": draft, "delivered_at": delivered_at, "created_at": "10:00", "body": "SQLite"}
+    assert tui.thread_blocks((item, [msg]))[-1] == ("you", f"{head}\n\nSQLite"), desc

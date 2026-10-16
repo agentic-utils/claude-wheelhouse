@@ -1137,17 +1137,20 @@ class Hub:
 
     def conversation(self, sid: str) -> list[tuple[str, str]] | None:
         """A session's conversation as (who, markdown) blocks, from its transcript, with
-        what's queued for it as a general message; None once the session has gone."""
+        what's sent and queued for it as a general message; None once the session has gone."""
         s = self.store.session(sid)
         if s is None:
             return None
         follower = self.followers.setdefault(sid, transcript.Follower(sid))
         recs = follower.read()
         queued = tuple(m["body"] for m in self.store.drafts(sid) if m["item_ref"] is None)
+        # sent, not yet passed on: the wheelhouse's own notices aren't the person's words
+        sending = tuple(m["body"] for m in self.store.pending(sid) if m["item_ref"] is None and m["kind"] != "notice")
         tab = None if runner(s) == "sdk" and not s["shell"] else launch.tab_title(s)
-        key = (s["name"] or short(sid), tab, follower.seen, queued)
+        key = (s["name"] or short(sid), tab, follower.seen, queued, sending)
         if follower.blocks_key != key:   # parsed once per change, not on every refresh tick
-            follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued, functools.partial(self.sent, sid))
+            follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued, functools.partial(self.sent, sid),
+                                                                          sending)
         return follower.blocks
 
     def agent_conversation(self, sid: str, ref: str) -> list[tuple[str, str]] | None:
