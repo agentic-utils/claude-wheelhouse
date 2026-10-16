@@ -1195,7 +1195,7 @@ class ItemList(SinkList):
             event.prevent_default()   # not DataTable's, which would clamp the cursor onto the last row
             return
         key = self.keys()[meta["row"]]
-        if event.ctrl or event.shift:
+        if event.ctrl or event.shift or event.meta:   # Alt (meta) for Shift, which Windows Terminal keeps
             event.prevent_default()   # not DataTable's: a click on the highlighted row opens it
             self.toggle(key) if event.ctrl else self.extend_to(key)
             self.move_cursor(row=meta["row"], animate=False)

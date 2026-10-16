@@ -3190,6 +3190,7 @@ async def test_delete_closes_and_ctrl_r_reopens_decisions(store, sid, start, key
     ([("ctrl", 2)], ["Q1", "Q3"], "Ctrl+click adds to the highlighted row"),
     ([("ctrl", 2), ("ctrl", 2)], ["Q1"], "a second Ctrl+click unmarks"),
     ([("click", 1), ("shift", 3)], ["Q2", "Q3", "Q4"], "Shift+click marks the range"),
+    ([("click", 1), ("alt", 3)], ["Q2", "Q3", "Q4"], "Alt+click marks the range, as Shift+click"),
     ([("ctrl", 0), ("ctrl", 1), ("shift", 3)], ["Q2", "Q3", "Q4"], "the range runs from the last one toggled"),
     ([("key", "space"), ("key", "down"), ("key", "down"), ("key", "space")], ["Q1", "Q3"], "Space toggles"),
     ([("key", "shift+down"), ("key", "shift+down")], ["Q1", "Q2", "Q3"], "Shift+Down extends"),
@@ -3210,7 +3211,8 @@ async def test_marking_rows(store, sid, steps, marked, desc):
             if how == "key":
                 await pilot.press(arg)
             else:
-                await pilot.click("#items", offset=(20, 1 + arg), control=how == "ctrl", shift=how == "shift")
+                await pilot.click("#items", offset=(20, 1 + arg), control=how == "ctrl", shift=how == "shift",
+                                meta=how == "alt")
             await pilot.pause()
         assert sorted(k.split("|")[1] for k in items.marked) == marked, desc
         shaded = [items.get_row_at(i)[1] for i in range(items.row_count)
@@ -3220,7 +3222,7 @@ async def test_marking_rows(store, sid, steps, marked, desc):
 
 async def five_questions(store, sid, pilot, steps) -> None:
     """Q1-Q5, newest first under the rows clicked so Q1 tops the list, the item list focused,
-    then the steps: a key, or a plain, Ctrl or Shift click on a row."""
+    then the steps: a key, or a plain, Ctrl, Shift or Alt click on a row."""
     app = pilot.app
     await pilot.pause()
     app.items_table.focus()
@@ -3228,7 +3230,8 @@ async def five_questions(store, sid, pilot, steps) -> None:
         if how == "key":
             await pilot.press(arg)
         else:
-            await pilot.click("#items", offset=(20, 1 + arg), control=how == "ctrl", shift=how == "shift")
+            await pilot.click("#items", offset=(20, 1 + arg), control=how == "ctrl", shift=how == "shift",
+                              meta=how == "alt")
         await pilot.pause()
 
 
