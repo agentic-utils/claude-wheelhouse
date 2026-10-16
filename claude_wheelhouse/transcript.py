@@ -224,35 +224,32 @@ def held(recs: list[dict], full=None) -> list[str]:
     """What the person said in prompts Claude Code holds for the session but hasn't taken up
     yet, oldest first: its queue as the transcript keeps it (queue-operation records: enqueue
     joins it, dequeue takes the first, remove and popAll take theirs). A prompt the session
-    is seen to take, as a turn of its own or folded into one (QUEUED), is taken whatever
-    the queue's records say: they don't always balance. Each take is paired with one prompt
-    leaving the queue, whichever is written first, so of two the same one stays held."""
-    queue, left, taken = [], Counter(), Counter()   # left the queue, not seen taken; and the reverse
+    is seen to take, as a turn of its own or folded into one (QUEUED), leaves it then,
+    whatever the queue's records say: they don't always balance. Each take is paired with one
+    record of a prompt leaving, whichever is written first, so of two the same one stays held."""
+    queue, left, taken = [], Counter(), Counter()   # left by a record, not seen taken; and the reverse
     for rec in recs:
         kind, attached = rec.get("type"), rec.get("attachment") or {}
         if kind == "user" or (kind == "attachment" and attached.get("type") == QUEUED):
             text = _text((rec.get("message") or {}).get("content") if kind == "user" else attached.get("prompt")).strip()
-            if text in queue or left[text]:
-                if left[text]:
-                    left[text] -= 1
-                else:
-                    taken[text] += 1
+            if left[text]:
+                left[text] -= 1
+            elif text in queue:
+                queue.remove(text)
+                taken[text] += 1
         elif kind == "queue-operation":
             op, text = rec.get("operation"), _text(rec.get("content")).strip()
-            gone = [text] if op == "remove" and text in queue else queue[:1] if op == "dequeue" else \
-                list(queue) if op == "popAll" else []
             if op == "enqueue":
                 queue.append(text)
-            for text in gone:
-                queue.remove(text)
-                if taken[text]:
-                    taken[text] -= 1
-                else:
-                    left[text] += 1
-    for text, n in taken.items():   # seen taken, its leaving unrecorded
-        for _ in range(n):
-            if text in queue:
-                queue.remove(text)
+            elif op == "remove" and taken[text]:   # its take already seen
+                taken[text] -= 1
+            elif op == "popAll":
+                queue, left, taken = [], Counter(), Counter()
+            elif op in ("remove", "dequeue"):   # a dequeue is the first's still queued, never a take's seen
+                gone = text if op == "remove" else queue[0] if queue else None
+                if gone in queue:
+                    queue.remove(gone)
+                    left[gone] += 1
     return [said for text in queue if (said := persons(text, None, full))]
 
 

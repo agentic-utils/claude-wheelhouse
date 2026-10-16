@@ -169,6 +169,8 @@ GENERAL = "[wheelhouse] from doug (general):\nship it"
     ([op("enqueue", GENERAL), op("enqueue", GENERAL), queued(GENERAL)], [], ["ship it"],
      "two the same, one seen taken with no record of it leaving: the other still held"),
     ([op("enqueue", GENERAL)], ["ship it"] * 2, ["ship it"] * 2, "one held and one the same not yet passed on: both"),
+    ([op("enqueue", GENERAL), queued(GENERAL), op("enqueue", "/compact notes"), op("dequeue")], [], [],
+     "a take whose record of leaving never came doesn't stand in for a later dequeue (f02699a4's /compact)"),
 ])
 def test_a_message_on_its_way_shows_as_sending(recs, sending, expected, desc):
     shown = [md for who, md in transcript.blocks("demo", None, recs, sending=sending) if "you · sending" in md]
