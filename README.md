@@ -144,9 +144,11 @@ session.
   item with children has a `-` on a grey background at the right-hand end of its row:
   click it to hide them, and the `+` it turns into to show them again (for as long as the
   app runs). `Delete` on an item with children asks first, saying how many it takes and
-  how many of them are still open or unread, then closes or dismisses it and deletes all
-  of them. They stay deleted, even when a subagent finishes or a doc is posted again;
-  `Ctrl+R` with `F` showing brings one back.
+  how many of them are still open or unread, and how many running ones stay, then closes
+  or dismisses it and deletes the rest, at any depth. They stay deleted, even when a
+  subagent finishes or a doc is posted again; `Ctrl+R` with `F` showing brings one back.
+  A running child (a subagent still at work, say) is never deleted: it stays in the list
+  with no parent, at the top level, and stays there if `Ctrl+R` brings its parent back.
 - **Docs.** A session declares each markdown document it writes for you to read (a design,
   plan, report or review, wherever it lives, `~/.claude` included) as a doc item (`M1`),
   under the task, question or decision it belongs to, or under the session's name if none.

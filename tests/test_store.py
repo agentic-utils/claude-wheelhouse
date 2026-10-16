@@ -861,6 +861,7 @@ def test_a_child_deleted_with_its_parent_stays_deleted(store, sid, tmp_path):
     t = store.post_item(sid, "task", "build it", status="done")
     store.track_agent(sid, "agent-1", f"{t}: help", "", datetime.now(timezone.utc))
     agent = store.agent_links(sid)["agent-1"][0]
+    store.agent_status(sid, "agent-1", "done", "finished")   # a running one stays (T125)
     doc = store.post_doc(sid, "the plan", str(tmp_path / "plan.md"), t)
     q = store.post_item(sid, "question", "which?")
     store.db.execute("UPDATE items SET parent_ref = ? WHERE ref = ?", (t, q))
@@ -868,12 +869,12 @@ def test_a_child_deleted_with_its_parent_stays_deleted(store, sid, tmp_path):
     old = store.post_doc(sid, "the old notes", str(tmp_path / "notes.md"), t)
     store.dismiss(sid, old)   # dismissed already, before its parent went
     assert sorted(store.delete_children(sid, t)) == sorted([agent, doc, q, old])
-    store.agent_status(sid, "agent-1", "done", "finished")
+    store.agent_status(sid, "agent-1", "failed", "ended badly")
     store.post_doc(sid, "the plan, v2", str(tmp_path / "plan.md"))
     store.update_item(sid, q, status="answered", declares=False)
     store.post_doc(sid, "the old notes, v2", str(tmp_path / "notes.md"))
     assert [standing(store.item(sid, r)) for r in (agent, doc, q, old)] == ["finished"] * 4, \
-        "a subagent finishing, a doc posted again, a question changed: all still deleted"
+        "a subagent's status changed, a doc posted again, a question changed: all still deleted"
     store.undelete(sid, agent)
     assert standing(store.item(sid, agent)) == "settled", "Ctrl+R brings one back"
 

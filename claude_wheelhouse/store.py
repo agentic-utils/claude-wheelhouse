@@ -1096,19 +1096,23 @@ class Store:
             raise KeyError(f"no task or subagent {ref} in this session")
 
     def delete_children(self, sid: str, ref: str) -> list[str]:
-        """The person deleted an item with its children: each child of it marked deleted
-        (DELETED), whatever its status, finished ones included, a question or decision closed too, so
-        it stays off the inbox when its session or subagent changes it. Ctrl+R on one
-        (undelete) brings it back. Returns the refs deleted."""
+        """The person deleted an item with its children (family): each one not running marked
+        deleted (DELETED), finished ones included, a question or decision closed too, so it stays
+        off the inbox when its session or subagent changes it. Ctrl+R on one (undelete) brings it
+        back. Each one running (spared) stays, orphaned: at the top level, and still there when
+        Ctrl+R brings its parent back. Returns the refs deleted."""
         with self.tx() as db:
             self._require(db, sid)
-            rows = db.execute("SELECT session_id, ref, kind, status, dismissed FROM items WHERE session_id = ? AND parent_ref = ?",
-                              (sid, ref)).fetchall()
+            rows = family(db.execute("SELECT ref, kind, status, dismissed, parent_ref FROM items WHERE session_id = ?",
+                                     (sid,)).fetchall(), ref)
             for r in rows:   # a finished one too: one dismissed already would come back on a change
+                if spared(r):
+                    db.execute("UPDATE items SET parent_ref = NULL WHERE session_id = ? AND ref = ?", (sid, r["ref"]))
+                    continue
                 closed = "closed" if r["kind"] in ("question", "decision") else r["status"]
                 db.execute("UPDATE items SET status = ?, dismissed = ?, updated_at = ? WHERE session_id = ? AND ref = ?",
                            (closed, DELETED, now(), sid, r["ref"]))
-        return [r["ref"] for r in rows]
+        return [r["ref"] for r in rows if not spared(r)]
 
     def undelete(self, sid: str, ref: str) -> None:
         with self.tx() as db:
@@ -1295,6 +1299,29 @@ SETTLED_RANK, FINISHED_RANK = 10, 11   # after every active item's rank
 DELETED = "deleted"   # items.dismissed: deleted with its parent, off the inbox whatever its status becomes
 KEEP_DELETED = f"CASE WHEN dismissed = '{DELETED}' THEN dismissed END"   # a status change clears a dismissal, not this
 UNDISMISS = (f"dismissed = CASE WHEN dismissed = '{DELETED}' OR coalesce(?, status) = status THEN dismissed END")
+
+
+def spared(item) -> bool:
+    """Whether Delete on an item's parent leaves it in the list: one running, not deleted already
+    (T125, reversing D102). Nothing runs out of sight."""
+    return item["status"] == "running" and item["dismissed"] != DELETED
+
+
+def family(items, ref: str, parent=lambda it: it["parent_ref"]) -> list:
+    """What Delete on `ref` acts on, among its session's `items`: its children and, under each
+    child that goes, theirs, at any depth. One spared stays, with whatever is under it, so the
+    walk stops there."""
+    under: dict[str, list] = {}
+    for it in items:
+        under.setdefault(parent(it), []).append(it)
+    found, todo = [], [ref]
+    while todo:
+        for it in under.get(todo.pop(), ()):
+            found.append(it)
+            if not spared(it):
+                todo.append(it["ref"])
+    return found
+
 
 # when a sent message reached the session, on messages aliased {m}: the latest of when it was
 # written, claimed and delivered. Not created_at alone: a draft keeps the time it was written

@@ -966,7 +966,8 @@ class Hub:
 
     def delete_family(self, sid: str, ref: str) -> Done:
         """Delete on an item with children, confirmed: its children deleted (Store.delete_children),
-        so they stay off the inbox when they change, then the item closed as Delete closes it."""
+        so they stay off the inbox when they change, a running one orphaned instead, then the item
+        closed as Delete closes it."""
         self.store.delete_children(sid, ref)
         return self.close(sid, ref, True)
 

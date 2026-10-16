@@ -61,7 +61,7 @@ from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .stats_pane import SessionStats
 from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
-                    inbox_rank, mode, runner, standing)
+                    family, inbox_rank, mode, runner, spared, standing)
 from .unsent import Unsent
 
 MATRIX = "#00ff41"
@@ -246,19 +246,22 @@ def unread(item) -> bool:
 
 def family_prompt(parents: list, family: list, marked: int = 1) -> str:
     """Delete on parents (one highlighted, or among `marked` rows): what they take with them,
-    and how much of that is open or unread."""
-    n, under_way = len(family), [it for it in family if standing(it) != "finished"]
+    and how much of that is open or unread, and how many running children stay (spared)."""
+    gone, kept = [it for it in family if not spared(it)], sum(map(spared, family))
+    n, under_way = len(gone), [it for it in gone if standing(it) != "finished"]
     said = [f"{k} {what}" for k, what in ((sum(map(still_open, under_way)), "still open"),
                                           (sum(map(unread, under_way)), "unread")) if k]
     kids = f"{n} {'child' if n == 1 else 'children'}"
     if marked == 1:
         item = parents[0]
-        ask = f"Delete {item['ref']} ({item['title']}) and its {kids}?"
+        ask = f"Delete {item['ref']} ({item['title']})" + (f" and its {kids}?" if n else "?")
     else:
-        ask = (f"Delete the {marked} marked rows and the {kids} of "
-               f"{', '.join(it['ref'] for it in parents)}?")
+        ask = f"Delete the {marked} marked rows" + (f" and the {kids} of {', '.join(it['ref'] for it in parents)}?"
+                                                    if n else "?")
     return (ask + (f" {' and '.join(said)}." if said else "")
-            + f" {'It stays' if n == 1 else 'They stay'} deleted, even once finished or changed.")
+            + (f" {'It stays' if n == 1 else 'They stay'} deleted, even once finished or changed." if n else "")
+            + (f" {kept} running {'child stays' if kept == 1 else 'children stay'} in the list, at the top level."
+               if kept else ""))
 
 
 def item_key(item) -> str:
@@ -3894,7 +3897,7 @@ class WheelhouseApp(App):
             self.notify(f"{item['ref']} is {verb} already: Ctrl+R reopens it")
             return
         family = self.family(item)
-        if family:   # it goes with its children, finished or not, once the person says so
+        if family:   # it goes with its children, finished or not, a running one orphaned, once the person says so
             self.push_screen(Confirm(family_prompt([item], family)),
                              lambda yes: yes and self.close_family(item, family))
             return
@@ -3903,14 +3906,16 @@ class WheelhouseApp(App):
         self.refresh_data()
 
     def family(self, item) -> list:
-        """An item's children, finished or not: what Delete on it takes with it (one finished
-        and dismissed would otherwise come back when posted again)."""
-        return [it for it in self.client.inbox(item["session_id"]).items if parent_of(it) == item["ref"]]
+        """An item's children at any depth, finished or not: what Delete on it takes with it (one
+        finished and dismissed would otherwise come back when posted again), or leaves orphaned,
+        running (store.family)."""
+        return family(self.client.inbox(item["session_id"]).items, item["ref"], parent_of)
 
     def close_family(self, item, family: list) -> None:
-        """Delete confirmed on a parent: each of its children deleted, whatever its status, and
-        kept off the inbox when it changes (a running subagent finishing), then it closed as
-        Delete closes it (Hub.delete_family). At once, as Delete is (close)."""
+        """Delete confirmed on a parent: each of its children deleted, finished or not, and kept
+        off the inbox when it changes, except a running one, which stays at the top level
+        (store.spared), then it closed as Delete closes it (Hub.delete_family). At once, as
+        Delete is (close)."""
         self.item_sink.jump()
         self.repin.add(item_key(item))
         try:
@@ -3918,7 +3923,9 @@ class WheelhouseApp(App):
         except (SessionGone, KeyError) as e:   # ended or gone meanwhile
             self.notify(str(e), severity="warning")
             return
-        self.notify(f"deleted {item['ref']} and {len(family)} {'child' if len(family) == 1 else 'children'}"
+        n, kept = sum(not spared(it) for it in family), sum(map(spared, family))
+        self.notify(f"deleted {item['ref']}" + (f" and {n} {'child' if n == 1 else 'children'}" if n else "")
+                    + (f"; {kept} running kept at the top level" if kept else "")
                     + ("" if self.show_finished else ": F shows finished items"))
         self.refresh_data()
 

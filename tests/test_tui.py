@@ -6508,9 +6508,9 @@ async def test_children_sit_under_their_parent_and_its_control_hides_them(store,
 @pytest.mark.anyio
 @pytest.mark.both
 @pytest.mark.parametrize("answer, said, closed, desc", [
-    ("y", "and its 3 children? 2 still open and 1 unread.", True, "yes takes the parent and every child"),
-    ("n", "and its 3 children? 2 still open and 1 unread.", False, "no takes nothing"),
-    ("escape", "and its 3 children? 2 still open and 1 unread.", False, "Esc takes nothing"),
+    ("y", "and its 2 children? 1 still open and 1 unread.", True, "yes takes the parent and every child not running"),
+    ("n", "and its 2 children? 1 still open and 1 unread.", False, "no takes nothing"),
+    ("escape", "and its 2 children? 1 still open and 1 unread.", False, "Esc takes nothing"),
 ])
 async def test_delete_on_a_parent_asks_then_takes_its_children(store, sid, answer, said, closed, desc):
     with one_second():
@@ -6529,11 +6529,55 @@ async def test_delete_on_a_parent_asks_then_takes_its_children(store, sid, answe
         await pilot.press("delete")
         await pilot.pause()
         assert isinstance(app.screen, Confirm), desc
-        assert said in app.screen.prompt, desc
+        assert said in app.screen.prompt and "1 running child stays in the list" in app.screen.prompt, desc
         await pilot.press(answer)
         await pilot.pause()
     finished = [tui.standing(store.item(sid, r)) == "finished" for r in (q, *kids)]
-    assert finished == [closed] * 4, desc
+    assert finished == [closed, False, closed, closed], desc
+    assert (store.item(sid, kids[0])["parent_ref"] is None) == closed, f"{desc}: the running subagent orphaned"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("shape, said, kept, desc", [
+    # each child: (its parent's index, -1 for T1, and its status); kept: the indexes that stay, orphaned
+    ([(-1, "running"), (-1, "done")], "and its 1 child? It stays deleted, even once finished or changed. "
+     "1 running child stays in the list, at the top level.", {0}, "a running child stays, a finished one goes"),
+    ([(-1, "running"), (-1, "running")], "(build it)? 2 running children stay in the list, at the top level.",
+     {0, 1}, "only running children: the parent alone goes"),
+    ([(-1, "answered"), (0, "running"), (0, "done")], "and its 2 children? They stay deleted, even once finished "
+     "or changed. 1 running child stays", {1}, "a running grandchild under a finished child stays too"),
+])
+async def test_delete_on_a_parent_leaves_its_running_children(store, sid, shape, said, kept, desc):
+    """T125: Delete on a parent orphans its running children, at any depth, so nothing runs out of
+    sight; Ctrl+R brings the parent back and leaves them where they are."""
+    t = store.post_item(sid, "task", "build it", status="done")
+    refs = []
+    for up, status in shape:
+        kind = "question" if status == "answered" else "agent"
+        refs.append(store.post_item(sid, kind, "a child", status=status))
+        store.db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ?",
+                         (t if up < 0 else refs[up], sid, refs[-1]))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        await pilot.press("f")   # the parent stays in sight, finished, for Ctrl+R
+        await pilot.pause()
+        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(t))
+        await pilot.pause()
+        await pilot.press("delete")
+        await pilot.pause()
+        assert said in app.screen.prompt, f"{desc}: {app.screen.prompt}"
+        await pilot.press("y")
+        await pilot.pause()
+        for n, r in enumerate(refs):
+            item = store.item(sid, r)
+            assert (item["dismissed"] != "deleted", item["parent_ref"] is None) == (n in kept, n in kept), f"{desc}: {r}"
+        assert [r[1] for r in item_list_rows(app)].count(t) == 1, f"{desc}: the parent shown, finished"
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+    assert tui.standing(store.item(sid, t)) != "finished", f"{desc}: Ctrl+R brings the parent back"
+    assert all(store.item(sid, refs[n])["parent_ref"] is None for n in kept), f"{desc}: its orphans stay orphaned"
 
 
 @pytest.mark.anyio
@@ -6649,13 +6693,15 @@ async def test_delete_takes_agent_and_doc_children_for_good(store, sid, tmp_path
         await pilot.pause()
         await pilot.press("delete")
         await pilot.pause()
-        assert "its 2 children? 1 still open and 1 unread. They stay deleted" in app.screen.prompt
+        assert "its 1 child? 1 unread. It stays deleted" in app.screen.prompt
+        assert "1 running child stays in the list, at the top level." in app.screen.prompt
         await pilot.press("y")
         await pilot.pause()
+        assert item_list_rows(app) == [["demo", f"└ {agent}"]], "the running subagent stays, in its session's group"
         store.agent_status(sid, "agent-1", "done", "finished")   # as the transcript says it ended
         store.post_doc(sid, "the plan, v2", str(tmp_path / "plan.md"))
         await refresh(pilot, sid)
-        assert item_list_rows(app) == [], "the subagent finishing and the doc posted again bring neither back"
+        assert [r[1] for r in item_list_rows(app)] == [f"└ {agent}"], "the doc posted again doesn't come back"
 
 
 def test_items_from_an_older_daemon_have_no_parents():
@@ -6683,13 +6729,14 @@ async def test_delete_on_marked_rows_asks_once_and_takes_the_children(store, sid
         await pilot.press("delete")
         await pilot.pause()
         assert isinstance(app.screen, Confirm), "a marked parent asks first"
-        assert app.screen.prompt.startswith(f"Delete the 2 marked rows and the 2 children of {q}? "
-                                            "1 still open and 1 unread."), app.screen.prompt
+        assert app.screen.prompt.startswith(f"Delete the 2 marked rows and the 1 child of {q}? 1 unread."), \
+            app.screen.prompt
+        assert "1 running child stays in the list" in app.screen.prompt, app.screen.prompt
         await pilot.press("y")
         await pilot.pause()
         store.agent_status(sid, "agent-1", "done", "finished")
         await refresh(pilot, sid)
-        assert item_list_rows(app) == [], "both rows and the children gone, the subagent finishing too"
+        assert [r[1] for r in item_list_rows(app)] == [f"└ {agent}"], "both rows and the doc gone, the running subagent kept"
 
 
 @pytest.mark.anyio
