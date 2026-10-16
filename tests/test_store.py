@@ -875,3 +875,22 @@ def test_a_child_deleted_with_its_parent_stays_deleted(store, sid, tmp_path):
         "a subagent finishing, a doc posted again, a question changed: all still deleted"
     store.undelete(sid, agent)
     assert standing(store.item(sid, agent)) == "settled", "Ctrl+R brings one back"
+
+
+def test_order_writes_leave_updated_at(store, sid):
+    """The person's order (T114): placed in a group, and updated_at, which the inbox ranks by, as it was."""
+    a, b = store.post_item(sid, "task", "a"), store.post_item(sid, "task", "b")
+    before = [store.item(sid, r)["updated_at"] for r in (a, b)]
+    store.set_item_order("g", [(sid, b), (sid, a)])
+    assert [(store.item(sid, r)["pos"], store.item(sid, r)["pos_group"]) for r in (a, b)] == [(1, "g"), (0, "g")]
+    assert [store.item(sid, r)["updated_at"] for r in (a, b)] == before
+    store.set_session_order("manual", [sid])
+    assert (store.session(sid)["pos"], store.session(sid)["pos_group"]) == (0, "manual")
+
+
+def test_last_at_is_the_latest_word(store, sid):
+    store.db.execute("UPDATE sessions SET created_at = '2026-01-01T00:00:00+00:00' WHERE id = ?", (sid,))
+    assert store.sessions()[0]["last_at"] == "2026-01-01T00:00:00+00:00"
+    ref = store.post_item(sid, "task", "a")
+    store.db.execute("UPDATE items SET updated_at = '2026-02-01T00:00:00+00:00' WHERE ref = ?", (ref,))
+    assert store.sessions()[0]["last_at"] == "2026-02-01T00:00:00+00:00"

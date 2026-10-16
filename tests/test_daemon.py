@@ -818,7 +818,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 31 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 33 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 
@@ -893,6 +893,14 @@ NEW_ROUTES = [
     ("POST", "/relaunch-all", {"sids": ["{sid}"]}, lambda store, sid, r: told(r) == ["relaunching 1 session(s)"],
      "Relaunch all, of those the client showed"),
     ("POST", "/relaunch-all", {"sids": "x"}, lambda store, sid, r: r.status_code == 400, "a list of them"),
+    ("POST", "/order/items", {"group": "manual", "keys": [["{sid}", "T1"]]},
+     lambda store, sid, r: (store.item(sid, "T1")["pos"], store.item(sid, "T1")["pos_group"]) == (0, "manual"),
+     "a group of items in the person's order (T114)"),
+    ("POST", "/order/items", {"group": "manual", "keys": ["T1"]}, lambda store, sid, r: r.status_code == 400,
+     "keys, [session, ref] pairs"),
+    ("POST", "/order/sessions", {"group": "manual", "sids": ["{sid}"]},
+     lambda store, sid, r: store.session(sid)["pos_group"] == "manual", "sessions in the person's order"),
+    ("POST", "/order/sessions", {"group": 3, "sids": []}, lambda store, sid, r: r.status_code == 400, "group, a string"),
     ("GET", "/sessions/{sid}/fork", None, lambda store, sid, r: (r.json()["name"], r.json()["items"], r.json()["tree"]["linked"])
      == ("demo (fork)", [["T1", "task", "todo", "do it"]], False), "what Fork offers: the items that may move"),
     ("POST", "/sessions/{sid}/fork", {"refs": "T1"}, lambda store, sid, r: r.status_code == 400, "refs, a list"),

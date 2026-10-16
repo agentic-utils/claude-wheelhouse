@@ -6775,3 +6775,137 @@ async def test_a_marked_child_its_parent_took_is_not_said_twice(store, sid, tmp_
         await pilot.press("y")
         await pilot.pause()
     assert said and said[-1].startswith(f"deleted with its children {q}") and a not in said[-1], said
+
+
+# drag to reorder and header sort (T114, ordering.py)
+
+def item_refs(app) -> list[str]:
+    table = app.items_table
+    return [str(table.get_row(k)[0 if app.filter_sid else 1]).lstrip("└ ") for k in table.keys() if not k.endswith("|")]
+
+
+def header_x(table, name: str) -> int:
+    x = 0
+    for c in table.ordered_columns:
+        if c.key.value == name:
+            return x + 1
+        x += c.get_render_width(table)
+    raise KeyError(name)
+
+
+async def drag_row(pilot, table, row: int, to: int, release: bool = True) -> None:
+    """A row pressed, moved with the button held to another row, and let go there."""
+    header = table.header_height
+    await pilot.mouse_down(table, offset=(2, header + row))
+    x, y = table.content_region.x + 2, table.content_region.y + header + to
+    # a move with the button held, as a terminal sends one, at the screen's coordinates
+    pilot.app.post_message(events.MouseMove(None, x, y, 0, to - row, button=1, shift=False, meta=False,
+                                            ctrl=False, screen_x=x, screen_y=y))
+    await pilot.pause()
+    if release:
+        await pilot.mouse_up(table, offset=(2, header + to))
+        await pilot.pause()
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+async def test_drag_within_a_group_keeps_the_sort_and_across_turns_it_off(store, sid):
+    """Q102, Q103: three tasks running (one group under Status *) and a question open above
+    them. A drag among the tasks reorders them and the sort stays; a drag of a task above the
+    question turns ordering off, and the marker goes."""
+    q = store.post_item(sid, "question", "which?")
+    t1, t2, t3 = (store.post_item(sid, "task", f"t{n}", status="running") for n in (1, 2, 3))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        assert item_refs(app) == [q, t3, t2, t1], "today's order: newest first within each status"
+        selected = app.selected
+        await drag_row(pilot, table, 3, 1)
+        assert item_refs(app) == [q, t1, t3, t2], "t1 dragged to the head of its group"
+        assert app.selected == selected, "the click after the drag selects nothing"
+        assert "status *" in [str(c.label) for c in table.ordered_columns], "the sort stays"
+        assert store.item(sid, t1)["pos_group"] == store.item(sid, t2)["pos_group"] is not None
+        await drag_row(pilot, table, 2, 0)
+        assert item_refs(app) == [t3, q, t1, t2], "t3 above the question: across groups"
+        assert [str(c.label) for c in table.ordered_columns] == ["session", "ref", "status", "title"], "no marker"
+        assert store.setting("layout.sort.items") == ""
+        store.update_item(sid, t2, status="blocked")
+        app.refresh_data()
+        await pilot.pause()
+        assert item_refs(app) == [t3, q, t1, t2], "ordering off: a status change moves nothing"
+
+
+@pytest.mark.anyio
+async def test_drag_esc_cancels_and_alt_keys_move(store, sid):
+    t1, t2, t3 = (store.post_item(sid, "task", f"t{n}", status="running") for n in (1, 2, 3))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        await drag_row(pilot, table, 0, 2, release=False)
+        assert table.drop_line == (2, False), "the line under the row it would take the place of"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert table.dragging is None and item_refs(app) == [t3, t2, t1], "Esc: nothing moved"
+        assert store.item(sid, t3)["pos"] is None
+        table.focus()
+        table.move_cursor(row=0)
+        await pilot.press("alt+down")
+        await pilot.pause()
+        assert item_refs(app) == [t2, t3, t1], "Alt+Down: one place down"
+        await pilot.press("alt+up")
+        await pilot.pause()
+        assert item_refs(app) == [t3, t2, t1], "Alt+Up: back"
+
+
+@pytest.mark.anyio
+async def test_header_clicks_cycle_the_markers(store, sid):
+    store.post_item(sid, "task", "b", status="running")
+    store.post_item(sid, "task", "a", status="todo")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        seen = []
+        for column in ("status", "status", "status", "title", "title", "title"):
+            await pilot.click(table, offset=(header_x(table, column), 0))
+            await pilot.pause()
+            seen.append([str(c.label) for c in table.ordered_columns if " " in str(c.label)])
+        assert seen == [["status ▲"], ["status ▼"], ["status *"], ["title ▲"], ["title ▼"], ["status *"]]
+        await pilot.click(table, offset=(header_x(table, "title"), 0))
+        await pilot.pause()
+        assert [str(table.get_row(k)[3]) for k in table.keys()] == ["a", "b"], "title ▲"
+        assert store.setting("layout.sort.items") == "title▲", "kept for the next start"
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert "title ▲" in [str(c.label) for c in app.items_table.ordered_columns], "remembered"
+
+
+@pytest.mark.anyio
+async def test_session_dot_header_sorts_and_drag_turns_it_off(store, sid, tmp_path):
+    other = store.create_session(str(tmp_path), name="later")
+    store.post_item(other, "task", "fresh", status="running")   # the latest activity
+    store.db.execute("UPDATE items SET updated_at = '2999-01-01T00:00:00+00:00' WHERE session_id = ?", (other,))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.session_list
+        assert table.keys()[:2] == [sid, other], "creation order"
+        await pilot.click(table, offset=(1, 0))
+        await pilot.pause()
+        assert str(table.ordered_columns[0].label) == "*"
+        assert table.keys()[:2] == [other, sid], "*: the latest activity first"
+        await drag_row(pilot, table, 1, 0)
+        assert table.keys()[:2] == [sid, other], "dragged within its group (neither running)"
+        assert str(table.ordered_columns[0].label) == "*", "the sort stays"
+        parked = store.create_session(str(tmp_path), name="parked")
+        store.db.execute("UPDATE sessions SET parked = 1 WHERE id = ?", (parked,))
+        app.refresh_data()
+        await pilot.pause()
+        assert table.keys()[-1] == parked, "parked at the foot"
+        await drag_row(pilot, table, 0, table.row_count - 1)
+        assert str(table.ordered_columns[0].label) == "", "across groups: ordering off"
+        assert [k for k in table.final() if k] == [other, parked, sid], "as dropped: the parked one no longer sinks"
+        assert store.setting("layout.sort.sessions") == ""
