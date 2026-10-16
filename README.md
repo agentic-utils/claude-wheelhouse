@@ -193,7 +193,8 @@ session.
   status in the description, are green when it's live, cyan while it starts or relaunches,
   yellow when stalled (its Claude Code runs, but its wheelhouse MCP server hasn't checked in
   for 2 minutes), magenta while it's been asked to park or forget, red when dead (its Claude
-  Code isn't running) and grey when parked.
+  Code isn't running) and grey when parked. A row selected or under the mouse keeps its dot's colour, and an
+  item's status its own, on the row's shade.
   The selected session, highlighted, is the current one, and the inbox shows its items
   alone. A click on it or on the list's title, or `Esc`, unselects it: the inbox shows every session's items, the
   list has no highlight, the description says All sessions and the buttons under it are

@@ -4791,6 +4791,7 @@ async def test_a_lost_release_ends_the_drag(store, sid):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("on", ["hover", "cursor"])
 @pytest.mark.parametrize("status,desc", [
     ("live", "Live: green"),
     ("dead", "Available: red, not the table's green"),
@@ -4800,9 +4801,12 @@ async def test_a_lost_release_ends_the_drag(store, sid):
     ("forgetting", "Forgetting: magenta"),
     ("parking", "Parking: magenta"),
 ])
-async def test_a_hovered_sessions_dot_keeps_its_status_colour(store, sid, tmp_path, monkeypatch, status, desc):
-    """#16: the mouse over a session's row (not the cursor's) shades it, and its dot keeps its
-    status's colour: the hover style's foreground, the table's green, was laid over it."""
+async def test_a_sessions_dot_keeps_its_status_colour_under_the_mouse_or_cursor(store, sid, tmp_path, monkeypatch,
+                                                                                status, desc, on):
+    """#16: the mouse over a session's row shades it, and its dot keeps its status's colour: the
+    hover style's foreground, the table's green, was laid over it. T113: the cursor's row the
+    same, on the cursor's background: Doug, "keep it red or green regardless of whether
+    selected or not"; the cursor's white was laid over it."""
     other = store.create_session(str(tmp_path), name="other")
     monkeypatch.setattr(WheelhouseApp, "shown_status", lambda self, s: status if s == other else "live")
     app = WheelhouseApp(store)
@@ -4810,15 +4814,45 @@ async def test_a_hovered_sessions_dot_keeps_its_status_colour(store, sid, tmp_pa
         await pilot.pause()
         t = app.query_one("#session-list", DataTable)
         row = t.get_row_index(other)
-        t.move_cursor(row=t.get_row_index(sid))
         y = t.header_height + row
-        await pilot.hover(t, offset=(20, y))
+        if on == "cursor":
+            app.follow(other)   # selected: the cursor shows (D20)
+        else:
+            t.move_cursor(row=t.get_row_index(sid))
+            await pilot.hover(t, offset=(20, y))
         await pilot.pause()
-        assert t.hover_coordinate.row == row, f"{desc}: the mouse is on the row"
+        assert (t.hover_coordinate.row if on == "hover" else t.cursor_row) == row, f"{desc}: the {on} is on the row"
         dot = next(s.style for s in t._render_line(y, 0, t.size.width, t.rich_style) if "●" in s.text)
-        hover = t.get_component_rich_style("datatable--hover")
-        assert (dot.color.name, dot.bgcolor) == (tui.STATUS_STYLE[status].split()[-1], hover.bgcolor), \
-            f"{desc}: its own colour, on the hover's shade"
+        shade = t.get_component_rich_style(f"datatable--{on}")
+        assert (dot.color.name, dot.bgcolor) == (tui.STATUS_STYLE[status].split()[-1], shade.bgcolor), \
+            f"{desc} ({on}): its own colour, on the {on}'s shade"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status, colour, desc", [
+    ("open", "#ffd300", "an open question stays yellow"),
+    ("blocked", "#ff2a6d", "a blocked task stays red"),
+    ("done", None, "a finished one, dim, keeps no colour of its own: the cursor's white"),
+])
+async def test_the_selected_items_status_keeps_its_colour(store, sid, status, colour, desc):
+    """T113: the cursor's row in the item list keeps its status's colour, on the cursor's
+    background, where the cursor's white was laid over it; a cell with no colour takes the
+    cursor's."""
+    kind = "question" if status == "open" else "task"
+    store.post_item(sid, kind, "the item", status=status)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.action_show_finished(status == "done")
+        await pilot.pause()
+        t = app.query_one("#items", DataTable)
+        row = next(i for i, k in enumerate(t.keys()) if not k.startswith(BLANK) and not k.endswith("|"))
+        t.move_cursor(row=row)
+        await pilot.pause()
+        y = t.header_height + row
+        cell = next(s.style for s in t._render_line(y, 0, t.size.width, t.rich_style) if status in s.text)
+        cursor = t.get_component_rich_style("datatable--cursor")
+        assert (cell.color.name, cell.bgcolor) == (colour or cursor.color.name, cursor.bgcolor), desc
 
 
 @pytest.mark.anyio

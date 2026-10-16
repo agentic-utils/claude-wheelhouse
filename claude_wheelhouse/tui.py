@@ -559,11 +559,12 @@ class SinkList(DataTable):
     @functools.lru_cache(maxsize=32)
     def _get_styles_to_render_cell(self, is_header_cell: bool, is_row_label_cell: bool, is_fixed_style_cell: bool,
                                    hover: bool, cursor: bool, *rest) -> tuple[Style, Style]:
-        """DataTable's, but the mouse's row keeps its cells' own colours (a session's status
-        dot, an item's status): the hover style takes the table's colour (MATRIX) with its
-        background, and with the foreground's priority on the CSS, DataTable laid it over
-        every cell, so every status went green under the mouse. The cursor's row still takes
-        the cursor's colour. Cached as DataTable's is, which it clears by this name when its
+        """DataTable's, but the mouse's row and the cursor's keep their cells' own colours (a
+        session's status dot, an item's status) on the hover's or the cursor's background: the
+        hover style takes the table's colour (MATRIX) and the cursor's white, and with the
+        foreground's priority on the CSS, DataTable laid it over every cell, so every status
+        went green under the mouse and white under the cursor. A cell with no colour of its own
+        still takes theirs. Cached as DataTable's is, which it clears by this name when its
         looks change: DataTable's own, unwrapped, so there is the one cache to clear. With the
         cursor hidden (the session list with none selected, #16) no row is the cursor's, but the
         mouse's is still shaded, where DataTable would shade none."""
@@ -571,7 +572,7 @@ class SinkList(DataTable):
             cursor, rest = False, (True, *rest[1:])
         style, post = DataTable._get_styles_to_render_cell.__wrapped__(
             self, is_header_cell, is_row_label_cell, is_fixed_style_cell, hover, cursor, *rest)
-        if hover and not cursor:
+        if hover or cursor:
             post = Style.from_color(bgcolor=post.bgcolor)
         return style, post
 
