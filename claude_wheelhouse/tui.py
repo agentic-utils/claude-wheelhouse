@@ -1643,7 +1643,7 @@ class NewSession(Dialog):
         with Vertical(id="dialog"):
             yield Label("NEW SESSION", classes="dialog-title")
             with Horizontal(id="cwd-row"):
-                yield Input(value="" if elsewhere else os.getcwd(), placeholder="working directory", id="cwd")
+                yield Input(value="" if elsewhere else str(features.session_dir()), placeholder="working directory", id="cwd")
                 if not elsewhere:
                     yield Button("Browse…", id="browse")
             yield Input(placeholder="name (optional)", id="name")

@@ -4606,6 +4606,16 @@ def test_the_picker_shows_directories(tmp_path, name, shown, desc):
 
 
 @pytest.mark.anyio
+async def test_new_session_starts_in_the_session_dir(store, tmp_path, monkeypatch):
+    monkeypatch.setenv("WHEELHOUSE_SESSION_DIR", str(tmp_path))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await pilot.press("n")
+        await pilot.pause()
+        assert app.screen.query_one("#cwd", Input).value == str(tmp_path)
+
+
+@pytest.mark.anyio
 async def test_browse_fills_in_the_working_directory(store, tmp_path):
     (tmp_path / "repo").mkdir()
     app = WheelhouseApp(store)

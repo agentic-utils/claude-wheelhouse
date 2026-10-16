@@ -44,7 +44,12 @@ animation_fps() frames a second: --animation-fps, else WHEELHOUSE_ANIMATION_FPS,
 ANIMATION_FPS= in either .env, else 10 (Doug's Q82, D85). Fractions are allowed up to 30,
 0 turns animation off (the title and eyes drawn still), more than 30 is said once and
 taken as 30, and anything else is said once and taken as 10. Whatever the rate, everything
-moves at the same speed: frames are counted from the time elapsed (WheelhouseApp.animate)."""
+moves at the same speed: frames are counted from the time elapsed (WheelhouseApp.animate).
+
+The New session dialog starts in session_dir(): WHEELHOUSE_SESSION_DIR, else SESSION_DIR=
+in either .env, else the parent of the install directory (Doug's T123, Q115), as the
+wheelhouse's own clone is rarely where a session works. ~ is expanded; a directory that
+doesn't exist is said once and the default taken."""
 
 import os
 import sys
@@ -71,6 +76,7 @@ ANIMATION_KEY = "ANIMATION_FPS"
 ANIMATION_FPS = 10.0
 MAX_FPS = 30.0   # above it, said once and taken as it
 _animation_fps: str | None = None   # set by the command line (set_animation_fps)
+SESSION_DIR_KEY = "SESSION_DIR"
 _warned: set[str] = set()
 # the directory the package runs from: the checkout, as uv sync installs it (editable), so
 # the same .env whatever directory the app, the daemon or a tab is started in
@@ -250,3 +256,17 @@ def animation_fps() -> float:
         return MAX_FPS
     _say(f"claude-wheelhouse: {where} is {value!r}, not a number of frames a second: the animation runs at 10")
     return ANIMATION_FPS
+
+
+def session_dir() -> Path:
+    """The New session dialog's starting directory: WHEELHOUSE_SESSION_DIR, else SESSION_DIR=
+    in the install directory's .env, else the user's, else the install directory's parent.
+    ~ expanded; one that isn't a directory is said once, on stderr, and the default taken."""
+    default = INSTALL_DIR.parent
+    if (setting := given(None, "", SESSION_DIR_KEY)) is None:
+        return default
+    value, where = setting
+    if (path := Path(value).expanduser()).is_dir():
+        return path
+    _say(f"claude-wheelhouse: {where} is {value!r}, not a directory: new sessions start in {default}")
+    return default

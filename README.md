@@ -527,6 +527,10 @@ a key spelt any other way isn't read.
 | `USAGE_MODE` | `WHEELHOUSE_USAGE_MODE` | `--usage-mode oneshot\|persistent` | `oneshot` |
 | `KEEPALIVE_HOURS` | `WHEELHOUSE_KEEPALIVE_HOURS` | `--keepalive-hours N` | 8 (0 turns it off) |
 | `ANIMATION_FPS` | `WHEELHOUSE_ANIMATION_FPS` | `--animation-fps N` | 10 (0 turns animation off) |
+| `SESSION_DIR` | `WHEELHOUSE_SESSION_DIR` | none | the parent of the wheelhouse's clone |
+
+`SESSION_DIR` is the directory the New session dialog (`N`) starts in, `~` allowed. If it
+isn't a directory, the app says so once and uses the default.
 
 `ANIMATION_FPS` sets how many frames a second the title's shimmer, the session eyes, busy sessions' flashing dots and
 the stats bars move; fractions are allowed, up to 30. Every rate moves them at the same

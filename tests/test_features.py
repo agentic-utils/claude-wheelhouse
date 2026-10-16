@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -430,3 +431,29 @@ def test_the_plugin_runs_open_items_after_a_compaction():
     hooks = json.loads((launch.PLUGIN_DIR / "hooks" / "hooks.json").read_text())["hooks"]["SessionStart"]
     assert [h["matcher"] for h in hooks] == ["compact"]
     assert hooks[0]["hooks"][0]["command"].endswith("-m claude_wheelhouse open-items")
+
+
+@pytest.mark.parametrize("env, cwd_env, config_env, expected, warns, desc", [
+    (None, None, None, "parent", False, "nothing given: the install directory's parent"),
+    (None, "SESSION_DIR={a}", None, "a", False, "the install directory's .env"),
+    (None, None, "SESSION_DIR={b}", "b", False, "the user's .env"),
+    (None, "SESSION_DIR={a}", "SESSION_DIR={b}", "a", False, "the install directory's wins"),
+    ("{b}", "SESSION_DIR={a}", None, "b", False, "WHEELHOUSE_SESSION_DIR before .env"),
+    (None, "SESSION_DIR={missing}", None, "parent", True, "not a directory: said once, and the default"),
+    (None, "SESSION_DIR=~", None, "home", False, "~ expanded"),
+])
+def test_session_dir(tmp_path, monkeypatch, capsys, env, cwd_env, config_env, expected, warns, desc):
+    dirs = {"a": tmp_path / "a", "b": tmp_path / "b", "missing": tmp_path / "missing"}
+    dirs["a"].mkdir(), dirs["b"].mkdir()
+    cwd, config = tmp_path / "cwd.env", tmp_path / "config.env"
+    monkeypatch.setattr(features, "env_files", lambda: [cwd, config])
+    monkeypatch.setattr(features, "_warned", set())
+    for path, text in ((cwd, cwd_env), (config, config_env)):
+        if text:
+            path.write_text(text.format(**dirs) + "\n")
+    if env:
+        monkeypatch.setenv("WHEELHOUSE_SESSION_DIR", env.format(**dirs))
+    want = {"parent": features.INSTALL_DIR.parent, "home": Path.home(), **dirs}[expected]
+    assert [features.session_dir(), features.session_dir()] == [want, want], desc
+    err = capsys.readouterr().err
+    assert err.count("not a directory") == (1 if warns else 0), f"{desc}: said once at most: {err!r}"
