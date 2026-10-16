@@ -83,7 +83,10 @@ and how many unread (a decision unseen, a doc new or updated). Yes closes or dis
 parent and every child, whatever its status; No or Esc takes nothing. A parent that can't be
 closed (a running task) still says so, as before.
 
-Delete on marked rows asks the same, once for the whole selection, whenever any marked row
+Delete takes the children whatever their status: a finished one, dismissed already, would
+otherwise come back when posted again. It asks only when one of them isn't finished yet;
+with every one finished there is nothing to lose. Delete on marked rows asks the same, once
+for the whole selection, whenever any marked row
 has children, and deletes each such row with its children.
 
 Children deleted this way stay deleted (`Hub.delete_family`, one daemon route): each is
@@ -123,9 +126,13 @@ tables and code blocks:
 Moving between tasks costs about 0.05 s, and back to a doc already shown about 0.1 s. A
 change to the file, or to the pane's width, renders it again.
 
-A doc over 2000 characters is rendered on a worker thread (`Transcript.render_off_loop`),
-showing "rendering…" meanwhile; a render for a width or text since left is dropped, and the
-block laid out again. The loop's worst stall while showing a doc fell from 743 ms to 334 ms
+A doc over 2000 characters is rendered on a worker thread (`Transcript.render_off_loop`).
+On its first show "rendering…" stands in; after that its last render does, so a resize, a
+splitter drag or a rewrite keeps the reading place, which is restored in proportion once the
+new render lands. A render for a width or text since left is dropped, and the block laid
+out again. The doc's scroll keeps a stable scrollbar gutter, so its width never depends on
+whether it scrolls (a short placeholder hid the scrollbar, widened the view and brought it
+back, over and over). The loop's worst stall while showing a doc fell from 743 ms to 334 ms
 at 42 KB, and from 168 ms to 85 ms at 8 KB (a width change: 793 to 188 ms, 184 to 70 ms).
 What is left is the render thread holding the interpreter lock.
 

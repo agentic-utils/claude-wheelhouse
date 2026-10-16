@@ -6499,3 +6499,92 @@ async def test_a_long_doc_renders_off_the_loop(store, sid):
         key = ("doc", long, detail.size.width + 3)
         detail.rendered(key)   # rendered for a width since left
         assert key not in detail.warm, "a stale render dropped"
+
+
+async def rendered_off_loop(app, pilot) -> None:
+    """Every doc render under way finished, and what it brought laid out."""
+    for _ in range(100):
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        if not app.detail.warming:
+            break
+    await pilot.pause()
+
+
+@pytest.mark.anyio
+async def test_a_long_doc_keeps_its_reading_place_through_a_rewrite_and_a_resize(store, sid, tmp_path, monkeypatch):
+    doc = tmp_path / "plan.md"
+    doc.write_text("\n".join(f"## Section {i}\n\nprose **bold**\n\n- a\n- b\n" for i in range(300)))
+    m = store.post_doc(sid, "the plan", str(doc))
+    laid = []
+    real = tui.Transcript._layout
+    monkeypatch.setattr(tui.Transcript, "_layout", lambda self, w: (
+        laid.append(w) if self is getattr(app, "detail", None) and (self._laid is None or self._laid[0] != w) else None, real(self, w))[1])
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(f"└ {m}"))
+        await pilot.pause()
+        laid.clear()
+        await rendered_off_loop(app, pilot)
+        assert len(laid) <= 4, f"first show laid out a few times, not a scrollbar's thrash: {laid}"
+        assert app.detail_scroll.styles.scrollbar_gutter == "stable", "its width the same, scrolling or not"
+        scroll = app.detail_scroll
+        scroll.scroll_to(y=scroll.max_scroll_y // 2, animate=False)
+        await pilot.pause()
+        place, lines = scroll.scroll_y, scroll.max_scroll_y
+        doc.write_text(doc.read_text() + "\n\nmore\n")
+        app.refresh_data()
+        await pilot.pause()
+        assert abs(scroll.scroll_y - place) <= 2, "mid-render: the last render stands in, at the same place"
+        await rendered_off_loop(app, pilot)
+        assert abs(scroll.scroll_y - place) <= 2, "rewritten: the place kept"
+        await pilot.resize_terminal(120, 40)
+        await pilot.pause()
+        assert scroll.scroll_y > 0, "mid-render after a resize: not back at the top"
+        await rendered_off_loop(app, pilot)
+        assert abs(scroll.scroll_y / scroll.max_scroll_y - place / lines) < 0.02, "resized: the place kept, in proportion"
+        app.items_table.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.query_one("#docview-scroll").styles.scrollbar_gutter == "stable", "full screen too"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+async def test_delete_takes_finished_children_too_without_asking(store, sid, tmp_path):
+    (tmp_path / "plan.md").write_text("# Plan\n")
+    t = store.post_item(sid, "task", "design it", status="done")
+    m = store.post_doc(sid, "the plan", str(tmp_path / "plan.md"), t)
+    store.mark_seen(sid, m)
+    store.dismiss(sid, m)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        await pilot.press("delete")
+        await pilot.pause()
+        assert not isinstance(app.screen, Confirm), "nothing open or unread to lose: no question"
+        store.post_doc(sid, "the plan, v2", str(tmp_path / "plan.md"))
+        await refresh(pilot, sid)
+        assert item_list_rows(app) == [], "the doc posted again stays deleted"
+
+
+@pytest.mark.anyio
+async def test_a_marked_child_its_parent_took_is_not_said_twice(store, sid, tmp_path, monkeypatch):
+    with one_second():
+        q = store.post_item(sid, "question", "which db?")
+        a = store.post_item(sid, "agent", "look", status="done")   # settled: closable when marked
+    store.db.execute("UPDATE items SET parent_ref = ? WHERE ref = ?", (q, a))
+    app = WheelhouseApp(store)
+    said = []
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        monkeypatch.setattr(app, "notify", lambda text, **kw: said.append(text))
+        app.items_table.focus()
+        app.items_table.set_marks({f"{sid}|{q}", f"{sid}|{a}"})
+        await pilot.press("delete")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+    assert said and said[-1].startswith(f"deleted with its children {q}") and a not in said[-1], said
