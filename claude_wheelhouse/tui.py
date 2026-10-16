@@ -2372,7 +2372,7 @@ class WheelhouseApp(App):
     .panel:focus-within {{ border: round #ff2a6d; }}
     DataTable {{ background: #000000; color: {MATRIX}; }}
     DataTable > .datatable--header {{ background: #12122a; color: #05d9e8; text-style: bold; }}
-    DataTable > .datatable--cursor {{ background: #003b0f; color: #ffffff; }}
+    DataTable > .datatable--cursor {{ background: #004466; color: #ffffff; }}   /* deep cyan: clear on black, apart from the marked purple and the grey hover, green and status text readable on it */
     /* the splitters' defaults, and the least each pane keeps when one is dragged (Splitter) */
     #sessions-pane {{ width: 39; min-width: 39; }}   /* every button its caption; names take the room the other columns leave (name_room) */
     #items-pane {{ width: 1fr; min-width: 12; }}   /* 39 + 12 + 24 + the splitters: three columns on 80 */
