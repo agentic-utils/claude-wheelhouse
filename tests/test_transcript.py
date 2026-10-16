@@ -162,6 +162,13 @@ GENERAL = "[wheelhouse] from doug (general):\nship it"
     ([op("enqueue", GENERAL), op("popAll")], [], [], "the queue emptied"),
     ([op("enqueue", "older"), op("enqueue", GENERAL), op("dequeue")], [], ["ship it"], "dequeue takes the first"),
     ([op("enqueue", "[wheelhouse] from doug on Q1:\nyes")], [], [], "an answer on an item: its thread has it"),
+    ([op("enqueue", GENERAL), op("enqueue", GENERAL), queued(GENERAL), op("remove", GENERAL)], [], ["ship it"],
+     "two the same, the first folded into a turn: the second still held"),
+    ([op("enqueue", GENERAL), op("enqueue", GENERAL), op("dequeue"), user(GENERAL)], [], ["ship it"],
+     "two the same, the first taken as a turn: the second still held"),
+    ([op("enqueue", GENERAL), op("enqueue", GENERAL), queued(GENERAL)], [], ["ship it"],
+     "two the same, one seen taken with no record of it leaving: the other still held"),
+    ([op("enqueue", GENERAL)], ["ship it"] * 2, ["ship it"] * 2, "one held and one the same not yet passed on: both"),
 ])
 def test_a_message_on_its_way_shows_as_sending(recs, sending, expected, desc):
     shown = [md for who, md in transcript.blocks("demo", None, recs, sending=sending) if "you · sending" in md]

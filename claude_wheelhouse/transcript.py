@@ -16,6 +16,7 @@ prefix, and one a notification cut short is shown whole, from the wheelhouse's c
 
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -224,23 +225,34 @@ def held(recs: list[dict], full=None) -> list[str]:
     yet, oldest first: its queue as the transcript keeps it (queue-operation records: enqueue
     joins it, dequeue takes the first, remove and popAll take theirs). A prompt the session
     is seen to take, as a turn of its own or folded into one (QUEUED), is taken whatever
-    the queue's records say: they don't always balance."""
-    queue = []
+    the queue's records say: they don't always balance. Each take is paired with one prompt
+    leaving the queue, whichever is written first, so of two the same one stays held."""
+    queue, left, taken = [], Counter(), Counter()   # left the queue, not seen taken; and the reverse
     for rec in recs:
         kind, attached = rec.get("type"), rec.get("attachment") or {}
         if kind == "user" or (kind == "attachment" and attached.get("type") == QUEUED):
-            taken = _text((rec.get("message") or {}).get("content") if kind == "user" else attached.get("prompt"))
-            queue = [q for q in queue if q != taken.strip()]
+            text = _text((rec.get("message") or {}).get("content") if kind == "user" else attached.get("prompt")).strip()
+            if text in queue or left[text]:
+                if left[text]:
+                    left[text] -= 1
+                else:
+                    taken[text] += 1
         elif kind == "queue-operation":
             op, text = rec.get("operation"), _text(rec.get("content")).strip()
+            gone = [text] if op == "remove" and text in queue else queue[:1] if op == "dequeue" else \
+                list(queue) if op == "popAll" else []
             if op == "enqueue":
                 queue.append(text)
-            elif op == "dequeue":
-                queue = queue[1:]
-            elif op == "remove" and text in queue:
+            for text in gone:
                 queue.remove(text)
-            elif op == "popAll":
-                queue = []
+                if taken[text]:
+                    taken[text] -= 1
+                else:
+                    left[text] += 1
+    for text, n in taken.items():   # seen taken, its leaving unrecorded
+        for _ in range(n):
+            if text in queue:
+                queue.remove(text)
     return [said for text in queue if (said := persons(text, None, full))]
 
 
@@ -286,8 +298,13 @@ def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=
     elif tab and (waiting := waiting_in_tab(recs)):
         out.append(("warn", f"> ⚠ **Waiting for you in its tab:** {waiting}."))
     out += [entry_block(e) for e in entries(recs or [], full)]
-    on_way = held(recs or [], full)   # one passed on as these were read is Claude Code's already: shown once
-    on_way += [body for body in sending if body not in on_way]
+    on_way = held(recs or [], full)
+    shown = Counter(on_way)   # one passed on as these were read is Claude Code's already: shown once, two the same twice
+    for body in sending:
+        if shown[body]:
+            shown[body] -= 1
+        else:
+            on_way.append(body)
     out += [("you", f"**you · sending**\n\n{hard_breaks(body)}") for body in on_way]
     out += [("you", f"**you · queued**\n\n{hard_breaks(body)}") for body in queued]
     return out
