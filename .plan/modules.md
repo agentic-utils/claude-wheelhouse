@@ -121,18 +121,21 @@ its own distribution in this repo:
 - `make install` installs core `--with` both modules from the repo, so a normal install
   looks as now. The "reinstall with make install" card for a stale install stays.
 - Its slot moves from `inbox.side` to `left.middle`. `stats.render` already lays out to a
-  width; see question 1 on how narrow that is.
+  width. Column 1 and the Inbox column both default to 45 wide (Q113), and Detail takes the
+  rest. At 45, Stats compacts a little from its 53-wide layout.
 
 ## Design, a new module
 
 `modules/design/` (`claude-wheelhouse-design`), id `design`, one pane: **Decisions**.
 
-- **Where decisions come from.** The daemon side scans, every 10 s and on demand, the
-  `decisions/` and `docs/adr/` directories of the git roots of the sessions' working
-  directories, plus any listed in `modules.design.roots`. A file is a decision if its name
-  matches `NNNN-*.md`; status comes from its frontmatter `Status`, else its filename
-  (`0042-ACCEPTED-slug.md`, the tfu convention), else `?`. These directories are its
-  `doc_roots`. Route: `GET /m/design/decisions`. No database: the scan is cheap.
+- **Where decisions come from (Q114).** By default the daemon side scans `docs/adr/` in the
+  git root of each session's working directory, every 10 s and on demand. A session can
+  declare other locations instead, with a new MCP tool `set_doc_dirs(paths)`: paths relative
+  to its git root, stored on the session and replacing the default for that repo. A file is
+  a decision if its name matches `NNNN-*.md`. Its status comes from its frontmatter `Status`,
+  else from its filename (`0042-ACCEPTED-slug.md`, the tfu convention), else `?`. These
+  directories are its `doc_roots`. Route: `GET /m/design/decisions`. It needs no database,
+  because the scan is cheap.
 - **The pane.** A table: number, status, title, repo. PROPOSED and UNRESOLVED first, then
   the rest by number, newest first. Header sorts as the inbox's do.
 - **Selecting a row** shows the decision in the Detail pane's viewer (`show_doc`), as a doc
@@ -224,14 +227,10 @@ next block scrolls the viewer; a fake clock checks 1 s and 2 s re-render and tha
 causes exactly one scroll on each side. Daemon: write refused outside the allow-list, 409 on a
 changed mtime, `force` overwrites, the write is atomic.
 
-## Open questions
+## Settled questions
 
-1. **Column 1's width.** It is 39 wide by default, and Stats was laid out for 53 (the
-   gauges' reset times and the charts' buckets). Either keep 39 and let Stats compact
-   (reset times on a line of their own, half as many chart buckets), or widen column 1's
-   default to 55 so Stats looks as today and the Inbox column is 16 narrower. I lean
-   towards 55: the session list's names gain room too.
-2. **Where decisions are found.** The plan scans `decisions/` and `docs/adr/` in the
-   sessions' repos plus a configured list. Should `.plan/*.md` (this repo's design docs)
-   also list in the Decisions pane, as docs without a number or status? It would make
-   the pane useful here from day one, at the cost of mixing plans with decisions.
+1. **Column widths (Q113).** Column 1 and the Inbox column both default to 45. We'll see how
+   that works, and swapping lets either be tried elsewhere.
+2. **Where decisions are found (Q114).** `docs/adr/` by default, unless a session declares
+   other locations with `set_doc_dirs`. `.plan/` is not scanned unless a session declares
+   it.
