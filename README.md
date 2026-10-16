@@ -529,8 +529,10 @@ a key spelt any other way isn't read.
 | `ANIMATION_FPS` | `WHEELHOUSE_ANIMATION_FPS` | `--animation-fps N` | 10 (0 turns animation off) |
 | `SESSION_DIR` | `WHEELHOUSE_SESSION_DIR` | none | the parent of the wheelhouse's clone |
 
-`SESSION_DIR` is the directory the New session dialog (`N`) starts in, `~` allowed. If it
-isn't a directory, the app says so once and uses the default.
+`SESSION_DIR` is the directory the New session dialog (`N`) starts in. `~` is allowed, and a
+relative path is taken from your home directory (`SESSION_DIR=projects` is `~/projects`).
+If it isn't a directory, the dialog uses the default, and a line on the terminal the app
+was started from says why.
 
 `ANIMATION_FPS` sets how many frames a second the title's shimmer, the session eyes, busy sessions' flashing dots and
 the stats bars move; fractions are allowed, up to 30. Every rate moves them at the same

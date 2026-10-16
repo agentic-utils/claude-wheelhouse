@@ -48,7 +48,8 @@ moves at the same speed: frames are counted from the time elapsed (WheelhouseApp
 
 The New session dialog starts in session_dir(): WHEELHOUSE_SESSION_DIR, else SESSION_DIR=
 in either .env, else the parent of the install directory (Doug's T123, Q115), as the
-wheelhouse's own clone is rarely where a session works. ~ is expanded; a directory that
+wheelhouse's own clone is rarely where a session works. ~ is expanded and a relative path
+is taken from the home directory; a directory that
 doesn't exist is said once and the default taken."""
 
 import os
@@ -261,12 +262,13 @@ def animation_fps() -> float:
 def session_dir() -> Path:
     """The New session dialog's starting directory: WHEELHOUSE_SESSION_DIR, else SESSION_DIR=
     in the install directory's .env, else the user's, else the install directory's parent.
-    ~ expanded; one that isn't a directory is said once, on stderr, and the default taken."""
+    ~ expanded, a relative path taken from the home directory (the app is started from
+    anywhere); one that isn't a directory is said once, on stderr, and the default taken."""
     default = INSTALL_DIR.parent
     if (setting := given(None, "", SESSION_DIR_KEY)) is None:
         return default
     value, where = setting
-    if (path := Path(value).expanduser()).is_dir():
+    if (path := (Path.home() / Path(value).expanduser()).resolve()).is_dir():
         return path
     _say(f"claude-wheelhouse: {where} is {value!r}, not a directory: new sessions start in {default}")
     return default
