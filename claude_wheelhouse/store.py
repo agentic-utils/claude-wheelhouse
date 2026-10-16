@@ -995,12 +995,13 @@ class Store:
         return self._all("SELECT i.*, s.name AS session_name, s.parked AS session_parked FROM items i "
                          "JOIN sessions s ON s.id = i.session_id")
 
-    def set_item_order(self, group: str, keys: list[tuple[str, str]]) -> None:
-        """The person's order for a group of items, (session, ref) in order: each placed in
-        it. updated_at stays: it is what the inbox ranks by."""
+    def set_item_order(self, group: str, keys: list[tuple]) -> None:
+        """The person's order for a group of items, (session, ref) in order, or (session, ref,
+        its own group) where each has its own (Status *'s tiers, ordering.arrange): each placed.
+        updated_at stays: it is what the inbox ranks by."""
         with self.tx() as db:
             db.executemany("UPDATE items SET pos = ?, pos_group = ? WHERE session_id = ? AND ref = ?",
-                           [(i, group, sid, ref) for i, (sid, ref) in enumerate(keys)])
+                           [(i, k[2] if len(k) > 2 else group, k[0], k[1]) for i, k in enumerate(keys)])
 
     def set_session_order(self, group: str, sids: list[str]) -> None:
         """The person's order for a group of sessions, each placed in it."""

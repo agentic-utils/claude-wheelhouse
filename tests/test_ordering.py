@@ -14,7 +14,8 @@ def item(n, ref, status, kind="task", title="", sid="s1", pos=None, group=None, 
 
 def order(spec, items, names=None):
     keyed = {f"{it['session_id']}|{it['ref']}": ordering.item_key(spec, it, names=names) for it in items}
-    return [k.split("|")[1] for k in sorted(keyed, key=lambda k: keyed[k][0])], {k.split("|")[1]: v[1] for k, v in keyed.items()}
+    ranks = ordering.arrange(spec, keyed)
+    return [k.split("|")[1] for k in sorted(keyed, key=ranks.get)], {k.split("|")[1]: v[1] for k, v in keyed.items()}
 
 
 @pytest.mark.parametrize("spec, column, then, desc", [
@@ -97,9 +98,9 @@ def test_drag_within_then_status_changes():
     got, tokens = order("status*", [a, b, c])
     assert got == ["T2", "T1", "T3"]
     group, new = ordering.drop(got, tokens, "T1", before="T2")
-    assert group == tokens["T1"] and new == ["T1", "T2"]
+    assert group == "status*|0" and new == ["T1", "T2", "T3"], "the band, each to be placed with its own tier"
     for i, ref in enumerate(new):
-        ({"T1": a, "T2": b}[ref]).update(pos=i, pos_group=group)
+        ({"T1": a, "T2": b, "T3": c}[ref]).update(pos=i, pos_group=tokens[ref])
     assert order("status*", [a, b, c])[0] == ["T1", "T2", "T3"], "within its group: the sort stays"
     a.update(status="todo", updated_at=T0.format(9))   # a status change is a write: the newest
     assert order("status*", [a, b, c])[0] == ["T2", "T1", "T3"], "its key changed: the top of its new group"
@@ -133,3 +134,34 @@ def test_sessions_off_keep_creation_order_until_placed():
 ])
 def test_sunk_keys(order_, settled, want, desc):
     assert ordering.sunk_keys(order_, settled) == want, desc
+
+
+def test_doug_example_drop_anywhere_in_the_band():
+    """T121 (Q108 B): A and B in one status, C and D in another, E and F in a third, all
+    active. B dragged between E and F keeps Status * on and stays there; once B's status
+    changes it goes in by status."""
+    rows = {r: item(n, r, s) for n, (r, s) in enumerate(
+        [("A", "blocked"), ("B", "blocked"), ("C", "running"), ("D", "running"), ("E", "todo"), ("F", "todo")], 1)}
+
+    def shown():
+        raw = {r: ordering.item_key("status*", it) for r, it in rows.items()}
+        ranks = ordering.arrange("status*", raw)
+        return sorted(rows, key=ranks.get), {r: token for r, (_, token) in raw.items()}
+
+    order, tokens = shown()
+    assert order == ["B", "A", "D", "C", "F", "E"]
+    group, new = ordering.drop(order, tokens, "B", after="F")
+    assert group == "status*|0" and new == ["A", "D", "C", "F", "B", "E"], "within the band: * stays"
+    for i, r in enumerate(new):
+        rows[r].update(pos=i, pos_group=tokens[r])   # each placed with its own tier
+    assert shown()[0] == ["A", "D", "C", "F", "B", "E"], "B stays where it was dropped"
+    rows["B"].update(status="running", updated_at=T0.format(30))
+    assert shown()[0] == ["A", "B", "D", "C", "F", "E"], "its status changed: in by status, at the head of it"
+    rows["G"] = item(9, "G", "open", "question", at=40)
+    assert shown()[0] == ["G", "A", "B", "D", "C", "F", "E"], "a newcomer goes in by status too: an open question first"
+
+
+def test_a_drop_into_another_band_is_across():
+    rows = [item(1, "T1", "running"), item(2, "T2", "running"), item(3, "T3", "done")]
+    got, tokens = order("status*", rows)
+    assert ordering.drop(got, tokens, "T2", after="T3")[0] is None

@@ -132,6 +132,39 @@ def item_key(spec: str, item, processing=frozenset(), busy=frozenset(), names=No
     return keyed(item, token, band, Desc(value) if mark == DOWN else value, tie)
 
 
+def drag_group(token: str) -> str:
+    """The group a drag stays within to keep the sort: its row's group, but under Status *
+    the whole band (T121, Q108 B): a token there is "status*|<band>|<tier>", and a drop
+    anywhere in the band keeps * on."""
+    return token.rsplit("|", 1)[0] if token.startswith(ITEMS_DEFAULT + "|") else token
+
+
+def arrange(spec: str, raw: dict) -> dict:
+    """Each row's rank from its item_key (raw: key -> (rank, token)). Under Status * (T121) a
+    band keeps the person's order: the rows placed in it (each placed with its tier at the
+    drop: placed while its status keeps that tier) by pos, and each row not placed (new, or
+    its status changed since) put in by status, before the first placed row of its tier or a
+    later one, else at the band's foot. The ranks hold for any subset (one session's view),
+    as they go by the placed rows of the whole list. Other sorts: their ranks as they are."""
+    if spec != ITEMS_DEFAULT:
+        return {k: rank for k, (rank, _) in raw.items()}
+    placed: dict[int, list] = {}
+    for k, (rank, _) in raw.items():
+        if rank[2]:
+            placed.setdefault(rank[0], []).append((rank[3], rank[1]))
+    for rows in placed.values():
+        rows.sort()
+    out = {}
+    for k, (rank, _) in raw.items():
+        band, tier, flag, x = rank
+        if flag:
+            out[k] = (band, x, 1)
+        else:
+            anchor = next((pos for pos, t in placed.get(band, ()) if t >= tier), float("inf"))
+            out[k] = (band, anchor, 0, tier, x)
+    return out
+
+
 def session_key(spec: str, s, running: bool, at: int) -> tuple[tuple, str]:
     """A session's sort key and its group's token. Ordering off: unparked then parked, in
     creation order (at, its place in the store's list) for those not placed; under dot*, running
@@ -146,7 +179,8 @@ def session_key(spec: str, s, running: bool, at: int) -> tuple[tuple, str]:
 def drop(order: list, tokens: dict, moved, before=None, after=None, shown=None) -> tuple[str | None, list]:
     """A unit (moved) dropped before the visible unit `before`, or after `after`, in the
     whole list's order (order: every row's key, as sorted now), next to it. Within its group, the group's
-    token and the group's rows in their new order; across groups, None and every row in the
+    drag group (drag_group) and its rows in their new order, each to be placed with its own
+    token; across groups, None and every row in the
     new order. A drop where it already was changes nothing: ("", []). Within or across goes
     by its neighbours where it lands as the list shows them (shown: the visible rows a drag
     moves, in order), else in the whole order."""
@@ -154,17 +188,17 @@ def drop(order: list, tokens: dict, moved, before=None, after=None, shown=None) 
     anchor, ahead = (before, True) if before is not None else (after, False)
     i = rest.index(anchor) + (0 if ahead else 1)
     new = rest[:i] + [moved] + rest[i:]
-    group = tokens[moved]
+    group = drag_group(tokens[moved])
     # within, if a neighbour where it lands is of its group: the foot of its group is also
     # the head of the next one's
     seen = [k for k in (shown if shown is not None else order) if k != moved and k in tokens]
     j = seen.index(anchor) + (0 if ahead else 1) if anchor in seen else None
     near = seen[max(0, j - 1):j + 1] if j is not None else rest[max(0, i - 1):i + 1]
-    within = group in {tokens[k] for k in near}
+    within = group in {drag_group(tokens[k]) for k in near}
     if new == order:
         return "", []
     if within:
-        return group, [k for k in new if tokens[k] == group]
+        return group, [k for k in new if drag_group(tokens[k]) == group]
     return None, new
 
 

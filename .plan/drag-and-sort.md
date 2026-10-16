@@ -31,11 +31,20 @@ Decided:
 
 ## Groups, and the two kinds of drag
 
-A **group** is the rows that share the sort's key. Under Status `*` that is today's
-status tiers (`store.RANK`, by `inbox_rank`'s first element); under a column sort, the rows
-with equal values in that column. The active, settled and finished bands are part of
-every sort's key, so a group never spans two bands. Each group has a token
+A **group** is the rows that share the sort's key: under a column sort, the rows with
+equal values in that column. The active, settled and finished bands are part of every
+sort's key, so a group never spans two bands. Each group has a token
 (`<spec>|<band>|<value>`), and a row is **placed** while its `pos_group` is its group's token.
+
+Under Status `*` the group a drag stays within is the whole band (T121, Doug's Q108 B):
+"dragging within the band keeps the ordering in force", even past rows of another status.
+Each row of the band is placed with its own status tier (`store.RANK`, `inbox_rank`'s first
+element: `status*|<band>|<tier>`), so it stays where it was dropped while its status keeps
+that tier. A row not placed (new, or its status changed since) goes in by status:
+before the first placed row of its tier or a later one, else at the band's foot
+(`ordering.arrange`). Doug's example: A and B in one status, C and D in another, E and F in
+a third. B dragged between E and F keeps `*` on and stays there; when B's status next
+changes it goes in by status. `/order/items` takes each key's own group as a third element.
 
 - **A drag within its group** (a neighbour where it lands is of its group) keeps the sort.
   Every row of the group (all sessions', not only those in view) is written with the

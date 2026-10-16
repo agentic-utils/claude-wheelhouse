@@ -3120,7 +3120,12 @@ class WheelhouseApp(App):
             self.pin = (key, self.ranks[key], self.rank_tokens[key]) if key in self.ranks else None
         keyed = [(item_key(it), it) for it in items]   # (row key, item): each key made once
         found = {key: ordering.item_key(self.item_sort, it, processing, busy, names) for key, it in keyed}
-        ranks = {key: rank for key, (rank, _) in found.items()}
+        everything = found
+        if self.item_sort == ordering.ITEMS_DEFAULT:   # ranks from the whole list's placed rows (arrange)
+            everything = {item_key(it): ordering.item_key(self.item_sort, it, processing, busy, names)
+                          for it in self.client.all_items()} | found
+        arranged = ordering.arrange(self.item_sort, everything)
+        ranks = {key: arranged[key] for key in found}
         tokens = {key: token for key, (_, token) in found.items()}
         if self.pin and self.pin[0] in ranks:
             key = self.pin[0]
@@ -3208,12 +3213,15 @@ class WheelhouseApp(App):
         if table is self.items_table:
             _, processing, queued, awaiting = self.client.inbox(self.filter_sid)
             names = self.session_names()
-            keyed = {item_key(it): ordering.item_key(self.item_sort, it, processing, queued | awaiting, names)
-                     for it in self.client.all_items()}
+            raw = {item_key(it): ordering.item_key(self.item_sort, it, processing, queued | awaiting, names)
+                   for it in self.client.all_items()}
+            arranged = ordering.arrange(self.item_sort, raw)
+            keyed = {k: (arranged[k], token) for k, (_, token) in raw.items()}
             shown = {k: (self.ranks[k], self.rank_tokens[k]) for k in self.ranks}
         else:
             keyed = self.session_keys()
             shown = {k: (self.session_ranks[k], self.session_tokens[k]) for k in self.session_ranks}
+        own = {k: token for k, (_, token) in keyed.items()}   # each row's group now, to place it in
         # the order as it shows: the selected row where its pin holds it, not where it would go
         keyed.update({k: v for k, v in shown.items() if k in keyed})
         if moved not in keyed or (before or after) not in keyed:   # gone meanwhile
@@ -3225,9 +3233,9 @@ class WheelhouseApp(App):
             return
         which = "items" if table is self.items_table else "sessions"
         across = group is None
-        if which == "items":
+        if which == "items":   # each placed with its own group now: under Status *, its tier (arrange)
             done = self.client.reorder_items(ordering.MANUAL if across else group,
-                                             [tuple(k.split("|", 1)) for k in new])
+                                             [tuple(k.split("|", 1)) + (() if across else (own[k],)) for k in new])
         else:
             done = self.client.reorder_sessions(ordering.MANUAL if across else group, new)
         if not done.ok:   # nothing written: the sort, and every row, as they were
@@ -3241,14 +3249,16 @@ class WheelhouseApp(App):
         # stays held in the group it shows in, at its new place there (its own key may be
         # another group's by now: ranked_keyed's pin, pinned_session_keys')
         pin, repin = (self.pin, self.repin) if which == "items" else (self.session_pin, self.session_repin)
-        if not across and pin and pin[0] in new:
+        if not across and pin and pin[0] in new and not (which == "items" and self.item_sort == ordering.ITEMS_DEFAULT):
             band, value, *_ = pin[1]
             held = (pin[0], (band, value, 1, new.index(pin[0])), *pin[2:])
             if which == "items":
                 self.pin = held
             else:
                 self.session_pin = held
-        repin.update(k for k in new if not (pin and k == pin[0] and not across))
+        # (under Status * it is placed with its tier now, where it was dropped: it goes at once)
+        held = pin and not across and pin[0] in new and not (which == "items" and self.item_sort == ordering.ITEMS_DEFAULT)
+        repin.update(k for k in new if not (held and k == pin[0]))
         self.paint_items() if which == "items" else self.paint_sessions()
 
     def keep_unsent(self, box, old, new) -> None:

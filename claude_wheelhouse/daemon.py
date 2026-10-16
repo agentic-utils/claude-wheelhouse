@@ -985,11 +985,12 @@ class Daemon:
         return group
 
     def order_items(self, request: Request, body: dict) -> Done:
-        """The person's order for a group of items: {group, keys: [[session, ref], ...]}."""
+        """The person's order for a group of items: {group, keys: [[session, ref], ...]}, a
+        key's own group third where each has its own."""
         keys = body.get("keys")
-        if not (isinstance(keys, list) and all(isinstance(k, list) and len(k) == 2
+        if not (isinstance(keys, list) and all(isinstance(k, list) and len(k) in (2, 3)
                                                 and all(isinstance(p, str) for p in k) for k in keys)):
-            raise Refused(400, "keys must be a list of [session, ref] pairs")
+            raise Refused(400, "keys must be a list of [session, ref] pairs, each with its group or none")
         return self.hub.reorder_items(self.group_of(body), [tuple(k) for k in keys])
 
     def order_sessions(self, request: Request, body: dict) -> Done:

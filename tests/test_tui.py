@@ -6799,7 +6799,8 @@ async def test_a_marked_child_its_parent_took_is_not_said_twice(store, sid, tmp_
 
 def item_refs(app) -> list[str]:
     table = app.items_table
-    return [str(table.get_row(k)[0 if app.filter_sid else 1]).lstrip("└ ") for k in table.keys() if not k.endswith("|")]
+    # the order once any move has ended (Sink): a settled row rising to its place falls into it over 0.4 s
+    return [str(table.get_row(k)[0 if app.filter_sid else 1]).lstrip("└ ") for k in table.final() if k and not k.endswith("|")]
 
 
 def header_x(table, name: str) -> int:
@@ -6827,31 +6828,38 @@ async def drag_row(pilot, table, row: int, to: int, release: bool = True) -> Non
 
 @pytest.mark.anyio
 @pytest.mark.both
-async def test_drag_within_a_group_keeps_the_sort_and_across_turns_it_off(store, sid):
-    """Q102, Q103: three tasks running (one group under Status *) and a question open above
-    them. A drag among the tasks reorders them and the sort stays; a drag of a task above the
-    question turns ordering off, and the marker goes."""
+async def test_drag_within_the_band_keeps_the_sort_and_across_turns_it_off(store, sid):
+    """Q102, Q103, Q108 B (T121): a question open and three tasks running, the active band
+    under Status *, and a task done below. A drag within the band keeps * on, even past
+    another status: the row stays where it was dropped until its status changes, then goes
+    in by status. A drag into the settled band turns ordering off, and the marker goes."""
     q = store.post_item(sid, "question", "which?")
     t1, t2, t3 = (store.post_item(sid, "task", f"t{n}", status="running") for n in (1, 2, 3))
+    done = store.post_item(sid, "task", "d", status="done")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         table = app.items_table
-        assert item_refs(app) == [q, t3, t2, t1], "today's order: newest first within each status"
+        assert item_refs(app) == [q, t3, t2, t1, done], "today's order: newest first within each status"
         selected = app.selected
         await drag_row(pilot, table, 3, 1)
-        assert item_refs(app) == [q, t1, t3, t2], "t1 dragged to the head of its group"
+        assert item_refs(app) == [q, t1, t3, t2, done], "t1 dragged to the head of its status"
         assert app.selected == selected, "the click after the drag selects nothing"
-        assert "status *" in [str(c.label) for c in table.ordered_columns], "the sort stays"
-        assert store.item(sid, t1)["pos_group"] == store.item(sid, t2)["pos_group"] is not None
         await drag_row(pilot, table, 2, 0)
-        assert item_refs(app) == [t3, q, t1, t2], "t3 above the question: across groups"
-        assert [str(c.label) for c in table.ordered_columns] == ["session", "ref", "status", "title"], "no marker"
-        assert store.setting("layout.sort.items") == ""
-        store.update_item(sid, t2, status="blocked")
+        assert item_refs(app) == [t3, q, t1, t2, done], "t3 above the question: still within the band"
+        assert "status *" in [str(c.label) for c in table.ordered_columns], "the sort stays"
+        store.update_item(sid, t3, status="blocked")
         app.refresh_data()
         await pilot.pause()
-        assert item_refs(app) == [t3, q, t1, t2], "ordering off: a status change moves nothing"
+        assert item_refs(app) == [q, t3, t1, t2, done], "its status changed: in by status, after the question"
+        await drag_row(pilot, table, 2, 4)
+        assert item_refs(app) == [q, t3, t2, done, t1], "t1 into the settled band: across"
+        assert [str(c.label) for c in table.ordered_columns] == ["session", "ref", "status", "title"], "no marker"
+        assert store.setting("layout.sort.items") == ""
+        store.update_item(sid, t2, status="todo")
+        app.refresh_data()
+        await pilot.pause()
+        assert item_refs(app) == [q, t3, t2, done, t1], "ordering off: a status change moves nothing"
 
 
 @pytest.mark.anyio

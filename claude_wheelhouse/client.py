@@ -743,8 +743,8 @@ class RemoteClient:
         done = self.order("/order/items", {"group": group, "keys": [list(k) for k in keys]})
         if done.ok:
             for i, key in enumerate(keys):
-                if (it := self.by_key.get(tuple(key))) is not None:
-                    it["pos"], it["pos_group"] = i, group
+                if (it := self.by_key.get(tuple(key[:2]))) is not None:
+                    it["pos"], it["pos_group"] = i, key[2] if len(key) > 2 else group
         return done
 
     def reorder_sessions(self, group: str, sids: list[str]) -> Done:

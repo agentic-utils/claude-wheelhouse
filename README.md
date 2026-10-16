@@ -358,8 +358,10 @@ The session list starts sorted: running sessions first, then by their latest act
 on the dot column); a click on that header goes to your own order, and another back. The other headers there
 still show every session's items, as `Esc` does. Drag a row with the mouse, or move the
 highlighted one with `Alt+Up` and `Alt+Down`, to reorder. A move among rows that share its
-sort key (the same status, under Status `*`) keeps the sort, and your order breaks the tie
-until the row's key changes. A move past them turns ordering off: the marker goes, the order
+sort key keeps the sort, and your order breaks the tie until the row's key changes. Under
+Status `*` that is the whole band (active, or settled): a row dropped anywhere in it stays
+where you put it, `*` still on, and goes back in by status when its status next changes,
+as new rows come in by status. A move past them (into another band) turns ordering off: the marker goes, the order
 as it shows becomes yours, and nothing moves by itself (not even a task finishing) until you
 click a header again; new rows then arrive at the top. A row's children move with it.
 `Esc` during a drag puts it back. Each TUI remembers its sort for its next start; the order
