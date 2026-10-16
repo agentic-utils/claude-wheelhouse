@@ -1942,6 +1942,9 @@ class KeysHelp(Dialog):
 class WheelhouseApp(App):
     CSS = f"""
     Screen {{ background: #0a0a12; }}
+    /* every dialog over the screen it was opened on, which shows through, and centred. After
+       Screen, which matches a dialog too: its opaque background blanked the screen behind */
+    Dialog {{ align: center middle; background: #0a0a12 60%; }}
     #title {{ height: 1; background: #12122a; content-align: center middle; }}
     #main {{ height: 1fr; }}   /* leaves room for the send bar and footer: no screen scroll */
     .panel {{ background: #000000; color: {MATRIX}; border: round #7b61ff; }}
@@ -1990,21 +1993,19 @@ class WheelhouseApp(App):
     .dialog-prompt {{ width: 1fr; }}   /* wraps, the dialog growing with it */
     #dialog TextArea {{ height: 8; }}
     .buttons {{ height: 3; }}
-    RenameSession {{ align: center middle; }}
     #dialog.wide {{ width: 120; }}
     #adopt-list {{ height: 16; }}
     #adopt-hint {{ color: #ffd300; }}
     #fork-items {{ height: auto; max-height: 12; background: #000000; }}
     #fork-where {{ background: #000000; }}
     #fork-warning {{ color: #ffd300; }}
-    NewSession, PickDirectory, Confirm, Choice, AdoptSession, ForkSession, KeysHelp, ChooseModel {{ align: center middle; }}
     #model-row {{ height: auto; }}
     #model-row Select {{ width: 1fr; }}
     #models {{ height: auto; max-height: 8; background: #000000; }}
     #cwd-row {{ height: auto; }}
     #cwd {{ width: 1fr; }}
     #folders {{ height: 20; background: #000000; }}
-    TutorialOffer {{ align: center top; }}
+    TutorialOffer {{ align: center top; }}   /* a line across the top, not a box: after Dialog */
     #offer {{ width: 100%; height: auto; background: #12122a; color: #e8e8e8; padding: 0 1; }}
     #keys-dialog {{ width: 100; max-width: 100%; height: 90%; background: #000000; color: {MATRIX};
                     border: thick #ff2a6d; padding: 0 1; }}

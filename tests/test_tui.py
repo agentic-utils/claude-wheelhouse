@@ -5067,6 +5067,40 @@ async def test_a_long_prompt_wraps_in_its_dialog(store, sid, dialog, height, des
         assert LONG_PROMPT in " ".join(inside.split()), desc
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("make, desc", [
+    (lambda app, sid, cwd: tui.NewSession(), "New session"),
+    (lambda app, sid, cwd: tui.PickDirectory(cwd), "the folder picker"),
+    (lambda app, sid, cwd: RenameSession("demo"), "Rename"),
+    (lambda app, sid, cwd: tui.ChooseModel("demo", None), "the model"),
+    (lambda app, sid, cwd: tui.AdoptSession([]), "Adopt"),
+    (lambda app, sid, cwd: tui.ForkSession(app.client.fork_plan(sid)), "Fork"),
+    (lambda app, sid, cwd: CompactSession("demo"), "Compact: was top-left"),
+    (lambda app, sid, cwd: ParkSession("demo", True), "Park: was top-left"),
+    (lambda app, sid, cwd: ForgetChoice("Forget demo?", True), "Forget: was top-left"),
+    (lambda app, sid, cwd: Confirm("Relaunch demo?"), "a confirmation"),
+    (lambda app, sid, cwd: Choice("Force it?"), "a choice"),
+    (lambda app, sid, cwd: RelaunchChoice("Relaunch demo?"), "Relaunch's choice: was top-left"),
+    (lambda app, sid, cwd: tui.KeysHelp(), "the keys"),
+])
+async def test_a_dialog_is_centred_over_the_screen(store, sid, tmp_path, make, desc):
+    """T115, Doug: "I'd prefer them rendered on top of the screen ... always center them".
+    The app's Screen rule matched every dialog, its opaque background blanking the screen
+    behind; the dialogs missing from the lists that centred them sat in the top left."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(make(app, sid, str(tmp_path)))
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, tui.ModalScreen), f"{desc}: a modal screen"
+        assert dialog.styles.background.a < 1, f"{desc}: the screen behind shows through"
+        box = dialog.children[0].region
+        assert (abs(box.x * 2 + box.width - 160) <= 1, abs(box.y * 2 + box.height - 40) <= 1) == (True, True), \
+            f"{desc}: centred, at {box}"
+        assert "demo" in app.export_screenshot(), f"{desc}: the session list is still in sight"
+
+
 def focused_id(app) -> str | None:
     return app.focused.id if app.focused is not None else None
 

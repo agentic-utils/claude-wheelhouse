@@ -303,7 +303,7 @@ selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued o
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
 as answered, a decision as seen), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
-A dialog asking yes or no takes `Y` or `N` (`Esc` is no, and so is `Enter`, as No has the focus).
+Every dialog opens centred over the screen, which stays in sight behind it. A dialog asking yes or no takes `Y` or `N` (`Esc` is no, and so is `Enter`, as No has the focus).
 
 `Tab` goes round the panes: the session list, the items, the answer box, then the conversation (one
 stop, where the arrows, `PgUp`, `PgDn`, `Home` and `End` scroll it), and `Shift+Tab` goes back.
