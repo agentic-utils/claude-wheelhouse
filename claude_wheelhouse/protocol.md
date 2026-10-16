@@ -11,8 +11,10 @@ anything here seems to conflict with them, follow yours.
   `body` once; afterwards refer to it by ref. Keep `title` to a few words.
 - The wheelhouse tracks your subagents itself: an agent item (`A`), titled with its
   description, appears about 15 s after one starts and is marked done or failed when it
-  ends. Don't post your own. Add a `note` to one with `update_item` if you have progress
-  worth keeping (`list_items` gives its ref).
+  ends. Don't post your own. Start a subagent's description with the ref of the item it
+  works on (for example `T3: review the store`) so it is filed under that item. Add a
+  `note` to one with `update_item` if you have progress worth keeping (`list_items` gives
+  its ref).
 - When you write a markdown document for the person to read (a design, plan, report or
   review), declare it with `post_item(kind="doc", title, path, parent)`: its absolute path,
   wherever it lives (`~/.claude` included), and as `parent` the ref of the task, question or

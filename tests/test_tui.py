@@ -6352,33 +6352,31 @@ async def test_a_doc_sits_under_its_parent_and_opens_rendered(store, sid, tmp_pa
         app.items_table.move_cursor(row=1)
         await pilot.pause()
         assert app.selected == (sid, m)
-        pane = app.query_one("#doc-pane")
-        assert pane.display and not app.query_one("#detail-scroll").display, "the doc in place of the thread"
         assert not app.query_one("#answer").display, "no answer box on a doc"
-        assert str(doc) in str(app.query_one("#doc-head").render())
-        assert "Build it" in app.query_one("#doc-view").document.source
+        assert str(doc) in app._detail_text and "Build it **well**" in app._detail_text, "its path, then the file"
+        assert "Build it well" in "\n".join(app.detail.render_line(y).text for y in range(12)), "rendered"
         dwell(app)
         assert store.item(sid, m)["status"] == "read", "in sight for the dwell: read"
         doc.write_text("# The plan\n\nBuild it twice.\n")
         app.refresh_data()
         await pilot.pause()
-        assert "twice" in app.query_one("#doc-view").document.source, "a change to the file shows"
+        assert "twice" in app._detail_text, "a change to the file shows"
         app.items_table.focus()
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, tui.DocView), "Enter opens it full screen"
         assert not app.screen.query(TextArea), "with no answer box"
-        assert "twice" in app.screen.query_one("#docview").document.source
+        assert "twice" in app.screen.text
         doc.unlink()
         app.refresh_data()
         await pilot.pause()
-        assert "The file has gone" in str(app.screen.query_one("#docview-head").render()), "a clear line"
+        assert "The file has gone: this is the last text read." in app.screen.text, "a clear line"
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, tui.DocView)
         app.items_table.move_cursor(row=0)
         await pilot.pause()
-        assert app.query_one("#answer").display and not app.query_one("#doc-pane").display, "the box back on a task"
+        assert app.query_one("#answer").display, "the box back on a task"
 
 
 @pytest.mark.anyio
@@ -6391,3 +6389,64 @@ async def test_a_doc_with_no_parent_sits_in_its_sessions_group(store, sid, tmp_p
         await pilot.pause()
         assert item_list_rows(app) == [["demo", q], ["demo", f"└ {m}"]]
         assert str(app.query_one("#items", DataTable).get_row_at(1)[2]) == "new"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size, extra, desc", [
+    ((160, 40), 0, "wide, no scrollbar"),
+    ((160, 14), 30, "a vertical scrollbar showing"),
+    ((80, 40), 0, "narrow: the title cut short"),
+])
+async def test_the_toggle_answers_its_click_at_any_width(store, sid, size, extra, desc):
+    t, kids = family(store, sid)
+    store.db.execute("UPDATE items SET title = ? WHERE ref = ?", ("a long title " * 8, t))
+    for n in range(extra):
+        store.post_item(sid, "task", f"filler {n}")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        items = app.query_one("#items", DataTable)
+        row = [r[1] for r in item_list_rows(app)].index(t)
+        items.scroll_to(y=row, animate=False)
+        await pilot.pause()
+        y = row - int(items.scroll_y) + 1   # the header is line 0
+        line = items.render_line(y).text
+        assert line.endswith(" -"), f"{desc}: the - at the end, a blank before it: {line!r}"
+        before, selected = len(item_list_rows(app)), app.selected
+        x = items.scrollable_content_region.right - items.region.x - 1   # the last cell left of any scrollbar
+        await pilot.click("#items", offset=(x, y), times=2)
+        await pilot.pause()
+        assert len(item_list_rows(app)) == before - 2, f"{desc}: a double-click toggles once"
+        assert app.selected == selected and not isinstance(app.screen, ThreadView), f"{desc}: nothing selected nor opened"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+async def test_delete_takes_agent_and_doc_children_for_good(store, sid, tmp_path):
+    (tmp_path / "plan.md").write_text("# Plan\n")
+    q = store.post_item(sid, "question", "which db?")
+    store.track_agent(sid, "agent-1", f"{q}: look into it", "", datetime.now(timezone.utc))
+    agent = store.agent_links(sid)["agent-1"][0]
+    doc = store.post_doc(sid, "the plan", str(tmp_path / "plan.md"), q)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert item_list_rows(app) == [["demo", q], ["", f"└ {agent}"], ["", f"└ {doc}"]]
+        app.items_table.focus()
+        app.items_table.move_cursor(row=0)
+        await pilot.pause()
+        await pilot.press("delete")
+        await pilot.pause()
+        assert "its 2 children? 1 still open and 1 unread. They stay deleted" in app.screen.prompt
+        await pilot.press("y")
+        await pilot.pause()
+        store.agent_status(sid, "agent-1", "done", "finished")   # as the transcript says it ended
+        store.post_doc(sid, "the plan, v2", str(tmp_path / "plan.md"))
+        await refresh(pilot, sid)
+        assert item_list_rows(app) == [], "the subagent finishing and the doc posted again bring neither back"
+
+
+def test_items_from_an_older_daemon_have_no_parents():
+    items = [{"session_id": "s", "ref": "T1", "kind": "task"}, {"session_id": "s", "ref": "A1", "kind": "agent"}]
+    rows, counts = tui.item_rows([items, [], []], {"s": "demo"})
+    assert [(it["ref"], place) for it, place, _ in rows] == [("T1", None), ("A1", 0)] and counts == {}

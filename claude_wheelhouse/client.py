@@ -715,6 +715,9 @@ class RemoteClient:
     def close(self, sid: str, ref: str, closed: bool) -> Done:
         return self.done(f"/items/{sid}/{ref}/close", {"closed": closed})
 
+    def delete_family(self, sid: str, ref: str) -> Done:
+        return self.done(f"/items/{sid}/{ref}/delete-family", {})
+
     # the stream and the fetching, on threads of their own
 
     def lost(self) -> None:

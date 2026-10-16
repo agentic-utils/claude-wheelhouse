@@ -19,6 +19,7 @@ import functools
 import json
 import os
 import signal
+import stat
 import sqlite3
 import sys
 import threading
@@ -938,6 +939,8 @@ class Hub:
             raise KeyError(f"no item {ref} in this session")
         if closed and standing(item) == "finished":
             return Done(False)
+        if not closed:   # Ctrl+R: one deleted with its parent comes back too
+            self.store.undelete(sid, ref)
         if item["kind"] == "decision":
             self.store.close_decision(sid, ref, closed)
         elif item["kind"] in DISMISSABLE:
@@ -945,6 +948,12 @@ class Hub:
         else:
             self.store.update_item(sid, ref, status="closed" if closed else "answered")
         return Done()
+
+    def delete_family(self, sid: str, ref: str) -> Done:
+        """Delete on an item with children, confirmed: its children deleted (Store.delete_children),
+        so they stay off the inbox when they change, then the item closed as Delete closes it."""
+        self.store.delete_children(sid, ref)
+        return self.close(sid, ref, True)
 
     # the transcripts
 
@@ -1153,9 +1162,10 @@ class Hub:
 
     def document(self, sid: str, ref: str) -> dict | None:
         """A doc item's file, read from the path the session posted (never one a client
-        sends), at most DOC_CAP bytes: {path, text, stamp, gone}. Read again only when its
-        mtime or size has changed (stamp), so asked each refresh it follows the file. A file
-        that has gone says so, with the last text read, if any. None if the item isn't a doc,
+        sends), at most DOC_CAP bytes, and only a regular file: {path, text, stamp, gone}. Read
+        again only when its mtime or size has changed (stamp), so asked each refresh it follows
+        the file. gone says why it can't be read ("gone", "not a file"), with the last text
+        read, if any; None while it can. None if the item isn't a doc,
         or has gone."""
         item = self.store.item(sid, ref)
         if item is None or item["kind"] != "doc":
@@ -1164,23 +1174,33 @@ class Hub:
         kept = self.docs.pop(key, None)
         if kept and kept[0] != path:
             kept = None
+        why = None
         try:
             st = os.stat(path)
             stamp = f"{st.st_mtime_ns}:{st.st_size}"
-            if kept is None or kept[1] != stamp:
-                with open(path, "rb") as f:
-                    data = f.read(DOC_CAP + 1)
-                text = data[:DOC_CAP].decode("utf-8", errors="replace")
-                if len(data) > DOC_CAP:
-                    text += f"\n\n_(only the first {DOC_CAP >> 20} MB is shown)_"
-                kept = (path, stamp, text)
-            gone = False
+            if not stat.S_ISREG(st.st_mode):
+                why = "not a file"
+            elif kept is None or kept[1] != stamp:
+                # opened without blocking and checked again as opened: a FIFO or device swapped in
+                # since the stat never holds the read (agent_lock, in the daemon)
+                fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                with os.fdopen(fd, "rb") as f:
+                    if not stat.S_ISREG(os.fstat(fd).st_mode):
+                        why = "not a file"
+                    else:
+                        data = f.read(DOC_CAP + 1)
+                        text = data[:DOC_CAP].decode("utf-8", errors="replace")
+                        if len(data) > DOC_CAP:
+                            text += f"\n\n_(only the first {DOC_CAP >> 20} MB is shown)_"
+                        kept = (path, stamp, text)
         except OSError:
-            kept, gone = (path, "gone", kept[2] if kept else ""), True
+            why = "gone"
+        if why:
+            kept = (path, why, kept[2] if kept else "")
         self.docs[key] = kept
         while len(self.docs) > DOCS_KEPT:
             del self.docs[next(iter(self.docs))]
-        return {"path": path, "text": kept[2], "stamp": kept[1], "gone": gone}
+        return {"path": path, "text": kept[2], "stamp": kept[1], "gone": why}
 
     def unfollow_agent(self) -> None:
         """No surface shows a subagent's conversation now: no transcript of one is read."""

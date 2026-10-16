@@ -68,11 +68,15 @@ class Agent:
     before: bool = False   # started before the cut-off: an item only if still running
     status: str | None = None   # as the transcript last said: None until it says anything
     note: str = ""
+    log: Path | None = None   # its own transcript, whose first prompt may name its item (store.agent_parent)
 
 
 def when(at) -> datetime | None:
     t = stats.epoch(at) if isinstance(at, str) else None
     return datetime.fromtimestamp(t, timezone.utc) if t is not None else None
+
+
+PROMPT_READ = 4000   # characters of a subagent's prompt searched for its item's ref
 
 
 def first_stamp(path: Path) -> datetime | None:
@@ -81,6 +85,16 @@ def first_stamp(path: Path) -> datetime | None:
             return when(json.loads(f.readline(FIRST_LINE)).get("timestamp"))
     except (OSError, ValueError, AttributeError):
         return None
+
+
+def first_prompt(path: Path | None) -> str:
+    """A subagent's prompt, as its transcript has it (transcript.prompt_record): '' if it
+    can't be read yet."""
+    try:
+        rec = path and transcript.prompt_record(path)
+    except OSError:
+        return ""
+    return transcript._text((rec.get("message") or {}).get("content"))[:PROMPT_READ] if rec else ""
 
 
 def notification(rec: dict) -> str | None:
@@ -218,7 +232,7 @@ class AgentWatcher:
         how = {"background": ", in the background", "foreground": ", in the foreground"}.get(d.get("requestShape"), "")
         self.agents[aid] = Agent(aid, d.get("toolUseId"), (d.get("description") or kind)[:200],
                                  f"A `{kind}` subagent{how}. The wheelhouse tracks it from the session's transcript.",
-                                 started, before=started < self.cutoff)
+                                 started, before=started < self.cutoff, log=log)
         if d.get("toolUseId"):
             self.by_tool[d["toolUseId"]] = aid
 
@@ -351,7 +365,7 @@ class AgentWatcher:
                     continue
                 # another wheelhouse may have made it: then its status as now stored
                 self.links[aid], changed = store.track_agent(self.sid, aid, a.title, a.body, a.started,
-                                                             a.status, a.note), True
+                                                             a.status, a.note, prompt=first_prompt(a.log)), True
             elif a.status is None or a.status == had:
                 continue
             else:

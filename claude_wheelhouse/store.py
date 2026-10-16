@@ -64,7 +64,8 @@ DECISION_FIELDS = (("why", "Why"),)
 # protocol asks the session to correct any that's finished.
 # 12: park_session and end_session stop the session's Claude Code once they return, and
 # park asks for handoff notes: an older session's tab stays open, parked but running.
-# 13: doc items (M), which the protocol asks a session to declare for docs meant for the person.
+# 13: doc items (M), which the protocol asks a session to declare for docs meant for the person,
+# and a subagent's description naming its item's ref, which files it under that item.
 PROTOCOL_VERSION = 13
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
@@ -762,8 +763,8 @@ class Store:
                 ref = self._insert_item(db, sid, "doc", title, path, INITIAL_STATUS["doc"])
                 db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ?", (parent, sid, ref))
                 return ref
-            db.execute("""UPDATE items SET title = ?, parent_ref = coalesce(?, parent_ref), updated_at = ?, session_at = ?,
-                          status = CASE WHEN status = 'new' THEN 'new' ELSE 'updated' END, dismissed = NULL
+            db.execute(f"""UPDATE items SET title = ?, parent_ref = coalesce(?, parent_ref), updated_at = ?, session_at = ?,
+                          status = CASE WHEN status = 'new' THEN 'new' ELSE 'updated' END, dismissed = {KEEP_DELETED}
                           WHERE session_id = ? AND ref = ?""", (title, parent, now(), now(), sid, row["ref"]))
             return row["ref"]
 
@@ -846,7 +847,7 @@ class Store:
         return row["agent_id"] if row else None
 
     def track_agent(self, sid: str, agent_id: str, title: str, body: str, started: datetime,
-                    status: str | None = None, note: str = "") -> str:
+                    status: str | None = None, note: str = "", prompt: str = "") -> str:
         """The subagent's A item, made once per agent id, with its status (None: nothing
         said yet, so running when made and left alone when it exists, as another wheelhouse
         may have made it). The session's own A item for it is taken instead when there is
@@ -862,7 +863,7 @@ class Store:
                 if ref is None:
                     ref = self._insert_item(db, sid, "agent", title, body, "running")   # then finished, with its note
                 db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ? AND parent_ref IS NULL",
-                           (agent_parent(db, sid, started), sid, ref))
+                           (agent_parent(db, sid, started, title, prompt), sid, ref))
                 db.execute("INSERT INTO agent_items (session_id, agent_id, item_ref) VALUES (?, ?, ?)",
                            (sid, agent_id, ref))
                 status = status or "running"
@@ -881,8 +882,8 @@ class Store:
     def _agent_status(self, db, sid, ref, status, note) -> None:
         """Only a change is written, so a transcript read again moves nothing."""
         self._check_status("agent", status)
-        if db.execute("UPDATE items SET status = ?, updated_at = ?, dismissed = NULL WHERE session_id = ? AND ref = ? "
-                      "AND status != ?", (status, now(), sid, ref, status)).rowcount and note:
+        if db.execute(f"UPDATE items SET status = ?, updated_at = ?, dismissed = {KEEP_DELETED} WHERE session_id = ? "
+                      "AND ref = ? AND status != ?", (status, now(), sid, ref, status)).rowcount and note:
             self._said(db, sid, ref, note, "note")
 
     def update_item(self, sid: str, ref: str, *, status=None, title=None, body=None, note=None,
@@ -1050,6 +1051,28 @@ class Store:
                               f"AND ref = ? AND kind IN {DISMISSABLE}", (dismissed, sid, ref)).rowcount
         if not done:
             raise KeyError(f"no task or subagent {ref} in this session")
+
+    def delete_children(self, sid: str, ref: str) -> list[str]:
+        """The person deleted an item with its children: each child of it not yet finished
+        marked deleted (DELETED), whatever its status, a question or decision closed too, so
+        it stays off the inbox when its session or subagent changes it. Ctrl+R on one
+        (undelete) brings it back. Returns the refs deleted."""
+        with self.tx() as db:
+            self._require(db, sid)
+            rows = db.execute("SELECT session_id, ref, kind, status, dismissed FROM items WHERE session_id = ? AND parent_ref = ?",
+                              (sid, ref)).fetchall()
+            done = [r["ref"] for r in rows if standing(r) != "finished"]
+            for r in rows:
+                if r["ref"] in done:
+                    closed = "closed" if r["kind"] in ("question", "decision") else r["status"]
+                    db.execute("UPDATE items SET status = ?, dismissed = ?, updated_at = ? WHERE session_id = ? AND ref = ?",
+                               (closed, DELETED, now(), sid, r["ref"]))
+        return done
+
+    def undelete(self, sid: str, ref: str) -> None:
+        with self.tx() as db:
+            db.execute("UPDATE items SET dismissed = NULL WHERE session_id = ? AND ref = ? AND dismissed = ?",
+                       (sid, ref, DELETED))
 
     def close_decision(self, sid: str, ref: str, closed: bool = True) -> None:
         """The person closes a decision (or reopens it, as seen)."""
@@ -1228,7 +1251,9 @@ RANK = {"open": 0, "blocked": 1, "waiting": 1, "answered": 2, "processing": 2, "
 SETTLED_RANK, FINISHED_RANK = 10, 11   # after every active item's rank
 # in a write that may set an item's status (the first parameter, or NULL to leave it): a change
 # of status brings back an item the person dismissed
-UNDISMISS = "dismissed = CASE WHEN coalesce(?, status) = status THEN dismissed END"
+DELETED = "deleted"   # items.dismissed: deleted with its parent, off the inbox whatever its status becomes
+KEEP_DELETED = f"CASE WHEN dismissed = '{DELETED}' THEN dismissed END"   # a status change clears a dismissal, not this
+UNDISMISS = (f"dismissed = CASE WHEN dismissed = '{DELETED}' OR coalesce(?, status) = status THEN dismissed END")
 
 # when a sent message reached the session, on messages aliased {m}: the latest of when it was
 # written, claimed and delivered. Not created_at alone: a draft keeps the time it was written
@@ -1285,13 +1310,24 @@ def agent_match(db, sid: str, title: str, started: datetime) -> str | None:
 PARENTS = ("task", "question", "decision")
 
 
-def agent_parent(db, sid: str, started: datetime) -> str | None:
-    """The item a subagent was most likely dispatched for: the task, question or decision its
-    session last posted, updated or replied on (created_at, session_at, its own messages on
-    it) at or before the subagent started. None if it had said nothing on any: the agent
-    then sits in its session's group. Made once, as the item is, so later words move nothing."""
-    at = started.astimezone(timezone.utc).isoformat(timespec="seconds")
+REF = re.compile(r"\b([TQD]\d+)\b")   # an item's ref, named in a subagent's description or prompt
+
+
+def agent_parent(db, sid: str, started: datetime, title: str = "", prompt: str = "") -> str | None:
+    """The item a subagent was dispatched for. First the session's own word: the first ref
+    of one of its tasks, questions or decisions named in the subagent's description, else in
+    its prompt (the protocol asks for it). Else a guess: the one its session last posted,
+    updated or replied on (created_at, session_at, its own messages on it) at or before the
+    subagent started, within that second the first posted. None if it had said nothing on
+    any: the agent then sits in its session's group. Made once, as the item is, so later
+    words move nothing."""
     kinds = ",".join("?" * len(PARENTS))
+    for text in (title, prompt):
+        for ref in dict.fromkeys(REF.findall(text or "")):
+            if db.execute(f"SELECT 1 FROM items WHERE session_id = ? AND ref = ? AND kind IN ({kinds}) "
+                          "AND moved_to IS NULL", (sid, ref, *PARENTS)).fetchone():
+                return ref
+    at = started.astimezone(timezone.utc).isoformat(timespec="seconds")
     row = db.execute(
         f"""SELECT ref FROM (
               SELECT ref, id, created_at AS at FROM items WHERE session_id = ? AND kind IN ({kinds}) AND moved_to IS NULL
@@ -1300,7 +1336,7 @@ def agent_parent(db, sid: str, started: datetime) -> str | None:
               UNION ALL SELECT i.ref, i.id, m.created_at FROM messages m JOIN items i
                         ON i.session_id = m.session_id AND i.ref = m.item_ref
                         WHERE m.session_id = ? AND m.author = 'claude' AND i.kind IN ({kinds}) AND i.moved_to IS NULL)
-            WHERE at <= ? ORDER BY at DESC, id DESC LIMIT 1""",
+            WHERE at <= ? ORDER BY at DESC, id LIMIT 1""",
         (sid, *PARENTS, sid, *PARENTS, sid, *PARENTS, at)).fetchone()
     return row and row["ref"]
 
@@ -1322,12 +1358,15 @@ def decision_body(body: str, status, fields: dict) -> str:
     return "\n\n".join(parts)
 
 
+
+
 def standing(item, busy=frozenset()) -> str:
     """Where an item stands in the inbox: active, settled or finished (SETTLED). A settled
     item the person has a word queued or awaiting a reply on, `busy` by (session, ref), is
     active, even if they dismissed it: the ball isn't back with them."""
     status, waiting = item["status"], (item["session_id"], item["ref"]) in busy
-    if status in CLOSED - SETTLED[item["kind"]] or (item["dismissed"] == status and not waiting):
+    if status in CLOSED - SETTLED[item["kind"]] or item["dismissed"] == DELETED or (
+            item["dismissed"] == status and not waiting):
         return "finished"
     if status in SETTLED[item["kind"]] and not waiting:
         return "settled"

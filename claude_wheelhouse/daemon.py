@@ -385,6 +385,9 @@ class Daemon:
             Route("/items/{sid}/{ref}/thread", self.query(self.thread)),
             Route("/items/{sid}/{ref}/permission", self.command(self.permission), methods=["POST"]),
             Route("/items/{sid}/{ref}/close", self.command(self.close), methods=["POST"]),
+            Route("/items/{sid}/{ref}/delete-family", self.command(
+                lambda request, body: self.hub.delete_family(request.path_params["sid"], request.path_params["ref"])),
+                methods=["POST"]),
             Route("/fs", self.query(self.folders)),
             Route("/models", self.query(lambda request: models.catalogue(), run=None)),
             Route("/events", self.events),

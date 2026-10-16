@@ -764,6 +764,9 @@ def test_a_questions_clock_runs_from_the_persons_answer(store, sid, written_at, 
     ([("task", "post", 0), ("question", "post", 5), ("T1", "reply", 20)], "Q1", "a word after it started counts for nothing"),
     ([("task", "post", 20)], None, "nothing said before it started: its session's group"),
     ([("agent", "post", 0)], None, "another agent is never a parent"),
+    ([("task", "post", 0), ("question", "post", 5), ("T1", "host", 8)], "T1",
+     "a reply its host posted, which leaves session_at alone: the messages alone say so"),
+    ([("task", "post", 10), ("question", "post", 10)], "T1", "within the second it started, the first posted"),
 ])
 def test_an_agent_sits_under_what_its_session_last_spoke_on(store, sid, words, parent, desc):
     base = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
@@ -773,6 +776,9 @@ def test_an_agent_sits_under_what_its_session_last_spoke_on(store, sid, words, p
             ref = store.post_item(sid, what, f"{what} item")
             store.db.execute("UPDATE items SET created_at = ?, session_at = ? WHERE session_id = ? AND ref = ?",
                              (at(s), at(s), sid, ref))
+        elif how == "host":
+            store.host_reply(sid, what, "on it")
+            store.db.execute("UPDATE messages SET created_at = ? WHERE id = (SELECT max(id) FROM messages)", (at(s),))
         else:
             store.reply(sid, what, "on it", by_session=True) if how == "reply" else store.update_item(
                 sid, what, note="progress", declares=True)
@@ -827,3 +833,40 @@ def test_a_docs_status_is_the_persons(store, sid, tmp_path):
         store.update_item(sid, ref, status="read", declares=True)
     with pytest.raises(ValueError, match="post_doc"):
         store.post_item(sid, "doc", "the plan", str(tmp_path / "plan.md"))
+
+
+@pytest.mark.parametrize("title, prompt, parent, desc", [
+    ("T2: review the store", "", "T2", "the ref its description names"),
+    ("review T3, then T2", "", "T3", "the first named"),
+    ("review the store", "Work on Q1 for me.", "Q1", "else the first its prompt names"),
+    ("T2: review", "Q1 first", "T2", "the description before the prompt"),
+    ("T9: review", "A1 and T7", "T5", "no such item, nor an agent: the guess, the last posted"),
+    ("T2:review,T3", "", "T2", "a ref against punctuation"),
+])
+def test_an_agent_named_for_its_item_sits_under_it(store, sid, title, prompt, parent, desc):
+    for _ in range(5):
+        store.post_item(sid, "task", "a task")
+    store.post_item(sid, "question", "a question")
+    store.db.execute("UPDATE items SET created_at = '2026-10-01T09:00:00+00:00', session_at = NULL")
+    store.db.execute("UPDATE items SET created_at = '2026-10-01T09:00:05+00:00' WHERE ref = 'T5'")
+    store.track_agent(sid, "agent-1", title, "", datetime(2026, 10, 1, 9, 1, tzinfo=timezone.utc), prompt=prompt)
+    assert store.item(sid, store.agent_links(sid)["agent-1"][0])["parent_ref"] == parent, desc
+
+
+def test_a_child_deleted_with_its_parent_stays_deleted(store, sid, tmp_path):
+    from claude_wheelhouse.store import standing
+    (tmp_path / "plan.md").write_text("# Plan\n")
+    t = store.post_item(sid, "task", "build it", status="done")
+    store.track_agent(sid, "agent-1", f"{t}: help", "", datetime.now(timezone.utc))
+    agent = store.agent_links(sid)["agent-1"][0]
+    doc = store.post_doc(sid, "the plan", str(tmp_path / "plan.md"), t)
+    q = store.post_item(sid, "question", "which?")
+    store.db.execute("UPDATE items SET parent_ref = ? WHERE ref = ?", (t, q))
+    assert sorted(store.delete_children(sid, t)) == sorted([agent, doc, q])
+    store.agent_status(sid, "agent-1", "done", "finished")
+    store.post_doc(sid, "the plan, v2", str(tmp_path / "plan.md"))
+    store.update_item(sid, q, status="answered", declares=False)
+    assert [standing(store.item(sid, r)) for r in (agent, doc, q)] == ["finished"] * 3, \
+        "a subagent finishing, a doc posted again, a question changed: all still deleted"
+    store.undelete(sid, agent)
+    assert standing(store.item(sid, agent)) == "settled", "Ctrl+R brings one back"

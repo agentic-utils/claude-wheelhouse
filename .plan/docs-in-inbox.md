@@ -18,12 +18,20 @@ always did.
 
 ## Agents
 
-An A item's parent is the task, question or decision its session last posted, updated or
-replied on at or before the subagent started (`store.agent_parent`): the latest of each
-item's `created_at`, its `session_at` and the session's own messages on it (replies, notes,
-status words), up to the subagent's first transcript stamp. It is set once, as
-`track_agent` makes or matches the item, so later words on other items move nothing. With
-none, the agent sits in its session's group at the foot of its band, as before.
+An A item's parent comes first from the session's own word: the first ref of one of its
+tasks, questions or decisions named in the subagent's description, else in its prompt
+(`store.agent_parent`). The protocol asks sessions to start a description with the item's
+ref (`T3: review the store`). A session that posts T1 to T5 and then dispatches five agents
+is the usual pattern, and only the refs can tell those apart.
+
+With no ref named, it is a guess: the item the session last posted, updated or replied on at
+or before the subagent started: the latest of each item's `created_at`, its `session_at` and
+the session's own messages on it (replies, notes, status words, a host's replies), up to the
+subagent's first transcript stamp. Stamps are to the second, so within the second it
+started the first posted wins, not one posted just after the dispatch. The parent is set
+once, as `track_agent` makes or matches the item, so later words on other items move
+nothing. With neither, the agent sits in its session's group at the foot of its band, as
+before.
 
 "The session's running task" was passed over: an orchestrating session often has several
 running at once, which is exactly where it would be ambiguous.
@@ -72,44 +80,40 @@ children behaves as before. On one with children not yet finished, a Confirm nam
 it takes, how many are still open (a question unanswered, a task or subagent not settled)
 and how many unread (a decision unseen, a doc new or updated). Yes closes or dismisses the
 parent and every child, whatever its status; No or Esc takes nothing. A parent that can't be
-closed (a running task) still says so, as before. A running subagent dismissed this way
-comes back, settled, when it finishes, as any dismissed item does on a status change.
+closed (a running task) still says so, as before.
+
+Children deleted this way stay deleted (`Hub.delete_family`, one daemon route): each is
+marked `items.dismissed = 'deleted'` (`store.DELETED`), which `standing` counts as finished
+whatever the status, and which a status change, a doc posted again or a subagent finishing
+leaves in place, where an ordinary dismissal clears. The confirm says so. Ctrl+R on one
+brings it back. A session still on older code clears the mark when it changes the item's
+status, as its own update_item predates it.
 
 ## The doc viewer
 
-Selecting a doc shows its path and status, then the file rendered with Textual's
-`MarkdownViewer` (Doug: "Try the Textual viewer and let's see how it performs"), in the item
-pane and full screen (`DocView`, Enter), with no answer box. Rich's Markdown through the
-existing `Blocks` path was the alternative: faster on long documents, as `MarkdownViewer`
-mounts a widget per block, but with no links or contents.
+Selecting a doc shows its ref, title, status and path, then the file rendered with Rich's
+Markdown through the same `Blocks` renderer as a thread, in the item pane and full screen
+(`DocView`, Enter), with no answer box. Doug tried Textual's `MarkdownViewer` first and
+chose Rich (Q100): `MarkdownViewer` mounts a widget per block, which took about 7 s of CPU
+to first show a 14 KB doc, and once mounted slowed every layout pass, even with another item
+selected. Rich has no clickable links or contents list.
 
 Reading goes through the hub, so it works through the daemon too: `Hub.document(sid, ref)`
-reads only the path stored on the item, never one a client sends, caps a read at 1 MB, and
-re-reads only when the file's mtime or size changes. The daemon serves it at
-`/items/{sid}/{ref}/document`; the remote client polls it while shown, as it does a
-subagent's conversation, and the daemon answers "same" when its stamp hasn't moved. A file
-that has gone shows a clear line saying so, over the last text read, if any.
+reads only the path stored on the item, never one a client sends, opens only a regular file
+(checked by stat and again on the opened descriptor, opened without blocking, so a FIFO or
+device swapped in never holds the daemon), caps a read at 1 MB, and re-reads only when the
+file's mtime or size changes. The daemon serves it at `/items/{sid}/{ref}/document`; the
+remote client polls it while shown, as it does a subagent's conversation, and the daemon
+answers "same" when its stamp hasn't moved. A file that has gone, or isn't a regular file,
+shows a clear line saying so, over the last text read, if any.
 
-The pane's viewer has no contents list; the full screen's has one. Links: a web link opens
-in the browser, an anchor scrolls to its heading, and a link to a file is not followed
-(MarkdownViewer would load it from the app's own disk, which under `--connect` is not the
-doc's machine).
+Measured headless, CPU time on the app's loop, synthetic docs of headings, prose, lists,
+tables and code blocks:
 
-## How MarkdownViewer performs
+| Doc | First show, pane | First show, full screen | Refresh after |
+|---|---|---|---|
+| 14 KB | 0.7 s | 0.9 s | 0.05 s (0.08 s full screen) |
+| 42 KB | 1.8 s | 2.0 s | 0.05 s (0.26 s full screen) |
 
-Measured headless (CPU time on the app's loop, synthetic docs of headings, prose, lists,
-tables and code blocks):
-
-| Doc | Blocks | First show | Refresh while shown | Back to the same doc |
-|---|---|---|---|---|
-| 1 KB | 50 | 0.7 s | 0.06 s | 0.05 s |
-| 14 KB | 500 | about 7 s | 0.06 s | 0.05 s |
-| 42 KB | 1500 | over 10 s | about 2.5 s | 0.7 s |
-
-Moving between tasks costs about 0.05 s. The cost is in mounting a widget per block, so it
-comes again each time the file changes. A doc kept mounted costs nothing more until it is
-big; past a thousand blocks or so every layout pass slows, even with another item selected
-(the last doc stays mounted, hidden, so going back to it is quick): about 1.5 s a refresh
-at 42 KB. If this is too slow in use, the
-cheap change is Rich's Markdown through `Blocks` in the pane, keeping MarkdownViewer for
-full screen only.
+Moving between tasks costs about 0.05 s, and back to a doc already shown about 0.1 s. A
+change to the file renders it again, at the first-show cost.

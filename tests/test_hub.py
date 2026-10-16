@@ -1,6 +1,7 @@
 """The hub on its own, with no Textual: what it keeps, decides and says."""
 
 import json
+import os
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -1361,16 +1362,16 @@ def test_a_doc_is_read_again_only_once_its_file_changes(hub, store, sid, tmp_pat
     doc.write_text("# Plan\n")
     ref = store.post_doc(sid, "the plan", str(doc))
     reads = []
-    real = open
-    monkeypatch.setattr("builtins.open", lambda p, *a, **k: (reads.append(p), real(p, *a, **k))[1])
+    real = os.open
+    monkeypatch.setattr(os, "open", lambda p, *a, **k: (reads.append(p), real(p, *a, **k))[1])
     first = hub.document(sid, ref)
-    assert (first["text"], first["gone"], first["path"]) == ("# Plan\n", False, str(doc))
+    assert (first["text"], first["gone"], first["path"]) == ("# Plan\n", None, str(doc))
     assert hub.document(sid, ref) == first and len(reads) == 1, "unchanged: not read again"
     doc.write_text("# Plan\n\nmore\n")
     assert hub.document(sid, ref)["text"].endswith("more\n") and len(reads) == 2, "changed: read again"
     doc.unlink()
     gone = hub.document(sid, ref)
-    assert gone["gone"] and gone["text"].endswith("more\n"), "gone: said, with the last text read"
+    assert gone["gone"] == "gone" and gone["text"].endswith("more\n"), "gone: said, with the last text read"
     assert hub.document(sid, store.post_item(sid, "task", "x")) is None, "not a doc"
 
 
@@ -1379,3 +1380,12 @@ def test_a_long_doc_is_cut_at_the_cap(hub, store, sid, tmp_path, monkeypatch):
     (tmp_path / "long.md").write_text("x" * 50)
     text = hub.document(sid, store.post_doc(sid, "long", str(tmp_path / "long.md")))["text"]
     assert text.startswith("x" * 10 + "\n") and "only the first" in text
+
+
+def test_a_doc_swapped_for_a_fifo_is_never_opened(hub, store, sid, tmp_path):
+    doc = tmp_path / "plan.md"
+    doc.write_text("# Plan\n")
+    ref = store.post_doc(sid, "the plan", str(doc))
+    doc.unlink()
+    os.mkfifo(doc)   # opened for reading, it would block until a writer came
+    assert hub.document(sid, ref) == {"path": str(doc), "text": "", "stamp": "not a file", "gone": "not a file"}

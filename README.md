@@ -130,22 +130,25 @@ session.
   prompt its session gave it, each tool call as one line, its replies and its result,
   following it at the end as it works unless you've scrolled up to read. `Enter` shows
   the same full screen. If its transcript can't be found, the pane says so. An agent item
-  sits under the task, question or decision its session last posted, updated or replied on
-  before the subagent started (`└ A1`), moving with it; if the session had said nothing on
-  any, it sits under the session's name at the foot of the list, as it did before. An
+  sits under the task, question or decision whose ref its description (or else its prompt)
+  names first (`└ A1`), moving with it; the protocol asks sessions to name it. Failing
+  that, under the one its session last posted, updated or replied on before the subagent
+  started; if the session had said nothing on any, under the session's name at the foot of
+  the list, as it did before. An
   item with children has a `-` on a grey background at the right-hand end of its row:
   click it to hide them, and the `+` it turns into to show them again (for as long as the
   app runs). `Delete` on an item with children asks first, saying how many it takes and
-  how many of them are still open or unread, then closes or dismisses it and all of them.
+  how many of them are still open or unread, then closes or dismisses it and deletes all
+  of them. They stay deleted, even when a subagent finishes or a doc is posted again;
+  `Ctrl+R` with `F` showing brings one back.
 - **Docs.** A session declares each markdown document it writes for you to read (a design,
   plan, report or review, wherever it lives, `~/.claude` included) as a doc item (`M1`),
   under the task, question or decision it belongs to, or under the session's name if none.
   Its scratch and working notes stay out. A doc shows `new` until it has been in sight for
   a second, then `read`; when the session changes it and posts it again it shows
   `updated`, never new again. Select one and the right-hand pane shows its path and the
-  file rendered (Textual's markdown viewer), with no answer box; `Enter` opens it full
-  screen with its contents alongside. The file is read again whenever it changes, and if
-  it has gone the pane says so. `Delete` dismisses one.
+  file rendered, with no answer box; `Enter` opens it full screen. The file is read again
+  whenever it changes, and if it has gone (or isn't a regular file) the pane says so. `Delete` dismisses one.
 - **Decisions.** If your own instructions let a session decide some things without asking
   you, it reports each one as a decision (`D1`): what it decided, and one short line with
   the alternative, why, and how to reverse it. Decisions block nothing. Each session

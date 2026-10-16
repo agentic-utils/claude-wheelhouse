@@ -44,7 +44,6 @@ from textual.widgets import (
     Footer,
     Input,
     Label,
-    MarkdownViewer,
     RadioButton,
     RadioSet,
     SelectionList,
@@ -188,6 +187,15 @@ GROUPED = ("agent", "doc")   # the kinds that sit in their session's group when 
 TOGGLE = Style(color="#e8e8e8", bgcolor="#555555")   # a parent row's + / - at its right-hand end
 
 
+def parent_of(item) -> str | None:
+    """An item's parent's ref (items.parent_ref), None if it has none, or if it came from a
+    daemon on older code, whose items have no such column."""
+    try:
+        return item["parent_ref"]
+    except (KeyError, IndexError):
+        return None
+
+
 def item_rows(bands, names, collapsed=frozenset()) -> tuple[list[tuple], dict[str, int]]:
     """Each band's rows (active, settled, finished, as shown), as (item, place, band): place
     None for an inbox row, CHILD for one nested under its parent (items.parent_ref) straight
@@ -199,7 +207,7 @@ def item_rows(bands, names, collapsed=frozenset()) -> tuple[list[tuple], dict[st
     children: dict[str, list] = {}
     for b in bands:
         for it in b:
-            parent = it["parent_ref"] and shown.get(f"{it['session_id']}|{it['parent_ref']}")
+            parent = (ref := parent_of(it)) and shown.get(f"{it['session_id']}|{ref}")
             if parent is not None and parent["kind"] in PARENTS and parent is not it:
                 children.setdefault(item_key(parent), []).append(it)
     nested = {id(c) for cs in children.values() for c in cs}
@@ -238,7 +246,8 @@ def family_prompt(item, family: list) -> str:
     said = [f"{k} {what}" for k, what in ((sum(map(still_open, family)), "still open"),
                                           (sum(map(unread, family)), "unread")) if k]
     return (f"Delete {item['ref']} ({item['title']}) and its {n} {'child' if n == 1 else 'children'}?"
-            + (f" {' and '.join(said)}." if said else ""))
+            + (f" {' and '.join(said)}." if said else "")
+            + f" {'It stays' if n == 1 else 'They stay'} deleted, even once finished or changed.")
 
 
 def item_key(item) -> str:
@@ -909,8 +918,9 @@ class ItemList(SinkList):
         self.toggles: dict[str, bool] = {}   # each parent row's key: whether its children are hidden
 
     def _render_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
-        """The row's line, and on a parent's its + / - (TOGGLE) in the line's last cell,
-        whatever the scroll: a click there toggles its children (_on_click)."""
+        """The row's line, and on a parent's its + / - (TOGGLE) in the line's last cell, a
+        blank cell before it so it never sits on the title's text, whatever the scroll: a click
+        there toggles its children (_on_click)."""
         strip = super()._render_line(y, x1, x2, base_style)
         if not self.toggles:
             return strip
@@ -920,11 +930,12 @@ class ItemList(SinkList):
             return strip
         shut = self.toggles.get(row_key.value)
         width = strip.cell_length
-        if shut is None or width < 2:
+        if shut is None or width < 3:
             return strip
         meta = {"row": self._row_locations.get(row_key), "column": len(self.columns) - 1, "toggle": row_key.value}
-        mark = Strip([Segment("+" if shut else "-", TOGGLE + Style.from_meta(meta))])
-        return Strip.join([strip.crop(0, width - 1), mark])
+        gap = Style.from_meta(meta) + (base_style or Style())
+        mark = Strip([Segment(" ", gap), Segment("+" if shut else "-", TOGGLE + Style.from_meta(meta))])
+        return Strip.join([strip.crop(0, width - 2), mark])
 
     def set_marks(self, marks: set[str], anchor: str | None = None) -> None:
         self.marked = {k for k in marks if not k.endswith("|")}   # not the conversation row
@@ -947,8 +958,9 @@ class ItemList(SinkList):
         if "toggle" in meta:   # a parent's + / -: its children shown or hidden, the row not selected
             event.prevent_default()
             event.stop()
-            self.app.settle()
-            self.app.toggle_children(meta["toggle"])
+            if event.chain == 1:   # a double-click's second click toggles nothing more
+                self.app.settle()
+                self.app.toggle_children(meta["toggle"])
             return
         self.app.settle()   # first what the keys before it moved: the rows they leave are the ones clicked
         if "row" not in meta or meta["row"] < 0:
@@ -1271,79 +1283,52 @@ class ThreadView(Screen):
                 scroll.scroll_end(animate=False)
 
 
-class DocViewer(MarkdownViewer):
-    """A doc's markdown, rendered. Its links: a web link opens in the browser, an anchor
-    scrolls to its heading, and a file is never loaded from this machine's disk, as the doc
-    itself came through the hub (Hub.document)."""
-
-    async def _on_markdown_link_clicked(self, message) -> None:
-        message.stop()
-        message.prevent_default()   # not MarkdownViewer's, which loads the file
-        href = message.href
-        if href.startswith("#"):
-            self.document.goto_anchor(href[1:])
-        elif href.startswith(("http://", "https://", "mailto:")):
-            self.app.open_url(href)
-        else:
-            self.notify(f"{href}: links to files aren't followed", severity="warning")
-
-
-def doc_head(item, doc) -> Text:
-    """A doc's lines above it: its ref, title and status, its path, and a clear line if its file has gone."""
-    head = Text.assemble((f"{item['ref']} · {item['title']}", "bold #05d9e8"), " · ",
-                         (item["status"], DECISION if item["status"] in UNREAD else "dim"),
-                         ("\n" + (doc["path"] if doc else item["body"]), "#777777"))
+def doc_blocks(item, doc) -> list[tuple[str, str]]:
+    """A doc as blocks, as an item's thread is shown (render): its ref, title, status and
+    path, a clear line if its file can't be read, then the file's markdown, rendered by Rich
+    as one block (a widget per block made a long one slow to show, and every layout after)."""
+    if item is None:
+        return [("note", "_gone_")]
+    path = doc["path"] if doc else item["body"]
+    out = [("head", f"## {item['ref']} · {item['title']}\n\n`doc` · **{item['status']}** · `{path}`")]
     if doc and doc["gone"]:
-        head.append("\nThe file has gone: " + ("this is the last text read" if doc["text"] else "nothing was read"),
-                    style=VOICE["warn"])
-    return head
-
-
-def show_doc(holder, head: Static, viewer: DocViewer, item, doc) -> None:
-    """A doc in a head and a viewer, each updated only when it changes (the viewer mounts a
-    widget per block, so not each refresh); back at the top for another doc."""
-    key = (item["session_id"], item["ref"])
-    text = doc["text"] if doc else ""
-    shown = getattr(holder, "_doc_shown", None)
-    head_text = doc_head(item, doc)
-    if shown is None or shown[1] != head_text.plain:
-        head.update(head_text)
-    if shown is None or shown[0] != key or shown[2] != text:
-        viewer.document.update(text)
-        if shown is None or shown[0] != key:
-            viewer.scroll_home(animate=False)
-    holder._doc_shown = (key, head_text.plain, text)
+        out.append(("warn", f"The file {'has gone' if doc['gone'] == 'gone' else 'is not a regular file'}: "
+                            + ("this is the last text read." if doc["text"] else "nothing was read.")))
+    if doc and doc["text"]:
+        out.append(("claude", doc["text"]))
+    return out
 
 
 class DocView(Screen):
-    """One doc full screen: rendered, with its contents alongside, and no answer box. The
-    app's refresh tick repaints it, so a change to the file shows while it's open."""
+    """One doc full screen, rendered, with no answer box. The app's refresh tick repaints it,
+    so a change to the file shows while it's open, where it was scrolled to."""
     BINDINGS = [Binding("escape", "leave", "Back", key_display="Esc")]
 
     def __init__(self, sid: str, ref: str):
         super().__init__()
         self.sid, self.ref = sid, ref
+        self.text = None
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="docview-pane", classes="panel"):
-            yield Static(id="docview-head", classes="doc-head")
-            yield DocViewer(id="docview", show_table_of_contents=True)
+        with VerticalScroll(id="docview-scroll", classes="panel"):
+            yield Transcript(id="docview")
         yield Footer()
 
     def on_mount(self) -> None:
+        self.query_one("#docview-scroll").can_focus = False   # the transcript's keys scroll it
         self.paint()
-        self.set_focus(self.query_one("#docview", DocViewer))
+        self.set_focus(self.query_one("#docview", Transcript))
 
     def action_leave(self) -> None:
         self.app.pop_screen()
         self.app.retarget()
 
     def paint(self) -> None:
-        item = self.app.client.item(self.sid, self.ref)
-        if item is None:
-            return
-        show_doc(self, self.query_one("#docview-head", Static), self.query_one("#docview", DocViewer),
-                 item, self.app.client.document(self.sid, self.ref))
+        blocks = doc_blocks(self.app.client.item(self.sid, self.ref), self.app.client.document(self.sid, self.ref))
+        text = "\n\n".join(md for _, md in blocks)
+        if text != self.text:
+            self.text = text
+            self.query_one("#docview", Transcript).update(render(blocks))
 
 
 PERMISSION_HINT = "Allow, Always or Deny above (1, 2, 3), at once"
@@ -2168,9 +2153,8 @@ class WheelhouseApp(App):
     .-split {{ border-top: none; min-height: 3; }}   /* the first module pane under the items: the splitter is its line */
     #detail-pane {{ width: 2fr; min-width: 24; }}
     #detail-scroll {{ height: 1fr; min-height: 3; }}
-    #doc-pane, #docview-pane {{ height: 1fr; }}
-    .doc-head {{ height: auto; padding: 0 1; }}
-    DocViewer {{ height: 1fr; background: #000000; }}
+    #docview-scroll {{ height: 1fr; }}
+    #docview {{ background: #000000; color: {MATRIX}; }}
     #answer {{ min-height: 3; }}
     #detail, #thread {{ background: #000000; color: {MATRIX}; }}
     #answer, #thread-answer {{ height: 8; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
@@ -2299,7 +2283,6 @@ class WheelhouseApp(App):
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
         self.show_finished = False   # finished items (store.standing), after the rest
         self.collapsed: set[str] = set()   # the parent rows whose children are hidden, for this run alone
-        self.child_counts: dict[str, int] = {}   # each parent row shown: how many children it shows (item_rows)
         # each list's rows that change sides (an item settling, a session parked) fall or rise
         # there (T66, T71): a frame repaints the list, but not while a key lands (tick)
         self.session_sink = Sink(lambda: self.landing or not self.screen_stack or self.paint_sessions())
@@ -2349,9 +2332,6 @@ class WheelhouseApp(App):
                     yield Static(id="checklist")
                 with VerticalScroll(id="detail-scroll"):
                     yield Transcript(NOTHING_SELECTED, id="detail")
-                with Vertical(id="doc-pane"):   # a doc selected, in place of the detail
-                    yield Static(id="doc-head", classes="doc-head")
-                    yield DocViewer(id="doc-view", show_table_of_contents=False)
                 yield Splitter("answer", "#answer", "#detail-scroll", "y")
                 yield PermissionButtons()
                 yield DenyReason()
@@ -2368,9 +2348,6 @@ class WheelhouseApp(App):
         self.items_table = self.query_one("#items", ItemList)
         self.detail = self.query_one("#detail", Transcript)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
-        self.doc_pane = self.query_one("#doc-pane", Vertical)
-        self.doc_pane.display = False
-        self.doc_head, self.doc_view = self.query_one("#doc-head", Static), self.query_one("#doc-view", DocViewer)
         self.answer_splitter = self.query_one("#detail-pane > Splitter", Splitter)   # held: a query walks every doc block
         self.answer = self.query_one("#answer", Compose)
         self.session_list = self.query_one("#session-list", SessionList)
@@ -2812,7 +2789,6 @@ class WheelhouseApp(App):
         for key, it in keyed:
             bands[band(self.ranks[key])].append(it)
         rows, counts = item_rows([active, settled, finished if self.show_finished else []], names, self.collapsed)
-        self.child_counts = counts
         table.toggles = {key: key in self.collapsed for key in counts}
         sunk = {key_of[id(it)] for it, _, n in rows if n}
         if self.filter_sid:   # the session's own conversation, pinned first
@@ -2944,16 +2920,11 @@ class WheelhouseApp(App):
         return item if item and item["kind"] == "doc" else None
 
     def paint_detail(self) -> None:
-        doc = self.selected_doc()
-        if self.doc_pane.display != bool(doc):
-            self.doc_pane.display, self.detail_scroll.display = bool(doc), not doc
-        if doc:   # rendered, in place of the thread
-            self.client.unfollow_agent()
-            show_doc(self, self.doc_head, self.doc_view, doc, self.client.document(*self.selected))
-            return
-        agent = False
+        agent, doc = False, self.selected_doc()
         if self.viewing:
             blocks = self.conversation(self.viewing)
+        elif doc:   # the file rendered, in place of a thread
+            blocks = doc_blocks(doc, self.client.document(*self.selected))
         elif self.selected:
             blocks, agent = self.item_blocks(*self.selected)
         else:   # what was shown has gone (a followed session ended, say): not left standing
@@ -3539,7 +3510,7 @@ class WheelhouseApp(App):
             self.notify(f"{item['ref']} is {verb} already: Ctrl+R reopens it")
             return
         family = [it for it in self.client.inbox(item["session_id"]).items
-                  if it["parent_ref"] == item["ref"] and standing(it) != "finished"]
+                  if parent_of(it) == item["ref"] and standing(it) != "finished"]
         if family:   # it goes with its children, once the person says so
             self.push_screen(Confirm(family_prompt(item, family)),
                              lambda yes: yes and self.close_family(item, family))
@@ -3549,13 +3520,16 @@ class WheelhouseApp(App):
         self.refresh_data()
 
     def close_family(self, item, family: list) -> None:
-        """Delete confirmed on a parent: it and each of its children closed or dismissed,
-        whatever their status (an open question closed, a running task or subagent dismissed)."""
-        for it in [item, *family]:
-            try:
-                self.close(it, True)
-            except (SessionGone, KeyError):   # ended or gone meanwhile: the rest still go
-                continue
+        """Delete confirmed on a parent: each of its children deleted, whatever its status, and
+        kept off the inbox when it changes (a running subagent finishing), then it closed as
+        Delete closes it (Hub.delete_family). At once, as Delete is (close)."""
+        self.item_sink.jump()
+        self.repin.add(item_key(item))
+        try:
+            self.told(self.client.delete_family(item["session_id"], item["ref"]))
+        except (SessionGone, KeyError) as e:   # ended or gone meanwhile
+            self.notify(str(e), severity="warning")
+            return
         self.notify(f"deleted {item['ref']} and {len(family)} {'child' if len(family) == 1 else 'children'}"
                     + ("" if self.show_finished else ": F shows finished items"))
         self.refresh_data()
@@ -3567,7 +3541,7 @@ class WheelhouseApp(App):
         sid, ref = key.split("|")
         if key in self.collapsed and self.selected and self.selected[0] == sid and self.selected[1]:
             item = self.client.item(*self.selected)
-            if item is not None and item["parent_ref"] == ref:
+            if item is not None and parent_of(item) == ref:
                 self.select_row(key)
         self.paint_items()
 
