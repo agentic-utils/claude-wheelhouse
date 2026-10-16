@@ -374,10 +374,10 @@ click a header again; new rows then arrive at the top. A row's children move wit
 itself is in the database, shared by every TUI.
 
 Closing several questions or decisions at once: in the item list, `Ctrl`+click marks or unmarks a row
-and `Shift`+click marks the range from the last one marked; from the keyboard, `Space`
+and `Shift`+click or `Alt`+click marks the range from the last one marked (Windows Terminal keeps
+`Shift`+click for its own text selection, so use `Alt` there); from the keyboard, `Space`
 marks or unmarks the highlighted row, `Shift+Up`/`Shift+Down` extend the range, and `Ctrl+A`
-marks every finished (dimmed) row shown (Windows Terminal keeps `Shift`+click for its own text
-selection). A `Ctrl`+ or `Shift`+click never starts a drag. `Delete` or `Backspace` then closes the marked
+marks every finished (dimmed) row shown. A `Ctrl`+, `Shift`+ or `Alt`+click never starts a drag. `Delete` or `Backspace` then closes the marked
 questions and decisions and dismisses the done tasks and subagents, `Ctrl+R` brings back the finished ones, `Esc` clears the marks, and a plain click
 starts afresh. Once `Delete` has taken the highlighted row (one row, or several marked), the
 highlight goes to the row immediately above the topmost row it took, or to the new first row
