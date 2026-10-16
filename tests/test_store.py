@@ -1,5 +1,6 @@
 import contextlib
 import json
+import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from unittest import mock
@@ -434,6 +435,32 @@ def test_a_transaction_rolled_back_is_not_written(store, sid):
         raise RuntimeError
     assert store.written() == before and store.session(sid)["name"] == "demo"
 
+
+
+def test_a_commit_that_raises_is_rolled_back(store, sid):
+    """#3: the connection isn't left mid-transaction, so the next write still works."""
+    class FailingCommit:
+        def __init__(self, db):
+            self.real = db
+
+        def execute(self, sql, *args):
+            if sql == "COMMIT":
+                raise sqlite3.OperationalError("database is locked")
+            return self.real.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(self.real, name)
+
+    real = store.db
+    store.db = FailingCommit(real)
+    with pytest.raises(sqlite3.OperationalError), store.tx() as db:
+        db.execute("UPDATE sessions SET name = 'x'")
+    store.db = real
+    assert not real.in_transaction
+    assert store.session(sid)["name"] == "demo"
+    with store.tx() as db:
+        db.execute("UPDATE sessions SET name = 'y'")
+    assert store.session(sid)["name"] == "y"
 
 
 # 2bbb99a's items.seq, as a database that code opened carries it

@@ -375,10 +375,13 @@ class Store:
             self.db.execute("BEGIN IMMEDIATE")
             try:
                 yield self.db
+                self.db.execute("COMMIT")
             except BaseException:
-                self.db.execute("ROLLBACK")
+                # a COMMIT that raises (SQLITE_BUSY, a disk error) leaves the transaction
+                # open, and every later BEGIN would fail on it (#3)
+                if self.db.in_transaction:
+                    self.db.execute("ROLLBACK")
                 raise
-            self.db.execute("COMMIT")
             self.mine.n = self.written() + self.db.total_changes - before
 
     def written(self) -> int:
