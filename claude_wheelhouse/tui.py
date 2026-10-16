@@ -1118,6 +1118,8 @@ class ThreadView(Screen):
         self.set_focus(self.box if self.box.display else None)
 
     def action_leave(self) -> None:
+        if self.app.deny_back():
+            return
         self.app.keep_unsent(self.box, (self.sid, self.ref), None)
         self.app.pop_screen()
         # the inbox box takes back its target's text, the bar its session: now, not after a
@@ -1138,6 +1140,7 @@ class ThreadView(Screen):
 
 
 PERMISSION_HINT = "Allow, Always or Deny above (1, 2, 3), at once"
+DENY_HINT = "Enter denies with the reason above (empty: a plain deny) · Esc goes back to Allow, Always or Deny"
 COMPACT_HINT = ("1 Compact or 2 Leave it, then 3 just compact, 4 send the queue or 5 park (outside the box) · "
                 "type instructions for the compaction here if you like (none: the session is asked what to keep): "
                 "Ctrl+Enter compacts with them")
@@ -2875,7 +2878,7 @@ class WheelhouseApp(App):
         total = sum(x["drafts"] for x in self.sessions if not self.dead(x["id"]))   # Send all skips the dead
         sends = "send" if s is not None and (mode(s) == "immediate" or self.sends_now(s["id"])) else "queue"
         for h in hints:
-            h.set_base(PERMISSION_HINT if asking else COMPACT_HINT if nudged
+            h.set_base(DENY_HINT if denying else PERMISSION_HINT if asking else COMPACT_HINT if nudged
                        else hint(sends, s is not None and self.dead(s["id"])))
         thread = isinstance(self.screen, ThreadView)
         for rows, shown in ((permission_rows, asking and not denying), (reasons, denying), (compact_rows, nudged),
@@ -3199,6 +3202,8 @@ class WheelhouseApp(App):
         self.paint_items()
 
     def action_clear_filter(self) -> None:
+        if self.deny_back():
+            return
         if self.screen.selections:   # a text selection first, as the screen's own Esc does
             self.screen.clear_selection()
             return
@@ -3207,6 +3212,14 @@ class WheelhouseApp(App):
             self.items_table.set_marks(set())
             return
         self.unfilter()
+
+    def deny_back(self) -> bool:
+        """Esc while Deny's reason shows on the screen in front, wherever focus is (a click
+        may have taken it from the box): back to the buttons, nothing sent."""
+        open_ = [r for r in self.screen.query(DenyReason) if r.target is not None]
+        for r in open_:
+            r.action_back()
+        return bool(open_)
 
     def unfilter(self) -> None:
         """All sessions: Esc, or a click on the selected session or the session list's title (SessionList)."""

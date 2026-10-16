@@ -25,7 +25,7 @@ from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
 from claude_wheelhouse.store import COMPACT_QUESTION, Store, mode
-from claude_wheelhouse.tui import (BLANK, COMPACT_HINT, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice,
+from claude_wheelhouse.tui import (BLANK, COMPACT_HINT, DENY_HINT, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice,
                                    CompactButtons, CompactSession, Confirm, ForgetChoice, ParkSession,
                                    DenyReason, Folders, Hint, PermissionButtons, RelaunchChoice, RenameSession, SendBar, SessionList,
                                    ThreadView, Transcript, cylon, fill, hint, render)
@@ -3810,6 +3810,7 @@ async def test_denys_optional_reason(store, tmp_path, where, press, typed, then,
         if then:
             assert reason.display and not buttons.display, f"{desc}: the reason in place of the buttons"
             assert app.focused is reason.query_one(Input) and "Why deny?" in str(reason.query_one(Label).content), desc
+            assert {h.base for h in app.screen.query(Hint)} == {DENY_HINT}, f"{desc}: the hint fits the reason box"
             await pilot.press(*[k if k != " " else "space" for k in typed], then)
             await pilot.pause()
         assert not reason.display, f"{desc}: the reason gone"
@@ -3818,6 +3819,35 @@ async def test_denys_optional_reason(store, tmp_path, where, press, typed, then,
     item = store.item(sid, ref)
     assert item["status"] == status, desc
     assert (json.loads(item["answer"])["message"] if item["answer"] else None) == message, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("where, desc", [
+    ("inbox", "focus clicked away from the reason in the inbox: Esc still goes back"),
+    ("thread", "in a full-screen item: Esc goes back, the item stays open"),
+])
+async def test_deny_reason_esc_without_focus(store, tmp_path, where, desc):
+    """Esc while Deny's reason shows goes back to the buttons, nothing sent, wherever focus is."""
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    ref = store.post_item(sid, "permission", "Bash: rm -rf build")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        if where == "thread":
+            app.push_screen(ThreadView(sid, ref))
+            await pilot.pause()
+        await pilot.press("3")
+        await pilot.pause()
+        reason, buttons = app.screen.query_one(DenyReason), app.screen.query_one(PermissionButtons)
+        assert reason.display, desc
+        app.screen.set_focus(app.items_table if where == "inbox" else None)
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not reason.display and buttons.display, f"{desc}: the buttons back"
+        assert {h.base for h in app.screen.query(Hint)} == {PERMISSION_HINT}, f"{desc}: the hint back"
+        assert isinstance(app.screen, ThreadView) == (where == "thread"), f"{desc}: Esc leaves only the reason"
+    assert store.item(sid, ref)["status"] == "open", desc
 
 
 @pytest.mark.anyio
