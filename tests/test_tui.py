@@ -6992,3 +6992,52 @@ async def test_the_selected_session_holds_its_place_under_the_sort(store, sid, t
         app.refresh_data()
         await pilot.pause()
         assert real() == [held, busy, sid], "settled into its sorted place"
+
+
+@pytest.mark.anyio
+async def test_a_drop_beside_the_pinned_session_goes_by_what_shows(store, sid, tmp_path):
+    """T114 review 2: s1 selected has new activity, held where it was by its pin. s2 dragged
+    onto it swaps the two as shown: the sort stays, nothing jumps."""
+    s1, s2 = (store.create_session(str(tmp_path), name=n) for n in ("s1", "s2"))
+    stamp = lambda s, at: store.db.execute("UPDATE sessions SET created_at = ? WHERE id = ?", (at, s))
+    for s, at in ((sid, "2026-01-03"), (s1, "2026-01-02"), (s2, "2026-01-01")):
+        stamp(s, f"{at}T00:00:00+00:00")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.session_list
+        real = lambda: [k for k in table.final() if k]
+        await pilot.click(table, offset=(3, table.header_height + 1))
+        await pilot.pause()
+        if isinstance(app.screen, Confirm):   # the offer to relaunch a dead session
+            await pilot.press("n")
+            await pilot.pause()
+        assert app.current_session() == s1
+        stamp(s1, "2026-02-01T00:00:00+00:00")
+        app.refresh_data()
+        await pilot.pause()
+        assert real() == [sid, s1, s2], "s1 held by its pin"
+        await drag_row(pilot, table, 2, 1)
+        assert real() == [sid, s2, s1] and str(table.ordered_columns[0].label) == "*", "a swap, as it showed"
+
+
+@pytest.mark.anyio
+async def test_a_drop_beside_the_pinned_item_goes_by_what_shows(store, sid):
+    """T114 review 2: the selected task blocked, held among the running by its pin; a task
+    dragged onto it swaps the two as shown, and Status * stays."""
+    a, b, c = (store.post_item(sid, "task", n, status="running") for n in ("a", "b", "c"))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        assert item_refs(app) == [c, b, a]
+        table.move_cursor(row=1)
+        await pilot.pause()
+        assert app.selected == (sid, b)
+        store.update_item(sid, b, status="blocked")
+        app.refresh_data()
+        await pilot.pause()
+        assert item_refs(app) == [c, b, a], "b held by its pin"
+        await drag_row(pilot, table, 2, 1)
+        assert item_refs(app) == [c, a, b], "a swap, as it showed"
+        assert "status *" in [str(col.label) for col in table.ordered_columns], "the sort stays"

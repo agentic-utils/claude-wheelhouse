@@ -140,14 +140,16 @@ def session_key(spec: str, s, running: bool, at: int) -> tuple[tuple, str]:
         return keyed(s, MANUAL, 0, 0, (s["parked"], at))
     value = (s["parked"], not running)
     last = field(s, "last_at") or s["created_at"]
-    return keyed(s, f"{spec}|{value!r}", 0, value, (Desc(last), at))
+    return keyed(s, f"{spec}|{value!r}", 0, value, (Desc(last), at))   # ties (one second): creation order
 
 
-def drop(order: list, tokens: dict, moved, before=None, after=None) -> tuple[str | None, list]:
+def drop(order: list, tokens: dict, moved, before=None, after=None, shown=None) -> tuple[str | None, list]:
     """A unit (moved) dropped before the visible unit `before`, or after `after`, in the
     whole list's order (order: every row's key, as sorted now), next to it. Within its group, the group's
     token and the group's rows in their new order; across groups, None and every row in the
-    new order. A drop where it already was changes nothing: ("", [])."""
+    new order. A drop where it already was changes nothing: ("", []). Within or across goes
+    by its neighbours where it lands as the list shows them (shown: the visible rows a drag
+    moves, in order), else in the whole order."""
     rest = [k for k in order if k != moved]
     anchor, ahead = (before, True) if before is not None else (after, False)
     i = rest.index(anchor) + (0 if ahead else 1)
@@ -155,7 +157,10 @@ def drop(order: list, tokens: dict, moved, before=None, after=None) -> tuple[str
     group = tokens[moved]
     # within, if a neighbour where it lands is of its group: the foot of its group is also
     # the head of the next one's
-    within = group in {tokens[k] for k in rest[max(0, i - 1):i + 1]}
+    seen = [k for k in (shown if shown is not None else order) if k != moved and k in tokens]
+    j = seen.index(anchor) + (0 if ahead else 1) if anchor in seen else None
+    near = seen[max(0, j - 1):j + 1] if j is not None else rest[max(0, i - 1):i + 1]
+    within = group in {tokens[k] for k in near}
     if new == order:
         return "", []
     if within:

@@ -2498,11 +2498,13 @@ class WheelhouseApp(App):
         self.sessions_cursor: str | None = None
         # the selected item's key and its rank as it was shown when selected: it keeps that
         # place while selected, re-sorting once the selection moves on (ranked)
-        self.pin: tuple[str, tuple] | None = None
+        self.pin: tuple[str, tuple, str] | None = None   # the selected item's key, its rank and group as shown
+        self.rank_tokens: dict[str, str] = {}   # each shown item's group (ordering.item_key), as shown
         # the selected session's, as the item's (D113): its sort key as shown when selected,
         # held while it stays selected, so its own activity never moves it under the cursor
         self.session_pin: tuple[str, tuple] | None = None
         self.session_ranks: dict[str, tuple] = {}
+        self.session_tokens: dict[str, str] = {}   # each session's group as shown, the pinned one's held
         self.session_repin: set[str] = set()
         # items the person just closed or reopened (close), or whose permission they answered
         # (answer_permission): pinned where they go
@@ -3115,16 +3117,19 @@ class WheelhouseApp(App):
         the order needs no tie-break of its own (#70)."""
         key = self.selected and self.selected[1] and f"{self.selected[0]}|{self.selected[1]}"
         if self.pin is None or self.pin[0] != key:
-            self.pin = (key, self.ranks[key]) if key in self.ranks else None
+            self.pin = (key, self.ranks[key], self.rank_tokens[key]) if key in self.ranks else None
         keyed = [(item_key(it), it) for it in items]   # (row key, item): each key made once
-        ranks = {key: ordering.item_key(self.item_sort, it, processing, busy, names)[0] for key, it in keyed}
+        found = {key: ordering.item_key(self.item_sort, it, processing, busy, names) for key, it in keyed}
+        ranks = {key: rank for key, (rank, _) in found.items()}
+        tokens = {key: token for key, (_, token) in found.items()}
         if self.pin and self.pin[0] in ranks:
-            if self.pin[0] in self.repin:   # Delete, Ctrl+R or a permission answered: at once, and held there
-                self.pin = (self.pin[0], ranks[self.pin[0]])
+            key = self.pin[0]
+            if key in self.repin:   # Delete, Ctrl+R or a permission answered: at once, and held there
+                self.pin = (key, ranks[key], tokens[key])
             else:
-                ranks[self.pin[0]] = self.pin[1]
+                ranks[key], tokens[key] = self.pin[1], self.pin[2]
         self.repin = set()
-        self.ranks = ranks
+        self.ranks, self.rank_tokens = ranks, tokens
         return sorted(keyed, key=lambda pair: ranks[pair[0]])
 
     def session_names(self) -> dict[str, str]:
@@ -3155,6 +3160,7 @@ class WheelhouseApp(App):
                 self.session_pin = (sid, keyed[sid][0])
         self.session_repin = set()
         self.session_ranks = {sid: k for sid, (k, _) in keyed.items()}
+        self.session_tokens = {sid: t for sid, (_, t) in keyed.items()}
         return keyed
 
     def kept_sort(self, which: str) -> str:
@@ -3167,7 +3173,7 @@ class WheelhouseApp(App):
         for this TUI's next start. The selected item's held place is let go, as it was held in
         the old sort's terms."""
         if which == "items":
-            self.item_sort, self.pin, self.ranks = spec, None, {}
+            self.item_sort, self.pin, self.ranks, self.rank_tokens = spec, None, {}, {}
         else:
             self.session_sort, self.session_pin, self.session_ranks = spec, None, {}
             self.paint_session_header()
@@ -3204,12 +3210,17 @@ class WheelhouseApp(App):
             names = self.session_names()
             keyed = {item_key(it): ordering.item_key(self.item_sort, it, processing, queued | awaiting, names)
                      for it in self.client.all_items()}
+            shown = {k: (self.ranks[k], self.rank_tokens[k]) for k in self.ranks}
         else:
             keyed = self.session_keys()
+            shown = {k: (self.session_ranks[k], self.session_tokens[k]) for k in self.session_ranks}
+        # the order as it shows: the selected row where its pin holds it, not where it would go
+        keyed.update({k: v for k, v in shown.items() if k in keyed})
         if moved not in keyed or (before or after) not in keyed:   # gone meanwhile
             return
         order = sorted(keyed, key=lambda k: keyed[k][0])
-        group, new = ordering.drop(order, {k: v[1] for k, v in keyed.items()}, moved, before, after)
+        group, new = ordering.drop(order, {k: v[1] for k, v in keyed.items()}, moved, before, after,
+                                   shown=[k for k, _, _ in table.units()])
         if not new:
             return
         which = "items" if table is self.items_table else "sessions"
@@ -3226,12 +3237,18 @@ class WheelhouseApp(App):
             self.told(done)
         if across:   # the places are written: only now is ordering off
             self.set_sort(which, "")
-        if which == "items":
-            # the person's own act: every row it placed goes at once, the selected one too
-            # if the drag moved another past it (ranked_keyed's pin)
-            self.repin.update(new)
-        else:
-            self.session_repin.update(new)
+        # the person's own act: every row it placed goes at once. The selected row, if one,
+        # stays held in the group it shows in, at its new place there (its own key may be
+        # another group's by now: ranked_keyed's pin, pinned_session_keys')
+        pin, repin = (self.pin, self.repin) if which == "items" else (self.session_pin, self.session_repin)
+        if not across and pin and pin[0] in new:
+            band, value, *_ = pin[1]
+            held = (pin[0], (band, value, 1, new.index(pin[0])), *pin[2:])
+            if which == "items":
+                self.pin = held
+            else:
+                self.session_pin = held
+        repin.update(k for k in new if not (pin and k == pin[0] and not across))
         self.paint_items() if which == "items" else self.paint_sessions()
 
     def keep_unsent(self, box, old, new) -> None:

@@ -174,8 +174,12 @@ Alt+Up and Alt+Down move the highlighted unit past its neighbour through the sam
   too); Esc cancels; Alt+Up and Alt+Down; the header cycles and the sort remembered at the
   next start; the session list's `*`, a drag within its group, and one across.
 
-## Left open
+## The order a drop works from
 
-- In one session's view, a drop's neighbours in the global order may be another
-  session's rows: a drop at a group's edge can then count as across. Rare; the list shows
-  the result at once.
+A drop works from the order as it shows, the selected row where its pin holds it, and
+judges within or across by the dragged row's neighbours where it lands, as shown. Working
+from the order the pin would give up (where a selected row would go once let go) made a
+swap of two rows in one group look like a move across: the watched session starting to
+run, or the selected item changing status, sat pinned among its old group but counted in
+its new one, so the drop turned ordering off and the list jumped. Rows out of view (other
+sessions' items, in one session's view) take their places from the whole order.

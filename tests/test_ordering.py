@@ -82,6 +82,14 @@ def test_drop(before, after, moved, group, written, desc):
     assert got == (group, written), desc
 
 
+def test_drop_goes_by_the_neighbours_shown():
+    """C dropped before B: as shown (A, B, C) its neighbours there are A and B, so within A's
+    and its group; by the whole order (B first) it would be B alone: across."""
+    order, tokens = ["B", "A", "C"], {"A": "g1", "B": "g2", "C": "g1"}
+    assert ordering.drop(order, tokens, "C", before="B")[0] is None, "by the whole order: across"
+    assert ordering.drop(order, tokens, "C", before="B", shown=["A", "B", "C"])[0] == "g1", "as shown: within"
+
+
 def test_drag_within_then_status_changes():
     """Q103: B dragged above A keeps the sort; once B's status matches C's, B moves there."""
     a, b = item(1, "T1", "running", at=1), item(2, "T2", "running", at=2)
