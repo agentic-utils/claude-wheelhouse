@@ -139,6 +139,9 @@ def blocks(data) -> list[tuple[str, str]] | None:
     return None if data is None else [(b["who"], b["text"]) for b in data]
 
 
+# a daemon on code from before T114, which has no /order routes
+OLD_DAEMON_ORDER = ("the wheelhouse daemon runs older code that can't save this order: stop it (claude-wheelhouse "
+                    "daemon --stop) and start the wheelhouse again to run it on this code")
 TAB_MODE_DAEMON = ("the running daemon is in tab mode: claude-wheelhouse daemon --stop, then start again "
                    "to use SDK mode")
 # a daemon already running keeps the usage mode it was started with (features.usage_mode)
@@ -723,10 +726,21 @@ class RemoteClient:
         self.catch_up()
         return self.items
 
+    def order(self, path: str, body: dict) -> Done:
+        """An order written, as done has it, but said plainly when the daemon is too old to
+        have the route (404)."""
+        try:
+            data = self.command(path, body)
+        except Unreachable as e:
+            return Done(False).say(str(e), "error")
+        except Refused as e:
+            return Done(False).say(OLD_DAEMON_ORDER if e.status == 404 else self.refusal_of(e), "error")
+        return Done(data.get("ok", True))
+
     def reorder_items(self, group: str, keys: list[tuple[str, str]]) -> Done:
         """Written, and the rows held here in their new places at once: the list repaints in
         the new order, not the old until the daemon's next answer."""
-        done = self.done("/order/items", {"group": group, "keys": [list(k) for k in keys]})
+        done = self.order("/order/items", {"group": group, "keys": [list(k) for k in keys]})
         if done.ok:
             for i, key in enumerate(keys):
                 if (it := self.by_key.get(tuple(key))) is not None:
@@ -734,7 +748,7 @@ class RemoteClient:
         return done
 
     def reorder_sessions(self, group: str, sids: list[str]) -> Done:
-        done = self.done("/order/sessions", {"group": group, "sids": sids})
+        done = self.order("/order/sessions", {"group": group, "sids": sids})
         if done.ok:
             place = {sid: i for i, sid in enumerate(sids)}
             for s in self.views:

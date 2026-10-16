@@ -352,10 +352,10 @@ dialog's answer go to the screen it uncovers.
 Ordering the lists: click a column header in the inbox to sort by it. Status cycles `*`
 (the inbox's own order: open questions first, then blocked, running and the rest, newest
 first, settled and finished below), `▲` (by urgency: blocked, waiting, open, running, todo,
-then the settled and finished, newest first within each) and `▼` (the reverse). The other
+newest first, then the settled and finished as `*` has them) and `▼` (the reverse). The other
 columns cycle `▲`, `▼`, then back to Status `*`. The marker shows on the column in force.
-In the session list, the dot column's header sorts running sessions first, then by their
-latest activity (`*`); a second click goes back to your own order. The other headers there
+The session list starts sorted: running sessions first, then by their latest activity (`*`
+on the dot column); a click on that header goes to your own order, and another back. The other headers there
 still show every session's items, as `Esc` does. Drag a row with the mouse, or move the
 highlighted one with `Alt+Up` and `Alt+Down`, to reorder. A move among rows that share its
 sort key (the same status, under Status `*`) keeps the sort, and your order breaks the tie

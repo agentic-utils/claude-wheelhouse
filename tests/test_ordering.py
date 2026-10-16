@@ -33,6 +33,7 @@ def test_header_cycles(spec, column, then, desc):
 
 def test_session_sort_toggles():
     assert [ordering.next_session_sort(s) for s in ("", "dot*")] == ["dot*", ""]
+    assert ordering.SESSIONS_DEFAULT == "dot*", "the session list starts sorted, its * showing (Q102)"
 
 
 @pytest.mark.parametrize("spec, rows, want, desc", [
@@ -44,6 +45,10 @@ def test_session_sort_toggles():
     ("status▼", [item(1, "T1", "open", "question"), item(2, "T2", "blocked"), item(3, "T4", "todo")],
      ["T4", "T1", "T2"], "▼: the reverse"),
     ("status▲", [item(1, "T1", "running"), item(2, "T2", "running")], ["T2", "T1"], "▲: ties newest first"),
+    ("status▲", [item(1, "T1", "done"), item(2, "T2", "done")], ["T1", "T2"],
+     "▲: the settled as * has them, the latest to settle lowest"),
+    ("status▲", [item(1, "T1", "running"), item(2, "M1", "new", "doc"), item(3, "Q1", "open", "question")],
+     ["Q1", "M1", "T1"], "▲: a status not in the table between open and running"),
     ("ref▲", [item(1, "T10", "running"), item(2, "T2", "running"), item(3, "Q1", "open", "question")],
      ["Q1", "T2", "T10"], "ref: natural order"),
     ("title▼", [item(1, "T1", "running", title="apple"), item(2, "T2", "running", title="Banana")],

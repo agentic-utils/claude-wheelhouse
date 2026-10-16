@@ -894,3 +894,14 @@ def test_last_at_is_the_latest_word(store, sid):
     ref = store.post_item(sid, "task", "a")
     store.db.execute("UPDATE items SET updated_at = '2026-02-01T00:00:00+00:00' WHERE ref = ?", (ref,))
     assert store.sessions()[0]["last_at"] == "2026-02-01T00:00:00+00:00"
+
+
+@pytest.mark.parametrize("sql, index, desc", [
+    ("SELECT max(created_at) FROM messages WHERE session_id = ?", "messages_session_created", "a session's latest message"),
+    ("SELECT max(updated_at) FROM items WHERE session_id = ?", "items_session_updated", "its latest item"),
+    ("SELECT count(*) FROM messages WHERE session_id = ? AND draft = 1", "messages_drafts", "its drafts"),
+])
+def test_sessions_subqueries_use_an_index(store, sid, sql, index, desc):
+    """sessions() runs each tick: 1.9 s a call with 300k messages before these (T114 review)."""
+    plan = " ".join(r[-1] for r in store.db.execute(f"EXPLAIN QUERY PLAN {sql}", (sid,)))
+    assert index in plan, f"{desc}: {plan}"

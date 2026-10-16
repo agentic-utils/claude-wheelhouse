@@ -18,8 +18,9 @@ Decided:
 - The inbox Status header cycles `*` (the inbox's own order), `▲`, `▼`. Other columns cycle
   `▲`, `▼`, then back to Status `*`. The marker shows only on the column in force (D97).
 - Status `▲` sorts by urgency: blocked, waiting, open, then what waits on the session
-  (answered, processing, unseen, seen), running, todo, then the settled and finished;
-  `▼` the reverse; ties newest first (Q104).
+  (answered, processing, unseen, seen, and any status not named), running, todo, then the
+  settled and finished; `▼` the reverse; ties newest first (Q104), the settled and
+  finished as `*` has them (the latest to settle lowest).
 - The session list's dot column has one sort, `*`: running first, then the latest
   activity. A second click goes back to the person's order. Its other headers keep their
   click: every session's items, as Esc (D109).
@@ -47,11 +48,14 @@ every sort's key, so a group never spans two bands. Each group has a token
   band: nothing moves by itself, not a status change, not settling or finishing (a finished
   row still hides until F). Rows not placed (new ones) come first. A header click imposes
   a sort again; the `manual` places then count for nothing until ordering is off again.
+- A drop the daemon doesn't write (refused, unreachable) changes nothing: the sort,
+  its marker and every row stay as they were. Ordering goes off only once the places are
+  written. Every row a drop writes takes its new place at once, the selected one too.
 
-The session list works the same way. Ordering off is its default: until a drag, nobody is
-placed, and the order is today's (unparked, then parked, each in creation order), so a
-parked session still sinks to the foot. Under `*` the key is (parked, not running), then
-`last_at` newest first; a drag between a running session and the others turns it off.
+The session list works the same way, and starts with its `*` on (Q102's example assumes
+the asterisk shows). Under `*` the key is (parked, not running), then `last_at` newest
+first; a drag between a running session and the others turns it off. With it off and
+nobody placed yet the order is creation order, unparked then parked.
 
 ## Code
 
@@ -77,6 +81,9 @@ TEXT, `sessions.pos` REAL, `sessions.pos_group` TEXT. NULL is "not placed".
   Item writes fire the `marks` triggers, so every client repaints.
 - `Store.sessions` gains `last_at`: the latest of `created_at`, `launched_at`, the newest
   message and the newest item update. Not `heartbeat_at`, which moves every few seconds.
+  It runs each tick, so `INDEXES` adds `messages (session_id, created_at)`, `items
+  (session_id, updated_at)` and, for the drafts count beside it, `messages (session_id)
+  WHERE draft = 1`: 0.4 ms a call with 300k messages, from 1.9 s.
 - Hub `reorder_items` and `reorder_sessions` return `Done`; daemon `POST /order/items`
   (`{group, keys: [[sid, ref], ...]}`) and `POST /order/sessions` (`{group, sids}`), not
   under `/sessions/`, where `{sid}/{action}` lives. The remote client holds the new places
@@ -85,7 +92,8 @@ TEXT, `sessions.pos` REAL, `sessions.pos_group` TEXT. NULL is "not placed".
   changes it. `fingerprint.API` stays 2: the routes and keys are additive. A daemon from
   this package on older code is restarted anyway (`connect.local`). One from another
   package on the same API serves rows without the keys, read as not placed
-  (`ordering.field`), and answers 404 on `/order/*`, which the TUI reports.
+  (`ordering.field`), and answers 404 on `/order/*`: the TUI says the daemon runs older
+  code that can't save the order and that a restart fixes it, and changes nothing.
 - Older code on the same DB never reads the columns, and its inserts leave them NULL: not
   placed, which is the newcomer rule.
 
@@ -104,7 +112,7 @@ the first, group places in the second.
 | list | column | key, `▲` | ties |
 |---|---|---|---|
 | inbox | status `*` | `inbox_rank`'s tier | `inbox_rank` (newest first; settled oldest first) |
-| inbox | status `▲` | urgency (above) | newest first |
+| inbox | status `▲` | urgency (above) | newest first; settled and finished as `*` |
 | inbox | session | name casefolded, then id | `inbox_rank` |
 | inbox | ref | (prefix, number): `T2` before `T10` | `inbox_rank` |
 | inbox | title | casefolded | `inbox_rank` |

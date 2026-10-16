@@ -7,6 +7,7 @@ import time
 
 import httpx2
 import pytest
+from types import SimpleNamespace
 
 from claude_wheelhouse import client as client_mod, features, launch
 from claude_wheelhouse.client import LOST, UNREACHABLE, RemoteClient, Unreachable
@@ -411,3 +412,17 @@ def test_a_command_sent_then_unreachable_says_it_may_have_been_done(store, sid, 
         assert [m["body"] for m in store.drafts(sid)] == ["once"], "it was done"
     finally:
         c.disconnect()
+
+
+@pytest.mark.parametrize("raised, said, desc", [
+    (client_mod.Refused(404, "the daemon answered 404"), client_mod.OLD_DAEMON_ORDER, "a daemon from before /order"),
+    (Unreachable("the daemon can't be reached"), "the daemon can't be reached", "unreachable: as any command"),
+])
+def test_an_order_refused_says_why(raised, said, desc):
+    """T114 review: a daemon too old to save the order says so, and that a restart fixes it."""
+    def command(path, body):
+        raise raised
+    stub = SimpleNamespace(command=command, refusal_of=lambda e: e.error)
+    done = RemoteClient.order(stub, "/order/items", {})
+    assert (done.ok, [n.text for n in done.notices]) == (False, [said]), desc
+    assert "older code" in client_mod.OLD_DAEMON_ORDER and "start" in client_mod.OLD_DAEMON_ORDER

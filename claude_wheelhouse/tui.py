@@ -3186,16 +3186,23 @@ class WheelhouseApp(App):
         if not new:
             return
         which = "items" if table is self.items_table else "sessions"
-        if group is None:
-            group = ordering.MANUAL
+        across = group is None
+        if which == "items":
+            done = self.client.reorder_items(ordering.MANUAL if across else group,
+                                             [tuple(k.split("|", 1)) for k in new])
+        else:
+            done = self.client.reorder_sessions(ordering.MANUAL if across else group, new)
+        if not done.ok:   # nothing written: the sort, and every row, as they were
+            self.told(done)
+            return
+        if done.notices:
+            self.told(done)
+        if across:   # the places are written: only now is ordering off
             self.set_sort(which, "")
         if which == "items":
-            done = self.client.reorder_items(group, [tuple(k.split("|", 1)) for k in new])
-            self.repin.add(moved)   # the person's own act: the selected item goes at once
-        else:
-            done = self.client.reorder_sessions(group, new)
-        if not done.ok or done.notices:
-            self.told(done)
+            # the person's own act: every row it placed goes at once, the selected one too
+            # if the drag moved another past it (ranked_keyed's pin)
+            self.repin.update(new)
         self.paint_items() if which == "items" else self.paint_sessions()
 
     def keep_unsent(self, box, old, new) -> None:

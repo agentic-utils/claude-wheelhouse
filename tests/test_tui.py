@@ -1102,6 +1102,7 @@ async def test_one_current_session_whatever_happens(store, sid, tmp_path, monkey
         store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
     expect = {"A": sid, "B": other, None: None}[filtered_current if filtered else unfiltered_current]
     desc = f"{desc}, {'following A' if filtered else 'the inbox unfiltered'}"
+    store.set_setting("layout.sort.sessions", "")   # the sessions in creation order: they hold still (T114)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -1179,6 +1180,7 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
     store.queue(other, "B's draft")
     store.queue(other, "B's answer", theirs)
     store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
+    store.set_setting("layout.sort.sessions", "")   # the sessions in creation order: they hold still (T114)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -1344,6 +1346,7 @@ async def two_lists(clock, tmp_path, where, steps, slow, counts=(2, 2), tick=Fal
         for s, count in zip((a, b), counts):
             for title in ("one", "two", "three", "four")[:count]:
                 store.post_item(s, "decision", title, why="over x: y; undo: z")
+    store.set_setting("layout.sort.sessions", "")   # the sessions in creation order: they hold still (T114)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -3981,7 +3984,7 @@ async def test_the_session_list_keeps_its_counts_in_sight(store, tmp_path, via, 
         await pilot.pause()
         table = app.query_one("#session-list", SessionList)
         assert table.virtual_size.width <= table.scrollable_content_region.width, desc
-        assert table.render_line(0).text.split() == ["session", "ctx", "?", "D", "✉"], desc
+        assert table.render_line(0).text.split() == ["*", "session", "ctx", "?", "D", "✉"], desc
         assert table.render_line(1).text.split() == ["●", *shown.split(), "1", "1"], desc
 
 @pytest.mark.anyio
@@ -6892,11 +6895,14 @@ async def test_session_dot_header_sorts_and_drag_turns_it_off(store, sid, tmp_pa
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         table = app.session_list
-        assert table.keys()[:2] == [sid, other], "creation order"
+        assert str(table.ordered_columns[0].label) == "*", "the list starts sorted, its * showing (Q102)"
+        assert table.keys()[:2] == [other, sid], "*: the latest activity first"
         await pilot.click(table, offset=(1, 0))
         await pilot.pause()
-        assert str(table.ordered_columns[0].label) == "*"
-        assert table.keys()[:2] == [other, sid], "*: the latest activity first"
+        assert (str(table.ordered_columns[0].label), table.keys()[:2]) == ("", [sid, other]), "off: creation order"
+        await pilot.click(table, offset=(1, 0))
+        await pilot.pause()
+        assert str(table.ordered_columns[0].label) == "*", "and on again"
         await drag_row(pilot, table, 1, 0)
         assert table.keys()[:2] == [sid, other], "dragged within its group (neither running)"
         assert str(table.ordered_columns[0].label) == "*", "the sort stays"
@@ -6909,3 +6915,41 @@ async def test_session_dot_header_sorts_and_drag_turns_it_off(store, sid, tmp_pa
         assert str(table.ordered_columns[0].label) == "", "across groups: ordering off"
         assert [k for k in table.final() if k] == [other, parked, sid], "as dropped: the parked one no longer sinks"
         assert store.setting("layout.sort.sessions") == ""
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+async def test_drag_past_the_selected_row_shows_at_once(store, sid):
+    """T114 review: B dragged above A, the selected row in its group, shows above it at once,
+    not only once the selection moves (ranked_keyed's pin)."""
+    a, b = (store.post_item(sid, "task", n, status="running") for n in ("a", "b"))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        assert item_refs(app) == [b, a]
+        table.move_cursor(row=0)
+        await pilot.pause()
+        assert app.selected == (sid, b)
+        await drag_row(pilot, table, 1, 0)
+        assert item_refs(app) == [a, b], "the selected row moved down past at once"
+        assert [store.item(sid, r)["pos"] for r in (a, b)] == [0, 1]
+
+
+@pytest.mark.anyio
+async def test_a_drag_not_written_changes_nothing(store, sid):
+    """T114 review: a drag across groups that the daemon refuses (older code, or unreachable)
+    leaves the sort on, its marker showing and kept, and every row where it was."""
+    q = store.post_item(sid, "question", "which?")
+    t = store.post_item(sid, "task", "t", status="running")
+    app = WheelhouseApp(store)
+    said = []
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.client.reorder_items = lambda group, keys: Done(False).say("too old", "error")
+        app.told = lambda done: said.extend(n.text for n in done.notices)
+        await drag_row(pilot, app.items_table, 1, 0)
+        assert said == ["too old"]
+        assert "status *" in [str(c.label) for c in app.items_table.ordered_columns]
+        assert app.item_sort == "status*" and store.setting("layout.sort.items") is None
+        assert item_refs(app) == [q, t]

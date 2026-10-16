@@ -174,6 +174,10 @@ DROP INDEX IF EXISTS messages_pending;
 CREATE INDEX IF NOT EXISTS messages_unsent
     ON messages (session_id) WHERE delivered_at IS NULL AND draft = 0;
 DROP INDEX IF EXISTS items_seq;
+-- sessions(), each tick: each session's latest message and item (last_at) and its drafts
+CREATE INDEX IF NOT EXISTS messages_session_created ON messages (session_id, created_at);
+CREATE INDEX IF NOT EXISTS items_session_updated ON items (session_id, updated_at);
+CREATE INDEX IF NOT EXISTS messages_drafts ON messages (session_id) WHERE draft = 1;
 """
 # Triggers fire for any connection: in the schema, so a writer running older code fires
 # them too once any newer one has opened the database. Each is one statement of its own, as

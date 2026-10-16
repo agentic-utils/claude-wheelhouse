@@ -17,13 +17,14 @@ from .store import FINISHED_RANK, SETTLED_RANK, _neg_time, inbox_rank
 UP, DOWN, STAR = "▲", "▼", "*"
 MANUAL = "manual"   # pos_group of a row placed with ordering off
 ITEMS_DEFAULT = "status*"   # today's inbox order
-SESSIONS_DEFAULT = ""   # the person's order: creation order until a drag
+SESSIONS_DEFAULT = "dot*"   # the session list's one sort, on until a drag across its groups
 SESSIONS_SORT = "dot*"   # the session list's one sort: running first, then the latest activity
 SORT_KEYS = {"items": "layout.sort.items", "sessions": "layout.sort.sessions"}   # settings, per TUI
 DEFAULTS = {"items": ITEMS_DEFAULT, "sessions": SESSIONS_DEFAULT}
 SPECS = {"items": {"", "status*", *(c + m for c in ("session", "ref", "status", "title") for m in "▲▼")},
          "sessions": {"", SESSIONS_SORT}}
-# Status ▲ (Q104): blocked, waiting, open, then what waits on the session, running, todo, the rest
+# Status ▲ (Q104): blocked, waiting, open, then what waits on the session (and any status
+# not named here), running, todo
 URGENCY = {"blocked": 0, "waiting": 1, "open": 2, "answered": 3, "processing": 3, "unseen": 3, "seen": 3,
            "running": 4, "todo": 5}
 REF = re.compile(r"([A-Za-z]*)(\d*)")
@@ -79,7 +80,7 @@ def next_item_sort(spec: str, column: str) -> str:
 
 def next_session_sort(spec: str) -> str:
     """A click on the session list's dot column: its one sort, or back to the person's order."""
-    return SESSIONS_DEFAULT if spec else SESSIONS_SORT
+    return "" if spec else SESSIONS_SORT
 
 
 def marker(spec: str, column: str) -> str:
@@ -118,8 +119,9 @@ def item_key(spec: str, item, processing=frozenset(), busy=frozenset(), names=No
     elif col == "status":
         status = "processing" if item["status"] == "open" and (item["session_id"], item["ref"]) in processing \
             else item["status"]
-        value = URGENCY.get(status, len(URGENCY)) if band == 0 else 0
-        tie = (_neg_time(item["updated_at"]), -item["id"])   # newest first
+        value = URGENCY.get(status, URGENCY["answered"]) if band == 0 else 0
+        # newest first; the settled and finished as the inbox has them, the latest to settle lowest
+        tie = (_neg_time(item["updated_at"]), -item["id"]) if band == 0 else rank
     elif col == "session":
         value = ((names or {}).get(item["session_id"], "").casefold(), item["session_id"])
     elif col == "ref":
@@ -132,7 +134,7 @@ def item_key(spec: str, item, processing=frozenset(), busy=frozenset(), names=No
 
 def session_key(spec: str, s, running: bool, at: int) -> tuple[tuple, str]:
     """A session's sort key and its group's token. Ordering off: unparked then parked, in
-    creation order (at, its place in the store's list) until placed; under dot*, running
+    creation order (at, its place in the store's list) for those not placed; under dot*, running
     first, then the latest activity, parked still at the foot."""
     if not spec:
         return keyed(s, MANUAL, 0, 0, (s["parked"], at))
