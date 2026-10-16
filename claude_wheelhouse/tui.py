@@ -244,11 +244,6 @@ def unread(item) -> bool:
     return (item["kind"], item["status"]) in {("decision", "unseen"), ("doc", "new"), ("doc", "updated")}
 
 
-def live(family: list) -> bool:
-    """Whether any of an item's children is not yet finished: then Delete asks first."""
-    return any(standing(it) != "finished" for it in family)
-
-
 def family_prompt(parents: list, family: list, marked: int = 1) -> str:
     """Delete on parents (one highlighted, or among `marked` rows): what they take with them,
     and how much of that is open or unread."""
@@ -3575,12 +3570,9 @@ class WheelhouseApp(App):
             self.notify(f"{item['ref']} is {verb} already: Ctrl+R reopens it")
             return
         family = self.family(item)
-        if live(family):   # it goes with its children, once the person says so
+        if family:   # it goes with its children, finished or not, once the person says so
             self.push_screen(Confirm(family_prompt([item], family)),
                              lambda yes: yes and self.close_family(item, family))
-            return
-        if family:   # every one finished already: nothing to lose, so no question, but deleted all the same
-            self.close_family(item, family)
             return
         self.close(item, True)
         self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
@@ -3643,7 +3635,7 @@ class WheelhouseApp(App):
         picked = [it for key in self.items_table.final() if key in self.items_table.marked   # as they'll stand
                   if (it := self.client.item(*key.split("|"))) and closable(it)]
         families = {item_key(it): self.family(it) for it in filter(acts, picked)} if closed else {}
-        if any(map(live, families.values())):   # the children go with their parents, once the person says so
+        if any(families.values()):   # the children go with their parents, once the person says so
             kids = [c for f in families.values() for c in f]
             parents = [it for it in filter(acts, picked) if families[item_key(it)]]
             self.push_screen(Confirm(family_prompt(parents, kids, len(families))),

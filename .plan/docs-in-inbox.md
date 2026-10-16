@@ -84,8 +84,8 @@ parent and every child, whatever its status; No or Esc takes nothing. A parent t
 closed (a running task) still says so, as before.
 
 Delete takes the children whatever their status: a finished one, dismissed already, would
-otherwise come back when posted again. It asks only when one of them isn't finished yet;
-with every one finished there is nothing to lose. Delete on marked rows asks the same, once
+otherwise come back when posted again. It always asks first; the dialog's open and unread
+counts cover the children not yet finished. Delete on marked rows asks the same, once
 for the whole selection, whenever any marked row
 has children, and deletes each such row with its children.
 

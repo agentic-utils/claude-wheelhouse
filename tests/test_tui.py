@@ -6552,7 +6552,7 @@ async def test_a_long_doc_keeps_its_reading_place_through_a_rewrite_and_a_resize
 
 @pytest.mark.anyio
 @pytest.mark.both
-async def test_delete_takes_finished_children_too_without_asking(store, sid, tmp_path):
+async def test_delete_asks_and_takes_finished_children_too(store, sid, tmp_path):
     (tmp_path / "plan.md").write_text("# Plan\n")
     t = store.post_item(sid, "task", "design it", status="done")
     m = store.post_doc(sid, "the plan", str(tmp_path / "plan.md"), t)
@@ -6564,7 +6564,10 @@ async def test_delete_takes_finished_children_too_without_asking(store, sid, tmp
         app.items_table.focus()
         await pilot.press("delete")
         await pilot.pause()
-        assert not isinstance(app.screen, Confirm), "nothing open or unread to lose: no question"
+        assert isinstance(app.screen, Confirm), "children, even all finished: it asks"
+        assert app.screen.prompt.endswith("and its 1 child? It stays deleted, even once finished or changed.")
+        await pilot.press("y")
+        await pilot.pause()
         store.post_doc(sid, "the plan, v2", str(tmp_path / "plan.md"))
         await refresh(pilot, sid)
         assert item_list_rows(app) == [], "the doc posted again stays deleted"
