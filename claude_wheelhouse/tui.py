@@ -60,7 +60,7 @@ from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, 
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .stats_pane import SessionStats
-from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
+from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     inbox_rank, mode, runner, standing)
 from .unsent import Unsent
 
@@ -180,19 +180,62 @@ def session_action(method):
     return guarded
 
 
-def item_rows(items, names) -> list[tuple]:
-    """Tasks and questions in inbox order, then each session's subagents grouped beneath
-    its name. Pairs of (item, None) for inbox rows, (item, position in its group) for agents."""
-    inbox = [(it, None) for it in items if it["kind"] != "agent"]
-    # sorted is stable, so each group keeps inbox order
-    agents = sorted((it for it in items if it["kind"] == "agent"),
-                    key=lambda it: (names.get(it["session_id"], ""), it["session_id"]))
-    grouped, last, n = [], None, 0
-    for it in agents:
-        n = n + 1 if it["session_id"] == last else 0
-        last = it["session_id"]
-        grouped.append((it, n))
-    return inbox + grouped
+CHILD = "child"   # item_rows: a row nested under its parent item
+GROUPED = ("agent",)   # the kinds that sit in their session's group when no parent of theirs shows
+TOGGLE = Style(color="#e8e8e8", bgcolor="#555555")   # a parent row's + / - at its right-hand end
+
+
+def item_rows(bands, names, collapsed=frozenset()) -> tuple[list[tuple], dict[str, int]]:
+    """Each band's rows (active, settled, finished, as shown), as (item, place, band): place
+    None for an inbox row, CHILD for one nested under its parent (items.parent_ref) straight
+    after it, or its position in its session's group. A child goes with its parent, in its
+    parent's band, while that parent shows; else it sits in its session's group, at the foot
+    of its own band, as agents always have. A parent in collapsed shows none of its children.
+    Also each shown parent's count of shown children."""
+    shown = {item_key(it): it for b in bands for it in b}
+    children: dict[str, list] = {}
+    for b in bands:
+        for it in b:
+            parent = it["parent_ref"] and shown.get(f"{it['session_id']}|{it['parent_ref']}")
+            if parent is not None and parent["kind"] in PARENTS and parent is not it:
+                children.setdefault(item_key(parent), []).append(it)
+    nested = {id(c) for cs in children.values() for c in cs}
+    rows = []
+    for n, b in enumerate(bands):
+        for it in b:
+            if id(it) not in nested and it["kind"] not in GROUPED:
+                rows.append((it, None, n))
+                if item_key(it) not in collapsed:
+                    rows += [(c, CHILD, n) for c in children.get(item_key(it), ())]
+        # sorted is stable, so each group keeps inbox order
+        grouped = sorted((it for it in b if id(it) not in nested and it["kind"] in GROUPED),
+                         key=lambda it: (names.get(it["session_id"], ""), it["session_id"]))
+        last, k = None, 0
+        for it in grouped:
+            k = k + 1 if it["session_id"] == last else 0
+            last = it["session_id"]
+            rows.append((it, k, n))
+    return rows, {key: len(cs) for key, cs in children.items()}
+
+
+def still_open(item) -> bool:
+    """Whether a child is still under way: a question unanswered, a task or subagent not settled."""
+    return (item["kind"], item["status"]) in {("question", "open"), ("permission", "open")} or (
+        item["kind"] in ("task", "agent") and item["status"] not in SETTLED[item["kind"]])
+
+
+def unread(item) -> bool:
+    """Whether a child is something the person hasn't looked at yet: a decision unseen."""
+    return item["kind"] == "decision" and item["status"] == "unseen"
+
+
+def family_prompt(item, family: list) -> str:
+    """Delete on a parent: what it takes with it, and how much of that is open or unread."""
+    n = len(family)
+    said = [f"{k} {what}" for k, what in ((sum(map(still_open, family)), "still open"),
+                                          (sum(map(unread, family)), "unread")) if k]
+    return (f"Delete {item['ref']} ({item['title']}) and its {n} {'child' if n == 1 else 'children'}?"
+            + (f" {' and '.join(said)}." if said else ""))
 
 
 def item_key(item) -> str:
@@ -860,6 +903,25 @@ class ItemList(SinkList):
         super().__init__(**kwargs)
         self.marked: set[str] = set()
         self.anchor: str | None = None
+        self.toggles: dict[str, bool] = {}   # each parent row's key: whether its children are hidden
+
+    def _render_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
+        """The row's line, and on a parent's its + / - (TOGGLE) in the line's last cell,
+        whatever the scroll: a click there toggles its children (_on_click)."""
+        strip = super()._render_line(y, x1, x2, base_style)
+        if not self.toggles:
+            return strip
+        try:
+            row_key, _ = self._get_offsets(y)
+        except LookupError:
+            return strip
+        shut = self.toggles.get(row_key.value)
+        width = strip.cell_length
+        if shut is None or width < 2:
+            return strip
+        meta = {"row": self._row_locations.get(row_key), "column": len(self.columns) - 1, "toggle": row_key.value}
+        mark = Strip([Segment("+" if shut else "-", TOGGLE + Style.from_meta(meta))])
+        return Strip.join([strip.crop(0, width - 1), mark])
 
     def set_marks(self, marks: set[str], anchor: str | None = None) -> None:
         self.marked = {k for k in marks if not k.endswith("|")}   # not the conversation row
@@ -878,8 +940,14 @@ class ItemList(SinkList):
         self.set_marks(set(keys[lo:hi + 1]), anchor)
 
     async def _on_click(self, event) -> None:
-        self.app.settle()   # first what the keys before it moved: the rows they leave are the ones clicked
         meta = event.style.meta
+        if "toggle" in meta:   # a parent's + / -: its children shown or hidden, the row not selected
+            event.prevent_default()
+            event.stop()
+            self.app.settle()
+            self.app.toggle_children(meta["toggle"])
+            return
+        self.app.settle()   # first what the keys before it moved: the rows they leave are the ones clicked
         if "row" not in meta or meta["row"] < 0:
             return
         if meta["row"] >= self.row_count:   # the settle refilled the list, shorter: below its rows, as typed slowly
@@ -1808,7 +1876,8 @@ DESCRIBE = {
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
     "app.close_question": ("Close the highlighted question or decision, or dismiss a done task or subagent "
-                           "(or every marked one); it never reopens one: Ctrl+R does"),
+                           "(or every marked one); it never reopens one: Ctrl+R does. On an item with children it "
+                           "asks first, saying how many are still open or unread, then takes them all"),
     "help": "This list",
     "quit": "Quit the wheelhouse (sessions carry on without it)",
     "toggle_mark": "Mark or unmark the highlighted row",
@@ -1920,7 +1989,8 @@ SEND_RULES = (
 MOUSE = ("Click selects a row; in the session list, a click on the selected session or the list's title "
          "unselects it, for all sessions' items, as Esc does. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
          "keep Shift+click for itself: Space and Shift+Up/Down do the same), then Delete or Backspace closes them together "
-         "and Ctrl+R reopens the finished ones. "
+         "and Ctrl+R reopens the finished ones. An item with children (its subagents, under it) has a - at the "
+         "right-hand end of its row: a click there hides them, and the + it becomes shows them again. "
          "Double-click selects a word. Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back.")
@@ -2146,6 +2216,8 @@ class WheelhouseApp(App):
         self.repin: set[str] = set()
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
         self.show_finished = False   # finished items (store.standing), after the rest
+        self.collapsed: set[str] = set()   # the parent rows whose children are hidden, for this run alone
+        self.child_counts: dict[str, int] = {}   # each parent row shown: how many children it shows (item_rows)
         # each list's rows that change sides (an item settling, a session parked) fall or rise
         # there (T66, T71): a frame repaints the list, but not while a key lands (tick)
         self.session_sink = Sink(lambda: self.landing or not self.screen_stack or self.paint_sessions())
@@ -2650,14 +2722,16 @@ class WheelhouseApp(App):
         active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
         for key, it in keyed:
             bands[band(self.ranks[key])].append(it)
-        rows = item_rows(active, names) + item_rows(settled, names) + item_rows(finished if self.show_finished else [], names)
-        sunk = {key_of[id(it)] for it in settled + finished}
+        rows, counts = item_rows([active, settled, finished if self.show_finished else []], names, self.collapsed)
+        self.child_counts = counts
+        table.toggles = {key: key in self.collapsed for key in counts}
+        sunk = {key_of[id(it)] for it, _, n in rows if n}
         if self.filter_sid:   # the session's own conversation, pinned first
             general = (self.filter_sid, None) in queued
             rows_out.append((f"{self.filter_sid}|", (names.get(self.filter_sid, "")[:14], Text("💬"),
                              Text("queued", style="bold #05d9e8") if general else "",
                              Text("Conversation", style="bold"))))
-        for it, nested in rows:
+        for it, nested, _ in rows:
             # an unfinished item of any kind with an answer waiting to be sent shows as queued, and one
             # whose answer went with no reply since as processing (D28); neither is stored
             key = (it["session_id"], it["ref"])
@@ -2677,6 +2751,8 @@ class WheelhouseApp(App):
                 shown, title = Text(status, style=style), Text(it["title"], style="dim") if where != "active" else it["title"]
             if nested is None:
                 cells = (name, it["ref"], shown, title)
+            elif nested == CHILD:   # under its parent, as a subagent is under its session's name
+                cells = ("", Text(f"└ {it['ref']}", style="dim"), shown, Text(it["title"], style="dim"))
             else:   # a subagent, tucked under its session's name
                 cells = (name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
                          shown, Text(it["title"], style="dim"))
@@ -3358,9 +3434,38 @@ class WheelhouseApp(App):
         if standing(item) == "finished" and self.show_finished:
             self.notify(f"{item['ref']} is {verb} already: Ctrl+R reopens it")
             return
+        family = [it for it in self.client.inbox(item["session_id"]).items
+                  if it["parent_ref"] == item["ref"] and standing(it) != "finished"]
+        if family:   # it goes with its children, once the person says so
+            self.push_screen(Confirm(family_prompt(item, family)),
+                             lambda yes: yes and self.close_family(item, family))
+            return
         self.close(item, True)
         self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
         self.refresh_data()
+
+    def close_family(self, item, family: list) -> None:
+        """Delete confirmed on a parent: it and each of its children closed or dismissed,
+        whatever their status (an open question closed, a running task or subagent dismissed)."""
+        for it in [item, *family]:
+            try:
+                self.close(it, True)
+            except (SessionGone, KeyError):   # ended or gone meanwhile: the rest still go
+                continue
+        self.notify(f"deleted {item['ref']} and {len(family)} {'child' if len(family) == 1 else 'children'}"
+                    + ("" if self.show_finished else ": F shows finished items"))
+        self.refresh_data()
+
+    def toggle_children(self, key: str) -> None:
+        """A parent's + / - clicked: its children hidden or shown again. A child selected as
+        they're hidden gives the selection to its parent."""
+        self.collapsed ^= {key}
+        sid, ref = key.split("|")
+        if key in self.collapsed and self.selected and self.selected[0] == sid and self.selected[1]:
+            item = self.client.item(*self.selected)
+            if item is not None and item["parent_ref"] == ref:
+                self.select_row(key)
+        self.paint_items()
 
     def close(self, item, closed: bool) -> None:
         """Close a question or decision (Delete), or reopen it (Ctrl+R): a question as answered,

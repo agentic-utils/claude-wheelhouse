@@ -1,7 +1,7 @@
 import contextlib
 import json
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
@@ -754,3 +754,31 @@ def test_a_questions_clock_runs_from_the_persons_answer(store, sid, written_at, 
         written_at["m"] = answered
         store.send(sid, "postgres", q)
     assert (store.in_doubt(sid, at(now)) == ["Q1 reply owed"]) == listed, desc
+
+
+@pytest.mark.parametrize("words, parent, desc", [
+    ([("task", "post", 0)], "T1", "the one item posted before it started"),
+    ([("task", "post", 0), ("question", "post", 5)], "Q1", "the latest posted"),
+    ([("task", "post", 0), ("question", "post", 5), ("T1", "reply", 8)], "T1", "a reply since moves it back"),
+    ([("task", "post", 0), ("question", "post", 5), ("T1", "note", 8)], "T1", "a note since, as update_item writes"),
+    ([("task", "post", 0), ("question", "post", 5), ("T1", "reply", 20)], "Q1", "a word after it started counts for nothing"),
+    ([("task", "post", 20)], None, "nothing said before it started: its session's group"),
+    ([("agent", "post", 0)], None, "another agent is never a parent"),
+])
+def test_an_agent_sits_under_what_its_session_last_spoke_on(store, sid, words, parent, desc):
+    base = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
+    at = lambda s: (base + timedelta(seconds=s)).isoformat(timespec="seconds")
+    for what, how, s in words:
+        if how == "post":
+            ref = store.post_item(sid, what, f"{what} item")
+            store.db.execute("UPDATE items SET created_at = ?, session_at = ? WHERE session_id = ? AND ref = ?",
+                             (at(s), at(s), sid, ref))
+        else:
+            store.reply(sid, what, "on it", by_session=True) if how == "reply" else store.update_item(
+                sid, what, note="progress", declares=True)
+            store.db.execute("UPDATE messages SET created_at = ? WHERE id = (SELECT max(id) FROM messages)", (at(s),))
+            store.db.execute("UPDATE items SET session_at = ? WHERE session_id = ? AND ref = ?", (at(s), sid, what))
+    store.track_agent(sid, "agent-1", "explore the code", "", base + timedelta(seconds=10))
+    ref = store.agent_links(sid)["agent-1"][0]
+    assert store.item(sid, ref)["parent_ref"] == parent, desc
+

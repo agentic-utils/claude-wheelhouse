@@ -211,7 +211,7 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "interrupted_at", "TEXT"), ("sessions", "model_chosen_at", "TEXT"),
                  ("sessions", "effort_chosen_at", "TEXT"), ("sessions", "launched_over", "INTEGER"),
                  ("items", "session_at", "TEXT"), ("items", "moved_to", "TEXT"), ("sessions", "compact_plan", "TEXT"),
-                 ("sessions", "park_compact", "INTEGER NOT NULL DEFAULT 0")]
+                 ("sessions", "park_compact", "INTEGER NOT NULL DEFAULT 0"), ("items", "parent_ref", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -827,6 +827,8 @@ class Store:
                 ref = agent_match(db, sid, title, started)
                 if ref is None:
                     ref = self._insert_item(db, sid, "agent", title, body, "running")   # then finished, with its note
+                db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ? AND parent_ref IS NULL",
+                           (agent_parent(db, sid, started), sid, ref))
                 db.execute("INSERT INTO agent_items (session_id, agent_id, item_ref) VALUES (?, ?, ?)",
                            (sid, agent_id, ref))
                 status = status or "running"
@@ -1238,6 +1240,30 @@ def agent_match(db, sid: str, title: str, started: datetime) -> str | None:
         if best is None or key < best[0]:
             best = (key, r["ref"])
     return best and best[1]
+
+
+# the kinds an item can be the child of (items.parent_ref): an agent or a doc sits under one
+PARENTS = ("task", "question", "decision")
+
+
+def agent_parent(db, sid: str, started: datetime) -> str | None:
+    """The item a subagent was most likely dispatched for: the task, question or decision its
+    session last posted, updated or replied on (created_at, session_at, its own messages on
+    it) at or before the subagent started. None if it had said nothing on any: the agent
+    then sits in its session's group. Made once, as the item is, so later words move nothing."""
+    at = started.astimezone(timezone.utc).isoformat(timespec="seconds")
+    kinds = ",".join("?" * len(PARENTS))
+    row = db.execute(
+        f"""SELECT ref FROM (
+              SELECT ref, id, created_at AS at FROM items WHERE session_id = ? AND kind IN ({kinds}) AND moved_to IS NULL
+              UNION ALL SELECT ref, id, session_at FROM items WHERE session_id = ? AND kind IN ({kinds})
+                        AND moved_to IS NULL AND session_at IS NOT NULL
+              UNION ALL SELECT i.ref, i.id, m.created_at FROM messages m JOIN items i
+                        ON i.session_id = m.session_id AND i.ref = m.item_ref
+                        WHERE m.session_id = ? AND m.author = 'claude' AND i.kind IN ({kinds}) AND i.moved_to IS NULL)
+            WHERE at <= ? ORDER BY at DESC, id DESC LIMIT 1""",
+        (sid, *PARENTS, sid, *PARENTS, sid, *PARENTS, at)).fetchone()
+    return row and row["ref"]
 
 
 def decision_body(body: str, status, fields: dict) -> str:

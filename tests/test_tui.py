@@ -6248,3 +6248,90 @@ async def test_fork_dialog(store, tmp_path, worktree, claude_home, monkeypatch, 
         want = {"plain": cwd, "linked": cwd, "new": str(main.resolve() / ".worktrees/feat-x-fork")}[want_cwd]
         assert forks[0]["cwd"] == want, desc
         assert sorted(i["ref"] for i in store.items(forks[0]["id"])) == sorted(tick), f"{desc}: the ticked moved"
+
+
+def item_list_rows(app) -> list[list[str]]:
+    items = app.query_one("#items", DataTable)
+    return [[str(c) for c in items.get_row_at(i)][:2] for i in range(items.row_count)]
+
+
+def family(store, sid):
+    """T1 with two subagents under it, and A3 with no parent, in its session's group."""
+    with one_second():
+        t = store.post_item(sid, "task", "build it", status="running")
+        kids = [store.post_item(sid, "agent", f"helper {n}", status="running") for n in (1, 2)]
+        store.post_item(sid, "agent", "orphan", status="running")
+    for k in kids:
+        store.db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ?", (t, sid, k))
+    return t, kids
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+async def test_children_sit_under_their_parent_and_its_control_hides_them(store, sid):
+    t, kids = family(store, sid)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        items = app.query_one("#items", DataTable)
+        assert item_list_rows(app) == [["demo", t], ["", "└ A2"], ["", "└ A1"], ["demo", "└ A3"]], \
+            "children under their parent; the orphan in its session's group"
+        line = items.render_line(1).text   # the header is line 0
+        assert line.endswith("-"), "an expanded parent ends with its -"
+        assert not items.render_line(2).text.endswith(("-", "+")), "a child has no control"
+        app.items_table.move_cursor(row=3)   # the orphan selected
+        await pilot.pause()
+        selected = app.selected
+        await pilot.click("#items", offset=(items.size.width - 1, 1))
+        await pilot.pause()
+        assert item_list_rows(app) == [["demo", t], ["demo", "└ A3"]], "collapsed: its children hidden"
+        assert items.render_line(1).text.endswith("+"), "a collapsed parent ends with its +"
+        assert app.selected == selected and isinstance(app.screen, type(app.screen_stack[0])), \
+            "the click neither selects nor opens the row"
+        await pilot.click("#items", offset=(items.size.width - 1, 1))
+        await pilot.pause()
+        assert len(item_list_rows(app)) == 4, "expanded again"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("answer, said, closed, desc", [
+    ("y", "and its 3 children? 2 still open and 1 unread.", True, "yes takes the parent and every child"),
+    ("n", "and its 3 children? 2 still open and 1 unread.", False, "no takes nothing"),
+    ("escape", "and its 3 children? 2 still open and 1 unread.", False, "Esc takes nothing"),
+])
+async def test_delete_on_a_parent_asks_then_takes_its_children(store, sid, answer, said, closed, desc):
+    with one_second():
+        q = store.post_item(sid, "question", "which db?")
+        kids = [store.post_item(sid, "agent", "look", status="running"),
+                store.post_item(sid, "question", "and which port?"),
+                store.post_item(sid, "decision", "used SQLite", why="local")]
+    for k in kids:
+        store.db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ?", (q, sid, k))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(q))
+        await pilot.pause()
+        await pilot.press("delete")
+        await pilot.pause()
+        assert isinstance(app.screen, Confirm), desc
+        assert said in app.screen.prompt, desc
+        await pilot.press(answer)
+        await pilot.pause()
+    finished = [tui.standing(store.item(sid, r)) == "finished" for r in (q, *kids)]
+    assert finished == [closed] * 4, desc
+
+
+@pytest.mark.anyio
+async def test_delete_on_an_item_with_no_children_asks_nothing(store, sid):
+    q = store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        await pilot.press("delete")
+        await pilot.pause()
+        assert not isinstance(app.screen, Confirm)
+    assert store.item(sid, q)["status"] == "closed"

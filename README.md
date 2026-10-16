@@ -129,7 +129,14 @@ session.
   description, then the subagent's own conversation, read live from its transcript: the
   prompt its session gave it, each tool call as one line, its replies and its result,
   following it at the end as it works unless you've scrolled up to read. `Enter` shows
-  the same full screen. If its transcript can't be found, the pane says so.
+  the same full screen. If its transcript can't be found, the pane says so. An agent item
+  sits under the task, question or decision its session last posted, updated or replied on
+  before the subagent started (`└ A1`), moving with it; if the session had said nothing on
+  any, it sits under the session's name at the foot of the list, as it did before. An
+  item with children has a `-` on a grey background at the right-hand end of its row:
+  click it to hide them, and the `+` it turns into to show them again (for as long as the
+  app runs). `Delete` on an item with children asks first, saying how many it takes and
+  how many of them are still open or unread, then closes or dismisses it and all of them.
 - **Decisions.** If your own instructions let a session decide some things without asking
   you, it reports each one as a decision (`D1`): what it decided, and one short line with
   the alternative, why, and how to reverse it. Decisions block nothing. Each session
