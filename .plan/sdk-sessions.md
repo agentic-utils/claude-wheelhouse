@@ -1,0 +1,383 @@
+# SDK-owned sessions (design)
+
+Run each session through the Claude Agent SDK instead of an interactive Claude Code tab.
+The wheelhouse becomes the place you talk to sessions, and a terminal tab opens only when
+you ask for one. Fewer tabs, one-click compaction, and adopt, restore and relaunch all
+become "start a host with `resume=<id>`".
+
+Evidence is marked **verified** (spike run on 2026-10-08, scripts and log in the session
+scratchpad under `sdk-spike/`, total cost $0.36) or **inferred**.
+
+**Status: experimental, behind `--enable-sdk` (issue #16, Q62 and Q66).** Doug: "let's
+make SDK mode experimental as you say, in fact make it undocumented via a startup flag
+(also via a flag in a local .env file). No references to it in the readme. If a new user
+downloads the thing, they get tab mode unless I personally tell them about SDK mode." And:
+"add code comments to the SDK stuff to make clear that it's experimental and not for use
+by users other than the author until we can confirm Anthropic T&Cs".
+
+- On: `claude-wheelhouse --enable-sdk` (before or after the command, for the app, the
+  tutorial and the daemon), or `WHEELHOUSE_ENABLE_SDK=true`, or `ENABLE_SDK=true` in the
+  install directory's `.env` (the checkout) or `~/.config/claude-wheelhouse/.env`. `features.sdk_enabled()` is the one switch; the
+  flag is left out of `--help`. Through the daemon the mode is the daemon's: an app in SDK
+  mode starts it with `--enable-sdk` (the flag is the app's alone), and
+  its inbox tells each client, whose SDK-only controls follow it. An app joining a daemon
+  already running takes that daemon's mode.
+- Off (the default): `DEFAULT_RUNNER` is `tab`, and `WHEELHOUSE_RUNNER=sdk` doesn't turn
+  SDK mode on. New session has no runner box; the hub refuses a new hosted session and
+  the daemon refuses one (403). Whatever the mode, the daemon refuses another machine
+  anything that would open a tab, where nobody there sees it. One rule, where the runner
+  resolves: `launch.open_session` (and `restore_session`) refuse a tab with `may_tab` false
+  (`launch.NotHere`), which the daemon passes for another machine's request, through
+  Restore, Restore all, Relaunch, Adopt and a Relaunch carried on later (stored with it:
+  `store.relaunch_may_tab`); the hub says it as a warning. Adopt checks first (once it knows
+  the session isn't still running), so a tracked session's rename isn't kept on a refusal. The daemon answers 403 at once
+  only where nothing at all could be done: New session's tab, the tutorial, Shell, and, out
+  of SDK mode (where every session comes back in a tab), Restore, Restore all, Relaunch of
+  a dead session and Adopt. Restore and
+  Adopt bring any session back the way new sessions run now (Q27, option A), so as a tab;
+  the tutorial is always a tab. The `?` overlay, README and
+  `claude-wheelhouse protocol` leave SDK mode out, and the tutorial runs in a tab.
+- A session a host already runs keeps working with the flag off: it shows and ends as
+  before, and Relaunch of a running one starts its host again, so nobody's work is
+  stranded. Once it has stopped, Restore (or Relaunch of the dead session) brings it back
+  as a tab, per Q27 option A. Interrupt, Compact (and Relaunch's compact
+  first), Shell and the permission buttons stay, since they manage it; Model and the
+  effort slider hide, so it runs on as it was set.
+
+## 1. Billing and policy: the deciding question
+
+**Technically it runs on the subscription login. Verified.** With no `ANTHROPIC_API_KEY`
+in the environment, `ClaudeSDKClient` (claude-agent-sdk 0.2.164, bundled CLI 2.1.292)
+reported `apiKeySource: none` in its init message and answered normally on the logged-in
+Max account. The SDK drives the Claude Code binary, which uses whatever login it finds.
+
+**Policy is a different matter.** The sources:
+
+- Agent SDK overview: "Unless previously approved, Anthropic does not allow third party
+  developers to offer claude.ai login or rate limits for their products, including agents
+  built on the Claude Agent SDK. Use the API key authentication methods described in the
+  Quickstart instead." (code.claude.com/docs/en/agent-sdk/overview)
+- Legal and compliance: "Advertised usage limits for Pro and Max plans assume ordinary,
+  individual usage of Claude Code and the Agent SDK." And: "Developers building products
+  or services that interact with Claude's capabilities, including those using the Agent
+  SDK, should use API key authentication ... Anthropic does not permit third-party
+  developers to offer Claude.ai login into their own applications, or to route requests
+  through Free, Pro, or Max plan credentials on behalf of their users." But also: it does
+  not "prevent an end user from signing in to the unmodified Claude Code binary with
+  their own Claude subscription". (code.claude.com/docs/en/legal-and-compliance)
+
+Reading (inferred, not legal advice):
+
+- **Doug's own use** reads as "ordinary, individual usage of ... the Agent SDK": his tool,
+  his machine, his login. Fine.
+- **Beta testers on their own subscriptions** is the grey zone. The wheelhouse never
+  touches credentials and runs the unmodified binary, which argues for it; but it is a
+  product built on the SDK offering subscription use, which is exactly what the overview
+  note names. The interactive-tab design has no such question: that is plainly a user
+  running Claude Code.
+
+So this is a go for Doug and an open question for beta. See open question 1.
+
+## 2. Permission prompts and Claude's own questions
+
+Both arrive at the `can_use_tool` callback. Verified: a Bash `touch` in `default` mode
+called the callback with `{"command": "touch spike.txt", ...}` and our deny reached Claude.
+Docs: "The callback can stay pending indefinitely. Execution remains paused until your
+callback returns." (agent-sdk/user-input)
+
+- **Tool approval** becomes a new item kind, permission (`P`): the command or diff in the
+  body, buttons Allow, Allow always (echoes `context.suggestions` as `updated_permissions`,
+  written to `.claude/settings.local.json`), Deny with an optional message. Deny with a
+  message doubles as "do this instead".
+- **AskUserQuestion** becomes a native question item with the options as buttons and
+  multi-select where `multiSelect` is set. The answer goes back as
+  `updated_input={"questions": ..., "answers": {question: label}}`. This finally gives us
+  Claude's real questions in the inbox, not the ones it remembered to post.
+- **Plan approval** (ExitPlanMode) inferred to arrive the same way; check in phase 1.
+- If the host restarts while a prompt is pending, the callback is lost. The documented fix
+  is a PreToolUse hook returning `defer`, so the call resumes from the persisted session.
+
+## 3. Escape hatch to a terminal
+
+Verified: a session created by the SDK resumes in the plain CLI. `claude --resume <id>`
+on the spike's session answered from its history with the same session id.
+
+Flow: you press Shell on a session. The host interrupts or waits for the turn to end,
+disconnects, marks the session `in shell` and exits. The wheelhouse opens a Windows
+Terminal tab running `claude --resume <id>` (the existing `open_tab` path). Liveness
+already finds that process by its session id; when it exits, the wheelhouse starts a host
+with `resume=<id>` again and the session is back in the inbox.
+
+The rule is one process per session at a time. The docs don't say what happens if two
+attach (inferred: both append to one JSONL and the history forks). The host must be gone
+before the tab opens, and the TUI must not start a host while a tab process is alive.
+Adopt already refuses a running session (`adopt.StillRunning`); the same check applies.
+
+## 4. Parity with interactive sessions
+
+Verified from the spike's init message, with default `setting_sources`:
+
+| Feature | Under the SDK |
+| --- | --- |
+| CLAUDE.md, rules, settings | Loaded (user, project, local) |
+| Plugins | All 24 of Doug's enabled plugins loaded |
+| Skills, agents | 99 skills, 7 agents |
+| MCP servers | User servers and claude.ai connectors connected |
+| Hooks | Run. Doug's PreCompact hook blocked the first `/compact`, exactly as it would in a tab |
+| Slash commands | 141 listed. `/compact <instructions>` sent as a prompt compacted the session: `compact_boundary`, trigger `manual`, 43,380 tokens down to 1,226 |
+| Transcript | Written to the normal `~/.claude/projects/<dir>/<id>.jsonl`, so the conversation pane and stats pane keep working |
+| Context size | `client.get_context_usage()` returns the `/context` breakdown directly |
+| Monitor tool | Present, but no longer needed (below) |
+
+The protocol still goes in through `system_prompt={"type": "preset", "preset":
+"claude_code", "append": protocol}`. Model is an option and can change mid-session with
+`set_model`. The options also take a `session_id`, so the wheelhouse can pick the id
+before launch.
+
+**The monitor goes away.** The host owns the session's input, so an answer is a real user
+turn, sent with `client.query()`. Streaming mode queues messages sent mid-turn and
+processes them in order ("Queued messages: send multiple messages that process
+sequentially, with ability to interrupt", agent-sdk/streaming-vs-single-mode). No
+480-character notification limit, no `get_input` pointer, no join notice. The MCP server
+stays: sessions still post items through it.
+
+What doesn't come across (inferred): Claude Code's own screen. Interactive pickers
+(`/model` menu, `/resume` list, `/config`), the status line, the todo panel and Esc Esc
+rewind need their own wheelhouse equivalents or the Shell escape hatch. The init message
+lists `terminal_slash_commands` separately, which looks like exactly that list.
+
+## 5. Process model
+
+One small host process per session, `claude-wheelhouse host <sid>`, started detached
+(`setsid`) so closing or restarting the TUI never kills a session. Each host owns one
+`ClaudeSDKClient` and talks to the rest only through SQLite, like everything else today:
+
+- it reads that session's dispatched messages and sends them as turns
+- it writes permission and question items from `can_use_tool` and waits for the answer row
+- it records state changes (running, waiting, compacting, in shell, exited)
+
+All sessions inside the TUI process is simpler but fails the "TUI restart must not kill
+sessions" test, so no.
+
+- **Restore after a reboot:** start a host per session with `resume=<id>`.
+- **Adopt:** the same, for any session id found on disk, once its interactive process has
+  exited.
+- **Relaunch after an upgrade:** stop the host, start a new one. The code-version stamp
+  stays.
+
+## 6. What changes for the user
+
+- No tab per session. The conversation pane is where you read and type; it already
+  renders the transcript. With `include_partial_messages` it can stream text as it's
+  written. Whether to stream is open question 4.
+- The send box sends real turns. Queued and Immediate modes keep their meaning: Immediate
+  goes straight to `client.query()`; Queued holds until Ctrl+S.
+- An Interrupt button (and Esc in the conversation) calls `client.interrupt()`.
+- Compact becomes one click. The session is asked what to keep (which also satisfies a
+  PreCompact hook like Doug's that wants a transcript saved first), then the host sends
+  `/compact <its notes>` and reports the token drop from `compact_boundary`.
+- Shell opens the real Claude Code in a tab for anything the wheelhouse can't do.
+- `protocol.md` shrinks: the parts about notifications, pointers, `get_input` and
+  answering in the tab go. Items, refs, `reply` and decisions stay.
+
+## 7. Migration
+
+1. **Host behind a flag.** `claude-wheelhouse host`, the launch option "Run in wheelhouse"
+   alongside "Open a tab" (default stays tab). Permission (`P`) items, AskUserQuestion as
+   question items, interrupt, send box wired to turns. Tests use a fake client.
+2. **Shell and back, and Compact.** The hand-off in section 3, the Compact button,
+   context usage from `get_context_usage()`.
+3. **Default to SDK.** Restore and Adopt start hosts; monitor and join notice kept only
+   for tab sessions; protocol trimmed for SDK sessions.
+4. **Tutorial** on the new flow. It gets simpler: no tab to explain.
+
+Risks:
+
+- Policy (section 1) for anyone but Doug.
+- Two Claude Code binaries: the SDK bundles its own CLI (2.1.292 against 2.1.294
+  installed today). Setting `cli_path` to the user's `claude` keeps one version.
+- A lost pending prompt if a host dies mid-approval, until `defer` is in place.
+- Feature gaps against the interactive screen will show up in use; Shell covers them.
+- Cost of the rewrite: `launch.py` and `monitor.py` (335 lines) give way to a host of
+  similar size, plus the permission item kind and the send path in `tui.py`.
+
+## Open questions for Doug
+
+1. **Beta testers and subscription login.** The SDK route is fine for Doug's own use, but
+   Anthropic's docs say third-party products built on the SDK must not offer claude.ai
+   login without approval. Options: (a) ask Anthropic (Two Inc has a commercial
+   relationship) before beta; (b) beta testers run SDK mode on an API key and pay per
+   token; (c) ship beta in tab mode and keep SDK mode for Doug until (a) is answered.
+   This decides whether SDK mode can ever be the default for others.
+2. **Default launch mode.** Once built, should new sessions run in the wheelhouse by
+   default with Shell as the escape hatch, or should launch ask each time? Default
+   changes what a new user sees first.
+3. **Permission prompt volume.** In `default` permission mode every unapproved tool call
+   becomes a `P` item, which could flood the inbox. Options: start SDK sessions in `auto`
+   mode (the classifier approves routine calls, only escalations reach the inbox), or
+   `default` with Allow always learning rules as you go. `auto` means fewer interruptions
+   and more trust in the classifier.
+4. **Live streaming.** Show Claude's text as it's generated (`include_partial_messages`,
+   more repaints, the pane we only just made fast) or only completed messages (what the
+   pane does now from the transcript)?
+
+## As built (2026-10-08, issue #40)
+
+Phases 1 and 2 are built and run on PR #17. Doug's call on building it: "nah it's GO BIG OR
+GO HOME time! Let's go straight to build out. This is a prototype and the bar for
+experimentation is low".
+
+**Verified live** on Doug's Max login, with Sonnet for the test sessions:
+
+- A new session runs in a host and answers its brief. The init records `permissionMode:
+  auto`, the same as Doug's tab sessions, which get it from `defaultMode` in
+  `~/.claude/settings.json` (the tab launch passes no mode flag either).
+- AskUserQuestion became question item Q1 with its options. A message on Q1 went back as
+  the answer, and the session carried on and posted a task through the MCP server.
+- A project `ask` rule (`Bash(touch:*)`) forced a prompt in auto mode. It became P1,
+  Allow ran the command, and a message on P2 denied the next one with that text.
+- Compact: the session was asked for its notes, and then `/compact <notes>`. 48k down to 8k
+  on one run (the compact_boundary's tokens), and "compacted 51k → 39k" on another (the
+  /context total, system prompt included).
+- Restore of a dead host resumed the session, and the join turn had it post its open
+  questions.
+- Shell: the host let go, a tab opened with `claude --resume`, and when the tab's Claude
+  exited the host took the session back under its own pid. A message afterwards was
+  answered.
+- End through the request path: the session called `end_session`, its row went, and the
+  host exited. No stray processes.
+
+**Decisions made while Doug was away:**
+
+| Decision | Alternative | Why |
+| --- | --- | --- |
+| New sessions run in a host by default (`DEFAULT_RUNNER = "sdk"`, now `SDK_DEFAULT_RUNNER`, in SDK mode only: see Status); a box in New session opens a tab instead; `WHEELHOUSE_RUNNER=tab` restores the old default | Keep tabs the default behind a flag | The whole point of the change, and it works end to end; one env var reverts it |
+| Sessions created before this stay tabs while they run (runner NULL means tab); Restore and Adopt bring any session back with the current default runner (Q27, option A), except the tutorial, always a tab (D66) | Migrate them; or keep each session's stored runner on Restore | A running tab would otherwise be misread; a stored runner left pre-host sessions as tabs for good, and Shell covers wanting a tab |
+| The host passes no permission mode | Pass `auto` explicitly | Never override the user's settings: SDK sessions already start in the user's `defaultMode`, verified |
+| `cli_path` is the user's `claude` | The SDK's bundled CLI | One Claude Code version for tabs and hosts |
+| The host always renders the system prompt fresh (`--system-prompt-snapshot off`), and a hosted session opened in a shell tab does too | Only for adopted sessions | Its recorded prompt would be the other runner's protocol |
+| No wheelhouse plugin in a host (no monitor, no `/wheelhouse` skill) | Load it | The monitor would deliver the person's messages a second time; End and Park come as turns, which `end_session` and `park_session` answer |
+| Permission items are their own kind (`P`, open / allowed / denied); sessions can't post them | Reuse questions | They have their own answers (Allow, Always, Deny) and must never be posted by a session |
+| A message typed on a permission item denies the call with that text, at once in either send mode (#53) | Ignore it; queue it like any answer | It's the natural "do this instead", and the session is blocked until it lands |
+| One AskUserQuestion call is one question item; several questions take `n: answer` parts | One item per question | One tool call waits on one answer |
+| Closing an AskUserQuestion item unanswered denies the call | Leave it waiting | The callback would otherwise wait forever |
+| A permission left open by a host that died is denied when the host restarts, with a note that Claude Code will ask again | The PreToolUse `defer` hook from section 2 | Simpler for a prototype; `defer` is the follow-up if lost approvals bite |
+| A permission or dialog question Claude Code withdraws (Interrupt, Shell) closes with a note; a message typed on it afterwards becomes an ordinary turn | Leave it open | Its buttons would do nothing, and the message would be lost |
+| The host starts through `setsid --fork`, so it is init's child, and a zombie (state Z) counts as dead | Reap it from the TUI | An exited host the TUI never waited on stayed a zombie that still read as alive, so Restore and Relaunch refused it |
+| In a hosted session `get_input()` takes nothing and says why | Leave it | The person's messages must arrive as user turns, never as a tool result |
+| Completed messages in the pane, plus a live activity line in the bar; no partial-text streaming | Stream partial text | The pane already renders the transcript; streaming is a later nicety |
+| Compact asks for notes between a line `<keep id="<nonce>">` and a line `</keep>`, a fresh id per press, and sends `/compact` once a turn's text has carried that block, whichever turn it arrives in (an empty block compacts without instructions); only Interrupt, the host stopping or 10 quiet minutes without notes abandon it (the last says so) | Count turns between the ask and the reply; time out from the press | Counting broke twice in review: Claude Code starts turns by itself, and an error in an earlier turn ended the wait. Timing from the press gave up on a long turn's session, the one most in need of compacting, and wrote "idle" over a running turn. Tags on lines of their own keep prose that quotes them from counting |
+| On a shell hand-back the host lets go silently once the shell flag is cleared (a Restore's host clears it as it starts) or another process holds the registration; only the registered owner writes the activity line | Take the session back whenever it reads dead | A Restore in the 2-second gap left the old host lurking, and its exit wrote "stopped" over the new owner's line |
+| A message the host has passed on is remembered by id until it is marked delivered, so a claim retaken after a failed confirm is confirmed, never sent again | Rely on the claim timeout | A locked database at the wrong moment would otherwise duplicate a turn |
+| An answer handed to a waiting call stays claimed, not delivered, until the call takes it; if Claude Code withdraws the call first, the message is released, undelivered, in the store | Keep withdrawn answers in the host's memory | The store then says what's true: whoever delivers next (this host, a new one after a stop, or a shell tab's monitor) sends it, and a host stopping can't lose it |
+| A host that can't start Claude Code (or resume it) records `stopped: Claude Code didn't start: …` as the session's activity | Leave the reason in the host's log | The session would otherwise just read dead, with nothing on screen saying why |
+| In a hosted session, `get_input(ref)` shows every sent message, marking those not yet delivered "(reaches you as a user turn)", or "(passed to you)" once the host has claimed them | Hide undelivered ones | Hiding also hid a message the host had sent but not yet marked; a claimed one has already gone to a turn or a waiting call |
+| A message handed to a waiting call stays handed until its delivery is recorded; withdrawn meanwhile, it is released to go out as a turn | Forget it once the call resumes | A locked database could otherwise leave it marked delivered without Claude Code ever reading it |
+| Allow, Always and Deny sit over the permission item's answer box (#53: from the bar they read as a free-text answer); the bar carries Interrupt, Compact and Shell (since #59 under the session list, for the current session, D20; still in a full-screen item's bar), shown only when they apply; Compact and Shell confirm first, Interrupt doesn't | Keys, or a new pane | The bar is on every screen and already context-aware; no new key clashes |
+| The monitor and join notice stay for tab sessions | Remove them | Tabs remain supported, and a shell tab uses them |
+
+**Not done or not verified:**
+
+- Beta testers on their own logins: open question 1 still stands. Nothing here changes that.
+- ExitPlanMode arrives as a permission item with the plan as its body (the code expects it,
+  but it hasn't been seen live).
+- Whether Windows Terminal closes the shell tab when Claude is killed rather than `/exit`ed:
+  the test killed it and couldn't see the tab.
+- Interrupt reached Claude Code (the turn stopped), but the test's tool call had been moved
+  to the background by Doug's own hooks, so the interrupt of a running foreground tool is
+  unseen.
+- `get_context_usage()` is stored on the session (`context_tokens`, `context_max`,
+  `context_at`). The stats read it only between a compaction and the next response (#54);
+  otherwise the transcript's size is exact and they read that.
+- Live partial-text streaming, a key for Interrupt, and a model picker are left for later.
+
+## 9. Token savings (#16)
+
+Measured on one long-running hosted session (T81): the main thread averaged 233k tokens of
+context per call, about $80 a day in cache reads; four cold cache rewrites after more than
+an hour idle waiting on the person cost $10.60, and one host restart rewrote 429k ($5).
+The hosts' cache writes are the 1 h kind (the transcripts' `ephemeral_1h_input_tokens`),
+so an hour's quiet is what turns the cache cold.
+
+- **Compact question.** When a turn ends with the context at `NUDGE_TOKENS` (200k) or more,
+  the host posts one question item, `context 220k: compact?`, marked in its answer column
+  (`store.COMPACT_QUESTION`), answered with buttons: Compact and Leave it, a choice of what
+  follows, and the answer box for optional instructions. It is one per crossing: neither a
+  restarted host nor Leave it brings a second. Once a turn ends compacted, or under 200k, it
+  closes with a note; the next crossing asks afresh only once the context has been under
+  200k, so a compaction that leaves it past 200k brings no new question. Keys: 1 Compact,
+  2 Leave it, 3 to 5 the choice of what follows. Compact needs the host running. It
+  never counts as the session waiting on the person (keepalive). Hosts only: the wheelhouse
+  can't compact a tab (D89).
+- **What follows a Compact.** The Compact button's dialog and the question both offer it
+  (`store.THEN`): just compact (the open-items reminder goes, as after any compaction); send
+  the queued answers with that reminder, one prompt rather than two (the default); or park at
+  once, sending nothing, so no prompt writes the compacted context to the cache. Instructions
+  typed are sent as `/compact <them>`, without asking the session. Park on a hosted session
+  offers Compact first, ticked while the cache is warm: the park turn, then `/compact`, then
+  the host stops. While a compaction that parks runs, new turns and requests stay queued
+  (an answer to a call waiting on the person still goes), for up to `COMPACT_TIMEOUT`;
+  Stop & Forget pressed meanwhile wins, told once the compaction's turn ends. Compact first lapses if the session hasn't parked within the hour.
+- **Keepalive.** A session whose last turn ended over `KEEPALIVE_TOKENS` (150k), with
+  nothing running, not parked, and waiting on the person (an open question, or an
+  unseen decision, of its own: a permission or AskUserQuestion waits inside a running turn,
+  so never brings one) or with an item in doubt (`Store.in_doubt`, `.plan/item-sync.md`),
+  gets a tiny turn from the host
+  `KEEPALIVE_AFTER` (55 min) after its last one, telling it to reply with one word and do
+  nothing else, or, with an item in doubt, the check line naming those items. It leaves the activity line as it found it (an error's or Interrupt's),
+  unless it fails itself; an interrupted keepalive leaves it too. That keeps the hour's
+  cache warm for a few thousand tokens of reads instead of a cold rewrite of the whole
+  context. The keepalive's own end restarts the 55 minutes but not the quiet time, so they
+  stop once the session has been quiet `features.keepalive_hours()` (8 h unless
+  `--keepalive-hours`, `WHEELHOUSE_KEEPALIVE_HOURS` or `KEEPALIVE_HOURS=` in a `.env` says otherwise; 0 turns it off,
+  and the hub passes it to each host): an abandoned session doesn't pay for ever. A host just started (or just back from a shell tab) sends none until a
+  turn of its own has ended, since it can't know the cache is warm. Compact under way, a
+  pending permission and a turn Claude Code started itself all hold it off, and so does a
+  last turn that compacted the context: there is no cache to preserve, until a turn ends
+  without one.
+- **Relaunch, compacting first.** A host's restart is what forces the cold rewrite
+  (quitting the TUI leaves detached hosts alone). Relaunch of a running host whose last
+  recorded context is over `COMPACT_FIRST_TOKENS` (150k) offers Compact first, Relaunch
+  now or Cancel. Compact first is the hub's (`Hub.compact_then_relaunch`, and the daemon's
+  relaunch with `compact: true`): it gives the host the ordinary `compact` command, so a
+  stale host understands it too, unless a Compact is under way already. The relaunch is
+  kept in `sessions.relaunch` with the time Compact was asked for, after the three values
+  older code reads. Each tick, once the host has recorded a context under 150k since then
+  (`context_at`, which no later activity line hides) and its activity line is idle again
+  (never mid-turn, as a turn queued behind /compact would be), the host is stopped and
+  started again as any Relaunch. The deadline (30 minutes) is checked first, so a
+  wheelhouse started hours later never restarts it. Interrupt (from any wheelhouse: a
+  new hub clears the store's row, and the host records `interrupted_at` as it interrupts,
+  which every hub reads, since the interrupted turn's end writes over its activity line),
+  Compact getting no notes, the session going to a shell tab or
+  another host give it up, saying so, with the host left running; a host that died is
+  relaunched as any stopped one.
+- **The host posts the reply.** One session made about 87 `reply` calls a day, each
+  repeating its chat as the reply's text. Now the host, which knows which refs the
+  person's messages in a turn were on, posts what that turn ends by saying (its text after
+  its last tool call, not a subagent's) as the reply on each when the turn ends
+  (`Store.host_reply`), and `protocol_sdk.md` asks the session to end its turn with the
+  answer and declare the status with a short `update_item(ref, status=...)` alone; tab
+  sessions keep `reply` as before (`protocol_tab.md`). PROTOCOL_VERSION 8, and 10 for the
+  final text. An errored turn, or one with no closing text, posts nothing; the session's
+  status call settles the item all the same (a `status` message, which AWAITING counts as
+  a reply). Nor is it posted where the session has replied itself since the person's
+  message (a relaunched session copying its history).
+  An interrupted turn ends as `interrupted`, not as an error.
+  Each turn goes with a uuid, and the host asks Claude Code to replay user messages
+  (`replay-user-messages`), which it does as it takes each turn up: a turn's end answers
+  the turns replayed in it. As probed on claude 2.1.296: a turn Claude Code starts itself
+  (a background task's notification) replays none of ours; a turn sent while one runs is
+  taken up into it at the next tool call, and one end answers both; an interrupted turn's
+  end lists it alone, and the turns queued behind it still run. (The result message's own
+  `user_message_uuids` say the same, but the SDK drops that field.) Should Claude Code
+  stop replaying, a turn's end with no origin (Claude Code's own turns carry one) that
+  replayed none of ours takes the oldest sent as ended, unanswered, and says so on stderr,
+  so the host never wedges.
+- **Slimmer decisions.** A decision's alternative, why and reverse were three required
+  fields, each its own labelled paragraph. They are one short line now, `why` ("over
+  Postgres: no server to run; undo: swap the DSN"), shown as **Why:** under the detail:
+  the same information in fewer words, for the session to write and the person to read.
+  PROTOCOL_VERSION 9. A session still on the older protocol may send `alternative` and
+  `reverse`: post_item folds them into `why`. Question bodies are left as they are, uncapped: a cap could cut what
+  a question needs to stand on its own.

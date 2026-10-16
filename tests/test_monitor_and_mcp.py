@@ -1,6 +1,7 @@
 import io
 import os
 import sys
+import types
 
 import anyio
 import pytest
@@ -8,19 +9,93 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from claude_wheelhouse import monitor
+from claude_wheelhouse.store import PROTOCOL_VERSION
 
 
-@pytest.mark.parametrize("ref, body, expected, desc", [
-    ("Q1", "yes", "[wheelhouse] from the person on Q1: yes", "answer to a question"),
-    (None, "a\nb", "[wheelhouse] from the person (general): a ⏎ b", "general hint, newlines flattened"),
+@pytest.mark.parametrize("ref, body, kind, expected, desc", [
+    ("Q1", "yes", None, "[wheelhouse] from doug on Q1: yes", "answer to a question"),
+    (None, "a\nb", None, "[wheelhouse] from doug (general): a ⏎ b", "general hint, newlines flattened"),
+    (None, "you joined", "notice", "[wheelhouse] you joined", "the wheelhouse's own notice names no sender"),
 ])
-def test_format_message(ref, body, expected, desc):
-    assert monitor.format_message({"item_ref": ref, "body": body}) == expected, desc
+def test_format_message(ref, body, kind, expected, desc):
+    m = {"id": 1, "item_ref": ref, "body": body, "kind": kind}
+    assert monitor.format_message(m, person="doug") == expected, desc
 
 
-def test_format_message_cuts_long_bodies():
-    line = monitor.format_message({"item_ref": "Q2", "body": "x" * 5000})
-    assert 'get_input("Q2")' in line and len(line) < 1700
+@pytest.mark.parametrize("msgs, expected, desc", [
+    ([("Q1", "yes")], "[wheelhouse] from doug on Q1: yes", "one message reads as before"),
+    ([("Q3", "use SQLite"), ("Q4", "yes,\nkeep the flag"), (None, "ship it tonight")],
+     "[wheelhouse] from doug, 3 answers: on Q3: use SQLite ‖ on Q4: yes, ⏎ keep the flag ‖ (general): ship it tonight",
+     "a batch is one line, a block per message in order"),
+])
+def test_format_batch(msgs, expected, desc):
+    got = monitor.format_batch([{"id": i, "item_ref": r, "body": b} for i, (r, b) in enumerate(msgs)], person="doug")
+    assert got == (expected, len(msgs)), desc
+
+
+@pytest.mark.parametrize("n, length, shown, desc", [
+    (2, 5000, 2, "two long messages share the limit, each cut short"),
+    (15, 5000, 3, "past what fits, the rest follow"),
+    (30, 300, 3, "many medium messages: the line stays within the limit"),
+    (30, 20, 13, "many short messages: as many as fit whole"),
+    (5, 30, 5, "a few short messages all fit"),
+])
+def test_a_long_batch_stays_within_the_line_limit(n, length, shown, desc):
+    msgs = [{"id": 100 + i, "item_ref": f"Q{i}", "body": "x" * length} for i in range(n)]
+    line, got = monitor.format_batch(msgs, person="doug")
+    assert (got, len(line) <= monitor.LINE_LIMIT) == (shown, True), desc
+    assert line[:500] == line, f"{desc}: Claude Code cuts a notification at 500 characters"
+    if length > 100:
+        assert "get_input(message_id=100)" in line, desc
+    assert (f"{n - shown} more follow" in line) == (shown < n), desc
+
+
+def test_messages_that_do_not_fit_come_in_the_next_notification(store, sid):
+    for i in range(20):
+        store.send(sid, "x" * 300, f"Q{i}")
+    out = io.StringIO()
+    counts = [monitor.poll_once(store, sid, out) for _ in range(10)]
+    assert sum(counts) == 20 and counts[0] < 20 and counts[-1] == 0, "released, then printed by later polls"
+    assert all(len(line) <= monitor.LINE_LIMIT for line in out.getvalue().splitlines())
+
+
+def test_a_cut_short_message_can_always_be_read_in_full(store, sid):
+    """Review: a general message is confirmed delivered as it prints, so get_input() can't find it."""
+    from claude_wheelhouse import mcp_server
+    store.send(sid, "y" * 5000)
+    out = io.StringIO()
+    monitor.poll_once(store, sid, out)
+    msg_id = store.db.execute("SELECT id FROM messages").fetchone()[0]
+    assert f"get_input(message_id={msg_id})" in out.getvalue()
+    mcp_server._store, mcp_server._sid = store, sid
+    assert mcp_server.get_input(message_id=msg_id) == "[general] " + "y" * 5000
+    assert mcp_server.get_input(message_id=msg_id + 1) == f"no message {msg_id + 1}"
+
+
+def test_a_dispatched_batch_arrives_as_one_notification(store, sid):
+    store.queue(sid, "SQLite", "Q3")
+    store.queue(sid, "yes", "Q4")
+    out = io.StringIO()
+    assert monitor.poll_once(store, sid, out) == 0, "drafts wait"
+    store.dispatch(sid)
+    assert monitor.poll_once(store, sid, out) == 2
+    assert out.getvalue().count("\n") == 1 and "2 answers" in out.getvalue()
+
+
+def test_format_message_names_the_os_user(monkeypatch):
+    monkeypatch.setattr(monitor.getpass, "getuser", lambda: "ada")
+    assert monitor.format_message({"id": 1, "item_ref": "Q1", "body": "yes"}).startswith("[wheelhouse] from ada on Q1")
+
+
+@pytest.mark.parametrize("ref, kind, desc", [
+    ("Q2", None, "an answer on an item"),
+    (None, None, "a general message (Doug's 676-character message 25 lost its tail and pointer)"),
+    (None, "notice", "the wheelhouse's own notice"),
+])
+def test_a_long_message_shows_its_pointer_before_the_cut(ref, kind, desc):
+    line = monitor.format_message({"id": 7, "item_ref": ref, "kind": kind, "body": "x" * 676}, person="doug")
+    assert len(line) <= monitor.LINE_LIMIT < 500, desc
+    assert line.index("get_input(message_id=7)") < 100, f"{desc}: the pointer comes before the text"
 
 
 def test_poll_once_delivers_each_message_once(store, sid):
@@ -41,20 +116,33 @@ def test_mcp_server_round_trip(store, sid, db_file):
         async with stdio_client(params) as (r, w), ClientSession(r, w) as client:
             await client.initialize()
             names = {t.name for t in (await client.list_tools()).tools}
-            assert {"post_item", "update_item", "get_input", "list_items",
+            assert {"post_item", "update_item", "reply", "set_synopsis", "get_input", "list_items",
                     "park_session", "end_session"} <= names
             ref = (await client.call_tool("post_item", {"kind": "question", "title": "db?",
                                                          "body": "detail"})).content[0].text
             store.send(sid, "postgres", ref)
             got = (await client.call_tool("get_input", {})).content[0].text
-            return ref, got
+            refused = [await client.call_tool("update_item", args) for args in (
+                {"ref": ref, "status": "done"}, {"ref": "Q9", "status": "closed"})]
+            replied = (await client.call_tool("reply", {"ref": ref, "text": "which version?",
+                                                        "status": "open"})).content[0].text
+            await client.call_tool("set_synopsis", {"text": "Choosing a database."})
+            return ref, got, refused, replied
 
-    ref, got = anyio.run(drive)
+    ref, got, refused, replied = anyio.run(drive)
+    assert replied == "replied on Q1, now open"
+    assert store.item(sid, ref)["status"] == "open"
+    assert store.session(sid)["synopsis"] == "Choosing a database."
+    assert [(r.is_error, r.content[0].text) for r in refused] == [
+        (True, "Error executing tool update_item: question status must be one of ['answered', 'closed', 'open']"),
+        (True, "Error executing tool update_item: no item Q9 in this session"),
+    ], "a refused call tells the session why"
     assert ref == "Q1"
     assert got == "[Q1] postgres"
     row = store.session(sid)
     assert row["claude_pid"] == 999999, "server leaves the pid registered by run() alone (review #4)"
     assert row["heartbeat_at"], "server beats once on start"
+    assert row["code_version"] == PROTOCOL_VERSION, "and stamps its code version"
 
 
 class BrokenOut:
@@ -106,7 +194,7 @@ def test_a_cancel_then_a_fresh_request_arrive_in_order(store, sid):
     out = io.StringIO()
     monitor.poll_once(store, sid, out)
     text = out.getvalue()
-    assert text.index("cancelled the end request") < text.index("pressed End"), text
+    assert text.index("cancelled the end request") < text.index("pressed Stop & Forget"), text
 
 
 def test_the_monitor_survives_a_locked_database(sid, monkeypatch):
@@ -157,7 +245,7 @@ def test_the_monitor_survives_a_locked_start_and_reports_each_error_once(sid, mo
         opens.append(1)
         if len(opens) == 1:
             raise sqlite3.OperationalError("database is locked")
-        return object()
+        return types.SimpleNamespace(mark_version=lambda sid: None)
 
     def poll(store, sid):
         polls.append(1)
@@ -175,3 +263,127 @@ def test_the_monitor_survives_a_locked_start_and_reports_each_error_once(sid, mo
     err = capsys.readouterr().err
     assert err.count("database is locked") == 1, err
     assert err.count("disk I/O error") == 1, err
+
+
+@pytest.mark.parametrize("fields, why, desc", [
+    ({"why": "over Postgres: no server; undo: swap the DSN"}, "over Postgres: no server; undo: swap the DSN",
+     "the one line, as the protocol asks"),
+    ({"alternative": "Postgres", "why": "no server", "reverse": "swap the DSN"},
+     "over Postgres: no server; undo: swap the DSN", "an older protocol's three fields: folded into why, none lost"),
+    ({"alternative": "Postgres", "reverse": "swap the DSN"}, "over Postgres; undo: swap the DSN",
+     "no why of its own: what there is"),
+])
+def test_a_decision_keeps_an_older_protocols_fields(store, sid, fields, why, desc):
+    from claude_wheelhouse import mcp_server
+    mcp_server._store, mcp_server._sid = store, sid
+    ref = mcp_server.post_item("decision", "used SQLite", **fields)
+    assert store.item(sid, ref)["body"] == f"**Why:** {why}", desc
+
+
+def test_the_sessions_status_call_settles_an_awaiting_item(store, sid):
+    from claude_wheelhouse import mcp_server
+    mcp_server._store, mcp_server._sid = store, sid
+    q = store.post_item(sid, "question", "db?")
+    store.send(sid, "postgres?", q)
+    mcp_server.update_item(q, status="answered")
+    assert (sid, q) not in store.awaiting() and store.item(sid, q)["status"] == "answered"
+
+
+@pytest.mark.parametrize("fields, named, desc", [
+    ({"alternative": "Postgres"}, "alternative", "a task with an older decision field: that field is named"),
+    ({"reverse": "undo it"}, "reverse", "the other"),
+    ({"why": "because"}, "why", "and why itself"),
+])
+def test_only_a_decision_takes_the_decision_fields(store, sid, fields, named, desc):
+    from claude_wheelhouse import mcp_server
+    mcp_server._store, mcp_server._sid = store, sid
+    with pytest.raises(Exception, match=f"{named}: only a decision"):
+        mcp_server.post_item("task", "x", **fields)
+
+
+@pytest.mark.parametrize("before, call, said, desc", [
+    (["T running"], ("update_item", "T1", {"status": "done"}), "T1 updated",
+     "nothing else in doubt: nothing appended"),
+    (["T running", "T waiting", "T running"], ("update_item", "T2", {"status": "done"}),
+     "T2 updated. Still open: T1 running, T3 running", "closing one of three lists the other two"),
+    (["T running", "T waiting"], ("update_item", "T2", {"note": "halfway"}), "T2 updated",
+     "a note only is no change of work"),
+    (["T waiting", "Q owed"], ("reply", "Q1", {"text": "thanks", "status": "answered"}),
+     "replied on Q1, now answered. Still open: T1 waiting", "a question answered"),
+    (["T waiting"], ("post_item", "task", {"title": "follow-on"}),
+     "T2. Still open: T1 waiting", "a task posted beside one waiting 17 minutes (T81 and T82)"),
+    (["Q owed"], ("post_item", "question", {"title": "next?"}),
+     "Q2. Still open: Q1 reply owed", "a question the person answered is marked reply owed (Q72 and Q73)"),
+    (["T waiting"], ("post_item", "decision", {"title": "chose", "why": "because"}), "D1",
+     "a decision is no change of work"),
+])
+def test_a_change_of_work_lists_what_is_still_open(store, sid, monkeypatch, before, call, said, desc):
+    from datetime import datetime, timedelta, timezone
+
+    from claude_wheelhouse import mcp_server
+    from claude_wheelhouse import store as store_mod
+    mcp_server._store, mcp_server._sid = store, sid
+    store.mark_version(sid)
+    t0 = datetime.now(timezone.utc) - timedelta(minutes=17)
+    real_now = store_mod.now
+    monkeypatch.setattr(store_mod, "now", lambda: t0.isoformat(timespec="seconds"))
+    for item in before:
+        kind, status = item.split()
+        ref = store.post_item(sid, "task" if kind == "T" else "question", item,
+                              status=None if status == "owed" else status)
+        if status == "owed":
+            store.send(sid, "yes", ref)
+    monkeypatch.setattr(store_mod, "now", real_now)
+    name, first, kwargs = call
+    assert getattr(mcp_server, name)(first, **kwargs) == said, desc
+
+
+@pytest.mark.parametrize("tool, parent, stops, said, gone, desc", [
+    ("park_session", 4242, True, "parked; this session stops in a moment", False,
+     "a tab's: its Claude Code (this server's parent, as registered) is stopped after the reply"),
+    ("end_session", 4242, True, "forgotten; wheelhouse data deleted; this session stops in a moment", True,
+     "Forget too, read before the row is deleted"),
+    ("park_session", 777, False, "parked", False, "a host's session: its host exits by itself, nothing signalled"),
+    ("end_session", 777, False, "forgotten; wheelhouse data deleted", True, "so on Forget"),
+])
+def test_park_and_forget_stop_the_session_after_replying(store, sid, monkeypatch, tool, parent, stops, said, gone,
+                                                        desc):
+    from claude_wheelhouse import mcp_server
+    store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b'")
+    mcp_server._store, mcp_server._sid = store, sid
+    timers, stopped = [], []
+    monkeypatch.setattr(mcp_server.os, "getppid", lambda: parent)
+    monkeypatch.setattr(mcp_server.liveness, "stop", lambda *a: stopped.append(a))
+    monkeypatch.setattr(mcp_server.threading, "Timer",
+                        lambda delay, fn, args: types.SimpleNamespace(start=lambda: timers.append((delay, fn, args)),
+                                                                      daemon=False))
+    assert getattr(mcp_server, tool)() == said, desc
+    assert stopped == [], f"{desc}: nothing signalled before the reply has gone"
+    for delay, fn, args in timers:
+        fn(*args)
+    assert stopped == ([(4242, 1, "b")] if stops else []), desc
+    assert [d for d, *_ in timers] == ([mcp_server.STOP_AFTER] if stops else []), desc
+    assert (store.session(sid) is None) is gone, desc
+
+
+@pytest.mark.parametrize("call, refused, desc", [
+    (dict(kind="doc", title="plan", path="{doc}", body="text"), "title, path and parent only", "a doc with a body"),
+    (dict(kind="task", title="build", path="{doc}"), "only a doc takes", "a task with a path"),
+    (dict(kind="question", title="which?", parent="T1"), "only a doc takes", "a question with a parent"),
+])
+def test_post_item_keeps_path_and_parent_to_docs(store, sid, tmp_path, call, refused, desc):
+    from claude_wheelhouse import mcp_server
+    (tmp_path / "plan.md").write_text("# Plan\n")
+    mcp_server._store, mcp_server._sid = store, sid
+    with pytest.raises(Exception, match=refused):   # the tool's ToolError, with the store's words
+        mcp_server.post_item(**{k: v.format(doc=tmp_path / "plan.md") for k, v in call.items()})
+    assert store.items(sid) == [], desc
+
+
+def test_post_item_declares_a_doc(store, sid, tmp_path):
+    from claude_wheelhouse import mcp_server
+    (tmp_path / "plan.md").write_text("# Plan\n")
+    mcp_server._store, mcp_server._sid = store, sid
+    t = mcp_server.post_item(kind="task", title="design it").split(".")[0]
+    assert mcp_server.post_item(kind="doc", title="the plan", path=str(tmp_path / "plan.md"), parent=t) == "M1"
+    assert store.item(sid, "M1")["parent_ref"] == t

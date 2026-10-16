@@ -170,6 +170,9 @@ Anyone can add a module, the review and dashboard modules included, by
 writing a package against one public protocol. The hub has no private hooks
 for its own modules: if review needs something, it goes into the protocol.
 
+A first slice of this protocol is built, with stats as its first module (#43): see
+`.plan/stats-plugin.md` for what exists and what doesn't yet.
+
 ### Discovery
 
 A module is a Python package that declares one entry point in the group
@@ -399,19 +402,34 @@ The prototype's `board/claude_board/` becomes `claude_wheelhouse`, and the
 become `WHEELHOUSE_*`, and the MCP server and injected plugin are both named
 `wheelhouse`.
 
-`store.py` is already most of a service. Out of `tui.py` and into the service:
+`store.py` is already most of a service. Out of `tui.py` and into the service,
+`hub.py` (built for the remote plan's phase 1, `.plan/remote.md`):
 
-- `session_action`, the shared "does this session still exist" guard, becomes
-  the service's own precondition on every session command (raises
-  `SessionGone`).
-- the liveness re-check in `act_on_dead` becomes part of the `restore` and
-  dead-session `park`/`end` commands.
-- the Park and End decision table (running: set a request; dead: act now;
-  cancel and force) moves into commands, so the rule that the wheelhouse
-  never deletes or hides a running session's data behind its back is enforced
-  in one place any surface must go through.
+- a session command that needs the session's row (`stop_host`,
+  `act_on_dead`, `rename`, `submit`, `toggle_mode`, and `send_queue` for a
+  dead session's name) reads it through `Hub.row`, which raises `SessionGone`
+  for one that has gone. The others leave that to the store's writes, which
+  raise it too (`ask`, `cancel_request`, `unpark`, parking by `force`,
+  `answer_permission`, `send_queue`'s dispatch), with three exceptions:
+  `host_command` drops it, as there is nothing to do; ending by `force` on a
+  session already gone deletes nothing; and `relaunch` and `restore` launch,
+  and a launch of a session that has gone fails like any other, said as an
+  error. `close` reads the item, and through `Hub.row` says which went when
+  it isn't there. `send_all` acts only on sessions with answers queued.
+  `session_action` stays in the TUI as what turns `SessionGone` into a toast.
+- the liveness re-check in `act_on_dead` is `Hub.act_on_dead`; `Hub.restore`
+  restores only a dead session.
+- the Park and End commands (`ask`, `act_on_dead`, `cancel_request`,
+  `force`) are the hub's. The decision of which to offer (running: ask; dead:
+  act now; pending: cancel or force) still picks the TUI's dialog; enforcing
+  it in the commands, with the planned `NotAllowed`, waits for a second
+  surface.
 
-The TUI keeps dialogs, confirm wording and layout.
+The TUI keeps dialogs, confirm wording and layout. Queries returning frozen
+dataclasses, the typed errors beyond `SessionGone` and the `changes()` feed
+are not built: the TUI reads store rows and re-queries on its tick. The daemon
+(`.plan/remote.md`, phase 2) serves the rows as JSON and publishes a change feed of its
+own, polling `PRAGMA data_version` on a connection of its own, so its own commits count too.
 
 ### Review (PR tab of `claude_dashboard.py` to `packages/review`)
 

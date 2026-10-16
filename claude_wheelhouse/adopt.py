@@ -3,13 +3,13 @@
 The wheelhouse lists recent transcripts from ~/.claude/projects, plus sessions it already
 tracks whose process has gone (e.g. an adoption whose tab failed). If the chosen session is
 still running, the person types /exit in its tab first; the wheelhouse never kills it. Then
-the wheelhouse registers the session under its own id and opens it in a new tab like any
-restore: `claude --resume <id>` with the wheelhouse's MCP server, monitor, protocol and
-/wheelhouse commands.
+the wheelhouse registers the session under its own id and opens it like any restore
+(launch.restore_runner: the way new sessions run now, and the tutorial's always in a tab),
+resuming it by id with the wheelhouse's MCP server, protocol and /wheelhouse commands.
 """
 
+import functools
 import json
-import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -17,12 +17,16 @@ from pathlib import Path
 
 from . import launch, liveness
 from .store import Store
+from .transcript import project_folder
 
 PROJECTS = Path.home() / ".claude/projects"
 WINDOW_DAYS = 14     # transcripts touched longer ago than this aren't offered
 LIMIT = 40
 CHUNK = 256 * 1024   # bytes read from each end of a transcript
 TITLE_WIDTH = 70
+
+
+JOINED_TEXT = launch.JOINED_TEXT
 
 
 class StillRunning(RuntimeError):
@@ -39,11 +43,7 @@ class Candidate:
     active: float         # last prompt or reply, epoch seconds
     running_pid: int | None
     name: str = ""        # its name in the wheelhouse, if it is already tracked there
-
-
-def project_folder(cwd: str) -> str:
-    """How Claude Code names a project's transcript folder."""
-    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    named: str = ""       # its own name in the transcript (its custom title, else Claude Code's), uncut
 
 
 def _records(data: bytes):
@@ -108,18 +108,20 @@ def read_transcript(path: Path) -> Candidate | None:
                 found[key] = rec[key]
     first = next((t for t in map(_prompt_text, head_recs) if t), "")
     last = found.get("lastPrompt", "")
-    title = found.get("customTitle") or found.get("aiTitle") or first or ("" if last.startswith("/") else last)
+    named = " ".join((found.get("customTitle") or found.get("aiTitle") or "").split())
+    title = named or first or ("" if last.startswith("/") else last)
     if not title:   # never prompted, e.g. opened to /resume something else and cancelled
         return None
-    return Candidate(path.stem, cwd, _one_line(title), _last_active(tail_recs or head_recs, path), None)
+    return Candidate(path.stem, cwd, _one_line(title), _last_active(tail_recs or head_recs, path), None,
+                     named=named)
 
 
 def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = liveness.SESSIONS,
                proc: Path = liveness.PROC, now: float | None = None) -> list[Candidate]:
-    """Recent interactive sessions not open in a wheelhouse tab, most recently active first.
-    Tracked ones whose process has gone are offered again, keeping their name."""
-    tracked = {s["id"]: s for s in store.sessions()}
-    busy = {sid for sid, s in tracked.items() if liveness.status(s, proc=proc) != "dead"}
+    """Recent interactive sessions with no row in the wheelhouse (forgotten, or never known),
+    most recently active first. A tracked one, running or not, is never offered: Relaunch
+    brings back one that isn't running."""
+    tracked = {s["id"] for s in store.sessions()}
     cutoff = (now or time.time()) - WINDOW_DAYS * 86400
     paths = []
     for p in projects.glob("*/*.jsonl"):   # subagent transcripts sit a level deeper
@@ -127,7 +129,7 @@ def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = livenes
             mtime = p.stat().st_mtime
         except OSError:
             continue
-        if p.stem not in busy and mtime >= cutoff:
+        if p.stem not in tracked and mtime >= cutoff:
             paths.append((mtime, p))
     alive = liveness.running_sessions(sessions, proc)
     found = []
@@ -138,7 +140,6 @@ def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = livenes
             continue
         if c:
             c.running_pid = alive.get(c.id)
-            c.name = tracked[c.id]["name"] if c.id in tracked else ""
             found.append(c)
             if len(found) == LIMIT:
                 break
@@ -146,18 +147,24 @@ def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = livenes
 
 
 def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSIONS,
-          proc: Path = liveness.PROC, open_tab=launch.open_tab) -> str:
-    """Register the session and open it in a new tab. Refuses while it is still running.
-    A session the wheelhouse already tracks keeps its row (and its items), renamed if asked."""
+          proc: Path = liveness.PROC, open_tab=None, sdk: bool | None = None, may_tab: bool = True) -> str:
+    """Register the session and open it as launch.restore_runner says (the way new sessions
+    run now; the tutorial's, a tab), tracked already or not. Refuses while it is still
+    running. A session the wheelhouse already tracks keeps its row (and its items), renamed
+    if asked. sdk: whether SDK mode is on, else features.sdk_enabled(). may_tab false (a
+    request from another machine): a tab is refused (launch.NotHere) before anything changes."""
+    open_tab = open_tab or functools.partial(launch.restore_session, sdk=sdk, may_tab=may_tab)
     pid = liveness.running_pid(c.id, sessions, proc)
     if pid:
         raise StillRunning(pid)
+    if not may_tab and launch.restore_runner(store, c.cwd, sdk) == "tab":   # before any rename or row
+        raise launch.NotHere({"name": name or c.name, "cwd": c.cwd, "id": c.id})
     if store.session(c.id):
         if name:
             store.rename(c.id, name)
         open_tab(store, c.id)
         return c.id
-    sid = store.create_session(c.cwd, name=name, sid=c.id)
+    sid = store.create_session(c.cwd, name=name, sid=c.id, runner=launch.restore_runner(store, c.cwd, sdk))
     try:
         open_tab(store, sid)
     except BaseException:

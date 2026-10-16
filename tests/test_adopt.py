@@ -68,6 +68,15 @@ def test_title(projects, records, title, desc):
     assert adopt.read_transcript(transcript(projects, records=records)).title == title, desc
 
 
+@pytest.mark.parametrize("records, named, desc", [
+    ([record(), {"type": "custom-title", "customTitle": "x" * 100}], "x" * 100, "a long custom title: whole, not cut"),
+    ([record(), {"type": "ai-title", "aiTitle": "VAT   rounding"}], "VAT rounding", "else Claude Code's title"),
+    ([record(message={"content": "x" * 200})], "", "a prompt isn't a name"),
+])
+def test_named(projects, records, named, desc):
+    assert adopt.read_transcript(transcript(projects, records=records)).named == named, desc
+
+
 @pytest.mark.parametrize("records, folder, cwd, desc", [
     ([record(), record(cwd="/elsewhere")], None, REPO, "the cwd matching the transcript folder, not the latest"),
     ([record(cwd="/a/b")], "-other", "/a/b", "falls back to the first cwd"),
@@ -121,12 +130,12 @@ def test_candidates(store, projects, sessions, proc):
     transcript(projects, "headless", records=[record(entrypoint="sdk-cli")])
     (projects / adopt.project_folder(REPO) / "newer" / "subagents").mkdir(parents=True)
     (projects / adopt.project_folder(REPO) / "newer/subagents/agent-1.jsonl").write_text(json.dumps(record()))
-    store.create_session(REPO, name="Rare caper", sid="older")   # tracked, its tab failed: offered again
+    store.create_session(REPO, name="Rare caper", sid="older")   # tracked, its tab failed: Relaunch's, not Adopt's
     store.create_session(REPO, sid="open")
     store.register("open", 4242, 1000, "boot-1")                  # open in a wheelhouse tab: not offered
     running(sessions, "newer")
     found = adopt.candidates(store, projects, sessions, proc)
-    assert [(c.id, c.running_pid, c.name) for c in found] == [("older", None, "Rare caper"), ("newer", 4242, "")]
+    assert [(c.id, c.running_pid, c.name) for c in found] == [("newer", 4242, "")]
 
 
 @pytest.mark.parametrize("start, expected, desc", [
@@ -170,6 +179,22 @@ def test_adopting_a_tracked_session_reuses_its_row(store, sessions, proc, name, 
     adopt.adopt(store, candidate(), name, sessions, proc, open_tab=lambda s, sid: opened.append(sid))
     assert opened == [SID] and len(store.sessions()) == 1, desc
     assert store.session(SID)["name"] == expected, desc
+
+
+@pytest.mark.parametrize("tracked, desc", [
+    (True, "a tracked session keeps its name (review 76: the rename stayed)"),
+    (False, "no row is made"),
+])
+def test_a_tab_another_machine_asked_for_changes_nothing(store, sessions, proc, monkeypatch, tracked, desc):
+    """may_tab false (another machine) and a tab to open: refused before anything changes."""
+    tabs = []
+    monkeypatch.setattr(launch, "open_tab", lambda store, sid, notice=True: tabs.append(sid))
+    if tracked:
+        store.create_session(REPO, name="Rare caper", sid=SID)
+    with pytest.raises(launch.NotHere):
+        adopt.adopt(store, candidate(), "LG", sessions, proc, sdk=False, may_tab=False)
+    assert tabs == [], desc
+    assert [s["name"] for s in store.sessions()] == (["Rare caper"] if tracked else []), desc
 
 
 def test_a_failed_launch_leaves_no_row(store, sessions, proc):

@@ -7,15 +7,28 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
+    "claude-agent-sdk>=0.2.164",
+    "httpx2>=2.13",
     "mcp>=2.2",
+    "sse-starlette>=3.5",
+    "starlette>=1.7",
     "textual>=8.2",
+    "uvicorn>=0.54",
 ]
 
 [project.scripts]
 claude-wheelhouse = "claude_wheelhouse.cli:main"
 
+[project.entry-points."claude_wheelhouse.modules"]
+stats = "claude_wheelhouse.stats_pane:module"
+
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["httpx2>=2.13", "pytest>=8", "pytest-xdist>=3.8"]
+
+[tool.pytest.ini_options]
+# in parallel, a worker a core (pytest-xdist); `-n 0` runs it serially
+addopts = "-n auto"
+markers = ["both: runs through a hub in process (--local), and through the daemon, fetching at each refresh and on the client's own threads (conftest.via)"]
 
 [build-system]
 requires = ["hatchling>=1.27"]
