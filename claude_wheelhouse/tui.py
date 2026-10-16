@@ -3748,15 +3748,19 @@ class WheelhouseApp(App):
                                    self.client.context_tokens(sid), n)
             self.push_screen(ForgetChoice(prompt, warm), lambda choice: choice and self.forget(sid, choice))
         else:
-            lost = f" {n} queued answer(s) will be discarded." if n else ""
-            self.lifecycle(sid, "end", f"Forget {self.label(sid)}? Its wheelhouse data is deleted.{lost}")
+            self.lifecycle(sid, "end", self.forget_act(sid, n))
+
+    def forget_act(self, sid: str, n: int) -> str:
+        """Forget's confirm, with the queued answers it discards."""
+        lost = f" {n} queued answer(s) will be discarded." if n else ""
+        return f"Forget {self.label(sid)}? Its wheelhouse data is deleted.{lost}"
 
     @session_action
     def forget(self, sid: str, choice: str) -> None:
         """ForgetChoice's answer: the end request, or stopped and forgotten now (force). The
         dialog may have sat open while the session stopped or was asked: lifecycle again."""
         if not self.running(sid) or self.pending(sid) is not None:
-            self.lifecycle(sid, "end", f"Forget {self.label(sid)}? Its wheelhouse data is deleted.")
+            self.lifecycle(sid, "end", self.forget_act(sid, len(self.client.drafts(sid))))
         elif choice == "tell":
             self.ask(sid, "end")
         else:

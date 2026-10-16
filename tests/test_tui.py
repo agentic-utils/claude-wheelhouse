@@ -3975,6 +3975,35 @@ async def test_stop_and_forget_offers_a_choice_by_cache_warmth(store, tmp_path, 
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("key, desc", [
+    ("l", "Let it know after the session stopped: the confirm keeps the queued-answers warning"),
+    ("j", "Just stop it after the session stopped: the same"),
+])
+async def test_stop_and_forget_stopped_while_open_keeps_queued_warning(store, tmp_path, monkeypatch, key, desc):
+    from claude_wheelhouse import liveness
+    status = {"now": "live"}
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: status["now"])
+    sid = store.create_session(str(tmp_path), name="forgettable", runner="tab")
+    store.queue(sid, "an answer")
+    app = WheelhouseApp(store)
+    monkeypatch.setattr(app.client, "warm", lambda s: True)
+    monkeypatch.setattr(app.client, "cache_expires", lambda s: 1_800_000_000.0)
+    monkeypatch.setattr(app.client, "context_tokens", lambda s: 180_000)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pick(app, pilot, sid)
+        await pilot.click("#end")
+        await pilot.pause()
+        assert isinstance(app.screen, ForgetChoice), desc
+        status["now"] = "dead"
+        app.refresh_data()
+        await pilot.pause()
+        await pilot.press(key)
+        await pilot.pause()
+        assert isinstance(app.screen, Confirm), desc
+        assert "1 queued answer(s) will be discarded" in app.screen.prompt, f"{desc}: {app.screen.prompt}"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("runner_, desc", [
     ("sdk", "hosted: a pending end request pressed again offers C cancel / F force, not ForgetChoice"),
     ("tab", "a tab: the same"),
