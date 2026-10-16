@@ -19,6 +19,7 @@ from rich.markdown import Markdown as RichMarkdown
 from rich.segment import Segment
 from rich.style import Style
 from rich.cells import cell_len
+from rich.color import Color
 from rich.text import Text
 from textual import events, on
 from textual.app import App, ComposeResult
@@ -70,6 +71,8 @@ DECISION = "bold #b967ff"   # an unseen decision: noticeable, not urgent
 STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "#05d9e8",
                 "dead": "bold #ff2a6d", "forgetting": "bold #d300c5", "parking": "bold #d300c5",
                 "relaunching": "bold #05d9e8"}
+BLINK_FRAMES = 7   # a busy session's dot: 0.7 s at its colour, then 0.7 s dimmed (dot_dimmed), at FRAMES a second
+DIM = 0.4   # a busy session's dot, dimmed: this share of its colour (dimmed)
 LARGE_CONTEXT = "bold #ff9f1c"   # a live session's dot at or past the Compact question's size (NUDGE_TOKENS)
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
 FRAMES = 10   # frames a second that the shimmer, the eyes and the bars are counted in, whatever the rate drawn
@@ -101,6 +104,17 @@ LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of
 def eye_at(frame: int, width: int = 8) -> int:
     """Where the eye is at `frame`: all that changes from one of its frames to the next (cylon)."""
     return round((math.sin(frame / 4) + 1) / 2 * (width - 1))
+
+
+def dot_dimmed(frame: int) -> bool:
+    """Whether a busy session's dot is dimmed at `frame`: BLINK_FRAMES on, then as many dimmed."""
+    return frame // BLINK_FRAMES % 2 == 1
+
+
+def dimmed(style: Style) -> Style:
+    """`style` with its colour dimmed: the same hue, darker, for a busy session's dot (dot_dimmed)."""
+    r, g, b = style.color.get_truecolor()
+    return style + Style(color=Color.from_rgb(r * DIM, g * DIM, b * DIM))
 
 
 def cylon(frame: int, width: int = 8) -> Text:
@@ -668,23 +682,28 @@ class SessionList(SinkList):
         self.eyes: set[str] = set()   # the busy sessions' rows, whose eye cell paint_sessions leaves blank
         self.eye_frame = 0
         self.swept: tuple | None = None   # the busy rows and the eye's place as last drawn again (sweep)
+        self.blinked = False   # whether the busy rows' dots were last drawn dimmed (sweep)
 
     def sweep(self, frame: int) -> None:
         """The busy rows' eyes to `frame`: drawn over their blank cell as each line is drawn
         (_render_line), and those rows alone drawn again. Never in the table's data, where
         each change would draw every row again: DataTable's caches key on its count of them.
-        Not if the eyes are where they were last drawn, on the same rows: a frame can leave them there."""
+        Not if the eyes are where they were last drawn, on the same rows: a frame can leave them there.
+        Their dots flash the same way (dot_dimmed): with the eyes still, only the dots' cells drawn again."""
         self.eye_frame = frame
         swept = (frozenset(self.eyes), eye_at(frame, self.EYE))   # a row the table draws anew, it draws as it is
-        if swept == self.swept:
+        blinked = dot_dimmed(frame)
+        if swept == self.swept and blinked == self.blinked:
             return
-        self.swept = swept
+        moved, self.swept, self.blinked = swept != self.swept, swept, blinked
         for sid in self.eyes:
             if sid in self.rows:
-                self.refresh_row(self.get_row_index(sid))
+                row = self.get_row_index(sid)
+                self.refresh_row(row) if moved else self.refresh_coordinate(Coordinate(row, 0))
 
     def _render_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
-        """The line as DataTable draws it, with a busy row's eye over its blank cell (sweep)."""
+        """The line as DataTable draws it, with a busy row's eye over its blank cell, and its
+        dot dimmed on alternate half seconds (sweep)."""
         strip = super()._render_line(y, x1, x2, base_style)
         if not self.eyes or not self.columns:
             return strip
@@ -694,6 +713,8 @@ class SessionList(SinkList):
             return strip
         if line or row_key.value not in self.eyes:
             return strip
+        if dot_dimmed(self.eye_frame):
+            strip = self.dim_dot(strip, x1)
         *before, _ = self.ordered_columns
         x = sum(c.get_render_width(self) for c in before) + self.cell_padding - x1
         lo, hi = max(0, x), min(strip.cell_length, x + self.EYE)
@@ -710,6 +731,16 @@ class SessionList(SinkList):
         base = under.style if under is not None and under.style else Style()
         eye = Strip([Segment(seg.text, base + seg.style + post) for seg in cylon(self.eye_frame).render(self.app.console)])
         return Strip.join([strip.crop(0, lo), eye.crop(lo - x, hi - x), strip.crop(hi)])
+
+    def dim_dot(self, strip: Strip, x1: int) -> Strip:
+        """The line with its dot, the first column's one cell, in its colour dimmed."""
+        x = self.cell_padding - x1
+        if not 0 <= x < strip.cell_length:   # scrolled out of sight
+            return strip
+        dot = next(iter(strip.crop(x, x + 1)), None)
+        if dot is None or not (dot.style and dot.style.color):
+            return strip
+        return Strip.join([strip.crop(0, x), Strip([Segment(dot.text, dimmed(dot.style))]), strip.crop(x + 1)])
 
     def reveal(self) -> str | None:
         """With none selected, the session a key picks: the one last followed if it's still
@@ -2066,6 +2097,7 @@ class WheelhouseApp(App):
         self.animation = None   # animate's timer: none at 0 fps (features.animation_fps)
         self.started = 0.0   # when the animation's time starts (animate)
         self.half_frame = 0   # the frame // 2 the eyes and panes last moved on (animate)
+        self.blink = False   # whether the busy dots were last dimmed (animate, dot_dimmed)
         self.animating = True   # whether it runs: paused while unfocused with nothing busy (pace)
         self.filter_sid: str | None = None
         self.followed: str | None = None   # the session last followed, which a key picks again (SessionList.reveal)
@@ -2307,10 +2339,12 @@ class WheelhouseApp(App):
         # the eyes and panes rest while you type, nothing drawn but what the keys change
         # (D41). No screen at all while the app shuts down, when asking what has focus would raise
         half = self.frame // 2   # FRAMES / 2 a second, as in the dashboard
-        if half != self.half_frame and self.screen_stack and not isinstance(self.focused, Compose):
-            self.half_frame = half
+        blink = dot_dimmed(self.frame)   # the busy dots' flash, which can fall between half frames
+        if (half, blink) != (self.half_frame, self.blink) and self.screen_stack and not isinstance(self.focused, Compose):
+            moved, self.half_frame, self.blink = half != self.half_frame, half, blink
             self.sweep_eyes()
-            self.each_pane("animate", half)
+            if moved:
+                self.each_pane("animate", half)
 
     def tick(self) -> None:
         """The refresh, each second, skipped while a key lands (land): a refresh settles, and a

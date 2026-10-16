@@ -3673,7 +3673,7 @@ async def test_the_eyes_look_as_when_they_were_the_tables_data(store, sid, tmp_p
         t.focus() if focused else app.items_table.focus()
         t.move_cursor(row=t.get_row_index(sid if on_busy else other))
         await pilot.pause()
-        for frame in range(0, 26, 5):
+        for frame in [f for f in range(0, 26, 5) if not tui.dot_dimmed(f)]:   # a dot dimmed was never data
             t.sweep(frame)
             got = [cells(t.render_line(y)) for y in range(t.size.height)]
             t.eyes = set()   # as it was: the eye in the table's data
@@ -3844,6 +3844,65 @@ async def test_a_live_sessions_dot_is_amber_with_a_large_context(store, sid, tmp
         await pilot.pause()
         dot = app.query_one("#session-list", DataTable).get_row(sid)[0]   # by key: a parked row sinks
     assert dot.style.split()[-1] == colour, desc
+
+
+def drawn_dot(app, sid) -> str:
+    """The colour a session's dot is drawn in, as its line renders."""
+    t = app.session_list
+    y = t.header_height + t.get_row_index(sid)
+    return next(s.style for s in t._render_line(y, 0, t.size.width, t.rich_style) if "●" in s.text).color.name
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("busy, fps, desc", [
+    (True, "10", "busy: its colour for 0.7 s, then dimmed for 0.7 s"),
+    (False, "10", "idle: steady"),
+    (True, "0", "busy, animation off: steady"),
+])
+async def test_a_busy_sessions_dot_flashes(store, sid, monkeypatch, clock, busy, fps, desc):
+    """Doug (#16): "When a session is actually doing something, make that status icon flash
+    between on and dimmed." Then: half a second is too quick, 0.7 s each."""
+    features.set_animation_fps(fps)
+    monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: busy)
+    monkeypatch.setattr(WheelhouseApp, "shown_status", lambda self, s: "live")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.refresh_data()
+        seen = []
+        for _ in range(4 * tui.BLINK_FRAMES):
+            if fps != "0":
+                clock.animate(app)   # one frame on (frame_clock)
+            await pilot.pause()
+            seen.append(drawn_dot(app, sid))
+    full, dim = "#00ff41", "#00661a"   # the live green, and at tui.DIM of it
+    runs = [(colour, len(list(run))) for colour, run in itertools.groupby(seen)]
+    if busy and fps != "0":   # whole runs between the first and last, which the frames seen may cut
+        assert [c for c, _ in runs] == [(full, dim)[i % 2] for i in range(len(runs))], desc
+        assert {n for _, n in runs[1:-1]} == {7} and len(runs) >= 4, f"{desc}: {runs}"
+    else:
+        assert runs == [(full, len(seen))], desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("first, then, row, cell, desc", [
+    (6, 7, False, True, "the dot dims, the eye still: the dot's cell alone drawn again"),
+    (27, 28, True, False, "the dot back to its colour as the eye moves: the row drawn again, once"),
+    (0, 4, True, False, "the eye moved, the dot as it was: the row drawn again"),
+    (0, 1, False, False, "neither changed: nothing drawn again"),
+])
+async def test_a_dot_that_flashes_draws_its_cell_alone(store, sid, monkeypatch, first, then, row, cell, desc):
+    monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: s == sid)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        t = app.session_list
+        t.sweep(first)
+        rows, cells_ = [], []
+        monkeypatch.setattr(t, "refresh_row", lambda r: rows.append(r))
+        monkeypatch.setattr(t, "refresh_coordinate", lambda c: cells_.append(c))
+        t.sweep(then)
+        assert (bool(rows), cells_ == [(t.get_row_index(sid), 0)]) == (row, cell), desc
 
 
 def shown_buttons(app) -> set[str]:

@@ -198,7 +198,9 @@ session.
   which a session run in the wheelhouse is asked whether to Compact), cyan while it starts or relaunches,
   yellow when stalled (its Claude Code runs, but its wheelhouse MCP server hasn't checked in
   for 2 minutes), magenta while it's been asked to park or forget, red when dead (its Claude
-  Code isn't running) and grey when parked. A row selected or under the mouse keeps its dot's colour, and an
+  Code isn't running) and grey when parked. While a session is busy (its Cylon eye sweeping), its dot
+  flashes, 0.7 seconds in its colour and 0.7 seconds dimmed; with the animation off
+  (`ANIMATION_FPS=0`) it stays steady. A row selected or under the mouse keeps its dot's colour, and an
   item's status its own, on the row's shade.
   The selected session, highlighted, is the current one, and the inbox shows its items
   alone. A click on it or on the list's title, or `Esc`, unselects it: the inbox shows every session's items, the
@@ -478,7 +480,7 @@ a key spelt any other way isn't read.
 | `KEEPALIVE_HOURS` | `WHEELHOUSE_KEEPALIVE_HOURS` | `--keepalive-hours N` | 8 (0 turns it off) |
 | `ANIMATION_FPS` | `WHEELHOUSE_ANIMATION_FPS` | `--animation-fps N` | 10 (0 turns animation off) |
 
-`ANIMATION_FPS` sets how many frames a second the title's shimmer, the session eyes and
+`ANIMATION_FPS` sets how many frames a second the title's shimmer, the session eyes, busy sessions' flashing dots and
 the stats bars move; fractions are allowed, up to 30. Every rate moves them at the same
 speed: a lower one draws fewer steps. While the terminal window is unfocused and no
 session is busy, the animation rests, and starts again when you come back or a session
