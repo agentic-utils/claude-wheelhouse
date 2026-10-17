@@ -181,7 +181,9 @@ def facts(store: Store) -> dict | None:
     """What the tour's dialogs wait on that the store records, for the tutorial's session
     (None while there is none): it has posted, a question has an answer, both have, the
     answers were sent, the session replied after that, and the decision was closed (closed,
-    not seen: automatic selection marks a decision seen, but only the person closes one)."""
+    not seen: automatic selection marks a decision seen, but only the person closes one). A
+    question the person closed unanswered counts as answered; with none answered at all,
+    there is nothing to send or reply to, so those count as done."""
     sid = session_id(store)
     if sid is None:
         return None
@@ -190,13 +192,16 @@ def facts(store: Store) -> dict | None:
     msgs = store.messages(sid)
     answers = [m for m in msgs if m["author"] == "person" and m["item_ref"] in questions]
     first_sent = min((m["id"] for m in answers if not m["draft"]), default=None)
+    answered = {m["item_ref"] for m in answers}
+    queued = len(questions) >= 2 and all(q in answered or items[q]["status"] == "closed" for q in questions)
+    none = queued and not answers   # every question closed unanswered
     return {
         "sid": sid,
         "posted": bool(items),   # it started, past any trust prompt in its tab
         "answered": bool(answers),
-        "queued": len({m["item_ref"] for m in answers}) >= 2,
-        "sent": first_sent is not None,
-        "replied": first_sent is not None and any(
+        "queued": queued,
+        "sent": first_sent is not None or none,
+        "replied": none or first_sent is not None and any(
             m["author"] == "claude" and m["kind"] == "reply" and m["item_ref"] in questions
             and m["id"] > first_sent for m in msgs),
         "closed": any(it["kind"] == "decision" and it["status"] == "closed" for it in items.values()),

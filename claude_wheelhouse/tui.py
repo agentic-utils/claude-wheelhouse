@@ -2289,7 +2289,8 @@ class TourInvite(Dialog):
 
 
 class TourStop(Dialog):
-    """A centred dialog of the tour's (the principles): Next (Enter) moves on, Esc pauses."""
+    """A centred dialog of the tour's (the principles): Next (Enter) moves on, Esc pauses. A
+    click outside does neither."""
     ACTION = "tour-stop-next"
     CANCEL = "pause"
 
@@ -2308,6 +2309,11 @@ class TourStop(Dialog):
     def on_mount(self) -> None:
         super().on_mount()
         self.set_focus(self.query_one("#tour-stop-next", Button))
+
+    def on_click(self, event: events.Click) -> None:
+        """A click outside the box does nothing: only Esc pauses the tour."""
+        if event.widget is self:
+            event.stop()
 
     @on(Button.Pressed, "#tour-stop-next")
     def pressed(self, event: Button.Pressed) -> None:
@@ -2931,9 +2937,9 @@ class WheelhouseApp(App):
             return
         if self.focused is not None:
             self.screen._clear_tooltip()
-        if event.key == "escape" and self.screen is self.screen_stack[0] and self.tour is not None \
-                and not self.tour.paused and self.screen.query(TourCallout):
-            self.pause_tour()   # Esc on any callout pauses the tour (Q122)
+        if event.key == "escape" and self.focused is not None \
+                and any(isinstance(w, TourCallout) for w in self.focused.ancestors_with_self):
+            self.pause_tour()   # Esc on a callout that has focus pauses the tour (Q122); elsewhere it's Esc
             return
         if event.key == "escape" and (lists := [t for t in (getattr(self, "items_table", None), getattr(self, "session_list", None))
                                             if t is not None and t.dragging]):
@@ -3848,22 +3854,29 @@ class WheelhouseApp(App):
     def show_tour(self) -> None:
         """The tour's dialog as it stands (tour.Tour.follow): a centred one pushed (the
         principles, the release notes), or a callout painted beside its pane on the main
-        screen. Painted again only when the dialog or its text changes."""
+        screen. Painted again only when the dialog or its text changes. A centred one waits
+        while the person is typing (a text box with focus and something in it), so no key
+        meant for the box lands in it."""
         tour = self.tour
         if tour is None or tour.paused or not self.screen_stack:
             return
         main = self.screen_stack[0]
-        tour.follow(self.client.tutorial(), lambda pane: callout.find(main, pane) is not None)
+        s = next((x for x in self.sessions if x["id"] == tour.sid), None) if tour.sid else None
+        why = tutorial.stopped(s) if s is not None and not self.running(tour.sid) else None
+        tour.follow(self.client.tutorial(), lambda pane: callout.find(main, pane) is not None, why)
         stop = tour.stop
         text = tour.text(stop) if stop else ""
-        if stop is not None and stop.id == "sessions" and tour.sid:   # a demo that has stopped says why
-            s = next((x for x in self.sessions if x["id"] == tour.sid), None)
-            if s is not None and not self.running(tour.sid) and (why := tutorial.stopped(s)):
-                text += f"\n{why}. {tutorial.AGAIN} at the next start."
-        showing = (stop.id, text) if stop else None
+        if tour.dead:   # the demo gone or stopped: one line, and Next to the release notes
+            text += f"\n{tour.dead[0].upper()}{tour.dead[1:]}: Next goes to the release notes."
+        nxt = stop is not None and (stop.advance == whatsnew.NEXT or tour.dead is not None)
+        showing = (stop.id, text, nxt) if stop else None
         if showing == self.tour_showing:
             return
-        same = stop is not None and self.tour_showing is not None and self.tour_showing[0] == stop.id
+        typing = isinstance(main.focused, (TextArea, Input)) and bool(
+            main.focused.text if isinstance(main.focused, TextArea) else main.focused.value)
+        if stop is not None and stop.pane is None and typing:
+            return   # tried again at the next refresh
+        same = stop is not None and self.tour_showing is not None and self.tour_showing[::2] == showing[::2]
         self.tour_showing = showing
         found = list(main.query(TourCallout))
         if same and found:   # its text alone changed
@@ -3880,7 +3893,7 @@ class WheelhouseApp(App):
         elif stop.id == "notes":
             self.push_screen(TourNotes(text, whatsnew.this_release()), self.tour_answered)
         else:
-            main.mount(TourCallout(stop.pane, text, next=stop.advance == whatsnew.NEXT))
+            main.mount(TourCallout(stop.pane, text, next=nxt))
 
     def tour_answered(self, answer: str | None) -> None:
         """A centred dialog of the tour answered: Next, pause (Esc), or, for the notes, closed
@@ -3892,8 +3905,8 @@ class WheelhouseApp(App):
             return
         self.tour.next()
         self.show_tour()
-        if answer == "new":
-            self.action_new_session()
+        if answer == "new":   # whatever has focus behind it: N on the notes said so
+            self.push_screen(NewSession(), self.launch_new)
 
     @on(TourCallout.Next)
     def tour_next(self, event: TourCallout.Next) -> None:
@@ -3902,14 +3915,16 @@ class WheelhouseApp(App):
             self.show_tour()
 
     def pause_tour(self) -> None:
-        """Esc on the tour: it stops where it is (stage 4 resumes it from the badge)."""
+        """Esc on the tour: it stops where it is, and, until stage 4 resumes it from the badge,
+        the next start offers it again (the offer set back to reset, as Later does)."""
         if self.tour is None:
             return
         self.tour.paused = True
         self.tour_showing = None
         for old in self.screen_stack[0].query(TourCallout):
             old.remove()
-        self.notify(f"Tour paused. {tutorial.AGAIN} at the next start.")
+        self.client.answer_offer(None)
+        self.notify("Tour paused: the next start offers it again.")
 
     def paint_session_info(self) -> None:
         """The current session's description, under the list, and its buttons' captions and
@@ -4797,6 +4812,8 @@ class WheelhouseApp(App):
         the answer box, or with none showing to the next Tab stop: not to a sibling, or to
         nothing, as Textual would (#77). Not when its going put focus somewhere itself (Deny,
         in its reason)."""
+        if not self.screen_stack:   # the app closing: no screen left to put focus on
+            return
         lost, screen = event.widget, self.screen
         if not isinstance(lost, BarButton) or not lost.is_attached or lost.screen is not screen \
                 or not self.stopped(screen) or not (screen.focused is None or isinstance(screen.focused, Button)):

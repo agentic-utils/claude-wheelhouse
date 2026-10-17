@@ -6,8 +6,9 @@ An action dialog moves on once what it asks has happened: what the store records
 demo session (tutorial.facts), or what only the screen has seen the person do (seen: a
 question opened, a turn of Claude's watched arriving), never the app's own automatic
 selection. A Next dialog moves on only on Next. A dialog whose pane is absent (Stats turned
-off) is passed over. Once the demo has gone, nothing is left to wait on, so every action
-dialog passes.
+off) is passed over. A demo that has gone, or stopped, leaves nothing to wait on: the action
+dialog showing says so (dead) and its Next goes straight to the release notes. Ending it is
+what the last action dialog asks, so there it simply moves on.
 """
 
 from . import whatsnew
@@ -38,6 +39,7 @@ class Tour:
         self.sid: str | None = None   # the demo session, once made
         self.seen: set[str] = set()   # the steps only the screen sees ("open", "follow")
         self.absent: set[str] = set()   # the dialogs passed over for want of their pane
+        self.dead: str | None = None   # why the demo can't go on (gone or stopped), at an action dialog
         self.paused = False
 
     @property
@@ -49,10 +51,11 @@ class Tour:
         """A dialog's text and, below it, every tip registered to it."""
         return "\n".join([stop.text, *(f.tip for f in whatsnew.tips(stop.id, self.sdk, self.features))])
 
-    def follow(self, facts: dict | None, present) -> bool:
-        """Moves past every dialog done with: an action dialog whose check holds (or every
-        one, once the demo has gone), and one whose pane is absent (present(pane) false).
-        Whether it moved."""
+    def follow(self, facts: dict | None, present, stopped: str | None = None) -> bool:
+        """Moves past every dialog done with: an action dialog whose check holds (End's, once
+        the demo has gone), and one whose pane is absent (present(pane) false). An action
+        dialog left waiting on a demo that has gone, or stopped (`stopped`, why), records why
+        (dead). Whether it moved."""
         if facts is not None and self.sid is None:
             self.sid = facts["sid"]
         gone = self.sid is not None and (facts is None or facts["sid"] != self.sid)
@@ -60,14 +63,18 @@ class Tour:
         while (stop := self.stop) is not None:
             if stop.pane is not None and not present(stop.pane):
                 self.absent.add(stop.id)
-            elif not (stop.advance == ACTION and (gone or CHECKS[stop.id](facts, self.seen))):
+            elif not (stop.advance == ACTION and (stop.id == "end" and gone or CHECKS[stop.id](facts, self.seen))):
                 break
             self.at += 1
             moved = True
+        waiting = stop is not None and stop.advance == ACTION and self.sid is not None
+        self.dead = ("the demo has ended" if gone else stopped) if waiting else None
         return moved
 
     def next(self) -> None:
-        self.at += 1
+        """Next: the dialog after this one, or with the demo dead, the release notes."""
+        self.at = next(i for i, d in enumerate(self.stops) if d.id == "notes") if self.dead else self.at + 1
+        self.dead = None
 
     def shown(self, stop: whatsnew.Stop) -> list[str]:
         """The features a dialog showing counts as seen: its tips; the notes, every feature

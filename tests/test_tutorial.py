@@ -146,11 +146,12 @@ async def test_the_tour(store, monkeypatch, fake_claude, sdk, runner_, desc):
         await step(lambda: store.dispatch(sid), ("reply", "detail"), "sent")
         await step(lambda: store.reply(sid, q1, "noted", status="answered"), ("decision", "items"), "it replied")
         await step(lambda: store.close_decision(sid, "D1"), ("conversation", "detail"), "the decision closed")
+        app.query_one("#answer", TextArea).focus()
         await step(lambda: app.saw(sid, None, "follow"), ("stats", "stats"), "a turn watched arriving")
-        assert app.focused is app.screen_stack[0].query_one("#tour-next"), f"{desc}: a Next callout takes focus"
-        await pilot.press("enter")
+        assert isinstance(app.focused, TextArea), f"{desc}: a Next callout leaves focus in the answer box"
+        app.screen_stack[0].query_one("#tour-next", Button).press()
         await pilot.pause()
-        assert shown(app) == ("end", "session-info"), f"{desc}: Enter is Next"
+        assert shown(app) == ("end", "session-info"), f"{desc}: Next"
         await step(lambda: store.end(sid), ("notes", None), "the demo gone")
         assert isinstance(app.screen, TourNotes), desc
         notes = app.screen.notes
@@ -196,28 +197,128 @@ async def test_a_callout_beside_its_pane(store, stop, pane, focus, desc, size):
         assert box.area and app.screen.region.contains_region(box), f"{desc} at {size}: {box} on screen"
 
 
-@pytest.mark.parametrize("stop, desc", [
-    ("principles", "Esc on the principles"),
-    ("inbox", "Esc on a callout, wherever focus is"),
+@pytest.mark.parametrize("stop, focus, pauses, desc", [
+    ("principles", None, True, "Esc on the principles"),
+    ("stats", None, True, "Esc on a callout that has focus"),
+    ("inbox", None, False, "an action callout has no focus: Esc keeps its own meaning"),
+    ("stats", "#answer", False, "focus in the answer box: Esc is the box's, not the tour's"),
 ])
 @pytest.mark.anyio
-async def test_esc_pauses_the_tour(store, stop, desc):
-    """Q122: Esc pauses; resuming is stage 4's."""
+async def test_esc_pauses_the_tour(store, stop, focus, pauses, desc):
+    """Q122: Esc pauses. Until stage 4 resumes it, the next start offers the tour again."""
     app = WheelhouseApp(store)
     said = []
     app.notify = lambda text, **kw: said.append(text)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
+        if focus:
+            app.query_one(focus).focus()
+            await pilot.pause()
         tour_at(app, stop)
         await pilot.pause()
         await pilot.press("escape")
         await pilot.pause()
-        assert app.tour.paused and not app.screen_stack[0].query(TourCallout), desc
-        assert not isinstance(app.screen, TourStop), desc
-        assert any(t.startswith("Tour paused.") for t in said), desc
+        assert app.tour.paused is pauses, desc
+        assert bool(app.screen_stack[0].query(TourCallout)) is not pauses, desc
+        assert ("Tour paused: the next start offers it again." in said) is pauses, desc
+        assert (store.setting(tutorial.OFFER_KEY) == tutorial.RESET) is pauses, f"{desc}: offered again"
+        if pauses:
+            assert not isinstance(app.screen, TourStop), desc
+            app.refresh_data()
+            await pilot.pause()
+            assert not app.screen_stack[0].query(TourCallout), f"{desc}: it stays paused"
+
+
+@pytest.mark.anyio
+async def test_the_tour_never_takes_focus_from_a_box_being_typed_in(store, monkeypatch):
+    """Review of #93: a Next callout appearing mid-word took focus, so the next letter, n,
+    opened New session. Nor does a centred dialog come up over the typing."""
+    sid = demo(store)
+    q1, q2 = setup_items(store, sid)
+    for act in (lambda: store.queue(sid, "a", q1), lambda: store.queue(sid, "b", q2), lambda: store.dispatch(sid),
+                lambda: store.reply(sid, q1, "ok", status="answered"), lambda: store.close_decision(sid, "D1")):
+        act()
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        tour_at(app, "conversation", sid)
+        box = app.query_one("#answer", TextArea)
+        box.focus()
+        await pilot.press("h", "i")
+        app.saw(sid, None, "follow")   # the Stats callout, a Next one, arrives mid-word
+        await pilot.pause()
+        assert shown(app) == ("stats", "stats") and app.focused is box, "the box keeps focus"
+        await pilot.press("n")
+        await pilot.pause()
+        assert box.text == "hin" and not isinstance(app.screen, NewSession), "n is typed, not New session"
+        tour_at(app, "notes", sid)
+        await pilot.pause()
+        assert not isinstance(app.screen, TourNotes) and app.focused is box, "the notes wait while there's typing"
+        box.text = ""
         app.refresh_data()
         await pilot.pause()
-        assert not app.screen_stack[0].query(TourCallout), f"{desc}: it stays paused"
+        assert isinstance(app.screen, TourNotes), "and come once the box is empty"
+
+
+@pytest.mark.parametrize("focus, desc", [(None, "nothing focused behind it"), ("#answer", "the answer box focused behind it")])
+@pytest.mark.anyio
+async def test_n_on_the_notes_opens_new_session(store, focus, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if focus:
+            app.query_one(focus).focus()
+        tour_at(app, "notes")
+        await pilot.pause()
+        assert isinstance(app.screen, TourNotes), desc
+        await pilot.press("n")
+        await pilot.pause()
+        assert isinstance(app.screen, NewSession) and app.tour is None, desc
+
+
+@pytest.mark.parametrize("act, then, desc", [
+    (lambda store, sid, q1, q2: store.update_item(sid, q2, status="closed"), "send",
+     "the other question closed unanswered: as if answered"),
+    (lambda store, sid, q1, q2: (store.update_item(sid, q1, status="closed"), store.update_item(sid, q2, status="closed")),
+     "decision", "both closed unanswered: nothing to send or wait for a reply to"),
+])
+@pytest.mark.anyio
+async def test_a_question_closed_unanswered(store, act, then, desc):
+    sid = demo(store)
+    q1, q2 = setup_items(store, sid)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.pause()
+        tour_at(app, "answer", sid)
+        if then == "send":
+            store.queue(sid, "a", q1)
+        act(store, sid, q1, q2)
+        app.refresh_data()
+        await pilot.pause()
+        assert shown(app)[0] == then, desc
+
+
+@pytest.mark.parametrize("at", ["inbox", "answer", "decision", "conversation", "end"])
+@pytest.mark.anyio
+async def test_a_demo_gone_early_offers_the_notes(store, at):
+    """Decided in review of #93: a demo that has gone says so in one line, and Next goes
+    straight to the release notes. At End, its going is what was asked."""
+    sid = demo(store)
+    setup_items(store, sid)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.pause()
+        tour_at(app, at, sid)
+        await pilot.pause()
+        store.end(sid)
+        app.refresh_data()
+        await pilot.pause()
+        if at != "end":
+            co = app.screen_stack[0].query_one(TourCallout)
+            assert shown(app)[0] == at and co.text.endswith("\nThe demo has ended: Next goes to the release notes."), at
+            co.query_one("#tour-next", Button).press()
+            await pilot.pause()
+        assert isinstance(app.screen, TourNotes), at
 
 
 @pytest.mark.both
@@ -327,8 +428,8 @@ async def test_watching_it_work_moves_the_tour_on(store, tut, tmp_path, monkeypa
 @pytest.mark.anyio
 async def test_a_stopped_demo_says_why(store, tut, registered, why, desc):
     """A tab's session has no host to record why it stopped: once it isn't running, the
-    tour's dialog says whether its tab never started Claude Code or has closed, with how to
-    start afresh, rather than wait on it."""
+    tour's dialog says whether its tab never started Claude Code or has closed, and offers
+    Next to the release notes, rather than wait on it."""
     if registered:
         store.register(tut, 4242, 1, "an-old-boot")   # a pid of another boot: not alive
     app = WheelhouseApp(store)
@@ -338,7 +439,7 @@ async def test_a_stopped_demo_says_why(store, tut, registered, why, desc):
         tour_at(app, "sessions", tut)
         await pilot.pause()
         text = app.screen.query_one(TourCallout).text
-        assert why in text and f"{tutorial.AGAIN} at the next start." in text, desc
+        assert f"\nS{why[1:]}" in text and text.endswith(": Next goes to the release notes."), desc
 
 
 @pytest.mark.anyio

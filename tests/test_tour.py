@@ -30,8 +30,8 @@ def facts(**kw) -> dict:
     ("stats", "demo", facts(), set(), ("stats",), "end", "Stats absent: passed over"),
     ("end", "demo", facts(), set(), (), "end", "waits for the demo to go"),
     ("end", "demo", None, set(), (), "notes", "the demo gone"),
-    ("answer", "demo", None, set(), (), "stats", "gone early: every action dialog passes, a Next one still shows"),
-    ("answer", "demo", facts(sid="other"), set(), (), "stats", "another tutorial session isn't the demo"),
+    ("answer", "demo", None, set(), (), "answer", "gone early: the dialog stays, saying so"),
+    ("answer", "demo", facts(sid="other"), set(), (), "answer", "another tutorial session isn't the demo"),
     ("notes", "demo", None, set(), (), "notes", "the notes wait for Close"),
 ])
 def test_the_tour_moves_on(at, sid, given, seen, absent, expected, desc):
@@ -41,6 +41,26 @@ def test_the_tour_moves_on(at, sid, given, seen, absent, expected, desc):
     tour.follow(given, lambda pane: pane not in absent)
     assert tour.stop.id == expected, desc
     assert tour.absent == {d.id for d in tour.stops if d.pane in absent and d.id == at}, f"{desc}: what was passed over"
+    gone = sid is not None and (given is None or given["sid"] != sid) and expected != "notes"
+    assert (tour.dead == "the demo has ended") is gone, f"{desc}: says the demo has ended"
+
+
+@pytest.mark.parametrize("at, sid, given, stopped, dead, then, desc", [
+    ("reply", "demo", facts(sent=True), "stopped: its tab has closed", "stopped: its tab has closed", "notes",
+     "a stopped demo: said, and Next goes to the notes"),
+    ("decision", "demo", None, None, "the demo has ended", "notes", "an ended one, the same"),
+    ("reply", "demo", facts(sent=True), None, None, "decision", "running: Next is the next dialog"),
+    ("create", None, None, "stopped: never", None, "sessions", "no demo yet: nothing to be dead"),
+    ("stats", "demo", None, None, None, "end", "a Next dialog isn't waiting on the demo"),
+])
+def test_a_dead_demo_offers_the_notes(at, sid, given, stopped, dead, then, desc):
+    tour = Tour(sdk=False)
+    tour.at = [d.id for d in tour.stops].index(at)
+    tour.sid = sid
+    tour.follow(given, lambda pane: True, stopped)
+    assert (tour.stop.id, tour.dead) == (at, dead), desc
+    tour.next()
+    assert (tour.stop.id, tour.dead) == (then, None), desc
 
 
 FEATURES = (
