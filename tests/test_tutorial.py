@@ -4,9 +4,9 @@ import sys
 import pytest
 from textual.widgets import DataTable, Static, TextArea
 
-from claude_wheelhouse import features, launch, tutorial
+from claude_wheelhouse import features, launch, tutorial, whatsnew
 from claude_wheelhouse.store import Store
-from claude_wheelhouse.tui import BUTTONS, Compose, ItemList, KeysHelp, ThreadView, Transcript, TutorialOffer, \
+from claude_wheelhouse.tui import BUTTONS, Compose, Dialog, ItemList, KeysHelp, ThreadView, Transcript, TourInvite, \
     SDK_BUTTONS, WheelhouseApp, key_name, keys_help
 from claude_wheelhouse.tutorial import should_offer as real_should_offer   # before conftest stubs it
 from test_tui import dwell, one_second
@@ -271,12 +271,13 @@ def test_the_tutorial_command_resets_the_offer(store, tmp_path, monkeypatch, cap
         assert out.strip() == "nothing changed", desc
 
 
-@pytest.mark.parametrize("key, setting, desc", [
-    ("enter", "taken", "Enter takes it"),
-    ("escape", "never", "Esc answers Never"),
+@pytest.mark.parametrize("key, setting, again, desc", [
+    ("enter", "taken", False, "Enter takes it"),
+    ("n", "never", False, "N answers Never"),
+    ("escape", "reset", True, "Esc is Later: the reset stands, so it is offered again"),
 ])
 @pytest.mark.anyio
-async def test_a_reset_offer_shows_once_over_sessions(store, tmp_path, monkeypatch, fake_claude, key, setting, desc):
+async def test_a_reset_offer_shows_over_sessions(store, tmp_path, monkeypatch, fake_claude, key, setting, again, desc):
     monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
     monkeypatch.setattr(launch, "open_tab", lambda s, i: None)
     store.create_session(str(tmp_path), name="real work")
@@ -284,13 +285,13 @@ async def test_a_reset_offer_shows_once_over_sessions(store, tmp_path, monkeypat
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert isinstance(app.screen, TutorialOffer), f"{desc}: offered though there is a session"
+        assert isinstance(app.screen, TourInvite), f"{desc}: offered though there is a session"
         await pilot.press(key)
         await pilot.pause()
-    assert store.setting(tutorial.OFFER_KEY) == setting, f"{desc}: the answer replaces the reset"
+    assert store.setting(tutorial.OFFER_KEY) == setting, f"{desc}: what the answer leaves"
     async with WheelhouseApp(store).run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert not isinstance(pilot.app.screen, TutorialOffer), f"{desc}: offered once"
+        assert isinstance(pilot.app.screen, TourInvite) is again, f"{desc}: offered at the next start"
 
 
 @pytest.mark.parametrize("on, opens, desc", [
@@ -307,28 +308,55 @@ def test_start_launches_the_session_and_settles_the_offer(store, monkeypatch, fa
     assert store.setting(tutorial.OFFER_KEY) == "taken"
 
 
-@pytest.mark.parametrize("key, started, setting, desc", [
-    ("enter", True, "taken", "Enter takes the tutorial"),
-    ("escape", False, "never", "Esc answers Never"),
+async def click_outside(pilot):
+    pilot.app.screen.opened -= Dialog.GRACE   # past the grace a double-click's second click gets
+    await pilot.click(offset=(0, 39))
+
+
+@pytest.mark.parametrize("gesture, started, setting, again, desc", [
+    (lambda p: p.press("enter"), True, "taken", False, "Enter is Start"),
+    (lambda p: p.click("#invite-start"), True, "taken", False, "a click on Start"),
+    (lambda p: p.press("l"), False, None, True, "L is Later: nothing recorded, offered at the next start"),
+    (lambda p: p.click("#invite-later"), False, None, True, "a click on Later"),
+    (lambda p: p.press("escape"), False, None, True, "Esc is Later, not Never"),
+    (click_outside, False, None, True, "a click outside is Later: a misclick doesn't lose the tour"),
+    (lambda p: p.press("n"), False, "never", False, "N is Never: it never comes back"),
+    (lambda p: p.click("#invite-never"), False, "never", False, "a click on Never"),
 ])
 @pytest.mark.anyio
-async def test_the_first_run_offer_takes_one_key(store, monkeypatch, fake_claude, key, started, setting, desc):
+async def test_the_invite(store, monkeypatch, fake_claude, gesture, started, setting, again, desc):
+    """Doug (#78): "the invite needs to be a centered dialog, not the banner which is not very
+    obvious to a new user". Start, Later and Never, by key or click."""
     monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
     launched = []
     monkeypatch.setattr(launch, "open_tab", lambda s, i: launched.append(i))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert isinstance(app.screen, TutorialOffer)
-        await pilot.press(key)
+        assert isinstance(app.screen, TourInvite), desc
+        await gesture(pilot)
         await pilot.pause()
-        assert not isinstance(app.screen, TutorialOffer), desc
+        assert not isinstance(app.screen, TourInvite), desc
         assert app.query_one("#checklist", Static).display is started, desc
     assert bool(launched) is started, desc
     assert store.setting(tutorial.OFFER_KEY) == setting, desc
+    assert store.tour_seen() == ({f.id: "skipped" for f in whatsnew.FEATURES} if setting == "never" else {}), desc
     async with WheelhouseApp(store).run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert not isinstance(pilot.app.screen, TutorialOffer), "answered either way, it never comes back"
+        assert isinstance(pilot.app.screen, TourInvite) is again, f"{desc}: offered at the next start"
+
+
+@pytest.mark.parametrize("width, height, desc", [(160, 40, "a wide screen"), (80, 24, "80 by 24")])
+@pytest.mark.anyio
+async def test_the_invite_fits_whole(store, monkeypatch, width, height, desc):
+    monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(width, height)) as pilot:
+        await pilot.pause()
+        box = app.screen.query_one("#dialog").region
+        assert app.screen.region.contains_region(box), f"{desc}: {box} on screen"
+        for widget in app.screen.query("#dialog Label, #dialog Button"):
+            assert box.contains_region(widget.region) and widget.region.height, f"{desc}: {widget.id} shown whole"
 
 
 @pytest.mark.anyio
@@ -681,8 +709,8 @@ async def test_every_hint_names_the_same_fixed_command(store, monkeypatch, fake_
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        offer = app.screen.query_one("#offer")
-        assert str(offer.render()).endswith(f"· {said}"), "offer"
+        hint = str(app.screen.query_one("#invite-hint").render())
+        assert hint.endswith(f"After Never, {said[0].lower()}{said[1:]}."), "invite"
     assert [e.text for e in Hub(store).answer_offer(False).notices] == \
         [f"{said}; ? lists every key"], "dismiss notice"
     tutorial.prepare(store)
@@ -690,24 +718,6 @@ async def test_every_hint_names_the_same_fixed_command(store, monkeypatch, fake_
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         assert f"\n{said} at the next start" in app._checklist_text, "checklist"
-
-
-@pytest.mark.parametrize("width, lines, desc", [
-    (200, 1, "one line on a wide screen"),
-    (120, 2, "wrapped at 120 columns, where one line cut off its end"),
-    (80, 3, "wrapped at 80, where one line lost the command itself"),
-])
-@pytest.mark.anyio
-async def test_the_offer_wraps_rather_than_lose_its_command(store, monkeypatch, width, lines, desc):
-    from textual.geometry import Region
-    monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(width, 24)) as pilot:
-        await pilot.pause()
-        offer = app.screen.query_one("#offer")
-        shown = " ".join(s.text.strip() for s in offer.render_lines(Region(0, 0, *offer.size)))
-        assert offer.size.height == lines, f"{desc}: {offer.size}"
-        assert f"Enter: take the tutorial · Esc: dismiss · {tutorial.AGAIN}" in " ".join(shown.split()), desc
 
 
 @pytest.mark.parametrize("how", ["restore", "open"])

@@ -44,7 +44,7 @@ resume at the same dialog.
 
 | # | Id | Anchors to | Draft text | Advances on |
 |---|---|---|---|---|
-| 0 | `invite` | centred | "New here? A five-minute tour, with a demo session that costs a few cents." Enter Start · L Later · N Never | a choice |
+| 0 | `invite` | centred | "New here? A five-minute tour, with a demo session that costs a few cents." Enter Start · L Later · N Never (Esc, or a click outside, is Later: a misclick never loses the tour) | a choice |
 | 1 | `principles` | centred | "Every Claude session in one place. Sessions ask you questions, record decisions and report tasks, all in one inbox. A session that needs you says so in its row, so you never hunt through tabs." | Next |
 | 2 | `create` | Sessions | "Start a session: press N. For the tour it's filled in for you, so just press Start." | the demo session's row appears |
 | 3 | `sessions` | Sessions | "This is your demo. Its row shows whether it's working, idle or needs you. It runs in a tab (or here, in SDK mode): you won't need to look at it." | the demo posts its first item |
