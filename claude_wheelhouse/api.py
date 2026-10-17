@@ -94,9 +94,10 @@ class Missing:
 
 
 def load(entries=None) -> list[Loaded]:
-    """Every module installed, in name order. One that fails to import, isn't a Module, or
-    was written against another API is reported with the reason, never raised; so is one
-    of the hub's own that wasn't found, which means the package needs reinstalling."""
+    """Every module installed, in name order. One that fails to import, isn't a Module,
+    was written against another API or has a pane for a slot that isn't one of SLOTS is
+    reported with the reason, never raised; so is one of the hub's own that wasn't found,
+    which means the package needs reinstalling."""
     found = list(importlib.metadata.entry_points(group=GROUP) if entries is None else entries)
     if entries is None:
         names = {ep.name for ep in found}
@@ -115,6 +116,8 @@ def load(entries=None) -> list[Loaded]:
             out.append(Loaded(ep.name, None, f"{ep.value} is not a Module"))
         elif module.api != WHEELHOUSE_API:
             out.append(Loaded(ep.name, module, f"written for API {module.api}; this wheelhouse has {WHEELHOUSE_API}"))
+        elif bad := [p for p in module.panes if p.slot not in SLOTS]:
+            out.append(Loaded(ep.name, module, f"its pane {bad[0].title!r} names slot {bad[0].slot!r}, not one of {', '.join(SLOTS)}"))
         else:
             out.append(Loaded(ep.name, module))
     return out
@@ -123,12 +126,19 @@ def load(entries=None) -> list[Loaded]:
 def panes(loaded: list[Loaded], slot: str) -> list[tuple[Loaded, Pane | None]]:
     """What goes in a slot: each running module's panes for it, and each module that
     couldn't start, so its error shows there instead (the stats pane's slot shows a broken
-    stats module's reason, not nothing). One that didn't load has no panes to say where: CARDS."""
+    stats module's reason, not nothing). One that didn't load has no panes to say where,
+    and one naming a slot that isn't one of SLOTS has nowhere to show it: CARDS for both."""
     out = []
     for item in loaded:
         if item.error:
-            if any(p.slot == slot for p in item.module.panes) if item.module else slot == CARDS:
+            if slot in ({home(p) for p in item.module.panes} if item.module else {CARDS}):
                 out.append((item, None))
         else:
             out += [(item, p) for p in item.module.panes if p.slot == slot]
     return out
+
+
+def home(pane: Pane) -> str:
+    """Where a pane's card goes: its slot, or CARDS for one that names no slot of SLOTS
+    (an API 1 module's inbox.side, say), so the card shows somewhere."""
+    return pane.slot if pane.slot in SLOTS else CARDS

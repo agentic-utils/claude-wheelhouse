@@ -34,6 +34,8 @@ def test_stats_is_found_by_its_entry_point():
     ("not a module", "pkg:module is not a Module", "nor does an entry point that isn't a Module"),
     (module(api_version=0), f"written for API 0; this wheelhouse has {api.WHEELHOUSE_API}",
      "one written against another API isn't started"),
+    (module(slot="inbox.side"), "its pane 'Demo' names slot 'inbox.side', not one of " + ", ".join(api.SLOTS),
+     "nor one with a pane for a slot that isn't one of the six"),
 ])
 def test_load(loads, error, desc):
     [found] = api.load([Entry("demo", loads)])
@@ -52,6 +54,12 @@ def test_the_stats_module_missing_says_to_reinstall(monkeypatch):
     ([api.Loaded("a", None, "failed to load: boom")], [("a", False)], api.CARDS, "a module that didn't load: its reason"),
     ([api.Loaded("a", None, "failed to load: boom")], [], "right", "and only in CARDS"),
     ([api.Loaded("a", module("a", api_version=0), "old")], [("a", False)], api.CARDS, "one that didn't start: its reason"),
+    ([api.Loaded("a", module("a", api_version=1, slot="inbox.side"), "old")], [("a", False)], api.CARDS,
+     "an API 1 module's inbox.side, no slot now: its reason in CARDS"),
+    ([api.Loaded("a", module("a", slot="nowhere"), "bad slot")], [("a", False)], api.CARDS, "any slot not in SLOTS"),
+    ([api.Loaded("a", module("a", slot="nowhere"), "bad slot")], [], "nowhere", "and not in the slot it names"),
+    ([api.Loaded("a", module("a", api_version=0, slot="right"), "old")], [], api.CARDS,
+     "one naming a real slot: its reason there, not in CARDS"),
 ])
 def test_panes_for_a_slot(loaded, ids, slot, desc):
     assert [(item.name, pane is not None) for item, pane in api.panes(loaded, slot)] == ids, desc
@@ -76,6 +84,8 @@ class Breaks(Widget):
      "a module with the id of one of the app's widgets, after its slot"),
     ([api.Loaded("title", module("title"))], ["title: its id 'title' is taken by the wheelhouse"], "or before it"),
     ([api.Loaded("stats", None, api.STALE)], [f"stats: {api.STALE}"], "the stats module not installed"),
+    (api.load([Entry("demo", module(api_version=1, slot="inbox.side"))]),
+     [f"demo: written for API 1; this wheelhouse has {api.WHEELHOUSE_API}"], "an API 1 module's card shows, in CARDS"),
     ([api.Loaded("demo", module())], [], "a pane with no hooks runs: Textual's own Widget.animate isn't one"),
 ])
 async def test_a_broken_module_leaves_the_app_running(store, monkeypatch, clock, loaded, cards, desc):
