@@ -111,8 +111,15 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 `modules/` holds the modules (`.plan/modules.md`), each its own distribution, a uv workspace
 member and a dependency group of the same name (`pyproject.toml`): `modules/stats` is
 `claude-wheelhouse-stats`, the stats pane (`pane.py`) and its drawing, charts and gauges
-(`stats.py`), with its tests in `modules/stats/tests`. Core never imports a module: the app
-finds them by entry point, and must run with none installed (`test_api.py`).
+(`stats.py`), with its tests in `modules/stats/tests`; `modules/design` is
+`claude-wheelhouse-design`, the Decisions pane (`pane.py`: the pane, its route
+`GET /m/design/decisions` and its doc roots, the decision directories `api.doc_dirs` gives)
+and the scan of those directories (`scan.py`, each file read again only when its stat
+changes), with its tests in `modules/design/tests` and the pane's pilot tests, which need
+core's fixtures, in `tests/test_decisions_pane.py`. Core never imports a module: the app
+finds them by entry point, and must run with none installed (`test_api.py`). A module's
+list that sets `TAB_LIST` is a Tab stop after the inbox (`tui.tab_stops`), and
+`Context.open_doc` opens a doc full screen (`DocView(file=...)`).
 
 `tests/` mirrors the modules (`test_<module>.py`); `conftest.py` holds the shared fixtures,
 and `transcripts.py` the transcripts the core's and the stats module's tests write.

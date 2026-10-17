@@ -24,15 +24,17 @@ claude-wheelhouse = "claude_wheelhouse.cli:main"
 dev = ["httpx2>=2.13", "pytest>=8", "pytest-xdist>=3.8"]
 # the modules in this repo (modules/), a group each: installed unless left out, as make
 # install WITH="..." does (.plan/modules.md)
+design = ["claude-wheelhouse-design"]
 stats = ["claude-wheelhouse-stats"]
 
 [tool.uv]
-default-groups = ["dev", "stats"]
+default-groups = ["dev", "design", "stats"]
 
 [tool.uv.workspace]
 members = ["modules/*"]
 
 [tool.uv.sources]
+claude-wheelhouse-design = { workspace = true }
 claude-wheelhouse-stats = { workspace = true }
 
 [tool.pytest.ini_options]

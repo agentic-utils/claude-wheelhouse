@@ -1452,10 +1452,12 @@ class BarButton(Button):
     FOCUS_ON_CLICK = False
 
 
-# the stops before the buttons (tab_stops): the inbox's lists, then whichever answer box
-# shows (Deny's reason in its place, or a doc shown in the detail pane, which has no box:
-# focusable only then, so its keys scroll it); a full-screen item's box. Any other pane is no stop
+# the stops before the buttons (tab_stops): the inbox's lists, then a module's (TAB_LIST: the
+# Decisions pane's), then whichever answer box shows (Deny's reason in its place, or a doc shown
+# in the detail pane, which has no box: focusable only then, so its keys scroll it); a
+# full-screen item's box. Any other pane is no stop
 TAB_ORDER = ("session-list", "items", "answer", "detail", "thread-answer", "deny-reason")
+LISTS_AFTER = "items"   # where a module's lists (TAB_LIST) come in TAB_ORDER: after it
 ANSWER_BOXES = TAB_ORDER[2:]
 
 
@@ -1468,12 +1470,14 @@ def reading_order(button: Button) -> tuple:
 
 def tab_stops(screen: Screen) -> list[tuple[Widget, str | None]]:
     """Tab's stops on the inbox and a full-screen item (#77), the one place they are said:
-    TAB_ORDER's that show, then a tour callout's Next, then every BarButton shown and enabled
-    in reading order, then a pane that says its own (tab_parts: the stats pane's effort
-    slider and zoom), each as (widget, part). Nothing else is one, whatever else can take
-    focus (a click on it, or a key)."""
+    TAB_ORDER's that show, a module's lists (TAB_LIST) after the inbox's, then a tour
+    callout's Next, then every BarButton shown and enabled in reading order, then a pane that
+    says its own (tab_parts: the stats pane's effort slider and zoom), each as (widget, part).
+    Nothing else is one, whatever else can take focus (a click on it, or a key)."""
     chain = screen.focus_chain
-    return [(w, None) for w in [w for id_ in TAB_ORDER for w in chain if w.id == id_]
+    lists = [w for w in chain if getattr(w, "TAB_LIST", False)]
+    return [(w, None) for w in [w for id_ in TAB_ORDER for w in [*(v for v in chain if v.id == id_),
+                                                                  *(lists if id_ == LISTS_AFTER else ())]]
             + [w for w in chain if w.id == "tour-next"]
             + sorted((w for w in chain if isinstance(w, BarButton)), key=reading_order)] + \
         [(w, part) for w in chain if hasattr(w, "tab_parts") for part in w.tab_parts()]
@@ -1768,13 +1772,14 @@ def file_blocks(path: str, title: str, doc) -> list[tuple[str, str]]:
 
 
 class DocView(Screen):
-    """One doc full screen, rendered, with no answer box. The app's refresh tick repaints it,
-    so a change to the file shows while it's open, where it was scrolled to."""
+    """One doc full screen, rendered, with no answer box: a doc item's, or a module's file
+    (`file`, (path, title), as show_doc gives it: api.Context.open_doc). The app's refresh
+    tick repaints it, so a change to the file shows while it's open, where it was scrolled to."""
     BINDINGS = [Binding("escape", "leave", "Back", key_display="Esc")]
 
-    def __init__(self, sid: str, ref: str):
+    def __init__(self, sid: str | None = None, ref: str | None = None, file: tuple[str, str] | None = None):
         super().__init__()
-        self.sid, self.ref = sid, ref
+        self.sid, self.ref, self.file = sid, ref, file
         self.text = None
 
     def compose(self) -> ComposeResult:
@@ -1792,12 +1797,15 @@ class DocView(Screen):
         self.app.retarget()
 
     def paint(self) -> None:
-        blocks = doc_blocks(self.app.client.item(self.sid, self.ref), self.app.client.document(self.sid, self.ref))
+        if self.file:
+            blocks = file_blocks(*self.file, self.app.client.read_doc(self.file[0]))
+        else:
+            blocks = doc_blocks(self.app.client.item(self.sid, self.ref), self.app.client.document(self.sid, self.ref))
         text = "\n\n".join(md for _, md in blocks)
         if text != self.text:
             self.text = text
             view = self.query_one("#docview", Transcript)
-            view.doc_key = (self.sid, self.ref)
+            view.doc_key = ("file", self.file[0]) if self.file else (self.sid, self.ref)
             view.update(render(blocks))
 
 
@@ -3861,10 +3869,14 @@ class WheelhouseApp(App):
         self.paint_sendbar()
         self.paint_detail()
 
+    def open_doc(self, path: str, title: str) -> None:
+        """A module's doc full screen (api.Context.open_doc), as Enter opens a doc item."""
+        self.push_screen(DocView(file=(path, title)))
+
     def module_ctx(self, mid: str) -> api.Context:
         """The context a module's pane is made with: the app's, with its own routes (call)."""
         return dataclasses.replace(self.ctx, call=functools.partial(self.client.call_module, mid),
-                                   show_doc=self.show_doc)
+                                   show_doc=self.show_doc, open_doc=self.open_doc)
 
     def paint_detail(self) -> None:
         agent, doc, shown = False, self.selected_doc(), self.shown_doc

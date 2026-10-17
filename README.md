@@ -39,7 +39,7 @@ make install
 installer, `curl -LsSf https://astral.sh/uv/install.sh | sh`, which puts it in
 `~/.local/bin`: open a new shell to have it on your `PATH`). It then runs
 `uv sync --reinstall-package claude-wheelhouse` (plain `uv sync` does for a first install),
-with the modules in `modules/` (today, the stats pane), which builds a `.venv` inside the clone: the wheelhouse installs
+with the modules in `modules/` (today, the stats and Decisions panes), which builds a `.venv` inside the clone: the wheelhouse installs
 nothing outside it (uv keeps its own cache of downloads, and any Python it fetched). To
 update, `git pull`, `make install` again, then quit and reopen the app straight away
 (with `--local` too, and on every machine that opens this database): a session relaunched
@@ -55,10 +55,11 @@ its environment variable and `.env` key where it has them (see [Settings](#setti
 and runs `make install` first when the clone has none, or `pyproject.toml` or `uv.lock`
 changed since. Without uv, every other target stops with `uv not found: run make install`.
 
-The stats pane is a module, its own package in `modules/stats`, which `make install`
-installs with the wheelhouse. To leave it out, `make install WITH=""`: the wheelhouse runs
-without it, and the space under the session list goes to the panes beside it. `WITH`
-names the modules to install, `WITH="stats"` for the stats pane alone. Leaving a module out
+The stats pane and the Decisions pane are modules, each its own package (`modules/stats`,
+`modules/design`), which `make install` installs with the wheelhouse. To leave them out,
+`make install WITH=""`: the wheelhouse runs without them, and the space each took goes to
+the panes beside it. `WITH` names the modules to install, `WITH="stats"` for the stats pane
+alone. Leaving a module out
 is a `make` choice: every `make` target (`run`, `test`, `stop` and the rest) keeps to what
 the last `make install` installed, and a plain `make install` installs them all again. A
 plain `uv run` (`uv run claude-wheelhouse`, say) installs every module back.
@@ -262,6 +263,16 @@ session.
   rather than freezing the app. The inbox's session list shows each session's context
   size the same way, as a one-cell bar in the same colours, filled in eighths on a
   linear scale: an eighth for each 125k begun, so the cell is full past 875k.
+- **The Decisions pane.** Under the inbox, the design decisions (ADRs) of every repo a session works
+  in: each `NNNN-*.md` file in the repo's `docs/adr`, or in the directories a session there
+  named with `set_doc_dirs` instead (`.plan/`, say, only if named), read again every 10
+  seconds and whenever a session starts in another repo or names its directories. A row is
+  its number, status and title, and its repo when the pane lists more than one. The status is the doc's front matter `status:`, else
+  a `Status:` line or `## Status` section, else its file name's (`0042-ACCEPTED-slug.md`),
+  else `?`. PROPOSED and UNRESOLVED come first, then the rest, newest first; a column's
+  header sorts by it, as the inbox's do. Moving the cursor shows the decision in Detail,
+  rendered, with no answer box, and `Enter` opens it full screen. The pane is the `design`
+  module: `make install WITH="stats"` leaves it out.
 - **Sessions.** The left-hand column lists every session (parked ones dimmed, at the
   foot of the list's room: they fall there as you park them, and rise back as you unpark
   them). A name too long for the column is cut short with `…` (never its `⟳`), so the
@@ -388,7 +399,7 @@ Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item lis
 as answered, a decision as seen), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
 Every dialog opens centred over the screen, which stays in sight behind it. `Esc`, or a click outside the box, cancels it (on the tutorial's invite, that is Later, never Never), though not a click outside in the moment a dialog opens (a double-click's second). `Enter` presses the focused button; with focus on a one-line box or a checkbox it takes the dialog's one action (Launch, Rename, Fork, Park and the like), while in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices (Stop & Forget's, Relaunch's) answers `Enter` only on the focused button. `Tab` and `Shift+Tab` go round its boxes and buttons. A dialog asking yes or no takes `Y` or `N` (`Esc` is no, and so is `Enter`, as No has the focus). The `?` list closes on `Esc`, `Enter`, `?` or a click outside.
 
-`Tab` goes round the session list, the items, the answer box, the tour's Next while a tour box
+`Tab` goes round the session list, the items, the Decisions list, the answer box, the tour's Next while a tour box
 with one shows, then every button shown, in reading order, then the stats pane's effort slider (while it shows) and its zoom's `-` and `+` (`Enter` or
 `Space` presses the one with the focus), and `Shift+Tab` goes back. Nothing else is a stop. A click in the conversation puts focus in the
 answer box, where `PgUp` and `PgDn` scroll the conversation, and `Ctrl+Enter` leaves it there. A click on
@@ -442,9 +453,9 @@ Windows clipboard through PowerShell, so it takes most of a second; elsewhere it
 wheelhouse's own last copy. Hold `Shift` to drag with the terminal's own selection
 instead.
 
-The left column holds Sessions, Stats and Session info, top to bottom; the Inbox is in
-the middle and Detail on the right. Sessions, Session info, Inbox and Detail are titled in
-their top border; the Stats panel's own border names the session it shows. The first two
+The left column holds Sessions, Stats and Session info, top to bottom; the Inbox and,
+under it, Decisions are in the middle, and Detail on the right. Sessions, Session info,
+Inbox, Decisions and Detail are titled in their top border; the Stats panel's own border names the session it shows. The first two
 columns are 45 wide where there's room; on a narrower terminal they give way in proportion,
 each down to its minimum, so Detail keeps 40. Every boundary between areas can be
 dragged: the lines between the three columns, between the panes in the left column, and
