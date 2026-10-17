@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_wheelhouse import features, launch, liveness, store as store_module, tui
+from claude_wheelhouse import api, features, launch, liveness, store as store_module, tui
 from claude_wheelhouse.store import Store
 
 SHIPPED_DWELL = tui.DWELL   # before no_dwell_timer puts it out of reach
@@ -46,6 +46,15 @@ def isolated_db(tmp_path, monkeypatch):
     for setting in ("ENABLE_SDK", "USAGE_MODE", "KEEPALIVE_HOURS", "ANIMATION_FPS"):   # features.given's
         monkeypatch.delenv(f"WHEELHOUSE_{setting}", raising=False)
     return path
+
+
+@pytest.fixture(autouse=True)
+def without_design(monkeypatch):
+    """The modules installed, less the design module: the app's layout and Tab order are
+    tested with the stats pane alone, as written before it. The Decisions pane's own tests
+    (test_decisions_pane.py) load it themselves."""
+    load = api.load
+    monkeypatch.setattr(api, "load", lambda entries=None: [m for m in load(entries) if m.name != "design"])
 
 
 @pytest.fixture(autouse=True)

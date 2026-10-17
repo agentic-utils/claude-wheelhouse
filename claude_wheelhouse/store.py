@@ -66,7 +66,9 @@ DECISION_FIELDS = (("why", "Why"),)
 # park asks for handoff notes: an older session's tab stays open, parked but running.
 # 13: doc items (M), which the protocol asks a session to declare for docs meant for the person,
 # and a subagent's description naming its item's ref, which files it under that item.
-PROTOCOL_VERSION = 13
+# 14: set_doc_dirs, the tool a session says where its repo's decisions are with, which the
+# design module's Decisions pane now reads (sessions.doc_dirs): an older session has no such tool.
+PROTOCOL_VERSION = 14
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.

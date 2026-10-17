@@ -1,6 +1,6 @@
 # Modules: stats and design docs, pane swapping, editing docs in place
 
-Issue: #79. Status: approved, stages 1 (PR #86) and 2 (PR #94) landed, stage 3 in progress.
+Issue: #79. Status: approved, stages 1 to 5 landed, stage 6 in progress.
 
 The asks, in Doug's words (Q94): "user needs to be able to edit ADR (or any other doc for
 that matter)"; "collapse the tab idea and instead keep a single view. To do that, let's
@@ -170,6 +170,17 @@ its own distribution in this repo:
   the rest by number, newest first. Header sorts as the inbox's do.
 - **Selecting a row** shows the decision in the Detail pane's viewer (`show_doc`), as a doc
   item shows; Enter opens it full screen (`DocView`). The answer box is hidden, as for docs.
+- **As built (stage 6).** The pane asks its route every 10 s (its `tick`), and at once when
+  the sessions' directories or declared doc dirs change, on a worker thread; the route scans
+  on each ask, reading a file again only when its mtime or size has changed, so nothing polls
+  the filesystem in between. Besides front matter and the file name, a `Status:` line or a
+  `## Status` section (adr-tools' layout) gives the status. The Repo column shows only when
+  there is more than one repo, as the 45-column pane is narrow. Moving the cursor shows the
+  decision (only while the list has focus, so Tab passing through changes nothing), and
+  Enter and a click on the cursor's row open it full screen through a new
+  `Context.open_doc`, an optional field, so `WHEELHOUSE_API` stays 2. The list is a Tab
+  stop after the inbox's (`TAB_LIST`). The header sort lasts the run: a module's settings
+  (`modules.<id>.*`) have no writer yet. `PROTOCOL_VERSION` is 14.
 - The rest of the proposal (`~/.claude/scratchpad/t112/proposal.md`: Accept and Reject,
   topics, conformance reports, badges) is out of this plan, and adds to this module later.
 

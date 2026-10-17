@@ -19,7 +19,9 @@ methods on it:
   transcript followers are shared, `follower`): a pane showing that session can repaint.
 
 A pane's widget may also name a section of the ? overlay for its BINDINGS: `KEYS_HELP =
-(title, sdk_only)`, sdk_only to list them only with SDK mode on.
+(title, sdk_only)`, sdk_only to list them only with SDK mode on. A list in a pane (the
+Decisions pane's table) that sets `TAB_LIST = True` is a Tab stop after the inbox, before the
+answer box (tui.tab_stops, #77).
 
 A module may also serve the daemon side (.plan/modules.md, "The module boundary"):
 `routes(ctx)`, its `Route`s, mounted under /m/<id>/ (and called in process with --local),
@@ -35,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .docroots import doc_dirs  # noqa: F401  (where each repo's decisions are found, Q114)
+from .docroots import doc_dirs, git_root  # noqa: F401  (where each repo's decisions are found, Q114)
 
 # what a module may use of the wheelhouse: a session's token use (transcript_usage.py), read
 # by the hub's shared followers, the account's usage, and the effort levels
@@ -139,6 +141,8 @@ class Context:
     call: Callable[[str, dict | None], object] | None = None
     # a doc under a doc root shown in the Detail pane's viewer: (absolute path, title). None daemon side
     show_doc: Callable[[str, str], None] | None = None
+    # the same, opened full screen (DocView), as Enter opens an inbox doc. None daemon side
+    open_doc: Callable[[str, str], None] | None = None
 
 
 @dataclass
