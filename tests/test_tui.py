@@ -5722,7 +5722,8 @@ async def test_ctrl_enter_leaves_focus_in_the_box(store, sid, text, focus, desc)
 # the inbox's Tab stops with a running tab session selected and an answer queued (#77): the
 # lists, the box, then every button shown and enabled in reading order, the session pane's
 # then the send bar's (Model, Mode, Interrupt, Compact and Shell disabled: a wheelhouse-run session's)
-INBOX_STOPS = ["session-list", "items", "answer", "rename", "relaunch", "park", "end", "fork", "send", "send-all"]
+INBOX_STOPS = ["session-list", "items", "answer", "rename", "relaunch", "park", "end", "fork", "send", "send-all",
+               "stats:zoom-out", "stats:zoom-in"]   # then the stats pane's zoom (no slider: a tab session)
 
 
 @pytest.mark.anyio
@@ -5747,10 +5748,10 @@ async def test_the_tab_order(store, sid, monkeypatch, screen, key, order, desc):
             await pick(app, pilot, sid)
             app.session_list.focus()
         await pilot.pause()
-        seen = [focused_id(app)]
+        seen = [stop_id(app)]
         for _ in order[1:]:
             await pilot.press(key)
-            seen.append(focused_id(app))
+            seen.append(stop_id(app))
         assert seen == order, f"{desc}: {seen}"
         assert_one_current(app, desc)
 
@@ -5758,14 +5759,19 @@ async def test_the_tab_order(store, sid, monkeypatch, screen, key, order, desc):
 @pytest.mark.anyio
 @pytest.mark.parametrize("screen, focus, how, want, desc", [
     ("inbox", "send", "enter", "answer", "Tab to Send, Enter: Send disables itself, focus to the answer box (#77)"),
-    ("inbox", "items", "ctrl+s", "answer", "Send by its key: focus to the answer box too"),
+    ("inbox", "answer", "ctrl+s", "answer", "Send by its key from the box: focus stays in it"),
+    ("inbox", "items", "ctrl+s", "items", "Send by its key from the items: focus stays there"),
+    ("inbox", "session-list", "ctrl+s", "session-list", "and from the session list"),
+    ("inbox", "items", "click", "items", "a click on Send from the items: focus stays there"),
     ("inbox", "fork", "disable", "answer", "a focused button disabled: focus to the answer box"),
     ("inbox", "fork", "hide", "answer", "a focused button hidden: the same"),
     ("inbox", "park", "no box", "end", "with no answer box: the next Tab stop"),
     ("thread", "send", "enter", "thread-answer", "a full-screen item: Send, then focus to its box"),
     ("thread", "send-all", "hide", "thread-answer", "a full-screen item: a focused button hidden, focus to its box"),
 ])
-async def test_focus_lost_with_a_button_goes_to_the_answer_box(store, sid, monkeypatch, screen, focus, how, want, desc):
+async def test_focus_lost_with_a_button_goes_to_the_answer_box(store, sid, monkeypatch, clock, screen, focus, how, want,
+                                                               desc):
+    """clock: no refresh tick puts back a button disabled or hidden here, or the answer box."""
     by_name(monkeypatch, {"demo": "live"})
     q = store.post_item(sid, "question", "one?")
     store.queue(sid, "queued")   # Send and Send all enabled
@@ -5780,7 +5786,9 @@ async def test_focus_lost_with_a_button_goes_to_the_answer_box(store, sid, monke
         await pilot.pause()
         assert focused_id(app) == focus, desc
         button = app.screen.query_one(f"#{focus}")
-        if how in ("enter", "ctrl+s"):
+        if how == "click":
+            await pilot.click("#send")
+        elif how in ("enter", "ctrl+s"):
             await pilot.press(how)
         elif how == "hide":
             button.display = False
@@ -5788,10 +5796,12 @@ async def test_focus_lost_with_a_button_goes_to_the_answer_box(store, sid, monke
             if how == "no box":
                 app.answer.display = False
             button.disabled = True
-        await pilot.pause()
-        await pilot.pause()
+        for _ in range(20):   # the blur, a Hide after the next layout, then the bubbling: a few hops each
+            await pilot.pause()
+            if focused_id(app) == want:
+                break
         assert focused_id(app) == want, f"{desc}: {focused_id(app)}"
-        if how in ("enter", "ctrl+s"):
+        if how in ("enter", "ctrl+s", "click"):
             assert store.drafts(sid) == [], f"{desc}: sent"
 
 
@@ -5825,11 +5835,13 @@ async def test_a_doc_in_the_inbox_scrolls_from_the_keyboard(store, sid, tmp_path
         await pilot.wait_for_scheduled_animations()
         await pilot.pause()
         assert app.detail_scroll.scroll_y > 0, desc
-        app.items_table.focus()
         app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{q}"))
         await pilot.pause()
+        assert focused_id(app) == "answer", f"{desc}: off the doc, focus goes to the box back in its place"
+        await pilot.press("shift+tab")
+        assert focused_id(app) == "items", f"{desc}: the box is the stop again"
         await pilot.press("tab")
-        assert focused_id(app) == "answer", f"{desc}: off the doc, the box is the stop again"
+        assert focused_id(app) == "answer", f"{desc}: the box is the stop again"
 
 
 @pytest.mark.anyio
@@ -5859,6 +5871,46 @@ async def test_a_click_in_a_thread_focuses_its_box(store, sid, key, desc):
             await pilot.pause()
             assert (scroll.scroll_y < 30 if key == "pageup" else scroll.scroll_y > 30), desc
             assert focused_id(app) == "thread-answer", f"{desc}: focus stays in the box"
+
+
+def stop_id(app) -> str | None:
+    """The focused stop: its id, and inside the stats pane which of its stops."""
+    pane = next(iter(app.query("#stats")), None)
+    return f"stats:{pane.at}" if pane is not None and app.focused is pane else focused_id(app)
+
+
+@pytest.mark.usefixtures("sdk_on")
+@pytest.mark.anyio
+@pytest.mark.parametrize("key, order, desc", [
+    ("tab", ["shell", "stats:slider", "stats:zoom-out", "stats:zoom-in", "session-list"],
+     "after the buttons (Shell the last: Send all has nothing to send): the stats pane's effort slider, then "
+     "its zoom's - and + (#77)"),
+    ("shift+tab", ["session-list", "stats:zoom-in", "stats:zoom-out", "stats:slider", "shell"], "and back"),
+])
+async def test_the_stats_panes_stops_follow_the_buttons(store, tmp_path, monkeypatch, key, order, desc):
+    sid, app = await hosted_app(store, tmp_path, monkeypatch)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await shown_stats(app, pilot)
+        pane = app.query_one("#stats")
+        assert pane.charts, f"{desc}: the charts, so the zoom, show"
+        app.query_one(f"#{order[0]}").focus()
+        await pilot.pause()
+        seen = [stop_id(app)]
+        for _ in order[1:]:
+            await pilot.press(key)
+            await pilot.pause()
+            seen.append(stop_id(app))
+        assert seen == order, f"{desc}: {seen}"
+        pane.focus_part("zoom-in")
+        app.screen.set_focus(pane)
+        await pilot.pause()
+        assert pane.render().plain.split("\n")[-1].endswith("2h  -   + "), desc
+        await pilot.press("enter")
+        await pilot.pause()
+        assert pane.span == 3600 and stop_id(app) == "stats:zoom-in", f"{desc}: Enter presses the focused +"
+        await pilot.press("right")
+        await pilot.pause()
+        assert store.session(sid)["effort"] == "high", f"{desc}: the slider's keys only on the slider"
 
 
 @pytest.mark.anyio

@@ -1353,13 +1353,20 @@ def reading_order(button: Button) -> tuple:
     return isinstance(pane, SendBar), pane.region.x, button.region.y, button.region.x
 
 
-def tab_stops(screen: Screen) -> list[Widget]:
+def tab_stops(screen: Screen) -> list[tuple[Widget, str | None]]:
     """Tab's stops on the inbox and a full-screen item (#77), the one place they are said:
-    TAB_ORDER's that show, then every BarButton shown and enabled in reading order. Nothing
-    else is one, whatever else can take focus (a click on it, or a key)."""
+    TAB_ORDER's that show, then every BarButton shown and enabled in reading order, then a
+    pane that says its own (tab_parts: the stats pane's effort slider and zoom), each as
+    (widget, part). Nothing else is one, whatever else can take focus (a click on it, or a key)."""
     chain = screen.focus_chain
-    return [w for id_ in TAB_ORDER for w in chain if w.id == id_] + \
-        sorted((w for w in chain if isinstance(w, BarButton)), key=reading_order)
+    return [(w, None) for w in [w for id_ in TAB_ORDER for w in chain if w.id == id_]
+            + sorted((w for w in chain if isinstance(w, BarButton)), key=reading_order)] + \
+        [(w, part) for w in chain if hasattr(w, "tab_parts") for part in w.tab_parts()]
+
+
+def stop_of(widget: Widget | None) -> tuple[Widget | None, str | None]:
+    """The stop (tab_stops) a focused widget is at."""
+    return widget, getattr(widget, "at", None) if hasattr(widget, "tab_parts") else None
 
 
 class Columns(Horizontal):
@@ -2278,6 +2285,7 @@ DESCRIBE = {
     "effort(1)": "A higher effort, applied live",
     "effort_end(0)": "The lowest effort",
     "effort_end(-1)": "The highest effort",
+    "press_zoom": "On the charts' - or +, zoom them out or in",
     "press('allow')": "Allow the permission item in context; on the question suggesting Compact, Compact",
     "press('always')": "Always: allow it, and keep the rule; on the question suggesting Compact, Leave it",
     "press('deny')": "Deny it, with an optional reason (Enter denies); on the question suggesting Compact, just compact after",
@@ -2350,14 +2358,17 @@ TAB_KEYS = [Binding("tab", "app.focus_next"), Binding("shift+tab", "app.focus_pr
 LIST_KEYS = [Binding(key, action) for key, action in (
     ("up", "cursor_up"), ("down", "cursor_down"), ("pageup", "page_up"), ("pagedown", "page_down"),
     ("ctrl+home", "scroll_top"), ("ctrl+end", "scroll_bottom"))]
+SLIDER_TAB = "effort slider (while it shows) and its "   # SDK mode's alone (keys_help)
 TABS = ("Tab goes round the session list, the items, the answer box, then every button shown, in reading "
-        "order, and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter "
+        "order, then the stats pane's {slider}zoom's - and + (Enter or Space presses the one with the focus), "
+        "and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter "
         "leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus "
         "where it was, and each has a key. An item opened full screen goes the same way: its answer box, then "
         "its buttons; a click in its thread puts focus in the box, where PgUp and PgDn scroll the thread. A doc "
         "shown in the inbox takes the answer box's place, and a click on it focuses it: Up, Down, PgUp, PgDn, "
         "Home and End scroll it. A "
-        "focused button that is disabled or hidden (Send, once sent) gives focus to the answer box.")
+        "focused button that is disabled or hidden (Send, once sent) gives focus to the answer box. Send from a "
+        "list leaves focus in the list.")
 SEND_RULES = (
     "**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the "
     "session's queue as one message, so related answers arrive together; ✉ counts what's queued. "
@@ -2431,7 +2442,7 @@ def keys_help(sdk: bool = False, shown=()) -> str:
     whose = WHOSE.format(sdk=SDK_WHOSE if sdk else HOSTED_WHOSE if offered & {"interrupt", "compact", "shell"}
                          else "; then Mode, and Send on one that isn't dead.")
     buttons = [text for id_, text in BUTTONS.items() if id_ not in SDK_BUTTONS or id_ in offered]
-    out += ["## Tab order", TABS, "## Mouse", MOUSE, "## Buttons", whose,
+    out += ["## Tab order", TABS.format(slider=SLIDER_TAB if sdk else ""), "## Mouse", MOUSE, "## Buttons", whose,
             *[f"- {text}" for text in buttons],
             "## Sending", SEND_RULES, "## Dialogs", DIALOGS,
             "## The tutorial", f"{tutorial.AGAIN} at the next start. Esc, Enter, ? or a click outside closes this list."]
@@ -3625,9 +3636,8 @@ class WheelhouseApp(App):
                        else hint(sends, s is not None and self.dead(s["id"])))
         thread = isinstance(self.screen, ThreadView)
         reading = not thread and self.selected_doc() is not None   # a doc: nothing to answer, no box
-        if not thread and self.detail.can_focus != reading:   # the doc in the box's place (TAB_ORDER)
-            if not reading and self.detail.has_focus:
-                self.screen.set_focus(self.items_table)
+        doc_gone = not thread and not reading and self.detail.has_focus   # the box back in its place: focus with it
+        if not thread:   # the doc in the box's place (TAB_ORDER)
             self.detail.can_focus = reading
         splitters = [] if thread else [self.answer_splitter]
         for rows, shown in ((permission_rows, asking and not denying), (reasons, denying), (compact_rows, nudged),
@@ -3640,6 +3650,8 @@ class WheelhouseApp(App):
                     if shown and thread and isinstance(row, Compose):
                         self.screen.set_focus(row)   # the thread's box back: its place to type
                     self.refit()   # a row more or less over the answer box
+        if doc_gone and not self.focus_answer():
+            self.screen.set_focus(self.items_table)
         show_button(bar, "send-all", f"Send all ({total})", not total)
         if s is not None and runner(s) == "sdk":
             bar.activity("in a shell tab" if s["shell"] else (s["activity"] or "") if self.running(s["id"]) else "")
@@ -4269,8 +4281,9 @@ class WheelhouseApp(App):
     def action_send_session(self) -> None:
         self.settle()
         if sid := self.context_session():
+            focused = self.focused
             self.send_session(sid)
-            self.focus_answer()   # #77: as the button does
+            self.after_send(focused)
 
     @session_action
     def send_session(self, sid: str) -> None:
@@ -4302,8 +4315,9 @@ class WheelhouseApp(App):
     def send_pressed(self, event: Button.Pressed) -> None:
         self.settle()
         if sid := self.bar_session(event.button.screen):
+            focused = self.focused
             self.send_session(sid)
-            self.focus_answer()   # #77: not lost with the button, disabled now its queue has gone
+            self.after_send(focused)
 
     @on(Button.Pressed, "#send-all")
     def send_all_pressed(self) -> None:
@@ -4538,11 +4552,14 @@ class WheelhouseApp(App):
         if step > 0 and isinstance(self.focused, Compose) and self.focused.take_suggestion():
             return
         screen = self.screen
-        chain = tab_stops(screen) if self.stopped(screen) else screen.focus_chain
+        chain = tab_stops(screen) if self.stopped(screen) else [(w, None) for w in screen.focus_chain]
         if not chain:
             return
-        here = chain.index(self.focused) if self.focused in chain else (-1 if step > 0 else 0)
-        nxt = chain[(here + step) % len(chain)]
+        at = stop_of(self.focused)
+        here = chain.index(at) if at in chain else (-1 if step > 0 else 0)
+        nxt, part = chain[(here + step) % len(chain)]
+        if part is not None:   # a stop inside a pane (tab_parts)
+            nxt.focus_part(part)
         # at once, not after a refresh as focus() does: keys behind it go there. A conversation
         # or thread stays where it's scrolled to, not taken to its top as Textual would (D43)
         screen.set_focus(nxt, scroll_visible=not isinstance(nxt, Transcript))
@@ -4561,7 +4578,7 @@ class WheelhouseApp(App):
     def focus_answer(self) -> bool:
         """Focus to the answer box on the screen in front (or Deny's reason in its place), if
         one shows: a click in the conversation, and Send (#77)."""
-        box = next((w for w in tab_stops(self.screen) if w.id in ANSWER_BOXES), None)
+        box = next((w for w, _ in tab_stops(self.screen) if w.id in ANSWER_BOXES), None)
         if box is not None:
             self.screen.set_focus(box, scroll_visible=False)
         return box is not None
@@ -4575,11 +4592,17 @@ class WheelhouseApp(App):
         if not isinstance(lost, BarButton) or not lost.is_attached or lost.screen is not screen \
                 or not self.stopped(screen) or not (screen.focused is None or isinstance(screen.focused, Button)):
             return
-        stops = tab_stops(screen)
+        stops = [w for w, _ in tab_stops(screen)]
         if lost in stops or self.focus_answer() or not stops:
             return
         screen.set_focus(next((b for b in stops if isinstance(b, BarButton) and reading_order(b) > reading_order(lost)),
                               stops[0]))
+
+    def after_send(self, focused: Widget | None) -> None:
+        """Send, by its button or Ctrl+S, from the answer box or a button: focus to the answer
+        box, not lost with Send, disabled now its queue has gone. From a list it stays (#77)."""
+        if isinstance(focused, Button) or getattr(focused, "id", None) in ANSWER_BOXES:
+            self.focus_answer()
 
     def action_relaunch_all(self) -> None:
         """Relaunch all: every Available session, once confirmed. Parked and Active ones are
