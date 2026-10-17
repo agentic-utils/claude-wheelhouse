@@ -100,9 +100,11 @@ and `transcripts.py` the transcripts the core's and the stats module's tests wri
   `--no-group` for the rest, and writes the modules installed to
   `.venv/.wheelhouse-installed`), then `make run` (`ARGS="..."` passes args;
   it runs `make install` first, with the stamp's modules, when that stamp is missing or
-  older than `pyproject.toml`, `uv.lock` or a module's `pyproject.toml`). The app's targets
-  run `uv run --no-sync`, so a module left out stays out; `uv run` alone syncs the default
-  groups, every module included. `make args` (`claude-wheelhouse args`, hidden from `--help`, `cli.args_text`)
+  older than `pyproject.toml`, `uv.lock` or a module's `pyproject.toml`; `none` in the stamp
+  for none, and an empty one, an install from before `modules/`, for all). Every target
+  depends on the stamp and runs `uv run --no-sync`, so a module left out stays out; `uv run`
+  alone syncs the default groups, every module included. The stats module's tests share
+  core's `tests/transcripts.py` (pytest's `pythonpath = ["."]`) and skip without it installed. `make args` (`claude-wheelhouse args`, hidden from `--help`, `cli.args_text`)
   lists the app's flags with their settings' names (`features.SETTINGS`).
   `make stop` (`claude-wheelhouse daemon --stop`) stops the daemon. `make tutorial` (`claude-wheelhouse tutorial`), with the app and daemon stopped, has the
   next start offer the tutorial again. `make` lists the targets. Python 3.12, managed by uv.

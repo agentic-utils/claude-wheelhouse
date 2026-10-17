@@ -108,16 +108,24 @@ Stats is already a module in protocol terms, but it ships in the core package. I
 its own distribution in this repo:
 
 - `modules/stats/` with its own `pyproject.toml` (`claude-wheelhouse-stats`), declaring
-  `stats = "claude_wheelhouse_stats:module"`. Core's `pyproject.toml` drops its entry point
-  and `api.OWN`.
+  `stats = "claude_wheelhouse_stats:module"`. Core's `pyproject.toml` drops its entry point.
+  `api.OWN` no longer lists core's own modules: it names the `claude_wheelhouse.` prefix of
+  core's old entry points, so a stale install's `stats` entry point, which no longer imports,
+  gets the "reinstall" card (below).
 - **Moves**: `stats_pane.py` whole; from `stats.py` the drawing (`layout`, `render`, `Chart`,
   the gauges, the slider and zoom spans, `cache_lines`, `Totals`, `combine`), with their
   tests.
 - **Stays core**, renamed `transcript_usage.py`: the transcript parsing and following
   (`parse`, `UsageFollower`, `follower`, `Snapshot`, `current`, `carry`, `epoch`, `grade`,
   `context_bar`). The hub uses them for the session list's context bars and cache warmth,
-  and `plan_usage.py` stays in the hub, as now. `api.py` re-exports what the module needs
-  (`follower`, `Snapshot`, `current`), so the module imports `api` alone.
+  and `plan_usage.py` stays in the hub, as now. `api.py` re-exports what the module needs, so the module imports `api` alone.
+  As built (stage 2), that is more than `follower`, `Snapshot` and `current`, because the
+  drawing and the pane's workers use them: from `transcript_usage`, `UsageFollower`,
+  `follower`, `current`, `read_safely`, `load_safely` (the pane's worker reads), `Snapshot`,
+  `Turn`, `History`, `tokens`, `clock`, `grade`, `hexc`, `window_for`, and the constants
+  `HOUR`, `DAY`, `WEEK`, `SPAN`, `BUCKET`, `PARTIAL`, `CHARTS`, `SERIES`, `OK`, `WARN`,
+  `AMBER`, `HOT`; from `models`, `EFFORTS` and `name` (as `model_label`); from `plan_usage`,
+  `AccountUsage` and `EVERY` (as `USAGE_EVERY`).
 - `make install` installs core `--with` both modules from the repo, so a normal install
   looks as now. The "reinstall with make install" card for a stale install stays.
 - Its slot moves from `inbox.side` to `left.middle`. `stats.render` already lays out to a

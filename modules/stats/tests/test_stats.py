@@ -5,8 +5,9 @@ import pytest
 
 from claude_wheelhouse import models, plan_usage, transcript_usage
 from claude_wheelhouse.transcript_usage import Turn
-from claude_wheelhouse_stats import stats
 from tests.transcripts import (D, H, NOW, compacted_snap, host, lines, response, snap, write)
+
+stats = pytest.importorskip("claude_wheelhouse_stats.stats", reason="installed without the stats module")
 EVEN = 1791460800 + 7200 - 1791460800 % 7200   # on a multiple of every bucket width below
 
 

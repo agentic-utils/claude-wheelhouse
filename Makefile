@@ -3,14 +3,16 @@
 
 # where Astral's installer puts uv, which isn't on PATH until a new shell
 export PATH := $(PATH):$(HOME)/.local/bin
-# make install's last step, holding the modules it installed: make run installs first when
-# it's missing, or older than these
+# make install's last step, holding the modules it installed ("none" for none; empty, as
+# an install before modules/ left it, for all): make run installs first when it's missing,
+# or older than these
 STAMP := .venv/.wheelhouse-installed
 # the modules in this repo (modules/), each its own package and dependency group; make install
 # installs them all with the wheelhouse, or those named: WITH="" for none (.plan/modules.md)
 MODULES := $(notdir $(wildcard modules/*))
 WITH ?= $(MODULES)
-# the app runs on what make install installed: a plain uv run would add back a module left out
+WANT = $(filter-out none,$(WITH))   # WITH=none, as the stamp says it, is none too
+# every target runs on what make install installed: a plain uv run would add back a module left out
 RUN := uv run --no-sync
 
 help: ## List the available commands (make help args: the app's command line args)
@@ -28,27 +30,28 @@ install: ## Install, or reinstall after an update, with every module in modules/
 		curl -LsSf https://astral.sh/uv/install.sh | sh; \
 		command -v uv >/dev/null 2>&1 || { echo "uv didn't install: see https://docs.astral.sh/uv/" >&2; exit 1; }; \
 		echo "uv is installed in ~/.local/bin: open a new shell to have it on your PATH"; }
-	@for m in $(WITH); do test -d modules/$$m || { echo "no module $$m: modules/ has $(MODULES)" >&2; exit 1; }; done
-	uv sync --reinstall-package claude-wheelhouse $(foreach m,$(WITH),--reinstall-package claude-wheelhouse-$(m)) \
-		$(foreach m,$(filter-out $(WITH),$(MODULES)),--no-group $(m))
-	@echo "$(WITH)" > $(STAMP)
+	@for m in $(WANT); do test -d modules/$$m || { echo "no module $$m: modules/ has $(MODULES)" >&2; exit 1; }; done
+	uv sync --reinstall-package claude-wheelhouse $(foreach m,$(WANT),--reinstall-package claude-wheelhouse-$(m)) \
+		$(foreach m,$(filter-out $(WANT),$(MODULES)),--no-group $(m))
+	@echo "$(if $(strip $(WANT)),$(strip $(WANT)),none)" > $(STAMP)
 
 $(STAMP): pyproject.toml uv.lock $(wildcard modules/*/pyproject.toml) | uv-check
-	@$(MAKE) --no-print-directory install WITH="$$(cat $(STAMP) 2>/dev/null || echo '$(MODULES)')"
+	@w="$$(cat $(STAMP) 2>/dev/null)"; test -n "$$w" || w='$(MODULES)'; \
+		$(MAKE) --no-print-directory install WITH="$$w"
 
 run: uv-check $(STAMP) ## Run the wheelhouse app, installing first if needed (ARGS="..." passes args: make args lists them)
 	$(RUN) claude-wheelhouse $(ARGS)
 
-stop: uv-check ## Stop the daemon (quit the app first, or it starts a new one)
+stop: uv-check $(STAMP) ## Stop the daemon (quit the app first, or it starts a new one)
 	$(RUN) claude-wheelhouse daemon --stop
 
-tutorial: uv-check ## Have the next make run offer the tutorial again, ending any earlier tutorial session (quit the app and make stop first)
+tutorial: uv-check $(STAMP) ## Have the next make run offer the tutorial again, ending any earlier tutorial session (quit the app and make stop first)
 	$(RUN) claude-wheelhouse tutorial
 
-test: uv-check ## Run the tests
-	uv run pytest
+test: uv-check $(STAMP) ## Run the tests
+	$(RUN) pytest
 
-stamp: uv-check ## Give every UNRELEASED feature in whatsnew.py a release's version (make stamp VERSION=0.2.0), as a release commit does
+stamp: uv-check $(STAMP) ## Give every UNRELEASED feature in whatsnew.py a release's version (make stamp VERSION=0.2.0), as a release commit does
 	@test -n "$(VERSION)" || { echo "make stamp VERSION=0.2.0"; exit 1; }
 	$(RUN) python -m claude_wheelhouse.whatsnew stamp $(VERSION)
 

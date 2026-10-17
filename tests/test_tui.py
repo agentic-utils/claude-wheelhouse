@@ -21,9 +21,11 @@ from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
 from claude_wheelhouse import features, launch, models, transcript, transcript_usage, tui
-from claude_wheelhouse_stats import stats
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
+
+# the stats pane's tests among these, and the slots' defaults, need the stats module
+stats = pytest.importorskip("claude_wheelhouse_stats.stats", reason="installed without the stats module")
 from claude_wheelhouse.splitter import Splitter
 from claude_wheelhouse.store import COMPACT_QUESTION, Store, mode
 from claude_wheelhouse.tui import (BLANK, COMPACT_HINT, DENY_HINT, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice,

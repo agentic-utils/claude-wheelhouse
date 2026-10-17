@@ -31,8 +31,8 @@ from typing import Callable
 # by the hub's shared followers, the account's usage, and the effort levels
 from .models import EFFORTS, name as model_label  # noqa: F401
 from .plan_usage import EVERY as USAGE_EVERY, AccountUsage  # noqa: F401
-from .transcript_usage import (AMBER, BUCKET, CHARTS, DAY, HOT, HOUR, OK, PARTIAL, RETRY,  # noqa: F401
-                               SERIES, SPAN, WARN, WEEK, History, Snapshot, Turn, UsageFollower, clock,
+from .transcript_usage import (AMBER, BUCKET, CHARTS, DAY, HOT, HOUR, OK, PARTIAL, SERIES,  # noqa: F401
+                               SPAN, WARN, WEEK, History, Snapshot, Turn, UsageFollower, clock,
                                current, follower, grade, hexc, load_safely, read_safely, tokens,
                                window_for)
 

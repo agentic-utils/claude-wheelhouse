@@ -58,8 +58,10 @@ changed since. Without uv, every other target stops with `uv not found: run make
 The stats pane is a module, its own package in `modules/stats`, which `make install`
 installs with the wheelhouse. To leave it out, `make install WITH=""`: the wheelhouse runs
 without it, and the space under the session list goes to the panes beside it. `WITH`
-names the modules to install, `WITH="stats"` for the stats pane alone; `make run` keeps to
-what the last `make install` installed, and a plain `make install` installs them all again.
+names the modules to install, `WITH="stats"` for the stats pane alone. Leaving a module out
+is a `make` choice: every `make` target (`run`, `test`, `stop` and the rest) keeps to what
+the last `make install` installed, and a plain `make install` installs them all again. A
+plain `uv run` (`uv run claude-wheelhouse`, say) installs every module back.
 
 Run the app in a Windows Terminal tab, which draws its colours and carries its copies to
 the clipboard.
@@ -656,8 +658,9 @@ sessions' conversations stay in `~/.claude/projects`, as Claude Code's own.
 make test
 ```
 
-(`make test` is `uv run pytest`, which installs every module in `modules/` and runs their
-tests too.)
+(`make test` is `uv run --no-sync pytest` on what `make install` installed: the modules'
+tests too, and with a module left out, the tests that need it skip. Plain `uv run pytest`
+installs every module back first.)
 
 The tests run in parallel, a worker a core (pytest-xdist). `uv run pytest -n 0` runs them
 serially, as a single test or a debugger wants.
