@@ -13,6 +13,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   session in a new Windows Terminal tab (through `cmd.exe` and `wt.exe`), all in a window
   of their own named `wheelhouse-<your WSL user>`, which the first launch opens.
 - [uv](https://docs.astral.sh/uv/), which installs everything else, Python included.
+  `make install` installs it if it's missing, with Astral's installer, into `~/.local/bin`.
 - Python 3.12 or later (`requires-python` in `pyproject.toml`). uv fetches 3.12 if your
   system doesn't have it.
 - Claude Code, installed in WSL and logged in, with `claude` on the `PATH` of your login
@@ -21,6 +22,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
 - git, to clone the repository.
 - make (`sudo apt install make`). Every `make` target is a one-line `uv` command, given
   beside it below, if you'd rather do without.
+- curl, for `make install` to fetch uv if you don't have it.
 
 ## Install
 
@@ -33,8 +35,11 @@ cd claude-wheelhouse
 make install
 ```
 
-`make install` runs `uv sync --reinstall-package claude-wheelhouse` (plain `uv sync` does
-for a first install), which builds a `.venv` inside the clone: the wheelhouse installs
+`make install` installs uv first if it isn't on your `PATH` or in `~/.local/bin` (Astral's
+installer, `curl -LsSf https://astral.sh/uv/install.sh | sh`, which puts it in
+`~/.local/bin`: open a new shell to have it on your `PATH`). It then runs
+`uv sync --reinstall-package claude-wheelhouse` (plain `uv sync` does for a first install),
+which builds a `.venv` inside the clone: the wheelhouse installs
 nothing outside it (uv keeps its own cache of downloads, and any Python it fetched). To
 update, `git pull`, `make install` again, then quit and reopen the app straight away
 (with `--local` too, and on every machine that opens this database): a session relaunched
@@ -44,7 +49,11 @@ relaunch" when an update changes what they're told.
 
 The `claude-wheelhouse` command lives in that `.venv`, so from the clone run it as
 `uv run claude-wheelhouse …` (this README writes it plain). `make` on its own lists the
-`make` targets.
+`make` targets, and `make help args` (or `make args`) the app's command line args, each with
+its environment variable and `.env` key where it has them (see [Settings](#settings)).
+`make run` passes `ARGS` to the app, for example `make run ARGS="--local --animation-fps 0"`,
+and runs `make install` first when the clone has none, or `pyproject.toml` or `uv.lock`
+changed since. Without uv, every other target stops with `uv not found: run make install`.
 
 Run the app in a Windows Terminal tab, which draws its colours and carries its copies to
 the clipboard.
@@ -344,7 +353,7 @@ selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued o
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
 as answered, a decision as seen), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
-Every dialog opens centred over the screen, which stays in sight behind it. A dialog asking yes or no takes `Y` or `N` (`Esc` is no, and so is `Enter`, as No has the focus).
+Every dialog opens centred over the screen, which stays in sight behind it. `Esc`, or a click outside the box, cancels it, though not the first-run tutorial offer (a line over the whole screen, which `Esc` turns off), nor a click outside in the moment a dialog opens (a double-click's second). `Enter` presses the focused button; with focus on a one-line box or a checkbox it takes the dialog's one action (Launch, Rename, Fork, Park and the like), while in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices (Stop & Forget's, Relaunch's) answers `Enter` only on the focused button. `Tab` and `Shift+Tab` go round its boxes and buttons. A dialog asking yes or no takes `Y` or `N` (`Esc` is no, and so is `Enter`, as No has the focus). The `?` list closes on `Esc`, `Enter`, `?` or a click outside.
 
 `Tab` goes round the panes: the session list, the items, the answer box, then the conversation (one
 stop, where the arrows, `PgUp`, `PgDn`, `Home` and `End` scroll it), and `Shift+Tab` goes back.
@@ -360,8 +369,11 @@ first, settled and finished below), `▲` (by urgency: blocked, waiting, open, r
 newest first, then the settled and finished as `*` has them) and `▼` (the reverse). The other
 columns cycle `▲`, `▼`, then back to Status `*`. The marker shows on the column in force.
 The session list starts sorted: running sessions first, then by their latest activity (`*`
-on the dot column); a click on that header goes to your own order, and another back. The other headers there
-still show every session's items, as `Esc` does. Drag a row with the mouse, or move the
+on the dot column). The name column cycles `▲`, `▼`, then back to the dot's `*`; the counts
+and sizes (context, `?`, `D`, `✉`) cycle `▼` (the most first), `▲`, then back, and a session
+whose context isn't known yet sorts last either way. A click on the dot's header puts `*` back. Parked sessions stay at the
+foot under every sort. A click on the header past the columns shows every session's items,
+as `Esc` does. Drag a row with the mouse, or move the
 highlighted one with `Alt+Up` and `Alt+Down`, to reorder. A move among rows that share its
 sort key keeps the sort, and your order breaks the tie until the row's key changes. Under
 Status `*` that is the whole band (active, or settled): a row dropped anywhere in it stays

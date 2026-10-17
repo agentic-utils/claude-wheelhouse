@@ -144,6 +144,41 @@ def test_an_invalid_command_doesnt_name_host(monkeypatch, capsys):
     assert "host" not in err, err
 
 
+ARGS_LISTED = [
+    ("--usage-mode {oneshot,persistent}", "USAGE_MODE", "the plan usage mode"),
+    ("--port PORT", "PORT", "the daemon's port"),
+    ("--keepalive-hours N", "KEEPALIVE_HOURS", "the keepalive"),
+    ("--animation-fps N", "ANIMATION_FPS", "the animation rate"),
+    ("--local", None, "the hub in process"),
+    ("--connect HOST:PORT", None, "another machine's daemon"),
+    ("--token-file PATH", None, "that daemon's token"),
+]
+
+
+@pytest.mark.parametrize("flag, key, desc", ARGS_LISTED)
+def test_make_args_lists_each_flag_with_its_setting_names(monkeypatch, capsys, flag, key, desc):
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", "args"])
+    cli.main()
+    lines = capsys.readouterr().out.splitlines()
+    assert (f"{flag}  (env WHEELHOUSE_{key}, .env {key}=)" if key else flag) in lines, desc
+
+
+def test_make_args_lists_no_other_flag_and_not_sdk_mode():
+    out = cli.args_text(cli.parser())
+    assert [line for line in out.splitlines() if line.startswith("--")] == \
+        [line for line in out.splitlines() if any(line.startswith(f) for f, _, _ in ARGS_LISTED)], \
+        "a flag added to the app is added to ARGS_LISTED"
+    assert "make run ARGS=" in out, "says how to pass them"
+    assert "sdk" not in out.lower(), "SDK mode stays undocumented (features.py)"
+
+
+def test_the_args_command_is_left_out_of_help(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", "--help"])
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert "args" not in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("argv, on, desc", [
     (["host", "abc"], False, "alone"),
     (["--enable-sdk", "host", "abc"], True, "after the flag, which turns SDK mode on as for any command"),

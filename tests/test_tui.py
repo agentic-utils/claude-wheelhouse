@@ -20,7 +20,7 @@ from textual.strip import Strip
 from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
-from claude_wheelhouse import features, launch, stats, transcript, tui
+from claude_wheelhouse import features, launch, models, stats, transcript, tui
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
@@ -809,8 +809,8 @@ async def session_step(app, pilot, how, ids) -> None:
         key = next(r.key.value for r in app.items_table.ordered_rows
                    if r.key.value.startswith(f"{ids[name]}|") and not r.key.value.endswith("|"))
         app.items_table.move_cursor(row=app.items_table.get_row_index(key))
-    elif what == "title":   # the list's header line
-        raw_click(app, app.session_list, (3, 0), 1)
+    elif what == "title":   # the list's header line, at its unsorted end: the others sort (#75)
+        raw_click(app, app.session_list, (header_x(app.session_list, 6), 0), 1)
     elif what == "esc":
         app.items_table.focus()
         await pilot.press("escape")
@@ -5582,6 +5582,105 @@ def focused_id(app) -> str | None:
     return app.focused.id if app.focused is not None else None
 
 
+OPEN = object()   # the dialog still open: Enter was its focus's own (a list's, a multi-line box's)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("make, outside, esc, enter, tabs, desc", [
+    (lambda app, sid, cwd: tui.NewSession(), None, None, {"name": "", "ticket": "", "brief": ""},
+     ["cwd", "browse", "name", "ticket", "brief", "model", "effort", "launch", "cancel"], "New session: Enter launches"),
+    (lambda app, sid, cwd: tui.PickDirectory(cwd), None, None, OPEN, ["folders", "choose", "up", "cancel"],
+     "the folder picker: Enter opens the folder"),
+    (lambda app, sid, cwd: RenameSession("demo"), None, None, "demo", ["new-name", "ok", "cancel"], "Rename"),
+    (lambda app, sid, cwd: tui.ChooseModel("demo", None), None, None, models.MODELS[0].id, ["models", "ok", "cancel"],
+     "the model: Enter takes the highlighted one"),
+    (lambda app, sid, cwd: tui.AdoptSession([]), None, None, OPEN, ["adopt-list", "adopt-name", "adopt", "cancel"],
+     "Adopt, with nothing to adopt"),
+    (lambda app, sid, cwd: tui.ForkSession(app.client.fork_plan(sid)), None, None, {"refs": [], "branch": None},
+     ["fork-go", "cancel"], "Fork"),
+    (lambda app, sid, cwd: CompactSession("demo"), None, None, OPEN,
+     ["compact-notes", "compact-dialog-then", "compact-go", "compact-cancel"], "Compact: Enter is a new line"),
+    (lambda app, sid, cwd: ParkSession("demo", True), None, None, {"compact": True},
+     ["park-compact", "park-go", "park-cancel"], "Park: Enter on the checkbox parks"),
+    (lambda app, sid, cwd: ForgetChoice("Forget demo?", True), None, None, "tell",
+     ["forget-tell", "forget-stop", "forget-cancel"], "Forget: Enter the focused default"),
+    (lambda app, sid, cwd: Confirm("Relaunch demo?"), False, False, False, ["no", "yes"], "a confirmation: No focused"),
+    (lambda app, sid, cwd: Choice("Force it?"), "leave", "leave", "cancel", ["cancel", "force", "leave"], "a choice"),
+    (lambda app, sid, cwd: RelaunchChoice("Relaunch demo?"), None, None, None,
+     ["relaunch-cancel", "relaunch-compact", "relaunch-now"], "Relaunch's choice: Cancel focused"),
+    (lambda app, sid, cwd: tui.TutorialOffer(), OPEN, False, True, [],
+     "the tutorial offer: all but its line is outside, so a click there leaves it be"),
+    (lambda app, sid, cwd: tui.KeysHelp(), None, None, None, None, "the keys: no answer asked"),
+])
+async def test_dialog_keys_and_click_outside(store, sid, tmp_path, make, outside, esc, enter, tabs, desc):
+    """#81, Doug: clicking outside a dialog dismisses it; one that asks nothing closes on Esc or
+    Enter; one that asks has Tab order on its buttons, Enter its single action and Esc its
+    cancel."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+
+        async def answer(gesture):
+            answers = []
+            app.push_screen(make(app, sid, str(tmp_path)), answers.append)
+            await pilot.pause()
+            await gesture()
+            await pilot.pause()
+            if isinstance(app.screen, tui.Dialog):
+                app.screen.dismiss(None)
+                await pilot.pause()
+                return OPEN
+            return answers[0]
+
+        async def inside():
+            await pilot.click(app.screen.children[0], offset=(0, 0))   # its border: not outside
+        async def outside_later():   # past the grace a double-click's second click gets
+            app.screen.opened -= tui.Dialog.GRACE
+            await pilot.click(offset=(0, 39))
+        assert await answer(inside) is OPEN, f"{desc}: a click on the box leaves it open"
+        assert await answer(outside_later) == outside, f"{desc}: a click outside"
+        assert await answer(lambda: pilot.press("escape")) == esc, f"{desc}: Esc"
+        got = await answer(lambda: pilot.press("enter"))
+        if isinstance(enter, dict):
+            got = {k: got.get(k) for k in enter} if isinstance(got, dict) else got
+        assert got == enter, f"{desc}: Enter"
+        if tabs is None:
+            return
+        app.push_screen(make(app, sid, str(tmp_path)))
+        await pilot.pause()
+        seen = []
+        for _ in tabs:
+            seen.append(focused_id(app))
+            await pilot.press("tab")
+        assert seen == tabs and focused_id(app) == (tabs[0] if tabs else None), f"{desc}: Tab order"
+        for want in reversed(tabs):
+            await pilot.press("shift+tab")
+            assert focused_id(app) == want, f"{desc}: Shift+Tab back to {want}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("after, want, desc", [
+    (0.0, OPEN, "at once: a double-click's second click on the button that opened it"),
+    (0.39, OPEN, "just inside the grace"),
+    (0.4, None, "at the grace: an outside click cancels"),
+    (2.0, None, "later: an outside click cancels"),
+])
+async def test_dialog_ignores_a_click_outside_as_it_opens(store, tmp_path, monkeypatch, after, want, desc):
+    clock = [100.0]
+    monkeypatch.setattr(tui.Dialog, "now", staticmethod(lambda: clock[0]))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        answers = []
+        app.push_screen(RenameSession("demo"), answers.append)
+        await pilot.pause()
+        clock[0] += after
+        await pilot.click(offset=(0, 39))
+        await pilot.pause()
+        got = OPEN if isinstance(app.screen, tui.Dialog) else answers[0]
+        assert got is want, desc
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("keys, desc", [
     ("pilot", "Ctrl+Enter, Down, Tab, type, Ctrl+Enter answers the next item (#73)"),
@@ -6950,10 +7049,11 @@ def item_refs(app) -> list[str]:
     return [str(table.get_row(k)[0 if app.filter_sid else 1]).lstrip("└ ") for k in table.final() if k and not k.endswith("|")]
 
 
-def header_x(table, name: str) -> int:
+def header_x(table, name: str | int) -> int:
+    """A column's header, by key or (the session list's, which have none) by index."""
     x = 0
-    for c in table.ordered_columns:
-        if c.key.value == name:
+    for i, c in enumerate(table.ordered_columns):
+        if name in (c.key.value, i):
             return x + 1
         x += c.get_render_width(table)
     raise KeyError(name)
@@ -7060,8 +7160,22 @@ async def test_header_clicks_cycle_the_markers(store, sid):
         assert "title ▲" in [str(c.label) for c in app.items_table.ordered_columns], "remembered"
 
 
+@pytest.mark.parametrize("spec, column, room, want, desc", [
+    ("session▲", 1, None, "session ▲", "the column in force: its marker"),
+    ("session▼", 1, 9, "session ▼", "room enough: as it is"),
+    ("session▲", 1, 6, "ses… ▲", "a narrow pane cuts the name, not the marker"),
+    ("dot*", 1, 6, "session", "no marker: the cell cuts it, as any name"),
+    ("dot*", 0, None, "*", "the dot's header is its marker alone"),
+    ("ctx▼", 2, None, "ctx ▼", "a size, most first"),
+    ("ctx▼", 3, None, "?", "another column: no marker"),
+])
+def test_session_label(spec, column, room, want, desc):
+    from types import SimpleNamespace
+    assert WheelhouseApp.session_label(SimpleNamespace(session_sort=spec), column, room) == want, desc
+
+
 @pytest.mark.anyio
-async def test_session_dot_header_sorts_and_drag_turns_it_off(store, sid, tmp_path):
+async def test_session_headers_sort_and_drag_turns_it_off(store, sid, tmp_path):
     other = store.create_session(str(tmp_path), name="later")
     store.post_item(other, "task", "fresh", status="running")   # the latest activity
     store.db.execute("UPDATE items SET created_at = '2999-01-01T00:00:00+00:00' WHERE session_id = ?", (other,))
@@ -7073,7 +7187,27 @@ async def test_session_dot_header_sorts_and_drag_turns_it_off(store, sid, tmp_pa
         assert table.keys()[:2] == [other, sid], "*: the latest activity first"
         await pilot.click(table, offset=(1, 0))
         await pilot.pause()
-        assert (str(table.ordered_columns[0].label), table.keys()[:2]) == ("", [sid, other]), "off: creation order"
+        assert str(table.ordered_columns[0].label) == "*", "the dot's * stays on: no other column took over"
+        names = {k: app.display_name(store.session(k)) for k in (sid, other)}
+        by_name = sorted(names, key=lambda k: names[k].casefold())
+        seen = []
+        widths = []
+        for column in (1, 1, 1, 2, 0):   # session ▲, ▼, back to *; ctx ▼ (most first); the dot's * again
+            await pilot.click(table, offset=(header_x(table, column), 0))
+            await pilot.pause()
+            seen.append([str(c.label) for c in table.ordered_columns[:6]])
+            widths.append(table.ordered_columns[2].content_width)
+            if seen[-1][1] == "session ▲":
+                assert table.keys()[:2] == by_name, "session ▲: by name"
+            if seen[-1][1] == "session ▼":
+                assert table.keys()[:2] == by_name[::-1], "session ▼: reversed"
+        plain = ["", "session", "ctx", "?", "D", "✉"]
+        assert seen == [["", "session ▲", *plain[2:]], ["", "session ▼", *plain[2:]], ["*", *plain[1:]],
+                        ["", "session", "ctx ▼", *plain[3:]], ["*", *plain[1:]]], "only the column in force is marked"
+        assert widths[3:] == [5, 3], "ctx widens for its marker, and narrows again when its sort goes off"
+        await pilot.click(table, offset=(header_x(table, 1), 0))
+        await pilot.pause()
+        assert store.setting("layout.sort.sessions") == "session▲", "kept for the next start"
         await pilot.click(table, offset=(1, 0))
         await pilot.pause()
         assert str(table.ordered_columns[0].label) == "*", "and on again"
