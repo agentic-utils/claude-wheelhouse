@@ -14,7 +14,7 @@ import httpx2
 import pytest
 from sse_starlette.sse import AppStatus
 
-from claude_wheelhouse import daemon as daemon_mod, hub as hub_mod, launch, liveness, store as store_mod, transcript
+from claude_wheelhouse import daemon as daemon_mod, fingerprint, hub as hub_mod, launch, liveness, store as store_mod, transcript
 from claude_wheelhouse.daemon import AlreadyRunning, Daemon, Feed, PortTaken, checked_address, hosts, listener, take_lock
 from claude_wheelhouse.hub import Event
 from claude_wheelhouse.store import COMPACT_QUESTION, SessionGone, Store
@@ -818,7 +818,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 32 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 33 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 
@@ -877,7 +877,7 @@ async def test_the_host_is_checked_before_the_token(daemon):
 
 NEW_ROUTES = [
     ("GET", "/hello", None, lambda store, sid, r: (r.json()["api"], r.json()["ready"], r.json()["pid"])
-     == (3, False, os.getpid()), "with the token, which daemon: its API, its code, not ready before its first tick"),
+     == (fingerprint.API, False, os.getpid()), "with the token, which daemon: its API, its code, not ready before its first tick"),
     ("GET", "/inbox", None, lambda store, sid, r: (sorted(i["ref"] for i in r.json()["items"]),
                                                    "body" in r.json()["items"][0], r.json()["tutorial"]["facts"])
      == (["P1", "T1"], False, None), "every item, without its body, and what the tour waits on"),
@@ -921,6 +921,10 @@ NEW_ROUTES = [
     ("POST", "/tour/seen", {"ids": ["tour"], "notes": "0.2.0"},
      lambda store, sid, r: (store.tour_seen(), store.setting("notes_seen")) == ({"tour": "shown"}, "0.2.0"),
      "features the tour showed, and the version whose notes it showed"),
+    ("POST", "/tour/at", {"at": "../etc"}, lambda store, sid, r: r.status_code == 400 and store.setting("tour_at") is None,
+     "a tour's place, nothing else"),
+    ("POST", "/tour/at", {"at": "topup:stats"}, lambda store, sid, r: store.setting("tour_at") == "topup:stats",
+     "where the tour under way resumes"),
     ("POST", "/shutdown", None, lambda store, sid, r: not r.json()["ok"], "stop: a test's daemon can't"),
 ]
 

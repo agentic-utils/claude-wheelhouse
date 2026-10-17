@@ -6,11 +6,12 @@ from textual.widgets import Button, DataTable, Input, TextArea
 
 from claude_wheelhouse import callout, features, launch, tutorial, whatsnew
 from claude_wheelhouse.callout import HIGHLIGHT, TourCallout
-from claude_wheelhouse.store import NOTES_SEEN
+from claude_wheelhouse.store import NOTES_SEEN, TOUR_AT
 from claude_wheelhouse.tour import Tour
 from claude_wheelhouse.tui import BUTTONS, Compose, Dialog, ItemList, KeysHelp, NewSession, ThreadView, Transcript, \
     TourInvite, TourNotes, TourStop, SDK_BUTTONS, WheelhouseApp, key_name, keys_help
 from claude_wheelhouse.tutorial import should_offer as real_should_offer   # before conftest stubs it
+from claude_wheelhouse.tutorial import state as real_state
 from test_tui import dwell, one_second
 
 
@@ -197,6 +198,10 @@ async def test_a_callout_beside_its_pane(store, stop, pane, focus, desc, size):
         assert box.area and app.screen.region.contains_region(box), f"{desc} at {size}: {box} on screen"
 
 
+def badge(app) -> str:
+    return app.badge.text if app.badge.display else ""
+
+
 @pytest.mark.parametrize("stop, focus, pauses, desc", [
     ("principles", None, True, "Esc on the principles"),
     ("stats", None, True, "Esc on a callout that has focus"),
@@ -205,7 +210,7 @@ async def test_a_callout_beside_its_pane(store, stop, pane, focus, desc, size):
 ])
 @pytest.mark.anyio
 async def test_esc_pauses_the_tour(store, stop, focus, pauses, desc):
-    """Q122: Esc pauses. Until stage 4 resumes it, the next start offers the tour again."""
+    """Q122: Esc pauses; the badge, or L, resumes it at the same dialog."""
     app = WheelhouseApp(store)
     said = []
     app.notify = lambda text, **kw: said.append(text)
@@ -220,13 +225,138 @@ async def test_esc_pauses_the_tour(store, stop, focus, pauses, desc):
         await pilot.pause()
         assert app.tour.paused is pauses, desc
         assert bool(app.screen_stack[0].query(TourCallout)) is not pauses, desc
-        assert ("Tour paused: the next start offers it again." in said) is pauses, desc
-        assert (store.setting(tutorial.OFFER_KEY) == tutorial.RESET) is pauses, f"{desc}: offered again"
+        assert ("Tour paused: the badge in the title bar, or L, resumes it here." in said) is pauses, desc
+        assert badge(app) == ("Tour paused · L" if pauses else ""), desc
+        assert store.setting(TOUR_AT) == f"tour:{stop}", f"{desc}: where it is, kept as it goes"
+        assert store.setting(tutorial.OFFER_KEY) is None, f"{desc}: the offer untouched"
         if pauses:
             assert not isinstance(app.screen, TourStop), desc
             app.refresh_data()
             await pilot.pause()
             assert not app.screen_stack[0].query(TourCallout), f"{desc}: it stays paused"
+            app.set_focus(None)
+            await pilot.press("l")
+            await pilot.pause()
+            assert not app.tour.paused and app.tour.stop.id == stop and badge(app) == "", f"{desc}: L resumes it"
+            assert isinstance(app.screen, TourStop) if stop == "principles" else shown(app) == (stop, "stats"), desc
+
+
+@pytest.mark.parametrize("at, gesture, then, desc", [
+    ("tour:stats", "l", ("stats", "stats"), "L resumes the whole tour where it was"),
+    ("tour:stats", "click", ("stats", "stats"), "so does a click on the badge"),
+    ("topup:sessions", "l", ("sessions", "sessions"), "a top-up, likewise"),
+])
+@pytest.mark.both
+@pytest.mark.anyio
+async def test_a_paused_tour_survives_a_restart(store, tmp_path, monkeypatch, at, gesture, then, desc):
+    """A pause is never lost: the next start shows the badge, not the invite, and L resumes it."""
+    monkeypatch.setattr(tutorial, "state", lambda st: {**real_state(st), "seen": ["session-sort"]
+                                                          if at.startswith("tour") else []})
+    store.create_session(str(tmp_path), name="real work")
+    store.set_setting(TOUR_AT, at)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert not isinstance(app.screen, TourInvite) and badge(app) == "Tour paused · L", desc
+        app.set_focus(None)
+        if gesture == "l":
+            await pilot.press("l")
+        else:
+            await pilot.click("#tour-badge")
+        await pilot.pause()
+        assert shown(app) == then and badge(app) == "", desc
+        assert app.tour.kind == at.partition(":")[0], desc
+
+
+def upgrader(store, tmp_path, monkeypatch, new=("session-sort", "tab-order", "pane-titles")):
+    """An upgrader: a session of their own, the tour taken, every feature seen but `new`."""
+    monkeypatch.setattr(tutorial, "state", real_state)
+    store.create_session(str(tmp_path), name="real work")
+    store.set_setting(tutorial.OFFER_KEY, "taken")
+    store.see_features([f.id for f in whatsnew.FEATURES if f.id not in new])
+    opened = []
+    monkeypatch.setattr(launch, "open_tab", lambda s, i: opened.append(i))
+    monkeypatch.setattr(launch, "open_host", lambda s, i: opened.append(i))
+    return opened
+
+
+@pytest.mark.both
+@pytest.mark.anyio
+async def test_an_upgraders_top_up(store, tmp_path, monkeypatch):
+    """Doug (#78, 4): an upgrader sees only the new features, in their dialogs, skipping any
+    dialog with none, then the release notes; it advances on Next only, and launches nothing."""
+    opened = upgrader(store, tmp_path, monkeypatch)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, TourInvite), "a dialog has new tips: the invite"
+        line = str(app.screen.query_one("#invite-text").render())
+        assert line == f"Updated to {whatsnew.running_version()}: 2 new things in 2 places.", line
+        await pilot.press("enter")
+        await pilot.pause()
+        for stop, pane, tip in (("sessions", "sessions", "Click a column heading"), ("answer", "detail", "Tab goes round")):
+            co = app.screen_stack[0].query_one(TourCallout)
+            assert shown(app) == (stop, pane) and co.text.startswith(tip), f"{stop}: its new tip alone"
+            assert app.focused is not None and app.focused.id == "tour-next", f"{stop}: Next takes focus"
+            assert store.setting(TOUR_AT) == f"topup:{stop}", stop
+            await pilot.press("enter")
+            await pilot.pause()
+        assert isinstance(app.screen, TourNotes), "then the release notes"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.tour is None and badge(app) == "", "nothing left to offer"
+    assert opened == [], "no demo session: no tokens"
+    assert set(store.tour_seen()) == {f.id for f in whatsnew.FEATURES}, "every new feature recorded shown"
+    assert store.setting(NOTES_SEEN) == whatsnew.running_version() and store.setting(TOUR_AT) is None
+    async with WheelhouseApp(store).run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert not isinstance(pilot.app.screen, TourInvite) and badge(pilot.app) == "", "nothing at the next start"
+
+
+@pytest.mark.parametrize("key, recorded, label, again, desc", [
+    ("l", {}, "Tour: 2 new · L", True, "Later: nothing recorded, the badge carries it, offered again next start"),
+    ("escape", {}, "Tour: 2 new · L", True, "Esc is Later"),
+    ("n", {"session-sort": "skipped", "tab-order": "skipped", "pane-titles": "skipped"}, "", False,
+     "Never: every pending feature skipped, so only later ones are offered"),
+])
+@pytest.mark.anyio
+async def test_the_upgrade_invite(store, tmp_path, monkeypatch, key, recorded, label, again, desc):
+    upgrader(store, tmp_path, monkeypatch)
+    before = store.tour_seen()
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press(key)
+        await pilot.pause()
+        assert not isinstance(app.screen, TourInvite) and badge(app) == label, desc
+        if label:
+            app.set_focus(None)
+            await pilot.press("l")
+            await pilot.pause()
+            assert isinstance(app.screen, TourInvite), f"{desc}: L opens it again"
+    assert {k: v for k, v in store.tour_seen().items() if k not in before} == recorded, desc
+    async with WheelhouseApp(store).run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, TourInvite) is again, f"{desc}: at the next start"
+
+
+@pytest.mark.anyio
+async def test_advanced_features_alone_get_the_badge(store, tmp_path, monkeypatch):
+    """Q120 C: a release with only advanced features gets the badge alone, pointing at the notes."""
+    upgrader(store, tmp_path, monkeypatch, new=("pane-titles", "make-targets"))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert not isinstance(app.screen, TourInvite) and badge(app) == "What's new · L"
+        app.set_focus(None)
+        await pilot.press("l")
+        await pilot.pause()
+        assert isinstance(app.screen, TourNotes), "L: the release notes"
+        notes = str(app.screen.notes)
+        assert "Each pane carries its title" in notes and "make run installs" in notes
+        await pilot.press("enter")
+        await pilot.pause()
+        assert badge(app) == "" and set(store.tour_seen()) == {f.id for f in whatsnew.FEATURES}
 
 
 @pytest.mark.anyio
@@ -747,3 +877,56 @@ def test_a_relaunched_tab_that_never_starts_says_so(store, tut, monkeypatch, how
     assert opened, how
     assert tutorial.stopped(store.session(tut)).startswith("stopped: its tab didn't start Claude Code"), how
     assert store.session(tut)["claude_pid"] == 4242, f"{how}: the launch keeps the last run's pid"
+
+
+@pytest.mark.both
+@pytest.mark.anyio
+async def test_a_paused_top_up_resumes_with_its_tips_after_a_restart(store, tmp_path, monkeypatch):
+    """Review of #98: a top-up dialog's tips count as seen once passed, not as it shows, so one
+    paused there still has them to show after a restart."""
+    upgrader(store, tmp_path, monkeypatch)
+    async with WheelhouseApp(store).run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("enter")   # Start
+        await pilot.pause()
+        await pilot.press("enter")   # Next past the sessions dialog
+        await pilot.pause()
+        assert shown(pilot.app) == ("answer", "detail")
+        await pilot.press("escape")
+        await pilot.pause()
+    assert "session-sort" in store.tour_seen() and "tab-order" not in store.tour_seen(), "only the dialog passed"
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert not isinstance(app.screen, TourInvite) and badge(app) == "Tour paused · L"
+        app.set_focus(None)
+        await pilot.press("l")
+        await pilot.pause()
+        co = app.screen_stack[0].query_one(TourCallout)
+        assert shown(app) == ("answer", "detail") and co.text.startswith("Tab goes round"), "the paused dialog, its tip"
+
+
+@pytest.mark.anyio
+async def test_a_click_on_the_badge_works_whatever_has_focus(store, tmp_path, monkeypatch):
+    """D141: L is typed in a text box, but a click on the badge always resumes."""
+    monkeypatch.setattr(tutorial, "state", lambda st: {**real_state(st), "seen": [f.id for f in whatsnew.FEATURES]})
+    store.create_session(str(tmp_path), name="real work")
+    store.set_setting(TOUR_AT, "tour:stats")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        box = app.query_one("#answer", TextArea)
+        box.focus()
+        await pilot.press("l")
+        await pilot.pause()
+        assert app.tour is None and box.text == "l", "L in a box is typed"
+        await pilot.click("#tour-badge")
+        await pilot.pause()
+        assert shown(app) == ("stats", "stats"), "a click resumes"
+
+
+def test_a_state_without_the_tour_offers_nothing(store):
+    """Review of #98: a daemon that doesn't say what the tour offers offers nothing."""
+    app = WheelhouseApp(store)
+    app.client.tour_state = lambda: {}
+    assert app.tour_offer() == (None, [])
