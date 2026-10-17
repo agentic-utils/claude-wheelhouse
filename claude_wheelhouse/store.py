@@ -1336,11 +1336,13 @@ REACHED = ("max({m}created_at, coalesce(substr({m}claimed_at, 1, 19) || '+00:00'
 # (update_item, declares), shown as a note
 STATUS = "status"
 # (session_id, item_ref) of items whose latest word is the person's, sent, with no reply since
-# (or status update: STATUS)
+# (or status update: STATUS). A session's message with no kind was written before messages had
+# one, when a reply was all a session wrote on an item: it counts as a reply (#76)
 AWAITING = f"""SELECT session_id, item_ref FROM messages WHERE item_ref IS NOT NULL AND draft = 0
               GROUP BY session_id, item_ref
               HAVING max(CASE WHEN author = 'person' THEN id END) >
-                     coalesce(max(CASE WHEN author = 'claude' AND kind IN ('reply', '{STATUS}') THEN id END), 0)"""
+                     coalesce(max(CASE WHEN author = 'claude' AND coalesce(kind, 'reply') IN ('reply', '{STATUS}')
+                                  THEN id END), 0)"""
 # D28, on items aliased i: answered and sent, not yet replied to, nothing more queued. Shown as
 # processing and not counted as awaiting the person; stored as open, so the protocol is unchanged
 PROCESSING = f"""((i.session_id, i.ref) IN ({AWAITING}) AND (i.session_id, i.ref) NOT IN
