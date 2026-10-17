@@ -113,7 +113,7 @@ async def test_with_no_modules_the_items_fill_their_column(store, monkeypatch):
 
 CORE = {"left.top": ["sessions-pane"], "left.bottom": ["session-info-pane"], "middle.top": ["items-pane"],
         "right": ["detail-pane"]}
-SPLITTERS = {"sessions-pane", "items-pane", "session-info", "answer"}   # beside no slot that can be empty
+SPLITTERS = {"sessions-pane", "items-pane", "left-bottom", "answer"}   # beside no slot that can be empty
 
 
 @pytest.mark.anyio

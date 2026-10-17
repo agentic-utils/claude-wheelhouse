@@ -5081,9 +5081,9 @@ async def drag(pilot, key: str, dx: int, dy: int) -> None:
     ("sessions-pane", 10, 0, 10, 40, "the sessions column, wider"),
     ("sessions-pane", -20, 0, -6, 40, "never narrower than its buttons' captions need: 39 of 45"),
     ("items-pane", 10, 0, 10, 40, "the inbox column, wider"),
-    ("session-info", 0, 1, -1, 52, "the session info, a row shorter as its top edge moves down a row"),
-    ("session-info", 0, -1, 1, 52, "a row taller as it moves up a row"),
-    ("session-info", 0, 1, 0, 40, "never shorter than its buttons and a row of description: 12 at 40 rows"),
+    ("left-bottom", 0, 1, -1, 52, "the session info, a row shorter as its top edge moves down a row"),
+    ("left-bottom", 0, -1, 1, 52, "a row taller as it moves up a row"),
+    ("left-bottom", 0, 1, 0, 40, "never shorter than its buttons and a row of description: 12 at 40 rows"),
     ("left-middle", 0, 1, -1, 40, "the stats, a row shorter"),
     ("left-middle", 0, 3, -3, 40, "the stats, shorter as its top edge moves down"),
     ("answer", 0, -3, 3, 40, "the answer box, taller"),
@@ -5239,6 +5239,7 @@ async def test_the_left_column_rows(store, sid, size, rows, desc):
 @pytest.mark.parametrize("stored, kept, desc", [
     ({"items": "0.5"}, {"items": None}, "the old items-over-stats share: deleted, and sizes nothing"),
     ({"detail-pane": "0.3"}, {"detail-pane": None}, "the old Detail column share: deleted"),
+    ({"session-info": "0.7"}, {"session-info": None}, "the old description-in-sessions share: deleted"),
     ({"middle-top": "0.5"}, {"middle-top": "0.5"}, "a share for the Inbox over an empty slot: kept, not applied"),
 ])
 async def test_the_inbox_fills_its_column_whatever_was_stored(store, sid, stored, kept, desc):

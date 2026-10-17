@@ -112,9 +112,10 @@ def slot(name: str) -> Vertical:
 
 LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of its parent
 SESSION_LABELS = ("", "session", "ctx", "?", "D", "✉")   # the session list's headers, as ordering.SESSION_COLUMNS
-# keys no splitter has now, deleted at start: items sized the items over the stats, and
-# detail-pane the column between them and Detail, before the six slots (.plan/modules.md)
-RETIRED_LAYOUT = ("items", "detail-pane")
+# keys no splitter has now, deleted at start: items sized the items over the stats,
+# detail-pane the column between them and Detail, and session-info the description inside
+# the sessions pane, before the six slots (.plan/modules.md); left-bottom sizes its slot now
+RETIRED_LAYOUT = ("items", "detail-pane", "session-info")
 DETAIL_ROOM = 40   # the columns Detail keeps on a narrow terminal while the others can give way
 
 
@@ -2704,7 +2705,7 @@ class WheelhouseApp(App):
                         yield SessionList(id="session-list", cursor_type="row", show_cursor=False)   # none selected (D20)
                 yield Splitter("left-middle", "#slot-left-middle", "#slot-left-top", "y")
                 yield slot("left.middle")   # the stats module's
-                yield Splitter("session-info", "#slot-left-bottom", "#slot-left-top", "y")
+                yield Splitter("left-bottom", "#slot-left-bottom", "#slot-left-top", "y")
                 with slot("left.bottom"):   # the highlighted session's description, and what can be done to it
                     with Vertical(id="session-info-pane", classes="panel") as pane:
                         pane.border_title = "Session info"
