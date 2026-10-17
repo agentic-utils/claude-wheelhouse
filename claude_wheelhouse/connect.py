@@ -89,6 +89,8 @@ def start(state_dir: Path, port: int) -> int:
     env = {k: v for k, v in os.environ.items() if k != "WHEELHOUSE_TOKEN"}
     ended, held = os.pipe()
     try:
+        # none yet on a first run: the daemon's store makes it, but only after this log
+        Path(state_dir).mkdir(parents=True, exist_ok=True)
         with open(Path(state_dir) / LOG, "a") as log:
             print(time.strftime("%Y-%m-%dT%H:%M:%S%z"), f"pid {os.getpid()} asked for a daemon", file=log, flush=True)
             argv = ["setsid", "--fork", sys.executable, "-m", "claude_wheelhouse", "daemon", "--port", str(port),
