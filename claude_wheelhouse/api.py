@@ -21,7 +21,10 @@ methods on it:
 A pane's widget may also name a section of the ? overlay for its BINDINGS: `KEYS_HELP =
 (title, sdk_only)`, sdk_only to list them only with SDK mode on. A list in a pane (the
 Decisions pane's table) that sets `TAB_LIST = True` is a Tab stop after the inbox, before the
-answer box (tui.tab_stops, #77).
+answer box (tui.tab_stops, #77). A pane's widget may say the least room it needs, `PANE_MINIMUM = (columns,
+rows)`, which its slot and column keep wherever it is swapped, and while it has nothing to
+show set `compact = True` and call `Context.relayout`: its slot shrinks to those rows, the
+panes beside it taking the rest.
 
 A module may also serve the daemon side (.plan/modules.md, "The module boundary"):
 `routes(ctx)`, its `Route`s, mounted under /m/<id>/ (and called in process with --local),
@@ -144,6 +147,8 @@ class Context:
     show_doc: Callable[[str, str], None] | None = None
     # the same, opened full screen (DocView), as Enter opens an inbox doc. None daemon side
     open_doc: Callable[[str, str], None] | None = None
+    # a pane's `compact` changed: its slot shrinks to its least rows, or takes its share again. None daemon side
+    relayout: Callable[[], None] | None = None
 
 
 @dataclass

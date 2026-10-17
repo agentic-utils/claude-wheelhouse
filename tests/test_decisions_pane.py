@@ -5,6 +5,7 @@ import pytest
 
 from claude_wheelhouse import api
 from claude_wheelhouse.tui import DocView, WheelhouseApp, tab_stops
+from test_tui import INBOX_STOPS, assert_one_current, by_name, pane_widget, pick, stop_id
 
 design = pytest.importorskip("claude_wheelhouse_design", reason="installed without the design module")
 from claude_wheelhouse_design import pane  # noqa: E402
@@ -88,10 +89,13 @@ async def test_a_header_sorts_and_a_new_decision_shows(store, sid, decisions):
             "number ▲, marked in its header"
         (decisions / "0004-UNRESOLVED-x.md").write_text("# X\n")
         p = app.query_one("#design")
-        for _ in range(pane.EVERY):
-            p.tick()
+        p.tick()
         await settled(app, pilot)
-        assert numbers(app) == ["0001", "0002", "0003", "0004"], "the next ask, EVERY ticks on, finds it"
+        assert numbers(app) == ["0001", "0002", "0003"], "a tick before EVERY seconds asks nothing"
+        p.asked_at -= pane.EVERY
+        p.tick()
+        await settled(app, pilot)
+        assert numbers(app) == ["0001", "0002", "0003", "0004"], "the next ask, EVERY seconds on, finds it"
 
 
 @pytest.mark.anyio
@@ -113,3 +117,102 @@ async def test_no_decisions_says_where_it_looked(store, sid, tmp_path, monkeypat
         await settled(app, pilot)
         note = app.query_one("#decisions-note")
         assert note.display and "docs/adr" in str(note.render()), "the empty pane says why"
+
+
+# the shipped default: every module loaded (conftest.every_module), not the stats pane alone
+
+ADRS = {"0001-ACCEPTED-use-sqlite.md": "# Use SQLite\n", "0002-PROPOSED-drop-redis.md": "# Drop Redis\n"}
+PANES = ["sessions", "stats", "session-info", "items", "design", "detail"]
+
+
+@pytest.fixture
+def shipped(store, sid, tmp_path, every_module):
+    """Every module installed loaded, as a default install runs, and the session's repo with two decisions."""
+    return repo(tmp_path, ADRS)
+
+
+@pytest.mark.anyio
+async def test_the_tab_order_with_every_module(store, sid, shipped, monkeypatch):
+    by_name(monkeypatch, {"demo": "live"})
+    store.post_item(sid, "question", "one?")
+    store.queue(sid, "queued")
+    order = ["session-list", "items", "decision-list", "answer", "tour-next", *INBOX_STOPS[3:], "session-list"]
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 60)) as pilot:
+        await settled(app, pilot)
+        await pick(app, pilot, sid)
+        from claude_wheelhouse.tour import Tour
+        app.tour = Tour(False)
+        app.tour.at = [d.id for d in app.tour.stops].index("stats")
+        app.show_tour()
+        await pilot.pause()
+        app.session_list.focus()
+        await pilot.pause()
+        seen = [stop_id(app)]
+        for _ in order[1:]:
+            await pilot.press("tab")
+            seen.append(stop_id(app))
+        assert seen == order, f"the inbox's lists, the Decisions', the box, Next, the buttons, the stats': {seen}"
+        assert_one_current(app, "every module")
+
+
+@pytest.mark.anyio
+async def test_reset_brings_the_decisions_home(store, sid, shipped):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        app.swap(pane_widget(app, "design").parent, pane_widget(app, "stats").parent)
+        await pilot.pause()
+        assert (app.layout_now()["left.middle"], app.layout_now()["middle.bottom"]) == ("design", "stats"), "swapped"
+        app.action_reset_layout()
+        await pilot.pause()
+        assert (app.layout_now()["left.middle"], app.layout_now()["middle.bottom"]) == ("stats", "design"), "home"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("onto", [None, *(p for p in PANES if p != "design")])
+async def test_every_decisions_swap_fits_80_by_24(store, sid, shipped, onto):
+    """The default with every module, and the Decisions pane swapped with each other pane:
+    each within its slot and on screen, and the Decisions more than its border wherever it
+    goes (its PANE_MINIMUM). The stats pane gives way to a row, as in its own slot."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        if onto:
+            app.swap(pane_widget(app, "design").parent, pane_widget(app, onto).parent)
+        await pilot.pause()
+        await pilot.pause()
+        for each in PANES:
+            widget = pane_widget(app, each)
+            assert widget.parent.region.contains_region(widget.region), f"<->{onto}: {each} within its slot"
+            assert widget.region.right <= 80 and widget.region.bottom <= 24, f"<->{onto}: {each} on screen"
+            if each != "stats":
+                assert widget.region.height >= 3, f"<->{onto}: {each} more than its border"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("onto, beside", [(None, "items"), ("stats", "sessions"), ("sessions", "stats")])
+async def test_no_decisions_shrinks_the_pane_to_its_note(store, sid, tmp_path, every_module, onto, beside):
+    """No decisions found: the pane keeps its border and the note, and the pane beside it
+    takes the rest; once one appears, its share again. Swapped into another column too."""
+    (tmp_path / ".git").mkdir()
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        if onto:
+            app.swap(pane_widget(app, "design").parent, pane_widget(app, onto).parent)
+        await pilot.pause()
+        await pilot.pause()
+        p, other = app.query_one("#design"), pane_widget(app, beside)
+        column = p.parent.parent
+        assert p.compact and p.region.height == 3, f"{onto}: the border and the note"
+        assert "docs/adr" in str(app.query_one("#decisions-note").render()), f"{onto}: the note says where it looked"
+        shown = [w for w in column.children if w.display]
+        assert sum(w.outer_size.height for w in shown) == column.size.height, f"{onto}: no gap in the column"
+        roomy = other.region.height
+        repo(tmp_path, ADRS)
+        p.asked_at -= pane.EVERY
+        await settled(app, pilot)
+        await pilot.pause()
+        assert not p.compact and p.region.height > 3 and numbers(app) == ["0002", "0001"], f"{onto}: its share again"
+        assert other.region.height < roomy, f"{onto}: {beside} gives it back"

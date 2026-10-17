@@ -133,6 +133,12 @@ def pane_of(widget: Widget) -> str:
     return getattr(widget, "pane_id", None) or PANE_OF.get(widget.id, widget.id or "")
 
 
+def minimum(widget: Widget) -> tuple[int, int]:
+    """The least room a pane needs, (columns, rows): a core pane's PANE_MINIMUM, a module
+    pane's own (its widget's PANE_MINIMUM, api), else none."""
+    return PANE_MINIMUM.get(pane_of(widget)) or getattr(widget, "PANE_MINIMUM", (0, 0))
+
+
 def arrange(saved: dict[str, str], defaults: dict[str, str]) -> dict[str, str]:
     """Where each pane goes (.plan/modules.md, "Swapping panes"), as {pane: slot}, from each
     pane's default slot (`defaults`, in the order they take an empty one) and the layout kept
@@ -3876,7 +3882,7 @@ class WheelhouseApp(App):
     def module_ctx(self, mid: str) -> api.Context:
         """The context a module's pane is made with: the app's, with its own routes (call)."""
         return dataclasses.replace(self.ctx, call=functools.partial(self.client.call_module, mid),
-                                   show_doc=self.show_doc, open_doc=self.open_doc)
+                                   show_doc=self.show_doc, open_doc=self.open_doc, relayout=self.fit_compact)
 
     def paint_detail(self) -> None:
         agent, doc, shown = False, self.selected_doc(), self.shown_doc
@@ -3986,7 +3992,7 @@ class WheelhouseApp(App):
         they are: a wide pane swapped into a narrow slot grows it, and fit shrinks the rest."""
         columns: dict[Widget, int] = {}
         for place in self.slots().values():
-            need = [PANE_MINIMUM.get(pane_of(w), (0, 0)) for w in place.children]
+            need = [minimum(w) for w in place.children]
             rows = max((h for _, h in need), default=0)
             place.styles.min_height = rows if rows > cells(place.styles.base.min_height) else None
             column = place.parent if place.parent.has_class("column") else place
@@ -4029,8 +4035,25 @@ class WheelhouseApp(App):
     def relaid(self) -> None:
         self.collapse()
         self.fit_panes()
-        self.refit()
+        self.fit_compact()
         self.post_message(self.LayoutChanged())
+
+    def fit_compact(self) -> None:
+        """A slot whose panes are all compact (a module pane with nothing to show sets
+        `compact`, api) keeps only their least rows (PANE_MINIMUM), and the slots beside it
+        take the room it gives up (Splitter.compact); every other slot its stylesheet's
+        height, or its splitter's share, as it was. A pane
+        calls it through Context.relayout when its `compact` changes."""
+        screen = self.screen_stack[0]
+        for place in screen.query(".slot"):
+            shown = [w for w in place.children if w.display]
+            compact = bool(shown) and all(getattr(w, "compact", False) for w in shown)
+            place.set_class(compact, "-compact")
+            place.styles.height = max(minimum(w)[1] for w in shown) if compact else None
+        for splitter in screen.query(Splitter):
+            if (panes := splitter.panes()) and all(p.has_class("slot") for p in panes):
+                splitter.apply(splitter.fraction)
+        self.refit()
 
     def action_reset_layout(self) -> None:
         """Reset layout, in the command palette: every pane in its default slot and every
