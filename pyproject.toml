@@ -19,15 +19,26 @@ dependencies = [
 [project.scripts]
 claude-wheelhouse = "claude_wheelhouse.cli:main"
 
-[project.entry-points."claude_wheelhouse.modules"]
-stats = "claude_wheelhouse.stats_pane:module"
-
 [dependency-groups]
 dev = ["httpx2>=2.13", "pytest>=8", "pytest-xdist>=3.8"]
+# the modules in this repo (modules/), a group each: installed unless left out, as make
+# install WITH="..." does (.plan/modules.md)
+stats = ["claude-wheelhouse-stats"]
+
+[tool.uv]
+default-groups = ["dev", "stats"]
+
+[tool.uv.workspace]
+members = ["modules/*"]
+
+[tool.uv.sources]
+claude-wheelhouse-stats = { workspace = true }
 
 [tool.pytest.ini_options]
 # in parallel, a worker a core (pytest-xdist); `-n 0` runs it serially
 addopts = "-n auto"
+testpaths = ["tests", "modules"]
+pythonpath = ["."]   # tests.transcripts, which modules/stats/tests share
 markers = ["both: runs through a hub in process (--local), and through the daemon, fetching at each refresh and on the client's own threads (conftest.via)"]
 
 [build-system]

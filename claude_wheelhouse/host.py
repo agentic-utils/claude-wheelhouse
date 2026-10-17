@@ -31,7 +31,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from . import features, liveness, models, plan_usage, stats, transcript
+from . import features, liveness, models, plan_usage, transcript, transcript_usage
 from .launch import PROTOCOL_SDK, after_compaction, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT
 from .store import CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, SessionGone, Store, db_path, now, runner
@@ -978,7 +978,7 @@ class Host:
 
     async def carry_back(self) -> bool:
         """A /model or /effort typed in a shell tab, carried to the session's columns before
-        the host launches with them (Q56), by the hub's rule (stats.carry): last write wins,
+        the host launches with them (Q56), by the hub's rule (transcript_usage.carry): last write wins,
         all its state in the database, so any host taking the session (this one back from
         its tab, or a Restore's after this one died) carries the same. Retried through a
         locked database while the session wants a host, saying so on its activity line:
@@ -986,7 +986,7 @@ class Host:
         nothing. False if the host is to stop instead: stopping, or the session parked or
         gone meanwhile. A Park or End pressed meanwhile is acted on by poll once the lock clears."""
         try:   # a whole transcript, maybe hundreds of MB: off the event loop
-            typed = await asyncio.to_thread(stats.typed_in, transcript.locate(self.sid))
+            typed = await asyncio.to_thread(transcript_usage.typed_in, transcript.locate(self.sid))
         except OSError as e:
             print(f"{now()} couldn't read the transcript for a /model or /effort typed: {e}",
                   file=sys.stderr, flush=True)
@@ -994,7 +994,7 @@ class Host:
         waiting = False
         while not self.stopping:
             try:
-                await self.steady(stats.carry, self.store, self.sid, typed)
+                await self.steady(transcript_usage.carry, self.store, self.sid, typed)
                 return True
             except sqlite3.OperationalError as e:
                 print(f"{now()} {e}: carrying back a /model or /effort typed, retrying", file=sys.stderr, flush=True)

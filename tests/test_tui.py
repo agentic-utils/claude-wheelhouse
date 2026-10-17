@@ -20,9 +20,12 @@ from textual.strip import Strip
 from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
-from claude_wheelhouse import features, launch, models, stats, transcript, tui
+from claude_wheelhouse import features, launch, models, transcript, transcript_usage, tui
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
+
+# the stats pane's tests among these, and the slots' defaults, need the stats module
+stats = pytest.importorskip("claude_wheelhouse_stats.stats", reason="installed without the stats module")
 from claude_wheelhouse.splitter import Splitter
 from claude_wheelhouse.store import COMPACT_QUESTION, Store, mode
 from claude_wheelhouse.tui import (BLANK, COMPACT_HINT, DENY_HINT, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice,
@@ -3565,7 +3568,7 @@ async def test_the_zoom_buttons_zoom_both_charts(store, sid, tmp_path, monkeypat
         async def click(button):
             await click_zoom(pilot, pane, button, desc)
 
-        assert bool(pane.charts) == shown and pane.span == stats.SPAN, f"{desc}: the charts, at the default"
+        assert bool(pane.charts) == shown and pane.span == transcript_usage.SPAN, f"{desc}: the charts, at the default"
         if not shown:
             return
         for button, span in (("+", 3600), ("+", 1800), ("+", 900), ("-", 1800)):
@@ -3576,7 +3579,7 @@ async def test_the_zoom_buttons_zoom_both_charts(store, sid, tmp_path, monkeypat
         assert pane.render().plain.split("\n")[-1].endswith("30m  -   + "), desc
         await click("-")
         await click("-")
-        assert pane.span == stats.SPAN and not zoomable(pane, "-"), f"{desc}: a transcript all in the span: - goes no wider"
+        assert pane.span == transcript_usage.SPAN and not zoomable(pane, "-"), f"{desc}: a transcript all in the span: - goes no wider"
 
 
 async def click_zoom(pilot, pane, button, desc):
@@ -3623,8 +3626,8 @@ class HeldLoads:
 
     def __init__(self, monkeypatch):
         import threading
-        self.go, real = threading.Event(), stats.UsageFollower.load
-        monkeypatch.setattr(stats.UsageFollower, "load", lambda f, cutoff: self.go.wait(10) and real(f, cutoff))
+        self.go, real = threading.Event(), transcript_usage.UsageFollower.load
+        monkeypatch.setattr(transcript_usage.UsageFollower, "load", lambda f, cutoff: self.go.wait(10) and real(f, cutoff))
 
 
 DAY = 86400
@@ -3681,7 +3684,7 @@ async def test_zooming_out_fills_the_charts_from_older_history(store, sid, tmp_p
 @pytest.mark.parametrize("selected", [True, False])
 async def test_a_failed_load_is_tried_once_a_backoff(store, sid, tmp_path, monkeypatch, clock, size, selected):
     """A load that fails isn't started again on every tick: its error shows, steadily, and
-    it's tried again once stats.RETRY has passed."""
+    it's tried again once transcript_usage.RETRY has passed."""
     transcript_of(tmp_path / "projects/-home-u-repo", sid, usage_rec("m1", 3 * DAY, 2000), prompt_rec(2.9 * DAY),
                   usage_rec("m2", 60, 82_000))
     monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
@@ -3690,7 +3693,7 @@ async def test_a_failed_load_is_tried_once_a_backoff(store, sid, tmp_path, monke
     def failing(f, cutoff):
         tries.append(cutoff)
         raise OSError("disk on fire")
-    monkeypatch.setattr(stats.UsageFollower, "load", failing)
+    monkeypatch.setattr(transcript_usage.UsageFollower, "load", failing)
     app = WheelhouseApp(store)
     desc = f"{'selected' if selected else 'totals'} at {size[0]}x{size[1]}"
     async with app.run_test(size=size) as pilot:
@@ -3708,7 +3711,7 @@ async def test_a_failed_load_is_tried_once_a_backoff(store, sid, tmp_path, monke
             shown = " ".join(pane.render().plain.translate(str.maketrans("│╭╮╰╯─", "      ")).split())
             assert "transcript's history: disk on fire" in shown and caption(pane) != "loading…", f"{desc}: the error, steadily: {shown}"
         assert len(tries) == 1, f"{desc}: one try, not one a tick: {len(tries)}"
-        pane.followers[sid].failed -= stats.RETRY
+        pane.followers[sid].failed -= transcript_usage.RETRY
         clock.tick(app)
         await app.workers.wait_for_complete()
         assert len(tries) == 2, f"{desc}: tried again after the backoff"
@@ -3774,7 +3777,7 @@ async def test_sessions_that_start_and_end_while_zoomed_out(store, sid, tmp_path
 @pytest.mark.anyio
 async def test_the_stats_pane_never_reads_on_the_ui_thread(store, sid, monkeypatch):
     import threading
-    from claude_wheelhouse import stats
+    from claude_wheelhouse import transcript_usage
     ui = threading.get_ident()
     release, threads = threading.Event(), []
 
@@ -3783,7 +3786,7 @@ async def test_the_stats_pane_never_reads_on_the_ui_thread(store, sid, monkeypat
         release.wait(5)
         self.ready = True
         return True
-    monkeypatch.setattr(stats.UsageFollower, "read", slow_read)
+    monkeypatch.setattr(transcript_usage.UsageFollower, "read", slow_read)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -3802,11 +3805,11 @@ async def test_the_stats_pane_never_reads_on_the_ui_thread(store, sid, monkeypat
 async def test_a_failed_transcript_read_is_shown_not_fatal(store, sid, monkeypatch):
     """A worker's read raising (the transcript deleted between stat and open, say) leaves
     the app running and says so in the pane."""
-    from claude_wheelhouse import stats
+    from claude_wheelhouse import transcript_usage
 
     def broken(self, now=None):
         raise FileNotFoundError("transcript gone")
-    monkeypatch.setattr(stats.UsageFollower, "read", broken)
+    monkeypatch.setattr(transcript_usage.UsageFollower, "read", broken)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -4886,7 +4889,7 @@ async def test_every_scrollbar_is_knurled_and_one_cell(store, sid):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("before, after, desc", [
-    (lambda: stats.context_bar(140_000), lambda: stats.context_bar(160_000), "a context bar changing grade in the same glyph (#51)"),
+    (lambda: transcript_usage.context_bar(140_000), lambda: transcript_usage.context_bar(160_000), "a context bar changing grade in the same glyph (#51)"),
     (lambda: Text("open", style="bold"), lambda: Text("open", style="bold on #3a1060"), "a cell marked, its text unchanged"),
 ])
 async def test_fill_repaints_a_cell_that_only_changed_colour(before, after, desc):
@@ -5262,7 +5265,7 @@ async def test_the_inbox_fills_its_column_whatever_was_stored(store, sid, stored
 async def test_the_stats_splitter_survives_a_pane_that_raised(store, sid, monkeypatch, missing, desc):
     """Review 8: a pane that raised was swapped for a card the splitter above it couldn't
     find, and a press on the splitter then raised NoMatches and closed the app."""
-    from claude_wheelhouse import stats_pane
+    from claude_wheelhouse_stats import pane as stats_pane
 
     def boom(self):
         raise RuntimeError("pane bug")
@@ -6234,11 +6237,11 @@ def placed(strip) -> list[tuple]:
 SHIMMER_NOW = 1_800_000_000.0
 
 
-def busy_snapshot(now: float) -> stats.Snapshot:
+def busy_snapshot(now: float) -> transcript_usage.Snapshot:
     """A session with turns all across the charts' span, of every kind: bars of every colour."""
-    turns = [stats.Turn(now - 7000 + 37 * i, 1000 * (i % 50), 500 * (i % 7), 300 * (i % 3), 90_000 + 100 * i, "1h",
+    turns = [transcript_usage.Turn(now - 7000 + 37 * i, 1000 * (i % 50), 500 * (i % 7), 300 * (i % 3), 90_000 + 100 * i, "1h",
                         "claude-opus-5-5", i % 4 > 0, output=200 * (i % 11)) for i in range(180)]
-    return stats.Snapshot(model="claude-opus-5-5", context=110_000, peak=120_000, last_at=now - 30, ttl="1h", turns=turns)
+    return transcript_usage.Snapshot(model="claude-opus-5-5", context=110_000, peak=120_000, last_at=now - 30, ttl="1h", turns=turns)
 
 
 @pytest.mark.anyio
@@ -6281,7 +6284,7 @@ async def test_a_shimmer_cycle_is_drawn_once_and_kept_through_a_turn_into_the_la
                 pane.render_line(y)
         drawn, was = [], [c.columns for c in pane.charts]
         monkeypatch.setattr(pane, "draw", lambda y, k: drawn.append((y, k)))
-        snap.turns.append(stats.Turn(now - 1, 2000, 100, 100, 99_000, "1h", "claude-opus-5-5", True, output=100))
+        snap.turns.append(transcript_usage.Turn(now - 1, 2000, 100, 100, 99_000, "1h", "claude-opus-5-5", True, output=100))
         pane.show(snap, "demo", now)   # a turn: into the last bar, on the same scale
         assert all(c.columns[:-1] == w[:-1] for c, w in zip(pane.charts, was)), "the bars but the last as they were"
         assert any(c.columns[-1] != w[-1] for c, w in zip(pane.charts, was)), "the last bar grown"

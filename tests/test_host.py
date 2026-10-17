@@ -567,7 +567,7 @@ def test_a_host_carrying_back_at_start_stops_when_it_should_and_says_why(store, 
     monkeypatch.setattr(host_mod, "transcript_exists", lambda sid: True)
     said, set_activity = [], store.set_activity
     monkeypatch.setattr(store, "set_activity", lambda i, a: (said.append(a), set_activity(i, a)))
-    locked, carry = {"on": True}, host_mod.stats.carry
+    locked, carry = {"on": True}, host_mod.transcript_usage.carry
 
     def flaky(*a):
         if how == "malformed":
@@ -575,7 +575,7 @@ def test_a_host_carrying_back_at_start_stops_when_it_should_and_says_why(store, 
         if locked["on"]:
             raise sqlite3.OperationalError("database is locked")
         return carry(*a)
-    monkeypatch.setattr(host_mod.stats, "carry", flaky)
+    monkeypatch.setattr(host_mod.transcript_usage, "carry", flaky)
     h = Host(store, sid, client_factory=StreamClient, person="doug")
 
     async def until(done):
@@ -612,8 +612,8 @@ def test_carry_back_reads_the_transcript_off_the_event_loop(host, monkeypatch):
     """Round 64, nit 6: a whole transcript, maybe hundreds of MB, read on a worker thread."""
     import threading
     threads = []
-    monkeypatch.setattr(host_mod.stats, "typed_in",
-                        lambda path: (threads.append(threading.current_thread()), host_mod.stats.Snapshot())[1])
+    monkeypatch.setattr(host_mod.transcript_usage, "typed_in",
+                        lambda path: (threads.append(threading.current_thread()), host_mod.transcript_usage.Snapshot())[1])
     assert run(host.carry_back())
     assert threads and threads[0] is not threading.main_thread()
 

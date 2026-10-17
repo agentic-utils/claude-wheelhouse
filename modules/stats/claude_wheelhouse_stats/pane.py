@@ -1,6 +1,7 @@
-"""The stats module: the session stats pane under the inbox's item list, plugged in through
-the module protocol (api.py) like any other module. What it reads and draws is stats.py's;
-this is the widget, its followers and its workers."""
+"""The stats module: the session stats pane under the session list, plugged in through the
+module protocol (claude_wheelhouse.api) like any other module. What it reads is the
+wheelhouse's (transcript_usage.py, through api) and what it draws is stats.py's; this is the
+widget, its followers and its workers."""
 
 import functools
 import importlib.metadata
@@ -17,7 +18,9 @@ from textual.style import Style as TextualStyle
 from textual.visual import Visual, visualize
 from textual.widget import Widget
 
-from . import api, models, stats
+from claude_wheelhouse import api
+
+from . import stats
 
 
 def looks(rows: list[Text]) -> list[tuple]:
@@ -36,12 +39,13 @@ class SessionStats(Widget):
     no session in context, every session's totals. Transcripts are read on worker
     threads, never on the UI thread: a first read of a big one takes a while, and even a
     steady one stats every subagent file. Each session's follower is shared with the
-    session list's context bars (stats.follower), so a transcript is read once for both. The panel and the charts' columns are rebuilt on
+    session list's context bars (api.follower), so a transcript is read once for both. The panel and the charts' columns are rebuilt on
     each tick; animate only recolours the columns."""
 
     DEFAULT_CSS = "SessionStats { height: 1fr; background: #000000; }"
     # the effort slider's, while it has the focus (a session run by a host in context), and
     # the zoom's: the pane takes focus only while it has one of them (tab_parts)
+    KEYS_HELP = ("The stats pane, with a session run in the wheelhouse in context", True)   # sdk only (api.py)
     BINDINGS = [Binding("left", "effort(-1)", "Lower effort", show=False),
                 Binding("right", "effort(1)", "Higher effort", show=False),
                 Binding("home", "effort_end(0)", "Lowest effort", show=False),
@@ -51,7 +55,7 @@ class SessionStats(Widget):
     def __init__(self, ctx: api.Context, **kwargs):
         super().__init__(**kwargs)
         self.ctx = ctx
-        self.followers: dict[str, stats.UsageFollower] = {}
+        self.followers: dict[str, api.UsageFollower] = {}
         self.usage = ctx.usage   # the hub's, fetched once for the whole wheelhouse
         self.view, self.name_, self.now = None, "", 0.0
         self.note: str | None = None   # what shows with nothing to show
@@ -83,7 +87,7 @@ class SessionStats(Widget):
         for sid in [sid for sid in self.followers if sid not in present]:   # ended: its follower goes
             del self.followers[sid]
         for sid in self.shown(sessions):
-            follower = self.followers.setdefault(sid, stats.follower(sid))
+            follower = self.followers.setdefault(sid, api.follower(sid))
             if not follower.reading:
                 follower.reading = True
                 self.run_worker(functools.partial(self.read, follower, now), thread=True, group="stats",
@@ -115,11 +119,11 @@ class SessionStats(Widget):
             return [sid]
         return [s["id"] for s in sessions]
 
-    def read(self, follower: stats.UsageFollower, now: float) -> None:
+    def read(self, follower: api.UsageFollower, now: float) -> None:
         """On a worker thread: one read of a session's transcripts, then a repaint if it
         brought anything (or was the first)."""
         first = not follower.ready
-        if stats.read_safely(follower, now) or first:
+        if api.read_safely(follower, now) or first:
             try:
                 self.app.call_from_thread(self.repaint)
             except RuntimeError:   # the app is closing
@@ -127,7 +131,7 @@ class SessionStats(Widget):
 
     def fill(self, now: float) -> None:
         """Zoomed out past what a shown session's follower holds: its older history read on a
-        worker (stats.UsageFollower.load), once at a time. A new session's too, once read."""
+        worker (api.UsageFollower.load), once at a time. A new session's too, once read."""
         cutoff = now - self.span
         for sid in self.shown(self.ctx.sessions()) if self.span > stats.SPAN else ():
             follower = self.followers.get(sid)
@@ -136,9 +140,9 @@ class SessionStats(Widget):
                 self.run_worker(functools.partial(self.load, follower, cutoff), thread=True, group="stats",
                                 exit_on_error=False)
 
-    def load(self, follower: stats.UsageFollower, cutoff: float) -> None:
+    def load(self, follower: api.UsageFollower, cutoff: float) -> None:
         """On a worker thread: a follower's older history, then a repaint."""
-        stats.load_safely(follower, cutoff)
+        api.load_safely(follower, cutoff)
         try:
             self.app.call_from_thread(self.repaint)
         except RuntimeError:   # the app is closing
@@ -160,14 +164,14 @@ class SessionStats(Widget):
             self.setting = next(s for s in sessions if s["id"] == sid)
             follower = self.followers.get(sid)
             if follower and follower.ready:
-                self.show(stats.current(follower.snap, host[sid]), names[sid], now, follower.error or failed)
+                self.show(api.current(follower.snap, host[sid]), names[sid], now, follower.error or failed)
             else:
                 self.show(None, names[sid], now, (follower and follower.error)
                           or f"reading {names[sid]}'s transcript…")
             return
         self.setting = None
         sids = [sid for sid in self.shown(sessions) if sid in self.followers]
-        snaps = {sid: stats.current(self.followers[sid].snap, host[sid]) for sid in sids if self.followers[sid].ready}
+        snaps = {sid: api.current(self.followers[sid].snap, host[sid]) for sid in sids if self.followers[sid].ready}
         self.show(stats.combine(snaps, names, now) if snaps else None, "", now,
                   "reading transcripts…" if len(snaps) < len(sids) else failed)
 
@@ -230,14 +234,14 @@ class SessionStats(Widget):
         """A level lower or higher, applied live: no warning, as effort has no side effects (Q52)."""
         if self.slider() is None or self.at != "slider":
             return
-        levels = models.EFFORTS
+        levels = api.EFFORTS
         current = stats.effort_of(self.view, self.setting)   # what the slider lights
         at = levels.index(current) if current in levels else levels.index("high")
         self.pick(levels[max(0, min(len(levels) - 1, at + step))])
 
     def action_effort_end(self, end: int) -> None:
         if self.slider() is not None and self.at == "slider":
-            self.pick(models.EFFORTS[end])
+            self.pick(api.EFFORTS[end])
 
     def action_press_zoom(self) -> None:
         """Enter or Space on the zoom's - or +, as a click on it."""
@@ -401,5 +405,5 @@ class SessionStats(Widget):
         return segments
 
 module = api.Module(
-    id="stats", title="Stats", version=importlib.metadata.version("claude-wheelhouse"), api=api.WHEELHOUSE_API,
+    id="stats", title="Stats", version=importlib.metadata.version("claude-wheelhouse-stats"), api=api.WHEELHOUSE_API,
     panes=[api.Pane("Stats", "left.middle", {"tui": SessionStats})])

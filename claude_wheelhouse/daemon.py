@@ -53,7 +53,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import auth, features, fingerprint, liveness, models, stats, tutorial
+from . import auth, features, fingerprint, liveness, models, transcript_usage, tutorial
 from .hub import Done, Event, Hub, host_context
 from .store import COMPACT_QUESTION, THEN, SessionGone, Store, inbox_rank, mode, runner, standing
 
@@ -668,7 +668,7 @@ class Daemon:
     def session_view(self, s) -> dict:
         sid = s["id"]
         follower = self.hub.contexts.get(sid)
-        snap = stats.current(follower.snap, host_context(s)) if follower and follower.ready else None
+        snap = transcript_usage.current(follower.snap, host_context(s)) if follower and follower.ready else None
         running = follower.snap if follower and follower.ready else None
         return {**dict(s), "status": self.hub.shown_status(sid), "liveness": self.hub.statuses.get(sid, "dead"),
                 "model_state": self.hub.model_state(s), "mode": mode(s), "busy": self.hub.busy(sid),

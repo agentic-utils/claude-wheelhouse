@@ -1,9 +1,11 @@
 """The module protocol: what a module gives the wheelhouse and what the wheelhouse gives
 it back. A module is any package that declares an entry point in the group
 `claude_wheelhouse.modules` pointing at a `Module`; the hub finds it at startup, with
-nothing to register by hand. The hub's own stats pane is one, declared in this package's
-pyproject.toml the same way. See .plan/suite-architecture.md ("Module protocol") and
-.plan/stats-plugin.md.
+nothing to register by hand. The stats pane is one, its own distribution in this repo
+(modules/stats, claude-wheelhouse-stats), which `make install` installs alongside. See
+.plan/suite-architecture.md ("Module protocol"), .plan/stats-plugin.md and .plan/modules.md.
+
+A module imports this alone: what it may use of the wheelhouse is re-exported here (below).
 
 A pane's `tui` surface is a factory taking the `Context` and returning a Textual widget.
 The hub mounts it in the pane's slot, one of `SLOTS` (.plan/modules.md), with the module's id as its id (an id one of the
@@ -14,22 +16,32 @@ methods on it:
 - `animate(frame)`: five times a second, except while the person types in an answer box,
   when animation rests.
 - `landed(sid)`: the hub's own read of a session's transcript has brought something (its
-  stats followers are shared, `stats.follower`): a pane showing that session can repaint.
+  transcript followers are shared, `follower`): a pane showing that session can repaint.
+
+A pane's widget may also name a section of the ? overlay for its BINDINGS: `KEYS_HELP =
+(title, sdk_only)`, sdk_only to list them only with SDK mode on.
 """
 
 import importlib.metadata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import Callable
 
-if TYPE_CHECKING:
-    from .plan_usage import AccountUsage
+# what a module may use of the wheelhouse: a session's token use (transcript_usage.py), read
+# by the hub's shared followers, the account's usage, and the effort levels
+from .models import EFFORTS, name as model_label  # noqa: F401
+from .plan_usage import EVERY as USAGE_EVERY, AccountUsage  # noqa: F401
+from .transcript_usage import (AMBER, BUCKET, CHARTS, DAY, HOT, HOUR, OK, PARTIAL, SERIES,  # noqa: F401
+                               SPAN, WARN, WEEK, History, Snapshot, Turn, UsageFollower, clock,
+                               current, follower, grade, hexc, load_safely, read_safely, tokens,
+                               window_for)
 
 WHEELHOUSE_API = 2                 # bumped on any breaking change, matched exactly
 GROUP = "claude_wheelhouse.modules"
-OWN = ("stats",)                   # declared in this package's pyproject.toml
-# an installed copy older than the entry points in pyproject.toml has no record of them
+# an installed copy older than pyproject.toml still declares an entry point this package no
+# longer has (stats, before it was its own distribution): its module fails to import
 STALE = "not found: the installed package is out of date. Reinstall it with make install"
+OWN = "claude_wheelhouse."         # where this package's own entry points pointed
 # the six places a pane goes, by column; an empty one collapses (.plan/modules.md)
 SLOTS = ("left.top", "left.middle", "left.bottom", "middle.top", "middle.bottom", "right")
 CARDS = "left.middle"              # where a module that didn't load says why: it has no slot to say
@@ -87,30 +99,19 @@ class Loaded:
     error: str | None = None
 
 
-@dataclass
-class Missing:
-    """One of the hub's own modules with no entry point installed."""
-    name: str
-
-
 def load(entries=None) -> list[Loaded]:
     """Every module installed, in name order. One that fails to import, isn't a Module,
     was written against another API or has a pane for a slot that isn't one of SLOTS is
-    reported with the reason, never raised; so is one of the hub's own that wasn't found,
-    which means the package needs reinstalling."""
+    reported with the reason, never raised; so is a stale entry point of this package's own
+    (OWN), which means the package needs reinstalling. None installed is no error: their
+    slots collapse."""
     found = list(importlib.metadata.entry_points(group=GROUP) if entries is None else entries)
-    if entries is None:
-        names = {ep.name for ep in found}
-        found += [Missing(name) for name in OWN if name not in names]
     out = []
     for ep in sorted(found, key=lambda ep: ep.name):
-        if isinstance(ep, Missing):
-            out.append(Loaded(ep.name, None, STALE))
-            continue
         try:
             module = ep.load()
         except Exception as e:
-            out.append(Loaded(ep.name, None, f"failed to load: {e}"))
+            out.append(Loaded(ep.name, None, STALE if ep.value.startswith(OWN) else f"failed to load: {e}"))
             continue
         if not isinstance(module, Module):
             out.append(Loaded(ep.name, None, f"{ep.value} is not a Module"))
