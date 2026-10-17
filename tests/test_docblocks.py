@@ -128,3 +128,24 @@ def test_a_long_doc_renders_by_block_about_as_fast_as_whole():
             f()
             runs.append(time.process_time() - started)
     assert min(new) <= min(old) * 1.3 + 0.05, f"by block {min(new):.3f}s, whole {min(old):.3f}s"
+
+
+COMMENTED = "Above.\n\n<!-- a note -->\n\nBelow.\n\n<!-- trailing -->\n"
+
+
+def test_a_block_that_renders_nothing_takes_no_click():
+    lines, m = docblocks.render(COMMENTED, STYLE, 60, console())
+    assert m.lines == ((0, 1), (2, 3), (4, 5), (6, 7)) and m.rows[1][0] == m.rows[1][1], "the comments render no rows"
+    assert {m.line_at(r) for r in range(m.rows[0][1], m.rows[2][0])} <= {0, 4}, "the rows between: a shown block"
+    assert m.line_at(len(lines) + 5) == 4, "past the end: the last shown block, not the trailing comment"
+
+
+@pytest.mark.parametrize("line, want, desc", [
+    (2, "below", "a comment between blocks: the next shown block's first row"),
+    (6, "last", "a trailing comment: the last row shown, never one past the end"),
+])
+def test_a_line_in_a_block_that_renders_nothing_maps_to_a_shown_row(line, want, desc):
+    lines, m = docblocks.render(COMMENTED, STYLE, 60, console())
+    row = m.row_of(line)
+    assert row == (m.rows[2][0] if want == "below" else m.rows[2][1] - 1), desc
+    assert row < len(lines), desc

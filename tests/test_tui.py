@@ -7154,7 +7154,9 @@ async def test_delete_on_marked_rows_asks_once_and_takes_the_children(store, sid
 async def test_a_doc_maps_its_rows_to_source_lines_in_detail_and_full_screen(store, sid, tmp_path, monkeypatch):
     doc = tmp_path / "plan.md"
     doc.write_text("# The plan\n\nBuild it.\n\n- one\n- two\n\n```py\nx = 1\n```\n\n| alpha | beta |\n|---|---|\n| 1 | 2 |\n")
-    starts = {"The plan": 0, "Build it.": 2, "one": 4, "x = 1": 7, "alpha": 11}   # each block's first text, its first line
+    # each block's first text: its block's first line, and the rows its block draws above it
+    # (a code fence's padding, a table's blank line above its header)
+    starts = {"The plan": (0, 0), "Build it.": (2, 0), "one": (4, 0), "x = 1": (7, 1), "alpha": (11, 1)}
     m = store.post_doc(sid, "the plan", str(doc))
     renders = []
     real = tui.docblocks.render
@@ -7167,10 +7169,10 @@ async def test_a_doc_maps_its_rows_to_source_lines_in_detail_and_full_screen(sto
         for where in ("detail", "full screen"):
             view = app.detail if where == "detail" else app.screen.query_one("#docview", tui.Transcript)
             texts = view._layout(view.size.width)[1]
-            for first, line in starts.items():
+            for first, (line, above) in starts.items():
                 row = next(y for y in range(view.doc_at[0], len(texts)) if first in texts[y])
                 assert view.line_at(row) == line, f"{where}: a click on {first!r} is its first line"
-                assert view.row_of(line) <= row, f"{where}: and line {line} back to its block"
+                assert view.row_of(line) == row - above, f"{where}: and line {line} back to its block's first row"
             assert view.line_at(0) == 0, f"{where}: a row above the doc (its heading) takes the first block"
             count = len(renders)
             for _ in range(3):

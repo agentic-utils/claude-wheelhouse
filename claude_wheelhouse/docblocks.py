@@ -25,8 +25,11 @@ class DocMap:
     def block_at_row(self, row: int) -> int | None:
         """The block a row shows, or for a row between blocks (the gap after one, or past
         the end) the nearest: on a tie, the one below, as a gap row reads as the space above
-        the next block. None for a doc with no blocks."""
-        return _nearest(self.rows, row)
+        the next block. A block that renders no rows (an HTML comment) never takes a row.
+        None for a doc with nothing shown."""
+        shown = [k for k, (a, b) in enumerate(self.rows) if a < b]
+        k = _nearest(tuple(self.rows[k] for k in shown), row)
+        return None if k is None else shown[k]
 
     def block_at_line(self, line: int) -> int | None:
         """The block a source line is in, or for one between blocks (a blank line) the
@@ -39,9 +42,17 @@ class DocMap:
         return None if k is None else self.lines[k][0]
 
     def row_of(self, line: int) -> int | None:
-        """The first rendered row of the block a source line is in (block_at_line)."""
+        """The first rendered row of the block a source line is in (block_at_line). For a
+        block that renders no rows, the next shown block's first row, else the last row
+        shown, never one past the end. None for a doc with nothing shown."""
         k = self.block_at_line(line)
-        return None if k is None else self.rows[k][0]
+        if k is None:
+            return None
+        after = [a for a, b in self.rows[k:] if a < b]
+        if after:
+            return after[0]
+        ends = [b for a, b in self.rows if a < b]
+        return ends[-1] - 1 if ends else None
 
 
 def _nearest(spans: tuple[tuple[int, int], ...], at: int) -> int | None:
