@@ -12,7 +12,7 @@ dependencies = [
     "mcp>=2.2",
     "sse-starlette>=3.5",
     "starlette>=1.7",
-    "textual>=8.2",
+    "textual>=8.2,<8.3",   # tui.rehome moves a widget through Textual internals: check it before widening
     "uvicorn>=0.54",
 ]
 

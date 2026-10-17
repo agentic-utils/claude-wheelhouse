@@ -7564,3 +7564,261 @@ def test_an_answer_in_its_thread_is_marked_until_the_session_has_it(draft, deliv
     item = {"ref": "Q1", "title": "which db?", "kind": "question", "status": "open", "updated_at": "10:00", "body": "?"}
     msg = {"author": "person", "draft": draft, "delivered_at": delivered_at, "created_at": "10:00", "body": "SQLite"}
     assert tui.thread_blocks((item, [msg]))[-1] == ("you", f"{head}\n\nSQLite"), desc
+
+
+# swapping panes by their titles (D116, .plan/modules.md "Swapping panes")
+
+DEFAULT_LAYOUT = {"left.top": "sessions", "left.middle": "stats", "left.bottom": "session-info",
+                  "middle.top": "items", "right": "detail"}
+DEFAULT_LAYOUT_SLOT = {p: s.replace(".", "-") for s, p in DEFAULT_LAYOUT.items()}
+CORE_DEFAULTS = {pane: home for pane, (_, home) in tui.CORE_PANES.items()}
+
+
+@pytest.mark.parametrize("saved, defaults, want, desc", [
+    ({}, {**CORE_DEFAULTS, "stats": "left.middle"}, {**CORE_DEFAULTS, "stats": "left.middle"}, "nothing kept: the defaults"),
+    ({"left.top": "items", "middle.top": "sessions"}, CORE_DEFAULTS,
+     {**CORE_DEFAULTS, "items": "left.top", "sessions": "middle.top"}, "a kept swap; the panes it doesn't name stay home"),
+    ({"left.top": "stats", "left.middle": "sessions"}, CORE_DEFAULTS, {**CORE_DEFAULTS, "sessions": "left.middle"},
+     "a slot kept for an absent module stays empty"),
+    ({"left.top": "items"}, CORE_DEFAULTS, {**CORE_DEFAULTS, "items": "left.top", "sessions": "left.middle"},
+     "a pane the layout doesn't name, its default taken: the first empty slot"),
+    ({"left.top": "items", "left.middle": "gone", "middle.bottom": "gone2"}, CORE_DEFAULTS,
+     {**CORE_DEFAULTS, "items": "left.top", "sessions": "middle.top"}, "a slot kept for an absent pane is passed over"),
+    ({"left.top": "items", "left.middle": "x", "middle.top": "y", "middle.bottom": "z"}, CORE_DEFAULTS,
+     {**CORE_DEFAULTS, "items": "left.top", "sessions": "left.middle"}, "and taken once no other is empty"),
+    ({"left.top": "items", "middle.top": "items", "nowhere": "sessions"}, CORE_DEFAULTS,
+     {**CORE_DEFAULTS, "items": "left.top", "sessions": "left.middle"}, "a pane named twice, or a slot not one of six: once, ignored"),
+    ({}, {**CORE_DEFAULTS, "a": "left.middle", "b": "left.middle"}, {**CORE_DEFAULTS, "a": "left.middle", "b": "middle.bottom"},
+     "two panes for one slot: the second to the first empty one"),
+])
+def test_arrange(saved, defaults, want, desc):
+    assert tui.arrange(saved, defaults) == want, desc
+
+
+@pytest.mark.parametrize("value, want, desc", [
+    (None, {}, "none kept"),
+    ('{"left.top": "items"}', {"left.top": "items"}, "kept"),
+    ("not json", {}, "unreadable: none"),
+    ('["left.top"]', {}, "not a map: none"),
+    ('{"left.top": 3}', {}, "a pane that isn't a name: left out"),
+])
+def test_kept_slots(value, want, desc):
+    assert tui.kept_slots(value) == want, desc
+
+
+def pane_widget(app, pane: str):
+    return app.query_one("#" + tui.CORE_PANES[pane][0] if pane in tui.CORE_PANES else "#" + pane)
+
+
+async def drag_title(pilot, pane: str, to: tuple[int, int] | str | None, release: bool = True) -> None:
+    """A pane's title pressed, moved with the button held to `to` (another pane, its middle,
+    or a screen point), and let go there."""
+    widget = pane_widget(pilot.app, pane)
+    await pilot.mouse_down(widget, offset=(3, 0))
+    if to is None:   # a plain click
+        await pilot.mouse_up(widget, offset=(3, 0))
+        await pilot.pause()
+        return
+    if isinstance(to, str):
+        region = pane_widget(pilot.app, to).region
+        to = (region.x + region.width // 2, region.y + region.height // 2)
+    x, y = to
+    pilot.app.post_message(events.MouseMove(None, x, y, 1, 1, button=1, shift=False, meta=False,
+                                            ctrl=False, screen_x=x, screen_y=y))
+    await pilot.pause()
+    if release:
+        await pilot.mouse_up(None, offset=(x, y))
+        await pilot.pause()
+
+
+class Relaid(WheelhouseApp):
+    """The app, counting LayoutChanged, as the tour's callout listens for it."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.relaid_count = 0
+
+    def on_wheelhouse_app_layout_changed(self) -> None:
+        self.relaid_count += 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("pane, onto, desc", [
+    ("sessions", "items", "the session list and the inbox"),
+    ("session-info", "detail", "session info into the wide right column, Detail into column 1"),
+    ("stats", "items", "a module's pane and a core one"),
+    ("detail", "sessions", "dragged the other way"),
+])
+async def test_a_title_drag_swaps_and_survives_a_restart(store, sid, pane, onto, desc):
+    want = {s: {pane: onto, onto: pane}.get(p, p) for s, p in DEFAULT_LAYOUT.items()}
+    app = Relaid(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        moved, other = pane_widget(app, pane), pane_widget(app, onto)
+        await drag_title(pilot, pane, onto, release=False)
+        assert app.query_one("#slot-" + DEFAULT_LAYOUT_SLOT[onto]).has_class("-swap-target"), f"{desc}: the target lit"
+        await pilot.mouse_up(None, offset=(other.region.x + 1, other.region.y + 1))
+        await pilot.pause()
+        assert app.layout_now() == want, desc
+        assert pane_widget(app, pane) is moved and pane_widget(app, onto) is other, f"{desc}: the same widgets, state and all"
+        assert not app.query(".-swap-target"), f"{desc}: the light goes out"
+        assert app.relaid_count == 1, f"{desc}: LayoutChanged posted, once"
+        assert json.loads(store.setting("layout.slots")) == want, f"{desc}: kept"
+        stops = [w.id for w, _ in tui.tab_stops(app.screen)]
+        assert [s for s in stops if s in ("session-list", "items", "answer")] == ["session-list", "items", "answer"], \
+            f"{desc}: Tab goes by pane, not by place"
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert app.layout_now() == want, f"{desc}: as it was, after a restart"
+
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("how, desc", [
+    ("escape", "Esc during the drag"),
+    ("own", "a release on its own slot"),
+    ("outside", "a release outside the grid, on the send bar"),
+    ("click", "a plain click on a title"),
+])
+async def test_a_title_drag_that_swaps_nothing(store, sid, how, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        items = pane_widget(app, "items").region
+        if how == "escape":
+            await drag_title(pilot, "sessions", "items", release=False)
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.mouse_up(None, offset=(items.x + 2, items.y + 2))
+        elif how == "own":
+            await drag_title(pilot, "sessions", "sessions")
+        elif how == "outside":
+            bar = app.query_one(SendBar).region
+            await drag_title(pilot, "sessions", (bar.x + 2, bar.y))
+        else:
+            await drag_title(pilot, "sessions", None)
+        await pilot.pause()
+        assert app.layout_now() == DEFAULT_LAYOUT, desc
+        assert store.setting("layout.slots") is None, desc
+        assert not app.query(".-swap-target") and not any(s.dragging for s in app.query(tui.Slot)), f"{desc}: the drag over"
+        assert not app.screen.selections, f"{desc}: and no text selected by it"
+
+
+@pytest.mark.anyio
+async def test_reset_layout(store, sid):
+    app = Relaid(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await drag_title(pilot, "session-info", "items")
+        await drag(pilot, "items-pane", 10, 0)
+        assert app.layout_now()["middle.top"] == "session-info"
+        assert app.query_one("#col-middle").styles.min_width.value == 39, "the column grows to the buttons' 39"
+        assert app.query_one("#slot-middle-top").styles.min_height.value == 12, "and the slot to their 12 rows"
+        assert store.setting("layout.items-pane") is not None
+        commands = [c.title for c in app.get_system_commands(app.screen)]
+        assert "Reset layout" in commands, "in the command palette"
+        app.action_reset_layout()
+        await pilot.pause()
+        assert app.layout_now() == DEFAULT_LAYOUT, "every pane home"
+        assert store.setting("layout.slots") is None and store.setting("layout.items-pane") is None, "nothing kept"
+        assert app.query_one("#col-left").styles.min_width.value == 39, "the buttons' minimum home with them"
+        assert app.query_one("#col-middle").styles.min_width.value == 12
+        assert sized(app, "items-pane") == 45, "the splitters at the stylesheet's sizes"
+        assert app.relaid_count == 2, "LayoutChanged for the swap and for the reset"
+
+
+@pytest.mark.anyio
+async def test_a_missing_modules_slot_stays_empty_until_it_returns(store, sid, monkeypatch):
+    from claude_wheelhouse import api
+    loaded = api.load()
+    store.set_setting("layout.slots", json.dumps({"left.top": "stats", "left.middle": "sessions"}))
+    monkeypatch.setattr(api, "load", lambda: [])
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert app.layout_now() == {"left.middle": "sessions", "left.bottom": "session-info",
+                                    "middle.top": "items", "right": "detail"}, "stats gone: its slot empty"
+        assert not app.query_one("#slot-left-top").display, "and collapsed"
+        await drag_title(pilot, "items", "detail")
+        assert json.loads(store.setting("layout.slots"))["left.top"] == "stats", "a swap keeps the absent pane's place"
+    monkeypatch.setattr(api, "load", lambda: loaded)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert app.layout_now()["left.top"] == "stats", "back where it was"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size", [(160, 40), (80, 24)])
+@pytest.mark.parametrize("saved, modules, desc", [
+    ({"left.middle": "detail", "right": "stats"}, False, "Detail swapped with Stats, then Stats uninstalled"),
+    ({"left.top": "detail", "right": "detail"}, True, "a corrupt layout naming Detail twice"),
+])
+async def test_an_empty_right_column_leaves_no_gap(store, sid, monkeypatch, size, saved, modules, desc):
+    """Review of #95: with the right column collapsed, the last column shown takes the rest of
+    the width, and the splitter between the two left stays usable."""
+    from claude_wheelhouse import api
+    if not modules:
+        monkeypatch.setattr(api, "load", lambda: [])
+    store.set_setting("layout.slots", json.dumps(saved))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        assert not app.query_one("#col-right").display, f"{desc}: the right column collapsed"
+        main = app.query_one("#main")
+        shown = [w for w in main.children if w.display]
+        assert sum(w.outer_size.width for w in shown) == main.size.width, f"{desc}: no gap at {size}"
+        assert [w.id for w in shown if not isinstance(w, Splitter)] == ["col-left", "col-middle"], desc
+        assert [s.key for s in shown if isinstance(s, Splitter)] == ["sessions-pane"], f"{desc}: one splitter, between them"
+        before = app.query_one("#col-left").size.width
+        await drag(pilot, "sessions-pane", -3 if size[0] == 160 else 3, 0)
+        assert app.query_one("#col-left").size.width != before, f"{desc}: and it still resizes"
+        for pane in ("sessions", "session-info", "items", "detail"):
+            region = pane_widget(app, pane).region
+            assert region.right <= size[0] and region.width > 2, f"{desc}: {pane} on screen at {size}"
+
+
+SWAPPABLE = ["sessions", "stats", "session-info", "items", "detail"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("pane, onto", list(itertools.combinations(SWAPPABLE, 2)))
+async def test_every_swap_fits_80_by_24(store, sid, pane, onto):
+    """Review of #95: each core pane keeps its own minimum wherever it goes, so no swap puts
+    one in a slot smaller than it, or cuts it to its border. The stats pane, a module's,
+    gives way to a row on a short terminal, as it does in its own slot."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        app.swap(pane_widget(app, pane).parent, pane_widget(app, onto).parent)
+        await pilot.pause()
+        await pilot.pause()
+        for each in SWAPPABLE:
+            widget = pane_widget(app, each)
+            assert widget.parent.region.contains_region(widget.region), f"{pane}<->{onto}: {each} within its slot"
+            assert widget.region.right <= 80 and widget.region.bottom <= 24, f"{pane}<->{onto}: {each} on screen"
+            if each != "stats":
+                assert widget.region.height >= 3, f"{pane}<->{onto}: {each} more than its border"
+
+
+@pytest.mark.anyio
+async def test_reset_puts_module_panes_in_their_declared_slots(store, sid, monkeypatch):
+    """Review of #95: a module pane's default is the slot it declares (api.Pane.slot), not
+    the one it's in, so Reset layout brings two swapped module panes home."""
+    from textual.widget import Widget
+    from claude_wheelhouse import api
+    loaded = [api.Loaded(m, api.Module(m, m.title(), "1.0", api.WHEELHOUSE_API,
+                                       [api.Pane(m.title(), home, {"tui": lambda ctx: Widget()})]))
+              for m, home in (("one", "left.middle"), ("two", "middle.bottom"))]
+    monkeypatch.setattr(api, "load", lambda: loaded)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.swap(app.slots()["left.middle"], app.slots()["middle.bottom"])
+        await pilot.pause()
+        assert (app.layout_now()["left.middle"], app.layout_now()["middle.bottom"]) == ("two", "one"), "swapped"
+        app.action_reset_layout()
+        await pilot.pause()
+        assert (app.layout_now()["left.middle"], app.layout_now()["middle.bottom"]) == ("one", "two"), "home again"
