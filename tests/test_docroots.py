@@ -104,6 +104,8 @@ def repo(tmp_path):
     (["docs/../../x"], ValueError, ".. out from deeper"),
     (["linkout"], ValueError, "a symlink out of the repo"),
     ([""], ValueError, "an empty path"),
+    (["."], ValueError, "the git root itself"),
+    (["src/.."], ValueError, "the git root, by .."),
     ("docs/adr", ValueError, "a string, not a list"),
     ([f"d{i}" for i in range(docroots.MOST + 1)], ValueError, "too many"),
 ])
@@ -123,6 +125,7 @@ def test_checked(repo, paths, expect, desc):
     ([("src", [".plan"]), ("", ["docs/decisions"])], [".plan", "docs/decisions"], "two sessions' declared, both"),
     ([("src", ["missing"])], [], "a declared dir that isn't there is left out"),
     ([("src", ["linkout"])], [], "one resolving outside the repo is left out"),
+    ([("src", ["."])], [], "the git root itself, kept from before the check, is left out"),
     ([], [], "no sessions, no dirs"),
 ])
 def test_doc_dirs(repo, sessions, expect, desc):
@@ -130,6 +133,14 @@ def test_doc_dirs(repo, sessions, expect, desc):
     assert docroots.doc_dirs(given) == sorted((repo / d).resolve() for d in expect), desc
 
 
-def test_doc_dirs_without_git_is_the_directory_itself(tmp_path):
+@pytest.mark.parametrize("dirs, desc", [
+    (None, "docs/adr by default"),
+    (["."], "the directory itself, declared"),
+    (["docs/adr"], "a directory in it, declared"),
+])
+def test_no_doc_dirs_outside_a_git_repo(tmp_path, dirs, desc):
+    """A session in ~, say, with no .git above: nothing of it is a doc root, and a declaration is refused."""
     (tmp_path / "docs/adr").mkdir(parents=True)
-    assert docroots.doc_dirs([{"cwd": str(tmp_path), "doc_dirs": None}]) == [(tmp_path / "docs/adr").resolve()]
+    assert docroots.doc_dirs([{"cwd": str(tmp_path), "doc_dirs": dirs}]) == [], desc
+    with pytest.raises(ValueError, match="in no git repo"):
+        docroots.checked(dirs or [], str(tmp_path))

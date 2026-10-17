@@ -132,8 +132,11 @@ def set_doc_dirs(paths: list[str]) -> str:
     relative to the git root of your working directory, such as ["docs/decisions"]. The
     wheelhouse then lists the NNNN-*.md files in them instead of docs/adr's, for every
     session in this repo. Only directories you name are looked in (.plan/, say, only if
-    named). An empty list goes back to docs/adr."""
+    named), never the git root itself, and none outside a git repo. An empty list goes back
+    to docs/adr."""
     session = _store.session(_sid)
+    if session is None:   # gone since the tool's own check: said as it says it (GONE_TEXT)
+        raise SessionGone(_sid)
     dirs = docroots.checked(paths, session["cwd"])
     _store.set_doc_dirs(_sid, dirs or None)
     return f"decisions are looked for in {', '.join(dirs)}" if dirs else "decisions are looked for in docs/adr"

@@ -32,6 +32,7 @@ STREAM_READ = 40    # seconds the stream may go quiet: the daemon pings every 15
 BACKOFF = (0.5, 1, 2, 5)   # seconds between tries to reconnect, the last repeated
 AGENT_POLL = 1.0    # a subagent's conversation shown: fetched again each second, as no event says it grew
 USAGE_POLL = 60     # the account's usage, as the hub fetches it
+ROOTS_EVERY = 5.0   # seconds a --local app keeps the modules' doc roots before asking again (read_doc)
 UNREACHABLE = "not connected to the daemon: nothing was sent"
 REFUSED = "its token isn't this daemon's: claude-wheelhouse token, on its machine, prints it"
 LOST = "lost the daemon mid-command: it may or may not have been done, so check before trying again"
@@ -137,11 +138,22 @@ class LocalClient(Hub):
 
     def read_doc(self, path: str) -> dict:
         """A doc under a module's doc root, as the daemon's /docs reads it; {"refused": why}
-        for a path outside them."""
+        for a path outside them. Asked at each paint, on the app's thread: the roots are
+        asked of the modules again only every ROOTS_EVERY seconds, and the file read again
+        only when its stamp has changed, as a remote client's is."""
+        now = time.monotonic()
+        roots = getattr(self, "doc_roots_at", None)
+        if roots is None or now - roots[0] >= ROOTS_EVERY:
+            self.doc_roots_at = roots = (now, self.served.doc_roots())
+        kept = getattr(self, "docs_read", {}).get(path)
         try:
-            return self.served.read(path)
+            doc = docroots.read(path, roots[1], kept and kept.get("stamp"))
         except docroots.Outside as e:
-            return {"refused": str(e)}
+            doc = {"refused": str(e)}
+        if doc.get("same"):
+            return kept
+        self.docs_read = {path: doc}   # the one shown
+        return doc
 
 
 class Unreachable(RuntimeError):

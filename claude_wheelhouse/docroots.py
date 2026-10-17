@@ -66,14 +66,15 @@ def read(path, roots, have: str | None = None) -> dict:
     return {"path": str(real), "text": text, "stamp": stamp, "gone": None, "mtime_ns": st.st_mtime_ns}
 
 
-def git_root(cwd) -> Path:
+def git_root(cwd) -> Path | None:
     """The git root of a directory: the nearest holding .git (a directory, or a linked
-    worktree's file), else the directory itself."""
+    worktree's file); None outside any repo, which then has no doc dirs (never the directory
+    itself: a session in ~ would otherwise reach all of it)."""
     here = Path(os.path.realpath(cwd))
     for d in (here, *here.parents):
         if (d / ".git").exists():
             return d
-    return here
+    return None
 
 
 def checked(paths, cwd) -> list[str]:
@@ -84,12 +85,17 @@ def checked(paths, cwd) -> list[str]:
     if len(paths) > MOST:
         raise ValueError(f"at most {MOST} directories")
     root = git_root(cwd)
+    if root is None:
+        raise ValueError(f"{cwd} is in no git repo: doc dirs are only looked for in one")
     out = []
     for p in paths:
         if not p.strip() or os.path.isabs(p) or "\0" in p:
             raise ValueError(f"{p!r}: give a directory relative to the git root, {root}")
-        if not Path(os.path.realpath(root / p)).is_relative_to(root):
+        real = Path(os.path.realpath(root / p))
+        if not real.is_relative_to(root):
             raise ValueError(f"{p!r} is outside the git root, {root}")
+        if real == root:
+            raise ValueError(f"{p!r} is the git root itself: name the directory the decisions are in")
         if (norm := os.path.normpath(p)) not in out:
             out.append(norm)
     return out
@@ -103,16 +109,17 @@ def declared(raw: str | None) -> list[str] | None:
 def doc_dirs(sessions) -> list[Path]:
     """Where decisions are found for every repo a session works in (each a dict with "cwd"
     and "doc_dirs", declared or None): per git root, every directory the sessions there
-    declared, else DEFAULT. Each resolved, and left out if it isn't a directory or resolves
-    outside its git root."""
+    declared, else DEFAULT. Each resolved, and left out if it isn't a directory, is the git
+    root itself or resolves outside it. A session in no git repo adds none."""
     repos: dict[Path, set[str]] = {}
     for s in sessions:
-        dirs = repos.setdefault(git_root(s["cwd"]), set())
-        dirs.update(s.get("doc_dirs") or ())
+        if (root := git_root(s["cwd"])) is None:
+            continue
+        repos.setdefault(root, set()).update(s.get("doc_dirs") or ())
     out = set()
     for root, dirs in repos.items():
         for d in dirs or DEFAULT:
             real = Path(os.path.realpath(root / d))
-            if real.is_relative_to(root) and real.is_dir():
+            if real != root and real.is_relative_to(root) and real.is_dir():
                 out.add(real)
     return sorted(out)

@@ -201,6 +201,10 @@ async def test_a_pane_reaches_its_routes_and_shows_its_docs(store, sid, monkeypa
         ctx.show_doc(str(root / "0001-sqlite.md"), "0001 Use SQLite")
         await pilot.pause()
         assert "We chose SQLite." in app._detail_text and "0001 Use SQLite" in app._detail_text
+        (root / "0001-sqlite.md").write_text("# Use SQLite\n\nWe chose SQLite, then WAL.\n")
+        app.refresh_data()
+        await pilot.pause()
+        assert "then WAL." in app._detail_text, "a change to the file shows at the next refresh"
         assert not app.query_one("#answer").display, "a doc: no answer box"
         ctx.show_doc(str(root / ".." / "out.md"), "Out")
         await pilot.pause()
@@ -241,6 +245,21 @@ def test_the_modules_command(store, monkeypatch, capsys, argv, kept, says, desc)
     cli.main()
     assert says in capsys.readouterr().out, desc
     assert store.setting(api.DISABLED) == kept, desc
+
+
+@pytest.mark.parametrize("argv, refused, desc", [
+    (["modules", "disable", "probe", "--connect", "far:7428"], "run it on the machine whose daemon is at far:7428",
+     "with --connect: the daemon's machine is the one to run it on"),
+    (["modules", "disable", "probe"], "no wheelhouse database on this machine", "a machine with no database of its own"),
+])
+def test_the_modules_command_refuses_another_machines_wheelhouse(db_file, monkeypatch, argv, refused, desc):
+    from claude_wheelhouse import cli
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", *argv])
+    if "--connect" not in argv:
+        monkeypatch.setenv("WHEELHOUSE_DB", str(db_file.parent / "absent" / "wheelhouse.db"))
+    with pytest.raises(SystemExit, match=refused):
+        cli.main()
+        pytest.fail(desc)
 
 
 def test_the_modules_command_refuses_a_module_not_installed(store, monkeypatch):

@@ -1285,7 +1285,42 @@ def moduled(store, monkeypatch, tmp_path):
     yield d, tmp_path
     d.pool.shutdown()
     d.worker.shutdown()
+    d.module_worker.shutdown()
     d.watch.close()
+
+
+@pytest.mark.parametrize("method, desc", [("GET", "a module's query"), ("POST", "a module's command")])
+async def test_a_slow_module_route_is_504_and_never_holds_up_the_hub(store, monkeypatch, method, desc):
+    import threading
+    from claude_wheelhouse import api
+    release = threading.Event()
+    slow = [api.Route("wait", lambda call: release.wait(5) and {"done": True}, m) for m in ("GET", "POST")]
+    monkeypatch.setattr(api, "load", lambda: [api.Loaded("slow", api.Module(
+        "slow", "Slow", "1", api.WHEELHOUSE_API, routes=lambda ctx: slow))])
+    monkeypatch.setattr(daemon_mod, "MODULE_WAIT", 0.2)
+    d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True)
+    try:
+        r = await call(d, method, "/m/slow/wait", {} if method == "POST" else None, key="slow-1")
+        assert r.status_code == 504, desc
+        assert await asyncio.wait_for(d.on_hub(lambda: "free"), 1) == "free", f"{desc}: the hub's thread is free"
+        assert (await call(d, "POST", "/dispatch")).status_code == 200, f"{desc}: and a command of the hub's done"
+        release.set()
+        if method == "POST":   # the same command again gets its answer, once it has one
+            again = await call(d, "POST", "/m/slow/wait", {}, key="slow-1")
+            assert (again.status_code, again.json()) == (200, {"done": True}), desc
+    finally:
+        release.set()
+        d.pool.shutdown()
+        d.worker.shutdown()
+        d.module_worker.shutdown()
+        d.watch.close()
+
+
+async def test_a_commands_key_covers_its_query_string(moduled):
+    daemon, _ = moduled
+    assert (await call(daemon, "POST", "/m/probe/echo/z?q=1", {}, key="q")).status_code == 200
+    assert (await call(daemon, "POST", "/m/probe/echo/z?q=2", {}, key="q")).status_code == 422, \
+        "the same key for another query string is another request"
 
 
 @pytest.mark.parametrize("method, path, body, status, answer, desc", [

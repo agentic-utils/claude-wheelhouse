@@ -75,7 +75,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   roots (`api.Module.doc_roots`, read through `/docs`), served by the daemon and, the same
   way, by `LocalClient` with `--local`; a pane reaches them with `Context.call` and
   `Context.show_doc`. `claude-wheelhouse modules disable <id>` (`api.DISABLED`) switches a
-  module off from the next start.
+  module off from the next start. Module routes run off the hub's thread, waited on
+  `daemon.MODULE_WAIT` then 504; `fingerprint.code` covers the installed modules too.
 - `docroots.py`: the doc roots' allow-list (`confine`: a path resolved, symlinks and `..`,
   and kept to a `.md` file under a root; stage 8 writes through it too), and where a repo's
   decisions are (`doc_dirs`: `docs/adr` under its git root unless a session declared others

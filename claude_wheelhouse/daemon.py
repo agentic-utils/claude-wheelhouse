@@ -61,6 +61,7 @@ ADDRESS = "127.0.0.1"   # the port is features.port()
 TICK = 1.0           # seconds between the hub's refreshes, as the TUI's tick
 RING = 1024          # events kept for a client that reconnects
 PING = 15            # seconds between keep-alive comments on a quiet stream
+MODULE_WAIT = 10.0   # seconds a module's route is waited on before 504 (it carries on, off the hub's thread)
 READ_WAIT = 1.0      # seconds a conversation waits on a read of it under way before 503
 LOCK = "daemon.lock"
 LOCK_WAIT = 0.5      # seconds it waits on the lock: a client's glance at it is shorter
@@ -361,6 +362,8 @@ class Daemon:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="wheelhouse")
         self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wheelhouse-hub")
+        # the modules' commands, one at a time (an Idempotency-Key's twice still done once), never on the hub's
+        self.module_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wheelhouse-modules")
         self.loop_thread: int | None = None
         # a connection of its own, only to read the marks, outside the store's lock: they move
         # with every commit made by any connection, the hosts', the MCP servers' and the hub's
@@ -417,8 +420,8 @@ class Daemon:
             Route("/shutdown", self.command(self.shutdown_requested), methods=["POST"]),
             # the modules' (served.py): a doc under a doc root, and each module's own routes
             Route("/docs", self.query(self.doc)),
-            Route("/m/{mid}/{rest:path}", self.query(self.module_query)),
-            Route("/m/{mid}/{rest:path}", self.command(self.module_command), methods=["POST"]),
+            Route("/m/{mid}/{rest:path}", self.query(self.module_query, run=self.module_run)),
+            Route("/m/{mid}/{rest:path}", self.command(self.module_command, hub=False), methods=["POST"]),
         ], middleware=[Middleware(Guard, daemon=self)], lifespan=self.lifespan)
 
     # the hub's work and what it says
@@ -581,6 +584,7 @@ class Daemon:
         self.hub.stop_usage()
         self.pool.shutdown(wait=False, cancel_futures=True)
         self.worker.shutdown(wait=False, cancel_futures=True)
+        self.module_worker.shutdown(wait=False, cancel_futures=True)
         self.hub.drop_pending_forks()   # a forked callback just cancelled never runs
 
     # requests
@@ -604,7 +608,18 @@ class Daemon:
                 return refusal(e)
         return endpoint
 
-    def command(self, handler):
+    async def module_run(self, handler, request: Request):
+        """A module's GET on starlette's threads, waited on MODULE_WAIT seconds at most (504)."""
+        return await self.waited(run_in_threadpool(handler, request))
+
+    async def waited(self, work):
+        try:
+            return await asyncio.wait_for(asyncio.shield(work), MODULE_WAIT)
+        except TimeoutError:
+            raise Refused(504, f"the module took longer than {MODULE_WAIT:g} s: it carries on, and the same "
+                          "command sent again gets its answer once it has one") from None
+
+    def command(self, handler, hub: bool = True):
         """A POST: from a client, not another site's page; with an Idempotency-Key, whose
         answer is kept, so the same request sent again is answered the same and done once.
         What it moved is published at once, not at the next tick, and the rows /sessions
@@ -618,6 +633,10 @@ class Daemon:
                 if not key:
                     raise Refused(400, "every command needs an Idempotency-Key")
                 raw = await request.body()
+                if not hub:   # a module's: on its own thread, so a slow one never holds up the hub
+                    loop = asyncio.get_running_loop()
+                    return await self.waited(loop.run_in_executor(self.module_worker, functools.partial(
+                        self.carry_out, handler, request, key, raw, False)))
                 return await self.on_hub(self.carry_out, handler, request, key, raw)
             except ClientDisconnect:   # gone before it sent the body: nothing done, nobody to tell
                 return Response(status_code=499)
@@ -625,12 +644,15 @@ class Daemon:
                 return refusal(e)
         return endpoint
 
-    def carry_out(self, handler, request: Request, key: str, raw: bytes) -> Response:
+    def carry_out(self, handler, request: Request, key: str, raw: bytes, hub: bool = True) -> Response:
         """A command, on the hub's thread: one at a time, so the same key sent twice at once
         is still done once. One that fails unexpectedly (the database locked) is kept if and
         only if it wrote anything first (store.written): a retry then gets the same 500 rather
-        than act twice; one that wrote nothing escapes unkept, so a retry tries again."""
-        fingerprint = hashlib.sha256(f"{request.url.path}\n".encode() + raw).hexdigest()
+        than act twice; one that wrote nothing escapes unkept, so a retry tries again. hub
+        False: a module's (served.py), on the modules' own thread, its answer always kept, and
+        nothing of the hub's refreshed or published."""
+        query = f"?{request.url.query}" if request.url.query else ""
+        fingerprint = hashlib.sha256(f"{request.url.path}{query}\n".encode() + raw).hexdigest()
         if (kept := self.unkept.get(key) or self.store.answered(key)) is not None:
             if kept["fingerprint"] != fingerprint:
                 return refusal(Refused(422, "that Idempotency-Key was used for another request"))
@@ -648,7 +670,7 @@ class Daemon:
         except ANSWERED as e:
             response = refusal(e)
         except Exception as e:
-            if self.store.written() == wrote:
+            if hub and self.store.written() == wrote:   # a module's is kept: it writes no store
                 raise
             response = refusal(e)
         answer = {"fingerprint": fingerprint, "status": response.status_code, "body": response.body.decode()}
@@ -658,9 +680,10 @@ class Daemon:
             print(f"wheelhouse daemon: couldn't keep the answer to {key} ({e}): kept in memory meanwhile",
                   file=sys.stderr, flush=True)
             self.unkept[key] = answer
-        seen = self.marks()
-        self.hub.refresh()   # what /sessions serves has the command's change before it's published
-        self.publish_moved(seen)
+        if hub:   # a module's moves nothing of the hub's
+            seen = self.marks()
+            self.hub.refresh()   # what /sessions serves has the command's change before it's published
+            self.publish_moved(seen)
         return response
 
     async def events(self, request: Request) -> Response:

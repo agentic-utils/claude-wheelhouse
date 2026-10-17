@@ -80,7 +80,9 @@ class Call:
 class Route:
     """One of a module's routes, at /m/<id>/<path>. A segment in braces ("decisions/{n}") is a
     param. A GET is a query, run on a worker thread; a POST a command, done once per
-    Idempotency-Key, on the hub's thread. handler(Call) answers JSON, or raises Refused."""
+    Idempotency-Key, on the modules' own thread (one at a time, never the hub's). Either is
+    waited on 10 s (daemon.MODULE_WAIT), then answered 504 while it carries on: keep them
+    quick. handler(Call) answers JSON, or raises Refused."""
     path: str
     handler: Callable[[Call], object]
     method: str = "GET"

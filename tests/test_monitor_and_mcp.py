@@ -106,8 +106,9 @@ def test_poll_once_delivers_each_message_once(store, sid):
     assert out.getvalue().count("first") == 1
 
 
-def test_mcp_server_round_trip(store, sid, db_file):
+def test_mcp_server_round_trip(store, sid, db_file, tmp_path):
     """Start the real stdio server and drive it like Claude Code would."""
+    (tmp_path / ".git").mkdir()   # the session's directory a repo, for set_doc_dirs
     store.register(sid, 999999, 1, "boot-x")   # as `claude_wheelhouse run` would, before exec
     params = StdioServerParameters(command=sys.executable, args=["-m", "claude_wheelhouse", "mcp"],
                                    env=dict(os.environ, WHEELHOUSE_SESSION_ID=sid, WHEELHOUSE_DB=str(db_file)))
@@ -398,10 +399,16 @@ def test_post_item_declares_a_doc(store, sid, tmp_path):
     ([], None, "decisions are looked for in docs/adr", "none: docs/adr again"),
     (["../elsewhere"], "unchanged", "is outside the git root", "outside the repo: refused, nothing kept"),
     (["/abs"], "unchanged", "relative to the git root", "an absolute path: refused"),
+    (["."], "unchanged", "the git root itself", "the repo's root: refused"),
+    (["docs"], "no git", "in no git repo", "a session in no git repo: refused"),
 ])
-def test_set_doc_dirs(store, sid, given, kept, said, desc):
+def test_set_doc_dirs(store, sid, tmp_path, given, kept, said, desc):
     from claude_wheelhouse import mcp_server
     mcp_server._store, mcp_server._sid = store, sid
+    if kept != "no git":
+        (tmp_path / ".git").mkdir()
+    else:
+        kept = "unchanged"
     store.set_doc_dirs(sid, ["before"])
     if kept == "unchanged":
         with pytest.raises(Exception, match=said):

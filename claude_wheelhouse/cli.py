@@ -95,6 +95,9 @@ def modules_command(action: str | None, name: str | None) -> None:
     from . import api
     from .connect import STOP, holder
     from .store import Store, db_path
+    if not db_path().exists():   # a machine whose app joins another's daemon (--connect): nothing here reads it
+        sys.exit(f"claude-wheelhouse: no wheelhouse database on this machine ({db_path()}): run claude-wheelhouse "
+                 "modules on the machine whose daemon your app connects to")
     store, loaded = Store(), api.load()
     off = api.disabled(store.setting(api.DISABLED))
     if action is None:
@@ -218,6 +221,7 @@ def parser() -> argparse.ArgumentParser:
     mods = sub.add_parser("modules", help="list the modules installed, or switch one off or on")
     mods.add_argument("action", nargs="?", choices=("disable", "enable"))
     mods.add_argument("name", nargs="?", help="the module's id, as the list shows it")
+    mods.add_argument("--connect", metavar="HOST:PORT", help=argparse.SUPPRESS)   # refused: said why
     sub.add_parser("token", help="print the daemon's token, for a client on another machine (--connect)")
     return p
 
@@ -299,6 +303,9 @@ def main() -> None:
     elif args.cmd == "tutorial":
         tutorial_again(args.yes)
     elif args.cmd == "modules":
+        if args.connect:
+            sys.exit("claude-wheelhouse: modules acts on this machine's wheelhouse only: run it on the machine "
+                     f"whose daemon is at {args.connect}, then restart that daemon")
         if bool(args.action) != bool(args.name):
             sys.exit("claude-wheelhouse: modules disable or enable takes a module's id")
         modules_command(args.action, args.name)

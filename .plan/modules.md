@@ -106,14 +106,16 @@ routes. A disabled or uninstalled module's slot collapses, as above.
 
 **As built (stage 5).** A route is `api.Route(path, handler, method)`, `{name}` segments as
 params, its handler taking an `api.Call(params, query, body)` and answering JSON or raising
-`api.Refused(status, error)`; a GET runs as a query, a POST as a command (Idempotency-Key,
-the hub's thread). `served.py` holds the routes and doc roots for the daemon and, the same
+`api.Refused(status, error)`; a GET runs as a query, a POST as a command (Idempotency-Key)
+on the modules' own thread, never the hub's, each waited on `daemon.MODULE_WAIT` (10 s) and
+then answered 504. The fingerprint covers each installed module's entry point, version and
+source, so a module reinstalled restarts the daemon. `served.py` holds the routes and doc roots for the daemon and, the same
 way, for `LocalClient` with `--local`, so `Context.call` answers alike through either. The
 viewer reads a doc root's file through `GET /docs?path=` (403 outside the roots, `have=` as
 a doc item's); `docroots.confine` is the allow-list stage 8 writes through. `show_doc`
 takes the Detail pane until the selection moves. `fingerprint.API` is 4. `set_doc_dirs`
 stores relative directories on the session (`sessions.doc_dirs`, an empty list for
-`docs/adr` again); a repo's directories are every one its sessions declared
+`docs/adr` again), never the git root itself, and none for a session in no git repo; a repo's directories are every one its sessions declared
 (`docroots.doc_dirs`, `api.doc_dirs`). `PROTOCOL_VERSION` is not bumped for it yet, as
 nothing reads it until the Design module: stage 6 bumps it.
 
