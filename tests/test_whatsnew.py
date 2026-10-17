@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from claude_wheelhouse import whatsnew
@@ -112,17 +114,26 @@ def test_notes(version, expected, desc):
 
 
 SOURCE = '''UNRELEASED = "UNRELEASED"
+# like Feature("id", UNRELEASED, ...), or version=UNRELEASED
 FEATURES = (
+    # Feature("x", UNRELEASED, "inbox") in a comment
     Feature("a", UNRELEASED, "inbox", note="UNRELEASED stays in prose"),
     Feature("b", version=UNRELEASED, where="inbox"),
+    Feature(
+        "d",
+        UNRELEASED,
+        "inbox"),
     Feature("c", "0.2.0", "inbox"),
 )
+OTHER = (Feature("e", UNRELEASED, "inbox"),)
 '''
 
 
 @pytest.mark.parametrize("version, expected, desc", [
-    ("0.3.0", SOURCE.replace('"a", UNRELEASED', '"a", "0.3.0"').replace("version=UNRELEASED", 'version="0.3.0"'),
-     "positional and named versions stamped; the constant, prose and released features left alone"),
+    ("0.3.0", (SOURCE.replace('"a", UNRELEASED', '"a", "0.3.0"').replace("version=UNRELEASED,", 'version="0.3.0",')
+               .replace('"d",\n        UNRELEASED', '"d",\n        "0.3.0"'), 3),
+     "positional, named and wrapped versions stamped; the constant, comments, prose, released features "
+     "and anything outside FEATURES left alone"),
     ("0.3.0.dev1", ValueError, "a development version refused"),
     (UNRELEASED, ValueError, "UNRELEASED refused"),
 ])
@@ -132,6 +143,17 @@ def test_stamp(version, expected, desc):
             whatsnew.stamp(SOURCE, version)
         return
     assert whatsnew.stamp(SOURCE, version) == expected, desc
+
+
+def test_stamp_the_real_source():
+    """This module's own comments and docstrings never stamped: its source with FEATURES
+    emptied comes back unchanged, and as it stands, only its unreleased features count."""
+    source = Path(whatsnew.__file__).read_text()
+    found = whatsnew.REGISTRY.search(source)
+    assert found, "FEATURES found"
+    empty = source[:found.start(1)] + source[found.end(1):]
+    assert whatsnew.stamp(empty, "9.9.9") == (empty, 0), "nothing to stamp, nothing changed"
+    assert whatsnew.stamp(source, "9.9.9")[1] == len(whatsnew.unreleased()), "each unreleased feature, once"
 
 
 @pytest.mark.parametrize("argv, version, desc", [

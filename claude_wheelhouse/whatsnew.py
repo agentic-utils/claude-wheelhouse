@@ -118,15 +118,22 @@ def running_version() -> str:
     return importlib.metadata.version("claude-wheelhouse")
 
 
-# a feature's version given positionally (Feature("id", UNRELEASED, ...)) or by name
-UNSTAMPED = re.compile(r"(Feature\(\s*\"[^\"]+\",\s*|version=)UNRELEASED\b")
+# the FEATURES tuple's body: from its opening line to the parenthesis that starts a line
+REGISTRY = re.compile(r"^FEATURES\b[^\n]*\(\n(.*?)^\)", re.M | re.S)
+# in that body, a feature's version given positionally or by name, never in a comment
+UNSTAMPED = re.compile(r"^([^#\n]*?(?:Feature\(\s*\"[^\"]+\",\s*|\bversion=))UNRELEASED\b", re.M)
 
 
-def stamp(source: str, version: str) -> str:
-    """This module's source with every UNRELEASED feature given `version`."""
+def stamp(source: str, version: str) -> tuple[str, int]:
+    """This module's source with every UNRELEASED feature in FEATURES given `version`, and
+    how many were."""
     if not is_release(version):
         raise ValueError(f"stamp a release version, not {version!r}")
-    return UNSTAMPED.sub(lambda m: f'{m[1]}"{version}"', source)
+    found = REGISTRY.search(source)
+    if found is None:
+        return source, 0
+    body, n = UNSTAMPED.subn(lambda m: f'{m[1]}"{version}"', found[1])
+    return source[:found.start(1)] + body + source[found.end(1):], n
 
 
 def main(argv: list[str]) -> None:
@@ -136,9 +143,9 @@ def main(argv: list[str]) -> None:
         sys.exit("usage: python -m claude_wheelhouse.whatsnew stamp VERSION")
     path = Path(__file__)
     before = path.read_text()
-    after = stamp(before, argv[1])
+    after, n = stamp(before, argv[1])
     path.write_text(after)
-    print(f"stamped {len(UNSTAMPED.findall(before))} feature(s) {argv[1]}")
+    print(f"stamped {n} feature(s) {argv[1]}")
 
 
 if __name__ == "__main__":
