@@ -128,11 +128,12 @@ and `transcripts.py` the transcripts the core's and the stats module's tests wri
 
 - `make install` (installs uv if it's missing, then `uv sync --reinstall-package claude-wheelhouse`
   and each module's package, with every module in `modules/` or those `WITH="..."` names,
-  `--no-group` for the rest, and writes the modules installed to
-  `.venv/.wheelhouse-installed`), then `make run` (`ARGS="..."` passes args;
-  it runs `make install` first, with the stamp's modules, when that stamp is missing or
-  older than `pyproject.toml`, `uv.lock` or a module's `pyproject.toml`; `none` in the stamp
-  for none, and an empty one, an install from before `modules/`, for all). Every target
+  `--no-group` for the rest, and writes the modules left out to
+  `.venv/.wheelhouse-installed`, as `without: stats`), then `make run` (`ARGS="..."` passes args;
+  it runs `make install` first, with every module but the stamp's, when that stamp is missing or
+  older than `pyproject.toml`, `uv.lock` or a module's `pyproject.toml`, so a module added since
+  installs by default. A stamp from before held the modules installed, when stats was the only
+  one: `stats` or empty leaves none out, `none` leaves out stats). Every target
   depends on the stamp and runs `uv run --no-sync`, so a module left out stays out; `uv run`
   alone syncs the default groups, every module included. The stats module's tests share
   core's `tests/transcripts.py` (pytest's `pythonpath = ["."]`) and skip without it installed. `make args` (`claude-wheelhouse args`, hidden from `--help`, `cli.args_text`)
