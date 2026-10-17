@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Callable
 
 from .docroots import doc_dirs, git_root  # noqa: F401  (where each repo's decisions are found, Q114)
+from .docroots import Outside, confine  # noqa: F401  (a path resolved, if a doc root holds it)
 
 # what a module may use of the wheelhouse: a session's token use (transcript_usage.py), read
 # by the hub's shared followers, the account's usage, and the effort levels

@@ -4,11 +4,16 @@ each session's git root, unless a session there declared others with set_doc_dir
 number, status, title and repo. A file is read again only when its mtime or size has changed,
 so a scan every 10 s costs a directory listing and a stat a file. Never imports Textual."""
 
+import logging
 import os
 import re
 import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+from claude_wheelhouse import api
+
+log = logging.getLogger(__name__)
 
 NAME = re.compile(r"^(\d{4})-(.+)\.md$")    # a decision's file: NNNN-*.md
 WORD = re.compile(r"^([A-Z]+)(?:-(.*))?$")   # its status in its name, the tfu convention: 0042-ACCEPTED-slug.md
@@ -99,8 +104,8 @@ class Scanner:
 
     def scan(self, dirs: list[tuple[Path, str]]) -> list[Decision]:
         """Every decision in dirs, each (directory, its repo's name); a directory that has
-        gone, or a file that can't be read, adds none. Not recursive: a decision is a file in
-        the directory itself."""
+        gone, a file that can't be read, or a link to one outside its directory
+        (api.confine), adds none. Not recursive: a decision is a file in the directory itself."""
         out, seen = [], set()
         for directory, repo in dirs:
             try:
@@ -121,10 +126,15 @@ class Scanner:
                 with self.lock:
                     kept = self.files.get(entry.path)
                 if kept is None or kept[0] != stamp:
-                    try:
-                        with open(entry.path, "rb") as f:
+                    try:   # opened as resolved, never following a link swapped in since
+                        real = api.confine(entry.path, [directory])
+                        fd = os.open(real, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+                        with open(fd, "rb") as f:
                             text = f.read(HEAD).decode("utf-8", errors="replace")
-                    except OSError:
+                    except (OSError, api.Outside) as e:
+                        log.debug("decision %s skipped: %s", entry.path, e)
+                        with self.lock:
+                            self.files.pop(entry.path, None)
                         continue
                     kept = (stamp, parse(Path(entry.path), text, repo))
                     with self.lock:

@@ -111,6 +111,17 @@ def test_a_file_is_read_again_only_when_it_changes(tmp_path, monkeypatch):
     assert scanner.scan([(d, "r")]) == [] and not scanner.files, "gone: forgotten"
 
 
+def test_a_link_out_of_the_directory_is_never_read(tmp_path):
+    d = repo(tmp_path / "r", {"0001-ACCEPTED-a.md": "# A\n"})
+    secret = tmp_path / "secret.md"
+    secret.write_text("---\nstatus: proposed\ntitle: Private\n---\n")
+    (d / "0002-out.md").symlink_to(secret)
+    (d / "0003-in.md").symlink_to(d / "0001-ACCEPTED-a.md")
+    got = scan.Scanner().scan([(d, "r")])
+    assert [(x.number, x.title) for x in got] == [("0003", "A"), ("0001", "A")], \
+        "a link outside its directory skipped, its title never listed; one inside it read"
+
+
 def test_doc_roots_are_the_decision_dirs(tmp_path):
     d = repo(tmp_path, {"0001-a.md": "# A\n"})
     ctx = api.Context(Path("/tmp"), lambda: sessions((tmp_path, None)), lambda: None)
