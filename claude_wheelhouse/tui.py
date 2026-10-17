@@ -2998,9 +2998,10 @@ class WheelhouseApp(App):
         fits = table.name_room([cells for _, cells in rows])
         rows = [(k, (first, cut(name, fits), *rest)) for k, (first, name, *rest) in rows]
         names = table.ordered_columns[1]
-        width = min(fits, max([names.label.cell_len, *(cells[1].cell_len for _, cells in rows)]))
-        resized = names.auto_width or names.width != width   # a column's width shows only once it's rebuilt
-        names.auto_width, names.width = False, width
+        width = min(fits, max([cell_len(self.session_label(1)), *(cells[1].cell_len for _, cells in rows)]))
+        label = self.session_label(1, width)   # a narrow pane cuts the name's header, not its marker
+        resized = names.auto_width or names.width != width or str(names.label) != label   # shows once rebuilt
+        names.auto_width, names.width, names.label = False, width, Text(label)
         cells = dict(rows)
         room = table.scrollable_content_region.height - table.header_height   # above any scrollbar
         table.draggable = set(cells)
@@ -3170,7 +3171,7 @@ class WheelhouseApp(App):
         """Each session's sort key and group (ordering.session_key), by id."""
         ctx = ordering.parse(self.session_sort)[0] == "ctx"   # the size only where it sorts
         return {s["id"]: ordering.session_key(self.session_sort, s, self.running(s["id"]), at, display_name(s),
-                                              (self.client.context_size(s) or 0) if ctx else 0)
+                                              self.client.context_size(s) if ctx else None)
                 for at, s in enumerate(self.sessions)}
 
     def pinned_session_keys(self) -> dict[str, tuple]:
@@ -3215,15 +3216,25 @@ class WheelhouseApp(App):
     def paint_session_header(self) -> None:
         """The session list's column in force carries its marker (D97): the dot's header is its marker alone."""
         table, changed = self.session_list, False
-        for col, name, label in zip(table.ordered_columns, ordering.SESSION_COLUMNS, SESSION_LABELS):
-            mark = ordering.marker(self.session_sort, name)
-            want = f"{label} {mark}" if label and mark else label or mark
+        for i, col in enumerate(table.ordered_columns[:len(SESSION_LABELS)]):
+            want = self.session_label(i)
             if str(col.label) != want:
                 col.label, changed = Text(want), True
-                col.content_width = max(col.content_width, col.label.cell_len)   # grows only, as DataTable's do
+                # its widest cell or its label, now: a marker gone narrows it again
+                col.content_width = max([col.label.cell_len, *map(cell_width, table.get_column(col.key))])
         if changed:
             table._clear_caches()
             table.refresh()
+
+    def session_label(self, i: int, room: int | None = None) -> str:
+        """The session list's i-th header, with its marker if its sort is in force, cut to
+        `room` cells by its name, never its marker."""
+        label, mark = SESSION_LABELS[i], ordering.marker(self.session_sort, ordering.SESSION_COLUMNS[i])
+        if not (label and mark):
+            return label or mark
+        if room is not None and len(label) + 2 > room:
+            label = cut(Text(label), room - 2).plain
+        return f"{label} {mark}"
 
     @on(DataTable.HeaderSelected)
     def sort_by(self, event: DataTable.HeaderSelected) -> None:

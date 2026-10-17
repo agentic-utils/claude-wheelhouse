@@ -36,11 +36,15 @@ def test_header_cycles(spec, column, then, desc):
     ("dot*", "dot", "dot*", "the dot's * stays on: only another column takes over"),
     ("", "dot", "dot*", "ordering off: the dot puts its * back"),
     ("ctx▲", "dot", "dot*", "the dot takes over from another column"),
-    ("dot*", "session", "session▲", "another column starts at ▲"),
+    ("dot*", "session", "session▲", "the name starts at ▲"),
     ("session▲", "session", "session▼", "then ▼"),
     ("session▼", "session", "dot*", "then back to the dot's *"),
-    ("session▲", "drafts", "drafts▲", "a third column starts afresh"),
-    ("", "questions", "questions▲", "ordering off: a column imposes its sort"),
+    ("dot*", "ctx", "ctx▼", "a size starts at ▼, the most at the top"),
+    ("ctx▼", "ctx", "ctx▲", "then ▲"),
+    ("ctx▲", "ctx", "dot*", "then back to the dot's *"),
+    ("session▲", "drafts", "drafts▼", "a count starts afresh at ▼"),
+    ("decisions▼", "decisions", "decisions▲", "a count's second click is ▲"),
+    ("", "questions", "questions▼", "ordering off: a count imposes its sort, most first"),
 ])
 def test_session_header_cycles(spec, column, then, desc):
     assert ordering.next_session_sort(spec, column) == then, desc
@@ -134,19 +138,20 @@ def test_session_sort(parked, running, last, want, desc):
 
 # rows a to d: (name, parked, running, context, open questions, unseen decisions, drafts, last)
 SESSION_ROWS = (("s10", 0, False, 900, 0, 2, 1, "1"), ("S2", 0, True, 50, 3, 0, 0, "2"),
-                ("alpha", 0, False, 400, 1, 0, 0, "3"), ("zed", 1, False, 9999, 9, 9, 9, "4"))
+                ("alpha", 0, False, 400, 1, 0, 0, "3"), ("zed", 1, False, 9999, 9, 9, 9, "4"),
+                ("new", 0, False, None, 0, 0, 0, "5"))
 
 
 @pytest.mark.parametrize("spec, want, desc", [
-    ("session▲", ["alpha", "S2", "s10", "zed"], "name: casefolded, numbers by value, parked at the foot"),
-    ("session▼", ["s10", "S2", "alpha", "zed"], "name ▼: reversed, parked still at the foot"),
-    ("ctx▲", ["S2", "alpha", "s10", "zed"], "context, smallest first"),
-    ("ctx▼", ["s10", "alpha", "S2", "zed"], "context, largest first"),
-    ("questions▲", ["s10", "alpha", "S2", "zed"], "open questions, ties as dot* (running, then latest)"),
-    ("questions▼", ["S2", "alpha", "s10", "zed"], "open questions, most first"),
-    ("decisions▼", ["s10", "S2", "alpha", "zed"], "unseen decisions, ties running first"),
-    ("drafts▼", ["s10", "S2", "alpha", "zed"], "drafts, ties running first"),
-    ("drafts▲", ["S2", "alpha", "s10", "zed"], "drafts ▲: ties running first, then the latest"),
+    ("session▲", ["alpha", "new", "S2", "s10", "zed"], "name: casefolded, numbers by value, parked at the foot"),
+    ("session▼", ["s10", "S2", "new", "alpha", "zed"], "name ▼: reversed, parked still at the foot"),
+    ("ctx▲", ["S2", "alpha", "s10", "new", "zed"], "context, smallest first, unknown last"),
+    ("ctx▼", ["s10", "alpha", "S2", "new", "zed"], "context, largest first, unknown still last"),
+    ("questions▲", ["new", "s10", "alpha", "S2", "zed"], "open questions, ties as dot* (running, then latest)"),
+    ("questions▼", ["S2", "alpha", "new", "s10", "zed"], "open questions, most first"),
+    ("decisions▼", ["s10", "S2", "new", "alpha", "zed"], "unseen decisions, ties running first"),
+    ("drafts▼", ["s10", "S2", "new", "alpha", "zed"], "drafts, ties running first"),
+    ("drafts▲", ["S2", "new", "alpha", "s10", "zed"], "drafts ▲: ties running first, then the latest"),
 ])
 def test_session_column_sorts(spec, want, desc):
     rows = [{"id": n, "parked": p, "created_at": T0.format(0), "last_at": T0.format(int(at)), "pos": None,

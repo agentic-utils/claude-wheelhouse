@@ -20,6 +20,7 @@ ITEMS_DEFAULT = "status*"   # today's inbox order
 SESSIONS_DEFAULT = "dot*"   # the session list's own sort: running first, then the latest activity
 # the session list's sortable columns, in its order (the eye's, last, has no sort)
 SESSION_COLUMNS = ("dot", "session", "ctx", "questions", "decisions", "drafts")
+MOST_FIRST = {"ctx", "questions", "decisions", "drafts"}   # counts and sizes: a first click puts the most at the top
 SORT_KEYS = {"items": "layout.sort.items", "sessions": "layout.sort.sessions"}   # settings, per TUI
 DEFAULTS = {"items": ITEMS_DEFAULT, "sessions": SESSIONS_DEFAULT}
 SPECS = {"items": {"", "status*", *(c + m for c in ("session", "ref", "status", "title") for m in "▲▼")},
@@ -85,12 +86,15 @@ def next_item_sort(spec: str, column: str) -> str:
 
 def next_session_sort(spec: str, column: str) -> str:
     """A click on the session list's column header: the dot column puts its * on (it stays
-    on); another column cycles ▲, ▼, then back to the dot's *, as the inbox's do. With
-    ordering off, any column starts afresh."""
+    on); the name cycles ▲, ▼, then back to the dot's *, as the inbox's columns do; a count
+    or size (MOST_FIRST) ▼, ▲, then back. With ordering off, any column starts afresh."""
     col, marker = parse(spec)
-    if column == "dot" or col != column:
-        return SESSIONS_DEFAULT if column == "dot" else column + UP
-    return column + DOWN if marker == UP else SESSIONS_DEFAULT
+    if column == "dot":
+        return SESSIONS_DEFAULT
+    first, second = (DOWN, UP) if column in MOST_FIRST else (UP, DOWN)
+    if col != column:
+        return column + first
+    return column + second if marker == first else SESSIONS_DEFAULT
 
 
 def marker(spec: str, column: str) -> str:
@@ -191,12 +195,13 @@ def arrange(spec: str, raw: dict) -> dict:
     return out
 
 
-def session_key(spec: str, s, running: bool, at: int, name: str = "", context: int = 0) -> tuple[tuple, str]:
+def session_key(spec: str, s, running: bool, at: int, name: str = "", context: int | None = None) -> tuple[tuple, str]:
     """A session's sort key and its group's token. Ordering off: unparked then parked, in
     creation order (at, its place in the store's list) for those not placed; under dot*, running
     first, then the latest activity; under another column (name, its natural key; context, its
     size in tokens; the open questions, unseen decisions and drafts, their counts), by it, then
-    as under dot*. Parked sessions keep to the foot under every sort."""
+    as under dot*; a context not known yet last either way. Parked sessions keep to the foot
+    under every sort."""
     if not spec:
         return keyed(s, MANUAL, 0, 0, (s["parked"], at))
     col, mark = parse(spec)
@@ -206,7 +211,9 @@ def session_key(spec: str, s, running: bool, at: int, name: str = "", context: i
         return keyed(s, f"{spec}|{value!r}", 0, value, (last, at))   # ties (one second): creation order
     x = natural_name(name) if col == "session" else context if col == "ctx" else \
         field(s, {"questions": "open_questions", "decisions": "unseen_decisions", "drafts": "drafts"}[col]) or 0
-    value = (s["parked"], Desc(x) if mark == DOWN else x)
+    unknown = x is None   # only a context can be: not read yet, or none
+    x = 0 if unknown else x
+    value = (s["parked"], unknown, Desc(x) if mark == DOWN else x)
     return keyed(s, f"{spec}|{value!r}", 0, value, (not running, last, at))
 
 
