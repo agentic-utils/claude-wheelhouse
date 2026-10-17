@@ -244,19 +244,14 @@ Table-driven, one case a line, with the description in the assertion message:
   L resumes at the same dialog; the demo is created `sdk` with `sdk_on` and `tab` without;
   the brief starts with the caps line.
 
-## Open questions
+## Settled questions
 
-1. **Creating the demo (dialog 2).** A: the person presses N and `NewSession` opens filled
-   in, so the first thing they learn is how every session starts. B: Start creates the demo
-   at once and dialog 2 just points at its new row; quicker, and N is taught only in the
-   last dialog. Drafted as A.
-2. **The invite after an upgrade.** A: the centred invite at the first start after any
-   upgrade with something new, as drafted. B: only the badge, so returning users are never
-   interrupted. C: centred when a dialog has new tips, badge alone for an advanced-only
-   release.
-3. **Which notes the last dialog shows.** A: this release's only, as asked. B: every
-   release since the last one the person saw (`notes_seen`), newest first, so a tester who
-   skipped 0.3.0 still reads its notes. Drafted as B for upgraders, A for new users.
-4. **Esc during the tour.** A: pause, with the badge offering to resume where they left off,
-   as drafted. B: end the tour, recording what was shown; the rest is offered as a top-up
-   next start.
+Doug's answers to the open questions, settled for the build:
+
+1. **Creating the demo (dialog 2): A.** The person presses N and `NewSession` opens filled
+   in, so the first thing they learn is how every session starts.
+2. **The invite after an upgrade: C.** The centred invite shows only when a tour dialog has
+   new tips; a release with only advanced features gets the badge alone.
+3. **Which notes the last dialog shows: B.** Upgraders see every release since the last one
+   they saw (`notes_seen`), newest first; new users see this release's.
+4. **Esc during the tour: A.** Esc pauses; the badge, or L, resumes at the same dialog.
