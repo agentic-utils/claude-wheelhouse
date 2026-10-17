@@ -4,6 +4,7 @@ import argparse
 import errno
 import os
 import sys
+import textwrap
 
 from . import features
 
@@ -97,25 +98,27 @@ def open_items() -> None:
         print(f"[wheelhouse] {text}")
 
 
-def main() -> None:
-    # host: a hosted session's process, started by the wheelhouse in SDK mode alone
-    # (launch.open_host runs `host <id>`), so taken before the main parser: neither --help
-    # nor an invalid choice's message lists it, like --enable-sdk, which it takes before or
-    # after it as every command does
-    given = sys.argv[1:]
-    rest = [a for a in given if a != features.FLAG]
-    if rest[:1] == ["host"]:
-        if len(rest) < len(given):
-            features.enable_sdk()
-        host = argparse.ArgumentParser(prog="claude-wheelhouse host")
-        host.add_argument("session_id")
-        host.add_argument(features.KEEPALIVE_FLAG, dest="keepalive_hours", default=None)
-        hosted = host.parse_args(rest[1:])
-        if hosted.keepalive_hours is not None:
-            features.set_keepalive_hours(hosted.keepalive_hours)
-        from .host import main as host_main
-        host_main(hosted.session_id)
-        return
+ARGS_HEAD = ("The app's command line args (make args). Give them to make run in ARGS, for example\n"
+             '  make run ARGS="--local --animation-fps 0"\n')
+
+
+def args_text(p: argparse.ArgumentParser) -> str:
+    """The app's options as --help gives them (none it hides), each with its help and, for a
+    setting, its environment variable and .env key (features.SETTINGS): what make args prints."""
+    fmt = p._get_formatter()
+    out = [ARGS_HEAD]
+    for action in p._actions:
+        if not action.option_strings or action.help == argparse.SUPPRESS or isinstance(action, argparse._HelpAction):
+            continue
+        flag = fmt._format_action_invocation(action)
+        if key := features.SETTINGS.get(action.option_strings[0]):
+            flag += f"  (env WHEELHOUSE_{key}, .env {key}=)"
+        out += [flag, textwrap.fill(action.help, 88, initial_indent="    ", subsequent_indent="    ")]
+    return "\n".join(out)
+
+
+def parser() -> argparse.ArgumentParser:
+    """The command line: the app's options, and the subcommands'."""
     # --enable-sdk: experimental SDK mode (features.py), deliberately left out of --help.
     # Taken before or after the command, for the commands that create sessions, and protocol
     sdk = argparse.ArgumentParser(add_help=False)
@@ -168,6 +171,9 @@ def main() -> None:
     sub.add_parser("open-items", help="inside a launched tab: print the session's open items (the plugin's "
                    "hook, after a compaction)")
     sub.add_parser("protocol", help="print everything wheelhouse puts into a launched session", parents=[sdk])
+    notes = sub.add_parser("notes", help="print a release's notes as Markdown, from the features it registered "
+                           "(whatsnew.py)")
+    notes.add_argument("version", nargs="?", default=None, help="the release (default: this one's version)")
     daemon = sub.add_parser("daemon", help="serve the wheelhouse over HTTP (the app starts it, or joins it)",
                             parents=[sdk, usage, port, keep])
     daemon.add_argument("--address", default=None, help="the IP address to listen on (default 127.0.0.1; "
@@ -178,7 +184,32 @@ def main() -> None:
                         "needed): the next start reads the token file again, or makes one if there's none")
     daemon.add_argument("--start-pipe", type=int, default=None, help=argparse.SUPPRESS)   # connect.start's
     sub.add_parser("token", help="print the daemon's token, for a client on another machine (--connect)")
-    args = p.parse_args()
+    return p
+
+
+def main() -> None:
+    # host: a hosted session's process, started by the wheelhouse in SDK mode alone
+    # (launch.open_host runs `host <id>`), so taken before the main parser: neither --help
+    # nor an invalid choice's message lists it, like --enable-sdk, which it takes before or
+    # after it as every command does
+    given = sys.argv[1:]
+    rest = [a for a in given if a != features.FLAG]
+    if rest[:1] == ["host"]:
+        if len(rest) < len(given):
+            features.enable_sdk()
+        host = argparse.ArgumentParser(prog="claude-wheelhouse host")
+        host.add_argument("session_id")
+        host.add_argument(features.KEEPALIVE_FLAG, dest="keepalive_hours", default=None)
+        hosted = host.parse_args(rest[1:])
+        if hosted.keepalive_hours is not None:
+            features.set_keepalive_hours(hosted.keepalive_hours)
+        from .host import main as host_main
+        host_main(hosted.session_id)
+        return
+    if rest[:1] == ["args"]:   # make args: hidden like host, as it's for make's help alone
+        print(args_text(parser()))
+        return
+    args = parser().parse_args()
     if getattr(args, "enable_sdk", False):
         features.enable_sdk()
     if getattr(args, "usage_mode", None):
@@ -213,6 +244,9 @@ def main() -> None:
     elif args.cmd == "protocol":
         from .launch import injected
         print(injected(features.sdk_enabled()))
+    elif args.cmd == "notes":
+        from . import whatsnew
+        print(whatsnew.notes(args.version or whatsnew.running_version()), end="")
     elif args.cmd == "token":
         from . import auth
         from .connect import NoDaemon, check

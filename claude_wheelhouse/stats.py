@@ -1225,6 +1225,7 @@ class Chart:
     recent: int = 0   # its series' tokens over its span, on its legend's line
     loading: bool = False   # its older history is still being read
     more: bool = True   # there's older history to zoom out to
+    zoom_focus: int | None = None   # the zoom's button with the focus, 0 for - and 1 for + (SessionStats.part)
 
 
 def chart(turns: list[Turn], now: float, width: int, height: int, kind: str = "assembly", span: int = SPAN,
@@ -1416,7 +1417,7 @@ def chart_lines(c: Chart, frame: int, ticks: bool = True) -> list[Text]:
     out.append(Text("0".rjust(MARGIN - 1) + " ", style=hexc(DIM)) + Text("└" + "─" * max(n - 1, 0), style=hexc(DIM2)))
     if not ticks:
         return out
-    buttons = zoom(c.span, c.more) if n >= ZOOM_MIN else Text()   # the zoom's, at the right, room permitting
+    buttons = zoom(c.span, c.more, c.zoom_focus) if n >= ZOOM_MIN else Text()   # the zoom's, at the right, room permitting
     room = n - buttons.cell_len - bool(buttons)
     axis, free = [" "] * room, 0
     for tick, lab in axis_ticks(c.start, c.span, n):
@@ -1491,13 +1492,23 @@ def zoom_parts(span: int, more: bool = True) -> list[tuple[str, int | None, bool
             (" ", None, False), (" + ", finer(span), True)]
 
 
-def zoom(span: int, more: bool = True) -> Text:
-    """The zoom: the span shown, then - and +, each dimmed where it can go no further."""
-    out = Text()
+def zoom(span: int, more: bool = True, focused: int | None = None) -> Text:
+    """The zoom: the span shown, then - and +, each dimmed where it can go no further, and the
+    one with the focus (0 for -, 1 for +) lit as the focused slider's level is."""
+    out, n = Text(), 0
     for text, to, button in zoom_parts(span, more):
-        style = (f"bold {hexc(TEXT)} on {hexc(DIM2)}" if to else hexc(DIM2)) if button else hexc(DIM)
+        if button and n == focused:
+            style = f"bold #000000 on {hexc(ACCENT)}"
+        else:
+            style = (f"bold {hexc(TEXT)} on {hexc(DIM2)}" if to else hexc(DIM2)) if button else hexc(DIM)
+        n += button
         out.append(text, style=style)
     return out
+
+
+def zoom_target(span: int, more: bool, button: int) -> int | None:
+    """The span the zoom's - (0) or + (1) goes to, None where it can go no further."""
+    return [to for _, to, is_button in zoom_parts(span, more) if is_button][button]
 
 
 ZOOM_MIN = 2 * zoom(SPAN).cell_len   # the columns below which the ticks keep the line to themselves

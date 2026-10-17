@@ -111,6 +111,7 @@ def slot(name: str) -> Vertical:
 
 
 LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of its parent
+SESSION_LABELS = ("", "session", "ctx", "?", "D", "✉")   # the session list's headers, as ordering.SESSION_COLUMNS
 # keys no splitter has now, deleted at start: items sized the items over the stats, and
 # detail-pane the column between them and Detail, before the six slots (.plan/modules.md)
 RETIRED_LAYOUT = ("items", "detail-pane")
@@ -414,17 +415,19 @@ def agreed(a: list, b: list) -> int:
     return n
 
 
-class Transcript(Widget, can_focus=True):
+class Transcript(Widget, can_focus=False):
     """A conversation or a thread: one widget drawing cached lines, as Blocks does, and
-    selectable. Drag selects, a double click a word (select_word), Ctrl+A selects it all,
-    Ctrl+C copies (Textual's screen binding, which copies through the terminal: OSC 52,
-    which Windows Terminal supports)."""
+    selectable. Drag selects, a double click a word (select_word), Ctrl+C copies (Textual's
+    screen binding, which copies through the terminal: OSC 52, which Windows Terminal
+    supports). Never focused (#77), as its answer box is, but a doc's (focusable=True), which
+    has no box: there its keys scroll it and Ctrl+A selects it all."""
     ALLOW_SELECT = True
     DEFAULT_CSS = "Transcript { height: auto; }"
     BINDINGS = [Binding("ctrl+a", "select_all", "Select all", show=False)]
 
-    def __init__(self, placeholder: str = "", **kwargs):
+    def __init__(self, placeholder: str = "", focusable: bool = False, **kwargs):
         super().__init__(**kwargs)
+        self.can_focus = focusable
         self.blocks: list[tuple[str, str]] = [("note", placeholder)] if placeholder else []
         self._laid: tuple | None = None
         self.warm: set[tuple] = set()   # long doc blocks rendered on a thread, by (who, md, width)
@@ -961,10 +964,10 @@ async def select_now(table: DataTable) -> None:
 class SessionList(SinkList):
     """The inbox's sessions. One click selects a row: a plain table selects only on a second
     click, the first just moving the cursor there. A single click on the selected row, or on
-    the list's title, unselects it (the inbox shows every session's items, as Esc), and with none selected the
+    the list's title past its sortable columns, unselects it (the inbox shows every session's items, as Esc), and with none selected the
     highlight is hidden (show_cursor) until a click, Enter or a key that moves it picks one
-    (reveal). The buttons under it act on the highlighted row and never take focus, so Tab
-    goes straight on to the items; these keys press them instead."""
+    (reveal). The buttons under it act on the highlighted row; Tab reaches them only after
+    the items and the answer box (#77), so these keys press them too."""
 
     # E, S and Shift+S (End, Restore and Restore all before Forget and Relaunch took them
     # over) are bound to nothing for a release, so muscle memory does nothing rather than
@@ -1095,13 +1098,13 @@ class SessionList(SinkList):
         if self.swallowed(event):
             return
         row = event.style.meta.get("row", -1)
-        if row == -1 and event.style.meta.get("column") == 0:   # the dot column's header: its sort (sort_by)
+        if row == -1 and event.style.meta.get("column", -1) < len(ordering.SESSION_COLUMNS):   # a sort (sort_by)
             return
         if self.blank(row):   # the gap above the parked sessions
             event.prevent_default()
             return
         self.app.settle()   # first what the keys before it moved, as a key's land does
-        if not 0 <= row < self.row_count:   # the header, its title: all sessions, as Esc
+        if not 0 <= row < self.row_count:   # the header past its sorts, its title: all sessions, as Esc
             if "row" in event.style.meta and self.show_cursor:   # not the room below the rows
                 event.prevent_default()
                 self.app.unfilter()
@@ -1249,7 +1252,15 @@ class Compose(TextArea):
     shows suggestions in the hint line, the first taken with Tab or Enter."""
     BINDINGS = [Binding("ctrl+enter", "app.submit", "Submit", show=False),   # the app's shows in the footer
                 Binding("ctrl+j", "app.submit", "Submit", show=False),
-                Binding("ctrl+a", "select_all", "Select all", show=False)]   # not line start
+                Binding("ctrl+a", "select_all", "Select all", show=False),   # not line start
+                # the conversation (or thread) above: focus stays here (#77), so its page keys do
+                Binding("pageup", "page(-1)", "Page up", show=False),
+                Binding("pagedown", "page(1)", "Page down", show=False)]
+
+    def action_page(self, step: int) -> None:
+        scroll = next(iter(self.screen.query("#detail-scroll, #thread-scroll")), None)
+        if scroll is not None:
+            scroll.action_page_down() if step > 0 else scroll.action_page_up()
 
     def _before_cursor(self) -> tuple[int, int, str]:
         row, col = self.cursor_location
@@ -1322,6 +1333,52 @@ def show_button(root: Widget, button_id: str, label: str, disabled: bool, shown:
     button.display = shown
 
 
+class ConversationScroll(VerticalScroll, can_focus=False):
+    """The conversation pane's scroll, or a full-screen item's thread's, never a Tab stop: a
+    click in it puts focus in the answer box (#77), where PgUp and PgDn scroll it; on a doc,
+    which has no box, in the doc, whose keys scroll it."""
+
+    def on_mouse_down(self) -> None:
+        self.app.focus_answer()
+
+
+class BarButton(Button):
+    """A button of the inbox or a full-screen item, the panes' and the bars': a Tab stop
+    (tab_stops) that a click doesn't focus, so a click leaves the answer box, and what's
+    typed, where it was (#77)."""
+    FOCUS_ON_CLICK = False
+
+
+# the stops before the buttons (tab_stops): the inbox's lists, then whichever answer box
+# shows (Deny's reason in its place, or a doc shown in the detail pane, which has no box:
+# focusable only then, so its keys scroll it); a full-screen item's box. Any other pane is no stop
+TAB_ORDER = ("session-list", "items", "answer", "detail", "thread-answer", "deny-reason")
+ANSWER_BOXES = TAB_ORDER[2:]
+
+
+def reading_order(button: Button) -> tuple:
+    """Where a button comes in reading order: each pane's from the left, top to bottom, then
+    the send bar's."""
+    pane = next((a for a in button.ancestors if isinstance(a, SendBar) or a.has_class("panel")), button.screen)
+    return isinstance(pane, SendBar), pane.region.x, button.region.y, button.region.x
+
+
+def tab_stops(screen: Screen) -> list[tuple[Widget, str | None]]:
+    """Tab's stops on the inbox and a full-screen item (#77), the one place they are said:
+    TAB_ORDER's that show, then every BarButton shown and enabled in reading order, then a
+    pane that says its own (tab_parts: the stats pane's effort slider and zoom), each as
+    (widget, part). Nothing else is one, whatever else can take focus (a click on it, or a key)."""
+    chain = screen.focus_chain
+    return [(w, None) for w in [w for id_ in TAB_ORDER for w in chain if w.id == id_]
+            + sorted((w for w in chain if isinstance(w, BarButton)), key=reading_order)] + \
+        [(w, part) for w in chain if hasattr(w, "tab_parts") for part in w.tab_parts()]
+
+
+def stop_of(widget: Widget | None) -> tuple[Widget | None, str | None]:
+    """The stop (tab_stops) a focused widget is at."""
+    return widget, getattr(widget, "at", None) if hasattr(widget, "tab_parts") else None
+
+
 class Columns(Horizontal):
     """The three columns. Every pane sits in them, so their resize, the terminal's (or the
     first layout), is when the splitters' sizes are fitted to the room again."""
@@ -1333,8 +1390,8 @@ class Columns(Horizontal):
 class SendBar(Horizontal):
     """Always on screen above the footer: Send all, every session's queue, and a line
     saying what the session in context is doing. Send all's key is Shift+A (BUTTON_KEYS):
-    Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S as plain Ctrl+S. The buttons never
-    take focus, so clicking one leaves the answer box (and what's typed in it) where it was.
+    Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S as plain Ctrl+S. A click on a button
+    never takes focus, so it leaves the answer box (and what's typed in it) where it was.
 
     On the inbox the session's own buttons (CONVERSATION) sit under the session list. A
     full-screen item has no session list, so its bar carries them too (conversation=True),
@@ -1357,12 +1414,8 @@ class SendBar(Horizontal):
         # on the row the footer covers
         buttons = CONVERSATION if self.conversation else ()
         for label, id_, variant in (*buttons[:2], ("Send all", "send-all", "warning"), *buttons[2:]):
-            yield Button(label, variant, id=id_, compact=True, tooltip=BUTTONS[id_])
+            yield BarButton(label, variant, id=id_, compact=True, tooltip=BUTTONS[id_])
         yield Label("", id="activity")
-
-    def on_mount(self) -> None:
-        for button in self.query(Button):
-            button.can_focus = False
 
     def activity(self, text: str) -> None:
         label = getattr(self, "activity_label", None) or next(iter(self.query("#activity")), None)
@@ -1385,11 +1438,7 @@ class PermissionButtons(Horizontal):
         for label, id_, variant in (("Allow", "allow", "success"), ("Always", "always", "primary"),
                                     ("Deny", "deny", "error")):
             # compact: one row, as in the send bar
-            yield Button(label, variant, id=id_, compact=True, tooltip=BUTTONS[id_])
-
-    def on_mount(self) -> None:
-        for button in self.query(Button):
-            button.can_focus = False   # a click leaves the answer box, and what's typed, where it was
+            yield BarButton(label, variant, id=id_, compact=True, tooltip=BUTTONS[id_])
 
 
 DENY_CAPTION = ("Why deny? (optional) The session reads this as your reason, so it can try something else. "
@@ -1449,13 +1498,11 @@ class CompactButtons(Horizontal):
     """
 
     def compose(self) -> ComposeResult:
-        yield Button("Compact", "success", id="compact-now", compact=True, tooltip=BUTTONS["compact-now"])
-        yield Button("Leave it", id="leave-it", compact=True, tooltip=BUTTONS["leave-it"])
-        yield then_radios("compact-then")
-
-    def on_mount(self) -> None:
-        for widget in (*self.query(Button), *self.query(RadioSet)):
-            widget.can_focus = False   # a click leaves the answer box, and what's typed, where it was
+        yield BarButton("Compact", "success", id="compact-now", compact=True, tooltip=BUTTONS["compact-now"])
+        yield BarButton("Leave it", id="leave-it", compact=True, tooltip=BUTTONS["leave-it"])
+        radios = then_radios("compact-then")
+        radios.can_focus = False   # no Tab stop (tab_stops), and a click leaves the answer box where it was: 3 to 5 press them
+        yield radios
 
     @property
     def then(self) -> str:
@@ -1473,7 +1520,7 @@ class ThreadView(Screen):
         self.text = None
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(id="thread-scroll", classes="panel"):
+        with ConversationScroll(id="thread-scroll", classes="panel"):
             yield Transcript(id="thread")
         yield PermissionButtons()
         yield DenyReason()
@@ -1491,8 +1538,6 @@ class ThreadView(Screen):
         app.keep_unsent(self.box, None, me)
         self.paint()
         app.paint_sendbar()   # its hint and bar now, not at the next refresh
-        # one Tab stop for the thread, the transcript: its scroll keys reach the scroll as an ancestor's
-        self.query_one("#thread-scroll").can_focus = False
         # at once, not after a refresh as focus() does: keys behind Enter go there. Not on a
         # permission, which shows no box (paint_sendbar gives it back once answered)
         self.set_focus(self.box if self.box.display else None)
@@ -1547,7 +1592,7 @@ class DocView(Screen):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="docview-scroll", classes="panel"):
-            yield Transcript(id="docview")
+            yield Transcript(id="docview", focusable=True)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -1634,15 +1679,62 @@ class Hint(Label):
             self.update(self.base if text is None else text)
 
 
+# where focus is on one of these, Enter is its own (a button presses, a list or radio set picks,
+# a multi-line box takes a new line), not a dialog's ACTION
+OWN_ENTER = (Button, TextArea, DataTable, OptionList, DirectoryTree, Select, RadioSet)
+
+
 class Dialog(ModalScreen):
     """A dialog. Every answer, by key, button or Enter in a box, is action_answer. A key acts
     once the one before it has landed (take_key), so a key typed behind the one that answers
     goes to the screen that answer uncovers, in order. Answered once: a second click finds it
-    closed already."""
+    closed already.
+
+    The keys every dialog shares (#81): Esc, and a click outside the box, answer CANCEL. Enter
+    presses the ACTION button, the one answer that isn't a cancel, wherever focus has no Enter
+    of its own (OWN_ENTER: a one-line box or a checkbox has none); a dialog of several choices
+    has no ACTION, and Enter presses only the focused button. Tab and Shift+Tab go round its
+    buttons and boxes in screen order (cycle_focus). One that asks nothing (RESPONSE False)
+    closes on Esc, Enter or a click outside. A click outside within GRACE of the dialog
+    opening is ignored: a double-click on the button that opened it. One whose box doesn't
+    hold the eye (CLICK_OUTSIDE False: the tutorial offer, a line over the whole screen)
+    ignores clicks outside altogether."""
+    CANCEL = None
+    ACTION: str | None = None
+    RESPONSE = True
+    CLICK_OUTSIDE = True
+    GRACE = 0.4   # seconds
+    now = staticmethod(time.monotonic)
+    opened = 0.0
+    # priority: tried before the focus's own Enter, which check_action lets through
+    BINDINGS = [Binding("escape", "cancel", show=False), Binding("enter", "enter", show=False, priority=True)]
 
     def action_answer(self, result=None) -> None:
         if self.is_active:
             self.dismiss(result)
+
+    def action_cancel(self) -> None:
+        self.action_answer(self.CANCEL)
+
+    def check_action(self, action: str, parameters) -> bool | None:
+        if action == "enter" and self.RESPONSE:
+            return self.ACTION is not None and not isinstance(self.focused, OWN_ENTER)
+        return True
+
+    def action_enter(self) -> None:
+        if self.RESPONSE:
+            self.query_one(f"#{self.ACTION}", Button).press()
+        else:
+            self.action_cancel()
+
+    def on_mount(self) -> None:
+        self.opened = self.now()
+
+    def on_click(self, event: events.Click) -> None:
+        if event.widget is self:   # the shade around the box, not the box
+            event.stop()
+            if self.CLICK_OUTSIDE and self.now() - self.opened >= self.GRACE:
+                self.action_cancel()
 
 
 class NewSession(Dialog):
@@ -1650,7 +1742,7 @@ class NewSession(Dialog):
     start at the defaults (models.py), and go to every launch of the session. It opens in a
     tab; in SDK mode alone (features.py) a box offers the wheelhouse's host instead, ticked
     for a tab by default only under WHEELHOUSE_RUNNER=tab."""
-    BINDINGS = [Binding("escape", "answer", show=False)]
+    ACTION = "launch"
 
     def compose(self) -> ComposeResult:
         # on another machine's daemon (--connect): its directories aren't this machine's, to
@@ -1720,8 +1812,8 @@ class PickDirectory(Dialog):
     Backspace (or Up) goes to the parent, Ctrl+Enter (or Choose) takes the highlighted one."""
     BINDINGS = [Binding("ctrl+enter", "choose", "Choose", show=False),
                 Binding("ctrl+j", "choose", "Choose", show=False),
-                Binding("backspace", "up", "Up", show=False),
-                Binding("escape", "answer", show=False)]
+                Binding("backspace", "up", "Up", show=False)]
+    ACTION = "choose"
 
     def __init__(self, start: str = ""):
         super().__init__()
@@ -1772,7 +1864,7 @@ class PickDirectory(Dialog):
 class RenameSession(Dialog):
     """A session's name: Enter keeps it, Esc leaves it as it was. Empty clears it, and the
     session shows its directory's name."""
-    BINDINGS = [Binding("escape", "answer", show=False)]
+    ACTION = "ok"
 
     def __init__(self, name: str):
         super().__init__()
@@ -1805,7 +1897,7 @@ MODEL_WARNING = ("Changing model drops the prompt cache: the session's next requ
 class ChooseModel(Dialog):
     """A hosted session's model, changed live: Enter takes the highlighted one, Esc leaves it
     as it was. Says first that the cache goes with the old model (Q52)."""
-    BINDINGS = [Binding("escape", "answer", show=False)]
+    ACTION = "ok"
 
     def __init__(self, name: str, current: str | None):
         super().__init__()
@@ -1846,7 +1938,7 @@ def ago(epoch: float, now: float | None = None) -> str:
 class AdoptSession(Dialog):
     """Pick a session to bring into the wheelhouse. A running one must be /exit-ed first:
     the wheelhouse never kills it, and only launches once it has gone."""
-    BINDINGS = [Binding("escape", "answer", show=False)]
+    ACTION = "adopt"
 
     def __init__(self, candidates: list):
         super().__init__()
@@ -1909,7 +2001,7 @@ class ForkSession(Dialog):
     where its directory is in a linked git worktree, whether the fork works in a new one on a
     new branch (the default; uncommitted changes, if any, stay behind, and it says so) or the
     same one. Answers {"refs", "branch"}, branch None for the same directory."""
-    BINDINGS = [Binding("escape", "answer", show=False)]
+    ACTION = "fork-go"
 
     def __init__(self, plan):
         super().__init__()
@@ -1968,7 +2060,7 @@ class CompactSession(Dialog):
     """Compact a session run in the wheelhouse: instructions for the compaction (optional: none,
     and the session is asked what to keep) and what follows it (THEN_CHOICES). Answers
     {"notes", "then"}, or None."""
-    BINDINGS = [Binding("escape", "answer", show=False)]
+    ACTION = "compact-go"
 
     def __init__(self, name: str):
         super().__init__()
@@ -2001,7 +2093,7 @@ class ParkSession(Dialog):
     Compact first ticked it is compacted before its host stops, nothing sent after. Ticked by
     default while its prompt cache is warm: a compaction reads the whole context, so a cold
     cache saves nothing. Answers {"compact"}, or None."""
-    BINDINGS = [Binding("escape", "answer", show=False)]
+    ACTION = "park-go"
 
     def __init__(self, name: str, warm: bool):
         super().__init__()
@@ -2030,8 +2122,7 @@ class ForgetChoice(Dialog):
     The default, focused for Enter, is to let it know while its prompt cache is warm, and to
     just stop it once cold: its end steps would re-read the whole context, which a session
     used for a quick look isn't worth. Answers "tell", "stop", or None."""
-    BINDINGS = [Binding("l", "answer('tell')", show=False), Binding("j", "answer('stop')", show=False),
-                Binding("escape", "answer", show=False)]
+    BINDINGS = [Binding("l", "answer('tell')", show=False), Binding("j", "answer('stop')", show=False)]
 
     def __init__(self, prompt: str, warm: bool):
         super().__init__()
@@ -2069,8 +2160,8 @@ def forget_prompt(name: str, warm: bool, expires: float | None, context: int, qu
 
 
 class Confirm(Dialog):
-    BINDINGS = [Binding("y", "answer(True)", show=False), Binding("n", "answer(False)", show=False),
-                Binding("escape", "answer(False)", show=False)]
+    BINDINGS = [Binding("y", "answer(True)", show=False), Binding("n", "answer(False)", show=False)]
+    CANCEL = False   # no ACTION: No has the focus, so a reflex Enter must not confirm
 
     def __init__(self, prompt: str):
         super().__init__()
@@ -2093,8 +2184,8 @@ class Confirm(Dialog):
 
 class Choice(Dialog):
     """A pending request: cancel it, force it, or leave it be."""
-    BINDINGS = [Binding("c", "answer('cancel')", show=False), Binding("f", "answer('force')", show=False),
-                Binding("escape", "answer('leave')", show=False)]
+    BINDINGS = [Binding("c", "answer('cancel')", show=False), Binding("f", "answer('force')", show=False)]
+    CANCEL = "leave"
 
     def __init__(self, prompt: str):
         super().__init__()
@@ -2115,8 +2206,7 @@ class Choice(Dialog):
 
 class RelaunchChoice(Dialog):
     """Relaunch of a big session: compact first, relaunch now, or neither."""
-    BINDINGS = [Binding("c", "answer('compact')", show=False), Binding("r", "answer('now')", show=False),
-                Binding("escape", "answer", show=False)]
+    BINDINGS = [Binding("c", "answer('compact')", show=False), Binding("r", "answer('now')", show=False)]
 
     def __init__(self, prompt: str):
         super().__init__()
@@ -2143,7 +2233,10 @@ class RelaunchChoice(Dialog):
 class TutorialOffer(Dialog):
     """The first-run offer, a line that wraps on a narrow screen, so the command it names is
     never cut: Enter takes the tutorial, Esc dismisses it for good."""
-    BINDINGS = [Binding("enter", "answer(True)", show=False), Binding("escape", "answer(False)", show=False)]
+    BINDINGS = [Binding("enter", "answer(True)", show=False)]   # no button to press: no ACTION
+    CANCEL = False
+    # a line over a screen that is all outside: a click anywhere would turn the offer off for good
+    CLICK_OUTSIDE = False
 
     def compose(self) -> ComposeResult:
         yield Label(Text.assemble(("New here? ", "bold #ffd300"), ("Enter", "bold"), ": take the tutorial · ",
@@ -2186,6 +2279,8 @@ DESCRIBE = {
     "extend(-1)": "Extend the marks up",
     "extend(1)": "Extend the marks down",
     "select_all": "Select all of it, to copy",
+    "page(-1)": "Scroll the conversation (or the thread) up a page",
+    "page(1)": "Scroll it down a page",
     "leave": "Back to the inbox",
     "app.press('rename')": "Rename the highlighted session",
     "app.press('relaunch')": "Relaunch it, or Unpark a parked one",
@@ -2200,6 +2295,7 @@ DESCRIBE = {
     "effort(1)": "A higher effort, applied live",
     "effort_end(0)": "The lowest effort",
     "effort_end(-1)": "The highest effort",
+    "press_zoom": "On the charts' - or +, zoom them out or in",
     "press('allow')": "Allow the permission item in context; on the question suggesting Compact, Compact",
     "press('always')": "Always: allow it, and keep the rule; on the question suggesting Compact, Leave it",
     "press('deny')": "Deny it, with an optional reason (Enter denies); on the question suggesting Compact, just compact after",
@@ -2266,22 +2362,23 @@ BUTTON_KEYS = [
 # the permission keys, 1 to 3, on the question suggesting Compact: Compact, Leave it and the
 # first then-choice; 4 and 5 (BUTTON_KEYS) the other two
 NUDGE_KEYS = {"allow": "compact-now", "always": "leave-it", "deny": "compact-then-compact"}
-# the inbox's Tab order (WheelhouseApp.cycle_focus): the answer box straight after the
-# items, so Ctrl+Enter (which goes back to the items), Down and Tab answer the next one.
-# Any other pane that takes focus (a module's) comes after these
-TAB_ORDER = ("session-list", "items", "answer", "detail")
 # for the ? overlay, keys bound elsewhere: Tab and Shift+Tab are every screen's own
 # (app.focus_next, which is cycle_focus), the lists' cursor keys DataTable's
 TAB_KEYS = [Binding("tab", "app.focus_next"), Binding("shift+tab", "app.focus_previous")]
 LIST_KEYS = [Binding(key, action) for key, action in (
     ("up", "cursor_up"), ("down", "cursor_down"), ("pageup", "page_up"), ("pagedown", "page_down"),
     ("ctrl+home", "scroll_top"), ("ctrl+end", "scroll_bottom"))]
-SLIDER_TAB = ", then the stats pane's effort slider while it shows"   # SDK mode's alone (keys_help)
-TABS = ("Tab goes round the panes: the session list, the items, the answer box, then the "
-        "conversation{slider}, and Shift+Tab back. Ctrl+Enter in the answer box goes back to the items with "
-        "the cursor where it was, so Down then Tab answers the next one. An item opened full screen "
-        "has two stops, its answer box and its thread. In the conversation or a thread, Up, Down, PgUp, "
-        "PgDn, Home and End scroll it. The buttons never take focus: each has a key.")
+SLIDER_TAB = "effort slider (while it shows) and its "   # SDK mode's alone (keys_help)
+TABS = ("Tab goes round the session list, the items, the answer box, then every button shown, in reading "
+        "order, then the stats pane's {slider}zoom's - and + (Enter or Space presses the one with the focus), "
+        "and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter "
+        "leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus "
+        "where it was, and each has a key. An item opened full screen goes the same way: its answer box, then "
+        "its buttons; a click in its thread puts focus in the box, where PgUp and PgDn scroll the thread. A doc "
+        "shown in the inbox takes the answer box's place, and a click on it focuses it: Up, Down, PgUp, PgDn, "
+        "Home and End scroll it. A "
+        "focused button that is disabled or hidden (Send, once sent) gives focus to the answer box. Send from a "
+        "list leaves focus in the list.")
 SEND_RULES = (
     "**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the "
     "session's queue as one message, so related answers arrive together; ✉ counts what's queued. "
@@ -2289,7 +2386,7 @@ SEND_RULES = (
     "**Immediate**: Ctrl+Enter sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
 MOUSE = ("Click selects a row; in the session list, a click on the selected session or the list's title "
-         "unselects it, for all sessions' items, as Esc does. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
+         "past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
          "keep Shift+click for itself: Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or "
          "Backspace closes them together, the highlight going to the row above the topmost one taken, "
          "and Ctrl+R reopens the finished ones. An item with children (its subagents and docs, under it) has a - at the "
@@ -2297,6 +2394,10 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "Double-click selects a word. Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back.")
+DIALOGS = ("Esc, or a click outside the box, cancels a dialog (not the tutorial offer, which is all but outside). Enter presses the focused button; with focus on a "
+           "one-line box or a checkbox, or nothing, it takes the dialog's one action (Launch, Rename, Fork, Park and "
+           "the like), but in a list, a set of choices or a multi-line box it does what it does there. A dialog of "
+           "several choices answers Enter only on the focused button. Tab and Shift+Tab go round its boxes and buttons.")
 # the SDK-only buttons' keys, and those buttons, which the ? overlay leaves out unless SDK
 # mode is on (features.py, EXPERIMENTAL: the author's alone until Anthropic's terms are
 # confirmed) or the screen shows them (a host's session, which runs on with it off). Out of
@@ -2353,15 +2454,16 @@ def keys_help(sdk: bool = False, shown=()) -> str:
     buttons = [text for id_, text in BUTTONS.items() if id_ not in SDK_BUTTONS or id_ in offered]
     out += ["## Tab order", TABS.format(slider=SLIDER_TAB if sdk else ""), "## Mouse", MOUSE, "## Buttons", whose,
             *[f"- {text}" for text in buttons],
-            "## Sending", SEND_RULES,
-            "## The tutorial", f"{tutorial.AGAIN} at the next start. Esc or ? closes this list."]
+            "## Sending", SEND_RULES, "## Dialogs", DIALOGS,
+            "## The tutorial", f"{tutorial.AGAIN} at the next start. Esc, Enter, ? or a click outside closes this list."]
     return "\n\n".join(out)
 
 
 class KeysHelp(Dialog):
     """? : every key and button, and how sending works. shown: the SDK_BUTTONS the screen
     behind it shows (keys_help)."""
-    BINDINGS = [Binding("escape,question_mark,q", "answer", show=False)]
+    BINDINGS = [Binding("question_mark,q", "answer", show=False)]
+    RESPONSE = False
 
     def __init__(self, shown=()):
         super().__init__()
@@ -2584,10 +2686,10 @@ class WheelhouseApp(App):
                             yield Static(id="session-activity")
                         with Grid(id="session-buttons"):
                             for label, id_ in LIFECYCLE:   # compact: one row each
-                                yield Button(label, id=id_, compact=True, tooltip=BUTTONS[id_])
+                                yield BarButton(label, id=id_, compact=True, tooltip=BUTTONS[id_])
                         with Grid(id="conversation-buttons"):
                             for label, id_, _ in CONVERSATION:
-                                yield Button(label, id=id_, compact=True, tooltip=BUTTONS[id_])
+                                yield BarButton(label, id=id_, compact=True, tooltip=BUTTONS[id_])
             yield Splitter("sessions-pane", "#col-left", "#col-right", "x", default=self.column_width)
             with Vertical(id="col-middle"):
                 with slot("middle.top"):
@@ -2602,7 +2704,7 @@ class WheelhouseApp(App):
                     pane.border_title = "Detail"
                     with VerticalScroll(id="checklist-scroll"):   # scrolls on a short terminal (review 9)
                         yield Static(id="checklist")
-                    with VerticalScroll(id="detail-scroll"):
+                    with ConversationScroll(id="detail-scroll"):
                         yield Transcript(NOTHING_SELECTED, id="detail")
                     yield Splitter("answer", "#answer", "#detail-scroll", "y")
                     yield PermissionButtons()
@@ -2626,15 +2728,11 @@ class WheelhouseApp(App):
         self.session_list.sink, self.items_table.sink = self.session_sink, self.item_sink
         self.session_info = self.query_one("#session-info-text", Static)
         self.session_activity = self.query_one("#session-activity", Static)
-        # out of the Tab order, which goes from the session list straight to the items: the
-        # buttons still click, and the list's own keys press them (SessionList)
         self.conversation_buttons = self.query_one("#conversation-buttons", Grid)
         self.session_buttons = self.query_one("#session-buttons", Grid)
         self.session_controls = list(self.query("#session-info-pane Grid, #session-info-pane Grid Button"))   # theirs and they
-        # the conversation's one stop is its transcript, not this scroll too: its keys
-        # still scroll it, an ancestor's bindings (TAB_ORDER)
-        for widget in (self.query_one("#session-info-scroll"), self.query_one("#checklist-scroll"), self.detail_scroll,
-                       *self.query("#session-info-pane Grid Button")):
+        # no Tab stops (tab_stops), nor taken by a click, which leaves the answer box where it was
+        for widget in (self.query_one("#session-info-scroll"), self.query_one("#checklist-scroll")):
             widget.can_focus = False
         for key in RETIRED_LAYOUT:   # once: after that they're gone
             if self.client.setting(LAYOUT + key) is not None:
@@ -2644,7 +2742,7 @@ class WheelhouseApp(App):
             # size a slot that has the column to itself
             if splitter.display and (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
                 splitter.apply(stored)
-        self.eye_col = self.session_list.add_columns("", "session", "ctx", "?", "D", "✉", "")[-1]
+        self.eye_col = self.session_list.add_columns(*SESSION_LABELS, "")[-1]
         self.item_sort = self.kept_sort("items")
         self.session_sort = self.kept_sort("sessions")
         self.paint_session_header()
@@ -3057,9 +3155,10 @@ class WheelhouseApp(App):
         fits = table.name_room([cells for _, cells in rows])
         rows = [(k, (first, cut(name, fits), *rest)) for k, (first, name, *rest) in rows]
         names = table.ordered_columns[1]
-        width = min(fits, max([names.label.cell_len, *(cells[1].cell_len for _, cells in rows)]))
-        resized = names.auto_width or names.width != width   # a column's width shows only once it's rebuilt
-        names.auto_width, names.width = False, width
+        width = min(fits, max([cell_len(self.session_label(1)), *(cells[1].cell_len for _, cells in rows)]))
+        label = self.session_label(1, width)   # a narrow pane cuts the name's header, not its marker
+        resized = names.auto_width or names.width != width or str(names.label) != label   # shows once rebuilt
+        names.auto_width, names.width, names.label = False, width, Text(label)
         cells = dict(rows)
         room = table.scrollable_content_region.height - table.header_height   # above any scrollbar
         table.draggable = set(cells)
@@ -3227,7 +3326,9 @@ class WheelhouseApp(App):
 
     def session_keys(self) -> dict[str, tuple]:
         """Each session's sort key and group (ordering.session_key), by id."""
-        return {s["id"]: ordering.session_key(self.session_sort, s, self.running(s["id"]), at)
+        ctx = ordering.parse(self.session_sort)[0] == "ctx"   # the size only where it sorts
+        return {s["id"]: ordering.session_key(self.session_sort, s, self.running(s["id"]), at, display_name(s),
+                                              self.client.context_size(s) if ctx else None)
                 for at, s in enumerate(self.sessions)}
 
     def pinned_session_keys(self) -> dict[str, tuple]:
@@ -3270,24 +3371,40 @@ class WheelhouseApp(App):
         self.client.set_setting(ordering.SORT_KEYS[which], spec)
 
     def paint_session_header(self) -> None:
-        col = self.session_list.ordered_columns[0]
-        want = ordering.marker(self.session_sort, "dot")
-        if str(col.label) != want:
-            col.label = Text(want)
-            self.session_list._clear_caches()
-            self.session_list.refresh()
+        """The session list's column in force carries its marker (D97): the dot's header is its marker alone."""
+        table, changed = self.session_list, False
+        for i, col in enumerate(table.ordered_columns[:len(SESSION_LABELS)]):
+            want = self.session_label(i)
+            if str(col.label) != want:
+                col.label, changed = Text(want), True
+                # its widest cell or its label, now: a marker gone narrows it again
+                col.content_width = max([col.label.cell_len, *map(cell_width, table.get_column(col.key))])
+        if changed:
+            table._clear_caches()
+            table.refresh()
+
+    def session_label(self, i: int, room: int | None = None) -> str:
+        """The session list's i-th header, with its marker if its sort is in force, cut to
+        `room` cells by its name, never its marker."""
+        label, mark = SESSION_LABELS[i], ordering.marker(self.session_sort, ordering.SESSION_COLUMNS[i])
+        if not (label and mark):
+            return label or mark
+        if room is not None and len(label) + 2 > room:
+            label = cut(Text(label), room - 2).plain
+        return f"{label} {mark}"
 
     @on(DataTable.HeaderSelected)
     def sort_by(self, event: DataTable.HeaderSelected) -> None:
-        """A column's header clicked: the inbox's sorts cycle (ordering.next_item_sort); the
-        session list's dot column has its one (ordering.next_session_sort)."""
+        """A column's header clicked: each list's sorts cycle (ordering.next_item_sort,
+        ordering.next_session_sort)."""
         event.stop()
         self.settle()
         if event.data_table is self.items_table:
             self.set_sort("items", ordering.next_item_sort(self.item_sort, event.column_key.value))
             self.paint_items()
-        elif event.data_table is self.session_list and event.column_index == 0:
-            self.set_sort("sessions", ordering.next_session_sort(self.session_sort))
+        elif event.data_table is self.session_list and event.column_index < len(ordering.SESSION_COLUMNS):
+            self.set_sort("sessions", ordering.next_session_sort(self.session_sort,
+                                                                 ordering.SESSION_COLUMNS[event.column_index]))
             self.paint_sessions()
 
     def drop_row(self, table, moved: str, before: str | None, after: str | None) -> None:
@@ -3583,6 +3700,9 @@ class WheelhouseApp(App):
                        else hint(sends, s is not None and self.dead(s["id"])))
         thread = isinstance(self.screen, ThreadView)
         reading = not thread and self.selected_doc() is not None   # a doc: nothing to answer, no box
+        doc_gone = not thread and not reading and self.detail.has_focus   # the box back in its place: focus with it
+        if not thread:   # the doc in the box's place (TAB_ORDER)
+            self.detail.can_focus = reading
         splitters = [] if thread else [self.answer_splitter]
         for rows, shown in ((permission_rows, asking and not denying), (reasons, denying), (compact_rows, nudged),
                             (boxes, not asking and not reading), (hints, not reading), (splitters, not reading)):
@@ -3594,6 +3714,8 @@ class WheelhouseApp(App):
                     if shown and thread and isinstance(row, Compose):
                         self.screen.set_focus(row)   # the thread's box back: its place to type
                     self.refit()   # a row more or less over the answer box
+        if doc_gone and not self.focus_answer():
+            self.screen.set_focus(self.items_table)
         show_button(bar, "send-all", f"Send all ({total})", not total)
         if s is not None and runner(s) == "sdk":
             bar.activity("in a shell tab" if s["shell"] else (s["activity"] or "") if self.running(s["id"]) else "")
@@ -4153,9 +4275,7 @@ class WheelhouseApp(App):
             self.repin.add(f"{target[0]}|{target[1]}")
         box.text = ""
         self.refresh_data()
-        if box is self.answer:   # back to the items, cursor where it was: Down, Tab answers the next
-            self.screen.set_focus(self.items_table)
-        elif isinstance(self.screen, ThreadView) and box is self.screen.box:   # to the end, where the answer just given shows
+        if isinstance(self.screen, ThreadView) and box is self.screen.box:   # to the end, where the answer just given shows
             self.screen.query_one("#thread-scroll").scroll_end(animate=False)
 
     @session_action
@@ -4225,7 +4345,9 @@ class WheelhouseApp(App):
     def action_send_session(self) -> None:
         self.settle()
         if sid := self.context_session():
+            focused = self.focused
             self.send_session(sid)
+            self.after_send(focused)
 
     @session_action
     def send_session(self, sid: str) -> None:
@@ -4257,7 +4379,9 @@ class WheelhouseApp(App):
     def send_pressed(self, event: Button.Pressed) -> None:
         self.settle()
         if sid := self.bar_session(event.button.screen):
+            focused = self.focused
             self.send_session(sid)
+            self.after_send(focused)
 
     @on(Button.Pressed, "#send-all")
     def send_all_pressed(self) -> None:
@@ -4400,7 +4524,7 @@ class WheelhouseApp(App):
             self.refresh_data()
 
     async def action_press(self, button_id: str) -> None:
-        """A key standing in for a button that never takes focus: as a click on it, on the
+        """A key standing in for a button: as a click on it, on the
         screen in front, the inbox or a full-screen item. Not in a text box, whose keys are
         typing, nor under a dialog, whose keys are its own. One that doesn't apply to what's
         in context says so rather than doing nothing."""
@@ -4485,21 +4609,21 @@ class WheelhouseApp(App):
         self.cycle_focus(-1)
 
     def cycle_focus(self, step: int) -> None:
-        """Tab and Shift+Tab on the inbox go round TAB_ORDER, then any other pane that takes
-        focus; elsewhere (a full-screen item, a dialog) in screen order. In an answer box
-        with an emoji code being typed, Tab takes the first suggestion instead. Tab is a key,
-        so the cursors have settled (land) before it moves on."""
+        """Tab and Shift+Tab on the inbox and a full-screen item go round tab_stops (#77);
+        elsewhere (a doc, a dialog) in screen order. In an answer box with an emoji code being
+        typed, Tab takes the first suggestion instead. Tab is a key, so the cursors have
+        settled (land) before it moves on."""
         if step > 0 and isinstance(self.focused, Compose) and self.focused.take_suggestion():
             return
         screen = self.screen
-        chain = screen.focus_chain
-        if screen is self.screen_stack[0]:
-            order = [w for id_ in TAB_ORDER for w in chain if w.id == id_]
-            chain = order + [w for w in chain if w not in order]
+        chain = tab_stops(screen) if self.stopped(screen) else [(w, None) for w in screen.focus_chain]
         if not chain:
             return
-        here = chain.index(self.focused) if self.focused in chain else (-1 if step > 0 else 0)
-        nxt = chain[(here + step) % len(chain)]
+        at = stop_of(self.focused)
+        here = chain.index(at) if at in chain else (-1 if step > 0 else 0)
+        nxt, part = chain[(here + step) % len(chain)]
+        if part is not None:   # a stop inside a pane (tab_parts)
+            nxt.focus_part(part)
         # at once, not after a refresh as focus() does: keys behind it go there. A conversation
         # or thread stays where it's scrolled to, not taken to its top as Textual would (D43)
         screen.set_focus(nxt, scroll_visible=not isinstance(nxt, Transcript))
@@ -4510,6 +4634,39 @@ class WheelhouseApp(App):
     def label(self, sid: str) -> str:
         s = self.row(sid)
         return f"{s['name'] or os.path.basename(s['cwd'])} ({short(sid)}, {s['cwd']})"
+
+    def stopped(self, screen: Screen) -> bool:
+        """Whether Tab goes round tab_stops there: the inbox and a full-screen item (#77)."""
+        return screen is self.screen_stack[0] or isinstance(screen, ThreadView)
+
+    def focus_answer(self) -> bool:
+        """Focus to the answer box on the screen in front (or Deny's reason in its place), if
+        one shows: a click in the conversation, and Send (#77)."""
+        box = next((w for w, _ in tab_stops(self.screen) if w.id in ANSWER_BOXES), None)
+        if box is not None:
+            self.screen.set_focus(box, scroll_visible=False)
+        return box is not None
+
+    def on_descendant_blur(self, event: events.DescendantBlur) -> None:
+        """A focused button disabled or hidden (Send, once its queue has gone) loses focus to
+        the answer box, or with none showing to the next Tab stop: not to a sibling, or to
+        nothing, as Textual would (#77). Not when its going put focus somewhere itself (Deny,
+        in its reason)."""
+        lost, screen = event.widget, self.screen
+        if not isinstance(lost, BarButton) or not lost.is_attached or lost.screen is not screen \
+                or not self.stopped(screen) or not (screen.focused is None or isinstance(screen.focused, Button)):
+            return
+        stops = [w for w, _ in tab_stops(screen)]
+        if lost in stops or self.focus_answer() or not stops:
+            return
+        screen.set_focus(next((b for b in stops if isinstance(b, BarButton) and reading_order(b) > reading_order(lost)),
+                              stops[0]))
+
+    def after_send(self, focused: Widget | None) -> None:
+        """Send, by its button or Ctrl+S, from the answer box or a button: focus to the answer
+        box, not lost with Send, disabled now its queue has gone. From a list it stays (#77)."""
+        if isinstance(focused, Button) or getattr(focused, "id", None) in ANSWER_BOXES:
+            self.focus_answer()
 
     def action_relaunch_all(self) -> None:
         """Relaunch all: every Available session, once confirmed. Parked and Active ones are

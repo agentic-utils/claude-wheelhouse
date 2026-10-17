@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import features, models
+from . import features, models, whatsnew
 
 DEFAULT_DB = Path.home() / ".local/state/claude-wheelhouse/wheelhouse.db"
 
@@ -152,6 +152,13 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+-- the tour's features (whatsnew.FEATURES) the person has been shown, or skipped by
+-- answering Never: a feature with no row is pending (whatsnew.pending)
+CREATE TABLE IF NOT EXISTS tour_seen (
+    feature_id TEXT PRIMARY KEY,
+    seen_at    TEXT NOT NULL,
+    how        TEXT NOT NULL
+);
 -- how many times each of items and messages has been written, by the triggers below: the
 -- daemon's mark of each (MARKED), moved by any change a client could see, whoever writes it
 CREATE TABLE IF NOT EXISTS marks (
@@ -237,6 +244,11 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
+TUTORIAL_OFFER = "tutorial_offer"   # settings: the tour's invite as answered (tutorial.OFFER_KEY)
+NEVER = "never"   # TUTORIAL_OFFER answered Never: every feature registered then is skipped
+TOUR_HOW = ("shown", "skipped")   # tour_seen.how
+# settings: the one-off move to the tour's record (.plan/tutorial-overhaul.md, Migration) has run
+TOUR_MIGRATED = "migrated_tour"
 # settings: when this database was first opened by code that tracks subagents. Subagents
 # that had finished by then (or by when their session joined) get no item (#69)
 AGENTS_SINCE = "agents_since"
@@ -367,6 +379,13 @@ class Store:
                 db.execute("UPDATE items SET status = 'closed' WHERE kind = 'decision' AND status = 'seen'")
                 db.execute("INSERT INTO settings (key, value) VALUES (?, '1')", (DECISIONS_CLOSE,))
             db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (AGENTS_SINCE, now()))
+            # the old offer's dismissed becomes Never, skipping every feature registered now;
+            # taken, reset and unset are kept, so the registered features are pending for them
+            if db.execute("SELECT 1 FROM settings WHERE key = ?", (TOUR_MIGRATED,)).fetchone() is None:
+                if db.execute("SELECT 1 FROM settings WHERE key = ? AND value = 'dismissed'",
+                              (TUTORIAL_OFFER,)).fetchone():
+                    self._never(db)
+                db.execute("INSERT INTO settings (key, value) VALUES (?, '1')", (TOUR_MIGRATED,))
 
     @contextmanager
     def tx(self):
@@ -1161,6 +1180,37 @@ class Store:
         with self.tx() as db:
             db.execute("DELETE FROM settings WHERE key = ?", (key,))
 
+    # the tour (whatsnew): which features the person has been shown or skipped
+
+    def tour_seen(self) -> dict[str, str]:
+        """Each feature with a record, and how: shown or skipped."""
+        return {r["feature_id"]: r["how"] for r in self._all("SELECT feature_id, how FROM tour_seen")}
+
+    def see_features(self, ids, how: str = "shown") -> None:
+        """Records features as seen; one already recorded keeps its first record."""
+        if how not in TOUR_HOW:
+            raise ValueError(f"how must be one of {TOUR_HOW}")
+        with self.tx() as db:
+            self._see(db, ids, how)
+
+    def tour_never(self) -> None:
+        """The tour's invite answered Never: every feature registered now is skipped, so only
+        later ones are offered."""
+        with self.tx() as db:
+            self._never(db)
+
+    @staticmethod
+    def _see(db, ids, how: str) -> None:
+        at = now()
+        db.executemany("INSERT OR IGNORE INTO tour_seen (feature_id, seen_at, how) VALUES (?, ?, ?)",
+                       [(i, at, how) for i in ids])
+
+    @classmethod
+    def _never(cls, db) -> None:
+        db.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
+                   "ON CONFLICT (key) DO UPDATE SET value = excluded.value", (TUTORIAL_OFFER, NEVER))
+        cls._see(db, [f.id for f in whatsnew.FEATURES], "skipped")
+
     # the daemon's requests, by Idempotency-Key
 
     def answered(self, key: str) -> sqlite3.Row | None:
@@ -1336,11 +1386,13 @@ REACHED = ("max({m}created_at, coalesce(substr({m}claimed_at, 1, 19) || '+00:00'
 # (update_item, declares), shown as a note
 STATUS = "status"
 # (session_id, item_ref) of items whose latest word is the person's, sent, with no reply since
-# (or status update: STATUS)
+# (or status update: STATUS). A session's message with no kind was written before messages had
+# one, when a reply was all a session wrote on an item: it counts as a reply (#76)
 AWAITING = f"""SELECT session_id, item_ref FROM messages WHERE item_ref IS NOT NULL AND draft = 0
               GROUP BY session_id, item_ref
               HAVING max(CASE WHEN author = 'person' THEN id END) >
-                     coalesce(max(CASE WHEN author = 'claude' AND kind IN ('reply', '{STATUS}') THEN id END), 0)"""
+                     coalesce(max(CASE WHEN author = 'claude' AND coalesce(kind, 'reply') IN ('reply', '{STATUS}')
+                                  THEN id END), 0)"""
 # D28, on items aliased i: answered and sent, not yet replied to, nothing more queued. Shown as
 # processing and not counted as awaiting the person; stored as open, so the protocol is unchanged
 PROCESSING = f"""((i.session_id, i.ref) IN ({AWAITING}) AND (i.session_id, i.ref) NOT IN

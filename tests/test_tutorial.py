@@ -197,7 +197,7 @@ def test_an_earlier_tutorials_host_is_stopped(store, monkeypatch, sdk, exits, ki
 @pytest.mark.parametrize("sessions, setting, offered, desc", [
     (0, None, True, "an empty wheelhouse offers it"),
     (1, None, False, "not once there are sessions"),
-    (0, "dismissed", False, "not once dismissed"),
+    (0, "never", False, "not once answered Never"),
     (0, "taken", False, "not once taken"),
     (2, tutorial.RESET, True, "reset by claude-wheelhouse tutorial: offered though there are sessions"),
     (0, tutorial.RESET, True, "reset, and empty"),
@@ -273,7 +273,7 @@ def test_the_tutorial_command_resets_the_offer(store, tmp_path, monkeypatch, cap
 
 @pytest.mark.parametrize("key, setting, desc", [
     ("enter", "taken", "Enter takes it"),
-    ("escape", "dismissed", "Esc dismisses it"),
+    ("escape", "never", "Esc answers Never"),
 ])
 @pytest.mark.anyio
 async def test_a_reset_offer_shows_once_over_sessions(store, tmp_path, monkeypatch, fake_claude, key, setting, desc):
@@ -309,7 +309,7 @@ def test_start_launches_the_session_and_settles_the_offer(store, monkeypatch, fa
 
 @pytest.mark.parametrize("key, started, setting, desc", [
     ("enter", True, "taken", "Enter takes the tutorial"),
-    ("escape", False, "dismissed", "Esc dismisses it"),
+    ("escape", False, "never", "Esc answers Never"),
 ])
 @pytest.mark.anyio
 async def test_the_first_run_offer_takes_one_key(store, monkeypatch, fake_claude, key, started, setting, desc):

@@ -20,7 +20,7 @@ from textual.strip import Strip
 from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
-from claude_wheelhouse import features, launch, stats, transcript, tui
+from claude_wheelhouse import features, launch, models, stats, transcript, tui
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
@@ -386,10 +386,11 @@ async def test_send_bar_and_session_buttons_follow_the_queues(store, sid, tmp_pa
         app.session_list.move_cursor(row=1)
         await pilot.pause()
         assert session_buttons(app)["send"] == ("Send (2)", False), "the highlight moved: the other's queue"
-        assert all(not b.can_focus for b in app.screen.query("SendBar Button, #session-info-pane Button")), \
-            "clicks leave focus alone"
+        app.answer.focus()
+        await pilot.pause()
         await pilot.click("#send-all")
         await pilot.pause()
+        assert focused_id(app) == "answer", "a click on a button leaves focus alone"
         assert bar()["send-all"] == ("Send all (0)", True)
     assert store.drafts() == []
     assert [m["body"] for m in store.pending(sid)] == ["a"]
@@ -809,8 +810,8 @@ async def session_step(app, pilot, how, ids) -> None:
         key = next(r.key.value for r in app.items_table.ordered_rows
                    if r.key.value.startswith(f"{ids[name]}|") and not r.key.value.endswith("|"))
         app.items_table.move_cursor(row=app.items_table.get_row_index(key))
-    elif what == "title":   # the list's header line
-        raw_click(app, app.session_list, (3, 0), 1)
+    elif what == "title":   # the list's header line, at its unsorted end: the others sort (#75)
+        raw_click(app, app.session_list, (header_x(app.session_list, 6), 0), 1)
     elif what == "esc":
         app.items_table.focus()
         await pilot.press("escape")
@@ -1612,7 +1613,7 @@ class Burst:
 @pytest.mark.anyio
 @pytest.mark.parametrize("focus, at, burst, seen, want, desc", [
     ("answer", "qa", ("a", "b", "backspace", "ctrl+enter"), lambda b: (b.answer("qa"), b.status("qa"), b.focus()),
-     (["a"], "open", "items"), "review 14 (1): Backspace edits the box, then Ctrl+Enter sends it; the question stays open"),
+     (["a"], "open", "answer"), "review 14 (1): Backspace edits the box, then Ctrl+Enter sends it; the question stays open"),
     ("items", "qa", ("delete", "down"), lambda b: (b.status("qa"), b.status("qb")), ("closed", "open"),
      "review 14 (2): Delete closes the question it was on, not the next"),
     ("items", "qa", ("ctrl+s", "down"), lambda b: (b.sent("alpha"), b.sent("bravo")), (1, 0),
@@ -2030,8 +2031,12 @@ async def test_a_long_conversation_is_one_widget(store, sid, tmp_path, monkeypat
         assert len(app.detail.children) == 0, "drawn as one renderable: a widget per paragraph made each keypress slow"
 
 
+# what the conversation pane's keys did while it was a Tab stop: its scroll's actions now (#77)
+SCROLLS = {"home": "scroll_home", "pageup": "page_up", "up": "scroll_up"}
+
+
 async def scroll_by(pilot, keys) -> list[list[str]]:
-    """What the conversation pane shows as it settles, then after each key."""
+    """What the conversation pane shows as it settles, then after each key's scroll."""
     app = pilot.app
 
     async def settled() -> list[str]:
@@ -2041,7 +2046,7 @@ async def scroll_by(pilot, keys) -> list[list[str]]:
 
     seen = [await settled()]
     for key in keys:
-        await pilot.press(key)
+        getattr(app.detail_scroll, f"action_{SCROLLS[key]}")()
         seen.append(await settled())
     return seen
 
@@ -2054,7 +2059,6 @@ async def test_home_takes_a_long_conversation_to_its_top(store, sid, tmp_path, m
         await pilot.pause()
         app.follow(sid)
         await pilot.pause()
-        app.detail.focus(scroll_visible=False)
         seen = await scroll_by(pilot, ["home"])
         full, page = laid_in_full(app), app.detail_scroll.size.height
         assert seen[0] == full[-page:], "first shown at its end"
@@ -2123,7 +2127,6 @@ async def test_a_change_to_a_long_conversation(store, sid, tmp_path, monkeypatch
         await pilot.pause()
         app.follow(sid)
         await pilot.pause()
-        app.detail.focus(scroll_visible=False)
         before = (await scroll_by(pilot, keys))[-1]
         starts, y = app.detail._layout(app.detail.size.width)[2], int(app.detail_scroll.scroll_y)
         rows = [at - y for at in starts[bisect.bisect_right(starts, y):][:2]]   # the next two blocks' on screen
@@ -2291,24 +2294,6 @@ async def test_a_double_click_in_an_answer_box_selects_the_word(at, chain, selec
                           times=chain)
         await pilot.pause()
         assert box.selected_text == selected, desc
-
-
-@pytest.mark.anyio
-async def test_ctrl_a_copies_all_of_a_long_conversation(store, sid, tmp_path, monkeypatch):
-    long_conversation(sid, tmp_path, monkeypatch)
-    app = WheelhouseApp(store)
-    copied = []
-    app.copy_to_clipboard = copied.append
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        app.follow(sid)
-        await pilot.pause()
-        expected = "\n".join(laid_in_full(app)).rstrip("\n")
-        assert expected.startswith("demo · conversation")
-        app.detail.focus(scroll_visible=False)
-        await pilot.press("ctrl+a", "ctrl+c")
-        await pilot.pause()
-    assert copied == [expected]
 
 
 async def relaunch_button(pilot):
@@ -2573,15 +2558,16 @@ async def drag_over_the_question(pilot, pane):
     await pilot.mouse_up(pane, offset=(5, 0))
 
 
-async def ctrl_a_in_the_pane(pilot, pane):
-    pane.focus()
-    await pilot.press("ctrl+a")
+async def drag_from_the_box(pilot, pane):
+    pilot.app.answer.focus()   # where focus always is with the conversation in sight (#77)
+    await pilot.pause()
+    await drag_over_the_question(pilot, pane)
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("select, expected, desc", [
     (drag_over_the_question, "Q1 · w", "dragging the mouse selects part of the text"),
-    (ctrl_a_in_the_pane, "Q1 · which db?", "Ctrl+A selects all of it, starting at the top"),
+    (drag_from_the_box, "Q1 · w", "Ctrl+C in the answer box, with nothing selected in it, copies the pane's (#77)"),
 ])
 async def test_the_detail_pane_selects_and_copies(store, sid, select, expected, desc):
     store.post_item(sid, "question", "which db?", "Postgres or SQLite for the cache?")
@@ -2596,9 +2582,7 @@ async def test_the_detail_pane_selects_and_copies(store, sid, select, expected, 
         await pilot.pause()
         await pilot.press("ctrl+c")
         await pilot.pause()
-    assert copied and copied[0].startswith(expected), desc
-    if select is ctrl_a_in_the_pane:
-        assert copied[0].endswith("Postgres or SQLite for the cache?"), desc
+    assert copied and copied[0] == expected, desc
 
 
 @pytest.mark.anyio
@@ -4811,8 +4795,7 @@ async def test_selections_read_black_on_white(store, sid, element, colour, backg
 
 
 async def select_in_the_pane(app, pilot):
-    app.query_one("#detail", Transcript).focus()
-    await pilot.press("ctrl+a")
+    await drag_over_the_question(pilot, app.query_one("#detail", Transcript))
 
 
 async def select_in_the_box(app, pilot):
@@ -4838,7 +4821,7 @@ async def right_click(app, selector: str) -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("select, system, copied, box, desc", [
-    (select_in_the_pane, "from windows", "Q1 · which db?", None, "a selection in the pane: copied"),
+    (select_in_the_pane, "from windows", "Q1 · w", None, "a selection in the pane: copied"),
     (select_in_the_box, "from windows", "typed words", "typed words", "a selection in the box: copied, and kept"),
     (nothing_selected, "from windows", None, "typed from windows", "nothing selected: the clipboard pasted in the box"),
     (nothing_selected, None, None, "typed earlier copy", "no system clipboard: the wheelhouse's own last copy"),
@@ -5483,7 +5466,7 @@ async def test_the_session_lists_keys_press_its_buttons(store, sid, monkeypatch,
         await pilot.press(key)
         await pilot.pause()
         assert pressed == [button], desc
-        assert not app.query_one(f"#{button}", Button).can_focus, f"{desc}: never focused"
+        assert app.focused is app.session_list, f"{desc}: focus stays on the list"
 
 
 @pytest.mark.anyio
@@ -5634,9 +5617,108 @@ def focused_id(app) -> str | None:
     return app.focused.id if app.focused is not None else None
 
 
+OPEN = object()   # the dialog still open: Enter was its focus's own (a list's, a multi-line box's)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("make, outside, esc, enter, tabs, desc", [
+    (lambda app, sid, cwd: tui.NewSession(), None, None, {"name": "", "ticket": "", "brief": ""},
+     ["cwd", "browse", "name", "ticket", "brief", "model", "effort", "launch", "cancel"], "New session: Enter launches"),
+    (lambda app, sid, cwd: tui.PickDirectory(cwd), None, None, OPEN, ["folders", "choose", "up", "cancel"],
+     "the folder picker: Enter opens the folder"),
+    (lambda app, sid, cwd: RenameSession("demo"), None, None, "demo", ["new-name", "ok", "cancel"], "Rename"),
+    (lambda app, sid, cwd: tui.ChooseModel("demo", None), None, None, models.MODELS[0].id, ["models", "ok", "cancel"],
+     "the model: Enter takes the highlighted one"),
+    (lambda app, sid, cwd: tui.AdoptSession([]), None, None, OPEN, ["adopt-list", "adopt-name", "adopt", "cancel"],
+     "Adopt, with nothing to adopt"),
+    (lambda app, sid, cwd: tui.ForkSession(app.client.fork_plan(sid)), None, None, {"refs": [], "branch": None},
+     ["fork-go", "cancel"], "Fork"),
+    (lambda app, sid, cwd: CompactSession("demo"), None, None, OPEN,
+     ["compact-notes", "compact-dialog-then", "compact-go", "compact-cancel"], "Compact: Enter is a new line"),
+    (lambda app, sid, cwd: ParkSession("demo", True), None, None, {"compact": True},
+     ["park-compact", "park-go", "park-cancel"], "Park: Enter on the checkbox parks"),
+    (lambda app, sid, cwd: ForgetChoice("Forget demo?", True), None, None, "tell",
+     ["forget-tell", "forget-stop", "forget-cancel"], "Forget: Enter the focused default"),
+    (lambda app, sid, cwd: Confirm("Relaunch demo?"), False, False, False, ["no", "yes"], "a confirmation: No focused"),
+    (lambda app, sid, cwd: Choice("Force it?"), "leave", "leave", "cancel", ["cancel", "force", "leave"], "a choice"),
+    (lambda app, sid, cwd: RelaunchChoice("Relaunch demo?"), None, None, None,
+     ["relaunch-cancel", "relaunch-compact", "relaunch-now"], "Relaunch's choice: Cancel focused"),
+    (lambda app, sid, cwd: tui.TutorialOffer(), OPEN, False, True, [],
+     "the tutorial offer: all but its line is outside, so a click there leaves it be"),
+    (lambda app, sid, cwd: tui.KeysHelp(), None, None, None, None, "the keys: no answer asked"),
+])
+async def test_dialog_keys_and_click_outside(store, sid, tmp_path, make, outside, esc, enter, tabs, desc):
+    """#81, Doug: clicking outside a dialog dismisses it; one that asks nothing closes on Esc or
+    Enter; one that asks has Tab order on its buttons, Enter its single action and Esc its
+    cancel."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+
+        async def answer(gesture):
+            answers = []
+            app.push_screen(make(app, sid, str(tmp_path)), answers.append)
+            await pilot.pause()
+            await gesture()
+            await pilot.pause()
+            if isinstance(app.screen, tui.Dialog):
+                app.screen.dismiss(None)
+                await pilot.pause()
+                return OPEN
+            return answers[0]
+
+        async def inside():
+            await pilot.click(app.screen.children[0], offset=(0, 0))   # its border: not outside
+        async def outside_later():   # past the grace a double-click's second click gets
+            app.screen.opened -= tui.Dialog.GRACE
+            await pilot.click(offset=(0, 39))
+        assert await answer(inside) is OPEN, f"{desc}: a click on the box leaves it open"
+        assert await answer(outside_later) == outside, f"{desc}: a click outside"
+        assert await answer(lambda: pilot.press("escape")) == esc, f"{desc}: Esc"
+        got = await answer(lambda: pilot.press("enter"))
+        if isinstance(enter, dict):
+            got = {k: got.get(k) for k in enter} if isinstance(got, dict) else got
+        assert got == enter, f"{desc}: Enter"
+        if tabs is None:
+            return
+        app.push_screen(make(app, sid, str(tmp_path)))
+        await pilot.pause()
+        seen = []
+        for _ in tabs:
+            seen.append(focused_id(app))
+            await pilot.press("tab")
+        assert seen == tabs and focused_id(app) == (tabs[0] if tabs else None), f"{desc}: Tab order"
+        for want in reversed(tabs):
+            await pilot.press("shift+tab")
+            assert focused_id(app) == want, f"{desc}: Shift+Tab back to {want}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("after, want, desc", [
+    (0.0, OPEN, "at once: a double-click's second click on the button that opened it"),
+    (0.39, OPEN, "just inside the grace"),
+    (0.4, None, "at the grace: an outside click cancels"),
+    (2.0, None, "later: an outside click cancels"),
+])
+async def test_dialog_ignores_a_click_outside_as_it_opens(store, tmp_path, monkeypatch, after, want, desc):
+    clock = [100.0]
+    monkeypatch.setattr(tui.Dialog, "now", staticmethod(lambda: clock[0]))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        answers = []
+        app.push_screen(RenameSession("demo"), answers.append)
+        await pilot.pause()
+        clock[0] += after
+        await pilot.click(offset=(0, 39))
+        await pilot.pause()
+        got = OPEN if isinstance(app.screen, tui.Dialog) else answers[0]
+        assert got is want, desc
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("keys, desc", [
-    ("pilot", "Ctrl+Enter, Down, Tab, type, Ctrl+Enter answers the next item (#73)"),
+    ("pilot", "Ctrl+Enter, Shift+Tab, Down, Tab, type, Ctrl+Enter answers the next item (#73, #77)"),
     ("raw", "the same as a burst, no idle wait between keys (#73)"),
 ])
 async def test_answer_one_then_the_next_from_the_keyboard(store, sid, keys, desc):
@@ -5650,20 +5732,20 @@ async def test_answer_one_then_the_next_from_the_keyboard(store, sid, keys, desc
         await pilot.pause()
         app.answer.focus()
         await pilot.pause()
-        flow = [*"aa", "ctrl+enter", "down", "tab", *"bb", "ctrl+enter"]
+        flow = [*"aa", "ctrl+enter", "shift+tab", "down", "tab", *"bb", "ctrl+enter"]
         if keys == "raw":
             raw_keys(app, *flow)
             for _ in range(6):
                 await pilot.pause()
         else:
             await pilot.press(*flow[:3])
-            assert focused_id(app) == "items", f"{desc}: Ctrl+Enter goes back to the items"
+            assert focused_id(app) == "answer", f"{desc}: Ctrl+Enter leaves focus in the box (#77)"
             assert app.items_table.cursor_key() == first, f"{desc}: the cursor where it was"
             await pilot.press(*flow[3:])
         await pilot.pause()
         drafts = {(m["session_id"], m["item_ref"]): m["body"] for m in store.drafts(sid)}
         assert drafts == {tuple(first.split("|")): "aa", tuple(second.split("|")): "bb"}, f"{desc}: {drafts}"
-        assert focused_id(app) == "items" and app.items_table.cursor_key() == second, desc
+        assert focused_id(app) == "answer" and app.items_table.cursor_key() == second, desc
         assert app.answer.text == "", desc
         assert_one_current(app, desc)
 
@@ -5671,9 +5753,10 @@ async def test_answer_one_then_the_next_from_the_keyboard(store, sid, keys, desc
 @pytest.mark.anyio
 @pytest.mark.parametrize("text, focus, desc", [
     ("", "answer", "nothing typed: nothing submitted, the box keeps focus"),
-    ("hi", "thread-answer", "a full-screen item has no items to go back to: its box keeps focus"),
+    ("hi", "answer", "sent: the box keeps focus (#77)"),
+    ("hi", "thread-answer", "a full-screen item's box keeps focus too"),
 ])
-async def test_ctrl_enter_leaves_focus_where_there_is_nothing_to_go_back_to(store, sid, text, focus, desc):
+async def test_ctrl_enter_leaves_focus_in_the_box(store, sid, text, focus, desc):
     q = store.post_item(sid, "question", "one?")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -5688,58 +5771,210 @@ async def test_ctrl_enter_leaves_focus_where_there_is_nothing_to_go_back_to(stor
         assert focused_id(app) == focus, desc
 
 
+# the inbox's Tab stops with a running tab session selected and an answer queued (#77): the
+# lists, the box, then every button shown and enabled in reading order, the session pane's
+# then the send bar's (Model, Mode, Interrupt, Compact and Shell disabled: a wheelhouse-run session's)
+INBOX_STOPS = ["session-list", "items", "answer", "rename", "relaunch", "park", "end", "fork", "send", "send-all",
+               "stats:zoom-out", "stats:zoom-in"]   # then the stats pane's zoom (no slider: a tab session)
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("screen, key, order, desc", [
-    ("inbox", "tab", ["session-list", "items", "answer", "detail", "session-list"],
-     "Tab: the session list, the items, the answer box, the conversation, round again (#73)"),
-    ("inbox", "shift+tab", ["session-list", "detail", "answer", "items", "session-list"], "Shift+Tab: the reverse"),
-    ("thread", "tab", ["thread-answer", "thread", "thread-answer"], "a full-screen item: its box and its thread"),
-    ("thread", "shift+tab", ["thread-answer", "thread", "thread-answer"], "and back"),
+    ("inbox", "tab", INBOX_STOPS + ["session-list"],
+     "Tab: the session list, the items, the answer box, every button, round again (#77)"),
+    ("inbox", "shift+tab", ["session-list", *INBOX_STOPS[:0:-1], "session-list"], "Shift+Tab: the reverse"),
+    ("thread", "tab", ["thread-answer", "send", "send-all", "thread-answer"],
+     "a full-screen item: its box, then its buttons, not its thread (#77)"),
+    ("thread", "shift+tab", ["thread-answer", "send-all", "send", "thread-answer"], "and back"),
 ])
-async def test_the_tab_order(store, sid, screen, key, order, desc):
+async def test_the_tab_order(store, sid, monkeypatch, screen, key, order, desc):
+    by_name(monkeypatch, {"demo": "live"})
     q = store.post_item(sid, "question", "one?")
+    store.queue(sid, "queued")   # Send and Send all enabled
     app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
+    async with app.run_test(size=(160, 60)) as pilot:   # the stats' charts, so their zoom: none at 40 rows
         await pilot.pause()
         if screen == "thread":
             app.push_screen(ThreadView(sid, q))
         else:
+            await pick(app, pilot, sid)
             app.session_list.focus()
         await pilot.pause()
-        seen = [focused_id(app)]
+        seen = [stop_id(app)]
         for _ in order[1:]:
             await pilot.press(key)
-            seen.append(focused_id(app))
-        assert seen == order, desc
+            seen.append(stop_id(app))
+        assert seen == order, f"{desc}: {seen}"
         assert_one_current(app, desc)
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("key, desc", [
-    ("pagedown", "PgDn scrolls the conversation pane it has focus"),
-    ("end", "End goes to its foot"),
-    ("down", "Down scrolls a line"),
+@pytest.mark.parametrize("screen, focus, how, want, desc", [
+    ("inbox", "send", "enter", "answer", "Tab to Send, Enter: Send disables itself, focus to the answer box (#77)"),
+    ("inbox", "answer", "ctrl+s", "answer", "Send by its key from the box: focus stays in it"),
+    ("inbox", "items", "ctrl+s", "items", "Send by its key from the items: focus stays there"),
+    ("inbox", "session-list", "ctrl+s", "session-list", "and from the session list"),
+    ("inbox", "items", "click", "items", "a click on Send from the items: focus stays there"),
+    ("inbox", "fork", "disable", "answer", "a focused button disabled: focus to the answer box"),
+    ("inbox", "fork", "hide", "answer", "a focused button hidden: the same"),
+    ("inbox", "park", "no box", "end", "with no answer box: the next Tab stop"),
+    ("thread", "send", "enter", "thread-answer", "a full-screen item: Send, then focus to its box"),
+    ("thread", "send-all", "hide", "thread-answer", "a full-screen item: a focused button hidden, focus to its box"),
 ])
-async def test_the_focused_conversation_scrolls_from_the_keyboard(store, sid, key, desc):
-    store.post_item(sid, "question", "long?", "\n\n".join(f"line {i}" for i in range(200)))
+async def test_focus_lost_with_a_button_goes_to_the_answer_box(store, sid, monkeypatch, clock, screen, focus, how, want,
+                                                               desc):
+    """clock: no refresh tick puts back a button disabled or hidden here, or the answer box."""
+    by_name(monkeypatch, {"demo": "live"})
+    q = store.post_item(sid, "question", "one?")
+    store.queue(sid, "queued")   # Send and Send all enabled
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        app.items_table.focus()
-        await pilot.press("tab", "tab")
-        assert focused_id(app) == "detail", desc
-        await pilot.press(key)
+        await pick(app, pilot, sid)
+        if screen == "thread":
+            app.push_screen(ThreadView(sid, q))
+            await pilot.pause()
+        app.screen.query_one(f"#{focus}").focus()
         await pilot.pause()
-        assert app.detail_scroll.scroll_y > 0, desc
+        assert focused_id(app) == focus, desc
+        button = app.screen.query_one(f"#{focus}")
+        if how == "click":
+            await pilot.click("#send")
+        elif how in ("enter", "ctrl+s"):
+            await pilot.press(how)
+        elif how == "hide":
+            button.display = False
+        else:
+            if how == "no box":
+                app.answer.display = False
+            button.disabled = True
+        for _ in range(20):   # the blur, a Hide after the next layout, then the bubbling: a few hops each
+            await pilot.pause()
+            if focused_id(app) == want:
+                break
+        assert focused_id(app) == want, f"{desc}: {focused_id(app)}"
+        if how in ("enter", "ctrl+s", "click"):
+            assert store.drafts(sid) == [], f"{desc}: sent"
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("pane, desc", [
-    ("conversation", "a long conversation, at its newest turn, stays there"),
-    ("thread", "a long item scrolled down part way stays there"),
+@pytest.mark.parametrize("how, key, desc", [
+    ("tab", "pagedown", "Tab from the items reaches a doc in the answer box's place; PgDn scrolls it (#77)"),
+    ("tab", "end", "and End"),
+    ("tab", "down", "and Down"),
+    ("click", "pagedown", "a click on the doc focuses it, and PgDn scrolls it"),
 ])
-async def test_tab_into_the_detail_pane_leaves_it_where_it_is_scrolled(store, sid, tmp_path, monkeypatch, pane, desc):
-    """D43: focus moved to the pane by Tab, not a scroll to its top."""
+async def test_a_doc_in_the_inbox_scrolls_from_the_keyboard(store, sid, tmp_path, how, key, desc):
+    doc = tmp_path / "plan.md"
+    doc.write_text("\n\n".join(f"line {i}" for i in range(200)))
+    m = store.post_doc(sid, "the plan", str(doc))
+    q = store.post_item(sid, "question", "one?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{m}"))
+        await pilot.pause()
+        assert app.selected == (sid, m), desc
+        app.items_table.focus()
+        await pilot.pause()
+        if how == "tab":
+            await pilot.press("tab")
+        else:
+            await pilot.click(app.detail_scroll, offset=(2, 2))
+        await pilot.pause()
+        assert focused_id(app) == "detail", desc
+        await pilot.press(key)
+        await pilot.wait_for_scheduled_animations()
+        await pilot.pause()
+        assert app.detail_scroll.scroll_y > 0, desc
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{q}"))
+        await pilot.pause()
+        assert focused_id(app) == "answer", f"{desc}: off the doc, focus goes to the box back in its place"
+        await pilot.press("shift+tab")
+        assert focused_id(app) == "items", f"{desc}: the box is the stop again"
+        await pilot.press("tab")
+        assert focused_id(app) == "answer", f"{desc}: the box is the stop again"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key, desc", [
+    (None, "a click in a full-screen item's thread focuses its box (#77)"),
+    ("pageup", "PgUp in its box scrolls the thread up"),
+    ("pagedown", "PgDn scrolls it down"),
+])
+async def test_a_click_in_a_thread_focuses_its_box(store, sid, key, desc):
+    q = store.post_item(sid, "question", "long?", "\n\n".join(f"line {i}" for i in range(200)))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(ThreadView(sid, q))
+        await pilot.pause()
+        scroll = app.screen.query_one("#thread-scroll")
+        scroll.scroll_to(y=30, animate=False)
+        app.screen.query_one("#send-all").focus()
+        await pilot.pause()
+        await pilot.click(scroll, offset=(2, 2))
+        await pilot.pause()
+        assert focused_id(app) == "thread-answer", desc
+        assert scroll.scroll_y == 30, f"{desc}: where it was scrolled"
+        if key:
+            await pilot.press(key)
+            await pilot.wait_for_scheduled_animations()
+            await pilot.pause()
+            assert (scroll.scroll_y < 30 if key == "pageup" else scroll.scroll_y > 30), desc
+            assert focused_id(app) == "thread-answer", f"{desc}: focus stays in the box"
+
+
+def stop_id(app) -> str | None:
+    """The focused stop: its id, and inside the stats pane which of its stops."""
+    pane = next(iter(app.query("#stats")), None)
+    return f"stats:{pane.at}" if pane is not None and app.focused is pane else focused_id(app)
+
+
+@pytest.mark.usefixtures("sdk_on")
+@pytest.mark.anyio
+@pytest.mark.parametrize("key, order, desc", [
+    ("tab", ["shell", "stats:slider", "stats:zoom-out", "stats:zoom-in", "session-list"],
+     "after the buttons (Shell the last: Send all has nothing to send): the stats pane's effort slider, then "
+     "its zoom's - and + (#77)"),
+    ("shift+tab", ["session-list", "stats:zoom-in", "stats:zoom-out", "stats:slider", "shell"], "and back"),
+])
+async def test_the_stats_panes_stops_follow_the_buttons(store, tmp_path, monkeypatch, key, order, desc):
+    sid, app = await hosted_app(store, tmp_path, monkeypatch)
+    async with app.run_test(size=(160, 60)) as pilot:   # the stats' charts, so their zoom: none at 40 rows
+        await shown_stats(app, pilot)
+        pane = app.query_one("#stats")
+        assert pane.charts, f"{desc}: the charts, so the zoom, show"
+        app.query_one(f"#{order[0]}").focus()
+        await pilot.pause()
+        seen = [stop_id(app)]
+        for _ in order[1:]:
+            await pilot.press(key)
+            await pilot.pause()
+            seen.append(stop_id(app))
+        assert seen == order, f"{desc}: {seen}"
+        pane.focus_part("zoom-in")
+        app.screen.set_focus(pane)
+        await pilot.pause()
+        assert pane.render().plain.split("\n")[-1].endswith("2h  -   + "), desc
+        await pilot.press("enter")
+        await pilot.pause()
+        assert pane.span == 3600 and stop_id(app) == "stats:zoom-in", f"{desc}: Enter presses the focused +"
+        await pilot.press("right")
+        await pilot.pause()
+        assert store.session(sid)["effort"] == "high", f"{desc}: the slider's keys only on the slider"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("pane, key, desc", [
+    ("conversation", None, "a long conversation, at its newest turn, stays there"),
+    ("item", None, "a long item scrolled down part way stays there"),
+    ("item", "pageup", "PgUp in the box scrolls the conversation up"),
+    ("item", "pagedown", "PgDn in the box scrolls it down"),
+])
+async def test_a_click_in_the_conversation_focuses_the_answer_box(store, sid, tmp_path, monkeypatch, pane, key, desc):
+    """#77: a click in the conversation puts focus in the answer box, the pane where it is
+    scrolled (as D43 had it for Tab), and the box's PgUp and PgDn scroll the pane."""
     if pane == "conversation":
         long_conversation(sid, tmp_path, monkeypatch)
     else:
@@ -5756,11 +5991,18 @@ async def test_tab_into_the_detail_pane_leaves_it_where_it_is_scrolled(store, si
         before, y = painted(app), app.detail_scroll.scroll_y
         assert y > 0, desc
         app.items_table.focus()
-        await pilot.press("tab", "tab")
+        await pilot.click(app.detail_scroll, offset=(2, 2))
         await pilot.wait_for_scheduled_animations()
         await pilot.pause()
-        assert focused_id(app) == "detail", desc
+        assert focused_id(app) == "answer", desc
         assert (app.detail_scroll.scroll_y, painted(app)) == (y, before), desc
+        if key:
+            await pilot.press(key)
+            await pilot.wait_for_scheduled_animations()
+            await pilot.pause()
+            moved = app.detail_scroll.scroll_y - y
+            assert (moved < 0 if key == "pageup" else moved > 0), desc
+            assert focused_id(app) == "answer", f"{desc}: focus stays in the box"
 
 
 @pytest.fixture
@@ -5791,7 +6033,7 @@ def presses(app) -> list[str]:
 @pytest.mark.parametrize("key, button", [("i", "interrupt"), ("c", "compact"), ("h", "shell"), ("1", "allow"),
                                          ("2", "always"), ("3", "deny"), ("A", "send-all"), ("shift+a", "send-all")])
 @pytest.mark.parametrize("where, pressed", [
-    ("items", True), ("session-list", True), ("detail", True), ("thread", True), ("answer", False), ("dialog", False),
+    ("items", True), ("session-list", True), ("send-all", True), ("thread", True), ("answer", False), ("dialog", False),
 ])
 async def test_the_button_keys(store, keyed, key, button, where, pressed):
     """#73: every button that was mouse-only has a key, pressing it on the screen in front,
@@ -5809,7 +6051,7 @@ async def test_the_button_keys(store, keyed, key, button, where, pressed):
         if where == "thread":
             app.push_screen(ThreadView(sid, ref))
             await pilot.pause()
-            app.screen.query_one("#thread", Transcript).focus()
+            app.screen.query_one("#send-all").focus()   # out of its box: a button (#77)
         elif where == "dialog":
             app.push_screen(Confirm("sure?"))
         else:
@@ -6159,8 +6401,8 @@ async def shown_stats(app, pilot) -> str:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("on, runner_, slider, desc", [
-    (True, "sdk", True, "a session run by a host: Model, the slider, and a Tab stop to it"),
-    (True, "tab", False, "a tab: neither, and no stop (Q52)"),
+    (True, "sdk", True, "a session run by a host: Model and the slider, which is no Tab stop (#77)"),
+    (True, "tab", False, "a tab: neither (Q52)"),
     (False, "sdk", False, "SDK mode off: a host's session runs on as it was set, with neither"),
 ])
 async def test_model_and_effort_are_offered_only_for_a_hosted_session(store, tmp_path, monkeypatch, on, runner_, slider,
@@ -6175,7 +6417,7 @@ async def test_model_and_effort_are_offered_only_for_a_hosted_session(store, tmp
         app.query_one("#detail").focus()
         await pilot.press("tab")
         await pilot.pause()
-        assert (focused_id(app) == "stats") == slider, f"{desc}: after the inbox's own stops"
+        assert focused_id(app) != "stats", f"{desc}: Tab goes round the inbox's own stops alone (#77)"
         app.session_list.focus()
         await pilot.press("m")
         await pilot.pause()
@@ -7003,10 +7245,11 @@ def item_refs(app) -> list[str]:
     return [str(table.get_row(k)[0 if app.filter_sid else 1]).lstrip("└ ") for k in table.final() if k and not k.endswith("|")]
 
 
-def header_x(table, name: str) -> int:
+def header_x(table, name: str | int) -> int:
+    """A column's header, by key or (the session list's, which have none) by index."""
     x = 0
-    for c in table.ordered_columns:
-        if c.key.value == name:
+    for i, c in enumerate(table.ordered_columns):
+        if name in (c.key.value, i):
             return x + 1
         x += c.get_render_width(table)
     raise KeyError(name)
@@ -7113,8 +7356,22 @@ async def test_header_clicks_cycle_the_markers(store, sid):
         assert "title ▲" in [str(c.label) for c in app.items_table.ordered_columns], "remembered"
 
 
+@pytest.mark.parametrize("spec, column, room, want, desc", [
+    ("session▲", 1, None, "session ▲", "the column in force: its marker"),
+    ("session▼", 1, 9, "session ▼", "room enough: as it is"),
+    ("session▲", 1, 6, "ses… ▲", "a narrow pane cuts the name, not the marker"),
+    ("dot*", 1, 6, "session", "no marker: the cell cuts it, as any name"),
+    ("dot*", 0, None, "*", "the dot's header is its marker alone"),
+    ("ctx▼", 2, None, "ctx ▼", "a size, most first"),
+    ("ctx▼", 3, None, "?", "another column: no marker"),
+])
+def test_session_label(spec, column, room, want, desc):
+    from types import SimpleNamespace
+    assert WheelhouseApp.session_label(SimpleNamespace(session_sort=spec), column, room) == want, desc
+
+
 @pytest.mark.anyio
-async def test_session_dot_header_sorts_and_drag_turns_it_off(store, sid, tmp_path):
+async def test_session_headers_sort_and_drag_turns_it_off(store, sid, tmp_path):
     other = store.create_session(str(tmp_path), name="later")
     store.post_item(other, "task", "fresh", status="running")   # the latest activity
     store.db.execute("UPDATE items SET created_at = '2999-01-01T00:00:00+00:00' WHERE session_id = ?", (other,))
@@ -7126,7 +7383,27 @@ async def test_session_dot_header_sorts_and_drag_turns_it_off(store, sid, tmp_pa
         assert table.keys()[:2] == [other, sid], "*: the latest activity first"
         await pilot.click(table, offset=(1, 0))
         await pilot.pause()
-        assert (str(table.ordered_columns[0].label), table.keys()[:2]) == ("", [sid, other]), "off: creation order"
+        assert str(table.ordered_columns[0].label) == "*", "the dot's * stays on: no other column took over"
+        names = {k: app.display_name(store.session(k)) for k in (sid, other)}
+        by_name = sorted(names, key=lambda k: names[k].casefold())
+        seen = []
+        widths = []
+        for column in (1, 1, 1, 2, 0):   # session ▲, ▼, back to *; ctx ▼ (most first); the dot's * again
+            await pilot.click(table, offset=(header_x(table, column), 0))
+            await pilot.pause()
+            seen.append([str(c.label) for c in table.ordered_columns[:6]])
+            widths.append(table.ordered_columns[2].content_width)
+            if seen[-1][1] == "session ▲":
+                assert table.keys()[:2] == by_name, "session ▲: by name"
+            if seen[-1][1] == "session ▼":
+                assert table.keys()[:2] == by_name[::-1], "session ▼: reversed"
+        plain = ["", "session", "ctx", "?", "D", "✉"]
+        assert seen == [["", "session ▲", *plain[2:]], ["", "session ▼", *plain[2:]], ["*", *plain[1:]],
+                        ["", "session", "ctx ▼", *plain[3:]], ["*", *plain[1:]]], "only the column in force is marked"
+        assert widths[3:] == [5, 3], "ctx widens for its marker, and narrows again when its sort goes off"
+        await pilot.click(table, offset=(header_x(table, 1), 0))
+        await pilot.pause()
+        assert store.setting("layout.sort.sessions") == "session▲", "kept for the next start"
         await pilot.click(table, offset=(1, 0))
         await pilot.pause()
         assert str(table.ordered_columns[0].label) == "*", "and on again"

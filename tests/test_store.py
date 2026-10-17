@@ -7,7 +7,9 @@ from unittest import mock
 
 import pytest
 
-from claude_wheelhouse.store import TRIGGER_NAMES, SessionGone, Store
+from claude_wheelhouse import whatsnew
+from claude_wheelhouse.store import (TOUR_MIGRATED, TRIGGER_NAMES, TUTORIAL_OFFER, SessionGone, Store,
+                                     now, standing)
 
 
 def test_pragmas_make_every_commit_durable(store):
@@ -220,6 +222,24 @@ def test_any_unfinished_item_can_be_processing(store, sid, kind, status, steps, 
     assert store.sessions()[0]["open_questions"] == 0, f"{desc}: only questions are counted"
 
 
+@pytest.mark.parametrize("kind, awaiting, desc", [
+    (None, False, "a reply written before messages had a kind (#76): no longer awaiting, finished"),
+    ("reply", False, "a reply: no longer awaiting, finished"),
+    ("status", False, "a status call: no longer awaiting, finished"),
+    ("note", True, "a note isn't a reply: still awaiting, so it stays in the inbox"),
+])
+def test_a_dismissed_done_task_the_session_answered_is_finished(store, sid, kind, awaiting, desc):
+    ref = store.post_item(sid, "task", "x", status="done")
+    store.send(sid, "and?", ref)
+    with store.tx() as db:
+        db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, delivered_at, kind) "
+                   "VALUES (?, ?, 'claude', 'that too', ?, ?, ?)", (sid, ref, now(), now(), kind))
+    store.dismiss(sid, ref, True)
+    busy = store.awaiting()
+    assert ((sid, ref) in busy) == awaiting, desc
+    assert standing(store.item(sid, ref), busy) == ("active" if awaiting else "finished"), desc
+
+
 def test_a_processing_question_ranks_below_one_awaiting_the_person(store, sid):
     sent = store.post_item(sid, "question", "sent")
     store.post_item(sid, "task", "blocked", status="blocked")
@@ -321,6 +341,43 @@ def test_decisions_seen_before_they_stayed_are_closed_once(db_file, sid, store):
     fresh = store.post_item(sid, "decision", "new", **DECIDED)
     store.mark_seen(sid, fresh)
     assert Store(db_file).item(sid, fresh)["status"] == "seen", "the migration runs once"
+
+
+TOUR_FEATURES = (whatsnew.Feature("old-a", "0.2.0", "inbox", note="A.", tip="A."),
+                 whatsnew.Feature("old-b", whatsnew.UNRELEASED, whatsnew.ADVANCED, note="B."))
+
+
+@pytest.mark.parametrize("offer, sessions, after, skipped, desc", [
+    ("taken", 1, "taken", {}, "taken: nothing written, so the registered features are pending"),
+    (None, 1, None, {}, "unset with sessions: nothing written, so they are pending"),
+    ("dismissed", 1, "never", {"old-a": "skipped", "old-b": "skipped"},
+     "dismissed: Never, every registered feature skipped"),
+    (None, 0, None, {}, "unset, no sessions: a new user, offered the full tour"),
+    ("reset", 1, "reset", {}, "reset: kept, the full tour offered"),
+])
+def test_the_tour_migration(db_file, store, tmp_path, monkeypatch, offer, sessions, after, skipped, desc):
+    monkeypatch.setattr(whatsnew, "FEATURES", TOUR_FEATURES)
+    for _ in range(sessions):
+        store.create_session(str(tmp_path))
+    store.clear_setting(TOUR_MIGRATED)   # as before the change
+    if offer:
+        store.set_setting(TUTORIAL_OFFER, offer)
+    migrated = Store(db_file)
+    assert (migrated.setting(TUTORIAL_OFFER), migrated.tour_seen()) == (after, skipped), desc
+    migrated.set_setting(TUTORIAL_OFFER, "dismissed")   # as the old code, still running, may write
+    monkeypatch.setattr(whatsnew, "FEATURES", ())
+    again = Store(db_file)
+    assert (again.setting(TUTORIAL_OFFER), again.tour_seen()) == ("dismissed", skipped), f"{desc}: it runs once"
+
+
+def test_never_skips_only_the_features_registered_then(store, monkeypatch):
+    store.see_features(["seen"], "shown")
+    monkeypatch.setattr(whatsnew, "FEATURES", TOUR_FEATURES)
+    store.tour_never()
+    assert (store.setting(TUTORIAL_OFFER), store.tour_seen()) == (
+        "never", {"seen": "shown", "old-a": "skipped", "old-b": "skipped"}), "a feature already shown keeps its record"
+    with pytest.raises(ValueError):
+        store.see_features(["x"], "glanced")
 
 
 @pytest.mark.parametrize("name, desc", [

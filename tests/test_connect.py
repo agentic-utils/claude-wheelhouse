@@ -73,6 +73,19 @@ def test_the_daemon_keeps_its_start_pipe_from_what_it_starts(state):
     assert flags & os.O_CLOEXEC, f"inheritable: flags {flags:o}"
 
 
+def test_the_first_run_starts_a_daemon_with_no_state_dir_yet(tmp_path, monkeypatch):
+    """A new install: nothing has made the state dir, which daemon.log goes in, before the app starts a daemon."""
+    state_dir = tmp_path / "fresh" / "claude-wheelhouse"
+    monkeypatch.setenv("WHEELHOUSE_DB", str(state_dir / "wheelhouse.db"))
+    port = free_port()
+    try:
+        url, _, said = connect.local(state_dir, port)
+        assert url == f"http://127.0.0.1:{port}" and said == []
+        assert f"pid {os.getpid()} asked for a daemon" in (state_dir / connect.LOG).read_text()
+    finally:
+        connect.halt(state_dir)
+
+
 @pytest.mark.parametrize("on", [False, True])
 def test_a_daemon_started_by_an_app_in_sdk_mode_is_in_it_too(tmp_path, monkeypatch, on):
     """It runs in the state dir, where the starting directory's .env isn't: so it is told."""

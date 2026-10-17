@@ -21,9 +21,11 @@ Decided:
   (answered, processing, unseen, seen, and any status not named), running, todo, then the
   settled and finished; `▼` the reverse; ties newest first (Q104), the settled and
   finished as `*` has them (the latest to settle lowest).
-- The session list's dot column has one sort, `*`: running first, then the latest
-  activity. A second click goes back to the person's order. Its other headers keep their
-  click: every session's items, as Esc (D109).
+- The session list's dot column has its sort, `*`: running first, then the latest
+  activity. A click on its header puts `*` on and leaves it on; the person's order comes
+  only from a drag across groups. Its other columns (name, context, `?`, `D`, `✉`) cycle
+  `▲`, `▼`, then back to the dot's `*`, as the inbox's do (#75, superseding D109's toggle).
+  The header past them keeps its click: every session's items, as Esc.
 - Children (agents and docs under an item, `.plan/docs-in-inbox.md`) are never dragged on
   their own: they move with their parent (D109).
 - The sort is kept per TUI under `layout.sort.*`; the person's order is in the DB (D109).
@@ -137,6 +139,8 @@ the first, group places in the second.
 | inbox | ref | (prefix, number): `T2` before `T10` | `inbox_rank` |
 | inbox | title | casefolded | `inbox_rank` |
 | sessions | dot `*` | (parked, not running) | `last_at` newest first, then creation order |
+| sessions | session | (parked, name casefolded, its numbers by value) | running first, then as dot `*` |
+| sessions | ctx, `?`, `D`, `✉` | (parked, context tokens or the count) | running first, then as dot `*` |
 
 `▼` reverses the column's key only. Within a group the person's places come after the
 rows not placed, as above. Grouped subagents (no parent) keep to their band's foot, by
@@ -147,8 +151,9 @@ session, as before, and are not dragged.
 `DataTable` posts `HeaderSelected` for a click on the header; the app's `sort_by` takes
 it. The inbox's columns have keys, and the column in force carries its marker in its
 label (`status *`, `title ▲`): a change rebuilds the columns, as a filter does. The
-session list's dot column shows `*` or nothing; `SessionList._on_click` lets a click on
-that header through, and keeps "every session's items" for the rest.
+session list's columns have no keys: `ordering.SESSION_COLUMNS` names them by position,
+and `paint_session_header` marks the one in force. `SessionList._on_click` lets a click on
+their headers through, and keeps "every session's items" for the header past them.
 
 ## The drag
 
