@@ -136,8 +136,9 @@ def test_a_daemon_from_another_package_is_joined_if_its_api_matches(state, monke
     _, _, said = connect.local(state_dir, port)
     assert daemon_pid(state_dir) == pid and said == [f"the daemon (pid {pid}) runs other code, from "
                                                      f"{fingerprint.PACKAGE.parent}/claude_wheelhouse"], said
-    monkeypatch.setattr(fingerprint, "API", 3)
-    with pytest.raises(connect.NoDaemon, match="speaks API 2, this wheelhouse 3"):
+    api = fingerprint.API   # one past whatever it is now, so a bump never breaks the test
+    monkeypatch.setattr(fingerprint, "API", api + 1)
+    with pytest.raises(connect.NoDaemon, match=f"speaks API {api}, this wheelhouse {api + 1}"):
         connect.local(state_dir, port)
 
 
