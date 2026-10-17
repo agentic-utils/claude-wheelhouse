@@ -392,8 +392,11 @@ Windows clipboard through PowerShell, so it takes most of a second; elsewhere it
 wheelhouse's own last copy. Hold `Shift` to drag with the terminal's own selection
 instead.
 
-Each pane is titled in its top border: Sessions, Stats and Session info down the left
-column, Inbox in the middle, Detail on the right. Every boundary between areas can be
+The left column holds Sessions, Stats and Session info, top to bottom; the Inbox is in
+the middle and Detail on the right. Sessions, Session info, Inbox and Detail are titled in
+their top border; the Stats panel's own border names the session it shows. The first two
+columns are 45 wide where there's room; on a narrower terminal they give way in proportion,
+each down to its minimum, so Detail keeps 40. Every boundary between areas can be
 dragged: the lines between the three columns, between the panes in the left column, and
 above the answer box. A line turns teal under the pointer and while you drag it, and no pane goes
 below its minimum (the session column never gets too narrow for its buttons' captions).
