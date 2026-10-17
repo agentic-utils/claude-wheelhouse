@@ -10,11 +10,15 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
 from claude_wheelhouse import auth, connect, features, fingerprint
 import conftest
+
+
+needs_proc = pytest.mark.skipif(not Path("/proc").exists(), reason="reads another process's /proc")
 
 
 def free_port() -> int:
@@ -59,6 +63,7 @@ def test_none_running_starts_one_and_the_next_joins_it(state):
     assert f"pid {os.getpid()} asked for a daemon" in log and f"wheelhouse daemon (pid {pid}) on {url}" in log
 
 
+@needs_proc
 def test_the_daemon_keeps_its_start_pipe_from_what_it_starts(state):
     """The pipe's write end, named on its command line, stays open in the daemon (its
     closing says it has exited) but is close-on-exec, so no host or tab it starts holds it."""
@@ -348,6 +353,7 @@ def test_a_daemon_the_tests_start_cant_run_claude(state):
     assert f"couldn't start Claude Code: [Errno 2] No such file or directory: '{conftest.NO_CLAUDE}'" in log, log
 
 
+@needs_proc
 def test_the_daemon_never_sees_the_apps_token_in_its_environment(state, monkeypatch):
     state_dir, port = state
     monkeypatch.setenv("WHEELHOUSE_TOKEN", "a-connect-token")

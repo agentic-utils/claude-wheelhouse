@@ -3,18 +3,25 @@ stopping one (stop), guarded the same way.
 
 Sleep and hibernate keep the process, so the session stays live. A reboot or a
 WSL shutdown changes the boot id, so it is dead. The process start time guards
-against pid reuse. The heartbeat only feeds the 'stalled' hint.
+against pid reuse. The heartbeat only feeds the 'stalled' hint. Linux reads both from
+/proc; macOS, which has none, from sysctl and ps.
 """
 
 import json
+import ctypes
+import ctypes.util
 import os
+import shutil
 import signal
+import struct
+import sys
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 PROC = Path("/proc")
+libc = ctypes.CDLL(ctypes.util.find_library("c"))   # macOS's sysctl and libproc, where there's no /proc
 SESSIONS = Path.home() / ".claude/sessions"   # Claude Code's record of each running session
 STARTING_GRACE = 90      # seconds a launched session may take to register
 STALLED_AFTER = 120      # heartbeat age that suggests a stalled session
@@ -23,15 +30,38 @@ WAKE_GRACE = 60          # hold off the stalled hint this long after waking
 KILL_AFTER = 10          # seconds a stopped Claude Code has to exit before its process group is killed
 # the process-group calls stop makes, here so a test can stub them for liveness alone
 getpgid, killpg = os.getpgid, os.killpg
+# Starts a command detached, init's child rather than ours, so it is reaped when it exits rather
+# than left a zombie that still looks alive. setsid --fork where there is one (util-linux), else
+# the same in Python (macOS)
+DETACH = ["setsid", "--fork"] if shutil.which("setsid") else [
+    sys.executable, "-c", "import os, sys; os.setsid(); os.fork() and os._exit(0); os.execvp(sys.argv[1], sys.argv[1:])"]
 
 
 def boot_id(proc: Path = PROC) -> str:
+    if not proc.exists():   # macOS
+        buf, size = ctypes.create_string_buffer(64), ctypes.c_size_t(64)
+        libc.sysctlbyname(b"kern.bootsessionuuid", buf, ctypes.byref(size), None, 0)
+        return buf.value.decode()
     return (proc / "sys/kernel/random/boot_id").read_text().strip()
+
+
+def lstart(text: str) -> int:
+    """Seconds since the epoch from ps's lstart in UTC and the C locale ("Sat Oct 17 03:53:50
+    2026"), as Claude Code records a process's start (procStart) on macOS."""
+    return int(datetime.strptime(" ".join(text.split()), "%a %b %d %H:%M:%S %Y").replace(tzinfo=timezone.utc).timestamp())
 
 
 def start_time(pid: int, proc: Path = PROC) -> int | None:
     """Field 22 of /proc/<pid>/stat: start time in clock ticks since boot. None for a
-    process that has gone, or exited and not been reaped yet (state Z): it keeps its stat."""
+    process that has gone, or exited and not been reaped yet (state Z): it keeps its stat.
+    Without /proc (macOS), its start in seconds since the epoch, from libproc."""
+    if not proc.exists():
+        # libproc's struct proc_bsdinfo (PROC_PIDTBSDINFO, 3): pbi_status at 4, pbi_start_tvsec at 120
+        info = ctypes.create_string_buffer(136)
+        if libc.proc_pidinfo(pid, 3, 0, info, 136) != 136:
+            return None
+        status, = struct.unpack_from("I", info, 4)
+        return None if status == 5 else struct.unpack_from("Q", info, 120)[0]   # 5: SZOMB
     try:
         stat = (proc / str(pid) / "stat").read_text()
     except OSError:
@@ -114,7 +144,8 @@ def running_sessions(sessions: Path = SESSIONS, proc: Path = PROC) -> dict[str, 
     for f in sessions.glob("*.json"):
         try:
             rec = json.loads(f.read_text())
-            pid, start = int(rec["pid"]), int(rec["procStart"])
+            pid, start = int(rec["pid"]), rec["procStart"]
+            start = lstart(start) if isinstance(start, str) and not start.isdigit() else int(start)
             sid = rec["sessionId"]
         except (OSError, ValueError, KeyError, TypeError):
             continue

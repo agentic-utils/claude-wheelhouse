@@ -107,3 +107,11 @@ def test_stop(proc, monkeypatch, no_group_kill, start, kill_after, gone_on_term,
     assert terms == ([(4242, liveness.signal.SIGTERM)] if termed else []), desc
     assert [d for d, *_ in timers.started] == ([kill_after] if termed and kill_after else []), desc
     assert no_group_kill == ([(-4242, liveness.signal.SIGKILL)] if group_killed else []), desc
+
+
+@pytest.mark.parametrize("text, expected, desc", [
+    ("Sat Oct 17 03:53:50 2026", 1792209230, "Claude Code's procStart on macOS: ps's lstart in UTC"),
+    ("Thu Oct  1 03:53:50 2026", 1790826830, "a one-digit day, padded with a space"),
+])
+def test_lstart(text, expected, desc):
+    assert liveness.lstart(text) == expected, desc
