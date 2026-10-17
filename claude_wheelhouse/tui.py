@@ -118,9 +118,11 @@ CORE_PANES = {"sessions": ("sessions-pane", "left.top"), "session-info": ("sessi
               "items": ("items-pane", "middle.top"), "detail": ("detail-pane", "right")}
 PANE_OF = {widget: pane for pane, (widget, _) in CORE_PANES.items()}
 # the least room a pane needs, (columns, rows): its slot and column grow to it wherever it
-# goes (WheelhouseApp.fit_panes). Every button its caption and a row of description; the
-# session list's header and three sessions; the detail pane's text beside its scrollbar
-PANE_MINIMUM = {"session-info": (39, 12), "sessions": (0, 6), "detail": (24, 3)}
+# goes (WheelhouseApp.fit_panes), every core pane its own. Every button its caption and a row
+# of description; the session list's header and two sessions; the inbox's header; the
+# detail pane's text beside its scrollbar. Small enough that any one column of them fits 80
+# by 24 (Session info's 12, Sessions' 5, the Inbox's 3 and two splitters in 22 rows)
+PANE_MINIMUM = {"session-info": (39, 12), "sessions": (12, 5), "items": (12, 3), "detail": (24, 3)}
 
 
 def pane_of(widget: Widget) -> str:
@@ -169,7 +171,9 @@ def kept_slots(value: str | None) -> dict[str, str]:
 def rehome(widget: Widget, to: Widget) -> None:
     """A pane moved to another slot, the same widget with its state (its rows, scroll, timers,
     workers): Textual mounts a widget once, so remove and mount would need a new one, and
-    move_child stays within a parent. Done as move_child does it, across parents."""
+    move_child stays within a parent. Done as move_child does it, across parents, through
+    Textual's internals (_nodes, _attach): pyproject.toml pins textual below 8.3 for this,
+    so check it before widening the pin."""
     old = widget.parent
     old._nodes._remove(widget)
     widget._attach(to)
@@ -1493,6 +1497,7 @@ class Slot(Vertical):
             if event.screen_offset == self.press:   # not yet off the cell pressed: still a click
                 return
             self.dragging = True
+            self.screen.clear_selection()   # the press began a text selection too: the drag's, not one
         event.stop()
         self.aim(self.app.slot_at(event.screen_offset))
 
@@ -1517,6 +1522,7 @@ class Slot(Vertical):
         self.aim(None)
         self.press, self.dragging = None, False
         self.release_mouse()
+        self.screen.clear_selection()
         if drop and target is not None:
             self.app.swap(self, target)
 
@@ -2826,6 +2832,7 @@ class WheelhouseApp(App):
                                set_effort=self.set_effort)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
         self.module_ids: dict[str, str] = {}   # each pane's widget id: the module that has it
+        self.pane_homes: dict[str, str] = {}   # each module pane's default slot, as it declares it (hosted)
         self.box_target: tuple | None = None
         self.landing = False   # a key's land under way, which the refresh tick waits out (tick)
         self.held_bars: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()   # by screen (bar_widgets)
@@ -2944,7 +2951,7 @@ class WheelhouseApp(App):
         main = splitter.parent
         if not (room := main.size.width):
             return None   # not laid out yet: the stylesheet's
-        columns = [s for s in main.children if isinstance(s, Splitter)]
+        columns = [s for s in main.children if isinstance(s, Splitter) and s.display]
         spare = room - len(columns) - DETAIL_ROOM - sum(s.fraction * room for s in columns if s.fraction is not None)
         giving = {s.panes()[0]: s for s in columns if s.fraction is None and s.panes()}
         widths = {}
@@ -3718,6 +3725,8 @@ class WheelhouseApp(App):
         for place in self.query(".slot"):
             await place.mount_all(list(self.hosted(place.name, taken)))
         self.place_panes(kept_slots(self.client.setting(SLOTS_KEY)))
+        self.collapse()
+        self.fit_panes()
 
     # the panes' places (.plan/modules.md, "Swapping panes", D116)
 
@@ -3726,12 +3735,9 @@ class WheelhouseApp(App):
         return {s.name: s for s in self.screen_stack[0].query(Slot)}
 
     def default_slots(self) -> dict[str, str]:
-        """Each pane's default slot, {pane: slot}: the core's, then the modules' as they were mounted."""
-        out = {pane: home for pane, (_, home) in CORE_PANES.items()}
-        for name, place in self.slots().items():
-            for widget in place.children:
-                out.setdefault(pane_of(widget), name)
-        return out
+        """Each pane's default slot, {pane: slot}: the core's, then the modules' as they
+        declare them (api.Pane.slot), never where they are now."""
+        return {**{pane: home for pane, (_, home) in CORE_PANES.items()}, **self.pane_homes}
 
     def layout_now(self) -> dict[str, str]:
         """Where each pane is, {slot: pane}, an empty slot left out."""
@@ -3746,19 +3752,33 @@ class WheelhouseApp(App):
                   if where.get(pane_of(w), place.name) != place.name]
         for widget, to in moving:
             rehome(widget, to)
-        self.collapse()
-        self.fit_panes()
 
     def collapse(self) -> None:
         """An empty slot collapses, and the splitter between it and its neighbour with it:
-        its column's other slots share the room. A column with every slot empty collapses too."""
+        its column's other slots share the room. A column with every slot empty collapses too,
+        and the last column shown takes the rest of the width (1fr, as Detail's does), each
+        column splitter before it sizing its column against that one."""
         screen = self.screen_stack[0]
         for place in screen.query(".slot"):
             place.display = bool(place.children)
-        for column in screen.query(".column"):
+        columns = list(screen.query(".column"))
+        for column in columns:
             column.display = any(place.display for place in column.query(".slot"))
+        shown = [c for c in columns if c.display]
+        last = shown[-1] if shown else None
+        sizing = {"#" + c.id: c for c in columns}
         for splitter in screen.query(Splitter):
-            if (panes := splitter.panes()) and all(p.has_class("slot") or p.has_class("column") for p in panes):
+            if (column := sizing.get(splitter.sized_selector)) is not None:
+                splitter.display = column.display and column is not last
+                if last is not None:
+                    splitter.flex_selector = "#" + last.id
+                if column is last:
+                    column.styles.width = "1fr"
+                    column.filling = True
+                elif getattr(column, "filling", False):   # the rest no more: its own width again
+                    column.filling = False
+                    splitter.apply(splitter.fraction)
+            elif (panes := splitter.panes()) and all(p.has_class("slot") for p in panes):
                 splitter.display = all(p.display for p in panes)
 
     def fit_panes(self) -> None:
@@ -3786,8 +3806,9 @@ class WheelhouseApp(App):
         return next((w for w in widget.ancestors_with_self if isinstance(w, Slot)), None)
 
     class LayoutChanged(Message):
-        """Panes moved between slots (a swap, or Reset layout): for whatever follows a pane,
-        as the tour's callout does."""
+        """Panes moved between slots (a swap, or Reset layout), for whatever needs to know.
+        Nothing listens yet: the tour's callout follows its pane on the screen's layout
+        refresh (screen_layout_refresh_signal), which a swap causes too."""
 
     def swap(self, one: Slot, other: Slot) -> None:
         """A pane dragged by its title onto another (Slot): the two swap slots, each keeping
@@ -3847,6 +3868,8 @@ class WheelhouseApp(App):
                 self.panes.append(widget)
             except Exception as e:
                 widget = Static(Text(f"{item.name}: {e}", style="dim"), classes="module-error")
+                widget.pane_id = item.name   # in a layout, the card stands for its module's pane
+            self.pane_homes.setdefault(pane_of(widget), slot)   # its declared slot (api.Pane.slot), for good
             yield widget
 
     def each_pane(self, hook: str, *args) -> None:
@@ -3860,6 +3883,7 @@ class WheelhouseApp(App):
             except Exception as e:
                 self.panes.remove(widget)
                 card = Static(Text(f"{widget.id}: {type(e).__name__}: {e}", style="dim"), classes="module-error")
+                card.pane_id = widget.id
                 widget.parent.mount(card, after=widget)
                 widget.remove()
 

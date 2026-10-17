@@ -7702,6 +7702,7 @@ async def test_a_title_drag_that_swaps_nothing(store, sid, how, desc):
         assert app.layout_now() == DEFAULT_LAYOUT, desc
         assert store.setting("layout.slots") is None, desc
         assert not app.query(".-swap-target") and not any(s.dragging for s in app.query(tui.Slot)), f"{desc}: the drag over"
+        assert not app.screen.selections, f"{desc}: and no text selected by it"
 
 
 @pytest.mark.anyio
@@ -7746,3 +7747,78 @@ async def test_a_missing_modules_slot_stays_empty_until_it_returns(store, sid, m
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         assert app.layout_now()["left.top"] == "stats", "back where it was"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size", [(160, 40), (80, 24)])
+@pytest.mark.parametrize("saved, modules, desc", [
+    ({"left.middle": "detail", "right": "stats"}, False, "Detail swapped with Stats, then Stats uninstalled"),
+    ({"left.top": "detail", "right": "detail"}, True, "a corrupt layout naming Detail twice"),
+])
+async def test_an_empty_right_column_leaves_no_gap(store, sid, monkeypatch, size, saved, modules, desc):
+    """Review of #95: with the right column collapsed, the last column shown takes the rest of
+    the width, and the splitter between the two left stays usable."""
+    from claude_wheelhouse import api
+    if not modules:
+        monkeypatch.setattr(api, "load", lambda: [])
+    store.set_setting("layout.slots", json.dumps(saved))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        assert not app.query_one("#col-right").display, f"{desc}: the right column collapsed"
+        main = app.query_one("#main")
+        shown = [w for w in main.children if w.display]
+        assert sum(w.outer_size.width for w in shown) == main.size.width, f"{desc}: no gap at {size}"
+        assert [w.id for w in shown if not isinstance(w, Splitter)] == ["col-left", "col-middle"], desc
+        assert [s.key for s in shown if isinstance(s, Splitter)] == ["sessions-pane"], f"{desc}: one splitter, between them"
+        before = app.query_one("#col-left").size.width
+        await drag(pilot, "sessions-pane", -3 if size[0] == 160 else 3, 0)
+        assert app.query_one("#col-left").size.width != before, f"{desc}: and it still resizes"
+        for pane in ("sessions", "session-info", "items", "detail"):
+            region = pane_widget(app, pane).region
+            assert region.right <= size[0] and region.width > 2, f"{desc}: {pane} on screen at {size}"
+
+
+SWAPPABLE = ["sessions", "stats", "session-info", "items", "detail"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("pane, onto", list(itertools.combinations(SWAPPABLE, 2)))
+async def test_every_swap_fits_80_by_24(store, sid, pane, onto):
+    """Review of #95: each core pane keeps its own minimum wherever it goes, so no swap puts
+    one in a slot smaller than it, or cuts it to its border. The stats pane, a module's,
+    gives way to a row on a short terminal, as it does in its own slot."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        app.swap(pane_widget(app, pane).parent, pane_widget(app, onto).parent)
+        await pilot.pause()
+        await pilot.pause()
+        for each in SWAPPABLE:
+            widget = pane_widget(app, each)
+            assert widget.parent.region.contains_region(widget.region), f"{pane}<->{onto}: {each} within its slot"
+            assert widget.region.right <= 80 and widget.region.bottom <= 24, f"{pane}<->{onto}: {each} on screen"
+            if each != "stats":
+                assert widget.region.height >= 3, f"{pane}<->{onto}: {each} more than its border"
+
+
+@pytest.mark.anyio
+async def test_reset_puts_module_panes_in_their_declared_slots(store, sid, monkeypatch):
+    """Review of #95: a module pane's default is the slot it declares (api.Pane.slot), not
+    the one it's in, so Reset layout brings two swapped module panes home."""
+    from textual.widget import Widget
+    from claude_wheelhouse import api
+    loaded = [api.Loaded(m, api.Module(m, m.title(), "1.0", api.WHEELHOUSE_API,
+                                       [api.Pane(m.title(), home, {"tui": lambda ctx: Widget()})]))
+              for m, home in (("one", "left.middle"), ("two", "middle.bottom"))]
+    monkeypatch.setattr(api, "load", lambda: loaded)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.swap(app.slots()["left.middle"], app.slots()["middle.bottom"])
+        await pilot.pause()
+        assert (app.layout_now()["left.middle"], app.layout_now()["middle.bottom"]) == ("two", "one"), "swapped"
+        app.action_reset_layout()
+        await pilot.pause()
+        assert (app.layout_now()["left.middle"], app.layout_now()["middle.bottom"]) == ("one", "two"), "home again"
