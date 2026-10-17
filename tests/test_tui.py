@@ -5214,6 +5214,24 @@ async def test_a_shrunk_share_comes_back_with_room(store, sid):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("stored, kept, desc", [
+    ({"items": "0.5"}, {"items": None}, "the old items-over-stats share: deleted, and sizes nothing"),
+    ({"detail-pane": "0.3"}, {"detail-pane": None}, "the old Detail column share: deleted"),
+    ({"middle-top": "0.5"}, {"middle-top": "0.5"}, "a share for the Inbox over an empty slot: kept, not applied"),
+])
+async def test_the_inbox_fills_its_column_whatever_was_stored(store, sid, stored, kept, desc):
+    """Review of #86: a share kept for a splitter beside a collapsed slot left half the Inbox
+    column blank."""
+    for key, value in stored.items():
+        store.set_setting("layout." + key, value)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert app.query_one("#slot-middle-top").region.height == app.query_one("#col-middle").size.height, desc
+    assert {key: store.setting("layout." + key) for key in kept} == kept, desc
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("missing, desc", [
     (False, "a module pane swapped for a card: the card keeps its slot, under the splitter"),
     (True, "a neighbour gone altogether: the splitter does nothing"),

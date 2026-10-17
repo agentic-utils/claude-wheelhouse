@@ -121,7 +121,7 @@ SPLITTERS = {"sessions-pane", "items-pane", "session-info", "answer"}   # beside
     (None, {**CORE, "left.middle": ["stats"]}, {"left-middle"},
      "the default slots: stats under the session list, middle.bottom empty and collapsed"),
     ([], CORE, set(), "no modules: left.middle collapses too"),
-    ([api.Loaded("demo", module(slot="middle.bottom"))], {**CORE, "middle.bottom": ["demo"]}, {"items"},
+    ([api.Loaded("demo", module(slot="middle.bottom"))], {**CORE, "middle.bottom": ["demo"]}, {"middle-top"},
      "a pane for middle.bottom: it shows under the inbox"),
 ])
 async def test_the_slots(store, monkeypatch, loaded, slots, splitters, desc):

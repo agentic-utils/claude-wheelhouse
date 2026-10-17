@@ -111,6 +111,9 @@ def slot(name: str) -> Vertical:
 
 
 LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of its parent
+# keys no splitter has now, deleted at start: items sized the items over the stats, and
+# detail-pane the column between them and Detail, before the six slots (.plan/modules.md)
+RETIRED_LAYOUT = ("items", "detail-pane")
 
 
 def eye_at(frame: int, width: int = 8) -> int:
@@ -2590,7 +2593,7 @@ class WheelhouseApp(App):
                     with Vertical(id="items-pane", classes="panel") as pane:
                         pane.border_title = "Inbox"
                         yield ItemList(id="items", cursor_type="row")
-                yield Splitter("items", "#slot-middle-top", "#slot-middle-bottom", "y")
+                yield Splitter("middle-top", "#slot-middle-top", "#slot-middle-bottom", "y")
                 yield slot("middle.bottom")
             yield Splitter("items-pane", "#col-middle", "#col-right", "x")
             with Vertical(id="col-right"), slot("right"):
@@ -2632,8 +2635,13 @@ class WheelhouseApp(App):
         for widget in (self.query_one("#session-info-scroll"), self.query_one("#checklist-scroll"), self.detail_scroll,
                        *self.query("#session-info-pane Grid Button")):
             widget.can_focus = False
+        for key in RETIRED_LAYOUT:   # once: after that they're gone
+            if self.client.setting(LAYOUT + key) is not None:
+                self.client.set_setting(LAYOUT + key, None)
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
-            if (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
+            # one beside a collapsed slot keeps its stylesheet's size: a share there would
+            # size a slot that has the column to itself
+            if splitter.display and (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
                 splitter.apply(stored)
         self.eye_col = self.session_list.add_columns("", "session", "ctx", "?", "D", "✉", "")[-1]
         self.item_sort = self.kept_sort("items")
