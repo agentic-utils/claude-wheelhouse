@@ -302,7 +302,7 @@ session.
   the tab stays open on its error. If the wheelhouse can't start
   a session in its tab, the tab stays open saying why. The wheelhouse never deletes
   anything by itself.
-  The buttons stay out of the Tab order, and each has a key: with the list focused, `R` renames, `L` relaunches
+  `Tab` reaches the buttons after the answer box, and each has a key: with the list focused, `R` renames, `L` relaunches
   (or unparks), `P` parks (or unparks) and `Delete` or `Backspace` forgets; the rest are under Keys below. `E`, `S`
   and `Shift+S` (End, Restore and Restore all before) do nothing for now.
 - **Adopt.** Brings a session the wheelhouse didn't launch into the wheelhouse: pick it
@@ -355,11 +355,16 @@ Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item lis
 as answered, a decision as seen), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
 Every dialog opens centred over the screen, which stays in sight behind it. `Esc`, or a click outside the box, cancels it, though not the first-run tutorial offer (a line over the whole screen, which `Esc` turns off), nor a click outside in the moment a dialog opens (a double-click's second). `Enter` presses the focused button; with focus on a one-line box or a checkbox it takes the dialog's one action (Launch, Rename, Fork, Park and the like), while in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices (Stop & Forget's, Relaunch's) answers `Enter` only on the focused button. `Tab` and `Shift+Tab` go round its boxes and buttons. A dialog asking yes or no takes `Y` or `N` (`Esc` is no, and so is `Enter`, as No has the focus). The `?` list closes on `Esc`, `Enter`, `?` or a click outside.
 
-`Tab` goes round the panes: the session list, the items, the answer box, then the conversation (one
-stop, where the arrows, `PgUp`, `PgDn`, `Home` and `End` scroll it), and `Shift+Tab` goes back.
-`Ctrl+Enter` in the answer box goes back to the items with the cursor where it was, so answering a run
-of items is: type, `Ctrl+Enter`, `Down`, `Tab`, type, `Ctrl+Enter`. An item opened full screen has two
-stops, its answer box and its thread. Keys typed ahead of the screen end as if typed slowly: each acts once the one
+`Tab` goes round the session list, the items, the answer box, then every button shown, in reading
+order, then the stats pane's effort slider (while it shows) and its zoom's `-` and `+` (`Enter` or
+`Space` presses the one with the focus), and `Shift+Tab` goes back. Nothing else is a stop. A click in the conversation puts focus in the
+answer box, where `PgUp` and `PgDn` scroll the conversation, and `Ctrl+Enter` leaves it there. A click on
+a button leaves focus where it was. A focused button that is disabled or hidden (Send, once it has sent)
+gives focus to the answer box. Send (its button or `Ctrl+S`) from the answer box or a button leaves focus in
+the box; from the session list or the items, focus stays there. An item opened full screen goes the same way: its
+answer box, then its buttons, and a click in its thread puts focus in the box. A doc shown in the inbox
+has no answer box: it takes the box's place in the Tab order, and a click on it focuses it, so the arrows,
+`PgUp`, `PgDn`, `Home` and `End` scroll it. Keys typed ahead of the screen end as if typed slowly: each acts once the one
 before it has done all it does, so the ones behind a key that opens a thread or a dialog go to it, and the ones behind a
 dialog's answer go to the screen it uncovers.
 
@@ -396,8 +401,8 @@ highlight goes to the row immediately above the topmost row it took, or to the n
 if that was the first.
 
 Text: drag the mouse over the conversation or a thread to select part of it (shown black
-on white), double-click to select a word, `Ctrl+A` selects all of the focused pane or answer box (in the item list it marks the finished rows), and `Ctrl+C` copies the
-selection (through the terminal, which Windows Terminal supports). Right-click does as a
+on white), double-click to select a word, `Ctrl+A` in the answer box selects its text (in the item list it marks the finished rows; in a doc opened
+full screen it selects the whole doc), and `Ctrl+C` copies the selection (through the terminal, which Windows Terminal supports). Right-click does as a
 terminal's does: it copies the selection, or with nothing selected pastes the clipboard
 into the answer box under the pointer (or the focused one). Under WSL the paste reads the
 Windows clipboard through PowerShell, so it takes most of a second; elsewhere it pastes the
