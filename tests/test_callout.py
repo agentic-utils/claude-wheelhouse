@@ -126,3 +126,17 @@ async def test_hidden_under_another_screen_and_unhighlighted_once_gone():
         await app.callout.remove()
         await pilot.pause()
         assert not app.query(f".{HIGHLIGHT}"), "its pane's highlight goes with it"
+
+
+@pytest.mark.anyio
+async def test_every_pane_resolves_in_the_real_app(store):
+    """Review of #86: a PANES selector left at an id the six slots changed finds no pane, or
+    the wrong one, and the callout sits centred, describing nothing."""
+    from claude_wheelhouse.callout import PANES
+    from claude_wheelhouse.tui import WheelhouseApp
+
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        for pane, (selector, _) in PANES.items():
+            assert app.screen.query_one(selector).parent.has_class("slot"), f"{pane}: {selector} is the pane in its slot"

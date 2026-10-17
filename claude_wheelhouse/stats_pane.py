@@ -39,7 +39,7 @@ class SessionStats(Widget):
     session list's context bars (stats.follower), so a transcript is read once for both. The panel and the charts' columns are rebuilt on
     each tick; animate only recolours the columns."""
 
-    DEFAULT_CSS = "SessionStats { height: 1fr; background: #000000; border-top: solid #7b61ff; }"
+    DEFAULT_CSS = "SessionStats { height: 1fr; background: #000000; }"
     # the effort slider's, while it has the focus (a session run by a host in context), and
     # the zoom's: the pane takes focus only while it has one of them (tab_parts)
     BINDINGS = [Binding("left", "effort(-1)", "Lower effort", show=False),
@@ -402,4 +402,4 @@ class SessionStats(Widget):
 
 module = api.Module(
     id="stats", title="Stats", version=importlib.metadata.version("claude-wheelhouse"), api=api.WHEELHOUSE_API,
-    panes=[api.Pane("Stats", "inbox.side", {"tui": SessionStats})])
+    panes=[api.Pane("Stats", "left.middle", {"tui": SessionStats})])

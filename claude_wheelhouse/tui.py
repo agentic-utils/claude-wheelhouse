@@ -102,10 +102,21 @@ def closable(item) -> bool:
     once it has settled (store.SETTLED), dismissed or not."""
     return item["kind"] in CLOSABLE or item["kind"] == "doc" or (
         item["kind"] in DISMISSABLE and item["status"] in SETTLED[item["kind"]])
-# where each module slot (api.SLOTS) is mounted: at the end of this container
-SLOT_PARENTS = {"inbox.side": "#items-pane"}
+
+
+def slot(name: str) -> Vertical:
+    """One of the six places a pane goes (api.SLOTS, .plan/modules.md), found by its name.
+    Its splitters size it, not the pane in it. Empty, it collapses (WheelhouseApp.collapse)."""
+    return Vertical(name=name, id="slot-" + name.replace(".", "-"), classes="slot")
+
+
 LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of its parent
 SESSION_LABELS = ("", "session", "ctx", "?", "D", "✉")   # the session list's headers, as ordering.SESSION_COLUMNS
+# keys no splitter has now, deleted at start: items sized the items over the stats,
+# detail-pane the column between them and Detail, and session-info the description inside
+# the sessions pane, before the six slots (.plan/modules.md); left-bottom sizes its slot now
+RETIRED_LAYOUT = ("items", "detail-pane", "session-info")
+DETAIL_ROOM = 40   # the columns Detail keeps on a narrow terminal while the others can give way
 
 
 def eye_at(frame: int, width: int = 8) -> int:
@@ -1551,7 +1562,9 @@ class ThreadView(Screen):
             self.text = text
             self.query_one("#thread", Transcript).update(render(blocks))
             if following:   # at the newest reply, or opening: scrolled up to read, it keeps its place
-                scroll.scroll_end(animate=False)
+                # after a refresh, as the detail pane's: scroll_end's own wait can end before the
+                # new reply is laid out, rows short of the end, which stops it following
+                self.call_after_refresh(scroll.scroll_end, animate=False)
 
 
 def doc_blocks(item, doc) -> list[tuple[str, str]]:
@@ -2505,11 +2518,18 @@ class WheelhouseApp(App):
     DataTable > .datatable--header {{ background: #12122a; color: #05d9e8; text-style: bold; }}
     DataTable > .datatable--cursor {{ background: #004466; color: #ffffff; }}   /* deep cyan: clear on black, apart from the marked purple and the grey hover, green and status text readable on it */
     /* the splitters' defaults, and the least each pane keeps when one is dragged (Splitter) */
-    #sessions-pane {{ width: 39; min-width: 39; }}   /* every button its caption; names take the room the other columns leave (name_room) */
-    #items-pane {{ width: 1fr; min-width: 12; }}   /* 39 + 12 + 24 + the splitters: three columns on 80 */
-    #items {{ height: 1fr; min-height: 3; }}   /* the top half; the stats the bottom */
-    .-split {{ border-top: none; min-height: 3; }}   /* the first module pane under the items: the splitter is its line */
-    #detail-pane {{ width: 2fr; min-width: 24; }}
+    /* the columns 45, 45 and the rest (.plan/modules.md); 39 + 12 + 24 + the splitters on 80 */
+    #col-left {{ width: 45; min-width: 39; }}   /* every button its caption; names take the room the other columns leave (name_room) */
+    #col-middle {{ width: 45; min-width: 12; }}
+    #col-right {{ width: 1fr; min-width: 24; }}
+    /* the slots in a column: the top one takes what the others leave, about 12, 11 and 12
+       rows at 40 and 21, 17 and 17 at 60 (a chart under the gauges from about 50) */
+    #slot-left-top {{ height: 1fr; min-height: 6; }}   /* the list's header and three sessions: 24 rows fit */
+    #slot-left-middle {{ height: 30%; min-height: 1; }}   /* on a short terminal the stats give way first, to a row */
+    #slot-left-bottom {{ height: 30%; min-height: 12; }}   /* every button, and a row of description */
+    #slot-middle-top, #slot-middle-bottom {{ height: 1fr; min-height: 3; }}
+    .panel {{ border-title-color: #05d9e8; }}   /* each pane's title, in its top border */
+    #items {{ height: 1fr; min-height: 3; }}
     #detail-scroll {{ height: 1fr; min-height: 3; scrollbar-gutter: stable; }}   /* its width the same, scrolling or not */
     #docview-scroll {{ height: 1fr; scrollbar-gutter: stable; }}
     #docview {{ background: #000000; color: {MATRIX}; }}
@@ -2522,7 +2542,7 @@ class WheelhouseApp(App):
     .answer-hint {{ color: #777777; height: 1; }}
     #thread-scroll {{ height: 1fr; }}
     #session-list {{ height: 1fr; min-height: 5; }}   /* on a short terminal the description gives way first */
-    #session-info {{ height: 50%; min-height: 3; background: #000000; padding: 0 1; }}
+    #session-info {{ height: 1fr; min-height: 1; background: #000000; padding: 0 1; }}
     #session-info-text {{ color: #e8e8e8; }}
     #session-info-scroll {{ height: 1fr; }}
     /* the activity's own two rows under the description, always there and never taller, so
@@ -2536,10 +2556,10 @@ class WheelhouseApp(App):
     #session-buttons, #conversation-buttons {{ grid-size: 3; grid-columns: 1fr 1fr 1fr; grid-rows: 1;
         grid-gutter: 1 1; height: auto; background: #000000; }}
     #conversation-buttons {{ padding-top: 1; }}   /* padding, not margin: the splitters fit by region */
-    #sessions-pane Grid Button {{ width: 1fr; min-width: 0; padding: 0; background: #4d4d4d; color: #ffffff; }}
-    #sessions-pane Grid Button:hover {{ background: #5e5e5e; }}
-    #sessions-pane Grid Button.-active {{ background: #6e6e6e; }}
-    #sessions-pane Grid Button:disabled {{ background: #333333; color: #8c8c8c; }}
+    #session-info-pane Grid Button {{ width: 1fr; min-width: 0; padding: 0; background: #4d4d4d; color: #ffffff; }}
+    #session-info-pane Grid Button:hover {{ background: #5e5e5e; }}
+    #session-info-pane Grid Button.-active {{ background: #6e6e6e; }}
+    #session-info-pane Grid Button:disabled {{ background: #333333; color: #8c8c8c; }}
     #conversation-buttons #mode, #session-buttons Button.wide {{ column-span: 2; }}
     #dialog {{ width: 80; max-width: 100%; height: auto; max-height: 100%; overflow-y: auto; padding: 1 2;
                background: #000000; color: {MATRIX}; border: thick #ff2a6d; }}
@@ -2680,35 +2700,49 @@ class WheelhouseApp(App):
     def compose(self) -> ComposeResult:
         yield TitleBar(id="title")
         with Columns(id="main"):
-            # the sessions, the highlighted one's description, and what can be done to it
-            with Vertical(id="sessions-pane", classes="panel"):
-                yield SessionList(id="session-list", cursor_type="row", show_cursor=False)   # none selected (D20)
-                yield Splitter("session-info", "#session-info", "#session-list", "y")
-                with Vertical(id="session-info"):
-                    with VerticalScroll(id="session-info-scroll"):
-                        yield Static(id="session-info-text")
-                    yield Static(id="session-activity")
-                with Grid(id="session-buttons"):
-                    for label, id_ in LIFECYCLE:   # compact: one row each
-                        yield BarButton(label, id=id_, compact=True, tooltip=BUTTONS[id_])
-                with Grid(id="conversation-buttons"):
-                    for label, id_, _ in CONVERSATION:
-                        yield BarButton(label, id=id_, compact=True, tooltip=BUTTONS[id_])
-            yield Splitter("sessions-pane", "#sessions-pane", "#items-pane", "x")
-            with Vertical(id="items-pane", classes="panel"):
-                yield ItemList(id="items", cursor_type="row")   # then a splitter and the inbox.side panes
-            yield Splitter("detail-pane", "#detail-pane", "#items-pane", "x")
-            with Vertical(id="detail-pane", classes="panel"):
-                with VerticalScroll(id="checklist-scroll"):   # scrolls on a short terminal (review 9)
-                    yield Static(id="checklist")
-                with ConversationScroll(id="detail-scroll"):
-                    yield Transcript(NOTHING_SELECTED, id="detail")
-                yield Splitter("answer", "#answer", "#detail-scroll", "y")
-                yield PermissionButtons()
-                yield DenyReason()
-                yield CompactButtons()
-                yield Compose(id="answer")
-                yield Hint(classes="answer-hint")
+            with Vertical(id="col-left"):
+                with slot("left.top"):   # the sessions
+                    with Vertical(id="sessions-pane", classes="panel") as pane:
+                        pane.border_title = "Sessions"
+                        yield SessionList(id="session-list", cursor_type="row", show_cursor=False)   # none selected (D20)
+                yield Splitter("left-middle", "#slot-left-middle", "#slot-left-top", "y")
+                yield slot("left.middle")   # the stats module's
+                yield Splitter("left-bottom", "#slot-left-bottom", "#slot-left-top", "y")
+                with slot("left.bottom"):   # the highlighted session's description, and what can be done to it
+                    with Vertical(id="session-info-pane", classes="panel") as pane:
+                        pane.border_title = "Session info"
+                        with Vertical(id="session-info"):
+                            with VerticalScroll(id="session-info-scroll"):
+                                yield Static(id="session-info-text")
+                            yield Static(id="session-activity")
+                        with Grid(id="session-buttons"):
+                            for label, id_ in LIFECYCLE:   # compact: one row each
+                                yield BarButton(label, id=id_, compact=True, tooltip=BUTTONS[id_])
+                        with Grid(id="conversation-buttons"):
+                            for label, id_, _ in CONVERSATION:
+                                yield BarButton(label, id=id_, compact=True, tooltip=BUTTONS[id_])
+            yield Splitter("sessions-pane", "#col-left", "#col-right", "x", default=self.column_width)
+            with Vertical(id="col-middle"):
+                with slot("middle.top"):
+                    with Vertical(id="items-pane", classes="panel") as pane:
+                        pane.border_title = "Inbox"
+                        yield ItemList(id="items", cursor_type="row")
+                yield Splitter("middle-top", "#slot-middle-top", "#slot-middle-bottom", "y")
+                yield slot("middle.bottom")
+            yield Splitter("items-pane", "#col-middle", "#col-right", "x", default=self.column_width)
+            with Vertical(id="col-right"), slot("right"):
+                with Vertical(id="detail-pane", classes="panel") as pane:
+                    pane.border_title = "Detail"
+                    with VerticalScroll(id="checklist-scroll"):   # scrolls on a short terminal (review 9)
+                        yield Static(id="checklist")
+                    with ConversationScroll(id="detail-scroll"):
+                        yield Transcript(NOTHING_SELECTED, id="detail")
+                    yield Splitter("answer", "#answer", "#detail-scroll", "y")
+                    yield PermissionButtons()
+                    yield DenyReason()
+                    yield CompactButtons()
+                    yield Compose(id="answer")
+                    yield Hint(classes="answer-hint")
         yield SendBar()
         yield Footer()
 
@@ -2727,12 +2761,17 @@ class WheelhouseApp(App):
         self.session_activity = self.query_one("#session-activity", Static)
         self.conversation_buttons = self.query_one("#conversation-buttons", Grid)
         self.session_buttons = self.query_one("#session-buttons", Grid)
-        self.session_controls = list(self.query("#sessions-pane Grid, #sessions-pane Grid Button"))   # theirs and they
+        self.session_controls = list(self.query("#session-info-pane Grid, #session-info-pane Grid Button"))   # theirs and they
         # no Tab stops (tab_stops), nor taken by a click, which leaves the answer box where it was
         for widget in (self.query_one("#session-info-scroll"), self.query_one("#checklist-scroll")):
             widget.can_focus = False
+        for key in RETIRED_LAYOUT:   # once: after that they're gone
+            if self.client.setting(LAYOUT + key) is not None:
+                self.client.set_setting(LAYOUT + key, None)
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
-            if (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
+            # one beside a collapsed slot keeps its stylesheet's size: a share there would
+            # size a slot that has the column to itself
+            if splitter.display and (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
                 splitter.apply(stored)
         self.eye_col = self.session_list.add_columns(*SESSION_LABELS, "")[-1]
         self.item_sort = self.kept_sort("items")
@@ -2760,6 +2799,30 @@ class WheelhouseApp(App):
     def on_unmount(self) -> None:
         """The daemon's stream let go as the app closes: nothing posts to it after."""
         self.client.disconnect()
+
+    def column_width(self, splitter: Splitter) -> int | None:
+        """A column's width with none dragged: the stylesheet's 45 (Q113) where there's room.
+        On a narrow terminal the columns at their default give way in proportion, each down
+        to its minimum, so Detail keeps DETAIL_ROOM. A dragged column keeps its width."""
+        main = splitter.parent
+        if not (room := main.size.width):
+            return None   # not laid out yet: the stylesheet's
+        columns = [s for s in main.children if isinstance(s, Splitter)]
+        spare = room - len(columns) - DETAIL_ROOM - sum(s.fraction * room for s in columns if s.fraction is not None)
+        giving = {s.panes()[0]: s for s in columns if s.fraction is None and s.panes()}
+        widths = {}
+        while giving:   # those held at their minimum leave the rest to share what's left
+            total = sum(pane.styles.base.width.value for pane in giving)
+            widths = {pane: min(pane.styles.base.width.value, pane.styles.base.width.value * spare / total)
+                      for pane in giving}
+            held = {pane for pane, width in widths.items() if width < giving[pane].minimum(pane)}
+            if not held:
+                break
+            for pane in held:
+                spare -= giving.pop(pane).minimum(pane)
+                widths[pane] = None
+        pane = splitter.panes()[0]
+        return splitter.minimum(pane) if widths.get(pane) is None else int(widths[pane])
 
     def fit_layout(self) -> None:
         """The panes' sizes kept within the terminal: one kept from a wider one shrinks."""
@@ -3512,12 +3575,18 @@ class WheelhouseApp(App):
         """The modules' panes, mounted once the app's own widgets are, so a module whose id
         one of them has gets a card rather than shadowing it."""
         taken = {w.id for w in self.screen.query("*") if w.id}
-        for slot, parent in SLOT_PARENTS.items():
-            widgets = list(self.hosted(slot, taken))
-            if widgets:   # the first, under the items, below a splitter that sizes the items
-                widgets[0].add_class("-split")
-                widgets.insert(0, Splitter("items", "#items", ".-split", "y"))
-            await self.query_one(parent).mount_all(widgets)
+        for place in self.query(".slot"):
+            await place.mount_all(list(self.hosted(place.name, taken)))
+        self.collapse()
+
+    def collapse(self) -> None:
+        """An empty slot collapses, and the splitter between it and its neighbour with it:
+        its column's other slots share the room."""
+        for place in self.query(".slot"):
+            place.display = bool(place.children)
+        for splitter in self.query(Splitter):
+            if (panes := splitter.panes()) and all(p.has_class("slot") for p in panes):
+                splitter.display = all(p.display for p in panes)
 
     def hosted(self, slot: str, taken: set[str]):
         """The widgets for a slot: each module's pane, or a card saying why it isn't running
@@ -3551,9 +3620,7 @@ class WheelhouseApp(App):
                     getattr(widget, hook)(*args)
             except Exception as e:
                 self.panes.remove(widget)
-                # it keeps -split, so the splitter above still finds the pane under it
-                card = Static(Text(f"{widget.id}: {type(e).__name__}: {e}", style="dim"),
-                              classes=" ".join(["module-error", *widget.classes & {"-split"}]))
+                card = Static(Text(f"{widget.id}: {type(e).__name__}: {e}", style="dim"), classes="module-error")
                 widget.parent.mount(card, after=widget)
                 widget.remove()
 
@@ -4241,7 +4308,7 @@ class WheelhouseApp(App):
         box.text = ""
         self.refresh_data()
         if isinstance(self.screen, ThreadView) and box is self.screen.box:   # to the end, where the answer just given shows
-            self.screen.query_one("#thread-scroll").scroll_end(animate=False)
+            self.call_after_refresh(self.screen.query_one("#thread-scroll").scroll_end, animate=False)   # as paint
 
     @session_action
     def action_recall(self) -> None:

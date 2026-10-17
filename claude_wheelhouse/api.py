@@ -6,7 +6,7 @@ pyproject.toml the same way. See .plan/suite-architecture.md ("Module protocol")
 .plan/stats-plugin.md.
 
 A pane's `tui` surface is a factory taking the `Context` and returning a Textual widget.
-The hub mounts it in the pane's slot, with the module's id as its id (an id one of the
+The hub mounts it in the pane's slot, one of `SLOTS` (.plan/modules.md), with the module's id as its id (an id one of the
 hub's own widgets or another module has gets a card instead), and calls three optional
 methods on it:
 
@@ -25,18 +25,20 @@ from typing import TYPE_CHECKING, Callable
 if TYPE_CHECKING:
     from .plan_usage import AccountUsage
 
-WHEELHOUSE_API = 1                 # bumped on any breaking change, matched exactly
+WHEELHOUSE_API = 2                 # bumped on any breaking change, matched exactly
 GROUP = "claude_wheelhouse.modules"
 OWN = ("stats",)                   # declared in this package's pyproject.toml
 # an installed copy older than the entry points in pyproject.toml has no record of them
 STALE = "not found: the installed package is out of date. Reinstall it with make install"
-SLOTS = ("inbox.side",)            # under the inbox's item list; tabs come with the first tab pane
+# the six places a pane goes, by column; an empty one collapses (.plan/modules.md)
+SLOTS = ("left.top", "left.middle", "left.bottom", "middle.top", "middle.bottom", "right")
+CARDS = "left.middle"              # where a module that didn't load says why: it has no slot to say
 
 
 @dataclass
 class Pane:
     title: str
-    slot: str                                          # one of SLOTS
+    slot: str                                          # its default slot, one of SLOTS
     surfaces: dict[str, Callable[["Context"], object]]   # {"tui": make_widget}
 
 
@@ -92,9 +94,10 @@ class Missing:
 
 
 def load(entries=None) -> list[Loaded]:
-    """Every module installed, in name order. One that fails to import, isn't a Module, or
-    was written against another API is reported with the reason, never raised; so is one
-    of the hub's own that wasn't found, which means the package needs reinstalling."""
+    """Every module installed, in name order. One that fails to import, isn't a Module,
+    was written against another API or has a pane for a slot that isn't one of SLOTS is
+    reported with the reason, never raised; so is one of the hub's own that wasn't found,
+    which means the package needs reinstalling."""
     found = list(importlib.metadata.entry_points(group=GROUP) if entries is None else entries)
     if entries is None:
         names = {ep.name for ep in found}
@@ -113,6 +116,8 @@ def load(entries=None) -> list[Loaded]:
             out.append(Loaded(ep.name, None, f"{ep.value} is not a Module"))
         elif module.api != WHEELHOUSE_API:
             out.append(Loaded(ep.name, module, f"written for API {module.api}; this wheelhouse has {WHEELHOUSE_API}"))
+        elif bad := [p for p in module.panes if p.slot not in SLOTS]:
+            out.append(Loaded(ep.name, module, f"its pane {bad[0].title!r} names slot {bad[0].slot!r}, not one of {', '.join(SLOTS)}"))
         else:
             out.append(Loaded(ep.name, module))
     return out
@@ -121,12 +126,19 @@ def load(entries=None) -> list[Loaded]:
 def panes(loaded: list[Loaded], slot: str) -> list[tuple[Loaded, Pane | None]]:
     """What goes in a slot: each running module's panes for it, and each module that
     couldn't start, so its error shows there instead (the stats pane's slot shows a broken
-    stats module's reason, not nothing)."""
+    stats module's reason, not nothing). One that didn't load has no panes to say where,
+    and one naming a slot that isn't one of SLOTS has nowhere to show it: CARDS for both."""
     out = []
     for item in loaded:
         if item.error:
-            if item.module is None or any(p.slot == slot for p in item.module.panes):
+            if slot in ({home(p) for p in item.module.panes} if item.module else {CARDS}):
                 out.append((item, None))
         else:
             out += [(item, p) for p in item.module.panes if p.slot == slot]
     return out
+
+
+def home(pane: Pane) -> str:
+    """Where a pane's card goes: its slot, or CARDS for one that names no slot of SLOTS
+    (an API 1 module's inbox.side, say), so the card shows somewhere."""
+    return pane.slot if pane.slot in SLOTS else CARDS
