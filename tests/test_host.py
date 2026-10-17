@@ -820,7 +820,7 @@ def test_get_input_hosted(store, tmp_path, monkeypatch, runner, shell, takes, de
 
 @pytest.mark.parametrize("resuming, desc", [(True, "a restore"), (False, "a new session")])
 def test_open_host_detaches(store, sid, monkeypatch, resuming, desc):
-    """The host is started through setsid --fork so it is never the TUI's child (and never
+    """The host is started detached (setsid --fork, or its like on macOS) so it is never the TUI's child (and never
     its zombie), with its output logged and the app's keepalive limit; a restore gets the
     joined notice."""
     features.set_keepalive_hours("2.5")
@@ -829,7 +829,8 @@ def test_open_host_detaches(store, sid, monkeypatch, resuming, desc):
     monkeypatch.setattr(launch.subprocess, "run", lambda argv, **kw: calls.append((argv, kw)))
     launch.open_host(store, sid)
     argv, kw = calls[0]
-    assert argv[:2] == ["setsid", "--fork"] and argv[-4:] == ["host", sid, "--keepalive-hours", "2.5"], desc
+    detach = launch.liveness.DETACH
+    assert argv[:len(detach)] == detach and argv[-4:] == ["host", sid, "--keepalive-hours", "2.5"], desc
     assert kw["check"] and kw["stdin"] is launch.subprocess.DEVNULL, desc
     log = store.path.parent / "hosts" / f"{sid}.log"
     assert ("resume" if resuming else "new") in log.read_text(), desc

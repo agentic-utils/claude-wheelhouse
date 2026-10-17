@@ -5,23 +5,27 @@
 > Anthropic.
 
 A sidecar for running several Claude Code sessions in parallel, on Windows with WSL and
-Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
+Windows Terminal, or on macOS with iTerm. Prototype: see `.plan/wheelhouse-sessions.md`
+for the design.
 
 ## Requirements
 
 - Windows with WSL and Windows Terminal. The wheelhouse runs inside WSL and opens each
   session in a new Windows Terminal tab (through `cmd.exe` and `wt.exe`), all in a window
   of their own named `wheelhouse-<your WSL user>`, which the first launch opens.
+- Or macOS with [iTerm](https://iterm2.com/). Each session opens in a new tab of iTerm's
+  front window (a new window if none is open), and a right-click paste reads the clipboard
+  through `pbpaste`. The first launch asks to let your terminal control iTerm: allow it.
 - [uv](https://docs.astral.sh/uv/), which installs everything else, Python included.
   `make install` installs it if it's missing, with Astral's installer, into `~/.local/bin`.
 - Python 3.12 or later (`requires-python` in `pyproject.toml`). uv fetches 3.12 if your
   system doesn't have it.
-- Claude Code, installed in WSL and logged in, with `claude` on the `PATH` of your login
-  shell: each tab starts `claude` through `$SHELL -lic`. The wheelhouse was built and
-  checked against Claude Code 2.1 (2.1.287 to 2.1.296).
+- Claude Code, installed in WSL (or on the Mac) and logged in, with `claude` on the
+  `PATH` of your login shell: each tab starts `claude` through `$SHELL -lic`. The
+  wheelhouse was built and checked against Claude Code 2.1 (2.1.287 to 2.1.296).
 - git, to clone the repository.
-- make (`sudo apt install make`). Every `make` target is a one-line `uv` command, given
-  beside it below, if you'd rather do without.
+- make (`sudo apt install make`; on macOS, the Xcode command line tools'). Every `make`
+  target is a one-line `uv` command, given beside it below, if you'd rather do without.
 - curl, for `make install` to fetch uv if you don't have it.
 
 ## Install
