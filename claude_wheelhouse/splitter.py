@@ -83,7 +83,8 @@ class Splitter(Widget):
         rows while they have nothing to show, WheelhouseApp.fit_compact). Then nothing here
         is sized (wanted): a compact pane keeps the rows the app gave it, and with the
         flexing pane compact the sized one flexes instead, its share kept for when it isn't,
-        so the room goes to it and not to a gap."""
+        so the room goes to it and not to a gap. Nor is it dragged or reset then: the share
+        stays as it was, for when neither is."""
         panes = self.panes()
         return (panes[0].has_class("-compact"), panes[1].has_class("-compact")) if panes else (False, False)
 
@@ -129,6 +130,8 @@ class Splitter(Widget):
         if event.button != 1 or (panes := self.panes()) is None:
             return
         event.stop()
+        if any(self.compact()):   # nothing here is sized while compact: a drag would move nothing, so none is kept
+            return
         sized, flex = panes
         self.drag = (self.pointer(event), self.extent(sized), self.extent(flex))
         self.moved = False
@@ -170,7 +173,7 @@ class Splitter(Widget):
             self.post_message(self.Resized(self, self.fraction))
 
     def _on_click(self, event: events.Click) -> None:
-        if event.chain >= 2:
+        if event.chain >= 2 and not any(self.compact()):   # as a drag: nothing to see, so nothing kept
             self.apply(None)
             self.post_message(self.Resized(self, None))
 

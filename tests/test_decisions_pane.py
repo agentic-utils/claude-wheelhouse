@@ -4,7 +4,7 @@ tests, for the app's fixtures (conftest.py). Skipped when it isn't installed."""
 import pytest
 
 from claude_wheelhouse import api
-from claude_wheelhouse.tui import DocView, WheelhouseApp, tab_stops
+from claude_wheelhouse.tui import LAYOUT, DocView, WheelhouseApp, tab_stops
 from test_tui import INBOX_STOPS, assert_one_current, by_name, pane_widget, pick, stop_id
 
 design = pytest.importorskip("claude_wheelhouse_design", reason="installed without the design module")
@@ -216,3 +216,82 @@ async def test_no_decisions_shrinks_the_pane_to_its_note(store, sid, tmp_path, e
         await pilot.pause()
         assert not p.compact and p.region.height > 3 and numbers(app) == ["0002", "0001"], f"{onto}: its share again"
         assert other.region.height < roomy, f"{onto}: {beside} gives it back"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("adrs", [False, True])
+@pytest.mark.parametrize("onto", [None, *(p for p in PANES if p != "design")])
+async def test_no_column_has_blank_rows_wherever_the_decisions_go(store, sid, tmp_path, every_module, onto, adrs):
+    """Swapped with each other pane, with and without decisions found: every column filled
+    by its slots and every slot by its panes. With none found the pane shrinks to its note
+    only where a slot beside it takes the room; alone in its column (Detail's), it keeps it."""
+    repo(tmp_path, ADRS if adrs else {})
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        if onto:
+            app.swap(pane_widget(app, "design").parent, pane_widget(app, onto).parent)
+        await pilot.pause()
+        await pilot.pause()
+        for column in app.query(".column"):
+            if column.display:
+                shown = sum(w.outer_size.height for w in column.children if w.display)
+                assert shown == column.size.height, f"<->{onto}, adrs {adrs}: no gap in #{column.id}"
+        for each in PANES:
+            widget = pane_widget(app, each)
+            assert widget.outer_size.height == widget.parent.size.height, f"<->{onto}, adrs {adrs}: {each} fills its slot"
+        p = app.query_one("#design")
+        alone = onto == "detail"
+        assert p.compact is not adrs, f"<->{onto}: compact only with none found"
+        assert (p.region.height == 3) is (not adrs and not alone), f"<->{onto}, adrs {adrs}: shrunk only with room taken"
+
+
+@pytest.mark.anyio
+async def test_a_drag_beside_a_compact_pane_is_not_kept(store, sid, tmp_path, every_module):
+    """The splitter between the inbox and the Decisions, shrunk to its note, moves nothing:
+    a drag is ignored, and once a decision appears the inbox has the share it had."""
+    from textual import events
+    from test_tui import splitter
+    repo(tmp_path, {})
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        await pilot.pause()
+        p, inbox = app.query_one("#design"), pane_widget(app, "items")
+        assert p.compact and p.region.height == 3, "shrunk to its note"
+        sp = splitter(app, "middle-top")
+        before, roomy = sp.fraction, inbox.region.height
+        x, y = sp.region.offset
+        await pilot.mouse_down(sp)
+        app.post_message(events.MouseMove(None, x, 8, 0, 8 - y, button=1, shift=False, meta=False,
+                                          ctrl=False, screen_x=x, screen_y=8))
+        await pilot.pause()
+        await pilot.mouse_up(None, (x, 8))
+        await pilot.pause()
+        assert not sp.has_class("-dragging") and sp.fraction == before, "no drag, nothing kept"
+        assert inbox.region.height == roomy, "the inbox as it was"
+        assert app.client.setting(LAYOUT + "middle-top") is None, "nothing stored"
+        repo(tmp_path, ADRS)
+        p.asked_at -= pane.EVERY
+        await settled(app, pilot)
+        await pilot.pause()
+        assert not p.compact and inbox.region.height > 7, f"the inbox its default share: {inbox.region.height}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("adrs", [False, True])
+async def test_a_failed_ask_keeps_the_pane_as_it_was(store, sid, tmp_path, every_module, adrs):
+    """A failed ask neither grows the pane shrunk to its note nor shrinks one with decisions:
+    the error shows in the note."""
+    repo(tmp_path, ADRS if adrs else {})
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        await pilot.pause()
+        p = app.query_one("#design")
+        height = p.region.height
+        p.got({"error": "boom"})
+        await pilot.pause()
+        await pilot.pause()
+        assert p.compact is not adrs and p.region.height == height, f"adrs {adrs}: as it was"
+        assert "boom" in str(app.query_one("#decisions-note").render()), f"adrs {adrs}: the error in the note"

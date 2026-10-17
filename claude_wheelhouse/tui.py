@@ -4042,12 +4042,20 @@ class WheelhouseApp(App):
         """A slot whose panes are all compact (a module pane with nothing to show sets
         `compact`, api) keeps only their least rows (PANE_MINIMUM), and the slots beside it
         take the room it gives up (Splitter.compact); every other slot its stylesheet's
-        height, or its splitter's share, as it was. A pane
+        height, or its splitter's share, as it was. Only where a slot in its column that
+        isn't shrinking is shown to take that room: alone in its column (swapped onto Detail,
+        say), it keeps its full size, as a gap would be all it gave. A pane
         calls it through Context.relayout when its `compact` changes."""
         screen = self.screen_stack[0]
-        for place in screen.query(".slot"):
+        places = list(screen.query(".slot"))
+        empty = {place for place in places
+                 if (shown := [w for w in place.children if w.display])
+                 and all(getattr(w, "compact", False) for w in shown)}
+        for place in places:
             shown = [w for w in place.children if w.display]
-            compact = bool(shown) and all(getattr(w, "compact", False) for w in shown)
+            column = place.parent if place.parent.has_class("column") else place
+            compact = place in empty and any(other.display and other not in empty
+                                             for other in column.query(".slot") if other is not place)
             place.set_class(compact, "-compact")
             place.styles.height = max(minimum(w)[1] for w in shown) if compact else None
         for splitter in screen.query(Splitter):

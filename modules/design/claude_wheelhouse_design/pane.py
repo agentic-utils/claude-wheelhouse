@@ -83,7 +83,7 @@ class Decisions(Vertical):
     Decisions { height: 1fr; }
     Decisions > DecisionTable { height: 1fr; }
     Decisions > #decisions-note { color: #777777; padding: 0 1; height: auto; }
-    Decisions.-compact > #decisions-note { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
+    Decisions > #decisions-note.-one-row { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
     """
     # its border and a row: the note, or the table's header, as the inbox's 3 (tui.PANE_MINIMUM)
     PANE_MINIMUM = (12, 3)
@@ -152,15 +152,18 @@ class Decisions(Vertical):
         if self.error is None:
             self.rows, self.looked = got.get("decisions", []), got.get("dirs", [])
         self.paint()
-        compact = self.error is None and not self.rows   # none found: only the note, which says where it looked
+        # none found: only the note, which says where it looked; a failed ask keeps it as it was,
+        # its error in the note
+        compact = self.compact if self.error is not None else not self.rows
         if compact != self.compact:
             self.compact = compact
-            self.set_class(compact, "-compact")
             self.query_one(DecisionTable).display = not compact
             if self.ctx.relayout is not None:
                 self.ctx.relayout()
 
     def on_resize(self) -> None:
+        # the slot shrunk to the note (tui.fit_compact): it says what fits on its one row
+        self.query_one("#decisions-note").set_class(self.compact and self.content_size.height <= 1, "-one-row")
         self.paint()
 
     def paint(self) -> None:

@@ -24,7 +24,7 @@ Decisions pane's table) that sets `TAB_LIST = True` is a Tab stop after the inbo
 answer box (tui.tab_stops, #77). A pane's widget may say the least room it needs, `PANE_MINIMUM = (columns,
 rows)`, which its slot and column keep wherever it is swapped, and while it has nothing to
 show set `compact = True` and call `Context.relayout`: its slot shrinks to those rows, the
-panes beside it taking the rest.
+panes beside it taking the rest (with none in its column to take them, it keeps its size).
 
 A module may also serve the daemon side (.plan/modules.md, "The module boundary"):
 `routes(ctx)`, its `Route`s, mounted under /m/<id>/ (and called in process with --local),
