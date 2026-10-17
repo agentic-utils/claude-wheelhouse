@@ -6228,6 +6228,12 @@ def placed(strip) -> list[tuple]:
     return out
 
 
+# a fixed time for a test that needs a given chart: the charts' buckets sit on epoch multiples
+# (stats.window), so the bars' heights, and which lines a shimmer moves, follow the time.
+# At 160x58 the top bar line shimmers at this one, and at about half of real times
+SHIMMER_NOW = 1_800_000_000.0
+
+
 def busy_snapshot(now: float) -> stats.Snapshot:
     """A session with turns all across the charts' span, of every kind: bars of every colour."""
     turns = [stats.Turn(now - 7000 + 37 * i, 1000 * (i % 50), 500 * (i % 7), 300 * (i % 3), 90_000 + 100 * i, "1h",
@@ -6314,8 +6320,8 @@ async def test_a_shimmer_frame_redraws_only_the_charts_bars(store, sid, monkeypa
 @pytest.mark.anyio
 async def test_a_shimmer_frame_moves_the_bars_on_screen_under_a_border(store, sid, monkeypatch, clock):
     """Each frame the test's own (clock): the app's animation, on real time, would otherwise
-    move the pane to a frame of its own during a slow pause, the same as one already seen."""
-    import time
+    move the pane to a frame of its own during a slow pause, the same as one already seen.
+    And the time its turns are at (SHIMMER_NOW)."""
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 58)) as pilot:   # a chart whose top bar line moves
         await pilot.pause()
@@ -6323,7 +6329,7 @@ async def test_a_shimmer_frame_moves_the_bars_on_screen_under_a_border(store, si
         monkeypatch.setattr(pane, "tick", lambda: None)   # the made-up session stays shown
         pane.styles.border_top = ("solid", "#7b61ff")   # a top border: the content one line down
         pane.styles.padding = (1, 0, 0, 0)   # and a line more
-        pane.show(busy_snapshot(time.time()), "demo", time.time())
+        pane.show(busy_snapshot(SHIMMER_NOW), "demo", SHIMMER_NOW)
         await pilot.pause()
         assert pane.gutter.top == 2 and pane.bars
         region, tops = pane.content_region, []
