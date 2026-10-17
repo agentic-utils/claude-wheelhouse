@@ -316,15 +316,17 @@ async def click_outside(pilot):
 @pytest.mark.parametrize("gesture, started, setting, again, desc", [
     (lambda p: p.press("enter"), True, "taken", False, "Enter is Start"),
     (lambda p: p.click("#invite-start"), True, "taken", False, "a click on Start"),
-    (lambda p: p.press("l"), False, None, True, "L is Later: nothing recorded, offered at the next start"),
-    (lambda p: p.click("#invite-later"), False, None, True, "a click on Later"),
-    (lambda p: p.press("escape"), False, None, True, "Esc is Later, not Never"),
-    (click_outside, False, None, True, "a click outside is Later: a misclick doesn't lose the tour"),
+    (lambda p: p.press("l"), False, "reset", True, "L is Later: offered at the next start"),
+    (lambda p: p.press("L"), False, "reset", True, "Shift+L too"),
+    (lambda p: p.press("N"), False, "never", False, "Shift+N too"),
+    (lambda p: p.click("#invite-later"), False, "reset", True, "a click on Later"),
+    (lambda p: p.press("escape"), False, "reset", True, "Esc is Later, not Never"),
+    (click_outside, False, "reset", True, "a click outside is Later: a misclick doesn't lose the tour"),
     (lambda p: p.press("n"), False, "never", False, "N is Never: it never comes back"),
     (lambda p: p.click("#invite-never"), False, "never", False, "a click on Never"),
 ])
 @pytest.mark.anyio
-async def test_the_invite(store, monkeypatch, fake_claude, gesture, started, setting, again, desc):
+async def test_the_invite(store, tmp_path, monkeypatch, fake_claude, gesture, started, setting, again, desc):
     """Doug (#78): "the invite needs to be a centered dialog, not the banner which is not very
     obvious to a new user". Start, Later and Never, by key or click."""
     monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
@@ -341,12 +343,16 @@ async def test_the_invite(store, monkeypatch, fake_claude, gesture, started, set
     assert bool(launched) is started, desc
     assert store.setting(tutorial.OFFER_KEY) == setting, desc
     assert store.tour_seen() == ({f.id: "skipped" for f in whatsnew.FEATURES} if setting == "never" else {}), desc
+    store.create_session(str(tmp_path), name="real work")   # Later still offers it once there are sessions
     async with WheelhouseApp(store).run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         assert isinstance(pilot.app.screen, TourInvite) is again, f"{desc}: offered at the next start"
 
 
-@pytest.mark.parametrize("width, height, desc", [(160, 40, "a wide screen"), (80, 24, "80 by 24")])
+@pytest.mark.parametrize("width, height, desc", [
+    (160, 40, "a wide screen"), (80, 24, "80 by 24"),
+    (50, 30, "50 columns: the buttons stack, not spill"), (40, 30, "40 columns"),
+])
 @pytest.mark.anyio
 async def test_the_invite_fits_whole(store, monkeypatch, width, height, desc):
     monkeypatch.setattr(tutorial, "should_offer", real_should_offer)

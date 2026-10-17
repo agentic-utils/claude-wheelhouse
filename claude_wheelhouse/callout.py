@@ -145,7 +145,10 @@ class TourCallout(Vertical):
         title = PANES.get(self.pane, ("", self.pane))[1]
         w = width(screen)
         spot, self.side = place(screen, region, self.lines(w, self.text))
-        text = f"In the {title} pane:\n{self.text}" if self.side == "centred" else self.text
+        text = self.text
+        if self.side == "centred":   # its pane named first, a line that wraps on a narrow screen
+            text = f"In the {title} pane:\n{self.text}"
+            spot, _ = place(screen, None, self.lines(w, text) - 1)
         self.query_one(".tour-text", Static).update(text)
         self.border_title = POINTERS[self.side].format(title) or None
         self.styles.width, self.styles.height = spot.width, spot.height

@@ -97,6 +97,21 @@ async def test_focus_and_next(next, focused, desc):
         assert app.nexts == (["items"] if next else []), desc
 
 
+@pytest.mark.parametrize("width, desc", [(120, "one line naming the pane"), (24, "that line wrapped on a narrow screen")])
+@pytest.mark.anyio
+async def test_a_centred_callout_holds_its_whole_text(width, desc):
+    """Review of #92: the line naming the pane, counted as one row, wrapped and cut the last."""
+    text = "Questions, decisions and tasks land here. Highlight Q1."
+    app = Panes(TourCallout("stats", text))   # no stats pane: centred
+    async with app.run_test(size=(width, 30)) as pilot:
+        await pilot.pause()
+        c = app.callout
+        assert c.side == "centred", desc
+        assert c.region.height == c.lines(c.region.width, f"In the Stats pane:\n{text}"), desc
+        shown = " ".join("".join(s.text for s in app.screen._compositor.render_strips()).split())
+        assert "Highlight" in shown and "Q1." in shown, f"{desc}: {shown}"
+
+
 @pytest.mark.anyio
 async def test_hidden_under_another_screen_and_unhighlighted_once_gone():
     app = Panes(TourCallout("items", "Highlight Q1."))

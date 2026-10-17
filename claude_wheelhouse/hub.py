@@ -706,9 +706,13 @@ class Hub:
             fork.undo(new, t, branch)
             fork.log(self.store, f"fork {new} dropped, the wheelhouse closing: taken away again")
 
-    def answer_offer(self, take: bool) -> Done:
-        """The first-run tutorial offer, answered: taken or Never, it never comes back; a start
-        that fails records nothing, so it is offered again. Whether the tutorial started."""
+    def answer_offer(self, take: bool | None) -> Done:
+        """The tour's invite, answered: taken (True) or Never (False), it never comes back;
+        Later (None) has every start offer it again, sessions or not, until one of those; a
+        start that fails records nothing, so it is offered again. Whether the tutorial started."""
+        if take is None:
+            self.store.set_setting(tutorial.OFFER_KEY, tutorial.RESET)
+            return Done(False).say("Later: the next start offers the tour again")
         if not take:
             self.store.tour_never()
             return Done(False).say(f"{tutorial.AGAIN}; ? lists every key")

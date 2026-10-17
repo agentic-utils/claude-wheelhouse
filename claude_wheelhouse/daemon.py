@@ -858,8 +858,8 @@ class Daemon:
 
     def answer_offer(self, request: Request, body: dict) -> Done:
         take = body.get("take")
-        if not isinstance(take, bool):
-            raise Refused(400, "take must be true or false")
+        if take is not None and not isinstance(take, bool):
+            raise Refused(400, "take must be true, false or null (Later)")
         if take:
             self.no_remote_tab(request, "tab")   # the tutorial is always a tab
         return self.hub.answer_offer(take)

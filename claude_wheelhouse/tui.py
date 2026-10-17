@@ -2225,7 +2225,9 @@ class TourInvite(Dialog):
     """The tour's invite (.plan/tutorial-overhaul.md), centred: Start (Enter) takes it, Never (N)
     turns it off for good, and Later (L, Esc, or a click outside, which a misclick mustn't
     cost the tour) leaves it to be offered again at the next start."""
-    BINDINGS = [Binding("l", "answer('later')", show=False), Binding("n", "answer('never')", show=False)]
+    # Shift too: some terminals send it as the capital, others as shift+
+    BINDINGS = [Binding(k, f"answer('{a}')", show=False)
+                for keys, a in (("l,L,shift+l", "later"), ("n,N,shift+n", "never")) for k in keys.split(",")]
     ACTION = "invite-start"
     CANCEL = "later"
 
@@ -2234,15 +2236,24 @@ class TourInvite(Dialog):
             yield Label(INVITE.title, classes="dialog-title")
             yield Label(INVITE.text, classes="dialog-prompt", id="invite-text")
             yield Label(INVITE_HINT, classes="dialog-prompt", id="invite-hint")
-            with Horizontal(classes="buttons"):
+            with Horizontal(classes="buttons", id="invite-buttons"):
                 # ids of its own: the app's buttons answer a press that bubbles up
                 yield Button(Text("Start [Enter]"), variant="success", id="invite-start")
                 yield Button(Text("[L]ater"), id="invite-later")
                 yield Button(Text("[N]ever"), id="invite-never")
 
+    STACK_BELOW = 60   # columns: on a screen narrower, the buttons stack, so they stay inside the box
+
     def on_mount(self) -> None:
         super().on_mount()
         self.set_focus(self.query_one("#invite-start", Button))
+        self.stack()
+
+    def on_resize(self) -> None:
+        self.stack()
+
+    def stack(self) -> None:
+        self.query_one("#invite-buttons").set_class(self.size.width < self.STACK_BELOW, "stacked")
 
     @on(Button.Pressed)
     def pressed(self, event: Button.Pressed) -> None:
@@ -2550,6 +2561,8 @@ class WheelhouseApp(App):
     #folders {{ height: 20; background: #000000; }}
     #dialog.invite {{ width: 64; }}
     #invite-hint {{ color: #999999; margin: 1 0; }}
+    #invite-buttons.stacked {{ layout: vertical; height: auto; }}
+    #invite-buttons.stacked Button {{ width: 100%; }}
     #keys-dialog {{ width: 100; max-width: 100%; height: 90%; background: #000000; color: {MATRIX};
                     border: thick #ff2a6d; padding: 0 1; }}
     /* selected text black on white: the theme's dark teal hid the characters (#52) */
@@ -4185,10 +4198,8 @@ class WheelhouseApp(App):
 
     def offer_answered(self, answer: str) -> None:
         """The tour's invite answered. Start or Never: it never comes back. Later records
-        nothing, so the next start offers it again."""
-        if answer == "later":
-            self.notify("Later: the next start offers the tour again")
-        elif self.told(self.client.answer_offer(answer == "start")).ok:
+        RESET, so every start offers it again, sessions or not, until Start or Never."""
+        if self.told(self.client.answer_offer({"start": True, "never": False}.get(answer))).ok:
             self.refresh_data()
 
     def composing(self):

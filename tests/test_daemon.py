@@ -916,6 +916,8 @@ NEW_ROUTES = [
     ("POST", "/messages/1/unqueue", None, lambda store, sid, r: r.json() == {"text": None}, "a draft taken back: gone"),
     ("POST", "/tutorial/offer", {"take": False}, lambda store, sid, r: store.setting("tutorial_offer") == "never",
      "the tutorial offer turned down"),
+    ("POST", "/tutorial/offer", {"take": None}, lambda store, sid, r: store.setting("tutorial_offer") == "reset",
+     "the tutorial offer put off till Later"),
     ("POST", "/tutorial/seen", {"sid": "{sid}", "step": "open"},
      lambda store, sid, r: json.loads(store.setting("tutorial_seen"))["seen"] == ["open"], "a tutorial step seen"),
     ("POST", "/tutorial/drop-ended", None, lambda store, sid, r: store.setting("tutorial_seen") is None,
