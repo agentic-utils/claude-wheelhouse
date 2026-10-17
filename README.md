@@ -190,7 +190,7 @@ session.
   and the pane flags when the session is waiting for you there (a question or a plan;
   permission prompts can't be seen from the transcript). Going to the item list switches
   the pane back to the highlighted item.
-- **Stats.** Under the item list, the session in context's numbers, read from its
+- **Stats.** Under the session list, the session in context's numbers, read from its
   transcripts, in claude-dashboard's colours. A bordered panel, titled with the session,
   model, effort and window, holds three gauges: context size against its window (green under
   150k, yellow under 300k, amber under 600k, then red), and the account's session and weekly usage with their reset times, as
@@ -225,7 +225,7 @@ session.
   them). A name too long for the column is cut short with `…` (never its `⟳`), so the
   `?`, `D` and `✉` counts after it stay in sight at whatever width you drag the column to. Under it, a description of the selected one: its status, ticket, directory
   and counts, and its synopsis, which the session keeps up to date itself (its brief until
-  it sets one), in a box that takes half the column. The box's last two rows always show
+  it sets one), in the Session info pane at the foot of the column, over the session's buttons. The box's last two rows always show
   what a session run in the wheelhouse is doing now, cropped to fit, so nothing above
   them moves as that changes. The dot before each name, and the
   status in the description, are green when it's live (the dot amber once its context reaches 200k tokens, the size at
@@ -392,9 +392,10 @@ Windows clipboard through PowerShell, so it takes most of a second; elsewhere it
 wheelhouse's own last copy. Hold `Shift` to drag with the terminal's own selection
 instead.
 
-Every boundary between areas can be dragged: the lines between the three columns, between
-the session list and its description, between the items and the stats, and above the
-answer box. A line turns teal under the pointer and while you drag it, and no pane goes
+Each pane is titled in its top border: Sessions, Stats and Session info down the left
+column, Inbox in the middle, Detail on the right. Every boundary between areas can be
+dragged: the lines between the three columns, between the panes in the left column, and
+above the answer box. A line turns teal under the pointer and while you drag it, and no pane goes
 below its minimum (the session column never gets too narrow for its buttons' captions).
 The sizes are kept in the wheelhouse's database, as shares of the space, so they follow a
 resized terminal; double-click a line to put its default back. A size that doesn't fit a

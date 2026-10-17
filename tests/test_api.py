@@ -1,6 +1,8 @@
 import pytest
 from textual.widget import Widget
 
+from claude_wheelhouse.splitter import Splitter
+
 from claude_wheelhouse import api, stats_pane
 from claude_wheelhouse.tui import WheelhouseApp
 
@@ -17,7 +19,7 @@ class Entry:
         return self.loads
 
 
-def module(id="demo", api_version=api.WHEELHOUSE_API, slot="inbox.side", widget=Widget):
+def module(id="demo", api_version=api.WHEELHOUSE_API, slot="left.middle", widget=Widget):
     return api.Module(id, id.title(), "1.0", api_version, [api.Pane(id.title(), slot, {"tui": lambda ctx: widget()})])
 
 
@@ -44,14 +46,15 @@ def test_the_stats_module_missing_says_to_reinstall(monkeypatch):
     assert [(m.name, m.error) for m in api.load()] == [("stats", api.STALE)]
 
 
-@pytest.mark.parametrize("loaded, ids, desc", [
-    ([api.Loaded("a", module("a"))], [("a", True)], "a running module's pane"),
-    ([api.Loaded("a", module("a", slot="tab"))], [], "a pane for another slot"),
-    ([api.Loaded("a", None, "failed to load: boom")], [("a", False)], "a module that didn't load: its reason"),
-    ([api.Loaded("a", module("a", api_version=0), "old")], [("a", False)], "one that didn't start: its reason"),
+@pytest.mark.parametrize("loaded, ids, slot, desc", [
+    ([api.Loaded("a", module("a"))], [("a", True)], api.CARDS, "a running module's pane"),
+    ([api.Loaded("a", module("a", slot="tab"))], [], api.CARDS, "a pane for another slot"),
+    ([api.Loaded("a", None, "failed to load: boom")], [("a", False)], api.CARDS, "a module that didn't load: its reason"),
+    ([api.Loaded("a", None, "failed to load: boom")], [], "right", "and only in CARDS"),
+    ([api.Loaded("a", module("a", api_version=0), "old")], [("a", False)], api.CARDS, "one that didn't start: its reason"),
 ])
-def test_panes_for_a_slot(loaded, ids, desc):
-    assert [(item.name, pane is not None) for item, pane in api.panes(loaded, "inbox.side")] == ids, desc
+def test_panes_for_a_slot(loaded, ids, slot, desc):
+    assert [(item.name, pane is not None) for item, pane in api.panes(loaded, slot)] == ids, desc
 
 
 class Breaks(Widget):
@@ -96,3 +99,32 @@ async def test_with_no_modules_the_items_fill_their_column(store, monkeypatch):
         await pilot.pause()
         items = app.query_one("#items")
         assert items.size.height >= items.parent.content_size.height - 1, "no stats pane: no empty half"
+
+
+CORE = {"left.top": ["sessions-pane"], "left.bottom": ["session-info-pane"], "middle.top": ["items-pane"],
+        "right": ["detail-pane"]}
+SPLITTERS = {"sessions-pane", "items-pane", "session-info", "answer"}   # beside no slot that can be empty
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("loaded, slots, splitters, desc", [
+    (None, {**CORE, "left.middle": ["stats"]}, {"left-middle"},
+     "the default slots: stats under the session list, middle.bottom empty and collapsed"),
+    ([], CORE, set(), "no modules: left.middle collapses too"),
+    ([api.Loaded("demo", module(slot="middle.bottom"))], {**CORE, "middle.bottom": ["demo"]}, {"items"},
+     "a pane for middle.bottom: it shows under the inbox"),
+])
+async def test_the_slots(store, monkeypatch, loaded, slots, splitters, desc):
+    """.plan/modules.md: six slots in three columns; an empty slot collapses, with the
+    splitter beside it, and its column's other slots share the room."""
+    if loaded is not None:
+        monkeypatch.setattr(api, "load", lambda: loaded)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        shown = {s.name: [w.id for w in s.children] for s in app.query(".slot") if s.display}
+        assert shown == slots, desc
+        assert {s.key for s in app.query(Splitter) if s.display} == SPLITTERS | splitters, desc
+        for column in app.query("#main > Vertical"):
+            assert sum(w.outer_size.height for w in column.children if w.display) == column.size.height, \
+                f"{desc}: {column.id} filled"

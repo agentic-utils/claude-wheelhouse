@@ -152,7 +152,7 @@ def fit(splitters) -> None:
     leaving the preference (fraction) as it was, for a terminal with room again."""
     groups: dict[tuple[int, str], list[Splitter]] = {}
     for splitter in splitters:
-        if splitter.panes() is not None:
+        if splitter.display and splitter.panes() is not None:   # one beside a collapsed slot sizes nothing
             groups.setdefault((id(splitter.parent), splitter.axis), []).append(splitter)
     for group in groups.values():
         first = group[0]

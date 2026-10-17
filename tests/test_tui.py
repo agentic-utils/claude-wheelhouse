@@ -386,7 +386,7 @@ async def test_send_bar_and_session_buttons_follow_the_queues(store, sid, tmp_pa
         app.session_list.move_cursor(row=1)
         await pilot.pause()
         assert session_buttons(app)["send"] == ("Send (2)", False), "the highlight moved: the other's queue"
-        assert all(not b.can_focus for b in app.screen.query("SendBar Button, #sessions-pane Button")), \
+        assert all(not b.can_focus for b in app.screen.query("SendBar Button, #session-info-pane Button")), \
             "clicks leave focus alone"
         await pilot.click("#send-all")
         await pilot.pause()
@@ -3693,7 +3693,7 @@ async def test_zooming_out_fills_the_charts_from_older_history(store, sid, tmp_p
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("size", [(200, 60), (160, 40)])
+@pytest.mark.parametrize("size", [(200, 60), (160, 50)])   # a session's chart, under its gauges, needs 50 rows
 @pytest.mark.parametrize("selected", [True, False])
 async def test_a_failed_load_is_tried_once_a_backoff(store, sid, tmp_path, monkeypatch, clock, size, selected):
     """A load that fails isn't started again on every tick: its error shows, steadily, and
@@ -3997,7 +3997,7 @@ async def test_a_cursor_move_draws_only_the_rows_it_leaves_and_lands_on(store, s
         store.create_session(str(tmp_path), name=f"s{n}")
     store.set_parked(sid, True)   # at the foot of the list's room, below blank rows
     app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
+    async with app.run_test(size=(160, 50)) as pilot:   # room for blank rows under the sessions
         await pilot.pause()
         t = app.session_list
         assert any(t.blank(row) for row in range(t.row_count))
@@ -5010,7 +5010,7 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
 
 @pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
-@pytest.mark.parametrize("size, half", [((80, 24), False), ((100, 30), True), ((160, 40), True)])
+@pytest.mark.parametrize("size", [(80, 24), (100, 30), (160, 40)])
 @pytest.mark.parametrize("status, parked, shown, desc", [
     ("live", True, ["rename", "relaunch", "park", "end", "model", "fork", "mode", "send", "interrupt", "compact", "shell"],
      "a running hosted session too old to queue, parked under the old rules (Active once the hub starts): the "
@@ -5023,11 +5023,10 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
     ("stalled", False, ["rename", "relaunch", "park", "end", "model", "fork", "mode", "send", "interrupt", "compact", "shell"],
      "a stalled one still takes what's sent"),
 ])
-async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, half, status, parked, shown, desc):
+async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, status, parked, shown, desc):
     """#58, #62: only the buttons that apply show, each its whole caption, in grey with a
     tooltip, filling the grid from the left with no hole where one is hidden and a blank
-    row between rows; and the list and description keep their room, the description half
-    the column where there's room."""
+    row between rows; and the list and description keep their room, the stats giving way."""
     from claude_wheelhouse import liveness
     from claude_wheelhouse.tui import BUTTONS
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: status)
@@ -5036,12 +5035,9 @@ async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, half,
     store.set_parked(sid, parked)
     app = WheelhouseApp(store)
     desc = f"{desc}, at {size[0]} columns"
-    # Model and Fork make a third row of a hosted Active session's lifecycle buttons: at 30
-    # rows the description gives way to it
-    half = half and not ("model" in shown and size[1] <= 30)
     async with app.run_test(size=size) as pilot:
         await pick(app, pilot, sid)
-        buttons = [b for b in app.query("#sessions-pane Grid Button") if b.display]
+        buttons = [b for b in app.query("#session-info-pane Grid Button") if b.display]
         assert [b.id for b in buttons] == shown, desc
         strips = app.screen._compositor.render_strips()
         for b in buttons:
@@ -5051,7 +5047,7 @@ async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, half,
             assert b.tooltip == BUTTONS[b.id], f"{desc}: {b.id}'s tooltip"
             grey = ("#333333", "#8C8C8C") if b.disabled else ("#4D4D4D", "#FFFFFF")   # dimmed when disabled
             assert (b.styles.background.hex, b.styles.color.hex) == grey, f"{desc}: {b.id} grey"
-        for grid in app.query("#sessions-pane Grid"):
+        for grid in app.query("#session-info-pane Grid"):
             mine = [b for b in buttons if b.parent is grid]
             rows = sorted({b.region.y for b in mine})
             assert all(y2 - y1 == 2 for y1, y2 in zip(rows, rows[1:])), f"{desc}: a blank row between rows"
@@ -5060,10 +5056,9 @@ async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, half,
             lefts = sorted({b.region.x for b in mine if b.id != "send"})   # Send follows Mode's two columns
             assert lefts == sorted({b.region.x for b in grid.query(Button) if b.display and b.id != "send"}) \
                 and lefts[0] == grid.content_region.x, f"{desc}: no hole at the left of a row"
-        assert app.query_one("#session-list").region.height >= 5, desc
-        column = app.query_one("#sessions-pane").content_region.height
-        info = app.query_one("#session-info").region.height
-        assert info == column // 2 if half else 3 <= info <= column // 2, f"{desc}: half the column, or less"
+        assert app.query_one("#session-list").region.height >= 4, f"{desc}: the header and three sessions"
+        rows = 1 if size[1] <= 30 else 3   # the description gives way to the buttons, after the stats
+        assert app.query_one("#session-info").region.height >= rows, f"{desc}: {rows} rows of description"
         captions = {"relaunch": "Unpark" if parked and status == "dead" else "Relaunch", "park": "Park",
                     "end": "Forget" if status == "dead" else "Stop & Forget"}
         assert {id_: str(app.query_one(f"#{id_}", Button).label) for id_ in captions if id_ in shown} == \
@@ -5100,10 +5095,10 @@ async def drag(pilot, key: str, dx: int, dy: int) -> None:
 @pytest.mark.anyio
 @pytest.mark.parametrize("key, dx, dy, change, desc", [
     ("sessions-pane", 10, 0, 10, "the sessions column, wider"),
-    ("sessions-pane", -20, 0, 0, "never narrower than its buttons' captions need"),
-    ("detail-pane", 10, 0, -10, "the right pane, narrower as its left edge moves right"),
-    ("session-info", 0, -4, 4, "the description, taller as its top edge moves up"),
-    ("items", 0, 3, 3, "the item list, taller over the stats"),
+    ("sessions-pane", -20, 0, -6, "never narrower than its buttons' captions need: 39 of 45"),
+    ("items-pane", 10, 0, 10, "the inbox column, wider"),
+    ("session-info", 0, 2, -1, "the session info, shorter as its top edge moves down, to the cell its share rounds to"),
+    ("left-middle", 0, 3, -3, "the stats, shorter as its top edge moves down"),
     ("answer", 0, -3, 3, "the answer box, taller"),
 ])
 async def test_dragging_a_splitter_resizes_and_is_kept(store, sid, key, dx, dy, change, desc):
@@ -5135,7 +5130,7 @@ async def test_dragged_sizes_follow_a_resized_terminal(store, sid, width, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await drag(pilot, "sessions-pane", 21, 0)   # 60 of the 158 cells inside the two splitters
+        await drag(pilot, "sessions-pane", 15, 0)   # 60 of the 158 cells inside the two splitters
         share = sized(app, "sessions-pane") / app.query_one("#main").size.width
         await pilot.resize_terminal(width, 40)
         await pilot.pause()
@@ -5149,24 +5144,24 @@ def on_screen(app, *selectors) -> bool:
     return all(0 < (r := app.query_one(sel).region).width and r.right <= width for sel in selectors)
 
 
-COLUMNS = ("#sessions-pane", "#items-pane", "#detail-pane")
+COLUMNS = ("#col-left", "#col-middle", "#col-right")
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("width, stored, desc", [
     (80, None, "80 columns: the three columns, as before #60 (review 8)"),
     (91, None, "91: under the old minimums' 92"),
-    (120, {"detail-pane": "0.69"}, "a share dragged on a wide terminal, shrunk on a narrower one"),
-    (120, {"sessions-pane": "0.6", "detail-pane": "0.6"}, "two of them"),
+    (120, {"items-pane": "0.69"}, "a share dragged on a wide terminal, shrunk on a narrower one"),
+    (120, {"sessions-pane": "0.6", "items-pane": "0.6"}, "two of them"),
     (160, {"sessions-pane": "abc"}, "an unreadable size is ignored"),
     (160, {"sessions-pane": "nan"}, "so is one not finite"),
-    (160, {"detail-pane": "inf"}, "nor infinite"),
+    (160, {"items-pane": "inf"}, "nor infinite"),
     (160, {"sessions-pane": "5.0"}, "one over the whole is clamped"),
     (160, {"sessions-pane": "-1"}, "as is a negative one"),
     # review 9: a share under its pane's minimum, held up by CSS, counted at the minimum
-    (90, {"sessions-pane": "0.6025", "detail-pane": "0.1225"}, "120 and 24 of 200, on 90"),
-    (80, {"sessions-pane": "0.6025", "detail-pane": "0.1225"}, "120 and 24 of 200, on 80"),
-    (113, {"sessions-pane": "0.218016", "detail-pane": "0.933439"}, "the sweep's 127 on 113"),
+    (90, {"sessions-pane": "0.6025", "items-pane": "0.1225"}, "120 and 24 of 200, on 90"),
+    (80, {"sessions-pane": "0.6025", "items-pane": "0.1225"}, "120 and 24 of 200, on 80"),
+    (113, {"sessions-pane": "0.218016", "items-pane": "0.933439"}, "the sweep's 127 on 113"),
 ])
 async def test_the_columns_stay_on_screen(store, sid, width, stored, desc):
     for key, value in (stored or {}).items():
@@ -5193,7 +5188,7 @@ async def test_any_shares_fit_any_width(store, sid):
     async with app.run_test(size=(160, 30)) as pilot:
         await pilot.pause()
         for _ in range(15):   # a quarter of these overflowed before review 9's fix
-            shares = {key: rng.uniform(0.02, 0.98) for key in ("sessions-pane", "detail-pane")}
+            shares = {key: rng.uniform(0.02, 0.98) for key in ("sessions-pane", "items-pane")}
             width = rng.randint(80, 220)
             for key, fraction in shares.items():
                 splitter(app, key).apply(fraction)
@@ -5207,7 +5202,7 @@ async def test_any_shares_fit_any_width(store, sid):
 @pytest.mark.anyio
 async def test_a_shrunk_share_comes_back_with_room(store, sid):
     """Review 8: a share that didn't fit is shrunk, not forgotten: a wide terminal has it back."""
-    store.set_setting("layout.detail-pane", "0.69")
+    store.set_setting("layout.items-pane", "0.6")
     app = WheelhouseApp(store)
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -5215,17 +5210,17 @@ async def test_a_shrunk_share_comes_back_with_room(store, sid):
         await pilot.resize_terminal(200, 30)
         await pilot.pause()
         await pilot.pause()
-        assert abs(sized(app, "detail-pane") - 0.69 * app.query_one("#main").size.width) <= 1
+        assert abs(sized(app, "items-pane") - 0.6 * app.query_one("#main").size.width) <= 1
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("missing, desc", [
-    (False, "a module pane swapped for a card: the card keeps its place under the splitter"),
+    (False, "a module pane swapped for a card: the card keeps its slot, under the splitter"),
     (True, "a neighbour gone altogether: the splitter does nothing"),
 ])
-async def test_the_items_splitter_survives_a_pane_that_raised(store, sid, monkeypatch, missing, desc):
-    """Review 8: a pane that raised was swapped for a card without the -split class, and a
-    press on the splitter above it then raised NoMatches and closed the app."""
+async def test_the_stats_splitter_survives_a_pane_that_raised(store, sid, monkeypatch, missing, desc):
+    """Review 8: a pane that raised was swapped for a card the splitter above it couldn't
+    find, and a press on the splitter then raised NoMatches and closed the app."""
     from claude_wheelhouse import stats_pane
 
     def boom(self):
@@ -5235,16 +5230,16 @@ async def test_the_items_splitter_survives_a_pane_that_raised(store, sid, monkey
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         card = app.query_one(".module-error")
-        assert card.has_class("-split"), desc
+        assert card.parent.name == "left.middle", desc
         if missing:
-            card.remove_class("-split")
-        before = sized(app, "items") if not missing else None
+            await card.parent.remove()
+        before = sized(app, "left-middle") if not missing else None
         if missing:
-            await pilot.mouse_down(splitter(app, "items"))
+            await pilot.mouse_down(splitter(app, "left-middle"))
             await pilot.pause()
         else:
-            await drag(pilot, "items", 0, -3)
-            assert sized(app, "items") == before - 3, f"{desc}: and still drags"
+            await drag(pilot, "left-middle", 0, 3)
+            assert sized(app, "left-middle") == before - 3, f"{desc}: and still drags"
         assert app.is_running and app.return_code is None, desc
 
 
@@ -6025,7 +6020,7 @@ async def test_a_shimmer_frame_moves_the_bars_on_screen_under_a_border(store, si
         await pilot.pause()
         pane = app.query_one("#stats")
         monkeypatch.setattr(pane, "tick", lambda: None)   # the made-up session stays shown
-        pane.remove_class("-split")   # its own top border back: the content one line down
+        pane.styles.border_top = ("solid", "#7b61ff")   # a top border: the content one line down
         pane.styles.padding = (1, 0, 0, 0)   # and a line more
         pane.show(busy_snapshot(time.time()), "demo", time.time())
         await pilot.pause()
@@ -6117,7 +6112,7 @@ async def test_model_and_effort_are_offered_only_for_a_hosted_session(store, tmp
     sid, app = await hosted_app(store, tmp_path, monkeypatch, runner_)
     async with app.run_test(size=(160, 40)) as pilot:
         shown = await shown_stats(app, pilot)
-        assert "demo · Sonnet 5.5 · high · 1M ─" in shown, desc
+        assert "demo · Sonnet 5.5 · high · 1M window" in shown, desc
         assert ("effort  low medium high xhigh max" in shown) == slider, desc
         assert app.query_one("#model", Button).display == slider, desc
         app.query_one("#detail").focus()
@@ -6148,7 +6143,7 @@ async def test_a_model_change_says_so_and_shows_as_applying(store, tmp_path, mon
         await pilot.press("m", "up", "enter")
         await pilot.pause()
         shown = await shown_stats(app, pilot)
-        assert "demo · Opus 5.5 · high · 1M ─" in shown and "applying…" in shown, "until its host confirms"
+        assert "demo · Opus 5.5 · high · 1M window" in shown and "applying…" in shown, "until its host confirms"
         store.set_applied(sid, "claude-opus-5-5", "high")
         assert "applying…" not in await shown_stats(app, pilot)
         assert_one_current(app, "after a model change")
@@ -6232,7 +6227,7 @@ async def test_a_tabs_header_shows_what_its_transcript_says_it_runs(store, tmp_p
     rec["message"] |= {"id": "m2", "model": "claude-opus-5-5"}
     path.write_text(path.read_text() + json.dumps(prompt) + "\n" + json.dumps(rec) + "\n")
     async with app.run_test(size=(160, 40)) as pilot:
-        assert "demo · Opus 5.5 · max · 1M ─" in await shown_stats(app, pilot)
+        assert "demo · Opus 5.5 · max · 1M window" in await shown_stats(app, pilot)
     s = store.session(sid)
     assert (s["model"], s["effort"]) == ("claude-opus-5-5", "max"), "copied back, as the pinned id"
 
@@ -6295,6 +6290,7 @@ async def test_the_arrows_start_from_the_transcripts_effort_with_nothing_set(sto
 async def test_a_click_on_an_arrow_steps_the_narrow_slider(store, tmp_path, monkeypatch, arrow, level):
     sid, app = await hosted_app(store, tmp_path, monkeypatch)
     async with app.run_test(size=(100, 30)) as pilot:
+        app.query_one("#stats").styles.width = 32   # narrower than column 1 lets it be
         shown = await shown_stats(app, pilot)
         pane = app.query_one("#stats")
         width = pane.size.width - 2

@@ -63,7 +63,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   Claude Code every 5 minutes (a one-shot `claude -p` by default, or one kept running with
   `--usage-mode persistent`), and, in SDK mode only, from SDK sessions' rate_limit_events.
 - `api.py`: the module protocol (entry point group `claude_wheelhouse.modules`). Bump
-  `WHEELHOUSE_API` on any breaking change to it.
+  `WHEELHOUSE_API` on any breaking change to it. `SLOTS` names the six places a pane goes
+  (`tui.slot`, `.plan/modules.md`): an empty one collapses (`WheelhouseApp.collapse`).
 - `models.py`: the models and effort levels offered. A new model is a row here.
 - `tutorial.py`: the new-user tutorial: its session brief and checklist steps.
 - `splitter.py`, `knurl.py`, `emoji.py`, `unsent.py`: TUI pieces (dividers, scrollbars,
