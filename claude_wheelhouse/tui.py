@@ -1562,7 +1562,9 @@ class ThreadView(Screen):
             self.text = text
             self.query_one("#thread", Transcript).update(render(blocks))
             if following:   # at the newest reply, or opening: scrolled up to read, it keeps its place
-                scroll.scroll_end(animate=False)
+                # after a refresh, as the detail pane's: scroll_end's own wait can end before the
+                # new reply is laid out, rows short of the end, which stops it following
+                self.call_after_refresh(scroll.scroll_end, animate=False)
 
 
 def doc_blocks(item, doc) -> list[tuple[str, str]]:
@@ -4306,7 +4308,7 @@ class WheelhouseApp(App):
         box.text = ""
         self.refresh_data()
         if isinstance(self.screen, ThreadView) and box is self.screen.box:   # to the end, where the answer just given shows
-            self.screen.query_one("#thread-scroll").scroll_end(animate=False)
+            self.call_after_refresh(self.screen.query_one("#thread-scroll").scroll_end, animate=False)   # as paint
 
     @session_action
     def action_recall(self) -> None:
