@@ -86,6 +86,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `callout.py`: the tour's callout, a box painted beside the pane a tour dialog describes,
   highlighting it and following it through a resize or a swap (`place`, a pure function;
   `PANES`, the one lookup from a tour pane id to its widget).
+- `docblocks.py`: a doc rendered block by block, exactly as Rich renders it whole, with its
+  map (`DocMap`: each block's source lines and rendered rows), for the viewer
+  (`Transcript.line_at`, `Transcript.row_of`; `.plan/modules.md`, Q106). Never imports Textual.
 - `splitter.py`, `knurl.py`, `emoji.py`, `unsent.py`: TUI pieces (dividers, scrollbars,
   emoji shortcodes, unsent text).
 - `protocol.md`, `protocol_sdk.md`, `protocol_tab.md`, `protocol_decisions.md`: what a

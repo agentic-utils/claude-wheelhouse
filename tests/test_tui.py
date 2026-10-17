@@ -7151,6 +7151,42 @@ async def test_delete_on_marked_rows_asks_once_and_takes_the_children(store, sid
 
 
 @pytest.mark.anyio
+async def test_a_doc_maps_its_rows_to_source_lines_in_detail_and_full_screen(store, sid, tmp_path, monkeypatch):
+    doc = tmp_path / "plan.md"
+    doc.write_text("# The plan\n\nBuild it.\n\n- one\n- two\n\n```py\nx = 1\n```\n\n| alpha | beta |\n|---|---|\n| 1 | 2 |\n")
+    # each block's first text: its block's first line, and the rows its block draws above it
+    # (a code fence's padding, a table's blank line above its header)
+    starts = {"The plan": (0, 0), "Build it.": (2, 0), "one": (4, 0), "x = 1": (7, 1), "alpha": (11, 1)}
+    m = store.post_doc(sid, "the plan", str(doc))
+    renders = []
+    real = tui.docblocks.render
+    monkeypatch.setattr(tui.docblocks, "render", lambda *a: (renders.append(1), real(*a))[1])
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(f"└ {m}"))
+        await pilot.pause()
+        for where in ("detail", "full screen"):
+            view = app.detail if where == "detail" else app.screen.query_one("#docview", tui.Transcript)
+            texts = view._layout(view.size.width)[1]
+            for first, (line, above) in starts.items():
+                row = next(y for y in range(view.doc_at[0], len(texts)) if first in texts[y])
+                assert view.line_at(row) == line, f"{where}: a click on {first!r} is its first line"
+                assert view.row_of(line) == row - above, f"{where}: and line {line} back to its block's first row"
+            assert view.line_at(0) == 0, f"{where}: a row above the doc (its heading) takes the first block"
+            count = len(renders)
+            for _ in range(3):
+                app.refresh_data()
+                await pilot.pause()
+            assert len(renders) == count, f"{where}: refreshing an unchanged doc renders nothing again"
+            if where == "detail":
+                app.items_table.focus()
+                await pilot.press("enter")
+                await pilot.pause()
+                assert isinstance(app.screen, tui.DocView), "Enter opens it full screen"
+
+
+@pytest.mark.anyio
 async def test_a_long_doc_renders_off_the_loop(store, sid):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
