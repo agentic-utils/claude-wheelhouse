@@ -25,7 +25,7 @@ cut-off. So joining, or upgrading, brings in what's running and not the history.
 
 Reads are incremental: the subagents folder is listed again only when it changes, and the
 main transcript is read from where the last read stopped. A first read starts at the
-earliest subagent still running (stats.window_start), or at the end when none is. See
+earliest subagent still running (transcript_usage.window_start), or at the end when none is. See
 .plan/wheelhouse-sessions.md ("Subagents").
 """
 
@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import stats, transcript
+from . import transcript, transcript_usage
 from .store import AGENT_MATCH_AFTER, AGENTS_SINCE
 
 # seconds after a subagent starts before its item is made: a session that posts its own A
@@ -72,7 +72,7 @@ class Agent:
 
 
 def when(at) -> datetime | None:
-    t = stats.epoch(at) if isinstance(at, str) else None
+    t = transcript_usage.epoch(at) if isinstance(at, str) else None
     return datetime.fromtimestamp(t, timezone.utc) if t is not None else None
 
 
@@ -247,7 +247,7 @@ class AgentWatcher:
             if self.offset is None or st.st_size < self.offset:
                 running = [a.started.timestamp() for aid, a in self.agents.items()
                            if self.links.get(aid, "running") == "running"]
-                self.offset = stats.window_start(f, st.st_size, min(running)) if running else st.st_size
+                self.offset = transcript_usage.window_start(f, st.st_size, min(running)) if running else st.st_size
                 self.base, self.seen, self.before = self.offset, set(), None
             f.seek(self.offset)
             data = f.read(st.st_size - self.offset)

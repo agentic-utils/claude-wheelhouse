@@ -59,11 +59,14 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   (conftest stubs `os.getpgid` and `os.killpg`).
 - `subagents.py`: A items for subagents, from the files Claude Code writes.
 - `transcript.py`: a session's conversation, read from its Claude Code transcript.
-- `stats.py`, `stats_pane.py`: token stats and charts; the pane is a module (`api.py`).
+- `transcript_usage.py`: a session's token use, read from its transcripts (`parse`,
+  `UsageFollower`, `follower`, `Snapshot`, `current`, `carry`), for the session list's
+  context bars and cache warmth, and for the stats module through `api.py`'s re-exports.
 - `plan_usage.py`: the account's session and weekly usage, from `/usage` asked of
   Claude Code every 5 minutes (a one-shot `claude -p` by default, or one kept running with
   `--usage-mode persistent`), and, in SDK mode only, from SDK sessions' rate_limit_events.
-- `api.py`: the module protocol (entry point group `claude_wheelhouse.modules`). Bump
+- `api.py`: the module protocol (entry point group `claude_wheelhouse.modules`), and all a
+  module imports of the wheelhouse: what it may use is re-exported there. Bump
   `WHEELHOUSE_API` on any breaking change to it. `SLOTS` names the six places a pane goes
   (`tui.slot`, `.plan/modules.md`): an empty one collapses (`WheelhouseApp.collapse`).
 - `models.py`: the models and effort levels offered. A new model is a row here.
@@ -81,14 +84,25 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `protocol.md`, `protocol_sdk.md`, `protocol_tab.md`, `protocol_decisions.md`: what a
   launched session is told. `claude-wheelhouse protocol` prints it as a session gets it.
 
-`tests/` mirrors the modules (`test_<module>.py`); `conftest.py` holds the shared fixtures.
+`modules/` holds the modules (`.plan/modules.md`), each its own distribution, a uv workspace
+member and a dependency group of the same name (`pyproject.toml`): `modules/stats` is
+`claude-wheelhouse-stats`, the stats pane (`pane.py`) and its drawing, charts and gauges
+(`stats.py`), with its tests in `modules/stats/tests`. Core never imports a module: the app
+finds them by entry point, and must run with none installed (`test_api.py`).
+
+`tests/` mirrors the modules (`test_<module>.py`); `conftest.py` holds the shared fixtures,
+and `transcripts.py` the transcripts the core's and the stats module's tests write.
 
 ## Run
 
 - `make install` (installs uv if it's missing, then `uv sync --reinstall-package claude-wheelhouse`
-  and touches `.venv/.wheelhouse-installed`), then `make run` (`ARGS="..."` passes args;
-  it runs `make install` first when that stamp is missing or older than `pyproject.toml` or
-  `uv.lock`). `make args` (`claude-wheelhouse args`, hidden from `--help`, `cli.args_text`)
+  and each module's package, with every module in `modules/` or those `WITH="..."` names,
+  `--no-group` for the rest, and writes the modules installed to
+  `.venv/.wheelhouse-installed`), then `make run` (`ARGS="..."` passes args;
+  it runs `make install` first, with the stamp's modules, when that stamp is missing or
+  older than `pyproject.toml`, `uv.lock` or a module's `pyproject.toml`). The app's targets
+  run `uv run --no-sync`, so a module left out stays out; `uv run` alone syncs the default
+  groups, every module included. `make args` (`claude-wheelhouse args`, hidden from `--help`, `cli.args_text`)
   lists the app's flags with their settings' names (`features.SETTINGS`).
   `make stop` (`claude-wheelhouse daemon --stop`) stops the daemon. `make tutorial` (`claude-wheelhouse tutorial`), with the app and daemon stopped, has the
   next start offer the tutorial again. `make` lists the targets. Python 3.12, managed by uv.

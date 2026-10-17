@@ -21,7 +21,7 @@ import time
 import uuid
 from typing import Callable, NamedTuple
 
-from . import adopt, auth, features, fork, plan_usage, stats, tutorial
+from . import adopt, auth, features, fork, plan_usage, transcript_usage, tutorial
 from .hub import RUNNING, Done, Event, Hub, host_context, requested
 from .store import SessionGone
 
@@ -73,7 +73,7 @@ class LocalClient(Hub):
         follower = self.contexts.get(s["id"])
         if not (follower and follower.ready):
             return None
-        return stats.current(follower.snap, host_context(s)).context or None
+        return transcript_usage.current(follower.snap, host_context(s)).context or None
 
     def session(self, sid: str):
         return self.store.session(sid)

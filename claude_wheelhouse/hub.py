@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import adopt, api, features, fork, launch, liveness, models, plan_usage, stats, subagents, transcript, tutorial
+from . import adopt, api, features, fork, launch, liveness, models, plan_usage, subagents, transcript, transcript_usage, tutorial
 from .host import AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, NO_NOTES, keepalive_body, waits_on_person
 from .store import COMPACT_QUESTION, DISMISSABLE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
 
@@ -101,7 +101,7 @@ def aimed(target) -> str:
 def host_context(s) -> api.HostContext | None:
     """The context size an SDK session's host last recorded, for the stats to show after a
     compaction. A tab session's sizes come from its transcript alone."""
-    at = stats.epoch(s["context_at"] or "")
+    at = transcript_usage.epoch(s["context_at"] or "")
     if runner(s) != "sdk" or at is None or not s["context_tokens"] or not s["context_max"]:
         return None
     return api.HostContext(s["context_tokens"], s["context_max"], at)
@@ -109,14 +109,14 @@ def host_context(s) -> api.HostContext | None:
 
 def since(at: str | None, asked: float) -> bool:
     """Whether a stored timestamp is at or after the epoch second `asked`."""
-    epoch = stats.epoch(at or "")
+    epoch = transcript_usage.epoch(at or "")
     return epoch is not None and epoch >= asked
 
 
 def compacted_since(s, asked: float) -> bool:
     """Whether the session's host has recorded a context under COMPACT_FIRST_TOKENS since
     the epoch second `asked`: a compaction's end, which no later activity line hides."""
-    at = stats.epoch(s["context_at"] or "")
+    at = transcript_usage.epoch(s["context_at"] or "")
     return at is not None and at >= asked and (s["context_tokens"] or 0) < COMPACT_FIRST_TOKENS
 
 
@@ -198,8 +198,8 @@ class Hub:
                                              if asked is not None}
         self.followers: dict[str, transcript.Follower] = {}
         # each session's context size for the session list: read on workers, by a follower
-        # shared with the stats pane (stats.follower), so each transcript is read once
-        self.contexts: dict[str, stats.UsageFollower] = {}
+        # shared with the stats pane (transcript_usage.follower), so each transcript is read once
+        self.contexts: dict[str, transcript_usage.UsageFollower] = {}
         # the sessions not running whose transcript has been read, and copied back, since
         # they stopped: read_contexts reads each once more after it stops, for its last second
         self.settled: set[str] = set()
@@ -392,12 +392,12 @@ class Hub:
 
     def warm(self, sid: str) -> bool:
         """Whether the session's prompt cache is warm: its last response within the cache's
-        lifetime (stats.Snapshot.warm), as the stats pane shows it."""
+        lifetime (transcript_usage.Snapshot.warm), as the stats pane shows it."""
         follower = self.contexts.get(sid)
         return bool(follower and follower.ready and follower.snap.warm(time.time()))
 
     def cache_expires(self, sid: str) -> float | None:
-        """When the session's prompt cache goes (or went) cold: stats.Snapshot.expires, the
+        """When the session's prompt cache goes (or went) cold: transcript_usage.Snapshot.expires, the
         "warm until" or "cold since" the stats pane shows. None with no cache written yet."""
         follower = self.contexts.get(sid)
         return follower.snap.expires if follower and follower.ready else None
@@ -405,7 +405,7 @@ class Hub:
     def context_tokens(self, sid: str) -> int:
         """The session's context as the stats pane sizes it: what a cold cache re-reads."""
         follower = self.contexts.get(sid)
-        return stats.current(follower.snap, host_context(self.listed(sid))).context if follower and follower.ready else 0
+        return transcript_usage.current(follower.snap, host_context(self.listed(sid))).context if follower and follower.ready else 0
 
     def compact_question(self, target):
         """The item in context, if it is the host's open question suggesting Compact."""
@@ -985,7 +985,7 @@ class Hub:
             del self.contexts[sid]
         self.settled &= set(listed)
         for sid in listed:
-            follower = self.contexts.setdefault(sid, stats.follower(sid))
+            follower = self.contexts.setdefault(sid, transcript_usage.follower(sid))
             alive = self.running(sid)
             if alive:
                 self.settled.discard(sid)
@@ -996,13 +996,13 @@ class Hub:
             follower.reading = True
             self.spawn(functools.partial(self.read_context, follower), "contexts")
 
-    def read_context(self, follower: stats.UsageFollower) -> None:
+    def read_context(self, follower: transcript_usage.UsageFollower) -> None:
         """On a worker thread. A failed read leaves the last size up; the next tick reads
         again. One that brought anything is said at once ("landed"), for the stats pane too
         if it shows that session: the follower is its as well, and it started no read of its
         own while this one was under way."""
         first = not follower.ready
-        changed = stats.read_safely(follower)
+        changed = transcript_usage.read_safely(follower)
         if follower.ready and not follower.error:
             try:
                 self.copy_back(follower)
@@ -1011,15 +1011,15 @@ class Hub:
         if changed or first:
             self.post(functools.partial(self.emit, Event("landed", sid=follower.sid)))
 
-    def copy_back(self, follower: stats.UsageFollower) -> None:
+    def copy_back(self, follower: transcript_usage.UsageFollower) -> None:
         """A /model or /effort typed in a tab, carried to the session's columns, so its next
         Relaunch or return from a shell tab launches with it (Q56), and the stats
-        pane shows it: by stats.carry's rule, last write wins. A tab session's on every read;
+        pane shows it: by transcript_usage.carry's rule, last write wins. A tab session's on every read;
         a hosted session's while it is out in a shell tab (its host carries once more as it
         takes it back), not while hosted, as its host applies the columns."""
         s = self.store.session(follower.sid)
         if s is not None and (runner(s) == "tab" or s["shell"]):
-            stats.carry(self.store, follower.sid, follower.snap)
+            transcript_usage.carry(self.store, follower.sid, follower.snap)
 
     def keep_warm(self, at: float | None = None) -> None:
         """Each tab session's keepalive, as an SDK host sends its own (host.keepalive_due),
@@ -1055,7 +1055,7 @@ class Hub:
                     or at - max(snap.last_at, w.sent or 0) < KEEPALIVE_AFTER or at - w.quiet >= self.keepalive_for):
                 continue
             try:
-                if (stats.epoch(self.store.heard_at(sid) or "") or 0) > snap.last_at:
+                if (transcript_usage.epoch(self.store.heard_at(sid) or "") or 0) > snap.last_at:
                     continue   # sent something it hasn't answered yet: its turn may be starting
                 doubted = self.store.in_doubt(sid)
                 if doubted or waits_on_person(self.store, sid):

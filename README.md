@@ -39,7 +39,7 @@ make install
 installer, `curl -LsSf https://astral.sh/uv/install.sh | sh`, which puts it in
 `~/.local/bin`: open a new shell to have it on your `PATH`). It then runs
 `uv sync --reinstall-package claude-wheelhouse` (plain `uv sync` does for a first install),
-which builds a `.venv` inside the clone: the wheelhouse installs
+with the modules in `modules/` (today, the stats pane), which builds a `.venv` inside the clone: the wheelhouse installs
 nothing outside it (uv keeps its own cache of downloads, and any Python it fetched). To
 update, `git pull`, `make install` again, then quit and reopen the app straight away
 (with `--local` too, and on every machine that opens this database): a session relaunched
@@ -54,6 +54,12 @@ its environment variable and `.env` key where it has them (see [Settings](#setti
 `make run` passes `ARGS` to the app, for example `make run ARGS="--local --animation-fps 0"`,
 and runs `make install` first when the clone has none, or `pyproject.toml` or `uv.lock`
 changed since. Without uv, every other target stops with `uv not found: run make install`.
+
+The stats pane is a module, its own package in `modules/stats`, which `make install`
+installs with the wheelhouse. To leave it out, `make install WITH=""`: the wheelhouse runs
+without it, and the space under the session list goes to the panes beside it. `WITH`
+names the modules to install, `WITH="stats"` for the stats pane alone; `make run` keeps to
+what the last `make install` installed, and a plain `make install` installs them all again.
 
 Run the app in a Windows Terminal tab, which draws its colours and carries its copies to
 the clipboard.
@@ -650,7 +656,8 @@ sessions' conversations stay in `~/.claude/projects`, as Claude Code's own.
 make test
 ```
 
-(`make test` is `uv run pytest`.)
+(`make test` is `uv run pytest`, which installs every module in `modules/` and runs their
+tests too.)
 
 The tests run in parallel, a worker a core (pytest-xdist). `uv run pytest -n 0` runs them
 serially, as a single test or a debugger wants.
