@@ -20,7 +20,7 @@ from textual.strip import Strip
 from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
-from claude_wheelhouse import features, launch, stats, transcript, tui
+from claude_wheelhouse import features, launch, models, stats, transcript, tui
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
@@ -5580,6 +5580,105 @@ async def test_a_dialog_is_centred_over_the_screen(store, sid, tmp_path, make, d
 
 def focused_id(app) -> str | None:
     return app.focused.id if app.focused is not None else None
+
+
+OPEN = object()   # the dialog still open: Enter was its focus's own (a list's, a multi-line box's)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("make, outside, esc, enter, tabs, desc", [
+    (lambda app, sid, cwd: tui.NewSession(), None, None, {"name": "", "ticket": "", "brief": ""},
+     ["cwd", "browse", "name", "ticket", "brief", "model", "effort", "launch", "cancel"], "New session: Enter launches"),
+    (lambda app, sid, cwd: tui.PickDirectory(cwd), None, None, OPEN, ["folders", "choose", "up", "cancel"],
+     "the folder picker: Enter opens the folder"),
+    (lambda app, sid, cwd: RenameSession("demo"), None, None, "demo", ["new-name", "ok", "cancel"], "Rename"),
+    (lambda app, sid, cwd: tui.ChooseModel("demo", None), None, None, models.MODELS[0].id, ["models", "ok", "cancel"],
+     "the model: Enter takes the highlighted one"),
+    (lambda app, sid, cwd: tui.AdoptSession([]), None, None, OPEN, ["adopt-list", "adopt-name", "adopt", "cancel"],
+     "Adopt, with nothing to adopt"),
+    (lambda app, sid, cwd: tui.ForkSession(app.client.fork_plan(sid)), None, None, {"refs": [], "branch": None},
+     ["fork-go", "cancel"], "Fork"),
+    (lambda app, sid, cwd: CompactSession("demo"), None, None, OPEN,
+     ["compact-notes", "compact-dialog-then", "compact-go", "compact-cancel"], "Compact: Enter is a new line"),
+    (lambda app, sid, cwd: ParkSession("demo", True), None, None, {"compact": True},
+     ["park-compact", "park-go", "park-cancel"], "Park: Enter on the checkbox parks"),
+    (lambda app, sid, cwd: ForgetChoice("Forget demo?", True), None, None, "tell",
+     ["forget-tell", "forget-stop", "forget-cancel"], "Forget: Enter the focused default"),
+    (lambda app, sid, cwd: Confirm("Relaunch demo?"), False, False, False, ["no", "yes"], "a confirmation: No focused"),
+    (lambda app, sid, cwd: Choice("Force it?"), "leave", "leave", "cancel", ["cancel", "force", "leave"], "a choice"),
+    (lambda app, sid, cwd: RelaunchChoice("Relaunch demo?"), None, None, None,
+     ["relaunch-cancel", "relaunch-compact", "relaunch-now"], "Relaunch's choice: Cancel focused"),
+    (lambda app, sid, cwd: tui.TutorialOffer(), OPEN, False, True, [],
+     "the tutorial offer: all but its line is outside, so a click there leaves it be"),
+    (lambda app, sid, cwd: tui.KeysHelp(), None, None, None, None, "the keys: no answer asked"),
+])
+async def test_dialog_keys_and_click_outside(store, sid, tmp_path, make, outside, esc, enter, tabs, desc):
+    """#81, Doug: clicking outside a dialog dismisses it; one that asks nothing closes on Esc or
+    Enter; one that asks has Tab order on its buttons, Enter its single action and Esc its
+    cancel."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+
+        async def answer(gesture):
+            answers = []
+            app.push_screen(make(app, sid, str(tmp_path)), answers.append)
+            await pilot.pause()
+            await gesture()
+            await pilot.pause()
+            if isinstance(app.screen, tui.Dialog):
+                app.screen.dismiss(None)
+                await pilot.pause()
+                return OPEN
+            return answers[0]
+
+        async def inside():
+            await pilot.click(app.screen.children[0], offset=(0, 0))   # its border: not outside
+        async def outside_later():   # past the grace a double-click's second click gets
+            app.screen.opened -= tui.Dialog.GRACE
+            await pilot.click(offset=(0, 39))
+        assert await answer(inside) is OPEN, f"{desc}: a click on the box leaves it open"
+        assert await answer(outside_later) == outside, f"{desc}: a click outside"
+        assert await answer(lambda: pilot.press("escape")) == esc, f"{desc}: Esc"
+        got = await answer(lambda: pilot.press("enter"))
+        if isinstance(enter, dict):
+            got = {k: got.get(k) for k in enter} if isinstance(got, dict) else got
+        assert got == enter, f"{desc}: Enter"
+        if tabs is None:
+            return
+        app.push_screen(make(app, sid, str(tmp_path)))
+        await pilot.pause()
+        seen = []
+        for _ in tabs:
+            seen.append(focused_id(app))
+            await pilot.press("tab")
+        assert seen == tabs and focused_id(app) == (tabs[0] if tabs else None), f"{desc}: Tab order"
+        for want in reversed(tabs):
+            await pilot.press("shift+tab")
+            assert focused_id(app) == want, f"{desc}: Shift+Tab back to {want}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("after, want, desc", [
+    (0.0, OPEN, "at once: a double-click's second click on the button that opened it"),
+    (0.39, OPEN, "just inside the grace"),
+    (0.4, None, "at the grace: an outside click cancels"),
+    (2.0, None, "later: an outside click cancels"),
+])
+async def test_dialog_ignores_a_click_outside_as_it_opens(store, tmp_path, monkeypatch, after, want, desc):
+    clock = [100.0]
+    monkeypatch.setattr(tui.Dialog, "now", staticmethod(lambda: clock[0]))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        answers = []
+        app.push_screen(RenameSession("demo"), answers.append)
+        await pilot.pause()
+        clock[0] += after
+        await pilot.click(offset=(0, 39))
+        await pilot.pause()
+        got = OPEN if isinstance(app.screen, tui.Dialog) else answers[0]
+        assert got is want, desc
 
 
 @pytest.mark.anyio

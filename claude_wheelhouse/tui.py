@@ -1625,15 +1625,62 @@ class Hint(Label):
             self.update(self.base if text is None else text)
 
 
+# where focus is on one of these, Enter is its own (a button presses, a list or radio set picks,
+# a multi-line box takes a new line), not a dialog's ACTION
+OWN_ENTER = (Button, TextArea, DataTable, OptionList, DirectoryTree, Select, RadioSet)
+
+
 class Dialog(ModalScreen):
     """A dialog. Every answer, by key, button or Enter in a box, is action_answer. A key acts
     once the one before it has landed (take_key), so a key typed behind the one that answers
     goes to the screen that answer uncovers, in order. Answered once: a second click finds it
-    closed already."""
+    closed already.
+
+    The keys every dialog shares (#81): Esc, and a click outside the box, answer CANCEL. Enter
+    presses the ACTION button, the one answer that isn't a cancel, wherever focus has no Enter
+    of its own (OWN_ENTER: a one-line box or a checkbox has none); a dialog of several choices
+    has no ACTION, and Enter presses only the focused button. Tab and Shift+Tab go round its
+    buttons and boxes in screen order (cycle_focus). One that asks nothing (RESPONSE False)
+    closes on Esc, Enter or a click outside. A click outside within GRACE of the dialog
+    opening is ignored: a double-click on the button that opened it. One whose box doesn't
+    hold the eye (CLICK_OUTSIDE False: the tutorial offer, a line over the whole screen)
+    ignores clicks outside altogether."""
+    CANCEL = None
+    ACTION: str | None = None
+    RESPONSE = True
+    CLICK_OUTSIDE = True
+    GRACE = 0.4   # seconds
+    now = staticmethod(time.monotonic)
+    opened = 0.0
+    # priority: tried before the focus's own Enter, which check_action lets through
+    BINDINGS = [Binding("escape", "cancel", show=False), Binding("enter", "enter", show=False, priority=True)]
 
     def action_answer(self, result=None) -> None:
         if self.is_active:
             self.dismiss(result)
+
+    def action_cancel(self) -> None:
+        self.action_answer(self.CANCEL)
+
+    def check_action(self, action: str, parameters) -> bool | None:
+        if action == "enter" and self.RESPONSE:
+            return self.ACTION is not None and not isinstance(self.focused, OWN_ENTER)
+        return True
+
+    def action_enter(self) -> None:
+        if self.RESPONSE:
+            self.query_one(f"#{self.ACTION}", Button).press()
+        else:
+            self.action_cancel()
+
+    def on_mount(self) -> None:
+        self.opened = self.now()
+
+    def on_click(self, event: events.Click) -> None:
+        if event.widget is self:   # the shade around the box, not the box
+            event.stop()
+            if self.CLICK_OUTSIDE and self.now() - self.opened >= self.GRACE:
+                self.action_cancel()
 
 
 class NewSession(Dialog):
@@ -1641,7 +1688,7 @@ class NewSession(Dialog):
     start at the defaults (models.py), and go to every launch of the session. It opens in a
     tab; in SDK mode alone (features.py) a box offers the wheelhouse's host instead, ticked
     for a tab by default only under WHEELHOUSE_RUNNER=tab."""
-    BINDINGS = [Binding("escape", "answer", show=False)]
+    ACTION = "launch"
 
     def compose(self) -> ComposeResult:
         # on another machine's daemon (--connect): its directories aren't this machine's, to
@@ -1711,8 +1758,8 @@ class PickDirectory(Dialog):
     Backspace (or Up) goes to the parent, Ctrl+Enter (or Choose) takes the highlighted one."""
     BINDINGS = [Binding("ctrl+enter", "choose", "Choose", show=False),
                 Binding("ctrl+j", "choose", "Choose", show=False),
-                Binding("backspace", "up", "Up", show=False),
-                Binding("escape", "answer", show=False)]
+                Binding("backspace", "up", "Up", show=False)]
+    ACTION = "choose"
 
     def __init__(self, start: str = ""):
         super().__init__()
@@ -1763,7 +1810,7 @@ class PickDirectory(Dialog):
 class RenameSession(Dialog):
     """A session's name: Enter keeps it, Esc leaves it as it was. Empty clears it, and the
     session shows its directory's name."""
-    BINDINGS = [Binding("escape", "answer", show=False)]
+    ACTION = "ok"
 
     def __init__(self, name: str):
         super().__init__()
@@ -1796,7 +1843,7 @@ MODEL_WARNING = ("Changing model drops the prompt cache: the session's next requ
 class ChooseModel(Dialog):
     """A hosted session's model, changed live: Enter takes the highlighted one, Esc leaves it
     as it was. Says first that the cache goes with the old model (Q52)."""
-    BINDINGS = [Binding("escape", "answer", show=False)]
+    ACTION = "ok"
 
     def __init__(self, name: str, current: str | None):
         super().__init__()
@@ -1837,7 +1884,7 @@ def ago(epoch: float, now: float | None = None) -> str:
 class AdoptSession(Dialog):
     """Pick a session to bring into the wheelhouse. A running one must be /exit-ed first:
     the wheelhouse never kills it, and only launches once it has gone."""
-    BINDINGS = [Binding("escape", "answer", show=False)]
+    ACTION = "adopt"
 
     def __init__(self, candidates: list):
         super().__init__()
@@ -1900,7 +1947,7 @@ class ForkSession(Dialog):
     where its directory is in a linked git worktree, whether the fork works in a new one on a
     new branch (the default; uncommitted changes, if any, stay behind, and it says so) or the
     same one. Answers {"refs", "branch"}, branch None for the same directory."""
-    BINDINGS = [Binding("escape", "answer", show=False)]
+    ACTION = "fork-go"
 
     def __init__(self, plan):
         super().__init__()
@@ -1959,7 +2006,7 @@ class CompactSession(Dialog):
     """Compact a session run in the wheelhouse: instructions for the compaction (optional: none,
     and the session is asked what to keep) and what follows it (THEN_CHOICES). Answers
     {"notes", "then"}, or None."""
-    BINDINGS = [Binding("escape", "answer", show=False)]
+    ACTION = "compact-go"
 
     def __init__(self, name: str):
         super().__init__()
@@ -1992,7 +2039,7 @@ class ParkSession(Dialog):
     Compact first ticked it is compacted before its host stops, nothing sent after. Ticked by
     default while its prompt cache is warm: a compaction reads the whole context, so a cold
     cache saves nothing. Answers {"compact"}, or None."""
-    BINDINGS = [Binding("escape", "answer", show=False)]
+    ACTION = "park-go"
 
     def __init__(self, name: str, warm: bool):
         super().__init__()
@@ -2021,8 +2068,7 @@ class ForgetChoice(Dialog):
     The default, focused for Enter, is to let it know while its prompt cache is warm, and to
     just stop it once cold: its end steps would re-read the whole context, which a session
     used for a quick look isn't worth. Answers "tell", "stop", or None."""
-    BINDINGS = [Binding("l", "answer('tell')", show=False), Binding("j", "answer('stop')", show=False),
-                Binding("escape", "answer", show=False)]
+    BINDINGS = [Binding("l", "answer('tell')", show=False), Binding("j", "answer('stop')", show=False)]
 
     def __init__(self, prompt: str, warm: bool):
         super().__init__()
@@ -2060,8 +2106,8 @@ def forget_prompt(name: str, warm: bool, expires: float | None, context: int, qu
 
 
 class Confirm(Dialog):
-    BINDINGS = [Binding("y", "answer(True)", show=False), Binding("n", "answer(False)", show=False),
-                Binding("escape", "answer(False)", show=False)]
+    BINDINGS = [Binding("y", "answer(True)", show=False), Binding("n", "answer(False)", show=False)]
+    CANCEL = False   # no ACTION: No has the focus, so a reflex Enter must not confirm
 
     def __init__(self, prompt: str):
         super().__init__()
@@ -2084,8 +2130,8 @@ class Confirm(Dialog):
 
 class Choice(Dialog):
     """A pending request: cancel it, force it, or leave it be."""
-    BINDINGS = [Binding("c", "answer('cancel')", show=False), Binding("f", "answer('force')", show=False),
-                Binding("escape", "answer('leave')", show=False)]
+    BINDINGS = [Binding("c", "answer('cancel')", show=False), Binding("f", "answer('force')", show=False)]
+    CANCEL = "leave"
 
     def __init__(self, prompt: str):
         super().__init__()
@@ -2106,8 +2152,7 @@ class Choice(Dialog):
 
 class RelaunchChoice(Dialog):
     """Relaunch of a big session: compact first, relaunch now, or neither."""
-    BINDINGS = [Binding("c", "answer('compact')", show=False), Binding("r", "answer('now')", show=False),
-                Binding("escape", "answer", show=False)]
+    BINDINGS = [Binding("c", "answer('compact')", show=False), Binding("r", "answer('now')", show=False)]
 
     def __init__(self, prompt: str):
         super().__init__()
@@ -2134,7 +2179,10 @@ class RelaunchChoice(Dialog):
 class TutorialOffer(Dialog):
     """The first-run offer, a line that wraps on a narrow screen, so the command it names is
     never cut: Enter takes the tutorial, Esc dismisses it for good."""
-    BINDINGS = [Binding("enter", "answer(True)", show=False), Binding("escape", "answer(False)", show=False)]
+    BINDINGS = [Binding("enter", "answer(True)", show=False)]   # no button to press: no ACTION
+    CANCEL = False
+    # a line over a screen that is all outside: a click anywhere would turn the offer off for good
+    CLICK_OUTSIDE = False
 
     def compose(self) -> ComposeResult:
         yield Label(Text.assemble(("New here? ", "bold #ffd300"), ("Enter", "bold"), ": take the tutorial · ",
@@ -2288,6 +2336,10 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "Double-click selects a word. Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back.")
+DIALOGS = ("Esc, or a click outside the box, cancels a dialog (not the tutorial offer, which is all but outside). Enter presses the focused button; with focus on a "
+           "one-line box or a checkbox, or nothing, it takes the dialog's one action (Launch, Rename, Fork, Park and "
+           "the like), but in a list, a set of choices or a multi-line box it does what it does there. A dialog of "
+           "several choices answers Enter only on the focused button. Tab and Shift+Tab go round its boxes and buttons.")
 # the SDK-only buttons' keys, and those buttons, which the ? overlay leaves out unless SDK
 # mode is on (features.py, EXPERIMENTAL: the author's alone until Anthropic's terms are
 # confirmed) or the screen shows them (a host's session, which runs on with it off). Out of
@@ -2344,15 +2396,16 @@ def keys_help(sdk: bool = False, shown=()) -> str:
     buttons = [text for id_, text in BUTTONS.items() if id_ not in SDK_BUTTONS or id_ in offered]
     out += ["## Tab order", TABS.format(slider=SLIDER_TAB if sdk else ""), "## Mouse", MOUSE, "## Buttons", whose,
             *[f"- {text}" for text in buttons],
-            "## Sending", SEND_RULES,
-            "## The tutorial", f"{tutorial.AGAIN} at the next start. Esc or ? closes this list."]
+            "## Sending", SEND_RULES, "## Dialogs", DIALOGS,
+            "## The tutorial", f"{tutorial.AGAIN} at the next start. Esc, Enter, ? or a click outside closes this list."]
     return "\n\n".join(out)
 
 
 class KeysHelp(Dialog):
     """? : every key and button, and how sending works. shown: the SDK_BUTTONS the screen
     behind it shows (keys_help)."""
-    BINDINGS = [Binding("escape,question_mark,q", "answer", show=False)]
+    BINDINGS = [Binding("question_mark,q", "answer", show=False)]
+    RESPONSE = False
 
     def __init__(self, shown=()):
         super().__init__()
