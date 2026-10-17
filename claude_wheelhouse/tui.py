@@ -55,7 +55,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, emoji, features, models, ordering, subagents, transcript, transcript_usage, tutorial, whatsnew
+from . import api, docblocks, emoji, features, models, ordering, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .client import LocalClient, Unreachable
 from .host import NUDGE_TOKENS
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
@@ -473,11 +473,17 @@ def fill(table: DataTable, rows: list[tuple[str, tuple]], rebuild: bool = False)
 
 
 @functools.lru_cache(maxsize=2048)
-def _block_strips(who: str, md: str, width: int, console) -> tuple[tuple[Strip, ...], tuple[str, ...]]:
-    """A block's lines as strips and as plain text (for selection), plus the gap after it."""
-    lines = list(Segment.split_lines(_block_lines(who, md, width, console))) + [[]]
+def _block_strips(who: str, md: str, width: int, console) -> tuple[tuple[Strip, ...], tuple[str, ...], "docblocks.DocMap | None"]:
+    """A block's lines as strips and as plain text (for selection), plus the gap after it,
+    and for a doc its map: a doc is rendered block by block (docblocks), as Rich renders it
+    whole, so a row maps to its source line and back."""
+    if who == "doc":
+        lines, doc_map = docblocks.render(md, VOICE[who], width, console)
+    else:
+        lines, doc_map = list(Segment.split_lines(_block_lines(who, md, width, console))), None
+    lines = lines + [[]]
     return (tuple(Strip(line).crop_extend(0, width, None) for line in lines),
-            tuple("".join(seg.text for seg in line).rstrip() for line in lines))
+            tuple("".join(seg.text for seg in line).rstrip() for line in lines), doc_map)
 
 
 def agreed(a: list, b: list) -> int:
@@ -509,6 +515,7 @@ class Transcript(Widget, can_focus=False):
         self.warming: set[tuple] = set()   # ... and those under way
         self.doc_key = None   # the doc shown (its session and ref), set by whoever shows one
         self.stand_in: tuple | None = None   # (doc_key, strips, texts): its last render, shown while the next one renders
+        self.doc_at: tuple[int, docblocks.DocMap] | None = None   # the doc block's first row and map, as laid out
 
     def update(self, content: "Blocks | list[tuple[str, str]]") -> None:
         """New blocks. Scrolled up to read (not at the end, which follows), the block at the top
@@ -540,6 +547,7 @@ class Transcript(Widget, can_focus=False):
         """Each line as a strip and as text, and the line each block starts on."""
         if self._laid is None or self._laid[0] != width:
             strips, texts, starts = [], [], []
+            self.doc_at = None
             for who, md in self.blocks:
                 if who == "doc" and len(md) > RENDER_OFF_LOOP and (who, md, width) not in self.warm:
                     self.render_off_loop((who, md, width))
@@ -547,16 +555,33 @@ class Transcript(Widget, can_focus=False):
                         s = tuple(line.crop_extend(0, width, None) for line in self.stand_in[1])   # a line: the place kept
                         t = self.stand_in[2]
                     else:   # its first show
-                        s, t = _block_strips(*RENDERING, width, self.app.console)
+                        s, t, _ = _block_strips(*RENDERING, width, self.app.console)
                 else:
-                    s, t = _block_strips(who, md, width, self.app.console)
+                    s, t, doc_map = _block_strips(who, md, width, self.app.console)
                     if who == "doc":
                         self.stand_in = (self.doc_key, s, t)
+                        self.doc_at = (len(strips), doc_map)
                 starts.append(len(strips))
                 strips.extend(s)
                 texts.extend(t)
             self._laid = (width, strips, texts, starts)
         return self._laid[1:]
+
+    def line_at(self, y: int) -> int | None:
+        """The source line (0-based) a row of the doc shown starts its block on, the nearest
+        block's for a row between blocks or outside the doc (its heading above, say). None
+        with no doc laid out, or while it renders off the loop."""
+        self._layout(self.size.width)
+        return None if self.doc_at is None else self.doc_at[1].line_at(y - self.doc_at[0])
+
+    def row_of(self, line: int) -> int | None:
+        """The row the block holding a source line (0-based) of the doc shown starts on, the
+        nearest block's for a line between blocks. None as for line_at."""
+        self._layout(self.size.width)
+        if self.doc_at is None:
+            return None
+        row = self.doc_at[1].row_of(line)
+        return None if row is None else self.doc_at[0] + row
 
     def render_off_loop(self, key: tuple) -> None:
         """A long doc block rendered at a width on a thread (_block_strips keeps it), then laid
