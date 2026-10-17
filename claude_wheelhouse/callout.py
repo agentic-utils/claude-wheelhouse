@@ -22,10 +22,10 @@ COLLAPSED = 3   # a pane fewer rows high than this shows nothing a callout could
 HIGHLIGHT = "tour-target"   # the class on the pane a callout describes: a yellow border
 
 # a tour pane id (whatsnew.Stop.pane): the selector of its widget on the screen and its title.
-# The one lookup (find): modules stage 1 points it at its slots' pane ids
+# The one lookup (find), by the panes' ids in their slots (.plan/modules.md)
 PANES = {
     "sessions": ("#sessions-pane", "Sessions"),
-    "session-info": ("#session-info", "Session info"),
+    "session-info": ("#session-info-pane", "Session info"),
     "items": ("#items-pane", "Inbox"),
     "detail": ("#detail-pane", "Detail"),
     "stats": ("#stats", "Stats"),
