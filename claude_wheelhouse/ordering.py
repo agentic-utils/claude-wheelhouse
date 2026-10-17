@@ -17,17 +17,19 @@ from .store import FINISHED_RANK, SETTLED_RANK, _neg_time, inbox_rank
 UP, DOWN, STAR = "▲", "▼", "*"
 MANUAL = "manual"   # pos_group of a row placed with ordering off
 ITEMS_DEFAULT = "status*"   # today's inbox order
-SESSIONS_DEFAULT = "dot*"   # the session list's one sort, on until a drag across its groups
-SESSIONS_SORT = "dot*"   # the session list's one sort: running first, then the latest activity
+SESSIONS_DEFAULT = "dot*"   # the session list's own sort: running first, then the latest activity
+# the session list's sortable columns, in its order (the eye's, last, has no sort)
+SESSION_COLUMNS = ("dot", "session", "ctx", "questions", "decisions", "drafts")
 SORT_KEYS = {"items": "layout.sort.items", "sessions": "layout.sort.sessions"}   # settings, per TUI
 DEFAULTS = {"items": ITEMS_DEFAULT, "sessions": SESSIONS_DEFAULT}
 SPECS = {"items": {"", "status*", *(c + m for c in ("session", "ref", "status", "title") for m in "▲▼")},
-         "sessions": {"", SESSIONS_SORT}}
+         "sessions": {"", SESSIONS_DEFAULT, *(c + m for c in SESSION_COLUMNS[1:] for m in "▲▼")}}
 # Status ▲ (Q104): blocked, waiting, open, then what waits on the session (and any status
 # not named here), running, todo
 URGENCY = {"blocked": 0, "waiting": 1, "open": 2, "answered": 3, "processing": 3, "unseen": 3, "seen": 3,
            "running": 4, "todo": 5}
 REF = re.compile(r"([A-Za-z]*)(\d*)")
+DIGITS = re.compile(r"(\d+)")
 
 
 def field(row, name: str):
@@ -56,6 +58,9 @@ class Desc:
     def __hash__(self) -> int:
         return hash(self.v)
 
+    def __repr__(self) -> str:   # as its value: a group's token is the same either way
+        return repr(self.v)
+
 
 def band_of(rank: tuple) -> int:
     """Where an inbox rank (store.inbox_rank) puts an item: 0 active, 1 settled, 2 finished."""
@@ -78,9 +83,14 @@ def next_item_sort(spec: str, column: str) -> str:
     return column + DOWN if marker == UP else ITEMS_DEFAULT
 
 
-def next_session_sort(spec: str) -> str:
-    """A click on the session list's dot column: its one sort, or back to the person's order."""
-    return "" if spec else SESSIONS_SORT
+def next_session_sort(spec: str, column: str) -> str:
+    """A click on the session list's column header: the dot column puts its * on (it stays
+    on); another column cycles ▲, ▼, then back to the dot's *, as the inbox's do. With
+    ordering off, any column starts afresh."""
+    col, marker = parse(spec)
+    if column == "dot" or col != column:
+        return SESSIONS_DEFAULT if column == "dot" else column + UP
+    return column + DOWN if marker == UP else SESSIONS_DEFAULT
 
 
 def marker(spec: str, column: str) -> str:
@@ -93,6 +103,11 @@ def natural(ref: str) -> tuple:
     """A ref's key: T2 before T10."""
     m = REF.match(ref)
     return (m.group(1), int(m.group(2)) if m.group(2) else -1, ref)
+
+
+def natural_name(name: str) -> tuple:
+    """A name's key: casefolded, its numbers by value ("s2" before "s10")."""
+    return tuple(int(p) if i % 2 else p for i, p in enumerate(DIGITS.split(name.casefold())))
 
 
 def placed(row, token: str) -> bool:
@@ -176,15 +191,23 @@ def arrange(spec: str, raw: dict) -> dict:
     return out
 
 
-def session_key(spec: str, s, running: bool, at: int) -> tuple[tuple, str]:
+def session_key(spec: str, s, running: bool, at: int, name: str = "", context: int = 0) -> tuple[tuple, str]:
     """A session's sort key and its group's token. Ordering off: unparked then parked, in
     creation order (at, its place in the store's list) for those not placed; under dot*, running
-    first, then the latest activity, parked still at the foot."""
+    first, then the latest activity; under another column (name, its natural key; context, its
+    size in tokens; the open questions, unseen decisions and drafts, their counts), by it, then
+    as under dot*. Parked sessions keep to the foot under every sort."""
     if not spec:
         return keyed(s, MANUAL, 0, 0, (s["parked"], at))
-    value = (s["parked"], not running)
-    last = field(s, "last_at") or s["created_at"]
-    return keyed(s, f"{spec}|{value!r}", 0, value, (Desc(last), at))   # ties (one second): creation order
+    col, mark = parse(spec)
+    last = Desc(field(s, "last_at") or s["created_at"])
+    if col not in SESSION_COLUMNS[1:]:   # dot*
+        value = (s["parked"], not running)
+        return keyed(s, f"{spec}|{value!r}", 0, value, (last, at))   # ties (one second): creation order
+    x = natural_name(name) if col == "session" else context if col == "ctx" else \
+        field(s, {"questions": "open_questions", "decisions": "unseen_decisions", "drafts": "drafts"}[col]) or 0
+    value = (s["parked"], Desc(x) if mark == DOWN else x)
+    return keyed(s, f"{spec}|{value!r}", 0, value, (not running, last, at))
 
 
 def drop(order: list, tokens: dict, moved, before=None, after=None, shown=None) -> tuple[str | None, list]:

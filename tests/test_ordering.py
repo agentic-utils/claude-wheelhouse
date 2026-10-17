@@ -32,9 +32,24 @@ def test_header_cycles(spec, column, then, desc):
     assert ordering.next_item_sort(spec, column) == then, desc
 
 
-def test_session_sort_toggles():
-    assert [ordering.next_session_sort(s) for s in ("", "dot*")] == ["dot*", ""]
+@pytest.mark.parametrize("spec, column, then, desc", [
+    ("dot*", "dot", "dot*", "the dot's * stays on: only another column takes over"),
+    ("", "dot", "dot*", "ordering off: the dot puts its * back"),
+    ("ctx▲", "dot", "dot*", "the dot takes over from another column"),
+    ("dot*", "session", "session▲", "another column starts at ▲"),
+    ("session▲", "session", "session▼", "then ▼"),
+    ("session▼", "session", "dot*", "then back to the dot's *"),
+    ("session▲", "drafts", "drafts▲", "a third column starts afresh"),
+    ("", "questions", "questions▲", "ordering off: a column imposes its sort"),
+])
+def test_session_header_cycles(spec, column, then, desc):
+    assert ordering.next_session_sort(spec, column) == then, desc
+    assert then in ordering.SPECS["sessions"], f"{desc}: kept, it parses on the next start"
+
+
+def test_session_sort_defaults():
     assert ordering.SESSIONS_DEFAULT == "dot*", "the session list starts sorted, its * showing (Q102)"
+    assert {"", "dot*"} <= ordering.SPECS["sessions"], "a sort stored by older code still parses"
 
 
 @pytest.mark.parametrize("spec, rows, want, desc", [
@@ -115,6 +130,34 @@ def test_session_sort(parked, running, last, want, desc):
              "pos_group": None} for sid, p, at in zip("abc", parked, last)]
     keyed = {s["id"]: ordering.session_key("dot*", s, r, i)[0] for i, (s, r) in enumerate(zip(rows, running))}
     assert sorted(keyed, key=keyed.get) == want, desc
+
+
+# rows a to d: (name, parked, running, context, open questions, unseen decisions, drafts, last)
+SESSION_ROWS = (("s10", 0, False, 900, 0, 2, 1, "1"), ("S2", 0, True, 50, 3, 0, 0, "2"),
+                ("alpha", 0, False, 400, 1, 0, 0, "3"), ("zed", 1, False, 9999, 9, 9, 9, "4"))
+
+
+@pytest.mark.parametrize("spec, want, desc", [
+    ("session▲", ["alpha", "S2", "s10", "zed"], "name: casefolded, numbers by value, parked at the foot"),
+    ("session▼", ["s10", "S2", "alpha", "zed"], "name ▼: reversed, parked still at the foot"),
+    ("ctx▲", ["S2", "alpha", "s10", "zed"], "context, smallest first"),
+    ("ctx▼", ["s10", "alpha", "S2", "zed"], "context, largest first"),
+    ("questions▲", ["s10", "alpha", "S2", "zed"], "open questions, ties as dot* (running, then latest)"),
+    ("questions▼", ["S2", "alpha", "s10", "zed"], "open questions, most first"),
+    ("decisions▼", ["s10", "S2", "alpha", "zed"], "unseen decisions, ties running first"),
+    ("drafts▼", ["s10", "S2", "alpha", "zed"], "drafts, ties running first"),
+    ("drafts▲", ["S2", "alpha", "s10", "zed"], "drafts ▲: ties running first, then the latest"),
+])
+def test_session_column_sorts(spec, want, desc):
+    rows = [{"id": n, "parked": p, "created_at": T0.format(0), "last_at": T0.format(int(at)), "pos": None,
+             "pos_group": None, "open_questions": q, "unseen_decisions": d, "drafts": dr}
+            for n, p, _, _, q, d, dr, at in SESSION_ROWS]
+    keyed = {s["id"]: ordering.session_key(spec, s, r[2], i, s["id"], r[3])
+             for i, (s, r) in enumerate(zip(rows, SESSION_ROWS))}
+    assert sorted(keyed, key=lambda k: keyed[k][0]) == want, desc
+    assert all(t.startswith(spec + "|") for _, t in keyed.values()), f"{desc}: grouped under the sort"
+    assert len({t for _, t in keyed.values()}) == len({str(k[0][1]) for k in keyed.values()}), \
+        f"{desc}: a group's token reads the same whichever way its value sorts"
 
 
 def test_sessions_off_keep_creation_order_until_placed():

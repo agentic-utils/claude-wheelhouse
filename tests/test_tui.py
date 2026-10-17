@@ -809,8 +809,8 @@ async def session_step(app, pilot, how, ids) -> None:
         key = next(r.key.value for r in app.items_table.ordered_rows
                    if r.key.value.startswith(f"{ids[name]}|") and not r.key.value.endswith("|"))
         app.items_table.move_cursor(row=app.items_table.get_row_index(key))
-    elif what == "title":   # the list's header line
-        raw_click(app, app.session_list, (3, 0), 1)
+    elif what == "title":   # the list's header line, at its unsorted end: the others sort (#75)
+        raw_click(app, app.session_list, (header_x(app.session_list, 6), 0), 1)
     elif what == "esc":
         app.items_table.focus()
         await pilot.press("escape")
@@ -6950,10 +6950,11 @@ def item_refs(app) -> list[str]:
     return [str(table.get_row(k)[0 if app.filter_sid else 1]).lstrip("└ ") for k in table.final() if k and not k.endswith("|")]
 
 
-def header_x(table, name: str) -> int:
+def header_x(table, name: str | int) -> int:
+    """A column's header, by key or (the session list's, which have none) by index."""
     x = 0
-    for c in table.ordered_columns:
-        if c.key.value == name:
+    for i, c in enumerate(table.ordered_columns):
+        if name in (c.key.value, i):
             return x + 1
         x += c.get_render_width(table)
     raise KeyError(name)
@@ -7061,7 +7062,7 @@ async def test_header_clicks_cycle_the_markers(store, sid):
 
 
 @pytest.mark.anyio
-async def test_session_dot_header_sorts_and_drag_turns_it_off(store, sid, tmp_path):
+async def test_session_headers_sort_and_drag_turns_it_off(store, sid, tmp_path):
     other = store.create_session(str(tmp_path), name="later")
     store.post_item(other, "task", "fresh", status="running")   # the latest activity
     store.db.execute("UPDATE items SET created_at = '2999-01-01T00:00:00+00:00' WHERE session_id = ?", (other,))
@@ -7073,7 +7074,24 @@ async def test_session_dot_header_sorts_and_drag_turns_it_off(store, sid, tmp_pa
         assert table.keys()[:2] == [other, sid], "*: the latest activity first"
         await pilot.click(table, offset=(1, 0))
         await pilot.pause()
-        assert (str(table.ordered_columns[0].label), table.keys()[:2]) == ("", [sid, other]), "off: creation order"
+        assert str(table.ordered_columns[0].label) == "*", "the dot's * stays on: no other column took over"
+        names = {k: app.display_name(store.session(k)) for k in (sid, other)}
+        by_name = sorted(names, key=lambda k: names[k].casefold())
+        seen = []
+        for column in (1, 1, 1, 2, 0):   # session ▲, ▼, back to *; ctx ▲; the dot's * again
+            await pilot.click(table, offset=(header_x(table, column), 0))
+            await pilot.pause()
+            seen.append([str(c.label) for c in table.ordered_columns[:6]])
+            if seen[-1][1] == "session ▲":
+                assert table.keys()[:2] == by_name, "session ▲: by name"
+            if seen[-1][1] == "session ▼":
+                assert table.keys()[:2] == by_name[::-1], "session ▼: reversed"
+        plain = ["", "session", "ctx", "?", "D", "✉"]
+        assert seen == [["", "session ▲", *plain[2:]], ["", "session ▼", *plain[2:]], ["*", *plain[1:]],
+                        ["", "session", "ctx ▲", *plain[3:]], ["*", *plain[1:]]], "only the column in force is marked"
+        await pilot.click(table, offset=(header_x(table, 1), 0))
+        await pilot.pause()
+        assert store.setting("layout.sort.sessions") == "session▲", "kept for the next start"
         await pilot.click(table, offset=(1, 0))
         await pilot.pause()
         assert str(table.ordered_columns[0].label) == "*", "and on again"

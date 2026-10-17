@@ -360,8 +360,10 @@ first, settled and finished below), `▲` (by urgency: blocked, waiting, open, r
 newest first, then the settled and finished as `*` has them) and `▼` (the reverse). The other
 columns cycle `▲`, `▼`, then back to Status `*`. The marker shows on the column in force.
 The session list starts sorted: running sessions first, then by their latest activity (`*`
-on the dot column); a click on that header goes to your own order, and another back. The other headers there
-still show every session's items, as `Esc` does. Drag a row with the mouse, or move the
+on the dot column). Its other columns (name, context, `?`, `D`, `✉`) cycle `▲`, `▼`, then
+back to the dot's `*`; a click on the dot's header puts `*` back. Parked sessions stay at the
+foot under every sort. A click on the header past the columns shows every session's items,
+as `Esc` does. Drag a row with the mouse, or move the
 highlighted one with `Alt+Up` and `Alt+Down`, to reorder. A move among rows that share its
 sort key keeps the sort, and your order breaks the tie until the row's key changes. Under
 Status `*` that is the whole band (active, or settled): a row dropped anywhere in it stays
