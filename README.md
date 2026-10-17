@@ -438,6 +438,15 @@ resized terminal; double-click a line to put its default back. A size that doesn
 smaller terminal shrinks there, and comes back when there's room again. The three columns
 fit an 80-column terminal.
 
+To try another layout, drag a pane by its title (its top border) onto another pane: the
+pane under the pointer gets a teal border, and letting go swaps the two. `Esc` during the
+drag, or letting go on the pane's own place or outside the panes, changes nothing, and a
+plain click on a title does nothing. Each place keeps its size, and grows to what a pane
+moved into it needs (Session info's buttons, say). Each TUI remembers its layout for its
+next start. A module's pane that's gone (uninstalled or disabled) leaves its place empty,
+and goes back there when it returns. **Reset layout**, in the command palette (`Ctrl+P`),
+puts every pane back in its default place and every line at its default size.
+
 Scrollbars are one cell wide: a teal thumb with solid ends and a knurled Braille grip,
 on a thin teal track. Drag the thumb, or click the track to page. The thumb brightens
 under the pointer and turns white while you drag it. Text boxes and the footer, one row

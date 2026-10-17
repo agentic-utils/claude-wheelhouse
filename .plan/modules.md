@@ -1,6 +1,6 @@
 # Modules: stats and design docs, pane swapping, editing docs in place
 
-Issue: #79. Status: approved, stage 1 landed (PR #86), stage 2 in progress.
+Issue: #79. Status: approved, stages 1 (PR #86) and 2 (PR #94) landed, stage 3 in progress.
 
 The asks, in Doug's words (Q94): "user needs to be able to edit ADR (or any other doc for
 that matter)"; "collapse the tab idea and instead keep a single view. To do that, let's
@@ -69,7 +69,13 @@ panes, so a swap keeps each slot's size. Default panes:
 - Implementation: the slots are fixed containers in `compose`; a swap moves the two pane
   widgets between them (`Widget.move_child` cannot cross parents, so remove and mount,
   keeping the widget instances so their state survives). The app's `query_one("#items")`
-  style lookups are unaffected, as ids don't change.
+  style lookups are unaffected, as ids don't change. As built (stage 3), a removed widget
+  can't be mounted again in Textual 8, so `tui.rehome` moves it across parents as
+  `move_child` does within one. Each pane's minimum lives with the pane (`PANE_MINIMUM`), not
+  its default slot, and its slot and column grow to it. A swap posts
+  `WheelhouseApp.LayoutChanged`. Tab's order is by pane, not place: the session list, the
+  inbox, the answer box (or doc), then the buttons in reading order where they now are, then
+  the stats controls.
 
 ## The module boundary
 
