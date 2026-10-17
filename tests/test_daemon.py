@@ -818,7 +818,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 33 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 32 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 
@@ -877,10 +877,10 @@ async def test_the_host_is_checked_before_the_token(daemon):
 
 NEW_ROUTES = [
     ("GET", "/hello", None, lambda store, sid, r: (r.json()["api"], r.json()["ready"], r.json()["pid"])
-     == (2, False, os.getpid()), "with the token, which daemon: its API, its code, not ready before its first tick"),
+     == (3, False, os.getpid()), "with the token, which daemon: its API, its code, not ready before its first tick"),
     ("GET", "/inbox", None, lambda store, sid, r: (sorted(i["ref"] for i in r.json()["items"]),
-                                                   "body" in r.json()["items"][0], r.json()["tutorial"]["sid"])
-     == (["P1", "T1"], False, None), "every item, without its body, and the tutorial's state"),
+                                                   "body" in r.json()["items"][0], r.json()["tutorial"]["facts"])
+     == (["P1", "T1"], False, None), "every item, without its body, and what the tour waits on"),
     ("GET", "/usage", None, lambda store, sid, r: r.json() == {"limits": {}, "read": {}, "failed": False}, "the account's usage"),
     ("POST", "/settings", {"key": "layout.x", "value": "0.5"}, lambda store, sid, r: store.setting("layout.x") == "0.5",
      "a splitter's size kept"),
@@ -918,10 +918,9 @@ NEW_ROUTES = [
      "the tutorial offer turned down"),
     ("POST", "/tutorial/offer", {"take": None}, lambda store, sid, r: store.setting("tutorial_offer") == "reset",
      "the tutorial offer put off till Later"),
-    ("POST", "/tutorial/seen", {"sid": "{sid}", "step": "open"},
-     lambda store, sid, r: json.loads(store.setting("tutorial_seen"))["seen"] == ["open"], "a tutorial step seen"),
-    ("POST", "/tutorial/drop-ended", None, lambda store, sid, r: store.setting("tutorial_seen") is None,
-     "an ended tutorial's checklist let go as an app starts"),
+    ("POST", "/tour/seen", {"ids": ["tour"], "notes": "0.2.0"},
+     lambda store, sid, r: (store.tour_seen(), store.setting("notes_seen")) == ({"tour": "shown"}, "0.2.0"),
+     "features the tour showed, and the version whose notes it showed"),
     ("POST", "/shutdown", None, lambda store, sid, r: not r.json()["ok"], "stop: a test's daemon can't"),
 ]
 
@@ -932,8 +931,6 @@ async def test_each_new_route(daemon, store, sid, tmp_path, method, path, body, 
     store.post_item(sid, "permission", "Bash: ls")
     if path == "/relaunch-all":
         await daemon.on_hub(daemon.tick)   # the session dead, as the client showed it
-    if path == "/tutorial/drop-ended":
-        store.set_setting("tutorial_seen", json.dumps({"sid": "ended", "seen": ["open"], "before": []}))
     r = await call(daemon, method, fill(path, sid, tmp_path), fill(body, sid, tmp_path))
     assert r.status_code < 500 and did(store, sid, r), f"{desc}: {r.status_code} {r.text}"
 
@@ -1141,21 +1138,18 @@ GONE = "host has stopped: Relaunch it from the daemon's machine"
     (False, "tab", "/sessions/{sid}/relaunch", {}, None, REMOTE, 403, OFF, [], "Relaunch of a dead session: a tab"),
     (False, "tab", "/relaunch-all", {"sids": ["{sid}"]}, None, REMOTE, 403, OFF, [], "Relaunch all: tabs"),
     (False, "tab", "/adopt", {"id": "adoptee"}, None, REMOTE, 403, OFF, [], "Adopt: a tab"),
-    (False, "tab", "/tutorial/offer", {"take": True}, None, REMOTE, 403, OFF, [], "the tutorial: a tab"),
     (False, "tab", "/sessions/{sid}/shell", {}, None, REMOTE, 403, OFF, [], "Shell: the host hands over to a tab"),
     (True, "tab", "/relaunch-all", {"sids": ["{sid}"]}, "stale", REMOTE, 200, "relaunching 0", [],
      "live at the last tick, gone since (review 75): not Available as shown, so left, and no tab"),
-    (True, "sdk", "/sessions/{sid}/relaunch", {}, "tut", REMOTE, 200, "tut " + HELD, [],
-     "SDK mode on: the tutorial is a tab all the same"),
-    (True, "sdk", "/tutorial/offer", {"take": True}, None, REMOTE, 403, "it would open in a tab", [],
-     "SDK mode on: the tutorial still"),
+    (True, "sdk", "/sessions/{sid}/relaunch", {}, "tut", REMOTE, 200, "relaunching", ["host"],
+     "SDK mode on: the tutorial's demo comes back by a host, as any session does (#78)"),
     (True, "tab", "/sessions/{sid}/relaunch", {}, None, REMOTE, 200, HELD, [], "SDK mode on, new sessions in tabs"),
     (True, "tab", "/adopt", {"id": "adoptee"}, None, REMOTE, 200, "adopt it from the daemon's machine", [],
      "Adopt, the same"),
     (True, "sdk", "/sessions/{sid}/relaunch", {}, None, REMOTE, 200, "relaunching", ["host"], "back by a host"),
     (True, "sdk", "/adopt", {"id": "adoptee"}, None, REMOTE, 200, "adopting", ["host"], "adopted by a host"),
-    (True, "sdk", "/relaunch-all", {"sids": ["{sid}", "{tut}"]}, None, REMOTE, 200, "tut " + HELD, ["host"],
-     "the rest relaunched, the tutorial held back"),
+    (True, "sdk", "/relaunch-all", {"sids": ["{sid}", "{tut}"]}, None, REMOTE, 200, "relaunching 2", ["host", "host"],
+     "the tutorial's demo relaunched with the rest"),
     (False, "tab", "/tutorial/offer", {"take": False}, None, REMOTE, 200, "the wheelhouse stopped", [],
      "the offer dismissed: nothing opens"),
     (False, "tab", "/sessions/{sid}/relaunch", GONE_HOST, "host", REMOTE, 200, GONE, [],
@@ -1179,7 +1173,6 @@ async def test_another_machine_opens_no_tab(store, tmp_path, monkeypatch, sdk, e
     opened = []
     monkeypatch.setattr(launch, "open_tab", lambda store, sid, notice=True: opened.append("tab"))
     monkeypatch.setattr(launch, "open_host", lambda store, sid: opened.append("host"))
-    monkeypatch.setattr(tutorial, "start", lambda store: opened.append("tutorial"))
     monkeypatch.setattr(hub_mod.Hub, "host_command", lambda self, sid, what: opened.append(what) or hub_mod.Done())
     monkeypatch.setattr(liveness, "running_pid", lambda *a, **k: None)
     sid = store.create_session(str(tmp_path), name="demo", runner="sdk" if how == "host" else "tab")

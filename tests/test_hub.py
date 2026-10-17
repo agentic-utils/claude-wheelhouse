@@ -334,7 +334,7 @@ def test_the_tutorial_offer_answered(hub, store, heard, monkeypatch, take, start
     assert done.ok == started, desc
     assert store.setting(tutorial.OFFER_KEY) == setting, desc
     assert store.tour_seen() == ({"f": "skipped"} if setting == "never" else {}), desc
-    assert (len(told(done)), heard) == (1, []), desc
+    assert (len(told(done)), heard) == (0 if started else 1, []), f"{desc}: the tour itself says what's next"
 
 
 @pytest.mark.parametrize("command, said, desc", [

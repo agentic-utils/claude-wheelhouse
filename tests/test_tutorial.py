@@ -2,20 +2,28 @@ import json
 import sys
 
 import pytest
-from textual.widgets import DataTable, Static, TextArea
+from textual.widgets import Button, DataTable, Input, TextArea
 
-from claude_wheelhouse import features, launch, tutorial, whatsnew
-from claude_wheelhouse.store import Store
-from claude_wheelhouse.tui import BUTTONS, Compose, Dialog, ItemList, KeysHelp, ThreadView, Transcript, TourInvite, \
-    SDK_BUTTONS, WheelhouseApp, key_name, keys_help
+from claude_wheelhouse import callout, features, launch, tutorial, whatsnew
+from claude_wheelhouse.callout import HIGHLIGHT, TourCallout
+from claude_wheelhouse.store import NOTES_SEEN
+from claude_wheelhouse.tour import Tour
+from claude_wheelhouse.tui import BUTTONS, Compose, Dialog, ItemList, KeysHelp, NewSession, ThreadView, Transcript, \
+    TourInvite, TourNotes, TourStop, SDK_BUTTONS, WheelhouseApp, key_name, keys_help
 from claude_wheelhouse.tutorial import should_offer as real_should_offer   # before conftest stubs it
 from test_tui import dwell, one_second
 
 
+def demo(store, runner="tab"):
+    """The demo session, as New session filled in by the tour makes it."""
+    form = tutorial.form(str(tutorial.prepare(store)))
+    return store.create_session(form["cwd"], name=form["name"], brief=form["brief"], runner=runner,
+                                model=form["model"], effort=form["effort"])
+
+
 @pytest.fixture
 def tut(store):
-    """The tutorial's session: a tab, SDK mode or not."""
-    return tutorial.prepare(store)
+    return demo(store)
 
 
 @pytest.fixture
@@ -31,7 +39,7 @@ def fake_claude(tmp_path, monkeypatch):
 
 
 def setup_items(store, sid):
-    """What the tutorial's session posts first."""
+    """What the demo posts first."""
     store.post_item(sid, "task", "Draft the welcome message", status="running")
     q1 = store.post_item(sid, "question", "Tone?")
     q2 = store.post_item(sid, "question", "Sign-off?")
@@ -39,141 +47,425 @@ def setup_items(store, sid):
     return q1, q2
 
 
-def answer(store, sid, q1, q2):
-    store.queue(sid, "pirate", q1)
-    store.queue(sid, "Holly", q2)
+def tour_at(app, stop: str, sid: str | None = None) -> None:
+    """The tour under way at one of its dialogs, its demo `sid`."""
+    app.tour = Tour(app.client.sdk)
+    app.tour.at = [d.id for d in app.tour.stops].index(stop)
+    app.tour.sid = sid
+    app.tour_showing = None
+    app.show_tour()
 
 
-def send(store, sid, q1, q2):
-    store.dispatch(sid)
+def shown(app) -> tuple[str | None, str | None]:
+    """The tour's dialog showing, and the pane its callout is beside (None: centred, or none)."""
+    found = list(app.screen_stack[0].query(TourCallout))
+    return (app.tour.stop.id if app.tour else None), (found[0].pane if found else None)
 
 
-def reply(store, sid, q1, q2):
-    store.reply(sid, q1, "noted", status="answered")
+def test_the_brief_speaks_to_the_person_first():
+    """Doug (#78, 7): a note in caps to the person watching the demo."""
+    assert tutorial.BRIEF.startswith("TO THE USER: THIS IS A DUMMY SESSION FOR THE TUTORIAL. FOLLOW THE PROMPTS ON "
+                                     "THE WHEELHOUSE SCREEN TO LEARN HOW TO USE IT.\n\nThat line is for the person")
 
 
-def see_decision(store, sid, q1, q2):
-    store.mark_seen(sid, "D1")
-
-
-def close_decision(store, sid, q1, q2):
-    store.close_decision(sid, "D1")
-
-
-def one_answer(store, sid, q1, q2):
-    store.queue(sid, "pirate", q1)
-
-
-def reply_first(store, sid, q1, q2):   # a reply before anything was sent doesn't count
-    store.reply(sid, q1, "still waiting", status="open")
-
-
-def own_session(store, sid, q1, q2):
-    store.create_session("/home/u/work", name="mine")
-
-
-def own_in_its_directory(store, sid, q1, q2):   # taken for the tutorial's, so not the person's own
-    store.create_session(str(tutorial.tutorial_dir(store)), name="mine")
-
-
-@pytest.mark.parametrize("actions, seen, done, kept, desc", [
-    ([], set(), set(), True, "nothing done yet"),
-    ([], {"open"}, {"open"}, True, "opening a question is seen on screen"),
-    ([one_answer], set(), {"open"}, True, "an answer means a question was opened, but one isn't both"),
-    ([answer], set(), {"open", "queue"}, True, "both questions answered, still queued"),
-    ([reply_first, answer], set(), {"open", "queue"}, True, "a reply from before the answers went isn't the reply"),
-    ([answer, send], set(), {"open", "queue", "send"}, True, "sent"),
-    ([answer, send, reply], set(), {"open", "queue", "send", "reply"}, True, "the session replied after they went"),
-    ([see_decision], set(), set(), True, "its seen status doesn't tick it: automatic selection sets that"),
-    ([see_decision, close_decision], set(), {"decision"}, True, "the person closing the decision does"),
-    ([], {"follow"}, {"follow"}, True, "a turn watched arriving is seen on screen"),
-    ([own_session], set(), {"new"}, True, "a session of their own, started after the tutorial, before End too"),
-    ([own_in_its_directory], set(), set(), True, "one in the tutorial's directory isn't their own"),
-    ([own_session], set(), set(), False, "a record from before the ids were kept: Start your own can't tick"),
-])
-def test_checklist_steps_come_from_the_store(store, tut, actions, seen, done, kept, desc):
-    q1, q2 = setup_items(store, tut)
-    for act in actions:
-        act(store, tut, q1, q2)
-    before = tutorial.record(store)["before"] if kept else None
-    got = {key for key, _, _, ok in tutorial.steps(store, tut, seen, before) if ok}
-    assert got == done | {"start"}, f"{desc}: started, as it has posted"
-
-
-@pytest.mark.parametrize("actions, setup, done, desc", [
-    ([], False, set(), "nothing done: the tab hasn't posted yet (its trust prompt, say)"),
-    ([], True, {"start"}, "it has posted: it started"),
-    ([answer, send, reply, see_decision, close_decision], True, {"start", "open", "queue", "send", "reply", "decision"},
-     "the whole loop, by a tab: all but the turn watched, End and a session of their own"),
-])
-def test_a_tab_tutorial_has_the_tabs_steps(store, tut, actions, setup, done, desc):
-    q1, q2 = setup_items(store, tut) if setup else ("Q1", "Q2")
-    for act in actions:
-        act(store, tut, q1, q2)
-    steps = tutorial.steps(store, tut, set())
-    assert [key for key, *_ in steps] == ["start", "open", "queue", "send", "reply", "follow", "decision", "end", "new"], \
-        "no permission step: that comes back as an SDK-only top-up; following the conversation is a tab's too"
-    assert {key for key, _, _, ok in steps if ok} == done, desc
-
-
-@pytest.mark.parametrize("before, own, end, record, shows, desc", [
-    (False, False, False, None, (9, False), "running: every step"),
-    (False, False, True, None, (2, False), "ended: End done, Start your own still to do"),
-    (True, False, True, None, (2, False), "a session from before the tutorial isn't their own"),
-    (False, True, False, None, (9, True), "their own session ticks it while the tutorial runs"),
-    (False, True, True, None, None, "ended with a session of their own: nothing left, the checklist goes"),
-    (False, False, True, {"seen": ["open"]}, None, "an earlier version's record, without before: it goes with the session"),
-    (False, False, True, "reset", None, "claude-wheelhouse tutorial clears its record"),
-    (False, True, False, {"seen": []}, (9, False), "an earlier version's record, without before: their own doesn't tick it"),
-    (False, False, True, "restart", None, "ended, then the app starts again: it goes"),
-    (False, False, False, "restart", (9, False), "running as the app starts again: it stays"),
-])
-def test_the_checklist_outlives_the_session_for_its_last_step(store, monkeypatch, before, own, end, record, shows, desc):
-    if before:
-        store.create_session("/home/u/work", name="from before")
-    tut = tutorial.prepare(store)
-    if own:
-        store.create_session("/home/u/work", name="mine")
-    if record == "reset":
-        monkeypatch.setattr(tutorial.liveness, "is_alive", lambda pid, start, boot: False)
-        tutorial.reset(store)
-    elif record and record != "restart":
-        store.set_setting(tutorial.SEEN_KEY, json.dumps({**record, "sid": tut}))
-    if end:
-        store.end(tut)
-    if record == "restart":
-        tutorial.drop_ended(store)
-    found = tutorial.current(store)
-    if shows is None:
-        assert found is None, desc
-        return
-    done = {key: ok for key, _, _, ok in found[1]}
-    assert (found[0], len(found[1]), done["new"]) == (tut, *shows), desc
-    assert done["end"] is end, f"{desc}: End done once the session has gone"
-
-
-@pytest.mark.parametrize("on, desc", [(False, "a new user's"), (True, "with SDK mode on, still a tab (D66)")])
-def test_prepare_starts_afresh(store, tmp_path, monkeypatch, on, desc):
-    monkeypatch.setattr(features, "_flag", on)
+def test_prepare_starts_afresh(store, tmp_path):
     other = store.create_session(str(tmp_path), name="real work")
     store.post_item(other, "task", "keep me")
-    old = tutorial.prepare(store)
+    old = demo(store)
     store.post_item(old, "question", "from last time")
     (tutorial.tutorial_dir(store) / "tutorial-ok").touch()
-    new = tutorial.prepare(store)
-    assert new != old
+    path = tutorial.prepare(store)
+    assert path == tutorial.tutorial_dir(store)
     assert store.session(old) is None and store.items(old) == [], "the earlier tutorial and its items are gone"
     assert [it["title"] for it in store.items(other)] == ["keep me"], "other sessions are untouched"
-    path = tutorial.tutorial_dir(store)
     assert not (path / "tutorial-ok").exists(), "its directory is recreated"
-    assert json.loads((path / ".claude/settings.json").read_text()) == tutorial.SETTINGS, desc
-    s = store.session(new)
-    assert (s["cwd"], s["name"], s["runner"], s["brief"]) == (str(path), "tutorial", "tab", tutorial.BRIEF), desc
-    assert "touch" not in json.dumps(tutorial.SETTINGS), f"{desc}: asking no permission"
-    assert (s["model"], s["effort"]) == ("claude-sonnet-5-5", "high"), "New session's defaults"
-    assert tutorial.session_id(store) == new
-    assert tutorial.record(store) == {"sid": new, "seen": [], "before": [other]}, \
-        f"{desc}: a fresh record, with the sessions there were (the earlier tutorial's gone)"
+    assert json.loads((path / ".claude/settings.json").read_text()) == tutorial.SETTINGS
+    assert "touch" not in json.dumps(tutorial.SETTINGS), "asking no permission"
+    assert tutorial.session_id(store) is None, "the demo is the person's to start, from New session"
+    assert tutorial.form(str(path)) == {"cwd": str(path), "name": "tutorial", "brief": tutorial.BRIEF,
+                                        "model": "claude-sonnet-5-5", "effort": "high"}, "New session's defaults"
+
+
+@pytest.mark.parametrize("sdk, runner_, desc", [
+    (False, "tab", "SDK mode off: the demo runs in a tab"),
+    (True, "sdk", "SDK mode on: the demo is hosted in the wheelhouse (Doug, #78 6)"),
+])
+@pytest.mark.both
+@pytest.mark.anyio
+async def test_the_tour(store, monkeypatch, fake_claude, sdk, runner_, desc):
+    """Doug (#78): the principles first, then a walk round the screen in dialogs painted over
+    the panes, starting with the demo's creation (N, New session filled in: Q119), and last
+    this release's notes. Each action dialog moves on as the person does what it asks."""
+    monkeypatch.setattr(features, "_flag", sdk)
+    monkeypatch.delenv("WHEELHOUSE_RUNNER")   # New session's own default
+    monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
+    opened = []
+    monkeypatch.setattr(launch, "open_tab", lambda s, i: opened.append(("tab", i)))
+    monkeypatch.setattr(launch, "open_host", lambda s, i: opened.append(("sdk", i)))
+    app = WheelhouseApp(store)
+
+    async def step(act, expected, why):
+        act()
+        app.refresh_data()
+        await pilot.pause()
+        assert shown(app) == expected, f"{desc}: {why}"
+
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("enter")   # the invite's Start
+        await pilot.pause()
+        assert isinstance(app.screen, TourStop), f"{desc}: the principles first"
+        assert "Every Claude session in one place" in str(app.screen.query_one("#tour-stop-text").render())
+        await pilot.press("enter")   # Next
+        await pilot.pause()
+        assert shown(app) == ("create", "sessions"), f"{desc}: creating the demo comes first"
+        assert app.focused is None or not isinstance(app.focused, Button), "an action callout leaves focus be"
+        await pilot.press("n")
+        await pilot.pause()
+        form = app.screen
+        assert isinstance(form, NewSession), desc
+        cwd = form.query_one("#cwd", Input)
+        assert cwd.value == str(tutorial.tutorial_dir(store)) and cwd.disabled, f"{desc}: its directory, fixed"
+        assert form.query_one("#name", Input).value == "tutorial"
+        assert form.query_one("#brief", TextArea).text == tutorial.BRIEF, f"{desc}: the brief, its caps line first"
+        assert "press Launch" in str(form.query_one("#tour-line").render()), f"{desc}: the tour's line on top"
+        assert not app.screen_stack[0].query_one(TourCallout).display, f"{desc}: the callout hidden under it"
+        form.query_one("#launch", Button).press()
+        await pilot.pause()
+        sid = tutorial.session_id(store)
+        assert store.session(sid)["runner"] == runner_ and opened == [(runner_, sid)], desc
+        await step(lambda: None, ("sessions", "sessions"), "its row appeared")
+        q1, q2 = None, None
+
+        def post():
+            nonlocal q1, q2
+            q1, q2 = setup_items(store, sid)
+        await step(post, ("inbox", "items"), "it posted")
+        await step(lambda: store.queue(sid, "pirate", q1), ("answer", "detail"), "a question answered: it was opened")
+        await step(lambda: store.queue(sid, "Holly", q2), ("send", "session-info"), "both answered")
+        await step(lambda: store.dispatch(sid), ("reply", "detail"), "sent")
+        await step(lambda: store.reply(sid, q1, "noted", status="answered"), ("decision", "items"), "it replied")
+        await step(lambda: store.close_decision(sid, "D1"), ("conversation", "detail"), "the decision closed")
+        app.query_one("#answer", TextArea).focus()
+        await step(lambda: app.saw(sid, None, "follow"), ("stats", "stats"), "a turn watched arriving")
+        assert isinstance(app.focused, TextArea), f"{desc}: a Next callout leaves focus in the answer box"
+        app.screen_stack[0].query_one("#tour-next", Button).press()
+        await pilot.pause()
+        assert shown(app) == ("end", "session-info"), f"{desc}: Next"
+        await step(lambda: store.end(sid), ("notes", None), "the demo gone")
+        assert isinstance(app.screen, TourNotes), desc
+        notes = app.screen.notes
+        assert f"What's new in {whatsnew.running_version()}" in notes and "guided tour" in notes, \
+            f"{desc}: this release's notes, its unreleased features while a development version"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.tour is None and not isinstance(app.screen, TourNotes), f"{desc}: the tour over"
+    assert store.tour_seen() == {f.id: "shown" for f in whatsnew.FEATURES}, f"{desc}: every feature seen"
+    assert store.setting(NOTES_SEEN) == whatsnew.running_version(), desc
+
+
+@pytest.mark.parametrize("stop", sorted({d.pane for d in whatsnew.DIALOGS if d.pane}))
+@pytest.mark.anyio
+async def test_every_tour_pane_is_on_the_screen(store, stop):
+    """Each dialog's pane id finds its pane in the default layout (callout.PANES)."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        pane = callout.find(app.screen, stop)
+        assert pane is not None and pane.display and pane.region.area, stop
+
+
+@pytest.mark.parametrize("stop, pane, focus, desc", [
+    ("create", "sessions", False, "an action callout leaves focus where it was"),
+    ("inbox", "items", False, "so does this one: the keys it teaches reach the app"),
+    ("stats", "stats", True, "a Next callout takes it, so Enter is Next"),
+    ("send", "session-info", False, "the send dialog, beside the session's info"),
+    ("answer", "detail", False, "the answer dialog, beside Detail"),
+])
+@pytest.mark.parametrize("size", [(160, 40), (80, 24)])
+@pytest.mark.anyio
+async def test_a_callout_beside_its_pane(store, stop, pane, focus, desc, size):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        tour_at(app, stop)
+        await pilot.pause()
+        assert shown(app) == (stop, pane), desc
+        assert HIGHLIGHT in callout.find(app.screen, pane).classes, f"{desc}: its pane highlighted"
+        assert (app.focused is not None and app.focused.id == "tour-next") is focus, desc
+        box = app.screen.query_one(TourCallout).region
+        assert box.area and app.screen.region.contains_region(box), f"{desc} at {size}: {box} on screen"
+
+
+@pytest.mark.parametrize("stop, focus, pauses, desc", [
+    ("principles", None, True, "Esc on the principles"),
+    ("stats", None, True, "Esc on a callout that has focus"),
+    ("inbox", None, False, "an action callout has no focus: Esc keeps its own meaning"),
+    ("stats", "#answer", False, "focus in the answer box: Esc is the box's, not the tour's"),
+])
+@pytest.mark.anyio
+async def test_esc_pauses_the_tour(store, stop, focus, pauses, desc):
+    """Q122: Esc pauses. Until stage 4 resumes it, the next start offers the tour again."""
+    app = WheelhouseApp(store)
+    said = []
+    app.notify = lambda text, **kw: said.append(text)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if focus:
+            app.query_one(focus).focus()
+            await pilot.pause()
+        tour_at(app, stop)
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.tour.paused is pauses, desc
+        assert bool(app.screen_stack[0].query(TourCallout)) is not pauses, desc
+        assert ("Tour paused: the next start offers it again." in said) is pauses, desc
+        assert (store.setting(tutorial.OFFER_KEY) == tutorial.RESET) is pauses, f"{desc}: offered again"
+        if pauses:
+            assert not isinstance(app.screen, TourStop), desc
+            app.refresh_data()
+            await pilot.pause()
+            assert not app.screen_stack[0].query(TourCallout), f"{desc}: it stays paused"
+
+
+@pytest.mark.anyio
+async def test_the_tour_never_takes_focus_from_a_box_being_typed_in(store, monkeypatch):
+    """Review of #93: a Next callout appearing mid-word took focus, so the next letter, n,
+    opened New session. Nor does a centred dialog come up over the typing."""
+    sid = demo(store)
+    q1, q2 = setup_items(store, sid)
+    for act in (lambda: store.queue(sid, "a", q1), lambda: store.queue(sid, "b", q2), lambda: store.dispatch(sid),
+                lambda: store.reply(sid, q1, "ok", status="answered"), lambda: store.close_decision(sid, "D1")):
+        act()
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        tour_at(app, "conversation", sid)
+        box = app.query_one("#answer", TextArea)
+        box.focus()
+        await pilot.press("h", "i")
+        app.saw(sid, None, "follow")   # the Stats callout, a Next one, arrives mid-word
+        await pilot.pause()
+        assert shown(app) == ("stats", "stats") and app.focused is box, "the box keeps focus"
+        await pilot.press("n")
+        await pilot.pause()
+        assert box.text == "hin" and not isinstance(app.screen, NewSession), "n is typed, not New session"
+        tour_at(app, "notes", sid)
+        await pilot.pause()
+        assert not isinstance(app.screen, TourNotes) and app.focused is box, "the notes wait while there's typing"
+        box.text = ""
+        app.refresh_data()
+        await pilot.pause()
+        assert isinstance(app.screen, TourNotes), "and come once the box is empty"
+
+
+@pytest.mark.parametrize("focus, desc", [(None, "nothing focused behind it"), ("#answer", "the answer box focused behind it")])
+@pytest.mark.anyio
+async def test_n_on_the_notes_opens_new_session(store, focus, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if focus:
+            app.query_one(focus).focus()
+        tour_at(app, "notes")
+        await pilot.pause()
+        assert isinstance(app.screen, TourNotes), desc
+        await pilot.press("n")
+        await pilot.pause()
+        assert isinstance(app.screen, NewSession) and app.tour is None, desc
+
+
+@pytest.mark.parametrize("act, then, desc", [
+    (lambda store, sid, q1, q2: store.update_item(sid, q2, status="closed"), "send",
+     "the other question closed unanswered: as if answered"),
+    (lambda store, sid, q1, q2: (store.update_item(sid, q1, status="closed"), store.update_item(sid, q2, status="closed")),
+     "decision", "both closed unanswered: nothing to send or wait for a reply to"),
+])
+@pytest.mark.anyio
+async def test_a_question_closed_unanswered(store, act, then, desc):
+    sid = demo(store)
+    q1, q2 = setup_items(store, sid)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.pause()
+        tour_at(app, "answer", sid)
+        if then == "send":
+            store.queue(sid, "a", q1)
+        act(store, sid, q1, q2)
+        app.refresh_data()
+        await pilot.pause()
+        assert shown(app)[0] == then, desc
+
+
+@pytest.mark.parametrize("at", ["inbox", "answer", "decision", "conversation", "end"])
+@pytest.mark.anyio
+async def test_a_demo_gone_early_offers_the_notes(store, at):
+    """Decided in review of #93: a demo that has gone says so in one line, and Next goes
+    straight to the release notes. At End, its going is what was asked."""
+    sid = demo(store)
+    setup_items(store, sid)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.pause()
+        tour_at(app, at, sid)
+        await pilot.pause()
+        store.end(sid)
+        app.refresh_data()
+        await pilot.pause()
+        if at != "end":
+            co = app.screen_stack[0].query_one(TourCallout)
+            assert shown(app)[0] == at and co.text.endswith("\nThe demo has ended: Next goes to the release notes."), at
+            co.query_one("#tour-next", Button).press()
+            await pilot.pause()
+        assert isinstance(app.screen, TourNotes), at
+
+
+@pytest.mark.both
+@pytest.mark.anyio
+async def test_only_the_persons_own_selection_opens_a_question(store, sid, tut):
+    """The inbox dialog moves on once the person highlights a question and rests there, not on
+    a task, nor on passing over one."""
+    q1, _ = setup_items(store, tut)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        tour_at(app, "inbox", tut)
+        await pilot.pause()
+        items = app.query_one("#items", DataTable)
+        items.move_cursor(row=items.get_row_index(f"{tut}|T1"))
+        await pilot.pause()
+        dwell(app)
+        await pilot.pause()
+        assert shown(app)[0] == "inbox", "a task isn't a question"
+        items.move_cursor(row=items.get_row_index(f"{tut}|{q1}"))
+        await pilot.pause()
+        assert shown(app)[0] == "inbox", "passing over a question doesn't count"
+        dwell(app)
+        app.refresh_data()
+        await pilot.pause()
+        assert shown(app)[0] == "answer", "highlighting a question, and resting there, does"
+
+
+@pytest.mark.anyio
+async def test_closing_the_decision_moves_the_tour_on(store, sid, tut):
+    with one_second():   # P1 just above D1: posted first, so the last of its rank's ties, the open ones
+        store.post_item(tut, "permission", "Bash: touch tutorial-ok")
+        setup_items(store, tut)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        tour_at(app, "decision", tut)
+        await pilot.pause()
+        items = app.query_one("#items", DataTable)
+        items.move_cursor(row=items.get_row_index(f"{tut}|P1"))
+        await pilot.pause()
+        app.answer_permission(tut, "P1", "allow")   # the person allows it: it goes at once
+        app.refresh_data()
+        await pilot.pause()
+        dwell(app)
+        await pilot.pause()
+        assert app.selected == (tut, "D1") and store.item(tut, "D1")["status"] == "seen", \
+            "P1 went, so D1 under the cursor was selected automatically, and seen once rested on"
+        assert shown(app)[0] == "decision", "automatic selection doesn't move it on"
+        items.focus()
+        await pilot.press("delete")
+        await pilot.pause()
+        assert store.item(tut, "D1")["status"] == "closed" and shown(app)[0] == "conversation", "closing it does"
+
+
+def turn(tmp_path, sid, who: str, text: str) -> None:
+    """A record added to the session's transcript: the person's words (user) or Claude's (assistant)."""
+    folder = tmp_path / "projects/-tutorial"
+    folder.mkdir(parents=True, exist_ok=True)
+    content = text if who == "user" else [{"type": "text", "text": text}]
+    with (folder / f"{sid}.jsonl").open("a") as f:
+        f.write(json.dumps({"type": who, "timestamp": "2026-10-12T10:00:00Z", "message": {"content": content}}) + "\n")
+
+
+@pytest.mark.parametrize("pick, arrives, replied, moves, desc", [
+    (True, "assistant", True, True, "their own pick of its conversation, and a turn of Claude's arrives while shown"),
+    (True, "user", True, False, "their own words arriving don't"),
+    (True, None, True, False, "shown, with nothing new, doesn't"),
+    (False, "assistant", True, False, "the app's own selection of it doesn't"),
+    (True, "assistant", False, False, "before its reply, the demo's first turn running, doesn't"),
+])
+@pytest.mark.both
+@pytest.mark.anyio
+async def test_watching_it_work_moves_the_tour_on(store, tut, tmp_path, monkeypatch, pick, arrives, replied, moves,
+                                                  desc):
+    """Following the conversation is a tab's too: it is read from the transcript (Hub.conversation)."""
+    from claude_wheelhouse import transcript
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    q1, q2 = setup_items(store, tut)
+    if replied:
+        store.queue(tut, "pirate", q1)
+        store.queue(tut, "Holly", q2)
+        store.dispatch(tut)
+        store.reply(tut, q1, "noted", status="answered")
+    turn(tmp_path, tut, "assistant", "Waiting on the two questions.")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        tour_at(app, "conversation", tut)
+        app.follow(tut)
+        if not pick:   # as the app's own selection leaves it: the person's last pick was something else
+            app.picked = None
+        await pilot.pause()
+        assert "Waiting on the two questions" in app._detail_text, f"{desc}: its conversation shown"
+        if arrives:
+            turn(tmp_path, tut, arrives, "Made it friendlier.")
+        app.refresh_data()
+        await pilot.pause()
+        assert ("follow" in app.tour.seen) is moves, desc
+        assert (shown(app)[0] != "conversation") is moves, desc
+
+
+@pytest.mark.parametrize("registered, runner_, why, desc", [
+    (False, "tab", "stopped: its tab didn't start Claude Code (launch.log", "never registered: wt.exe or Claude Code failed"),
+    (True, "tab", "stopped: its tab has closed", "registered, and its Claude Code has gone"),
+    (True, "sdk", "the demo has stopped", "a host killed or crashed, which recorded no reason (review of #93)"),
+])
+@pytest.mark.anyio
+async def test_a_stopped_demo_says_why(store, tut, registered, runner_, why, desc):
+    """A tab's session has no host to record why it stopped: once it isn't running, the
+    tour's dialog says whether its tab never started Claude Code or has closed, and offers
+    Next to the release notes, rather than wait on it."""
+    store.set_runner(tut, runner_)
+    if registered:
+        store.register(tut, 4242, 1, "an-old-boot")   # a pid of another boot: not alive
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert app.hub.statuses[tut] == "dead", f"{desc}: not running"
+        tour_at(app, "sessions", tut)
+        await pilot.pause()
+        co = app.screen.query_one(TourCallout)
+        assert f"\n{why[0].upper()}{why[1:]}" in co.text and co.text.endswith(": Next goes to the release notes."), desc
+        co.query_one("#tour-next").press()
+        await pilot.pause()
+        assert isinstance(app.screen, TourNotes), f"{desc}: not stranded: Next goes to the notes"
+
+
+@pytest.mark.anyio
+async def test_every_hint_names_the_same_fixed_command(store, monkeypatch, fake_claude):
+    """Review 68: the offer, the ? overlay and the dismiss notice all name the command that
+    has it offered again. Guessing it from PATH named a command that fails under make run,
+    where uv puts the venv's claude-wheelhouse on PATH but the person's shell can't run it,
+    so every hint names both. Each is shown in a running app, where the command is refused,
+    so each says to stop it first."""
+    from claude_wheelhouse.hub import Hub
+    said = "With the wheelhouse stopped, claude-wheelhouse tutorial (make tutorial in a source checkout) offers the tutorial again"
+    monkeypatch.setattr(tutorial.shutil, "which", lambda cmd, *a, **k: f"/venv/bin/{cmd}")   # as under uv run
+    assert f"{said} at the next start" in keys_help(), "? overlay"
+    monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        hint = str(app.screen.query_one("#invite-hint").render())
+        assert hint.endswith(f"After Never, {said[0].lower()}{said[1:]}."), "invite"
+    assert [e.text for e in Hub(store).answer_offer(False).notices] == \
+        [f"{said}; ? lists every key"], "dismiss notice"
 
 
 @pytest.mark.parametrize("sdk, exits, killed, desc", [
@@ -182,7 +474,7 @@ def test_prepare_starts_afresh(store, tmp_path, monkeypatch, on, desc):
     (False, False, [4242], "a tab's Claude Code, which never exits by itself, is told to"),
 ])
 def test_an_earlier_tutorials_host_is_stopped(store, monkeypatch, sdk, exits, killed, desc):
-    sid = tutorial.prepare(store)
+    sid = demo(store)
     if sdk:
         store.set_runner(sid, "sdk")
     store.register(sid, 4242, 1, "boot")
@@ -240,7 +532,7 @@ def test_the_tutorial_command_resets_the_offer(store, tmp_path, monkeypatch, cap
         request.getfixturevalue("daemon_lock")
     other = store.create_session(str(tmp_path), name="real work")
     store.post_item(other, "task", "keep me")
-    tut = tutorial.prepare(store)
+    tut = demo(store)
     store.set_setting(tutorial.OFFER_KEY, "dismissed")
     asked = []
 
@@ -294,20 +586,6 @@ async def test_a_reset_offer_shows_over_sessions(store, tmp_path, monkeypatch, f
         assert isinstance(pilot.app.screen, TourInvite) is again, f"{desc}: offered at the next start"
 
 
-@pytest.mark.parametrize("on, opens, desc", [
-    (False, "tab", "a tab, as a new user has it"),
-    (True, "tab", "with SDK mode on, still a tab (D66)"),
-])
-def test_start_launches_the_session_and_settles_the_offer(store, monkeypatch, fake_claude, on, opens, desc):
-    monkeypatch.setattr(features, "_flag", on)
-    launched = []
-    monkeypatch.setattr(launch, "open_host", lambda s, i: launched.append(("host", i)))
-    monkeypatch.setattr(launch, "open_tab", lambda s, i: launched.append(("tab", i)))
-    sid = tutorial.start(store)
-    assert launched == [(opens, sid)], desc
-    assert store.setting(tutorial.OFFER_KEY) == "taken"
-
-
 async def click_outside(pilot):
     pilot.app.screen.opened -= Dialog.GRACE   # past the grace a double-click's second click gets
     await pilot.click(offset=(0, 39))
@@ -339,10 +617,11 @@ async def test_the_invite(store, tmp_path, monkeypatch, fake_claude, gesture, st
         await gesture(pilot)
         await pilot.pause()
         assert not isinstance(app.screen, TourInvite), desc
-        assert app.query_one("#checklist", Static).display is started, desc
-    assert bool(launched) is started, desc
+        assert isinstance(app.screen, TourStop) is started, f"{desc}: the tour opens on its principles"
+    assert launched == [], f"{desc}: nothing launched: the person starts the demo from New session"
     assert store.setting(tutorial.OFFER_KEY) == setting, desc
-    assert store.tour_seen() == ({f.id: "skipped" for f in whatsnew.FEATURES} if setting == "never" else {}), desc
+    seen = {f.id: "shown" for f in whatsnew.tips("principles", False)} if started else {}   # its tips shown
+    assert store.tour_seen() == ({f.id: "skipped" for f in whatsnew.FEATURES} if setting == "never" else seen), desc
     store.create_session(str(tmp_path), name="real work")   # Later still offers it once there are sessions
     async with WheelhouseApp(store).run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -363,144 +642,6 @@ async def test_the_invite_fits_whole(store, monkeypatch, width, height, desc):
         assert app.screen.region.contains_region(box), f"{desc}: {box} on screen"
         for widget in app.screen.query("#dialog Label, #dialog Button"):
             assert box.contains_region(widget.region) and widget.region.height, f"{desc}: {widget.id} shown whole"
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("permission, desc", [
-    (False, "80 by 24: the checklist scrolls, the answer box below it gives way"),
-    (True, "and with the permission buttons, which show in place of the box"),
-])
-async def test_the_answer_box_stays_on_screen_under_the_checklist(store, tut, permission, desc):
-    """Review 9: the checklist's 19 rows pushed the answer box off an 80 by 24 screen, and
-    neither it nor the permission buttons appearing fitted the right pane again."""
-    ref = store.post_item(tut, "permission", "Bash: make test")
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(80, 24)) as pilot:
-        await pilot.pause()
-        pane = app.query_one("#detail-pane").content_region
-        if permission:
-            app.items_table.move_cursor(row=app.items_table.get_row_index(f"{tut}|{ref}"))
-        else:
-            app.follow(tut)
-        await pilot.pause()
-        await pilot.pause()
-        assert app.query_one("PermissionButtons").display is permission, desc
-        box, hint = app.query_one("#answer").region, app.query_one(".answer-hint").region
-        if permission:   # buttons alone: no answer box
-            buttons = app.query_one("PermissionButtons").region
-            assert box.height == 0 and buttons.bottom <= hint.y and hint.bottom <= pane.bottom, f"{desc}: {buttons}, {hint}"
-        else:
-            assert box.height >= 3 and box.bottom <= hint.y and hint.bottom <= pane.bottom, f"{desc}: {box}, {hint}"
-        own_session(store, tut, "Q1", "Q2")   # its last step done, so the checklist goes with the session
-        store.end(tut)
-        app.refresh_data()
-        await pilot.pause()
-        await pilot.pause()
-        assert app.query_one("#answer").region.height == 8, f"{desc}: the box's own size back with the checklist gone"
-
-
-@pytest.mark.both
-@pytest.mark.anyio
-async def test_the_checklist_follows_the_tutorial(store, sid, tut):
-    q1, _ = setup_items(store, tut)
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        checklist = app.query_one("#checklist", Static)
-        assert checklist.display
-        assert "▶ Open a question" in app._checklist_text, "the next step leads"
-        items = app.query_one("#items", DataTable)
-        keys = [items.coordinate_to_cell_key((i, 0)).row_key.value for i in range(items.row_count)]
-        items.move_cursor(row=keys.index(f"{tut}|T1"))   # a task isn't a question
-        await pilot.pause()
-        assert "▶ Open a question" in app._checklist_text
-        items.move_cursor(row=keys.index(f"{tut}|{q1}"))
-        await pilot.pause()
-        assert "▶ Open a question" in app._checklist_text, "passing over a question doesn't tick it"
-        dwell(app)
-        app.refresh_data()   # the tick's: through a daemon, the checklist is its last snapshot until then
-        await pilot.pause()
-        assert "✔ Open a question" in app._checklist_text, "highlighting a question, and resting there, ticks it"
-        app.follow(tut)
-        await pilot.pause()
-        dwell(app)
-        await pilot.pause()
-        assert tutorial.seen(store, tut) == {"open"}, "following the conversation alone isn't watching it work"
-        store.end(tut)
-        app.refresh_data()
-        await pilot.pause()
-        assert "✔ Forget the session\n▶ Start your own: N opens New" in app._checklist_text, \
-            "it outlives the session for its last step"
-        assert "Open a question" not in app._checklist_text, "the steps that went with the session go too"
-        own_session(store, tut, q1, None)
-        app.refresh_data()
-        await pilot.pause()
-        assert not checklist.display, "a session of their own: nothing left, it goes"
-        store.end(store.sessions()[-1]["id"])
-        app.refresh_data()
-        await pilot.pause()
-        assert not checklist.display, "and stays gone once their own session ends too"
-
-
-@pytest.mark.both
-@pytest.mark.anyio
-async def test_an_ended_tutorials_checklist_lasts_the_app_run(store, tut):
-    """D80: kept past End for the rest of that app run, dropped at the next app start."""
-    setup_items(store, tut)
-    store.end(tut)
-    assert tutorial.current(store) is not None, "the app run it ended in still shows it"
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        app.refresh_data()
-        await pilot.pause()
-        assert not app.query_one("#checklist", Static).display, "the next app start drops it"
-    assert tutorial.record(store) == {}, "its record goes with it"
-
-
-def turn(tmp_path, sid, who: str, text: str) -> None:
-    """A record added to the session's transcript: the person's words (user) or Claude's (assistant)."""
-    folder = tmp_path / "projects/-tutorial"
-    folder.mkdir(parents=True, exist_ok=True)
-    content = text if who == "user" else [{"type": "text", "text": text}]
-    with (folder / f"{sid}.jsonl").open("a") as f:
-        f.write(json.dumps({"type": who, "timestamp": "2026-10-12T10:00:00Z", "message": {"content": content}}) + "\n")
-
-
-@pytest.mark.parametrize("pick, arrives, replied, ticks, desc", [
-    (True, "assistant", True, True, "their own pick of its conversation, and a turn of Claude's arrives while shown"),
-    (True, "user", True, False, "their own words arriving don't"),
-    (True, None, True, False, "shown, with nothing new, doesn't"),
-    (False, "assistant", True, False, "the app's own selection of it doesn't"),
-    (True, "assistant", False, False, "before its reply, the tutorial's first turn running, doesn't"),
-])
-@pytest.mark.both
-@pytest.mark.anyio
-async def test_watching_it_work_ticks_as_a_turn_arrives(store, tut, tmp_path, monkeypatch, pick, arrives, replied,
-                                                       ticks, desc):
-    """Following the conversation is a tab's too: it is read from the transcript (Hub.conversation)."""
-    from claude_wheelhouse import transcript
-    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
-    q1, q2 = setup_items(store, tut)
-    if replied:
-        for act in (answer, send, reply):
-            act(store, tut, q1, q2)
-    turn(tmp_path, tut, "assistant", "Waiting on the two questions.")
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        app.follow(tut)
-        if not pick:   # as the app's own selection leaves it: the person's last pick was something else
-            app.picked = None
-        await pilot.pause()
-        assert "Waiting on the two questions" in app._detail_text, f"{desc}: its conversation shown"
-        if arrives:
-            turn(tmp_path, tut, arrives, "Made it friendlier.")
-        app.refresh_data()
-        await pilot.pause()
-        assert "Made it friendlier" in app._detail_text or not arrives, f"{desc}: the turn shown"
-        assert ("follow" in tutorial.seen(store, tut)) is ticks, desc
-        assert ("✔ Watch it work" in app._checklist_text) is ticks, desc
 
 
 @pytest.mark.parametrize("cls, desc", [
@@ -572,37 +713,12 @@ def test_start_refuses_without_claude(store, tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))   # no claude anywhere
     with pytest.raises(RuntimeError, match="isn't on PATH"):
         tutorial.start(store)
-    assert tutorial.session_id(store) is None, "nothing created, so no dead session and no checklist"
+    assert not tutorial.tutorial_dir(store).exists(), "nothing made"
     assert store.setting(tutorial.OFFER_KEY) is None
 
 
-@pytest.mark.anyio
-async def test_a_host_that_cant_start_says_why(store, fake_claude):
-    """An earlier version's tutorial, run in the wheelhouse, relaunched with SDK mode off.
-    The real path: the host starts detached (setsid returns at once), then Claude Code
-    fails to start inside it. The host records why, and the checklist says so."""
-    import asyncio
-    sid = tutorial.prepare(store)
-    store.set_runner(sid, "sdk")
-    launch.open_session(store, sid)
-    for _ in range(300):
-        why = tutorial.stopped(store.session(sid))
-        if why:
-            break
-        await asyncio.sleep(0.1)
-    assert why and why.startswith("stopped: Claude Code didn't start"), why
-    assert "\n" not in why, "one line"
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        for _ in range(50):   # the host's own exit, a moment after it records why
-            await pilot.pause(0.1)
-            if why in app._checklist_text:
-                break
-        assert why in app._checklist_text and f"{tutorial.AGAIN} at the next start" in app._checklist_text
-
-
 def test_an_earlier_host_that_exits_as_its_told_is_no_error(store, monkeypatch):
-    sid = tutorial.prepare(store)
+    sid = demo(store)
     store.register(sid, 4242, 1, "boot")
     monkeypatch.setattr(tutorial, "STOP_WAIT", 0)
     monkeypatch.setattr(tutorial.liveness, "is_alive", lambda pid, start, boot: True)
@@ -610,120 +726,8 @@ def test_an_earlier_host_that_exits_as_its_told_is_no_error(store, monkeypatch):
     def gone(pid, sig):
         raise ProcessLookupError(pid)
     monkeypatch.setattr(tutorial.os, "kill", gone)
-    assert tutorial.prepare(store) != sid
-
-
-@pytest.mark.anyio
-async def test_closing_the_decision_ticks_it(store, sid, tut):
-    with one_second():   # P1 just above D1: posted first, so the last of its rank's ties, the open ones
-        store.post_item(tut, "permission", "Bash: touch tutorial-ok")
-        setup_items(store, tut)
-    app = WheelhouseApp(store)
-    step = "✔ Read and close the decision"
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        items = app.query_one("#items", DataTable)
-        items.move_cursor(row=items.get_row_index(f"{tut}|P1"))
-        await pilot.pause()
-        app.answer_permission(tut, "P1", "allow")   # the person allows it: it goes at once
-        app.refresh_data()
-        await pilot.pause()
-        dwell(app)
-        await pilot.pause()
-        assert app.selected == (tut, "D1") and store.item(tut, "D1")["status"] == "seen", \
-            "P1 went, so D1 under the cursor was selected automatically, and seen once rested on"
-        assert step not in app._checklist_text, "automatic selection doesn't tick it"
-        for ref in ("T1", "D1"):   # each row looked up as it's moved to: a sinking D1 moves under a stale index
-            items.move_cursor(row=items.get_row_index(f"{tut}|{ref}"))
-            await pilot.pause()
-        assert step not in app._checklist_text, "nor does reading it"
-        items.focus()
-        await pilot.press("delete")
-        await pilot.pause()
-        assert store.item(tut, "D1")["status"] == "closed" and step in app._checklist_text, "closing it with Delete does"
-    async with WheelhouseApp(store).run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        assert step in pilot.app._checklist_text, "kept across a restart of the app"
-
-
-@pytest.mark.parametrize("registered, why, desc", [
-    (False, "stopped: its tab didn't start Claude Code (launch.log", "never registered: wt.exe or Claude Code failed"),
-    (True, "stopped: its tab has closed", "registered, and its Claude Code has gone"),
-])
-@pytest.mark.anyio
-async def test_a_stopped_tab_says_why(store, tut, registered, why, desc):
-    """A tab's session has no host to record why it stopped: once it isn't running, the
-    checklist says whether its tab never started Claude Code or has closed, with how to
-    start afresh."""
-    if registered:
-        store.register(tut, 4242, 1, "an-old-boot")   # a pid of another boot: not alive
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        assert app.hub.statuses[tut] == "dead", f"{desc}: not running"
-        assert why in app._checklist_text, desc
-        assert f"{tutorial.AGAIN} at the next start" in app._checklist_text
-        assert "▶ Find the demo in its tab" in app._checklist_text
-
-
-@pytest.mark.parametrize("on", [True, False])
-@pytest.mark.parametrize("how", ["restore", "relaunch", "adopt", "adopt ended"])
-@pytest.mark.parametrize("stored, desc", [
-    ("tab", "the tutorial, recorded as a tab"),
-    ("sdk", "a tutorial an earlier version hosted"),
-    (None, "a tutorial with no runner recorded, as one from before hosts would be"),
-])
-def test_the_tutorial_comes_back_as_a_tab(store, tut, monkeypatch, on, how, stored, desc):
-    """Review 68: Restore, Relaunch and Adopt with SDK mode on once made every tab, the
-    tutorial's included, an SDK session. Review 69: adopting an ended tutorial's transcript
-    did too. Any other session comes back the way new sessions run (test_restore_session)."""
-    from claude_wheelhouse import adopt
-    from claude_wheelhouse.hub import Hub
-    monkeypatch.setattr(features, "_flag", on)
-    monkeypatch.delenv("WHEELHOUSE_RUNNER", raising=False)
-    with store.tx() as db:
-        db.execute("UPDATE sessions SET runner = ? WHERE id = ?", (stored, tut))
-    cwd = store.session(tut)["cwd"]
-    seen = []
-    monkeypatch.setattr(launch, "open_host", lambda s, i: seen.append("host"))
-    monkeypatch.setattr(launch, "open_tab", lambda s, i: seen.append("tab"))
-    monkeypatch.setattr(adopt.liveness, "running_pid", lambda *a, **k: None)
-    if how == "restore":
-        launch.restore_session(store, tut)
-    elif how == "relaunch":
-        assert Hub(store, sdk=on).relaunch(tut).ok, desc
-    else:
-        if how == "adopt ended":   # its row gone, its transcript still offered
-            store.end(tut)
-        adopt.adopt(store, adopt.Candidate(tut, cwd, "tutorial", 0.0, None), "", sdk=on)
-    assert seen == ["tab"], f"{how}, SDK mode {on}: {desc}"
-    assert store.session(tut)["runner"] == "tab", f"{how}, SDK mode {on}: {desc}"
-
-
-@pytest.mark.anyio
-async def test_every_hint_names_the_same_fixed_command(store, monkeypatch, fake_claude):
-    """Review 68: the offer, the ? overlay, the dismiss notice and a stopped tutorial's
-    checklist all name the command that has it offered again. Guessing it from
-    PATH named a command that fails under make run, where uv puts the venv's
-    claude-wheelhouse on PATH but the person's shell can't run it, so every hint names both.
-    Each is shown in a running app, where the command is refused, so each says to stop it first."""
-    from claude_wheelhouse.hub import Hub
-    said = "With the wheelhouse stopped, claude-wheelhouse tutorial (make tutorial in a source checkout) offers the tutorial again"
-    monkeypatch.setattr(tutorial.shutil, "which", lambda cmd, *a, **k: f"/venv/bin/{cmd}")   # as under uv run
-    assert f"{said} at the next start" in keys_help(), "? overlay"
-    monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        hint = str(app.screen.query_one("#invite-hint").render())
-        assert hint.endswith(f"After Never, {said[0].lower()}{said[1:]}."), "invite"
-    assert [e.text for e in Hub(store).answer_offer(False).notices] == \
-        [f"{said}; ? lists every key"], "dismiss notice"
     tutorial.prepare(store)
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        assert f"\n{said} at the next start" in app._checklist_text, "checklist"
+    assert store.session(sid) is None
 
 
 @pytest.mark.parametrize("how", ["restore", "open"])

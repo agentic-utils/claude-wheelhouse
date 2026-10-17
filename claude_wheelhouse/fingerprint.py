@@ -7,7 +7,7 @@ import hashlib
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parent
-API = 2   # the daemon's routes as this code serves and calls them: another number won't do
+API = 3   # the daemon's routes as this code serves and calls them: another number won't do
 
 
 @functools.lru_cache(maxsize=1)

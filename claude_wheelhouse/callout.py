@@ -14,11 +14,12 @@ from textual.containers import Vertical
 from textual.geometry import Offset, Region, Size
 from textual.message import Message
 from textual.widget import Widget
-from textual.widgets import Button, Static
+from textual.widgets import Button, Input, Static, TextArea
 
 WIDTH = 46   # a callout's width, on a screen wide enough
 MARGIN = 4   # the columns a narrower screen keeps free beside it
 COLLAPSED = 3   # a pane fewer rows high than this shows nothing a callout could sit over
+EDITABLE = (Input, TextArea)   # what a Next callout leaves focus in
 HIGHLIGHT = "tour-target"   # the class on the pane a callout describes: a yellow border
 
 # a tour pane id (whatsnew.Stop.pane): the selector of its widget on the screen and its title.
@@ -80,7 +81,8 @@ def find(screen: Widget, pane: str) -> Widget | None:
 
 class TourCallout(Vertical):
     """One tour dialog painted beside its pane. With `next` it takes focus, on its Next button,
-    so Enter is Next (Next posted); without, it never takes focus, so the keys it teaches reach
+    so Enter is Next (Next posted), unless a text box has it (a click on Next then); without,
+    it never takes focus, so the keys it teaches reach
     the app. Hidden while another screen covers the one it's on."""
     SCOPED_CSS = False   # the highlight is on the pane, outside the callout
     DEFAULT_CSS = f"""
@@ -112,11 +114,17 @@ class TourCallout(Vertical):
         self.screen.screen_layout_refresh_signal.subscribe(self, lambda _: self.place())
         self.app.screen_change_signal.subscribe(self, lambda _: self.cover(), immediate=True)
         self.place()
-        if self.next:
-            self.query_one("#tour-next", Button).focus()
+        found = self.query("#tour-next")   # none in one removed before it was composed
+        if found and not isinstance(self.screen.focused, EDITABLE):   # never from a box being typed in
+            found.first().focus()
 
     def on_unmount(self) -> None:
         self.highlight(None)
+
+    def say(self, text: str) -> None:
+        """Its text changed: placed again, as its height may have."""
+        self.text, self.placed = text, None
+        self.place()
 
     def cover(self) -> None:
         """Shown only while its own screen is the one on top."""
@@ -134,7 +142,10 @@ class TourCallout(Vertical):
         return len(Text(text).wrap(self.app.console, max(1, w - 4))) + self.next + 2
 
     def place(self) -> None:
-        """Beside its pane, as place says, again only once the screen or the pane has moved."""
+        """Beside its pane, as place says, again only once the screen or the pane has moved.
+        Nothing while it has no text to place (not composed yet, or being removed)."""
+        if not self.query(".tour-text"):
+            return
         screen = self.screen.size
         target = find(self.screen, self.pane)
         region = target.region if target is not None and target.display else None

@@ -23,7 +23,7 @@ from typing import Callable, NamedTuple
 
 from . import adopt, auth, features, fork, plan_usage, transcript_usage, tutorial
 from .hub import RUNNING, Done, Event, Hub, host_context, requested
-from .store import SessionGone
+from .store import NOTES_SEEN, SessionGone
 
 TIMEOUT = 10        # seconds a request may take to be answered (a launch, Relaunch all)
 CONNECT = 2         # seconds to connect: the daemon is on this machine, or one hop away
@@ -103,20 +103,24 @@ class LocalClient(Hub):
         else:
             self.store.set_setting(key, value)
 
-    def tutorial(self) -> tuple[str, list] | None:
-        """The tutorial's session and its steps, while its checklist shows (tutorial.current:
-        its last step outlives the session)."""
-        return tutorial.current(self.store)
+    def tutorial(self) -> dict | None:
+        """What the tour waits on that the store records of the demo session, None while there's
+        none (tutorial.facts)."""
+        return tutorial.facts(self.store)
+
+    @property
+    def tutorial_dir(self) -> str:
+        return str(tutorial.tutorial_dir(self.store))
 
     def should_offer(self) -> bool:
         return tutorial.should_offer(self.store)
 
-    def see(self, sid: str, step: str) -> None:
-        tutorial.see(self.store, sid, step)
-
-    def drop_ended_tutorial(self) -> None:
-        """As the app starts: an ended tutorial's checklist is let go (tutorial.drop_ended)."""
-        tutorial.drop_ended(self.store)
+    def see_features(self, ids: list[str], notes: str | None = None) -> None:
+        """Features the tour has shown (store.see_features), and with them the version whose
+        release notes it showed (notes)."""
+        self.store.see_features(ids)
+        if notes:
+            self.store.set_setting(NOTES_SEEN, notes)
 
     def start(self, post=None) -> None:
         pass   # its work runs on the app's own workers (spawn, post)
@@ -608,24 +612,22 @@ class RemoteClient:
         self.layout[key] = value
         self.quietly("/settings", {"key": key, "value": value})
 
-    def tutorial(self) -> tuple[str, list] | None:
-        sid = self.tutorial_state.get("sid")   # its session may have ended: its last step outlives it
-        if sid is None:
-            return None
-        return sid, [tuple(step) for step in self.tutorial_state["steps"]]
+    def tutorial(self) -> dict | None:
+        return self.tutorial_state.get("facts")
+
+    @property
+    def tutorial_dir(self) -> str:
+        return self.tutorial_state.get("dir", "")
 
     def should_offer(self) -> bool:
         return bool(self.tutorial_state.get("offer"))
 
-    def see(self, sid: str, step: str) -> None:
-        self.quietly("/tutorial/seen", {"sid": sid, "step": step})
-
-    def drop_ended_tutorial(self) -> None:
-        self.quietly("/tutorial/drop-ended", {})
+    def see_features(self, ids: list[str], notes: str | None = None) -> None:
+        self.quietly("/tour/seen", {"ids": ids, "notes": notes})
 
     def quietly(self, path: str, body: dict) -> bool:
-        """A command nobody waits to hear about (a splitter's size, a tutorial step, a
-        decision seen by the dwell): one that can't reach the daemon is let go."""
+        """A command nobody waits to hear about (a splitter's size, a feature the tour
+        showed, a decision seen by the dwell): one that can't reach the daemon is let go."""
         try:
             return self.command(path, body).get("ok", True)
         except (Unreachable, Refused, SessionGone, KeyError, ValueError):
