@@ -25,6 +25,9 @@ def looks(rows: list[Text]) -> list[tuple]:
     return [(t.plain, t.style, t.spans) for t in rows]
 
 
+ZOOM_PARTS = ("zoom-out", "zoom-in")   # the charts' - and +, as Tab stops (SessionStats.tab_parts)
+
+
 class SessionStats(Widget):
     """A bordered panel of the context, session and weekly gauges and the cache and
     compaction rows, then charts of the last two hours' context assembly and output (zoomed
@@ -37,12 +40,13 @@ class SessionStats(Widget):
     each tick; animate only recolours the columns."""
 
     DEFAULT_CSS = "SessionStats { height: 1fr; background: #000000; border-top: solid #7b61ff; }"
-    # the effort slider's, while it shows (a session run by a host in context): only then does
-    # the pane take focus, after the inbox's own stops (TAB_ORDER)
+    # the effort slider's, while it has the focus (a session run by a host in context), and
+    # the zoom's: the pane takes focus only while it has one of them (tab_parts)
     BINDINGS = [Binding("left", "effort(-1)", "Lower effort", show=False),
                 Binding("right", "effort(1)", "Higher effort", show=False),
                 Binding("home", "effort_end(0)", "Lowest effort", show=False),
-                Binding("end", "effort_end(-1)", "Highest effort", show=False)]
+                Binding("end", "effort_end(-1)", "Highest effort", show=False),
+                Binding("enter,space", "press_zoom", "Zoom", show=False)]
 
     def __init__(self, ctx: api.Context, **kwargs):
         super().__init__(**kwargs)
@@ -53,6 +57,7 @@ class SessionStats(Widget):
         self.note: str | None = None   # what shows with nothing to show
         self.setting: dict | None = None   # the session shown's model and effort (Hub.model_state)
         self.can_focus = False
+        self.part: str | None = None   # the Tab stop of tab_parts with the focus, while the pane has it
         self.rows: list[Text] = []
         self.charts: list[stats.Chart] = []
         self.span = stats.SPAN   # the charts' zoom (stats.SPANS, stats.wider)
@@ -173,14 +178,36 @@ class SessionStats(Widget):
         self.rebuild()
 
     def rebuild(self) -> None:
-        self.can_focus = self.slider() is not None and self.ctx.set_effort is not None
+        at = self.has_focus and self.at
         rows, charts = stats.layout(self.view, self.name_, self.note, self.usage, self.now,
-                                    self.size.width, self.size.height, self.setting, self.has_focus,
+                                    self.size.width, self.size.height, self.setting, at == "slider",
                                     span=self.span, loading=self.filling, more=self.more)
+        for chart in charts:
+            chart.zoom_focus = ZOOM_PARTS.index(at) if at in ZOOM_PARTS else None
         if (looks(rows), charts) != (looks(self.rows), self.charts):   # each tick builds them again, mostly the same
             self.rows, self.charts = rows, charts
             self.drawn_for = None
             self.refresh()
+        self.can_focus = bool(self.tab_parts())
+
+    # Tab's stops in the pane (tui.tab_stops, #77): it is one widget, so it says where they are
+
+    def tab_parts(self) -> list[str]:
+        """The pane's Tab stops in reading order: the effort slider while it shows and can be
+        set, then the charts' - and + while they show."""
+        slider = self.slider() is not None and self.ctx.set_effort is not None
+        zoom = bool(self.charts) and self.size.width - stats.MARGIN >= stats.ZOOM_MIN
+        return ["slider"] * slider + list(ZOOM_PARTS) * zoom
+
+    @property
+    def at(self) -> str | None:
+        """The stop with the focus: the one Tab or a click last put it on, else the first."""
+        parts = self.tab_parts()
+        return self.part if self.part in parts else next(iter(parts), None)
+
+    def focus_part(self, part: str) -> None:
+        self.part = part
+        self.rebuild()
 
     def on_resize(self) -> None:
         self.rebuild()
@@ -201,7 +228,7 @@ class SessionStats(Widget):
 
     def action_effort(self, step: int) -> None:
         """A level lower or higher, applied live: no warning, as effort has no side effects (Q52)."""
-        if self.slider() is None:
+        if self.slider() is None or self.at != "slider":
             return
         levels = models.EFFORTS
         current = stats.effort_of(self.view, self.setting)   # what the slider lights
@@ -209,8 +236,19 @@ class SessionStats(Widget):
         self.pick(levels[max(0, min(len(levels) - 1, at + step))])
 
     def action_effort_end(self, end: int) -> None:
-        if self.slider() is not None:
+        if self.slider() is not None and self.at == "slider":
             self.pick(models.EFFORTS[end])
+
+    def action_press_zoom(self) -> None:
+        """Enter or Space on the zoom's - or +, as a click on it."""
+        if self.at in ZOOM_PARTS:
+            self.zoom_to(stats.zoom_target(self.span, self.more, ZOOM_PARTS.index(self.at)))
+
+    def zoom_to(self, span: int | None) -> None:
+        if span is not None:
+            self.span = span
+            self.fill(time.time())
+            self.repaint()
 
     def pick(self, level: str) -> None:
         sid = self.slider()
@@ -227,12 +265,12 @@ class SessionStats(Widget):
             to = next((to for start, end, to in stats.zoom_spans(self.span, self.size.width, self.more)
                        if start <= x + 1 < end), None)
             if to is not None:
-                self.span = to
-                self.fill(time.time())
-                self.repaint()
+                self.part = ZOOM_PARTS[to != stats.zoom_target(self.span, self.more, 0)]
+                self.zoom_to(to)
             return
         if self.slider() is None or y != stats.SLIDER_ROW:
             return
+        self.part = "slider"
         spans = stats.slider_spans(stats.effort_of(self.view, self.setting), self.size.width - 2)
         level = next((level for start, end, level in spans if start <= x < end), None)
         if level is not None:
