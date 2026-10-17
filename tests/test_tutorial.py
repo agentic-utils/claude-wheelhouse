@@ -877,3 +877,56 @@ def test_a_relaunched_tab_that_never_starts_says_so(store, tut, monkeypatch, how
     assert opened, how
     assert tutorial.stopped(store.session(tut)).startswith("stopped: its tab didn't start Claude Code"), how
     assert store.session(tut)["claude_pid"] == 4242, f"{how}: the launch keeps the last run's pid"
+
+
+@pytest.mark.both
+@pytest.mark.anyio
+async def test_a_paused_top_up_resumes_with_its_tips_after_a_restart(store, tmp_path, monkeypatch):
+    """Review of #98: a top-up dialog's tips count as seen once passed, not as it shows, so one
+    paused there still has them to show after a restart."""
+    upgrader(store, tmp_path, monkeypatch)
+    async with WheelhouseApp(store).run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("enter")   # Start
+        await pilot.pause()
+        await pilot.press("enter")   # Next past the sessions dialog
+        await pilot.pause()
+        assert shown(pilot.app) == ("answer", "detail")
+        await pilot.press("escape")
+        await pilot.pause()
+    assert "session-sort" in store.tour_seen() and "tab-order" not in store.tour_seen(), "only the dialog passed"
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert not isinstance(app.screen, TourInvite) and badge(app) == "Tour paused · L"
+        app.set_focus(None)
+        await pilot.press("l")
+        await pilot.pause()
+        co = app.screen_stack[0].query_one(TourCallout)
+        assert shown(app) == ("answer", "detail") and co.text.startswith("Tab goes round"), "the paused dialog, its tip"
+
+
+@pytest.mark.anyio
+async def test_a_click_on_the_badge_works_whatever_has_focus(store, tmp_path, monkeypatch):
+    """D141: L is typed in a text box, but a click on the badge always resumes."""
+    monkeypatch.setattr(tutorial, "state", lambda st: {**real_state(st), "seen": [f.id for f in whatsnew.FEATURES]})
+    store.create_session(str(tmp_path), name="real work")
+    store.set_setting(TOUR_AT, "tour:stats")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        box = app.query_one("#answer", TextArea)
+        box.focus()
+        await pilot.press("l")
+        await pilot.pause()
+        assert app.tour is None and box.text == "l", "L in a box is typed"
+        await pilot.click("#tour-badge")
+        await pilot.pause()
+        assert shown(app) == ("stats", "stats"), "a click resumes"
+
+
+def test_a_state_without_the_tour_offers_nothing(store):
+    """Review of #98: a daemon that doesn't say what the tour offers offers nothing."""
+    app = WheelhouseApp(store)
+    app.client.tour_state = lambda: {}
+    assert app.tour_offer() == (None, [])

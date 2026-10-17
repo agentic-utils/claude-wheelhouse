@@ -14,7 +14,7 @@ import httpx2
 import pytest
 from sse_starlette.sse import AppStatus
 
-from claude_wheelhouse import daemon as daemon_mod, hub as hub_mod, launch, liveness, store as store_mod, transcript
+from claude_wheelhouse import daemon as daemon_mod, fingerprint, hub as hub_mod, launch, liveness, store as store_mod, transcript
 from claude_wheelhouse.daemon import AlreadyRunning, Daemon, Feed, PortTaken, checked_address, hosts, listener, take_lock
 from claude_wheelhouse.hub import Event
 from claude_wheelhouse.store import COMPACT_QUESTION, SessionGone, Store
@@ -877,7 +877,7 @@ async def test_the_host_is_checked_before_the_token(daemon):
 
 NEW_ROUTES = [
     ("GET", "/hello", None, lambda store, sid, r: (r.json()["api"], r.json()["ready"], r.json()["pid"])
-     == (3, False, os.getpid()), "with the token, which daemon: its API, its code, not ready before its first tick"),
+     == (fingerprint.API, False, os.getpid()), "with the token, which daemon: its API, its code, not ready before its first tick"),
     ("GET", "/inbox", None, lambda store, sid, r: (sorted(i["ref"] for i in r.json()["items"]),
                                                    "body" in r.json()["items"][0], r.json()["tutorial"]["facts"])
      == (["P1", "T1"], False, None), "every item, without its body, and what the tour waits on"),

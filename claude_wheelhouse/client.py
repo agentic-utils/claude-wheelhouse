@@ -635,7 +635,8 @@ class RemoteClient:
     def see_features(self, ids: list[str], notes: str | None = None) -> None:
         self.quietly("/tour/seen", {"ids": ids, "notes": notes})
         tour = self.tour_state()   # as the daemon now has it, until the next fetch says so itself
-        tour["seen"] = sorted({*tour.get("seen", ()), *ids})
+        if "seen" in tour:   # not known, it stays so: nothing offered
+            tour["seen"] = sorted({*tour["seen"], *ids})
         if notes:
             tour["notes_seen"] = notes
 

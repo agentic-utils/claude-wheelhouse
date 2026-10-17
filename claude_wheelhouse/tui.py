@@ -1838,7 +1838,7 @@ class TourBadge(Static):
 
     def on_click(self, event: events.Click) -> None:
         event.stop()
-        self.app.action_tour()
+        self.app.take_tour()   # a click always does, whatever has focus (D141)
 
 
 # the badge's words by what the tour offers (tour.opening): n, the new tips a top-up brings
@@ -4208,6 +4208,8 @@ class WheelhouseApp(App):
         if not stored and self.tour is not None:
             return (PAUSED, []) if self.tour.paused else (None, [])
         st = self.client.tour_state()
+        if "seen" not in st:   # not known (a daemon that doesn't say): nothing to offer, not everything
+            return None, []
         main = self.screen_stack[0] if self.screen_stack else None
         pending = whatsnew.pending(st.get("seen", ()), self.client.sdk)
         at = None if stored else st.get("at")
@@ -4230,7 +4232,12 @@ class WheelhouseApp(App):
         """L, or a click on the badge: a paused tour resumes at the dialog it was at (Q122),
         in this run or one before; the whole tour's invite, or a top-up's, opens again; with
         only advanced features new, their release notes."""
-        if isinstance(self.focused, (TextArea, Input)) or not self.badge.display:
+        if not isinstance(self.focused, (TextArea, Input)):   # there, L is typed
+            self.take_tour()
+
+    def take_tour(self) -> None:
+        """What L, or a click on the badge, does (action_tour)."""
+        if not self.badge.display:
             return
         if self.tour is not None and self.tour.paused:
             self.tour.paused, self.tour_showing = False, None
@@ -4291,7 +4298,8 @@ class WheelhouseApp(App):
             self.tour = None
             self.paint_badge()
             return
-        self.client.see_features(tour.shown(stop), whatsnew.running_version() if stop.id == "notes" else None)
+        if tour.kind == TOUR or stop.id == "notes":   # a top-up's dialog counts once passed (passed)
+            self.client.see_features(tour.shown(stop), whatsnew.running_version() if stop.id == "notes" else None)
         if stop.id == "principles":
             self.push_screen(TourStop(stop.title, text), self.tour_answered)
         elif stop.id == "notes":   # an upgrader's: every release since the last notes seen (Q121 B)
@@ -4299,6 +4307,13 @@ class WheelhouseApp(App):
             self.push_screen(TourNotes(text, notes), self.tour_answered)
         else:
             main.mount(TourCallout(stop.pane, text, next=nxt))
+
+    def passed(self) -> None:
+        """Next on a top-up's dialog: its tips count as seen now, not as it showed, so one paused
+        there and resumed after a restart still has them to show."""
+        tour = self.tour
+        if tour.kind == TOPUP and tour.stop is not None and tour.stop.id != "notes":
+            self.client.see_features(tour.shown(tour.stop))
 
     def drop_callouts(self, found: list) -> None:
         """Callouts taken away. Focus on one's Next goes nowhere, not to the next in the chain
@@ -4318,6 +4333,7 @@ class WheelhouseApp(App):
         if answer == "pause":
             self.pause_tour()
             return
+        self.passed()
         self.tour.next()
         self.show_tour()
         if answer == "new":   # whatever has focus behind it: N on the notes said so
@@ -4326,6 +4342,7 @@ class WheelhouseApp(App):
     @on(TourCallout.Next)
     def tour_next(self, event: TourCallout.Next) -> None:
         if self.tour is not None:
+            self.passed()
             self.tour.next()
             self.show_tour()
 
