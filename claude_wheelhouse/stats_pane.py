@@ -38,7 +38,7 @@ class SessionStats(Widget):
 
     DEFAULT_CSS = "SessionStats { height: 1fr; background: #000000; border-top: solid #7b61ff; }"
     # the effort slider's, while it shows (a session run by a host in context): only then does
-    # the pane take focus, after the inbox's own stops (TAB_ORDER)
+    # the pane take focus, by a click, as it is no Tab stop (tui.tab_stops)
     BINDINGS = [Binding("left", "effort(-1)", "Lower effort", show=False),
                 Binding("right", "effort(1)", "Higher effort", show=False),
                 Binding("home", "effort_end(0)", "Lowest effort", show=False),

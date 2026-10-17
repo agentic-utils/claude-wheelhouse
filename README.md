@@ -349,8 +349,9 @@ Every dialog opens centred over the screen, which stays in sight behind it. A di
 `Tab` goes round the session list, the items, the answer box, then every button shown, in reading
 order, and `Shift+Tab` goes back. Nothing else is a stop. A click in the conversation puts focus in the
 answer box, where `PgUp` and `PgDn` scroll the conversation, and `Ctrl+Enter` leaves it there. A click on
-a button leaves focus where it was. An item opened full screen has two stops, its answer box and its
-thread. Keys typed ahead of the screen end as if typed slowly: each acts once the one
+a button leaves focus where it was. A focused button that is disabled or hidden (Send, once it has sent)
+gives focus to the answer box, as Send by its key does. An item opened full screen goes the same way: its
+answer box, then its buttons, and a click in its thread puts focus in the box. Keys typed ahead of the screen end as if typed slowly: each acts once the one
 before it has done all it does, so the ones behind a key that opens a thread or a dialog go to it, and the ones behind a
 dialog's answer go to the screen it uncovers.
 
@@ -384,8 +385,8 @@ highlight goes to the row immediately above the topmost row it took, or to the n
 if that was the first.
 
 Text: drag the mouse over the conversation or a thread to select part of it (shown black
-on white), double-click to select a word, `Ctrl+A` selects all of the focused pane or answer box (in the item list it marks the finished rows), and `Ctrl+C` copies the
-selection (through the terminal, which Windows Terminal supports). Right-click does as a
+on white), double-click to select a word, `Ctrl+A` in the answer box selects its text (in the item list it marks the finished rows; in a doc opened
+full screen it selects the whole doc), and `Ctrl+C` copies the selection (through the terminal, which Windows Terminal supports). Right-click does as a
 terminal's does: it copies the selection, or with nothing selected pastes the clipboard
 into the answer box under the pointer (or the focused one). Under WSL the paste reads the
 Windows clipboard through PowerShell, so it takes most of a second; elsewhere it pastes the

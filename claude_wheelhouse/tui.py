@@ -404,17 +404,19 @@ def agreed(a: list, b: list) -> int:
     return n
 
 
-class Transcript(Widget, can_focus=True):
+class Transcript(Widget, can_focus=False):
     """A conversation or a thread: one widget drawing cached lines, as Blocks does, and
-    selectable. Drag selects, a double click a word (select_word), Ctrl+A selects it all,
-    Ctrl+C copies (Textual's screen binding, which copies through the terminal: OSC 52,
-    which Windows Terminal supports)."""
+    selectable. Drag selects, a double click a word (select_word), Ctrl+C copies (Textual's
+    screen binding, which copies through the terminal: OSC 52, which Windows Terminal
+    supports). Never focused (#77), as its answer box is, but a doc's (focusable=True), which
+    has no box: there its keys scroll it and Ctrl+A selects it all."""
     ALLOW_SELECT = True
     DEFAULT_CSS = "Transcript { height: auto; }"
     BINDINGS = [Binding("ctrl+a", "select_all", "Select all", show=False)]
 
-    def __init__(self, placeholder: str = "", **kwargs):
+    def __init__(self, placeholder: str = "", focusable: bool = False, **kwargs):
         super().__init__(**kwargs)
+        self.can_focus = focusable
         self.blocks: list[tuple[str, str]] = [("note", placeholder)] if placeholder else []
         self._laid: tuple | None = None
         self.warm: set[tuple] = set()   # long doc blocks rendered on a thread, by (who, md, width)
@@ -1321,17 +1323,40 @@ def show_button(root: Widget, button_id: str, label: str, disabled: bool, shown:
 
 
 class ConversationScroll(VerticalScroll, can_focus=False):
-    """The conversation pane's scroll, never a Tab stop: a click in it puts focus in the
-    answer box (#77), where PgUp and PgDn scroll it."""
+    """The conversation pane's scroll, or a full-screen item's thread's, never a Tab stop: a
+    click in it puts focus in the answer box (#77), where PgUp and PgDn scroll it."""
 
     def on_mouse_down(self) -> None:
         self.app.focus_answer()
 
 
-def tab_stop(button: Button) -> None:
-    """A button Tab reaches (#77) that a click doesn't focus: a click leaves the answer box,
-    and what's typed, where it was."""
-    button.can_focus, button.FOCUS_ON_CLICK = True, False
+class BarButton(Button):
+    """A button of the inbox or a full-screen item, the panes' and the bars': a Tab stop
+    (tab_stops) that a click doesn't focus, so a click leaves the answer box, and what's
+    typed, where it was (#77)."""
+    FOCUS_ON_CLICK = False
+
+
+# the stops before the buttons (tab_stops): the inbox's lists, then whichever answer box
+# shows (Deny's reason in its place); a full-screen item's box. Any other pane is no stop
+TAB_ORDER = ("session-list", "items", "answer", "thread-answer", "deny-reason")
+ANSWER_BOXES = TAB_ORDER[2:]
+
+
+def reading_order(button: Button) -> tuple:
+    """Where a button comes in reading order: each pane's from the left, top to bottom, then
+    the send bar's."""
+    pane = next((a for a in button.ancestors if isinstance(a, SendBar) or a.has_class("panel")), button.screen)
+    return isinstance(pane, SendBar), pane.region.x, button.region.y, button.region.x
+
+
+def tab_stops(screen: Screen) -> list[Widget]:
+    """Tab's stops on the inbox and a full-screen item (#77), the one place they are said:
+    TAB_ORDER's that show, then every BarButton shown and enabled in reading order. Nothing
+    else is one, whatever else can take focus (a click on it, or a key)."""
+    chain = screen.focus_chain
+    return [w for id_ in TAB_ORDER for w in chain if w.id == id_] + \
+        sorted((w for w in chain if isinstance(w, BarButton)), key=reading_order)
 
 
 class Columns(Horizontal):
@@ -1369,12 +1394,8 @@ class SendBar(Horizontal):
         # on the row the footer covers
         buttons = CONVERSATION if self.conversation else ()
         for label, id_, variant in (*buttons[:2], ("Send all", "send-all", "warning"), *buttons[2:]):
-            yield Button(label, variant, id=id_, compact=True, tooltip=BUTTONS[id_])
+            yield BarButton(label, variant, id=id_, compact=True, tooltip=BUTTONS[id_])
         yield Label("", id="activity")
-
-    def on_mount(self) -> None:
-        for button in self.query(Button):
-            button.can_focus = False
 
     def activity(self, text: str) -> None:
         label = getattr(self, "activity_label", None) or next(iter(self.query("#activity")), None)
@@ -1397,11 +1418,7 @@ class PermissionButtons(Horizontal):
         for label, id_, variant in (("Allow", "allow", "success"), ("Always", "always", "primary"),
                                     ("Deny", "deny", "error")):
             # compact: one row, as in the send bar
-            yield Button(label, variant, id=id_, compact=True, tooltip=BUTTONS[id_])
-
-    def on_mount(self) -> None:
-        for button in self.query(Button):
-            button.can_focus = False   # a click leaves the answer box, and what's typed, where it was
+            yield BarButton(label, variant, id=id_, compact=True, tooltip=BUTTONS[id_])
 
 
 DENY_CAPTION = ("Why deny? (optional) The session reads this as your reason, so it can try something else. "
@@ -1461,13 +1478,11 @@ class CompactButtons(Horizontal):
     """
 
     def compose(self) -> ComposeResult:
-        yield Button("Compact", "success", id="compact-now", compact=True, tooltip=BUTTONS["compact-now"])
-        yield Button("Leave it", id="leave-it", compact=True, tooltip=BUTTONS["leave-it"])
-        yield then_radios("compact-then")
-
-    def on_mount(self) -> None:
-        for widget in (*self.query(Button), *self.query(RadioSet)):
-            widget.can_focus = False   # a click leaves the answer box, and what's typed, where it was
+        yield BarButton("Compact", "success", id="compact-now", compact=True, tooltip=BUTTONS["compact-now"])
+        yield BarButton("Leave it", id="leave-it", compact=True, tooltip=BUTTONS["leave-it"])
+        radios = then_radios("compact-then")
+        radios.can_focus = False   # no Tab stop (tab_stops), and a click leaves the answer box where it was: 3 to 5 press them
+        yield radios
 
     @property
     def then(self) -> str:
@@ -1485,7 +1500,7 @@ class ThreadView(Screen):
         self.text = None
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(id="thread-scroll", classes="panel"):
+        with ConversationScroll(id="thread-scroll", classes="panel"):
             yield Transcript(id="thread")
         yield PermissionButtons()
         yield DenyReason()
@@ -1503,8 +1518,6 @@ class ThreadView(Screen):
         app.keep_unsent(self.box, None, me)
         self.paint()
         app.paint_sendbar()   # its hint and bar now, not at the next refresh
-        # one Tab stop for the thread, the transcript: its scroll keys reach the scroll as an ancestor's
-        self.query_one("#thread-scroll").can_focus = False
         # at once, not after a refresh as focus() does: keys behind Enter go there. Not on a
         # permission, which shows no box (paint_sendbar gives it back once answered)
         self.set_focus(self.box if self.box.display else None)
@@ -1559,7 +1572,7 @@ class DocView(Screen):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="docview-scroll", classes="panel"):
-            yield Transcript(id="docview")
+            yield Transcript(id="docview", focusable=True)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -2280,9 +2293,6 @@ BUTTON_KEYS = [
 # the permission keys, 1 to 3, on the question suggesting Compact: Compact, Leave it and the
 # first then-choice; 4 and 5 (BUTTON_KEYS) the other two
 NUDGE_KEYS = {"allow": "compact-now", "always": "leave-it", "deny": "compact-then-compact"}
-# the inbox's Tab order (WheelhouseApp.cycle_focus, #77): these, the answer box (or Deny's
-# reason in its place), then every button in reading order; nothing else
-TAB_ORDER = ("session-list", "items", "answer", "deny-reason")
 # for the ? overlay, keys bound elsewhere: Tab and Shift+Tab are every screen's own
 # (app.focus_next, which is cycle_focus), the lists' cursor keys DataTable's
 TAB_KEYS = [Binding("tab", "app.focus_next"), Binding("shift+tab", "app.focus_previous")]
@@ -2292,8 +2302,9 @@ LIST_KEYS = [Binding(key, action) for key, action in (
 TABS = ("Tab goes round the session list, the items, the answer box, then every button shown, in reading "
         "order, and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter "
         "leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus "
-        "where it was, and each has a key. An item opened full screen has two stops, its answer box and its "
-        "thread; in the thread, Up, Down, PgUp, PgDn, Home and End scroll it.")
+        "where it was, and each has a key. An item opened full screen goes the same way: its answer box, then "
+        "its buttons; a click in its thread puts focus in the box, where PgUp and PgDn scroll the thread. A "
+        "focused button that is disabled or hidden (Send, once sent) gives focus to the answer box.")
 SEND_RULES = (
     "**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the "
     "session's queue as one message, so related answers arrive together; ✉ counts what's queued. "
@@ -2582,10 +2593,10 @@ class WheelhouseApp(App):
                     yield Static(id="session-activity")
                 with Grid(id="session-buttons"):
                     for label, id_ in LIFECYCLE:   # compact: one row each
-                        yield Button(label, id=id_, compact=True, tooltip=BUTTONS[id_])
+                        yield BarButton(label, id=id_, compact=True, tooltip=BUTTONS[id_])
                 with Grid(id="conversation-buttons"):
                     for label, id_, _ in CONVERSATION:
-                        yield Button(label, id=id_, compact=True, tooltip=BUTTONS[id_])
+                        yield BarButton(label, id=id_, compact=True, tooltip=BUTTONS[id_])
             yield Splitter("sessions-pane", "#sessions-pane", "#items-pane", "x")
             with Vertical(id="items-pane", classes="panel"):
                 yield ItemList(id="items", cursor_type="row")   # then a splitter and the inbox.side panes
@@ -2620,13 +2631,9 @@ class WheelhouseApp(App):
         self.conversation_buttons = self.query_one("#conversation-buttons", Grid)
         self.session_buttons = self.query_one("#session-buttons", Grid)
         self.session_controls = list(self.query("#sessions-pane Grid, #sessions-pane Grid Button"))   # theirs and they
-        # Tab's stops are TAB_ORDER's and the buttons (cycle_focus): not the panes' scrolls,
-        # nor the conversation, whose click puts focus in the answer box (ConversationScroll)
+        # no Tab stops (tab_stops), nor taken by a click, which leaves the answer box where it was
         for widget in (self.query_one("#session-info-scroll"), self.query_one("#checklist-scroll")):
             widget.can_focus = False
-        self.detail.FOCUS_ON_CLICK = False
-        for button in self.screen.query(Button):
-            tab_stop(button)
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
             if (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
                 splitter.apply(stored)
@@ -4182,6 +4189,7 @@ class WheelhouseApp(App):
         self.settle()
         if sid := self.context_session():
             self.send_session(sid)
+            self.focus_answer()   # #77: as the button does
 
     @session_action
     def send_session(self, sid: str) -> None:
@@ -4214,6 +4222,7 @@ class WheelhouseApp(App):
         self.settle()
         if sid := self.bar_session(event.button.screen):
             self.send_session(sid)
+            self.focus_answer()   # #77: not lost with the button, disabled now its queue has gone
 
     @on(Button.Pressed, "#send-all")
     def send_all_pressed(self) -> None:
@@ -4356,7 +4365,7 @@ class WheelhouseApp(App):
             self.refresh_data()
 
     async def action_press(self, button_id: str) -> None:
-        """A key standing in for a button that never takes focus: as a click on it, on the
+        """A key standing in for a button: as a click on it, on the
         screen in front, the inbox or a full-screen item. Not in a text box, whose keys are
         typing, nor under a dialog, whose keys are its own. One that doesn't apply to what's
         in context says so rather than doing nothing."""
@@ -4441,21 +4450,14 @@ class WheelhouseApp(App):
         self.cycle_focus(-1)
 
     def cycle_focus(self, step: int) -> None:
-        """Tab and Shift+Tab on the inbox go round TAB_ORDER, then the buttons shown and
-        enabled in reading order (each pane's from the left, top to bottom, then the send
-        bar's), and nothing else (#77); elsewhere (a full-screen item, a dialog) in screen
-        order. In an answer box with an emoji code being typed, Tab takes the first suggestion
-        instead. Tab is a key, so the cursors have settled (land) before it moves on."""
+        """Tab and Shift+Tab on the inbox and a full-screen item go round tab_stops (#77);
+        elsewhere (a doc, a dialog) in screen order. In an answer box with an emoji code being
+        typed, Tab takes the first suggestion instead. Tab is a key, so the cursors have
+        settled (land) before it moves on."""
         if step > 0 and isinstance(self.focused, Compose) and self.focused.take_suggestion():
             return
         screen = self.screen
-        chain = screen.focus_chain
-        if screen is self.screen_stack[0]:
-            def reading(b: Button) -> tuple:
-                pane = next((a for a in b.ancestors if isinstance(a, SendBar) or a.has_class("panel")), b)
-                return isinstance(pane, SendBar), pane.region.x, b.region.y, b.region.x
-            chain = [w for id_ in TAB_ORDER for w in chain if w.id == id_] + \
-                sorted((w for w in chain if isinstance(w, Button)), key=reading)
+        chain = tab_stops(screen) if self.stopped(screen) else screen.focus_chain
         if not chain:
             return
         here = chain.index(self.focused) if self.focused in chain else (-1 if step > 0 else 0)
@@ -4471,11 +4473,32 @@ class WheelhouseApp(App):
         s = self.row(sid)
         return f"{s['name'] or os.path.basename(s['cwd'])} ({short(sid)}, {s['cwd']})"
 
-    def focus_answer(self) -> None:
-        """The answer box (or Deny's reason in its place), if it shows: a click in the conversation (#77)."""
-        box = next((w for w in self.screen.focus_chain if w.id in ("answer", "deny-reason")), None)
+    def stopped(self, screen: Screen) -> bool:
+        """Whether Tab goes round tab_stops there: the inbox and a full-screen item (#77)."""
+        return screen is self.screen_stack[0] or isinstance(screen, ThreadView)
+
+    def focus_answer(self) -> bool:
+        """Focus to the answer box on the screen in front (or Deny's reason in its place), if
+        one shows: a click in the conversation, and Send (#77)."""
+        box = next((w for w in tab_stops(self.screen) if w.id in ANSWER_BOXES), None)
         if box is not None:
             self.screen.set_focus(box, scroll_visible=False)
+        return box is not None
+
+    def on_descendant_blur(self, event: events.DescendantBlur) -> None:
+        """A focused button disabled or hidden (Send, once its queue has gone) loses focus to
+        the answer box, or with none showing to the next Tab stop: not to a sibling, or to
+        nothing, as Textual would (#77). Not when its going put focus somewhere itself (Deny,
+        in its reason)."""
+        lost, screen = event.widget, self.screen
+        if not isinstance(lost, BarButton) or not lost.is_attached or lost.screen is not screen \
+                or not self.stopped(screen) or not (screen.focused is None or isinstance(screen.focused, Button)):
+            return
+        stops = tab_stops(screen)
+        if lost in stops or self.focus_answer() or not stops:
+            return
+        screen.set_focus(next((b for b in stops if isinstance(b, BarButton) and reading_order(b) > reading_order(lost)),
+                              stops[0]))
 
     def action_relaunch_all(self) -> None:
         """Relaunch all: every Available session, once confirmed. Parked and Active ones are
