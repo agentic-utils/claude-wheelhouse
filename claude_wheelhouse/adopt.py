@@ -4,7 +4,7 @@ The wheelhouse lists recent transcripts from ~/.claude/projects, plus sessions i
 tracks whose process has gone (e.g. an adoption whose tab failed). If the chosen session is
 still running, the person types /exit in its tab first; the wheelhouse never kills it. Then
 the wheelhouse registers the session under its own id and opens it like any restore
-(launch.restore_runner: the way new sessions run now, and the tutorial's always in a tab),
+(launch.restore_runner: the way new sessions run now),
 resuming it by id with the wheelhouse's MCP server, protocol and /wheelhouse commands.
 """
 
@@ -149,7 +149,7 @@ def candidates(store: Store, projects: Path = PROJECTS, sessions: Path = livenes
 def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSIONS,
           proc: Path = liveness.PROC, open_tab=None, sdk: bool | None = None, may_tab: bool = True) -> str:
     """Register the session and open it as launch.restore_runner says (the way new sessions
-    run now; the tutorial's, a tab), tracked already or not. Refuses while it is still
+    run now), tracked already or not. Refuses while it is still
     running. A session the wheelhouse already tracks keeps its row (and its items), renamed
     if asked. sdk: whether SDK mode is on, else features.sdk_enabled(). may_tab false (a
     request from another machine): a tab is refused (launch.NotHere) before anything changes."""
@@ -157,14 +157,14 @@ def adopt(store: Store, c: Candidate, name: str, sessions: Path = liveness.SESSI
     pid = liveness.running_pid(c.id, sessions, proc)
     if pid:
         raise StillRunning(pid)
-    if not may_tab and launch.restore_runner(store, c.cwd, sdk) == "tab":   # before any rename or row
+    if not may_tab and launch.restore_runner(sdk) == "tab":   # before any rename or row
         raise launch.NotHere({"name": name or c.name, "cwd": c.cwd, "id": c.id})
     if store.session(c.id):
         if name:
             store.rename(c.id, name)
         open_tab(store, c.id)
         return c.id
-    sid = store.create_session(c.cwd, name=name, sid=c.id, runner=launch.restore_runner(store, c.cwd, sdk))
+    sid = store.create_session(c.cwd, name=name, sid=c.id, runner=launch.restore_runner(sdk))
     try:
         open_tab(store, sid)
     except BaseException:

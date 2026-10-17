@@ -20,7 +20,7 @@ from textual.strip import Strip
 from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
-from claude_wheelhouse import features, launch, models, stats, transcript, tui
+from claude_wheelhouse import features, launch, models, stats, transcript, tui, tutorial
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 from claude_wheelhouse.splitter import Splitter
@@ -415,11 +415,11 @@ async def test_one_current_session_for_the_buttons_and_keys(store, sid, tmp_path
     the buttons under it, Ctrl+S and Ctrl+T, the hint and the activity line all act on or
     describe the same one, however the person got there. Unfiltered (#16) none is
     highlighted: the keys act on the highlighted item's session, the buttons on none."""
-    from claude_wheelhouse import tutorial
     monkeypatch.setattr(tutorial, "tutorial_dir", lambda store: tmp_path / "tut")
     mine = store.post_item(sid, "question", "which db?")
     store.queue(sid, "a", mine)
-    target = tutorial.prepare(store) if nav == "tutorial" else store.create_session(str(tmp_path), name="other")
+    target = store.create_session(str(tutorial.prepare(store)) if nav == "tutorial" else str(tmp_path),
+                                  name="tutorial" if nav == "tutorial" else "other")
     q = store.post_item(target, "question", "Q1?")
     store.queue(target, "b", q)
     store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
@@ -5647,6 +5647,13 @@ OPEN = object()   # the dialog still open: Enter was its focus's own (a list's, 
      ["relaunch-cancel", "relaunch-compact", "relaunch-now"], "Relaunch's choice: Cancel focused"),
     (lambda app, sid, cwd: tui.TourInvite(), "later", "later", "start", ["invite-start", "invite-later", "invite-never"],
      "the tour's invite: a click outside is Later, never Never, so a misclick doesn't lose the tour"),
+    (lambda app, sid, cwd: tui.NewSession(tutorial.form(cwd), "Press Launch."), None, None,
+     {"name": "tutorial", "ticket": ""}, ["name", "ticket", "brief", "model", "effort", "launch", "cancel"],
+     "New session filled in by the tour: its directory fixed, so no Tab stop"),
+    (lambda app, sid, cwd: tui.TourStop("The wheelhouse", "Every session in one place."), "pause", "pause", "next",
+     ["tour-stop-next"], "the tour's principles: Esc, or a click outside, pauses the tour"),
+    (lambda app, sid, cwd: tui.TourNotes("N starts a session.", "## What's new"), "close", "close", "close", None,
+     "the tour's release notes: no answer asked"),
     (lambda app, sid, cwd: tui.KeysHelp(), None, None, None, None, "the keys: no answer asked"),
 ])
 async def test_dialog_keys_and_click_outside(store, sid, tmp_path, make, outside, esc, enter, tabs, desc):

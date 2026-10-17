@@ -118,6 +118,11 @@ class TourCallout(Vertical):
     def on_unmount(self) -> None:
         self.highlight(None)
 
+    def say(self, text: str) -> None:
+        """Its text changed: placed again, as its height may have."""
+        self.text, self.placed = text, None
+        self.place()
+
     def cover(self) -> None:
         """Shown only while its own screen is the one on top."""
         self.display = self.app.screen is self.screen

@@ -67,7 +67,12 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `WHEELHOUSE_API` on any breaking change to it. `SLOTS` names the six places a pane goes
   (`tui.slot`, `.plan/modules.md`): an empty one collapses (`WheelhouseApp.collapse`).
 - `models.py`: the models and effort levels offered. A new model is a row here.
-- `tutorial.py`: the new-user tutorial: its session brief and checklist steps.
+- `tutorial.py`: the tutorial's demo session: its directory, its brief (`BRIEF`, a line in
+  capitals to the person first), New session's fields for it (`form`) and what the store
+  records of it (`facts`).
+- `tour.py`: the tour's progress, no Textual: which dialog shows and what moves each on
+  (`CHECKS`). The app paints it (`WheelhouseApp.show_tour`): the principles and the release
+  notes as centred dialogs, the rest as callouts (`callout.py`).
 - `whatsnew.py`: the tour's dialogs (`DIALOGS`) and every feature a user can see
   (`FEATURES`), each registered against a dialog or as advanced: what a top-up offers
   (`pending`, by the store's `tour_seen` record, never by version) and the release notes
@@ -168,7 +173,7 @@ Sessions keep running the code they started with, against the same database.
 Update these in the same commit as the behaviour they describe:
 
 - `protocol*.md`, the MCP tool docstrings and `launch.JOINED_TEXT`: what sessions are told.
-- `tutorial.py`: the tutorial session's `BRIEF` and checklist `STEPS`.
+- `tutorial.py`'s `BRIEF` and `whatsnew.DIALOGS`' text: what the demo is told and what the tour says.
 - `whatsnew.FEATURES`: every change a user can see adds a `Feature` in the same commit,
   with `version=UNRELEASED`. Set `where` to the tour dialog for the pane it changes, with a
   `tip` of at most two lines, or to `ADVANCED` when it is for experienced users only. Give

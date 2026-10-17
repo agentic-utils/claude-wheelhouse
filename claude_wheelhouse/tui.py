@@ -53,13 +53,15 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, emoji, features, models, ordering, stats, subagents, transcript, tutorial, whatsnew
+from . import api, callout, emoji, features, models, ordering, stats, subagents, transcript, tutorial, whatsnew
+from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import NUDGE_TOKENS
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .stats_pane import SessionStats
+from .tour import Tour
 from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mode, runner, spared, standing)
 from .unsent import Unsent
@@ -80,7 +82,7 @@ FRAMES = 10   # frames a second that the shimmer, the eyes and the bars are coun
 SHIMMER_PERIOD = 2 * len(SHIMMER)   # the title's frames before its colours come round again (shimmer)
 UNREACHABLE = Text(" daemon unreachable: reconnecting… ", style="bold #000000 on #ff2a6d")   # the title, while it is
 # seconds the person must stay on an item, without a break, before it counts as looked at:
-# an unseen decision becomes seen, a tutorial step ticks (dwelt). Passing over it does neither
+# an unseen decision becomes seen, the tour sees a question opened (dwelt). Passing over it does neither
 DWELL = 1.0
 # seconds with no key before a text box's cursor blinks again (hold_cursor). A terminal sends
 # no key release: a held key repeats after an initial delay of about half a second, then
@@ -1741,26 +1743,38 @@ class NewSession(Dialog):
     """Name and ticket are optional; the brief becomes the first prompt. Model and effort
     start at the defaults (models.py), and go to every launch of the session. It opens in a
     tab; in SDK mode alone (features.py) a box offers the wheelhouse's host instead, ticked
-    for a tab by default only under WHEELHOUSE_RUNNER=tab."""
+    for a tab by default only under WHEELHOUSE_RUNNER=tab.
+
+    For the tour (`tour`, tutorial.form), it opens filled in with the demo's directory, name,
+    brief and the default model and effort, the tour's line at its top (`line`). Every field
+    stays editable but the directory, as the tour finds its session by directory."""
     ACTION = "launch"
+
+    def __init__(self, tour: dict | None = None, line: str = "") -> None:
+        super().__init__()
+        self.tour, self.line = tour, line
 
     def compose(self) -> ComposeResult:
         # on another machine's daemon (--connect): its directories aren't this machine's, to
         # check or browse here (the daemon checks), and a tab would open on its screen
         elsewhere = self.app.client.elsewhere
+        tour = self.tour or {}
         with Vertical(id="dialog"):
             yield Label("NEW SESSION", classes="dialog-title")
+            if self.line:
+                yield Label(self.line, id="tour-line")
             with Horizontal(id="cwd-row"):
-                yield Input(value="" if elsewhere else str(features.session_dir()), placeholder="working directory", id="cwd")
-                if not elsewhere:
+                cwd = tour.get("cwd", "" if elsewhere else str(features.session_dir()))
+                yield Input(value=cwd, placeholder="working directory", id="cwd", disabled=bool(tour))
+                if not elsewhere and not tour:
                     yield Button("Browse…", id="browse")
-            yield Input(placeholder="name (optional)", id="name")
+            yield Input(value=tour.get("name", ""), placeholder="name (optional)", id="name")
             yield Input(placeholder="ticket: #42, owner/repo#42 or ABC-123 (optional)", id="ticket")
-            yield TextArea(id="brief")
+            yield TextArea(tour.get("brief", ""), id="brief")
             with Horizontal(id="model-row"):   # Sonnet 5.5 at high unless changed (Q50)
-                yield Select([(m.name, m.id) for m in models.MODELS], value=models.DEFAULT_MODEL,
-                             allow_blank=False, id="model")
-                yield Select([(e, e) for e in models.EFFORTS], value=models.default_effort(models.DEFAULT_MODEL),
+                model = tour.get("model", models.DEFAULT_MODEL)
+                yield Select([(m.name, m.id) for m in models.MODELS], value=model, allow_blank=False, id="model")
+                yield Select([(e, e) for e in models.EFFORTS], value=tour.get("effort", models.default_effort(model)),
                              allow_blank=False, id="effort")
             if self.app.client.sdk:   # the runner choice: SDK mode only (features.py, EXPERIMENTAL)
                 yield Checkbox("Open in a terminal tab instead of the wheelhouse",
@@ -2274,6 +2288,64 @@ class TourInvite(Dialog):
         self.action_answer(event.button.id.removeprefix("invite-"))
 
 
+class TourStop(Dialog):
+    """A centred dialog of the tour's (the principles): Next (Enter) moves on, Esc pauses."""
+    ACTION = "tour-stop-next"
+    CANCEL = "pause"
+
+    def __init__(self, title: str, text: str) -> None:
+        super().__init__()
+        self.heading, self.text = title, text
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog", classes="invite"):
+            yield Label(self.heading, classes="dialog-title")
+            yield Label(self.text, classes="dialog-prompt", id="tour-stop-text")
+            yield Label("Esc pauses the tour.", classes="dialog-prompt")
+            with Horizontal(classes="buttons"):
+                yield Button(Text("Next [Enter]"), variant="success", id="tour-stop-next")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self.set_focus(self.query_one("#tour-stop-next", Button))
+
+    @on(Button.Pressed, "#tour-stop-next")
+    def pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_answer("next")
+
+
+class TourNotes(Dialog):
+    """The tour's last dialog: this release's notes (whatsnew.this_release), then a line
+    saying N starts a session of the person's own. Esc, Enter, Close or a click outside
+    closes it; N closes it and opens New session."""
+    RESPONSE = False
+    CANCEL = "close"
+    BINDINGS = [Binding(k, "answer('new')", show=False) for k in ("n", "N", "shift+n")]
+
+    def __init__(self, text: str, notes: str) -> None:
+        super().__init__()
+        self.text, self.notes = text, notes
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog", classes="invite tour-notes"):
+            yield Label("RELEASE NOTES", classes="dialog-title")
+            with VerticalScroll(id="tour-notes-scroll"):
+                yield Static(RichMarkdown(self.notes), id="tour-notes")
+            yield Label(self.text, classes="dialog-prompt", id="tour-notes-text")
+            with Horizontal(classes="buttons"):
+                yield Button(Text("Close [Enter]"), variant="success", id="tour-notes-close")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self.set_focus(self.query_one("#tour-notes-close", Button))
+
+    @on(Button.Pressed, "#tour-notes-close")
+    def pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_answer("close")
+
+
 def key_name(key: str) -> str:
     """A binding's key as the person reads it: Ctrl+S, Shift+Up, Space, ?."""
     names = {"question_mark": "?", "escape": "Esc", "enter": "Enter", "space": "Space", "pageup": "PgUp",
@@ -2581,6 +2653,8 @@ class WheelhouseApp(App):
     #folders {{ height: 20; background: #000000; }}
     #dialog.invite {{ width: 64; }}
     #invite-hint {{ color: #999999; margin: 1 0; }}
+    #tour-notes-scroll {{ height: auto; max-height: 20; }}
+    #tour-notes-text, #tour-line {{ margin: 1 0 0 0; color: #ffd300; }}
     #invite-buttons.stacked {{ layout: vertical; height: auto; }}
     #invite-buttons.stacked Button {{ width: 100%; }}
     #keys-dialog {{ width: 100; max-width: 100%; height: 90%; background: #000000; color: {MATRIX};
@@ -2588,9 +2662,6 @@ class WheelhouseApp(App):
     /* selected text black on white: the theme's dark teal hid the characters (#52) */
     Screen > .screen--selection, TextArea > .text-area--selection, Input > .input--selection {{
         background: #ffffff; color: #000000; }}
-    #checklist-scroll {{ height: auto; max-height: 50%; }}   /* the answer box stays on screen at 80 by 24 */
-    #checklist {{ height: auto; display: none; background: #000000; color: #e8e8e8;
-                  border-bottom: solid #7b61ff; padding: 0 1; }}
     /* one-cell knurled scrollbars (KnurlRender, #55): teal, brighter on hover, white in the hand */
     Widget {{ scrollbar-size-vertical: 1; scrollbar-size-horizontal: 1; scrollbar-color: #05d9e8;
          scrollbar-color-hover: #5ff0fa; scrollbar-color-active: #ffffff; scrollbar-background: #000000;
@@ -2694,8 +2765,8 @@ class WheelhouseApp(App):
         self.held_bars: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()   # by screen (bar_widgets)
         self.said: list[tuple[str, str]] = []   # what to say as it opens, (text, severity): how it found the daemon
         self.client.listen(self.heard)
-        # the tutorial steps only the screen sees (a question opened, the conversation
-        # followed), by tutorial session
+        self.tour: Tour | None = None   # the tour under way (tour.py), painted by show_tour
+        self.tour_showing: tuple | None = None   # what show_tour last painted: (dialog id, text)
 
     def compose(self) -> ComposeResult:
         yield TitleBar(id="title")
@@ -2733,8 +2804,6 @@ class WheelhouseApp(App):
             with Vertical(id="col-right"), slot("right"):
                 with Vertical(id="detail-pane", classes="panel") as pane:
                     pane.border_title = "Detail"
-                    with VerticalScroll(id="checklist-scroll"):   # scrolls on a short terminal (review 9)
-                        yield Static(id="checklist")
                     with ConversationScroll(id="detail-scroll"):
                         yield Transcript(NOTHING_SELECTED, id="detail")
                     yield Splitter("answer", "#answer", "#detail-scroll", "y")
@@ -2763,8 +2832,7 @@ class WheelhouseApp(App):
         self.session_buttons = self.query_one("#session-buttons", Grid)
         self.session_controls = list(self.query("#session-info-pane Grid, #session-info-pane Grid Button"))   # theirs and they
         # no Tab stops (tab_stops), nor taken by a click, which leaves the answer box where it was
-        for widget in (self.query_one("#session-info-scroll"), self.query_one("#checklist-scroll")):
-            widget.can_focus = False
+        self.query_one("#session-info-scroll").can_focus = False
         for key in RETIRED_LAYOUT:   # once: after that they're gone
             if self.client.setting(LAYOUT + key) is not None:
                 self.client.set_setting(LAYOUT + key, None)
@@ -2777,9 +2845,7 @@ class WheelhouseApp(App):
         self.item_sort = self.kept_sort("items")
         self.session_sort = self.kept_sort("sessions")
         self.paint_session_header()
-        self.checklist = self.query_one("#checklist", Static)
         self.client.start(self.post)   # the daemon's stream, now there's an app to tell
-        self.client.drop_ended_tutorial()   # an ended tutorial's checklist lasts only the app run it ended in
         self.started = self.now()
         if fps := features.animation_fps():   # 0: no animation, the title and eyes drawn still
             self.animation = self.set_interval(1 / fps, self.animate)
@@ -2865,6 +2931,10 @@ class WheelhouseApp(App):
             return
         if self.focused is not None:
             self.screen._clear_tooltip()
+        if event.key == "escape" and self.screen is self.screen_stack[0] and self.tour is not None \
+                and not self.tour.paused and self.screen.query(TourCallout):
+            self.pause_tour()   # Esc on any callout pauses the tour (Q122)
+            return
         if event.key == "escape" and (lists := [t for t in (getattr(self, "items_table", None), getattr(self, "session_list", None))
                                             if t is not None and t.dragging]):
             lists[0].end_drag(drop=False)   # a drag let go: nothing moves, and Esc does nothing else
@@ -2987,7 +3057,7 @@ class WheelhouseApp(App):
         self.client.finish_relaunches()
         self.paint_session_info()
         self.paint_sendbar()
-        self.paint_checklist()
+        self.show_tour()
         if isinstance(self.screen, (ThreadView, DocView)) and self.screen.is_mounted:   # not before its widgets exist
             self.screen.paint()   # an action here (queue, take back) shows at once
 
@@ -3038,7 +3108,7 @@ class WheelhouseApp(App):
     def dwelt(self, gen: int) -> None:
         """The selection has been in sight for DWELL without a break: an unseen decision becomes
         seen, whatever selected it (the app's own selection, at startup or once an item goes,
-        included), and a tutorial step the person's own selection makes ticks (saw). Only if it
+        included), and the tour sees what the person's own selection opens (saw). Only if it
         is still what they look at: the same selection, once the cursors have settled (a
         burst's arrows may have moved them), on the inbox or in the selected item's thread,
         not under a dialog."""
@@ -3549,7 +3619,7 @@ class WheelhouseApp(App):
         # a conversation, the session's or a subagent's, shows its newest turn, and follows it
         self.detail_follows = bool(self.viewing or agent)
         # a turn of Claude's arriving in the conversation shown, the person's own pick: the
-        # tutorial's Watch it work, if it's the tutorial's (saw). Their own words don't count
+        # tour's conversation dialog, if it's the demo's (saw). Their own words don't count
         turns = {md for who, md in blocks if who in ("claude", "tool")} if self.viewing else set()
         (was, before), self._shown_turns = getattr(self, "_shown_turns", (None, set())), (self.viewing, turns)
         if self.viewing and was == self.viewing and turns - before and self.selected == self.picked:
@@ -3753,54 +3823,93 @@ class WheelhouseApp(App):
         else:
             bar.activity("")
 
-    def paint_checklist(self) -> None:
-        """While the tutorial's checklist shows (its session exists, or has ended with its last
-        step to do): its steps, at the top of the right pane."""
-        found = self.client.tutorial()
-        if found is None:
-            if self.checklist.display:
-                self.checklist.display = False
-                self.refit()
-            return
-        sid, steps = found
-        nxt = next((key for key, *_, done in steps if not done), None)
-        text = Text.assemble(("TUTORIAL", "bold #ffd300"), ("  ? lists every key", "#777777"))
-        session = next((s for s in self.sessions if s["id"] == sid), None)   # None once ended
-        why = tutorial.stopped(session) if session and not self.running(sid) else None
-        if why:
-            text.append(f"\n{why}", style="bold #ff2a6d")
-            text.append(f"\n{tutorial.AGAIN} at the next start", style="#e8e8e8")
-        for key, what, how, done in steps:
-            if done:
-                text.append(f"\n✔ {what}", style="dim")
-            elif key == nxt:
-                text.append(f"\n▶ {what}", style="bold #05d9e8")
-                text.append(f": {how}", style="#e8e8e8")
-            else:
-                text.append(f"\n☐ {what}", style="#777777")
-        if getattr(self, "_checklist_text", None) != text.plain or not self.checklist.display:
-            self._checklist_text = text.plain
-            self.checklist.update(text)
-            self.checklist.display = True
-            self.refit()   # its height may have changed: the answer box below gives or takes
-
     def saw(self, sid: str, ref: str | None, step: str | None = None) -> None:
-        """The person opened something of the tutorial's: a question, or watched a turn arrive
-        in its conversation (step "follow", from paint_detail). Called only from what the
-        person does, never from automatic selection: Enter at once, their own selection once
-        they have looked at it (dwelt), their own pick of the conversation."""
-        found = self.client.tutorial()
-        if found is None or found[0] != sid:
+        """The person opened something of the demo's: a question, or watched a turn arrive in
+        its conversation (step "follow", from paint_detail). Called only from what the person
+        does, never from automatic selection: Enter at once, their own selection once they
+        have looked at it (dwelt), their own pick of the conversation."""
+        tour = self.tour
+        if tour is None or tour.sid != sid:
             return
         if step is None and ref is not None:
             item = self.client.item(sid, ref)
             step = {"question": "open"}.get(item and item["kind"])
-        done = {key for key, *_, ok in found[1] if ok}
-        if step == "follow" and "reply" not in done:   # a turn watched before the first reply is the tutorial's own run
+        facts = self.client.tutorial()
+        if step == "follow" and not (facts and facts["replied"]):   # a turn before the reply is its own first run
             return
-        if step and step not in done:   # once is enough
-            self.client.see(sid, step)
-            self.paint_checklist()
+        if step and step not in tour.seen:   # once is enough
+            tour.seen.add(step)
+            self.show_tour()
+
+    def begin_tour(self) -> None:
+        self.tour = Tour(self.client.sdk)
+        self.show_tour()
+
+    def show_tour(self) -> None:
+        """The tour's dialog as it stands (tour.Tour.follow): a centred one pushed (the
+        principles, the release notes), or a callout painted beside its pane on the main
+        screen. Painted again only when the dialog or its text changes."""
+        tour = self.tour
+        if tour is None or tour.paused or not self.screen_stack:
+            return
+        main = self.screen_stack[0]
+        tour.follow(self.client.tutorial(), lambda pane: callout.find(main, pane) is not None)
+        stop = tour.stop
+        text = tour.text(stop) if stop else ""
+        if stop is not None and stop.id == "sessions" and tour.sid:   # a demo that has stopped says why
+            s = next((x for x in self.sessions if x["id"] == tour.sid), None)
+            if s is not None and not self.running(tour.sid) and (why := tutorial.stopped(s)):
+                text += f"\n{why}. {tutorial.AGAIN} at the next start."
+        showing = (stop.id, text) if stop else None
+        if showing == self.tour_showing:
+            return
+        same = stop is not None and self.tour_showing is not None and self.tour_showing[0] == stop.id
+        self.tour_showing = showing
+        found = list(main.query(TourCallout))
+        if same and found:   # its text alone changed
+            found[0].say(text)
+            return
+        for old in found:
+            old.remove()
+        if stop is None:
+            self.tour = None
+            return
+        self.client.see_features(tour.shown(stop), whatsnew.running_version() if stop.id == "notes" else None)
+        if stop.id == "principles":
+            self.push_screen(TourStop(stop.title, text), self.tour_answered)
+        elif stop.id == "notes":
+            self.push_screen(TourNotes(text, whatsnew.this_release()), self.tour_answered)
+        else:
+            main.mount(TourCallout(stop.pane, text, next=stop.advance == whatsnew.NEXT))
+
+    def tour_answered(self, answer: str | None) -> None:
+        """A centred dialog of the tour answered: Next, pause (Esc), or, for the notes, closed
+        (N: then New session)."""
+        if self.tour is None:
+            return
+        if answer == "pause":
+            self.pause_tour()
+            return
+        self.tour.next()
+        self.show_tour()
+        if answer == "new":
+            self.action_new_session()
+
+    @on(TourCallout.Next)
+    def tour_next(self, event: TourCallout.Next) -> None:
+        if self.tour is not None:
+            self.tour.next()
+            self.show_tour()
+
+    def pause_tour(self) -> None:
+        """Esc on the tour: it stops where it is (stage 4 resumes it from the badge)."""
+        if self.tour is None:
+            return
+        self.tour.paused = True
+        self.tour_showing = None
+        for old in self.screen_stack[0].query(TourCallout):
+            old.remove()
+        self.notify(f"Tour paused. {tutorial.AGAIN} at the next start.")
 
     def paint_session_info(self) -> None:
         """The current session's description, under the list, and its buttons' captions and
@@ -3973,7 +4082,7 @@ class WheelhouseApp(App):
         session list's highlight shows again if none was selected (D20)."""
         self.filter_sid = self.followed = sid
         self.selected = (sid, None)
-        self.picked = self.selected   # the person's own: a turn arriving in it ticks the tutorial's step (paint_detail)
+        self.picked = self.selected   # the person's own: a turn arriving in it moves the tour on (paint_detail)
         table = self.session_list
         if not table.show_cursor:
             with table.prevent(DataTable.RowHighlighted):   # the app's move, as highlight_session's
@@ -4017,7 +4126,7 @@ class WheelhouseApp(App):
         if key is not None and key != self.items_cursor:
             self.items_cursor = key
             self.select_row(key)
-            self.picked = self.selected   # the person's own pick: looked at for DWELL, a tutorial step it makes ticks (dwelt)
+            self.picked = self.selected   # the person's own pick: looked at for DWELL, what it opens the tour sees (dwelt)
             # what the selection held re-sorts now, not at the next tick (ranked): a settled
             # item sinks as the key that moved on lands, so the keys behind it act on the same rows
             self.paint_items()
@@ -4267,7 +4376,7 @@ class WheelhouseApp(App):
         """The tour's invite answered. Start or Never: it never comes back. Later records
         RESET, so every start offers it again, sessions or not, until Start or Never."""
         if self.told(self.client.answer_offer({"start": True, "never": False}.get(answer))).ok:
-            self.refresh_data()
+            self.begin_tour()
 
     def composing(self):
         """The compose box in use and the item it answers: the thread view's, or the inbox's."""
@@ -4540,7 +4649,11 @@ class WheelhouseApp(App):
     def action_new_session(self) -> None:
         if isinstance(self.focused, (TextArea, Input)):
             return
-        self.push_screen(NewSession(), self.launch_new)
+        stop = self.tour.stop if self.tour is not None and not self.tour.paused else None
+        if stop is not None and stop.id == "create":   # the tour's demo: filled in (Q119)
+            self.push_screen(NewSession(tutorial.form(self.client.tutorial_dir), self.tour.text(stop)), self.launch_new)
+        else:
+            self.push_screen(NewSession(), self.launch_new)
 
     def launch_new(self, form) -> None:
         if form:

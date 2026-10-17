@@ -55,7 +55,7 @@ from starlette.routing import Route
 
 from . import auth, features, fingerprint, liveness, models, stats, tutorial
 from .hub import Done, Event, Hub, host_context
-from .store import COMPACT_QUESTION, THEN, SessionGone, Store, inbox_rank, mode, runner, standing
+from .store import COMPACT_QUESTION, NOTES_SEEN, THEN, SessionGone, Store, inbox_rank, mode, runner, standing
 
 ADDRESS = "127.0.0.1"   # the port is features.port()
 TICK = 1.0           # seconds between the hub's refreshes, as the TUI's tick
@@ -412,8 +412,7 @@ class Daemon:
             Route("/messages/{id:int}/unqueue", self.command(
                 lambda request, body: {"text": self.hub.unqueue(request.path_params["id"])}), methods=["POST"]),
             Route("/tutorial/offer", self.command(self.answer_offer), methods=["POST"]),
-            Route("/tutorial/seen", self.command(self.tutorial_seen), methods=["POST"]),
-            Route("/tutorial/drop-ended", self.command(self.tutorial_drop_ended), methods=["POST"]),
+            Route("/tour/seen", self.command(self.tour_seen), methods=["POST"]),
             Route("/shutdown", self.command(self.shutdown_requested), methods=["POST"]),
         ], middleware=[Middleware(Guard, daemon=self)], lifespan=self.lifespan)
 
@@ -763,17 +762,17 @@ class Daemon:
         every item (but its body, which its thread brings), with its session's name and
         whether it's parked, so a client filters it as the store would (store.items); what's
         processing, awaiting and drafted, by session and ref (a draft's ref None for a
-        general message); the tutorial's steps; and whether SDK mode is on (features.py), which
+        general message); what the tour waits on (tutorial.facts); and whether SDK mode is on (features.py), which
         the TUI's SDK-only controls follow. The ranking is the client's own."""
         rows = self.store._all("SELECT i.*, s.name AS session_name, s.parked AS session_parked FROM items i "
                                "JOIN sessions s ON s.id = i.session_id")
-        sid, steps = tutorial.current(self.store) or (None, [])
         return {"items": [{**{k: v for k, v in dict(r).items() if k not in UNLISTED},
                             "compact_question": r["answer"] == COMPACT_QUESTION} for r in rows],
                 "processing": sorted(self.store.processing()), "awaiting": sorted(self.store.awaiting()),
                 "drafts": [{"id": m["id"], "session_id": m["session_id"], "item_ref": m["item_ref"]}
                            for m in self.store.drafts()],
-                "tutorial": {"sid": sid, "steps": steps, "offer": tutorial.should_offer(self.store)},
+                "tutorial": {"facts": tutorial.facts(self.store), "dir": str(tutorial.tutorial_dir(self.store)),
+                             "offer": tutorial.should_offer(self.store)},
                 "sdk": self.hub.sdk, "usage_mode": self.hub.usage_probe.mode}
 
     def usage(self, request: Request) -> dict:
@@ -860,20 +859,17 @@ class Daemon:
         take = body.get("take")
         if take is not None and not isinstance(take, bool):
             raise Refused(400, "take must be true, false or null (Later)")
-        if take:
-            self.no_remote_tab(request, "tab")   # the tutorial is always a tab
-        return self.hub.answer_offer(take)
+        return self.hub.answer_offer(take)   # nothing opens: the person starts the demo from New session
 
-    def tutorial_seen(self, request: Request, body: dict) -> Done:
-        """A tutorial step only the screen sees (a question opened, the conversation followed)."""
-        sid, step = text(body, "sid"), text(body, "step")
-        self.hub.row(sid)
-        tutorial.see(self.store, sid, step)
-        return Done()
-
-    def tutorial_drop_ended(self, request: Request, body: dict) -> Done:
-        """An app starting: an ended tutorial's checklist lasts only the app run it ended in."""
-        tutorial.drop_ended(self.store)
+    def tour_seen(self, request: Request, body: dict) -> Done:
+        """Features the tour has shown (store.see_features), and the version whose notes it
+        showed (notes)."""
+        ids, notes = body.get("ids"), text(body, "notes", False)
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            raise Refused(400, "ids must be a list of feature ids")
+        self.store.see_features(ids)
+        if notes:
+            self.store.set_setting(NOTES_SEEN, notes)
         return Done()
 
     def shutdown_requested(self, request: Request, body: dict) -> Done:
