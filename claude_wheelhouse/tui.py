@@ -1324,7 +1324,8 @@ def show_button(root: Widget, button_id: str, label: str, disabled: bool, shown:
 
 class ConversationScroll(VerticalScroll, can_focus=False):
     """The conversation pane's scroll, or a full-screen item's thread's, never a Tab stop: a
-    click in it puts focus in the answer box (#77), where PgUp and PgDn scroll it."""
+    click in it puts focus in the answer box (#77), where PgUp and PgDn scroll it; on a doc,
+    which has no box, in the doc, whose keys scroll it."""
 
     def on_mouse_down(self) -> None:
         self.app.focus_answer()
@@ -1338,8 +1339,9 @@ class BarButton(Button):
 
 
 # the stops before the buttons (tab_stops): the inbox's lists, then whichever answer box
-# shows (Deny's reason in its place); a full-screen item's box. Any other pane is no stop
-TAB_ORDER = ("session-list", "items", "answer", "thread-answer", "deny-reason")
+# shows (Deny's reason in its place, or a doc shown in the detail pane, which has no box:
+# focusable only then, so its keys scroll it); a full-screen item's box. Any other pane is no stop
+TAB_ORDER = ("session-list", "items", "answer", "detail", "thread-answer", "deny-reason")
 ANSWER_BOXES = TAB_ORDER[2:]
 
 
@@ -2303,7 +2305,9 @@ TABS = ("Tab goes round the session list, the items, the answer box, then every 
         "order, and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter "
         "leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus "
         "where it was, and each has a key. An item opened full screen goes the same way: its answer box, then "
-        "its buttons; a click in its thread puts focus in the box, where PgUp and PgDn scroll the thread. A "
+        "its buttons; a click in its thread puts focus in the box, where PgUp and PgDn scroll the thread. A doc "
+        "shown in the inbox takes the answer box's place, and a click on it focuses it: Up, Down, PgUp, PgDn, "
+        "Home and End scroll it. A "
         "focused button that is disabled or hidden (Send, once sent) gives focus to the answer box.")
 SEND_RULES = (
     "**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the "
@@ -3548,6 +3552,10 @@ class WheelhouseApp(App):
                        else hint(sends, s is not None and self.dead(s["id"])))
         thread = isinstance(self.screen, ThreadView)
         reading = not thread and self.selected_doc() is not None   # a doc: nothing to answer, no box
+        if not thread and self.detail.can_focus != reading:   # the doc in the box's place (TAB_ORDER)
+            if not reading and self.detail.has_focus:
+                self.screen.set_focus(self.items_table)
+            self.detail.can_focus = reading
         splitters = [] if thread else [self.answer_splitter]
         for rows, shown in ((permission_rows, asking and not denying), (reasons, denying), (compact_rows, nudged),
                             (boxes, not asking and not reading), (hints, not reading), (splitters, not reading)):

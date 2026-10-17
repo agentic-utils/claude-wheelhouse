@@ -351,7 +351,9 @@ order, and `Shift+Tab` goes back. Nothing else is a stop. A click in the convers
 answer box, where `PgUp` and `PgDn` scroll the conversation, and `Ctrl+Enter` leaves it there. A click on
 a button leaves focus where it was. A focused button that is disabled or hidden (Send, once it has sent)
 gives focus to the answer box, as Send by its key does. An item opened full screen goes the same way: its
-answer box, then its buttons, and a click in its thread puts focus in the box. Keys typed ahead of the screen end as if typed slowly: each acts once the one
+answer box, then its buttons, and a click in its thread puts focus in the box. A doc shown in the inbox
+has no answer box: it takes the box's place in the Tab order, and a click on it focuses it, so the arrows,
+`PgUp`, `PgDn`, `Home` and `End` scroll it. Keys typed ahead of the screen end as if typed slowly: each acts once the one
 before it has done all it does, so the ones behind a key that opens a thread or a dialog go to it, and the ones behind a
 dialog's answer go to the screen it uncovers.
 

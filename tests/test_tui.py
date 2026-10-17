@@ -5697,6 +5697,43 @@ async def test_focus_lost_with_a_button_goes_to_the_answer_box(store, sid, monke
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("how, key, desc", [
+    ("tab", "pagedown", "Tab from the items reaches a doc in the answer box's place; PgDn scrolls it (#77)"),
+    ("tab", "end", "and End"),
+    ("tab", "down", "and Down"),
+    ("click", "pagedown", "a click on the doc focuses it, and PgDn scrolls it"),
+])
+async def test_a_doc_in_the_inbox_scrolls_from_the_keyboard(store, sid, tmp_path, how, key, desc):
+    doc = tmp_path / "plan.md"
+    doc.write_text("\n\n".join(f"line {i}" for i in range(200)))
+    m = store.post_doc(sid, "the plan", str(doc))
+    q = store.post_item(sid, "question", "one?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{m}"))
+        await pilot.pause()
+        assert app.selected == (sid, m), desc
+        app.items_table.focus()
+        await pilot.pause()
+        if how == "tab":
+            await pilot.press("tab")
+        else:
+            await pilot.click(app.detail_scroll, offset=(2, 2))
+        await pilot.pause()
+        assert focused_id(app) == "detail", desc
+        await pilot.press(key)
+        await pilot.wait_for_scheduled_animations()
+        await pilot.pause()
+        assert app.detail_scroll.scroll_y > 0, desc
+        app.items_table.focus()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{q}"))
+        await pilot.pause()
+        await pilot.press("tab")
+        assert focused_id(app) == "answer", f"{desc}: off the doc, the box is the stop again"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("key, desc", [
     (None, "a click in a full-screen item's thread focuses its box (#77)"),
     ("pageup", "PgUp in its box scrolls the thread up"),
