@@ -1,6 +1,6 @@
 [project]
 name = "claude-wheelhouse"
-version = "0.1.0"
+version = "0.2.0.dev0"
 description = "Sidecar for parallel Claude Code sessions: tasks, questions, lifecycle"
 readme = "README.md"
 license = "MIT"

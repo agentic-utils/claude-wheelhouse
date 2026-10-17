@@ -171,6 +171,9 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("open-items", help="inside a launched tab: print the session's open items (the plugin's "
                    "hook, after a compaction)")
     sub.add_parser("protocol", help="print everything wheelhouse puts into a launched session", parents=[sdk])
+    notes = sub.add_parser("notes", help="print a release's notes as Markdown, from the features it registered "
+                           "(whatsnew.py)")
+    notes.add_argument("version", nargs="?", default=None, help="the release (default: this one's version)")
     daemon = sub.add_parser("daemon", help="serve the wheelhouse over HTTP (the app starts it, or joins it)",
                             parents=[sdk, usage, port, keep])
     daemon.add_argument("--address", default=None, help="the IP address to listen on (default 127.0.0.1; "
@@ -241,6 +244,9 @@ def main() -> None:
     elif args.cmd == "protocol":
         from .launch import injected
         print(injected(features.sdk_enabled()))
+    elif args.cmd == "notes":
+        from . import whatsnew
+        print(whatsnew.notes(args.version or whatsnew.running_version()), end="")
     elif args.cmd == "token":
         from . import auth
         from .connect import NoDaemon, check

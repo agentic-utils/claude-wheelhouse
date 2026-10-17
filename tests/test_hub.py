@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from claude_wheelhouse import fork as fork_mod, host as host_mod, hub as hub_mod, launch, liveness, models, plan_usage, stats, subagents, transcript, tutorial
+from claude_wheelhouse import fork as fork_mod, host as host_mod, hub as hub_mod, launch, liveness, models, plan_usage, stats, subagents, transcript, tutorial, whatsnew
 from claude_wheelhouse.hub import Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone
 
@@ -321,16 +321,18 @@ def refuse(store):
 
 
 @pytest.mark.parametrize("take, start, started, setting, desc", [
-    (False, None, False, "dismissed", "declined: never offered again"),
-    (True, refuse, False, "dismissed", "a start that fails is said, and not offered again"),
+    (False, None, False, "never", "declined: never offered again"),
+    (True, refuse, False, None, "a start that fails is said, and records nothing: offered again"),
     (True, lambda store: store.set_setting(tutorial.OFFER_KEY, "taken"), True, "taken", "taken: it starts"),
 ])
 def test_the_tutorial_offer_answered(hub, store, heard, monkeypatch, take, start, started, setting, desc):
     if start:
         monkeypatch.setattr(tutorial, "start", start)
+    monkeypatch.setattr(whatsnew, "FEATURES", (whatsnew.Feature("f", whatsnew.UNRELEASED, whatsnew.ADVANCED, "n"),))
     done = hub.answer_offer(take)
     assert done.ok == started, desc
     assert store.setting(tutorial.OFFER_KEY) == setting, desc
+    assert store.tour_seen() == ({"f": "skipped"} if setting == "never" else {}), desc
     assert (len(told(done)), heard) == (1, []), desc
 
 

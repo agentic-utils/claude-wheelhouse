@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help args install run stop tutorial test uv-check
+.PHONY: help args install run stop tutorial test stamp uv-check
 
 # where Astral's installer puts uv, which isn't on PATH until a new shell
 export PATH := $(PATH):$(HOME)/.local/bin
@@ -38,6 +38,10 @@ tutorial: uv-check ## Have the next make run offer the tutorial again, ending an
 
 test: uv-check ## Run the tests
 	uv run pytest
+
+stamp: uv-check ## Give every UNRELEASED feature in whatsnew.py a release's version (make stamp VERSION=0.2.0), as a release commit does
+	@test -n "$(VERSION)" || { echo "make stamp VERSION=0.2.0"; exit 1; }
+	uv run python -m claude_wheelhouse.whatsnew stamp $(VERSION)
 
 uv-check:
 	@command -v uv >/dev/null 2>&1 || { echo "uv not found: run make install" >&2; exit 1; }

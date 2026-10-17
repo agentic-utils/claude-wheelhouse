@@ -26,10 +26,10 @@ import time
 from pathlib import Path
 
 from . import liveness, models
-from .store import Store, runner
+from .store import TUTORIAL_OFFER, Store, runner
 
 NAME = "tutorial"
-OFFER_KEY = "tutorial_offer"   # settings: unset until the first-run offer is taken or dismissed
+OFFER_KEY = TUTORIAL_OFFER   # settings: unset until the first-run offer is taken, or answered Never (store.NEVER)
 RESET = "reset"   # OFFER_KEY as reset() leaves it: offered at the next start, sessions or not, until answered
 SEEN_KEY = "tutorial_seen"     # settings: the current tutorial's record (record): its screen-only steps
 STOP_WAIT = 5.0   # seconds an earlier tutorial's host gets to exit before it is told to
