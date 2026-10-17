@@ -87,10 +87,10 @@ the callout fits without covering the pane; the callout's border title points at
 pane is narrower than the callout or collapsed, it is centred and its first line names the
 pane by its title ("In the Inbox pane:").
 
-**Staying correct.** Placement reruns on the screen's `Resize`, on the layout message the
-swap posts (modules stage 3, `LayoutChanged`), and on each data refresh if the target's
-region differs from the one last placed against (catches splitter drags). Placing is cheap,
-so there is no other caching. While another screen covers the main one (`ThreadView`,
+**Staying correct.** Placement reruns on every layout refresh of the screen (Textual's
+`screen_layout_refresh_signal`), which a resize, a swap and a splitter drag all cause, and
+does anything only when the screen size or the target's region differs from the one last
+placed against. While another screen covers the main one (`ThreadView`,
 `DocView`, a `Dialog`), the callout is hidden. Step 2 is the one exception: `NewSession`
 shows the tour's line at its top while it is open, and its fields come filled in.
 
