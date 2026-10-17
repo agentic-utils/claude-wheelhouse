@@ -48,13 +48,21 @@ def isolated_db(tmp_path, monkeypatch):
     return path
 
 
+SHIPPED_LOAD = api.load   # every module installed, as the app loads them
+
+
 @pytest.fixture(autouse=True)
 def without_design(monkeypatch):
     """The modules installed, less the design module: the app's layout and Tab order are
     tested with the stats pane alone, as written before it. The Decisions pane's own tests
-    (test_decisions_pane.py) load it themselves."""
-    load = api.load
-    monkeypatch.setattr(api, "load", lambda entries=None: [m for m in load(entries) if m.name != "design"])
+    (test_decisions_pane.py) load it themselves, and every_module tests the shipped default."""
+    monkeypatch.setattr(api, "load", lambda entries=None: [m for m in SHIPPED_LOAD(entries) if m.name != "design"])
+
+
+@pytest.fixture
+def every_module(monkeypatch):
+    """Every module installed loaded, as a default install runs (without_design undone)."""
+    monkeypatch.setattr(api, "load", SHIPPED_LOAD)
 
 
 @pytest.fixture(autouse=True)

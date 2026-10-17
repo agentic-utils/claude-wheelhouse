@@ -219,7 +219,9 @@ Update these in the same commit as the behaviour they describe:
 - `tutorial.py`'s `BRIEF` and `whatsnew.DIALOGS`' text: what the demo is told and what the tour says.
 - `whatsnew.FEATURES`: every change a user can see adds a `Feature` in the same commit,
   with `version=UNRELEASED`. Set `where` to the tour dialog for the pane it changes, with a
-  `tip` of at most two lines, or to `ADVANCED` when it is for experienced users only. Give
+  `tip` of at most two lines, or to `ADVANCED` when it is for experienced users only. A
+  module's pane has a dialog of its own (`pane` its module's id, as `stats` and `decisions`),
+  so its tips show only with that module loaded: core never advertises a module's pane. Give
   it a one-line `note` for the release notes. Fixes add nothing. Never change or reuse a
   released feature's id. Between releases `pyproject.toml`'s version is a `.dev` one (say
   `0.3.0.dev0` after 0.2.0): a release version fails the tests while any feature is

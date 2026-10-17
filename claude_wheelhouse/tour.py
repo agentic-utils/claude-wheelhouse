@@ -64,7 +64,7 @@ CHECKS = {
 
 
 class Tour:
-    """A new user's tour, from the principles to the release notes: dialogs 1 to 12. Given
+    """A new user's tour, from the principles to the release notes: every dialog whose pane is here. Given
     `pending` (whatsnew.pending), an upgrader's top-up instead: the dialogs with a pending
     tip, each a Next one showing only those, then the notes, which show every release since
     `notes_seen` (whatsnew.since)."""
