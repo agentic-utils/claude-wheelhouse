@@ -2310,9 +2310,11 @@ class TourStop(Dialog):
         self.set_focus(self.query_one("#tour-stop-next", Button))
 
     def on_click(self, event: events.Click) -> None:
-        """A click outside the box does nothing: only Esc pauses the tour."""
+        """A click outside the box does nothing: only Esc pauses the tour. Dialog's own handler,
+        which Textual would run after this one, is skipped (prevent_default)."""
         if event.widget is self:
             event.stop()
+            event.prevent_default()
 
     @on(Button.Pressed, "#tour-stop-next")
     def pressed(self, event: Button.Pressed) -> None:
