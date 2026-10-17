@@ -160,11 +160,16 @@ class Decisions(Vertical):
             self.query_one(DecisionTable).display = not compact
             if self.ctx.relayout is not None:
                 self.ctx.relayout()
+        self.fit_note()   # compact now in a slot already that small: no resize to say so
 
     def on_resize(self) -> None:
-        # the slot shrunk to the note (tui.fit_compact): it says what fits on its one row
-        self.query_one("#decisions-note").set_class(self.compact and self.content_size.height <= 1, "-one-row")
+        self.fit_note()
         self.paint()
+
+    def fit_note(self) -> None:
+        """The note, compact in a pane with one row inside (tui.fit_compact, or a slot dragged
+        that small): what fits on that row, cut short with an ellipsis."""
+        self.query_one("#decisions-note").set_class(self.compact and self.content_size.height <= 1, "-one-row")
 
     def paint(self) -> None:
         """The table built again, only if what it shows, its order or its width has changed;

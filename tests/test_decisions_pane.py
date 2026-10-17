@@ -315,6 +315,37 @@ async def test_a_drag_in_the_left_column_with_the_empty_decisions_on_top(store, 
 
 
 @pytest.mark.anyio
+async def test_the_note_fits_one_row_when_compact_comes_without_a_resize(store, sid, tmp_path, every_module):
+    """Review r3: the slot dragged to its least rows while decisions show, then the last one
+    goes: no resize comes, and the note still says what fits on its row, with an ellipsis."""
+    from claude_wheelhouse.splitter import NUDGE
+    from test_tui import splitter
+    d = repo(tmp_path, ADRS)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p, note = app.query_one("#design"), app.query_one("#decisions-note")
+        sp = splitter(app, "middle-top")
+        room = sp.room()
+        sp.apply((room - sp.outer_size.height - 3 + NUDGE) / room)
+        await pilot.pause()
+        await pilot.pause()
+        assert not p.compact and p.region.height == 3 and not note.has_class("-one-row"), "dragged small"
+        for f in d.iterdir():
+            f.unlink()
+        p.asked_at -= pane.EVERY
+        await settled(app, pilot)
+        await pilot.pause()
+        assert p.compact and p.region.height == 3, "compact, at the same size"
+        assert note.has_class("-one-row"), "the note cut to its row"
+        repo(tmp_path, ADRS)
+        p.asked_at -= pane.EVERY
+        await settled(app, pilot)
+        await pilot.pause()
+        assert not p.compact and not note.has_class("-one-row"), "and back"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("adrs", [False, True])
 async def test_a_failed_ask_keeps_the_pane_as_it_was(store, sid, tmp_path, every_module, adrs):
     """A failed ask neither grows the pane shrunk to its note nor shrinks one with decisions:
