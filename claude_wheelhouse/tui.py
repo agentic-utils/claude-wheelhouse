@@ -1640,10 +1640,17 @@ class Dialog(ModalScreen):
     of its own (OWN_ENTER: a one-line box or a checkbox has none); a dialog of several choices
     has no ACTION, and Enter presses only the focused button. Tab and Shift+Tab go round its
     buttons and boxes in screen order (cycle_focus). One that asks nothing (RESPONSE False)
-    closes on Esc, Enter or a click outside."""
+    closes on Esc, Enter or a click outside. A click outside within GRACE of the dialog
+    opening is ignored: a double-click on the button that opened it. One whose box doesn't
+    hold the eye (CLICK_OUTSIDE False: the tutorial offer, a line over the whole screen)
+    ignores clicks outside altogether."""
     CANCEL = None
     ACTION: str | None = None
     RESPONSE = True
+    CLICK_OUTSIDE = True
+    GRACE = 0.4   # seconds
+    now = staticmethod(time.monotonic)
+    opened = 0.0
     # priority: tried before the focus's own Enter, which check_action lets through
     BINDINGS = [Binding("escape", "cancel", show=False), Binding("enter", "enter", show=False, priority=True)]
 
@@ -1665,10 +1672,14 @@ class Dialog(ModalScreen):
         else:
             self.action_cancel()
 
+    def on_mount(self) -> None:
+        self.opened = self.now()
+
     def on_click(self, event: events.Click) -> None:
         if event.widget is self:   # the shade around the box, not the box
             event.stop()
-            self.action_cancel()
+            if self.CLICK_OUTSIDE and self.now() - self.opened >= self.GRACE:
+                self.action_cancel()
 
 
 class NewSession(Dialog):
@@ -2169,6 +2180,8 @@ class TutorialOffer(Dialog):
     never cut: Enter takes the tutorial, Esc dismisses it for good."""
     BINDINGS = [Binding("enter", "answer(True)", show=False)]   # no button to press: no ACTION
     CANCEL = False
+    # a line over a screen that is all outside: a click anywhere would turn the offer off for good
+    CLICK_OUTSIDE = False
 
     def compose(self) -> ComposeResult:
         yield Label(Text.assemble(("New here? ", "bold #ffd300"), ("Enter", "bold"), ": take the tutorial · ",
@@ -2322,7 +2335,7 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "Double-click selects a word. Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back.")
-DIALOGS = ("Esc, or a click outside the box, cancels a dialog. Enter presses the focused button; with focus on a "
+DIALOGS = ("Esc, or a click outside the box, cancels a dialog (not the tutorial offer, which is all but outside). Enter presses the focused button; with focus on a "
            "one-line box or a checkbox, or nothing, it takes the dialog's one action (Launch, Rename, Fork, Park and "
            "the like), but in a list, a set of choices or a multi-line box it does what it does there. A dialog of "
            "several choices answers Enter only on the focused button. Tab and Shift+Tab go round its boxes and buttons.")

@@ -5608,7 +5608,8 @@ OPEN = object()   # the dialog still open: Enter was its focus's own (a list's, 
     (lambda app, sid, cwd: Choice("Force it?"), "leave", "leave", "cancel", ["cancel", "force", "leave"], "a choice"),
     (lambda app, sid, cwd: RelaunchChoice("Relaunch demo?"), None, None, None,
      ["relaunch-cancel", "relaunch-compact", "relaunch-now"], "Relaunch's choice: Cancel focused"),
-    (lambda app, sid, cwd: tui.TutorialOffer(), False, False, True, [], "the tutorial offer"),
+    (lambda app, sid, cwd: tui.TutorialOffer(), OPEN, False, True, [],
+     "the tutorial offer: all but its line is outside, so a click there leaves it be"),
     (lambda app, sid, cwd: tui.KeysHelp(), None, None, None, None, "the keys: no answer asked"),
 ])
 async def test_dialog_keys_and_click_outside(store, sid, tmp_path, make, outside, esc, enter, tabs, desc):
@@ -5633,8 +5634,11 @@ async def test_dialog_keys_and_click_outside(store, sid, tmp_path, make, outside
 
         async def inside():
             await pilot.click(app.screen.children[0], offset=(0, 0))   # its border: not outside
+        async def outside_later():   # past the grace a double-click's second click gets
+            app.screen.opened -= tui.Dialog.GRACE
+            await pilot.click(offset=(0, 39))
         assert await answer(inside) is OPEN, f"{desc}: a click on the box leaves it open"
-        assert await answer(lambda: pilot.click(offset=(0, 39))) == outside, f"{desc}: a click outside"
+        assert await answer(outside_later) == outside, f"{desc}: a click outside"
         assert await answer(lambda: pilot.press("escape")) == esc, f"{desc}: Esc"
         got = await answer(lambda: pilot.press("enter"))
         if isinstance(enter, dict):
@@ -5652,6 +5656,29 @@ async def test_dialog_keys_and_click_outside(store, sid, tmp_path, make, outside
         for want in reversed(tabs):
             await pilot.press("shift+tab")
             assert focused_id(app) == want, f"{desc}: Shift+Tab back to {want}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("after, want, desc", [
+    (0.0, OPEN, "at once: a double-click's second click on the button that opened it"),
+    (0.39, OPEN, "just inside the grace"),
+    (0.4, None, "at the grace: an outside click cancels"),
+    (2.0, None, "later: an outside click cancels"),
+])
+async def test_dialog_ignores_a_click_outside_as_it_opens(store, tmp_path, monkeypatch, after, want, desc):
+    clock = [100.0]
+    monkeypatch.setattr(tui.Dialog, "now", staticmethod(lambda: clock[0]))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        answers = []
+        app.push_screen(RenameSession("demo"), answers.append)
+        await pilot.pause()
+        clock[0] += after
+        await pilot.click(offset=(0, 39))
+        await pilot.pause()
+        got = OPEN if isinstance(app.screen, tui.Dialog) else answers[0]
+        assert got is want, desc
 
 
 @pytest.mark.anyio
