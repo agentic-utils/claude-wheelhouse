@@ -75,7 +75,11 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 
 ## Run
 
-- `make install` (`uv sync --reinstall-package claude-wheelhouse`), then `make run`.
+- `make install` (installs uv if it's missing, then `uv sync --reinstall-package claude-wheelhouse`
+  and touches `.venv/.wheelhouse-installed`), then `make run` (`ARGS="..."` passes args;
+  it runs `make install` first when that stamp is missing or older than `pyproject.toml` or
+  `uv.lock`). `make args` (`claude-wheelhouse args`, hidden from `--help`, `cli.args_text`)
+  lists the app's flags with their settings' names (`features.SETTINGS`).
   `make stop` (`claude-wheelhouse daemon --stop`) stops the daemon. `make tutorial` (`claude-wheelhouse tutorial`), with the app and daemon stopped, has the
   next start offer the tutorial again. `make` lists the targets. Python 3.12, managed by uv.
 - The install is editable: `.venv` imports this checkout. In another clone or worktree,

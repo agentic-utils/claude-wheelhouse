@@ -13,6 +13,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
   session in a new Windows Terminal tab (through `cmd.exe` and `wt.exe`), all in a window
   of their own named `wheelhouse-<your WSL user>`, which the first launch opens.
 - [uv](https://docs.astral.sh/uv/), which installs everything else, Python included.
+  `make install` installs it if it's missing, with Astral's installer, into `~/.local/bin`.
 - Python 3.12 or later (`requires-python` in `pyproject.toml`). uv fetches 3.12 if your
   system doesn't have it.
 - Claude Code, installed in WSL and logged in, with `claude` on the `PATH` of your login
@@ -21,6 +22,7 @@ Windows Terminal. Prototype: see `.plan/wheelhouse-sessions.md` for the design.
 - git, to clone the repository.
 - make (`sudo apt install make`). Every `make` target is a one-line `uv` command, given
   beside it below, if you'd rather do without.
+- curl, for `make install` to fetch uv if you don't have it.
 
 ## Install
 
@@ -33,8 +35,11 @@ cd claude-wheelhouse
 make install
 ```
 
-`make install` runs `uv sync --reinstall-package claude-wheelhouse` (plain `uv sync` does
-for a first install), which builds a `.venv` inside the clone: the wheelhouse installs
+`make install` installs uv first if it isn't on your `PATH` or in `~/.local/bin` (Astral's
+installer, `curl -LsSf https://astral.sh/uv/install.sh | sh`, which puts it in
+`~/.local/bin`: open a new shell to have it on your `PATH`). It then runs
+`uv sync --reinstall-package claude-wheelhouse` (plain `uv sync` does for a first install),
+which builds a `.venv` inside the clone: the wheelhouse installs
 nothing outside it (uv keeps its own cache of downloads, and any Python it fetched). To
 update, `git pull`, `make install` again, then quit and reopen the app straight away
 (with `--local` too, and on every machine that opens this database): a session relaunched
@@ -44,7 +49,11 @@ relaunch" when an update changes what they're told.
 
 The `claude-wheelhouse` command lives in that `.venv`, so from the clone run it as
 `uv run claude-wheelhouse …` (this README writes it plain). `make` on its own lists the
-`make` targets.
+`make` targets, and `make help args` (or `make args`) the app's command line args, each with
+its environment variable and `.env` key where it has them (see [Settings](#settings)).
+`make run` passes `ARGS` to the app, for example `make run ARGS="--local --animation-fps 0"`,
+and runs `make install` first when the clone has none, or `pyproject.toml` or `uv.lock`
+changed since. Without uv, every other target stops with `uv not found: run make install`.
 
 Run the app in a Windows Terminal tab, which draws its colours and carries its copies to
 the clipboard.
