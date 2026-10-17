@@ -710,12 +710,12 @@ class Hub:
         """The first-run tutorial offer, answered either way: it never comes back. Whether the
         tutorial started."""
         if not take:
-            self.store.set_setting(tutorial.OFFER_KEY, "dismissed")
+            self.store.tour_never()
             return Done(False).say(f"{tutorial.AGAIN}; ? lists every key")
         try:
             tutorial.start(self.store)   # always a tab, SDK mode or not
         except Exception as e:   # claude missing, say
-            self.store.set_setting(tutorial.OFFER_KEY, "dismissed")
+            self.store.tour_never()
             return Done(False).say(f"couldn't start the tutorial: {e}", "error")
         return Done().say("tutorial started: follow the checklist on the right")
 

@@ -321,8 +321,8 @@ def refuse(store):
 
 
 @pytest.mark.parametrize("take, start, started, setting, desc", [
-    (False, None, False, "dismissed", "declined: never offered again"),
-    (True, refuse, False, "dismissed", "a start that fails is said, and not offered again"),
+    (False, None, False, "never", "declined: never offered again"),
+    (True, refuse, False, "never", "a start that fails is said, and not offered again"),
     (True, lambda store: store.set_setting(tutorial.OFFER_KEY, "taken"), True, "taken", "taken: it starts"),
 ])
 def test_the_tutorial_offer_answered(hub, store, heard, monkeypatch, take, start, started, setting, desc):

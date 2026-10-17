@@ -8,7 +8,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 `claude_wheelhouse/`:
 
 - `cli.py`: the `claude-wheelhouse` entry point and its subcommands (`tui`, the default;
-  `tutorial`, `run`, `host`, `mcp`, `monitor`, `protocol`, `daemon`, `token`, `open-items`).
+  `tutorial`, `notes`, `run`, `host`, `mcp`, `monitor`, `protocol`, `daemon`, `token`,
+  `open-items`).
   The app takes `--local`, or `--connect HOST:PORT` with `--token-file`; it and `daemon`
   take `--port`, `--usage-mode`, `--keepalive-hours` and `--enable-sdk` (`features.py`);
   `daemon` adds `--address`, `--name` (repeatable) and `--stop`; `tutorial` takes `--yes`.
@@ -66,6 +67,11 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `WHEELHOUSE_API` on any breaking change to it.
 - `models.py`: the models and effort levels offered. A new model is a row here.
 - `tutorial.py`: the new-user tutorial: its session brief and checklist steps.
+- `whatsnew.py`: the tour's dialogs (`DIALOGS`) and every feature a user can see
+  (`FEATURES`), each registered against a dialog or as advanced: what a top-up offers
+  (`pending`, by the store's `tour_seen` record, never by version) and the release notes
+  (`notes`, `claude-wheelhouse notes`). `make stamp VERSION=...` gives `UNRELEASED`
+  features their release (`.plan/tutorial-overhaul.md`).
 - `splitter.py`, `knurl.py`, `emoji.py`, `unsent.py`: TUI pieces (dividers, scrollbars,
   emoji shortcodes, unsent text).
 - `protocol.md`, `protocol_sdk.md`, `protocol_tab.md`, `protocol_decisions.md`: what a
@@ -155,6 +161,11 @@ Update these in the same commit as the behaviour they describe:
 
 - `protocol*.md`, the MCP tool docstrings and `launch.JOINED_TEXT`: what sessions are told.
 - `tutorial.py`: the tutorial session's `BRIEF` and checklist `STEPS`.
+- `whatsnew.FEATURES`: every change a user can see adds a `Feature` in the same commit,
+  with `version=UNRELEASED`. Set `where` to the tour dialog for the pane it changes, with a
+  `tip` of at most two lines, or to `ADVANCED` when it is for experienced users only. Give
+  it a one-line `note` for the release notes. Fixes add nothing. Never change or reuse a
+  released feature's id.
 - `tui.py`'s `DESCRIBE` (each binding's line in the `?` overlay; a test fails when a binding
   has none), `BUTTONS` (each button's tooltip and overlay line), `SEND_RULES` and `MOUSE`.
 - `README.md`: anything a user sees or does.

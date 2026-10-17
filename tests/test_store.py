@@ -7,7 +7,9 @@ from unittest import mock
 
 import pytest
 
-from claude_wheelhouse.store import TRIGGER_NAMES, SessionGone, Store, now, standing
+from claude_wheelhouse import whatsnew
+from claude_wheelhouse.store import (TOUR_MIGRATED, TRIGGER_NAMES, TUTORIAL_OFFER, SessionGone, Store,
+                                     now, standing)
 
 
 def test_pragmas_make_every_commit_durable(store):
@@ -339,6 +341,43 @@ def test_decisions_seen_before_they_stayed_are_closed_once(db_file, sid, store):
     fresh = store.post_item(sid, "decision", "new", **DECIDED)
     store.mark_seen(sid, fresh)
     assert Store(db_file).item(sid, fresh)["status"] == "seen", "the migration runs once"
+
+
+TOUR_FEATURES = (whatsnew.Feature("old-a", "0.2.0", "inbox", note="A.", tip="A."),
+                 whatsnew.Feature("old-b", whatsnew.UNRELEASED, whatsnew.ADVANCED, note="B."))
+
+
+@pytest.mark.parametrize("offer, sessions, after, skipped, desc", [
+    ("taken", 1, "taken", {}, "taken: nothing written, so the registered features are pending"),
+    (None, 1, None, {}, "unset with sessions: nothing written, so they are pending"),
+    ("dismissed", 1, "never", {"old-a": "skipped", "old-b": "skipped"},
+     "dismissed: Never, every registered feature skipped"),
+    (None, 0, None, {}, "unset, no sessions: a new user, offered the full tour"),
+    ("reset", 1, "reset", {}, "reset: kept, the full tour offered"),
+])
+def test_the_tour_migration(db_file, store, tmp_path, monkeypatch, offer, sessions, after, skipped, desc):
+    monkeypatch.setattr(whatsnew, "FEATURES", TOUR_FEATURES)
+    for _ in range(sessions):
+        store.create_session(str(tmp_path))
+    store.clear_setting(TOUR_MIGRATED)   # as before the change
+    if offer:
+        store.set_setting(TUTORIAL_OFFER, offer)
+    migrated = Store(db_file)
+    assert (migrated.setting(TUTORIAL_OFFER), migrated.tour_seen()) == (after, skipped), desc
+    migrated.set_setting(TUTORIAL_OFFER, "dismissed")   # as the old code, still running, may write
+    monkeypatch.setattr(whatsnew, "FEATURES", ())
+    again = Store(db_file)
+    assert (again.setting(TUTORIAL_OFFER), again.tour_seen()) == ("dismissed", skipped), f"{desc}: it runs once"
+
+
+def test_never_skips_only_the_features_registered_then(store, monkeypatch):
+    store.see_features(["seen"], "shown")
+    monkeypatch.setattr(whatsnew, "FEATURES", TOUR_FEATURES)
+    store.tour_never()
+    assert (store.setting(TUTORIAL_OFFER), store.tour_seen()) == (
+        "never", {"seen": "shown", "old-a": "skipped", "old-b": "skipped"}), "a feature already shown keeps its record"
+    with pytest.raises(ValueError):
+        store.see_features(["x"], "glanced")
 
 
 @pytest.mark.parametrize("name, desc", [

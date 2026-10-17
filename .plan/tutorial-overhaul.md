@@ -112,7 +112,7 @@ class Feature:
     tip: str = ""     # one or two lines added to that dialog; required unless ADVANCED
     when: str = ""    # "sdk": offered only with SDK mode on
 
-DIALOGS = (Stop("principles", pane=None, text=..., advance=NEXT), ...)   # the table above
+DIALOGS = (Stop("principles", pane=None, title="The wheelhouse", text=..., advance=NEXT), ...)   # the table above
 FEATURES = (Feature("pane-swap", UNRELEASED, "sessions", note="Drag a pane by its title to swap it with another.", tip="Drag any pane by its title to move it; Ctrl+P, Reset layout puts them back."), ...)
 ```
 
@@ -121,12 +121,12 @@ FEATURES = (Feature("pane-swap", UNRELEASED, "sessions", note="Drag a pane by it
   advanced feature appears only in the release notes.
 - **New users** see each dialog's base text plus every tip registered to it, then every
   feature is recorded as seen.
-- **Releases.** `make release VERSION=0.3.0` replaces `UNRELEASED` with the version in the
-  commit it already makes. A test fails if a released package (version without `.dev`)
+- **Releases.** `make stamp VERSION=0.3.0` replaces `UNRELEASED` with the version; `make
+  release` (`.plan/release.md`, not yet built) runs it in the commit it makes. A test fails if a released package (version without `.dev`)
   still has `UNRELEASED` entries.
 - **Release notes come from the registry.** `claude-wheelhouse notes [VERSION]` prints a
-  version's notes as Markdown: its features grouped by dialog (in tour order), then
-  Advanced. The release workflow puts that at the top of the GitHub release, with the
+  version's notes as Markdown: its features grouped under their dialog's `title` (in tour
+  order), then Advanced. The release workflow puts that at the top of the GitHub release, with the
   commit list below it for fixes. The notes dialog renders the same text.
 - **Modules** (later, with `.plan/modules.md` stage 5): `api.Module` may add `dialogs` and
   `features` for its own panes, merged into the registry at start.
@@ -174,7 +174,10 @@ skips straight to the notes dialog.
 | unset, no sessions | nothing: a new user, offered the full tour |
 | `reset` | kept: the full tour is offered |
 
-`tutorial_seen` (the old checklist's record) is deleted. A tutorial session still running
+The old code's Never (`dismissed`) is written as `never` from stage 1, so the migration
+only meets `dismissed` from older code. `tutorial_seen` (the old checklist's record) is
+deleted in stage 3, with the checklist that reads it, so a tutorial under way keeps its
+checklist until then. A tutorial session still running
 from the old code stays a normal session until Start ends it, as `stop_earlier` does now.
 
 ## The demo session
