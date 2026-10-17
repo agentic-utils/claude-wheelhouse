@@ -152,8 +152,6 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
--- how many times each of items and messages has been written, by the triggers below: the
--- daemon's mark of each (MARKED), moved by any change a client could see, whoever writes it
 -- the tour's features (whatsnew.FEATURES) the person has been shown, or skipped by
 -- answering Never: a feature with no row is pending (whatsnew.pending)
 CREATE TABLE IF NOT EXISTS tour_seen (
@@ -161,6 +159,8 @@ CREATE TABLE IF NOT EXISTS tour_seen (
     seen_at    TEXT NOT NULL,
     how        TEXT NOT NULL
 );
+-- how many times each of items and messages has been written, by the triggers below: the
+-- daemon's mark of each (MARKED), moved by any change a client could see, whoever writes it
 CREATE TABLE IF NOT EXISTS marks (
     kind TEXT PRIMARY KEY,
     n    INTEGER NOT NULL DEFAULT 0
