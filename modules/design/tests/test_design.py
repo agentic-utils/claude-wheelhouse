@@ -94,6 +94,34 @@ def test_route_lists_every_repo_and_none_outside_one(tmp_path):
         "UNRESOLVED first, the rest newest first, across repos; a session in no repo adds none"
 
 
+def worktree(main: Path, path: Path, name: str) -> None:
+    """A linked worktree of main at path, as git worktree add lays it out on disk."""
+    gitdir = main / ".git" / "worktrees" / name
+    gitdir.mkdir(parents=True)
+    (gitdir / "commondir").write_text("../..\n")
+    path.mkdir(parents=True)
+    (path / ".git").write_text(f"gitdir: {gitdir}\n")
+
+
+def test_a_worktrees_decisions_are_its_main_repos_once(tmp_path):
+    main = tmp_path / "app"
+    repo(main, {"0001-ACCEPTED-a.md": "# A\n"})
+    worktree(main, main / ".worktrees" / "feature-x", "feature-x")
+    (main / ".worktrees" / "feature-x" / "docs" / "adr").mkdir(parents=True)
+    (main / ".worktrees" / "feature-x" / "docs" / "adr" / "0001-ACCEPTED-a.md").write_text("# A\n")
+    worktree(main, tmp_path / "elsewhere", "elsewhere")
+    sub = tmp_path / "sub"   # a submodule: a .git file whose gitdir has no commondir
+    (tmp_path / "modules-dir").mkdir()
+    repo(sub, {"0002-b.md": "# B\n"})
+    (sub / ".git").rmdir()
+    (sub / ".git").write_text(f"gitdir: {tmp_path / 'modules-dir'}\n")
+    got = listed(sessions((main, None), (main / ".worktrees" / "feature-x", None), (tmp_path / "elsewhere", None),
+                          (sub, None)))
+    assert got == [("sub", "0002", "?"), ("app", "0001", "ACCEPTED")], \
+        "each worktree's sessions list the main repo's decisions, once, under its name; a submodule is its own"
+    assert api.git_root(tmp_path / "elsewhere") == main.resolve(), "a worktree outside the repo too"
+
+
 def test_a_file_is_read_again_only_when_it_changes(tmp_path, monkeypatch):
     d = repo(tmp_path, {"0001-a.md": "---\nstatus: proposed\n---\n"})
     scanner = scan.Scanner()
