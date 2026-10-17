@@ -5218,6 +5218,26 @@ async def test_a_shrunk_share_comes_back_with_room(store, sid):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("width, stored, widths, desc", [
+    (200, None, (45, 45, 108), "room: 45 and 45 (Q113), Detail the rest"),
+    (120, None, (39, 39, 40), "narrow: the first two give way in proportion, Detail keeps 40"),
+    (100, None, (39, 19, 40), "narrower: the session column at its minimum, the Inbox gives the rest"),
+    (120, {"sessions-pane": "0.5"}, (60, 18, 40), "a dragged width wins; the Inbox at its default gives way"),
+])
+async def test_detail_keeps_its_room_on_a_narrow_terminal(store, sid, width, stored, widths, desc):
+    """Review of #86: at 120 columns 45 + 45 left Detail 28 wide."""
+    for key, value in (stored or {}).items():
+        store.set_setting("layout." + key, value)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(200 if width < 200 else 160, 40)) as pilot:   # from another width, as a resize
+        await pilot.pause()
+        await pilot.resize_terminal(width, 40)
+        await pilot.pause()
+        assert tuple(app.query_one(sel).region.width for sel in COLUMNS) == widths, desc
+        assert columns_fill(app), desc
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("size, rows, desc", [
     ((160, 40), (12, 11, 12), "40 rows: the session list keeps a share, the stats too small for a chart"),
     ((200, 60), (21, 17, 17), "60 rows: the session list grows most"),

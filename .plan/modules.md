@@ -122,7 +122,8 @@ its own distribution in this repo:
   looks as now. The "reinstall with make install" card for a stale install stays.
 - Its slot moves from `inbox.side` to `left.middle`. `stats.render` already lays out to a
   width. Column 1 and the Inbox column both default to 45 wide (Q113), and Detail takes the
-  rest. At 45, Stats compacts a little from its 53-wide layout.
+  rest; on a narrow terminal the two give way in proportion so Detail keeps 40. At 45,
+  Stats compacts a little from its 53-wide layout.
 
 ## Design, a new module
 

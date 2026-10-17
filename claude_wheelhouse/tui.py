@@ -114,6 +114,7 @@ LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of
 # keys no splitter has now, deleted at start: items sized the items over the stats, and
 # detail-pane the column between them and Detail, before the six slots (.plan/modules.md)
 RETIRED_LAYOUT = ("items", "detail-pane")
+DETAIL_ROOM = 40   # the columns Detail keeps on a narrow terminal while the others can give way
 
 
 def eye_at(frame: int, width: int = 8) -> int:
@@ -2587,7 +2588,7 @@ class WheelhouseApp(App):
                         with Grid(id="conversation-buttons"):
                             for label, id_, _ in CONVERSATION:
                                 yield Button(label, id=id_, compact=True, tooltip=BUTTONS[id_])
-            yield Splitter("sessions-pane", "#col-left", "#col-right", "x")
+            yield Splitter("sessions-pane", "#col-left", "#col-right", "x", default=self.column_width)
             with Vertical(id="col-middle"):
                 with slot("middle.top"):
                     with Vertical(id="items-pane", classes="panel") as pane:
@@ -2595,7 +2596,7 @@ class WheelhouseApp(App):
                         yield ItemList(id="items", cursor_type="row")
                 yield Splitter("middle-top", "#slot-middle-top", "#slot-middle-bottom", "y")
                 yield slot("middle.bottom")
-            yield Splitter("items-pane", "#col-middle", "#col-right", "x")
+            yield Splitter("items-pane", "#col-middle", "#col-right", "x", default=self.column_width)
             with Vertical(id="col-right"), slot("right"):
                 with Vertical(id="detail-pane", classes="panel") as pane:
                     pane.border_title = "Detail"
@@ -2669,6 +2670,30 @@ class WheelhouseApp(App):
     def on_unmount(self) -> None:
         """The daemon's stream let go as the app closes: nothing posts to it after."""
         self.client.disconnect()
+
+    def column_width(self, splitter: Splitter) -> int | None:
+        """A column's width with none dragged: the stylesheet's 45 (Q113) where there's room.
+        On a narrow terminal the columns at their default give way in proportion, each down
+        to its minimum, so Detail keeps DETAIL_ROOM. A dragged column keeps its width."""
+        main = splitter.parent
+        if not (room := main.size.width):
+            return None   # not laid out yet: the stylesheet's
+        columns = [s for s in main.children if isinstance(s, Splitter)]
+        spare = room - len(columns) - DETAIL_ROOM - sum(s.fraction * room for s in columns if s.fraction is not None)
+        giving = {s.panes()[0]: s for s in columns if s.fraction is None and s.panes()}
+        widths = {}
+        while giving:   # those held at their minimum leave the rest to share what's left
+            total = sum(pane.styles.base.width.value for pane in giving)
+            widths = {pane: min(pane.styles.base.width.value, pane.styles.base.width.value * spare / total)
+                      for pane in giving}
+            held = {pane for pane, width in widths.items() if width < giving[pane].minimum(pane)}
+            if not held:
+                break
+            for pane in held:
+                spare -= giving.pop(pane).minimum(pane)
+                widths[pane] = None
+        pane = splitter.panes()[0]
+        return splitter.minimum(pane) if widths.get(pane) is None else int(widths[pane])
 
     def fit_layout(self) -> None:
         """The panes' sizes kept within the terminal: one kept from a wider one shrinks."""

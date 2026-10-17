@@ -1,5 +1,7 @@
 """A draggable divider between two panes: Textual has no splitter of its own."""
 
+from typing import Callable
+
 from rich.text import Text
 from textual import events
 from textual.css.query import NoMatches
@@ -15,9 +17,9 @@ class Splitter(Widget):
     splitter's parent), and `flex`, the pane on its other side that fills what's left
     (1fr), gives or takes the room. The size is set as a percentage of the parent, so the
     layout follows a resized terminal. Neither pane goes under its CSS min-width (or
-    min-height): one cell without one. A double-click puts back the stylesheet's size.
-    With a neighbour missing (a pane swapped out), it does nothing. fit() keeps the sizes
-    within the room there is: a size kept from a wider terminal is shrunk while it doesn't
+    min-height): one cell without one. A double-click puts back its default (`default`'s,
+    else the stylesheet's). With a neighbour missing (a pane swapped out), it does nothing.
+    fit() keeps the sizes within the room there is: a size kept from a wider terminal is shrunk while it doesn't
     fit, the preference itself kept.
 
     axis "x" sits between columns and sets a width; "y" sits between rows and sets a
@@ -40,9 +42,11 @@ class Splitter(Widget):
             super().__init__()
             self.splitter, self.fraction = splitter, fraction
 
-    def __init__(self, key: str, sized: str, flex: str, axis: str, **kwargs):
+    def __init__(self, key: str, sized: str, flex: str, axis: str,
+                 default: "Callable[[Splitter], int | None] | None" = None, **kwargs):
         super().__init__(classes=f"-{axis}", **kwargs)
         self.key, self.sized_selector, self.flex_selector, self.axis = key, sized, flex, axis
+        self.default = default   # the pane's size in cells with none set, if not the stylesheet's
         self.drag: tuple[int, int, int] | None = None   # the pointer, sized and flex at the press
         self.fraction: float | None = None   # set by a drag or a stored size; None: the stylesheet's
         self.moved = False
@@ -75,10 +79,14 @@ class Splitter(Widget):
         return self.parent.size.width if self.axis == "x" else self.parent.size.height
 
     def apply(self, fraction: float | None) -> None:
-        """Size the pane as a share of the parent; None puts back the stylesheet's size."""
+        """Size the pane as a share of the parent; None puts back its default: `default`'s,
+        else the stylesheet's."""
         self.fraction = fraction
         if panes := self.panes():
-            self.show(panes[0], None if fraction is None else f"{fraction * 100:.3f}%")
+            if fraction is not None:
+                self.show(panes[0], f"{fraction * 100:.3f}%")
+            else:
+                self.show(panes[0], self.default(self) if self.default else None)
 
     def show(self, sized: Widget, value: str | int | None) -> None:
         if self.axis == "x":
@@ -91,6 +99,8 @@ class Splitter(Widget):
         stylesheet's fr, which takes what's left."""
         if self.fraction is not None:
             return self.fraction * room
+        if self.default and (cells := self.default(self)) is not None:
+            return cells
         base = sized.styles.base.width if self.axis == "x" else sized.styles.base.height
         if base is None or base.unit == Unit.FRACTION:
             return None
