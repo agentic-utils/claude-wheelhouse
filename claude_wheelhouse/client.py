@@ -660,7 +660,7 @@ class RemoteClient:
     def fork(self, sid: str, refs: list[str], branch: str | None = None) -> Done:
         return self.done(f"/sessions/{sid}/fork", {"refs": refs, "branch": branch})
 
-    def answer_offer(self, take: bool) -> Done:
+    def answer_offer(self, take: bool | None) -> Done:
         return self.done("/tutorial/offer", {"take": take})
 
     def ask(self, sid: str, what: str, compact: bool = False) -> Done:

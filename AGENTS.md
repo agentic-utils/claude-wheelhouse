@@ -72,6 +72,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   (`pending`, by the store's `tour_seen` record, never by version) and the release notes
   (`notes`, `claude-wheelhouse notes`). `make stamp VERSION=...` gives `UNRELEASED`
   features their release (`.plan/tutorial-overhaul.md`).
+- `callout.py`: the tour's callout, a box painted beside the pane a tour dialog describes,
+  highlighting it and following it through a resize or a swap (`place`, a pure function;
+  `PANES`, the one lookup from a tour pane id to its widget).
 - `splitter.py`, `knurl.py`, `emoji.py`, `unsent.py`: TUI pieces (dividers, scrollbars,
   emoji shortcodes, unsent text).
 - `protocol.md`, `protocol_sdk.md`, `protocol_tab.md`, `protocol_decisions.md`: what a

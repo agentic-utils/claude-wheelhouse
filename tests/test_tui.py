@@ -5541,6 +5541,7 @@ async def test_a_long_prompt_wraps_in_its_dialog(store, sid, dialog, height, des
     (lambda app, sid, cwd: Confirm("Relaunch demo?"), "a confirmation"),
     (lambda app, sid, cwd: Choice("Force it?"), "a choice"),
     (lambda app, sid, cwd: RelaunchChoice("Relaunch demo?"), "Relaunch's choice: was top-left"),
+    (lambda app, sid, cwd: tui.TourInvite(), "the tour's invite: was a line across the top"),
     (lambda app, sid, cwd: tui.KeysHelp(), "the keys"),
 ])
 async def test_a_dialog_is_centred_over_the_screen(store, sid, tmp_path, make, desc):
@@ -5591,8 +5592,8 @@ OPEN = object()   # the dialog still open: Enter was its focus's own (a list's, 
     (lambda app, sid, cwd: Choice("Force it?"), "leave", "leave", "cancel", ["cancel", "force", "leave"], "a choice"),
     (lambda app, sid, cwd: RelaunchChoice("Relaunch demo?"), None, None, None,
      ["relaunch-cancel", "relaunch-compact", "relaunch-now"], "Relaunch's choice: Cancel focused"),
-    (lambda app, sid, cwd: tui.TutorialOffer(), OPEN, False, True, [],
-     "the tutorial offer: all but its line is outside, so a click there leaves it be"),
+    (lambda app, sid, cwd: tui.TourInvite(), "later", "later", "start", ["invite-start", "invite-later", "invite-never"],
+     "the tour's invite: a click outside is Later, never Never, so a misclick doesn't lose the tour"),
     (lambda app, sid, cwd: tui.KeysHelp(), None, None, None, None, "the keys: no answer asked"),
 ])
 async def test_dialog_keys_and_click_outside(store, sid, tmp_path, make, outside, esc, enter, tabs, desc):
