@@ -3527,7 +3527,7 @@ async def test_the_stats_pane_follows_the_session_in_context(store, sid, tmp_pat
     app = WheelhouseApp(store)
     other = store.create_session(str(tmp_path), name="other")
     q = store.post_item(other, "question", "B's")
-    async with app.run_test(size=(160, 40)) as pilot:
+    async with app.run_test(size=(160, 60)) as pilot:   # room for the charts: none at 40 rows
         await pilot.pause()
         app.items_table.move_cursor(row=app.items_table.get_row_index(f"{other}|{q}"))   # another's item highlighted
         app.refresh_data()
@@ -3551,7 +3551,7 @@ async def test_the_stats_pane_follows_the_session_in_context(store, sid, tmp_pat
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("size, shown", [((200, 60), True), ((160, 40), True),
+@pytest.mark.parametrize("size, shown", [((200, 60), True), ((160, 50), True),
                                          ((80, 24), False)])   # an 11x9 pane: no charts, so no zoom
 @pytest.mark.parametrize("selected, desc", [
     (True, "a session selected"),
@@ -3647,7 +3647,7 @@ DAY = 86400
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("size", [(200, 60), (160, 40)])   # the zoom test's sizes the charts show at
+@pytest.mark.parametrize("size", [(200, 60), (160, 50)])   # the zoom test's sizes the charts show at
 @pytest.mark.parametrize("selected, desc", [
     (True, "a session selected"),
     (False, "none selected: every session's totals"),
@@ -3693,7 +3693,7 @@ async def test_zooming_out_fills_the_charts_from_older_history(store, sid, tmp_p
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("size", [(200, 60), (160, 50)])   # a session's chart, under its gauges, needs 50 rows
+@pytest.mark.parametrize("size", [(200, 64), (160, 64)])   # a session's chart, under its gauges, needs 64 rows
 @pytest.mark.parametrize("selected", [True, False])
 async def test_a_failed_load_is_tried_once_a_backoff(store, sid, tmp_path, monkeypatch, clock, size, selected):
     """A load that fails isn't started again on every tick: its error shows, steadily, and
@@ -3731,7 +3731,7 @@ async def test_a_failed_load_is_tried_once_a_backoff(store, sid, tmp_path, monke
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("size", [(200, 60), (160, 40)])
+@pytest.mark.parametrize("size", [(200, 60), (160, 50)])
 async def test_sessions_that_start_and_end_while_zoomed_out(store, sid, tmp_path, monkeypatch, clock, size):
     """With every session's totals zoomed out: a new session's history is read to the span
     too, and one that ends takes its own with it, loading or not."""
@@ -5010,7 +5010,7 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
 
 @pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
-@pytest.mark.parametrize("size", [(80, 24), (100, 30), (160, 40)])
+@pytest.mark.parametrize("size", [(80, 24), (100, 30), (160, 40), (160, 60)])
 @pytest.mark.parametrize("status, parked, shown, desc", [
     ("live", True, ["rename", "relaunch", "park", "end", "model", "fork", "mode", "send", "interrupt", "compact", "shell"],
      "a running hosted session too old to queue, parked under the old rules (Active once the hub starts): the "
@@ -5057,7 +5057,8 @@ async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, statu
             assert lefts == sorted({b.region.x for b in grid.query(Button) if b.display and b.id != "send"}) \
                 and lefts[0] == grid.content_region.x, f"{desc}: no hole at the left of a row"
         assert app.query_one("#session-list").region.height >= 4, f"{desc}: the header and three sessions"
-        rows = 1 if size[1] <= 30 else 3   # the description gives way to the buttons, after the stats
+        # the description gives way to the buttons, after the stats; at 40 rows the session list's share takes the rest
+        rows = 1 if size[1] <= 40 else 3
         assert app.query_one("#session-info").region.height >= rows, f"{desc}: {rows} rows of description"
         captions = {"relaunch": "Unpark" if parked and status == "dead" else "Relaunch", "park": "Park",
                     "end": "Forget" if status == "dead" else "Stop & Forget"}
@@ -5093,19 +5094,22 @@ async def drag(pilot, key: str, dx: int, dy: int) -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("key, dx, dy, change, desc", [
-    ("sessions-pane", 10, 0, 10, "the sessions column, wider"),
-    ("sessions-pane", -20, 0, -6, "never narrower than its buttons' captions need: 39 of 45"),
-    ("items-pane", 10, 0, 10, "the inbox column, wider"),
-    ("session-info", 0, 2, -1, "the session info, shorter as its top edge moves down, to the cell its share rounds to"),
-    ("left-middle", 0, 3, -3, "the stats, shorter as its top edge moves down"),
-    ("answer", 0, -3, 3, "the answer box, taller"),
+@pytest.mark.parametrize("key, dx, dy, change, rows, desc", [
+    ("sessions-pane", 10, 0, 10, 40, "the sessions column, wider"),
+    ("sessions-pane", -20, 0, -6, 40, "never narrower than its buttons' captions need: 39 of 45"),
+    ("items-pane", 10, 0, 10, 40, "the inbox column, wider"),
+    ("session-info", 0, 1, -1, 52, "the session info, a row shorter as its top edge moves down a row"),
+    ("session-info", 0, -1, 1, 52, "a row taller as it moves up a row"),
+    ("session-info", 0, 1, 0, 40, "never shorter than its buttons and a row of description: 12 at 40 rows"),
+    ("left-middle", 0, 1, -1, 40, "the stats, a row shorter"),
+    ("left-middle", 0, 3, -3, 40, "the stats, shorter as its top edge moves down"),
+    ("answer", 0, -3, 3, 40, "the answer box, taller"),
 ])
-async def test_dragging_a_splitter_resizes_and_is_kept(store, sid, key, dx, dy, change, desc):
+async def test_dragging_a_splitter_resizes_and_is_kept(store, sid, key, dx, dy, change, rows, desc):
     """Doug: the boundaries between all areas draggable. A drag is kept across runs, and a
     double-click puts the default back."""
     app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
+    async with app.run_test(size=(160, rows)) as pilot:
         await pilot.pause()
         before = sized(app, key)
         await drag(pilot, key, dx, dy)
@@ -5114,7 +5118,7 @@ async def test_dragging_a_splitter_resizes_and_is_kept(store, sid, key, dx, dy, 
         assert not splitter(app, key).has_class("-dragging"), desc
     assert store.setting("layout." + key) is not None, f"{desc}: kept"
     app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
+    async with app.run_test(size=(160, rows)) as pilot:
         await pilot.pause()
         assert sized(app, key) == after, f"{desc}: as it was left, next run"
         await pilot.double_click(splitter(app, key))
@@ -5211,6 +5215,21 @@ async def test_a_shrunk_share_comes_back_with_room(store, sid):
         await pilot.pause()
         await pilot.pause()
         assert abs(sized(app, "items-pane") - 0.6 * app.query_one("#main").size.width) <= 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size, rows, desc", [
+    ((160, 40), (12, 11, 12), "40 rows: the session list keeps a share, the stats too small for a chart"),
+    ((200, 60), (21, 17, 17), "60 rows: the session list grows most"),
+])
+async def test_the_left_column_rows(store, sid, size, rows, desc):
+    """Review of #86: Sessions, Stats and Session info, top to bottom; the session list
+    took 4 rows at 160x40 with the stats and description at 40% each."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        got = tuple(app.query_one(f"#slot-left-{name}").region.height for name in ("top", "middle", "bottom"))
+        assert got == rows, desc
 
 
 @pytest.mark.anyio
@@ -5953,7 +5972,7 @@ def busy_snapshot(now: float) -> stats.Snapshot:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("size", [(160, 45), (315, 98)])
+@pytest.mark.parametrize("size", [(160, 60), (315, 98)])
 async def test_a_shimmer_frame_draws_the_charts_as_the_whole_panel_did(store, sid, size, monkeypatch):
     import time
     app = WheelhouseApp(store)
@@ -5978,7 +5997,7 @@ async def test_a_shimmer_frame_draws_the_charts_as_the_whole_panel_did(store, si
 async def test_a_shimmer_cycle_is_drawn_once_and_kept_through_a_turn_into_the_last_bar(store, sid, monkeypatch):
     import time
     app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 45)) as pilot:
+    async with app.run_test(size=(160, 60)) as pilot:
         await pilot.pause()
         pane = app.query_one("#stats")
         monkeypatch.setattr(pane, "tick", lambda: None)   # the made-up session stays shown
@@ -6008,7 +6027,7 @@ async def test_a_shimmer_cycle_is_drawn_once_and_kept_through_a_turn_into_the_la
 async def test_a_shimmer_frame_redraws_only_the_charts_bars(store, sid, monkeypatch):
     import time
     app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 45)) as pilot:
+    async with app.run_test(size=(160, 60)) as pilot:
         await pilot.pause()
         pane = app.query_one("#stats")
         monkeypatch.setattr(pane, "tick", lambda: None)   # the made-up session stays shown
@@ -6034,7 +6053,7 @@ async def test_a_shimmer_frame_moves_the_bars_on_screen_under_a_border(store, si
     move the pane to a frame of its own during a slow pause, the same as one already seen."""
     import time
     app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 45)) as pilot:
+    async with app.run_test(size=(160, 58)) as pilot:   # a chart whose top bar line moves
         await pilot.pause()
         pane = app.query_one("#stats")
         monkeypatch.setattr(pane, "tick", lambda: None)   # the made-up session stays shown

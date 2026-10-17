@@ -2390,11 +2390,11 @@ class WheelhouseApp(App):
     #col-left {{ width: 45; min-width: 39; }}   /* every button its caption; names take the room the other columns leave (name_room) */
     #col-middle {{ width: 45; min-width: 12; }}
     #col-right {{ width: 1fr; min-width: 24; }}
-    /* the slots in a column: the top one takes what the others leave. On a short terminal
-       the stats give way first, to a row, then the description, to a row: 24 rows fit */
-    #slot-left-top {{ height: 1fr; min-height: 6; }}   /* the list's header and three sessions */
-    #slot-left-middle {{ height: 40%; min-height: 1; }}   /* room for a chart under the gauges (stats.charts) */
-    #slot-left-bottom {{ height: 40%; min-height: 12; }}   /* every button, and a row of description */
+    /* the slots in a column: the top one takes what the others leave, about 12, 11 and 12
+       rows at 40 and 21, 17 and 17 at 60 (a chart under the gauges from about 50) */
+    #slot-left-top {{ height: 1fr; min-height: 6; }}   /* the list's header and three sessions: 24 rows fit */
+    #slot-left-middle {{ height: 30%; min-height: 1; }}   /* on a short terminal the stats give way first, to a row */
+    #slot-left-bottom {{ height: 30%; min-height: 12; }}   /* every button, and a row of description */
     #slot-middle-top, #slot-middle-bottom {{ height: 1fr; min-height: 3; }}
     .panel {{ border-title-color: #05d9e8; }}   /* each pane's title, in its top border */
     #items {{ height: 1fr; min-height: 3; }}
