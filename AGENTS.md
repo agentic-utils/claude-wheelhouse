@@ -79,8 +79,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `daemon.MODULE_WAIT` then 504; `fingerprint.code` covers the installed modules too.
 - `docroots.py`: the doc roots' allow-list (`confine`: a path resolved, symlinks and `..`,
   and kept to a `.md` file under a root; stage 8 writes through it too), and where a repo's
-  decisions are (`doc_dirs`: `docs/adr` under its git root unless a session declared others
-  with `set_doc_dirs`, Q114). Never imports Textual.
+  decisions are (`doc_dirs`: `docs/adr` under its git root, a linked worktree's main
+  repository's (`main_root`), unless a session declared others with `set_doc_dirs`, Q114).
+  Never imports Textual.
 - `models.py`: the models and effort levels offered. A new model is a row here.
 - `tutorial.py`: the tutorial's demo session: its directory, its brief (`BRIEF`, a line in
   capitals to the person first), New session's fields for it (`form`) and what the store

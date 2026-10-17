@@ -271,8 +271,10 @@ session.
   a `Status:` line or `## Status` section, else its file name's (`0042-ACCEPTED-slug.md`),
   else `?`. PROPOSED and UNRESOLVED come first, then the rest, newest first; a column's
   header sorts by it, as the inbox's do. Moving the cursor shows the decision in Detail,
-  rendered, with no answer box, and `Enter` opens it full screen. The pane is the `design`
-  module: `make install WITH="stats"` leaves it out.
+  rendered, with no answer box, and `Enter` opens it full screen. With no decisions found
+  the pane shrinks to a line saying where it looked, and the inbox takes the room. A session
+  in a git worktree lists its main repository's decisions, so each is listed once. The pane
+  is the `design` module: `make install WITH="stats"` leaves it out.
 - **Sessions.** The left-hand column lists every session (parked ones dimmed, at the
   foot of the list's room: they fall there as you park them, and rise back as you unpark
   them). A name too long for the column is cut short with `…` (never its `⟳`), so the
