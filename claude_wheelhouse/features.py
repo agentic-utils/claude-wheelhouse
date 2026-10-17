@@ -78,6 +78,9 @@ ANIMATION_FPS = 10.0
 MAX_FPS = 30.0   # above it, said once and taken as it
 _animation_fps: str | None = None   # set by the command line (set_animation_fps)
 SESSION_DIR_KEY = "SESSION_DIR"
+# each flag's .env key (its environment variable is WHEELHOUSE_<key>), for cli.args_text
+SETTINGS = {FLAG: KEY, USAGE_FLAG: USAGE_KEY, PORT_FLAG: PORT_KEY, KEEPALIVE_FLAG: KEEPALIVE_KEY,
+            ANIMATION_FLAG: ANIMATION_KEY}
 _warned: set[str] = set()
 # the directory the package runs from: the checkout, as uv sync installs it (editable), so
 # the same .env whatever directory the app, the daemon or a tab is started in
