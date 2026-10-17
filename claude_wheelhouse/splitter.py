@@ -7,6 +7,8 @@ from textual.css.scalar import Unit
 from textual.message import Message
 from textual.widget import Widget
 
+NUDGE = 0.01   # cells a dragged share is over the cell it lands on (Splitter._on_mouse_move)
+
 
 class Splitter(Widget):
     """A one-cell divider. Dragging it resizes `sized` (a selector, found under the
@@ -124,8 +126,10 @@ class Splitter(Widget):
         if high < low or not room or not delta:
             return
         self.moved = True
-        # half a cell over: a share resolves to a fraction of a cell, and Textual rounds it down
-        self.apply((max(low, min(sized_at + delta, high)) + 0.5) / room)
+        # a hair over the cell: Textual draws a pane from floor(top) to floor(top + size), so a
+        # share a float's error under it loses a row, and half a cell over gains one where the
+        # pane starts past a cell's half (one under a percentage-sized pane)
+        self.apply((max(low, min(sized_at + delta, high)) + NUDGE) / room)
 
     def _on_mouse_up(self, event: events.MouseUp) -> None:
         if self.drag is not None:
