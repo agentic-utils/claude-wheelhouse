@@ -178,17 +178,22 @@ async def test_every_tour_pane_is_on_the_screen(store, stop):
     ("create", "sessions", False, "an action callout leaves focus where it was"),
     ("inbox", "items", False, "so does this one: the keys it teaches reach the app"),
     ("stats", "stats", True, "a Next callout takes it, so Enter is Next"),
+    ("send", "session-info", False, "the send dialog, beside the session's info"),
+    ("answer", "detail", False, "the answer dialog, beside Detail"),
 ])
+@pytest.mark.parametrize("size", [(160, 40), (80, 24)])
 @pytest.mark.anyio
-async def test_a_callout_beside_its_pane(store, stop, pane, focus, desc):
+async def test_a_callout_beside_its_pane(store, stop, pane, focus, desc, size):
     app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
+    async with app.run_test(size=size) as pilot:
         await pilot.pause()
         tour_at(app, stop)
         await pilot.pause()
         assert shown(app) == (stop, pane), desc
         assert HIGHLIGHT in callout.find(app.screen, pane).classes, f"{desc}: its pane highlighted"
         assert (app.focused is not None and app.focused.id == "tour-next") is focus, desc
+        box = app.screen.query_one(TourCallout).region
+        assert box.area and app.screen.region.contains_region(box), f"{desc} at {size}: {box} on screen"
 
 
 @pytest.mark.parametrize("stop, desc", [
