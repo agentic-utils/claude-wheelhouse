@@ -5795,6 +5795,8 @@ INBOX_STOPS = ["session-list", "items", "answer", "rename", "relaunch", "park", 
     ("inbox", "tab", INBOX_STOPS + ["session-list"],
      "Tab: the session list, the items, the answer box, every button, round again (#77)"),
     ("inbox", "shift+tab", ["session-list", *INBOX_STOPS[:0:-1], "session-list"], "Shift+Tab: the reverse"),
+    ("tour", "tab", INBOX_STOPS[:3] + ["tour-next"] + INBOX_STOPS[3:] + ["session-list"],
+     "a tour box's Next after the answer box, before the buttons (review of #93)"),
     ("thread", "tab", ["thread-answer", "send", "send-all", "thread-answer"],
      "a full-screen item: its box, then its buttons, not its thread (#77)"),
     ("thread", "shift+tab", ["thread-answer", "send-all", "send", "thread-answer"], "and back"),
@@ -5810,6 +5812,12 @@ async def test_the_tab_order(store, sid, monkeypatch, screen, key, order, desc):
             app.push_screen(ThreadView(sid, q))
         else:
             await pick(app, pilot, sid)
+            if screen == "tour":   # the Stats dialog, a Next one
+                from claude_wheelhouse.tour import Tour
+                app.tour = Tour(False)
+                app.tour.at = [d.id for d in app.tour.stops].index("stats")
+                app.show_tour()
+                await pilot.pause()
             app.session_list.focus()
         await pilot.pause()
         seen = [stop_id(app)]

@@ -421,15 +421,17 @@ async def test_watching_it_work_moves_the_tour_on(store, tut, tmp_path, monkeypa
         assert (shown(app)[0] != "conversation") is moves, desc
 
 
-@pytest.mark.parametrize("registered, why, desc", [
-    (False, "stopped: its tab didn't start Claude Code (launch.log", "never registered: wt.exe or Claude Code failed"),
-    (True, "stopped: its tab has closed", "registered, and its Claude Code has gone"),
+@pytest.mark.parametrize("registered, runner_, why, desc", [
+    (False, "tab", "stopped: its tab didn't start Claude Code (launch.log", "never registered: wt.exe or Claude Code failed"),
+    (True, "tab", "stopped: its tab has closed", "registered, and its Claude Code has gone"),
+    (True, "sdk", "the demo has stopped", "a host killed or crashed, which recorded no reason (review of #93)"),
 ])
 @pytest.mark.anyio
-async def test_a_stopped_demo_says_why(store, tut, registered, why, desc):
+async def test_a_stopped_demo_says_why(store, tut, registered, runner_, why, desc):
     """A tab's session has no host to record why it stopped: once it isn't running, the
     tour's dialog says whether its tab never started Claude Code or has closed, and offers
     Next to the release notes, rather than wait on it."""
+    store.set_runner(tut, runner_)
     if registered:
         store.register(tut, 4242, 1, "an-old-boot")   # a pid of another boot: not alive
     app = WheelhouseApp(store)
@@ -438,8 +440,11 @@ async def test_a_stopped_demo_says_why(store, tut, registered, why, desc):
         assert app.hub.statuses[tut] == "dead", f"{desc}: not running"
         tour_at(app, "sessions", tut)
         await pilot.pause()
-        text = app.screen.query_one(TourCallout).text
-        assert f"\nS{why[1:]}" in text and text.endswith(": Next goes to the release notes."), desc
+        co = app.screen.query_one(TourCallout)
+        assert f"\n{why[0].upper()}{why[1:]}" in co.text and co.text.endswith(": Next goes to the release notes."), desc
+        co.query_one("#tour-next").press()
+        await pilot.pause()
+        assert isinstance(app.screen, TourNotes), f"{desc}: not stranded: Next goes to the notes"
 
 
 @pytest.mark.anyio

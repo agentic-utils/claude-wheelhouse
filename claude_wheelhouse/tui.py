@@ -1442,11 +1442,13 @@ def reading_order(button: Button) -> tuple:
 
 def tab_stops(screen: Screen) -> list[tuple[Widget, str | None]]:
     """Tab's stops on the inbox and a full-screen item (#77), the one place they are said:
-    TAB_ORDER's that show, then every BarButton shown and enabled in reading order, then a
-    pane that says its own (tab_parts: the stats pane's effort slider and zoom), each as
-    (widget, part). Nothing else is one, whatever else can take focus (a click on it, or a key)."""
+    TAB_ORDER's that show, then a tour callout's Next, then every BarButton shown and enabled
+    in reading order, then a pane that says its own (tab_parts: the stats pane's effort
+    slider and zoom), each as (widget, part). Nothing else is one, whatever else can take
+    focus (a click on it, or a key)."""
     chain = screen.focus_chain
     return [(w, None) for w in [w for id_ in TAB_ORDER for w in chain if w.id == id_]
+            + [w for w in chain if w.id == "tour-next"]
             + sorted((w for w in chain if isinstance(w, BarButton)), key=reading_order)] + \
         [(w, part) for w in chain if hasattr(w, "tab_parts") for part in w.tab_parts()]
 
@@ -2617,7 +2619,8 @@ LIST_KEYS = [Binding(key, action) for key, action in (
     ("up", "cursor_up"), ("down", "cursor_down"), ("pageup", "page_up"), ("pagedown", "page_down"),
     ("ctrl+home", "scroll_top"), ("ctrl+end", "scroll_bottom"))]
 SLIDER_TAB = "effort slider (while it shows) and its "   # SDK mode's alone (keys_help)
-TABS = ("Tab goes round the session list, the items, the answer box, then every button shown, in reading "
+TABS = ("Tab goes round the session list, the items, the answer box, a tour box's Next while one shows, then "
+        "every button shown, in reading "
         "order, then the stats pane's {slider}zoom's - and + (Enter or Space presses the one with the focus), "
         "and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter "
         "leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus "
@@ -4127,7 +4130,8 @@ class WheelhouseApp(App):
             return
         main = self.screen_stack[0]
         s = next((x for x in self.sessions if x["id"] == tour.sid), None) if tour.sid else None
-        why = tutorial.stopped(s) if s is not None and not self.running(tour.sid) else None
+        # not running, whatever the reason: a host killed or crashed records none (tutorial.stopped)
+        why = (tutorial.stopped(s) or "the demo has stopped") if s is not None and not self.running(tour.sid) else None
         tour.follow(self.client.tutorial(), lambda pane: callout.find(main, pane) is not None, why)
         stop = tour.stop
         text = tour.text(stop) if stop else ""
@@ -4188,8 +4192,13 @@ class WheelhouseApp(App):
         self.tour_showing = None
         for old in self.screen_stack[0].query(TourCallout):
             old.remove()
-        self.client.answer_offer(None)
-        self.notify("Tour paused: the next start offers it again.")
+        done = self.client.answer_offer(None)   # Later's answer is never ok: an error notice is the failure
+        failed = [e.text for e in done.notices if e.severity == "error"]
+        if failed:
+            self.notify(f"Tour paused, but the next start won't offer it again ({failed[0]}). {tutorial.AGAIN}.",
+                        severity="error")
+        else:
+            self.notify("Tour paused: the next start offers it again.")
 
     def paint_session_info(self) -> None:
         """The current session's description, under the list, and its buttons' captions and
