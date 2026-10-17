@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from . import adopt, api, features, fork, launch, liveness, models, plan_usage, subagents, transcript, transcript_usage, tutorial
+from .docroots import DOC_CAP
 from .host import AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, NO_NOTES, keepalive_body, waits_on_person
 from .store import COMPACT_QUESTION, DISMISSABLE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
 
@@ -56,7 +57,6 @@ SDK_USAGE_EVERY = 10   # seconds between looks for an SDK session's plan usage r
 RELAUNCH_WAIT = 30   # seconds a host has to stop for Relaunch before it gives up and says so
 AGENTS_FOLLOWED = 2   # subagent conversations followed at once: the inbox's and a full screen's
 DOCS_KEPT = 4   # docs whose last read the hub keeps (Hub.document), the newest asked for
-DOC_CAP = 1 << 20   # bytes of a doc read at most: the rest is left out, and said to be
 # A host's restart writes its whole context to the prompt cache again: past this many
 # tokens, Relaunch offers to compact first, and waits up to COMPACT_RELAUNCH_WAIT seconds
 # for the compaction before it gives up, and says so

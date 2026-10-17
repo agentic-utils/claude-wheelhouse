@@ -3,6 +3,7 @@ daemon's hub, over HTTP and SSE, or with --local a hub of its own, in process.""
 
 import asyncio
 import bisect
+import dataclasses
 import functools
 import gc
 import json
@@ -55,7 +56,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, callout, docblocks, emoji, features, models, ordering, subagents, transcript, transcript_usage, tutorial, whatsnew
+from . import api, callout, docblocks, docroots, emoji, features, models, ordering, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import NUDGE_TOKENS
@@ -1751,6 +1752,21 @@ def doc_blocks(item, doc) -> list[tuple[str, str]]:
     return out
 
 
+def file_blocks(path: str, title: str, doc) -> list[tuple[str, str]]:
+    """A module's doc (show_doc) as blocks, as doc_blocks shows an item's: its title and path,
+    a clear line if it can't be read or isn't under a doc root, then the file's markdown."""
+    out = [("head", f"## {title}\n\n`{path}`")]
+    if doc is None:
+        out.append(("warn", "The file couldn't be read."))
+    elif doc.get("refused"):
+        out.append(("warn", f"Not shown: {doc['refused']}."))
+    elif doc["gone"]:
+        out.append(("warn", "The file has gone." if doc["gone"] == "gone" else "The file is not a regular file."))
+    if doc and doc.get("text"):
+        out.append(("doc", doc["text"]))
+    return out
+
+
 class DocView(Screen):
     """One doc full screen, rendered, with no answer box. The app's refresh tick repaints it,
     so a change to the file shows while it's open, where it was scrolled to."""
@@ -2932,7 +2948,9 @@ class WheelhouseApp(App):
         # session's conversation, the first row while a session is selected
         self.selected: tuple[str, str | None] | None = None   # its setter restarts the dwell (look)
         self.detail_follows = False   # the detail pane shows a conversation: it follows its newest turn
-        self.modules = api.load()
+        # the modules installed, those switched off (claude-wheelhouse modules disable) marked so
+        self.modules = api.switch_off(api.load(), api.disabled(self.client.setting(api.DISABLED)))
+        self.shown_doc: tuple[str, str] | None = None   # a module's doc in Detail (show_doc): (path, title)
         # the state dir: the database's, for a module that keeps files of its own
         state_dir = self.store.path.parent if self.store else db_path().parent
         self.ctx = api.Context(state_dir, self.module_sessions, self.stats_sid, usage=self.client.usage,
@@ -3252,6 +3270,8 @@ class WheelhouseApp(App):
 
     @selected.setter
     def selected(self, value: tuple[str, str | None] | None) -> None:
+        if value != getattr(self, "_selected", None):
+            self.shown_doc = None   # a module's doc gives way to the next selection
         self._selected = value
         self.look()
 
@@ -3786,10 +3806,25 @@ class WheelhouseApp(App):
         item = self.selected and self.selected[1] and self.client.item(*self.selected)
         return item if item and item["kind"] == "doc" else None
 
+    def show_doc(self, path: str, title: str) -> None:
+        """A module's doc in the Detail pane (api.Context.show_doc), read through the client
+        from under a doc root (/docs), in place of what's selected until the selection moves:
+        as a doc item shows, with no answer box."""
+        self.shown_doc = (path, title)
+        self.paint_sendbar()
+        self.paint_detail()
+
+    def module_ctx(self, mid: str) -> api.Context:
+        """The context a module's pane is made with: the app's, with its own routes (call)."""
+        return dataclasses.replace(self.ctx, call=functools.partial(self.client.call_module, mid),
+                                   show_doc=self.show_doc)
+
     def paint_detail(self) -> None:
-        agent, doc = False, self.selected_doc()
-        self.detail.doc_key = None if self.viewing or not doc else self.selected
-        if self.viewing:
+        agent, doc, shown = False, self.selected_doc(), self.shown_doc
+        self.detail.doc_key = ("file", shown[0]) if shown else None if self.viewing or not doc else self.selected
+        if shown:   # a module's doc, in place of what's selected
+            blocks = file_blocks(*shown, self.client.read_doc(shown[0]))
+        elif self.viewing:
             blocks = self.conversation(self.viewing)
         elif doc:   # the file rendered, in place of a thread
             blocks = doc_blocks(doc, self.client.document(*self.selected))
@@ -3966,7 +4001,7 @@ class WheelhouseApp(App):
                     raise RuntimeError(f"its id {item.module.id!r} is taken by {other}")
                 if item.module.id in taken:
                     raise RuntimeError(f"its id {item.module.id!r} is taken by the wheelhouse")
-                widget = pane.surfaces["tui"](self.ctx)
+                widget = pane.surfaces["tui"](self.module_ctx(item.module.id))
                 if not isinstance(widget, Widget):
                     raise TypeError(f"its tui surface made a {type(widget).__name__}, not a widget")
                 widget.id = item.module.id
@@ -4007,7 +4042,8 @@ class WheelhouseApp(App):
 
     def module_sessions(self) -> list[dict]:
         return [{"id": s["id"], "name": s["name"] or short(s["id"]), "running": self.running(s["id"]),
-                 "context": host_context(s), **self.client.model_state(s)} for s in self.sessions]
+                 "context": host_context(s), "cwd": s["cwd"], "doc_dirs": docroots.declared(s["doc_dirs"]),
+                 **self.client.model_state(s)} for s in self.sessions]
 
     def set_effort(self, sid: str, effort: str) -> None:
         """The stats pane's slider moved: written now, and the panes painted from it, so the
@@ -4099,7 +4135,7 @@ class WheelhouseApp(App):
             h.set_base(DENY_HINT if denying else PERMISSION_HINT if asking else COMPACT_HINT if nudged
                        else hint(sends, s is not None and self.dead(s["id"])))
         thread = isinstance(self.screen, ThreadView)
-        reading = not thread and self.selected_doc() is not None   # a doc: nothing to answer, no box
+        reading = not thread and (self.shown_doc is not None or self.selected_doc() is not None)   # a doc: no box
         doc_gone = not thread and not reading and self.detail.has_focus   # the box back in its place: focus with it
         if not thread:   # the doc in the box's place (TAB_ORDER)
             self.detail.can_focus = reading

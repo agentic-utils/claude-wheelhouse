@@ -15,13 +15,14 @@ same keys typed slowly do. A command blocks until it's answered, as the hub's ca
 and the refresh after it fetches what it changed at once."""
 
 import contextlib
+import functools
 import socket
 import threading
 import time
 import uuid
 from typing import Callable, NamedTuple
 
-from . import adopt, auth, features, fork, plan_usage, transcript_usage, tutorial
+from . import adopt, api, auth, docroots, features, fork, plan_usage, served, transcript_usage, tutorial
 from .hub import RUNNING, Done, Event, Hub, host_context, requested
 from .store import NOTES_SEEN, SessionGone
 
@@ -125,6 +126,23 @@ class LocalClient(Hub):
     def start(self, post=None) -> None:
         pass   # its work runs on the app's own workers (spawn, post)
 
+    @functools.cached_property
+    def served(self):
+        """The modules' daemon side, in process (served.py): made when first asked for."""
+        return served.serve(self)
+
+    def call_module(self, mid: str, path: str, body: dict | None = None):
+        """A module's own route (api.Context.call), as the daemon would answer it."""
+        return self.served.call(mid, path, body)
+
+    def read_doc(self, path: str) -> dict:
+        """A doc under a module's doc root, as the daemon's /docs reads it; {"refused": why}
+        for a path outside them."""
+        try:
+            return self.served.read(path)
+        except docroots.Outside as e:
+            return {"refused": str(e)}
+
 
 class Unreachable(RuntimeError):
     """The daemon can't be reached: nothing was sent (UNREACHABLE)."""
@@ -200,7 +218,7 @@ class RemoteClient:
         # the terminal's: a bad .env value is said there, not under the TUI
         self.usage_chosen = features.usage_mode_given()
         # the threads, conversations and subagents' conversations shown, by key: ("thread",
-        # sid, ref), ("conversation", sid), ("agent", sid, ref), ("doc", sid, ref)
+        # sid, ref), ("conversation", sid), ("agent", sid, ref), ("doc", sid, ref), ("file", path)
         self.cache: dict[tuple, object] = {}
         self.shown_seq: dict[tuple, int] = {}   # each key's fetch as shown: a later one replaces it
         self.waiting: dict[tuple, tuple[int, object]] = {}   # fetched in the background, for the next refresh
@@ -392,6 +410,14 @@ class RemoteClient:
             if kind == "doc":
                 have = (self.cache.get(key) or {}).get("stamp")
                 return self.get(f"/items/{key[1]}/{key[2]}/document", {"have": have} if have else None)
+            if kind == "file":
+                have = (self.cache.get(key) or {}).get("stamp")
+                try:
+                    return self.get("/docs", {"path": key[1], **({"have": have} if have else {})})
+                except Refused as e:
+                    if e.status == 403:   # outside every doc root: said where the doc would show
+                        return {"refused": e.error}
+                    raise
             return self.get(f"/items/{key[1]}/{key[2]}/conversation")
         except Refused as e:
             if e.status == 404:   # gone
@@ -429,7 +455,7 @@ class RemoteClient:
             self.usage.read = data.get("read") or {}   # an older daemon's has none: taken as fresh
             self.usage.limits = {k: tuple(v) for k, v in data["limits"].items()}
             self.usage.failed = data["failed"]
-        elif not (kind == "doc" and data and data.get("same")):   # a doc unchanged keeps what it has
+        elif not (kind in ("doc", "file") and data and data.get("same")):   # a doc unchanged keeps what it has
             self.cache[key] = data
 
     def shown(self, key: tuple):
@@ -453,7 +479,7 @@ class RemoteClient:
                     self.lock.notify_all()
             else:
                 self.refused(self.refusal_of(e))
-            return [] if key[0] not in ("thread", "doc") else None
+            return [] if key[0] not in ("thread", "doc", "file") else None
         with self.lock:
             if seq > self.shown_seq.get(key, -1):
                 self.apply(key, data, seq)
@@ -559,6 +585,27 @@ class RemoteClient:
         if item is None or item["kind"] != "doc":
             return None
         return self.shown(("doc", sid, ref))
+
+    def read_doc(self, path: str) -> dict | None:
+        """A doc under a module's doc root (/docs), kept up to date as a doc item's is;
+        {"refused": why} for a path outside them, None if it couldn't be read."""
+        return self.shown(("file", path))
+
+    def call_module(self, mid: str, path: str, body: dict | None = None):
+        """A module's own route (api.Context.call): a GET without a body, a POST, sent once
+        with an Idempotency-Key, with one. api.Refused for any failure, 503 for no daemon."""
+        try:
+            if body is None:
+                return self.get(f"/m/{mid}/{path}")
+            return self.request("POST", f"/m/{mid}/{path}", body, str(uuid.uuid4()))
+        except Refused as e:
+            raise api.Refused(e.status, e.error) from None
+        except (Unreachable, self.httpx.TransportError) as e:
+            raise api.Refused(503, str(e) or UNREACHABLE) from None
+        finally:
+            if body is not None:
+                with self.lock:
+                    self.forced = True
 
     def asking(self, target):
         item = target and target[1] and self.item(*target)
@@ -886,7 +933,7 @@ class RemoteClient:
                 now = time.monotonic()
                 if now - polled >= AGENT_POLL:
                     polled = now
-                    self.dirty |= {k for k in self.wanted | self.asked if k[0] in ("agent", "doc")}
+                    self.dirty |= {k for k in self.wanted | self.asked if k[0] in ("agent", "doc", "file")}
                 if now - usage >= USAGE_POLL:
                     usage = now
                     self.dirty.add(("usage",))
@@ -894,7 +941,7 @@ class RemoteClient:
                 shown = self.wanted | self.asked
                 self.in_flight = True
             for key in sorted(todo):
-                if key[0] in ("thread", "conversation", "agent", "doc") and key not in shown:
+                if key[0] in ("thread", "conversation", "agent", "doc", "file") and key not in shown:
                     continue
                 seq = self.next_seq()
                 try:

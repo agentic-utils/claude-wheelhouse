@@ -53,7 +53,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import auth, features, fingerprint, liveness, models, transcript_usage, tutorial
+from . import api, auth, docroots, features, fingerprint, liveness, models, served, transcript_usage, tutorial
 from .hub import Done, Event, Hub, host_context
 from .store import COMPACT_QUESTION, NOTES_SEEN, THEN, SessionGone, Store, inbox_rank, mode, runner, standing
 
@@ -373,6 +373,7 @@ class Daemon:
         self.unkept: dict[str, dict] = {}  # answers the store couldn't keep: kept here till a tick can
         self.reading: dict[str, threading.Lock] = {}   # each session's transcript, read by one request at a time
         self.hub.listen(self.heard)
+        self.served = served.serve(self.hub)   # the modules' routes and doc roots (.plan/modules.md)
         self.app = Starlette(routes=[
             Route("/sessions", self.query(self.sessions, run=None)),
             Route("/sessions", self.command(self.new_session), methods=["POST"]),
@@ -414,6 +415,10 @@ class Daemon:
             Route("/tutorial/offer", self.command(self.answer_offer), methods=["POST"]),
             Route("/tour/seen", self.command(self.tour_seen), methods=["POST"]),
             Route("/shutdown", self.command(self.shutdown_requested), methods=["POST"]),
+            # the modules' (served.py): a doc under a doc root, and each module's own routes
+            Route("/docs", self.query(self.doc)),
+            Route("/m/{mid}/{rest:path}", self.query(self.module_query)),
+            Route("/m/{mid}/{rest:path}", self.command(self.module_command), methods=["POST"]),
         ], middleware=[Middleware(Guard, daemon=self)], lifespan=self.lifespan)
 
     # the hub's work and what it says
@@ -782,9 +787,10 @@ class Daemon:
         return {"limits": {k: list(v) for k, v in u.limits.items()}, "read": u.read, "failed": u.failed}
 
     def settings(self, request: Request) -> dict:
-        """The TUI's kept splitter sizes, each a share of its parent: no other setting."""
-        return dict(self.store._all("SELECT key, value FROM settings WHERE substr(key, 1, ?) = ?",
-                                    (len(LAYOUT), LAYOUT)))
+        """The TUI's kept layout (layout.*: splitter sizes, sorts, slots), and the modules
+        switched off (api.DISABLED), which it reads at start: no other setting."""
+        return dict(self.store._all("SELECT key, value FROM settings WHERE substr(key, 1, ?) = ? OR key = ?",
+                                    (len(LAYOUT), LAYOUT, api.DISABLED)))
 
     def agent_conversation(self, request: Request) -> list[dict] | None:
         """A subagent item's own conversation, read now (Hub.agent_conversation), on
@@ -808,7 +814,24 @@ class Daemon:
             return {"same": True}
         return doc
 
+    def doc(self, request: Request) -> dict:
+        """A doc under a module's doc root (docroots.read: ?path=, absolute), or {"same": true}
+        if its stamp is still ?have=; 403 for any other path, resolved first, so neither ..
+        nor a symlink reaches outside."""
+        try:
+            return self.served.read(text(dict(request.query_params), "path"), request.query_params.get("have"))
+        except docroots.Outside as e:
+            raise Refused(403, str(e)) from None
+
+    def module_query(self, request: Request):
+        p = request.path_params
+        return self.served.dispatch(p["mid"], "GET", p["rest"], request.query_params, None)
+
     # commands
+
+    def module_command(self, request: Request, body: dict):
+        p = request.path_params
+        return self.served.dispatch(p["mid"], "POST", p["rest"], request.query_params, body)
 
     def set_setting(self, request: Request, body: dict) -> Done:
         """A splitter size kept, or with value null its default put back."""
@@ -1005,7 +1028,7 @@ class Daemon:
 
 # the errors a request is answered with, each as its status (refusal): a command's is kept
 # with its key, as any other (the database locked) may not happen again
-ANSWERED = (Refused, SessionGone, KeyError, ValueError)
+ANSWERED = (Refused, api.Refused, SessionGone, KeyError, ValueError)
 
 
 def refusal(e: Exception) -> JSONResponse:
@@ -1015,6 +1038,8 @@ def refusal(e: Exception) -> JSONResponse:
     headers = None
     if isinstance(e, Refused):
         status, error, headers = e.status, e.error, e.headers
+    elif isinstance(e, api.Refused):   # a module's route refusing
+        status, error = e.status, e.error
     elif isinstance(e, (SessionGone, KeyError)):
         status, error = 404, str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e)
     elif isinstance(e, ValueError):

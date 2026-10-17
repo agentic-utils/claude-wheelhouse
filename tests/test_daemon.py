@@ -806,7 +806,8 @@ async def test_a_tab_session_only_from_this_machine(daemon, store, tmp_path, add
 
 def every_route(daemon):
     """(method, path) for each route the daemon serves, its parameters filled in."""
-    params = {"sid": "nosuch", "ref": "T1", "action": "rename", "id": "1", "id:int": "1"}
+    params = {"sid": "nosuch", "ref": "T1", "action": "rename", "id": "1", "id:int": "1", "mid": "probe",
+              "rest:path": "echo/x"}
     out = []
     for route in daemon.app.routes:
         path = route.path
@@ -818,7 +819,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 32 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 35 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 
@@ -877,7 +878,7 @@ async def test_the_host_is_checked_before_the_token(daemon):
 
 NEW_ROUTES = [
     ("GET", "/hello", None, lambda store, sid, r: (r.json()["api"], r.json()["ready"], r.json()["pid"])
-     == (3, False, os.getpid()), "with the token, which daemon: its API, its code, not ready before its first tick"),
+     == (4, False, os.getpid()), "with the token, which daemon: its API, its code, not ready before its first tick"),
     ("GET", "/inbox", None, lambda store, sid, r: (sorted(i["ref"] for i in r.json()["items"]),
                                                    "body" in r.json()["items"][0], r.json()["tutorial"]["facts"])
      == (["P1", "T1"], False, None), "every item, without its body, and what the tour waits on"),
@@ -1261,3 +1262,80 @@ async def test_compact_needs_a_running_host(daemon, store, sid, monkeypatch, run
     daemon.tick()
     r = await call(daemon, "POST", f"/sessions/{sid}/compact", {"notes": None, "then": "send"})
     assert r.json()["ok"] is ok and (store.session(sid)["host_command"] == "compact") is ok, desc
+
+
+# the modules' routes and doc roots (.plan/modules.md, stage 5), with the test module of test_served
+
+@pytest.fixture
+def moduled(store, monkeypatch, tmp_path):
+    """A daemon serving the probe module, whose doc root is tmp/root (a.md in it, out/c.md
+    and a symlink to it beside), with a second module, off, switched off."""
+    from claude_wheelhouse import api
+    from tests.test_served import probe
+    root, out = tmp_path / "root", tmp_path / "out"
+    root.mkdir()
+    out.mkdir()
+    (root / "a.md").write_text("# A\n")
+    (out / "c.md").write_text("# C\n")
+    (root / "link.md").symlink_to(out / "c.md")
+    store.set_setting(api.DISABLED, '["off"]')
+    monkeypatch.setattr(api, "load", lambda: [api.Loaded("probe", probe([root])),
+                                              api.Loaded("off", probe([out], id="off"))])
+    d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True)
+    yield d, tmp_path
+    d.pool.shutdown()
+    d.worker.shutdown()
+    d.watch.close()
+
+
+@pytest.mark.parametrize("method, path, body, status, answer, desc", [
+    ("GET", "/m/probe/echo/x?q=1", None, 200, {"params": {"a": "x"}, "query": {"q": "1"}, "body": None},
+     "a module's GET, its params and query"),
+    ("POST", "/m/probe/echo/y", {"k": 1}, 200, {"params": {"a": "y"}, "query": {}, "body": {"k": 1}},
+     "a module's POST, with its body"),
+    ("GET", "/m/probe/refuse", None, 409, {"error": "not now", "type": "Refused"}, "a route's refusal, as it said it"),
+    ("GET", "/m/probe/nothing", None, 404, None, "no such route"),
+    ("GET", "/m/off/echo/x", None, 404, None, "a module switched off serves nothing"),
+    ("GET", "/m/probe/broken", None, 500, None, "a route that fails: the daemon's 500"),
+    ("GET", "/docs?path={tmp}/root/a.md", None, 200, "# A\n", "a doc under a doc root"),
+    ("GET", "/docs?path={tmp}/root/../out/c.md", None, 403, None, ".. out of the root"),
+    ("GET", "/docs?path={tmp}/root/link.md", None, 403, None, "a symlink out of the root"),
+    ("GET", "/docs?path={tmp}/out/c.md", None, 403, None, "absolute, elsewhere: the root of a module switched off"),
+    ("GET", "/docs?path={TMP}/root/a.md", None, 403, None, "the root spelt in another case"),
+    ("GET", "/docs?path=root/a.md", None, 403, None, "a relative path"),
+    ("GET", "/docs", None, 400, None, "no path"),
+])
+async def test_module_routes_and_docs(moduled, method, path, body, status, answer, desc):
+    daemon, tmp = moduled
+    r = await call(daemon, method, path.replace("{tmp}", str(tmp)).replace("{TMP}", str(tmp).upper()), body)
+    assert r.status_code == status, f"{desc}: {r.text}"
+    if isinstance(answer, str):
+        assert r.json()["text"] == answer, desc
+    elif answer is not None:
+        assert r.json() == answer, desc
+
+
+@pytest.mark.parametrize("path", ["/m/probe/echo/x", "/docs?path=/etc/passwd.md", "/m/nobody/x"])
+async def test_module_routes_and_docs_need_the_token(moduled, path):
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=moduled[0].app), base_url=URL) as c:
+        assert (await c.get(path)).status_code == 401, "refused for the token before any route is matched"
+
+
+async def test_a_module_command_is_done_once_per_key(moduled):
+    daemon, _ = moduled
+    first = await call(daemon, "POST", "/m/probe/echo/z", {"n": 1}, key="k1")
+    again = await call(daemon, "POST", "/m/probe/echo/z", {"n": 1}, key="k1")
+    assert again.headers.get("idempotent-replayed") == "true" and again.json() == first.json()
+    assert (await call(daemon, "POST", "/m/probe/echo/z", {"n": 1}, idempotency_key="")).status_code == 400
+
+
+async def test_a_doc_unchanged_is_answered_same(moduled):
+    daemon, tmp = moduled
+    first = (await call(daemon, "GET", f"/docs?path={tmp}/root/a.md")).json()
+    r = await call(daemon, "GET", f"/docs?path={tmp}/root/a.md&have={first['stamp']}")
+    assert r.json() == {"same": True}
+
+
+async def test_settings_say_which_modules_are_off(moduled):
+    r = await call(moduled[0], "GET", "/settings")
+    assert r.json().get("modules.disabled") == '["off"]'

@@ -20,12 +20,22 @@ methods on it:
 
 A pane's widget may also name a section of the ? overlay for its BINDINGS: `KEYS_HELP =
 (title, sdk_only)`, sdk_only to list them only with SDK mode on.
+
+A module may also serve the daemon side (.plan/modules.md, "The module boundary"):
+`routes(ctx)`, its `Route`s, mounted under /m/<id>/ (and called in process with --local),
+which its pane reaches with `Context.call`; and `doc_roots(ctx)`, the directories whose .md
+files the core viewer may read (and later write), which `Context.show_doc` shows. Both are
+asked of a `Context` with no focus. `claude-wheelhouse modules disable <id>` switches a
+module off (DISABLED): no pane, no routes and no doc roots, from the next start.
 """
 
 import importlib.metadata
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+
+from .docroots import doc_dirs  # noqa: F401  (where each repo's decisions are found, Q114)
 
 # what a module may use of the wheelhouse: a session's token use (transcript_usage.py), read
 # by the hub's shared followers, the account's usage, and the effort levels
@@ -45,6 +55,35 @@ OWN = "claude_wheelhouse."         # where this package's own entry points point
 # the six places a pane goes, by column; an empty one collapses (.plan/modules.md)
 SLOTS = ("left.top", "left.middle", "left.bottom", "middle.top", "middle.bottom", "right")
 CARDS = "left.middle"              # where a module that didn't load says why: it has no slot to say
+DISABLED = "modules.disabled"      # settings: the modules switched off, a JSON list of their names
+
+
+class Refused(Exception):
+    """A module's route refusing a call, with the status it answers (404, 400, ...); and what
+    Context.call raises for any call that fails, the route's own refusal or not (503: the
+    daemon couldn't be reached)."""
+
+    def __init__(self, status: int, error: str):
+        super().__init__(error)
+        self.status, self.error = status, error
+
+
+@dataclass
+class Call:
+    """A call to a module's route: the path's {params}, the query string's, and a POST's body."""
+    params: dict[str, str]
+    query: dict[str, str]
+    body: dict | None = None
+
+
+@dataclass
+class Route:
+    """One of a module's routes, at /m/<id>/<path>. A segment in braces ("decisions/{n}") is a
+    param. A GET is a query, run on a worker thread; a POST a command, done once per
+    Idempotency-Key, on the hub's thread. handler(Call) answers JSON, or raises Refused."""
+    path: str
+    handler: Callable[[Call], object]
+    method: str = "GET"
 
 
 @dataclass
@@ -61,6 +100,8 @@ class Module:
     version: str
     api: int                       # the WHEELHOUSE_API it was written against
     panes: list[Pane] = field(default_factory=list)
+    routes: Callable[["Context"], list[Route]] | None = None     # served under /m/<id>/
+    doc_roots: Callable[["Context"], list[Path]] | None = None   # directories of docs it shows
 
 
 @dataclass
@@ -89,6 +130,11 @@ class Context:
     usage: "AccountUsage | None" = None
     # a hosted session's effort, set live: (session id, level); None where the surface has none
     set_effort: Callable[[str, str], None] | None = None
+    # the module's own routes, through the client, local or remote: (path under /m/<id>/,
+    # with any query string; body, None for a GET) -> their JSON, or Refused. None daemon side
+    call: Callable[[str, dict | None], object] | None = None
+    # a doc under a doc root shown in the Detail pane's viewer: (absolute path, title). None daemon side
+    show_doc: Callable[[str, str], None] | None = None
 
 
 @dataclass
@@ -97,6 +143,22 @@ class Loaded:
     name: str
     module: Module | None
     error: str | None = None
+    disabled: bool = False   # switched off (DISABLED): nothing of it runs
+
+
+def disabled(raw: str | None) -> set[str]:
+    """The modules switched off, from the DISABLED setting as kept; none for none or junk."""
+    try:
+        names = json.loads(raw) if raw else []
+    except ValueError:
+        return set()
+    return {n for n in names if isinstance(n, str)} if isinstance(names, list) else set()
+
+
+def switch_off(loaded: list[Loaded], names: set[str]) -> list[Loaded]:
+    """loaded, each one named in names (by entry point or module id) marked disabled."""
+    return [Loaded(i.name, i.module, i.error, True)
+            if i.name in names or (i.module is not None and i.module.id in names) else i for i in loaded]
 
 
 def load(entries=None) -> list[Loaded]:
@@ -128,9 +190,12 @@ def panes(loaded: list[Loaded], slot: str) -> list[tuple[Loaded, Pane | None]]:
     """What goes in a slot: each running module's panes for it, and each module that
     couldn't start, so its error shows there instead (the stats pane's slot shows a broken
     stats module's reason, not nothing). One that didn't load has no panes to say where,
-    and one naming a slot that isn't one of SLOTS has nowhere to show it: CARDS for both."""
+    and one naming a slot that isn't one of SLOTS has nowhere to show it: CARDS for both. One
+switched off (disabled) has nothing anywhere."""
     out = []
     for item in loaded:
+        if item.disabled:
+            continue
         if item.error:
             if slot in ({home(p) for p in item.module.panes} if item.module else {CARDS}):
                 out.append((item, None))

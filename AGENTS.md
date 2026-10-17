@@ -9,7 +9,7 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 
 - `cli.py`: the `claude-wheelhouse` entry point and its subcommands (`tui`, the default;
   `tutorial`, `notes`, `run`, `host`, `mcp`, `monitor`, `protocol`, `daemon`, `token`,
-  `open-items`).
+  `open-items`, `modules`).
   The app takes `--local`, or `--connect HOST:PORT` with `--token-file`; it and `daemon`
   take `--port`, `--usage-mode`, `--keepalive-hours` and `--enable-sdk` (`features.py`);
   `daemon` adds `--address`, `--name` (repeatable) and `--stop`; `tutorial` takes `--yes`.
@@ -71,6 +71,15 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   (`tui.slot`, `.plan/modules.md`): an empty one collapses (`WheelhouseApp.collapse`). A pane
   dragged by its title swaps slots with another (`tui.Slot`, `WheelhouseApp.swap`), kept as
   `layout.slots` and placed at start by `tui.arrange`.
+- `served.py`: the modules' daemon side, their routes (`api.Route`, under `/m/<id>/`) and doc
+  roots (`api.Module.doc_roots`, read through `/docs`), served by the daemon and, the same
+  way, by `LocalClient` with `--local`; a pane reaches them with `Context.call` and
+  `Context.show_doc`. `claude-wheelhouse modules disable <id>` (`api.DISABLED`) switches a
+  module off from the next start.
+- `docroots.py`: the doc roots' allow-list (`confine`: a path resolved, symlinks and `..`,
+  and kept to a `.md` file under a root; stage 8 writes through it too), and where a repo's
+  decisions are (`doc_dirs`: `docs/adr` under its git root unless a session declared others
+  with `set_doc_dirs`, Q114). Never imports Textual.
 - `models.py`: the models and effort levels offered. A new model is a row here.
 - `tutorial.py`: the tutorial's demo session: its directory, its brief (`BRIEF`, a line in
   capitals to the person first), New session's fields for it (`form`) and what the store

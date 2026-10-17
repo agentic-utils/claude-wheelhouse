@@ -63,6 +63,11 @@ is a `make` choice: every `make` target (`run`, `test`, `stop` and the rest) kee
 the last `make install` installed, and a plain `make install` installs them all again. A
 plain `uv run` (`uv run claude-wheelhouse`, say) installs every module back.
 
+`claude-wheelhouse modules` lists the modules installed, with their version, the module API
+they were written for and whether each is on. `claude-wheelhouse modules disable <id>`
+switches one off without uninstalling it, and `enable <id>` back on: the daemon and the app
+read this as they start, so quit the app and `make stop` for it to take.
+
 Run the app in a Windows Terminal tab, which draws its colours and carries its copies to
 the clipboard.
 

@@ -87,6 +87,38 @@ def tutorial_again(yes: bool) -> None:
           + "; the wheelhouse's next start (make run in a source checkout) offers the tutorial")
 
 
+def modules_command(action: str | None, name: str | None) -> None:
+    """claude-wheelhouse modules: the modules installed (id, version, API, status), or with
+    disable or enable, one switched off or on (api.DISABLED, by its entry point's name), which
+    the daemon and the app read as they start: so said, with how to restart them if they run."""
+    import json
+    from . import api
+    from .connect import STOP, holder
+    from .store import Store, db_path
+    store, loaded = Store(), api.load()
+    off = api.disabled(store.setting(api.DISABLED))
+    if action is None:
+        for item in api.switch_off(loaded, off):
+            m = item.module
+            status = "disabled" if item.disabled else f"not running: {item.error}" if item.error else "on"
+            print(f"{m.id if m else item.name}  {m.version if m else '?'}  API {m.api if m else '?'}  {status}")
+        if not loaded:
+            print("no modules installed")
+        return
+    found = next((i.name for i in loaded if name in (i.name, i.module and i.module.id)), None)
+    if found is None and name not in off:
+        sys.exit(f"claude-wheelhouse: no module {name!r} is installed (claude-wheelhouse modules lists them)")
+    found = found or name
+    off = off | {found} if action == "disable" else off - {found, name}
+    if off:
+        store.set_setting(api.DISABLED, json.dumps(sorted(off)))
+    else:
+        store.clear_setting(api.DISABLED)
+    held = holder(db_path().parent)
+    print(f"{found} {action}d: from the wheelhouse's next start"
+          + (f" (the daemon is running: quit the app, then {STOP}, then start it again)" if held else ""))
+
+
 def open_items() -> None:
     """claude-wheelhouse open-items: the session's open tasks and questions
     (launch.after_compaction), printed for the plugin's SessionStart hook after a compaction,
@@ -183,6 +215,9 @@ def parser() -> argparse.ArgumentParser:
     daemon.add_argument("--stop", action="store_true", help="stop the daemon running, by its pid (no token "
                         "needed): the next start reads the token file again, or makes one if there's none")
     daemon.add_argument("--start-pipe", type=int, default=None, help=argparse.SUPPRESS)   # connect.start's
+    mods = sub.add_parser("modules", help="list the modules installed, or switch one off or on")
+    mods.add_argument("action", nargs="?", choices=("disable", "enable"))
+    mods.add_argument("name", nargs="?", help="the module's id, as the list shows it")
     sub.add_parser("token", help="print the daemon's token, for a client on another machine (--connect)")
     return p
 
@@ -263,6 +298,10 @@ def main() -> None:
             sys.exit(f"claude-wheelhouse: {e}{first}")
     elif args.cmd == "tutorial":
         tutorial_again(args.yes)
+    elif args.cmd == "modules":
+        if bool(args.action) != bool(args.name):
+            sys.exit("claude-wheelhouse: modules disable or enable takes a module's id")
+        modules_command(args.action, args.name)
     elif args.cmd == "open-items":
         open_items()
     elif args.cmd == "monitor":
