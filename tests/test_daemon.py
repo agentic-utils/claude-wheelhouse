@@ -806,7 +806,8 @@ async def test_a_tab_session_only_from_this_machine(daemon, store, tmp_path, add
 
 def every_route(daemon):
     """(method, path) for each route the daemon serves, its parameters filled in."""
-    params = {"sid": "nosuch", "ref": "T1", "action": "rename", "id": "1", "id:int": "1"}
+    params = {"sid": "nosuch", "ref": "T1", "action": "rename", "id": "1", "id:int": "1", "mid": "probe",
+              "rest:path": "echo/x"}
     out = []
     for route in daemon.app.routes:
         path = route.path
@@ -818,7 +819,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 33 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 36 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 
@@ -1265,3 +1266,171 @@ async def test_compact_needs_a_running_host(daemon, store, sid, monkeypatch, run
     daemon.tick()
     r = await call(daemon, "POST", f"/sessions/{sid}/compact", {"notes": None, "then": "send"})
     assert r.json()["ok"] is ok and (store.session(sid)["host_command"] == "compact") is ok, desc
+
+
+# the modules' routes and doc roots (.plan/modules.md, stage 5), with the test module of test_served
+
+@pytest.fixture
+def moduled(store, monkeypatch, tmp_path):
+    """A daemon serving the probe module, whose doc root is tmp/root (a.md in it, out/c.md
+    and a symlink to it beside), with a second module, off, switched off."""
+    from claude_wheelhouse import api
+    from tests.test_served import probe
+    root, out = tmp_path / "root", tmp_path / "out"
+    root.mkdir()
+    out.mkdir()
+    (root / "a.md").write_text("# A\n")
+    (out / "c.md").write_text("# C\n")
+    (root / "link.md").symlink_to(out / "c.md")
+    store.set_setting(api.DISABLED, '["off"]')
+    monkeypatch.setattr(api, "load", lambda: [api.Loaded("probe", probe([root])),
+                                              api.Loaded("off", probe([out], id="off"))])
+    d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True)
+    yield d, tmp_path
+    d.pool.shutdown()
+    d.worker.shutdown()
+    for lane in d.lanes.values():
+        lane.shutdown()
+    d.watch.close()
+
+
+@pytest.mark.parametrize("method, desc", [("GET", "a module's query"), ("POST", "a module's command")])
+async def test_a_slow_module_route_is_504_and_never_holds_up_the_hub(store, monkeypatch, method, desc):
+    import threading
+    from claude_wheelhouse import api
+    release = threading.Event()
+    slow = [api.Route("wait", lambda call: release.wait(5) and {"done": True}, m) for m in ("GET", "POST")]
+    monkeypatch.setattr(api, "load", lambda: [api.Loaded("slow", api.Module(
+        "slow", "Slow", "1", api.WHEELHOUSE_API, routes=lambda ctx: slow))])
+    monkeypatch.setattr(daemon_mod, "MODULE_WAIT", 0.2)
+    d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True)
+    try:
+        r = await call(d, method, "/m/slow/wait", {} if method == "POST" else None, key="slow-1")
+        assert r.status_code == 504, desc
+        assert await asyncio.wait_for(d.on_hub(lambda: "free"), 1) == "free", f"{desc}: the hub's thread is free"
+        assert (await call(d, "POST", "/dispatch")).status_code == 200, f"{desc}: and a command of the hub's done"
+        release.set()
+        if method == "POST":   # the same command again gets its answer, once it has one
+            while not d.lanes["slow"].overrun.done():
+                await asyncio.sleep(0.01)
+            again = await call(d, "POST", "/m/slow/wait", {}, key="slow-1")
+            assert (again.status_code, again.json()) == (200, {"done": True}), desc
+    finally:
+        release.set()
+        close(d)
+
+
+async def test_a_commands_key_covers_its_query_string(moduled):
+    daemon, _ = moduled
+    assert (await call(daemon, "POST", "/m/probe/echo/z?q=1", {}, key="q")).status_code == 200
+    assert (await call(daemon, "POST", "/m/probe/echo/z?q=2", {}, key="q")).status_code == 422, \
+        "the same key for another query string is another request"
+
+
+@pytest.mark.parametrize("method, path, body, status, answer, desc", [
+    ("GET", "/m/probe/echo/x?q=1", None, 200, {"params": {"a": "x"}, "query": {"q": "1"}, "body": None},
+     "a module's GET, its params and query"),
+    ("POST", "/m/probe/echo/y", {"k": 1}, 200, {"params": {"a": "y"}, "query": {}, "body": {"k": 1}},
+     "a module's POST, with its body"),
+    ("GET", "/m/probe/refuse", None, 409, {"error": "not now", "type": "Refused"}, "a route's refusal, as it said it"),
+    ("GET", "/m/probe/nothing", None, 404, None, "no such route"),
+    ("GET", "/m/off/echo/x", None, 404, None, "a module switched off serves nothing"),
+    ("GET", "/m/probe/broken", None, 500, {"error": "the module failed: RuntimeError: bug", "type": "Failed"},
+     "a route that fails: 500, as --local says it"),
+    ("GET", "/m/probe/lookup", None, 500, None, "its own KeyError: 500, not 404"),
+    ("GET", "/m/probe/parse", None, 500, None, "its own ValueError: 500, not 400"),
+    ("GET", "/docs?path={tmp}/root/a.md", None, 200, "# A\n", "a doc under a doc root"),
+    ("GET", "/docs?path={tmp}/root/../out/c.md", None, 403, None, ".. out of the root"),
+    ("GET", "/docs?path={tmp}/root/link.md", None, 403, None, "a symlink out of the root"),
+    ("GET", "/docs?path={tmp}/out/c.md", None, 403, None, "absolute, elsewhere: the root of a module switched off"),
+    ("GET", "/docs?path={TMP}/root/a.md", None, 403, None, "the root spelt in another case"),
+    ("GET", "/docs?path=root/a.md", None, 403, None, "a relative path"),
+    ("GET", "/docs", None, 400, None, "no path"),
+])
+async def test_module_routes_and_docs(moduled, method, path, body, status, answer, desc):
+    daemon, tmp = moduled
+    r = await call(daemon, method, path.replace("{tmp}", str(tmp)).replace("{TMP}", str(tmp).upper()), body)
+    assert r.status_code == status, f"{desc}: {r.text}"
+    if isinstance(answer, str):
+        assert r.json()["text"] == answer, desc
+    elif answer is not None:
+        assert r.json() == answer, desc
+
+
+@pytest.mark.parametrize("path", ["/m/probe/echo/x", "/docs?path=/etc/passwd.md", "/m/nobody/x"])
+async def test_module_routes_and_docs_need_the_token(moduled, path):
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=moduled[0].app), base_url=URL) as c:
+        assert (await c.get(path)).status_code == 401, "refused for the token before any route is matched"
+
+
+async def test_a_module_command_is_done_once_per_key(moduled):
+    daemon, _ = moduled
+    first = await call(daemon, "POST", "/m/probe/echo/z", {"n": 1}, key="k1")
+    again = await call(daemon, "POST", "/m/probe/echo/z", {"n": 1}, key="k1")
+    assert again.headers.get("idempotent-replayed") == "true" and again.json() == first.json()
+    assert (await call(daemon, "POST", "/m/probe/echo/z", {"n": 1}, idempotency_key="")).status_code == 400
+
+
+async def test_a_doc_unchanged_is_answered_same(moduled):
+    daemon, tmp = moduled
+    first = (await call(daemon, "GET", f"/docs?path={tmp}/root/a.md")).json()
+    r = await call(daemon, "GET", f"/docs?path={tmp}/root/a.md&have={first['stamp']}")
+    assert r.json() == {"same": True}
+
+
+async def test_settings_say_which_modules_are_off(moduled):
+    r = await call(moduled[0], "GET", "/settings")
+    assert r.json().get("modules.disabled") == '["off"]'
+
+
+def lanes_daemon(store, monkeypatch, release):
+    """A daemon serving two modules: stuck, whose routes wait on release, and quick."""
+    from claude_wheelhouse import api
+    stuck = [api.Route("wait", lambda call: release.wait(5) and {"done": True}, m) for m in ("GET", "POST")]
+    quick = [api.Route("go", lambda call: {"went": True}, m) for m in ("GET", "POST")]
+    monkeypatch.setattr(api, "load", lambda: [
+        api.Loaded("stuck", api.Module("stuck", "S", "1", api.WHEELHOUSE_API, routes=lambda ctx: stuck)),
+        api.Loaded("quick", api.Module("quick", "Q", "1", api.WHEELHOUSE_API, routes=lambda ctx: quick))])
+    monkeypatch.setattr(daemon_mod, "MODULE_WAIT", 0.2)
+    return Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True)
+
+
+def close(d):
+    d.pool.shutdown()
+    d.worker.shutdown()
+    for lane in d.lanes.values():
+        lane.shutdown()
+    d.watch.close()
+
+
+async def test_a_stuck_modules_commands_are_refused_at_once_and_others_run(store, monkeypatch):
+    import threading
+    release = threading.Event()
+    d = lanes_daemon(store, monkeypatch, release)
+    try:
+        assert (await call(d, "POST", "/m/stuck/wait", {})).status_code == 504
+        started = time.monotonic()
+        busy = await call(d, "POST", "/m/stuck/wait", {})
+        assert busy.status_code == 503 and "is busy" in busy.json()["error"], "refused, not queued behind it"
+        assert time.monotonic() - started < 0.15, "at once"
+        assert (await call(d, "POST", "/m/quick/go", {})).json() == {"went": True}, "another module's runs"
+    finally:
+        release.set()
+        close(d)
+
+
+async def test_slow_module_queries_are_bounded_and_the_daemons_own_stay_quick(store, monkeypatch):
+    import threading
+    release = threading.Event()
+    d = lanes_daemon(store, monkeypatch, release)
+    try:
+        slow = await asyncio.gather(*(call(d, "GET", "/m/stuck/wait") for _ in range(daemon_mod.MODULE_GETS)))
+        assert [r.status_code for r in slow] == [504] * daemon_mod.MODULE_GETS
+        assert (await call(d, "GET", "/m/stuck/wait")).status_code == 503, "one more is refused, not queued"
+        started = time.monotonic()
+        assert (await call(d, "GET", "/settings")).status_code == 200
+        assert time.monotonic() - started < 1, "the daemon's own queries aren't behind the module's"
+        assert (await call(d, "GET", "/m/quick/go")).json() == {"went": True}, "nor another module's"
+    finally:
+        release.set()
+        close(d)

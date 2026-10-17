@@ -54,7 +54,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import auth, features, fingerprint, liveness, models, transcript_usage, tutorial
+from . import api, auth, docroots, features, fingerprint, liveness, models, served, transcript_usage, tutorial
 from .hub import Done, Event, Hub, host_context
 from .store import COMPACT_QUESTION, NOTES_SEEN, THEN, TOUR_AT, SessionGone, Store, inbox_rank, mode, runner, standing
 
@@ -62,6 +62,9 @@ ADDRESS = "127.0.0.1"   # the port is features.port()
 TICK = 1.0           # seconds between the hub's refreshes, as the TUI's tick
 RING = 1024          # events kept for a client that reconnects
 PING = 15            # seconds between keep-alive comments on a quiet stream
+MODULE_WAIT = 10.0   # seconds a module's route is waited on before 504 (it carries on, off the hub's thread)
+MODULE_GETS = 4      # a module's queries under way at once: one more is refused 503 (Lane)
+BUSY = "module {mid} is busy: {why}. Try again shortly"
 READ_WAIT = 1.0      # seconds a conversation waits on a read of it under way before 503
 LOCK = "daemon.lock"
 LOCK_WAIT = 0.5      # seconds it waits on the lock: a client's glance at it is shorter
@@ -325,6 +328,35 @@ class Guard:
         await self.app(scope, receive, send)
 
 
+class Lane:
+    """One module's threads (served.py): its commands one at a time on a thread of their own,
+    and its queries on MODULE_GETS more, so a slow module holds up neither the hub, the
+    daemon's own queries nor another module. Counted on the event loop alone."""
+
+    def __init__(self, mid: str):
+        self.mid = mid
+        self.commands = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"wheelhouse-{mid}")
+        self.queries = ThreadPoolExecutor(max_workers=MODULE_GETS, thread_name_prefix=f"wheelhouse-{mid}-q")
+        self.querying = 0
+        self.overrun = None   # the command that ran past MODULE_WAIT, while it runs on
+
+    def done_querying(self) -> None:
+        self.querying -= 1
+
+    def shutdown(self) -> None:
+        self.commands.shutdown(wait=False, cancel_futures=True)
+        self.queries.shutdown(wait=False, cancel_futures=True)
+
+
+async def waited(future):
+    """A module's call, waited on MODULE_WAIT seconds, then 504 while it carries on."""
+    try:
+        return await asyncio.wait_for(asyncio.shield(future), MODULE_WAIT)
+    except TimeoutError:
+        raise Refused(504, f"the module took longer than {MODULE_WAIT:g} s and carries on: sent again "
+                      "with another Idempotency-Key, it may be done twice") from None
+
+
 def done_json(done: Done) -> dict:
     return {"ok": done.ok, "notices": [{"text": e.text, "severity": e.severity} for e in done.notices],
             "denied": done.denied, **({"sid": done.sid} if done.sid else {})}
@@ -365,6 +397,7 @@ class Daemon:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="wheelhouse")
         self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wheelhouse-hub")
+        self.lanes: dict[str, Lane] = {}   # each module's own threads (Lane), made as it's first called
         self.loop_thread: int | None = None
         # a connection of its own, only to read the marks, outside the store's lock: they move
         # with every commit made by any connection, the hosts', the MCP servers' and the hub's
@@ -377,6 +410,7 @@ class Daemon:
         self.unkept: dict[str, dict] = {}  # answers the store couldn't keep: kept here till a tick can
         self.reading: dict[str, threading.Lock] = {}   # each session's transcript, read by one request at a time
         self.hub.listen(self.heard)
+        self.served = served.serve(self.hub)   # the modules' routes and doc roots (.plan/modules.md)
         self.app = Starlette(routes=[
             Route("/sessions", self.query(self.sessions, run=None)),
             Route("/sessions", self.command(self.new_session), methods=["POST"]),
@@ -419,6 +453,10 @@ class Daemon:
             Route("/tour/seen", self.command(self.tour_seen), methods=["POST"]),
             Route("/tour/at", self.command(self.tour_at), methods=["POST"]),
             Route("/shutdown", self.command(self.shutdown_requested), methods=["POST"]),
+            # the modules' (served.py): a doc under a doc root, and each module's own routes
+            Route("/docs", self.query(self.doc)),
+            Route("/m/{mid}/{rest:path}", self.query(self.module_query, run=self.module_run)),
+            Route("/m/{mid}/{rest:path}", self.command(self.module_command, hub=False), methods=["POST"]),
         ], middleware=[Middleware(Guard, daemon=self)], lifespan=self.lifespan)
 
     # the hub's work and what it says
@@ -581,6 +619,8 @@ class Daemon:
         self.hub.stop_usage()
         self.pool.shutdown(wait=False, cancel_futures=True)
         self.worker.shutdown(wait=False, cancel_futures=True)
+        for lane in self.lanes.values():
+            lane.shutdown()
         self.hub.drop_pending_forks()   # a forked callback just cancelled never runs
 
     # requests
@@ -604,7 +644,42 @@ class Daemon:
                 return refusal(e)
         return endpoint
 
-    def command(self, handler):
+    def lane(self, mid: str) -> "Lane":
+        """A module's threads; KeyError (404) for a module serving no routes, so a path names
+        no lane into being."""
+        if mid not in self.served.routes:
+            raise KeyError(f"no module {mid} serving routes")
+        if mid not in self.lanes:
+            self.lanes[mid] = Lane(mid)
+        return self.lanes[mid]
+
+    async def module_run(self, handler, request: Request):
+        """A module's GET on its own few threads (Lane), never starlette's, which the daemon's
+        own queries share: 503 while MODULE_GETS are under way, 504 past MODULE_WAIT."""
+        lane = self.lane(request.path_params["mid"])
+        if lane.querying >= MODULE_GETS:
+            raise Refused(503, BUSY.format(mid=lane.mid, why=f"{MODULE_GETS} of its queries are under way"))
+        lane.querying += 1
+        future = asyncio.get_running_loop().run_in_executor(lane.queries, handler, request)
+        future.add_done_callback(lambda f: lane.done_querying())
+        return await waited(future)
+
+    async def module_carry_out(self, handler, request: Request, key: str, raw: bytes) -> Response:
+        """A module's POST on its own thread (Lane), one at a time, so an Idempotency-Key sent
+        twice is still done once: refused 503 at once while one has run past MODULE_WAIT,
+        rather than queued behind it."""
+        lane = self.lane(request.path_params["mid"])
+        if lane.overrun is not None and not lane.overrun.done():
+            raise Refused(503, BUSY.format(mid=lane.mid, why="a command of its own is still running"))
+        future = asyncio.get_running_loop().run_in_executor(
+            lane.commands, functools.partial(self.carry_out, handler, request, key, raw, False))
+        try:
+            return await waited(future)
+        except Refused:
+            lane.overrun = future
+            raise
+
+    def command(self, handler, hub: bool = True):
         """A POST: from a client, not another site's page; with an Idempotency-Key, whose
         answer is kept, so the same request sent again is answered the same and done once.
         What it moved is published at once, not at the next tick, and the rows /sessions
@@ -618,6 +693,8 @@ class Daemon:
                 if not key:
                     raise Refused(400, "every command needs an Idempotency-Key")
                 raw = await request.body()
+                if not hub:   # a module's: on its own thread, so a slow one never holds up the hub
+                    return await self.module_carry_out(handler, request, key, raw)
                 return await self.on_hub(self.carry_out, handler, request, key, raw)
             except ClientDisconnect:   # gone before it sent the body: nothing done, nobody to tell
                 return Response(status_code=499)
@@ -625,12 +702,15 @@ class Daemon:
                 return refusal(e)
         return endpoint
 
-    def carry_out(self, handler, request: Request, key: str, raw: bytes) -> Response:
+    def carry_out(self, handler, request: Request, key: str, raw: bytes, hub: bool = True) -> Response:
         """A command, on the hub's thread: one at a time, so the same key sent twice at once
         is still done once. One that fails unexpectedly (the database locked) is kept if and
         only if it wrote anything first (store.written): a retry then gets the same 500 rather
-        than act twice; one that wrote nothing escapes unkept, so a retry tries again."""
-        fingerprint = hashlib.sha256(f"{request.url.path}\n".encode() + raw).hexdigest()
+        than act twice; one that wrote nothing escapes unkept, so a retry tries again. hub
+        False: a module's (served.py), on the modules' own thread, its answer always kept, and
+        nothing of the hub's refreshed or published."""
+        query = f"?{request.url.query}" if request.url.query else ""
+        fingerprint = hashlib.sha256(f"{request.url.path}{query}\n".encode() + raw).hexdigest()
         if (kept := self.unkept.get(key) or self.store.answered(key)) is not None:
             if kept["fingerprint"] != fingerprint:
                 return refusal(Refused(422, "that Idempotency-Key was used for another request"))
@@ -648,7 +728,7 @@ class Daemon:
         except ANSWERED as e:
             response = refusal(e)
         except Exception as e:
-            if self.store.written() == wrote:
+            if hub and self.store.written() == wrote:   # a module's is kept: it writes no store
                 raise
             response = refusal(e)
         answer = {"fingerprint": fingerprint, "status": response.status_code, "body": response.body.decode()}
@@ -658,9 +738,10 @@ class Daemon:
             print(f"wheelhouse daemon: couldn't keep the answer to {key} ({e}): kept in memory meanwhile",
                   file=sys.stderr, flush=True)
             self.unkept[key] = answer
-        seen = self.marks()
-        self.hub.refresh()   # what /sessions serves has the command's change before it's published
-        self.publish_moved(seen)
+        if hub:   # a module's moves nothing of the hub's
+            seen = self.marks()
+            self.hub.refresh()   # what /sessions serves has the command's change before it's published
+            self.publish_moved(seen)
         return response
 
     async def events(self, request: Request) -> Response:
@@ -787,9 +868,10 @@ class Daemon:
         return {"limits": {k: list(v) for k, v in u.limits.items()}, "read": u.read, "failed": u.failed}
 
     def settings(self, request: Request) -> dict:
-        """The TUI's kept splitter sizes, each a share of its parent: no other setting."""
-        return dict(self.store._all("SELECT key, value FROM settings WHERE substr(key, 1, ?) = ?",
-                                    (len(LAYOUT), LAYOUT)))
+        """The TUI's kept layout (layout.*: splitter sizes, sorts, slots), and the modules
+        switched off (api.DISABLED), which it reads at start: no other setting."""
+        return dict(self.store._all("SELECT key, value FROM settings WHERE substr(key, 1, ?) = ? OR key = ?",
+                                    (len(LAYOUT), LAYOUT, api.DISABLED)))
 
     def agent_conversation(self, request: Request) -> list[dict] | None:
         """A subagent item's own conversation, read now (Hub.agent_conversation), on
@@ -813,7 +895,24 @@ class Daemon:
             return {"same": True}
         return doc
 
+    def doc(self, request: Request) -> dict:
+        """A doc under a module's doc root (docroots.read: ?path=, absolute), or {"same": true}
+        if its stamp is still ?have=; 403 for any other path, resolved first, so neither ..
+        nor a symlink reaches outside."""
+        try:
+            return self.served.read(text(dict(request.query_params), "path"), request.query_params.get("have"))
+        except docroots.Outside as e:
+            raise Refused(403, str(e)) from None
+
+    def module_query(self, request: Request):
+        p = request.path_params
+        return self.served.dispatch(p["mid"], "GET", p["rest"], request.query_params, None)
+
     # commands
+
+    def module_command(self, request: Request, body: dict):
+        p = request.path_params
+        return self.served.dispatch(p["mid"], "POST", p["rest"], request.query_params, body)
 
     def set_setting(self, request: Request, body: dict) -> Done:
         """A splitter size kept, or with value null its default put back."""
@@ -1021,7 +1120,7 @@ class Daemon:
 
 # the errors a request is answered with, each as its status (refusal): a command's is kept
 # with its key, as any other (the database locked) may not happen again
-ANSWERED = (Refused, SessionGone, KeyError, ValueError)
+ANSWERED = (Refused, api.Refused, served.Failed, SessionGone, KeyError, ValueError)
 
 
 def refusal(e: Exception) -> JSONResponse:
@@ -1031,6 +1130,12 @@ def refusal(e: Exception) -> JSONResponse:
     headers = None
     if isinstance(e, Refused):
         status, error, headers = e.status, e.error, e.headers
+    elif isinstance(e, api.Refused):   # a module's route refusing
+        status, error = e.status, e.error
+    elif isinstance(e, served.Failed):   # a module's route failing: its bug, not the daemon's
+        status, error = 500, str(e)
+        print(f"wheelhouse daemon: {error}", file=sys.stderr, flush=True)
+        traceback.print_exception(e.__cause__ or e)
     elif isinstance(e, (SessionGone, KeyError)):
         status, error = 404, str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e)
     elif isinstance(e, ValueError):

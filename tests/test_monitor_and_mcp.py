@@ -106,8 +106,9 @@ def test_poll_once_delivers_each_message_once(store, sid):
     assert out.getvalue().count("first") == 1
 
 
-def test_mcp_server_round_trip(store, sid, db_file):
+def test_mcp_server_round_trip(store, sid, db_file, tmp_path):
     """Start the real stdio server and drive it like Claude Code would."""
+    (tmp_path / ".git").mkdir()   # the session's directory a repo, for set_doc_dirs
     store.register(sid, 999999, 1, "boot-x")   # as `claude_wheelhouse run` would, before exec
     params = StdioServerParameters(command=sys.executable, args=["-m", "claude_wheelhouse", "mcp"],
                                    env=dict(os.environ, WHEELHOUSE_SESSION_ID=sid, WHEELHOUSE_DB=str(db_file)))
@@ -116,7 +117,7 @@ def test_mcp_server_round_trip(store, sid, db_file):
         async with stdio_client(params) as (r, w), ClientSession(r, w) as client:
             await client.initialize()
             names = {t.name for t in (await client.list_tools()).tools}
-            assert {"post_item", "update_item", "reply", "set_synopsis", "get_input", "list_items",
+            assert {"post_item", "update_item", "reply", "set_synopsis", "set_doc_dirs", "get_input", "list_items",
                     "park_session", "end_session"} <= names
             ref = (await client.call_tool("post_item", {"kind": "question", "title": "db?",
                                                          "body": "detail"})).content[0].text
@@ -127,9 +128,12 @@ def test_mcp_server_round_trip(store, sid, db_file):
             replied = (await client.call_tool("reply", {"ref": ref, "text": "which version?",
                                                         "status": "open"})).content[0].text
             await client.call_tool("set_synopsis", {"text": "Choosing a database."})
-            return ref, got, refused, replied
+            dirs = (await client.call_tool("set_doc_dirs", {"paths": ["docs/decisions"]})).content[0].text
+            return ref, got, refused, replied, dirs
 
-    ref, got, refused, replied = anyio.run(drive)
+    ref, got, refused, replied, dirs = anyio.run(drive)
+    assert dirs == "decisions are looked for in docs/decisions"
+    assert store.session(sid)["doc_dirs"] == '["docs/decisions"]', "a list, through MCP's schema"
     assert replied == "replied on Q1, now open"
     assert store.item(sid, ref)["status"] == "open"
     assert store.session(sid)["synopsis"] == "Choosing a database."
@@ -387,3 +391,29 @@ def test_post_item_declares_a_doc(store, sid, tmp_path):
     t = mcp_server.post_item(kind="task", title="design it").split(".")[0]
     assert mcp_server.post_item(kind="doc", title="the plan", path=str(tmp_path / "plan.md"), parent=t) == "M1"
     assert store.item(sid, "M1")["parent_ref"] == t
+
+
+@pytest.mark.parametrize("given, kept, said, desc", [
+    (["docs/decisions"], '["docs/decisions"]', "decisions are looked for in docs/decisions", "declared"),
+    (["docs/adr", ".plan/"], '["docs/adr", ".plan"]', "decisions are looked for in docs/adr, .plan", "several, normalised"),
+    ([], None, "decisions are looked for in docs/adr", "none: docs/adr again"),
+    (["../elsewhere"], "unchanged", "is outside the git root", "outside the repo: refused, nothing kept"),
+    (["/abs"], "unchanged", "relative to the git root", "an absolute path: refused"),
+    (["."], "unchanged", "the git root itself", "the repo's root: refused"),
+    (["docs"], "no git", "in no git repo", "a session in no git repo: refused"),
+])
+def test_set_doc_dirs(store, sid, tmp_path, given, kept, said, desc):
+    from claude_wheelhouse import mcp_server
+    mcp_server._store, mcp_server._sid = store, sid
+    if kept != "no git":
+        (tmp_path / ".git").mkdir()
+    else:
+        kept = "unchanged"
+    store.set_doc_dirs(sid, ["before"])
+    if kept == "unchanged":
+        with pytest.raises(Exception, match=said):
+            mcp_server.set_doc_dirs(given)
+        assert store.session(sid)["doc_dirs"] == '["before"]', desc
+    else:
+        assert mcp_server.set_doc_dirs(given) == said, desc
+        assert store.session(sid)["doc_dirs"] == kept, desc

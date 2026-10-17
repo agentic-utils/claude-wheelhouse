@@ -240,7 +240,9 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "park_compact", "INTEGER NOT NULL DEFAULT 0"), ("items", "parent_ref", "TEXT"),
                  # the person's order (ordering.py): a row's place, and the group it was placed in
                  ("items", "pos", "REAL"), ("items", "pos_group", "TEXT"),
-                 ("sessions", "pos", "REAL"), ("sessions", "pos_group", "TEXT")]
+                 ("sessions", "pos", "REAL"), ("sessions", "pos_group", "TEXT"),
+                 # where its repo's decisions are, as it declared them (set_doc_dirs): JSON, NULL for docs/adr
+                 ("sessions", "doc_dirs", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -654,6 +656,13 @@ class Store:
         with self.tx() as db:
             self._require(db, sid)
             db.execute("UPDATE sessions SET synopsis = ? WHERE id = ?", (text.strip(), sid))
+
+    def set_doc_dirs(self, sid: str, dirs: list[str] | None) -> None:
+        """The directories, relative to its git root, where a session's repo keeps its
+        decisions (docroots.checked), or None to have docs/adr again."""
+        with self.tx() as db:
+            self._require(db, sid)
+            db.execute("UPDATE sessions SET doc_dirs = ? WHERE id = ?", (json.dumps(dirs) if dirs else None, sid))
 
     def mark_launched(self, sid: str) -> None:
         """A (re)launch also drops any request left over from the last run. It keeps the last

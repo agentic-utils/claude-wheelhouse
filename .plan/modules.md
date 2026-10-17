@@ -104,6 +104,21 @@ the module's own routes through the client (local or remote, as core's queries g
 settings table. Daemon and TUI both read it at start: a disabled module mounts no pane and no
 routes. A disabled or uninstalled module's slot collapses, as above.
 
+**As built (stage 5).** A route is `api.Route(path, handler, method)`, `{name}` segments as
+params, its handler taking an `api.Call(params, query, body)` and answering JSON or raising
+`api.Refused(status, error)`; a GET runs as a query, a POST as a command (Idempotency-Key)
+on the module's own thread (`daemon.Lane`; GETs on 4 more, `MODULE_GETS`, then 503), never the hub's, each waited on `daemon.MODULE_WAIT` (10 s) and
+then answered 504. The fingerprint covers each installed module's entry point, version and
+source, so a module reinstalled restarts the daemon. `served.py` holds the routes and doc roots for the daemon and, the same
+way, for `LocalClient` with `--local`, so `Context.call` answers alike through either. The
+viewer reads a doc root's file through `GET /docs?path=` (403 outside the roots, `have=` as
+a doc item's); `docroots.confine` is the allow-list stage 8 writes through. `show_doc`
+takes the Detail pane until the selection moves. `fingerprint.API` is 5. `set_doc_dirs`
+stores relative directories on the session (`sessions.doc_dirs`, an empty list for
+`docs/adr` again), never the git root itself, and none for a session in no git repo; a repo's directories are every one its sessions declared
+(`docroots.doc_dirs`, `api.doc_dirs`). `PROTOCOL_VERSION` is not bumped for it yet, as
+nothing reads it until the Design module: stage 6 bumps it.
+
 **No module, no harm.** With neither installed, the wheelhouse is sessions, inbox and detail,
 as it was before stats. Core never imports a module. Docs the inbox shows (doc items) keep
 the viewer and editor, which are core (below).

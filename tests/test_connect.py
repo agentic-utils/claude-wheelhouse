@@ -136,10 +136,11 @@ def test_a_daemon_from_another_package_is_joined_if_its_api_matches(state, monke
     _, _, said = connect.local(state_dir, port)
     assert daemon_pid(state_dir) == pid and said == [f"the daemon (pid {pid}) runs other code, from "
                                                      f"{fingerprint.PACKAGE.parent}/claude_wheelhouse"], said
-    api = fingerprint.API   # one past whatever it is now, so a bump never breaks the test
-    monkeypatch.setattr(fingerprint, "API", api + 1)
-    with pytest.raises(connect.NoDaemon, match=f"speaks API {api}, this wheelhouse {api + 1}"):
-        connect.local(state_dir, port)
+    served = fingerprint.API
+    for mine in (served + 1, served - 1):   # a newer app on an older daemon, and an older app on a newer one
+        monkeypatch.setattr(fingerprint, "API", mine)
+        with pytest.raises(connect.NoDaemon, match=f"speaks API {served}, this wheelhouse {mine}"):
+            connect.local(state_dir, port)
 
 
 def test_a_daemon_that_holds_its_lock_and_never_answers_is_left_alone(state, monkeypatch):
