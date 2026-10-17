@@ -1289,7 +1289,8 @@ def moduled(store, monkeypatch, tmp_path):
     yield d, tmp_path
     d.pool.shutdown()
     d.worker.shutdown()
-    d.module_worker.shutdown()
+    for lane in d.lanes.values():
+        lane.shutdown()
     d.watch.close()
 
 
@@ -1310,14 +1311,13 @@ async def test_a_slow_module_route_is_504_and_never_holds_up_the_hub(store, monk
         assert (await call(d, "POST", "/dispatch")).status_code == 200, f"{desc}: and a command of the hub's done"
         release.set()
         if method == "POST":   # the same command again gets its answer, once it has one
+            while not d.lanes["slow"].overrun.done():
+                await asyncio.sleep(0.01)
             again = await call(d, "POST", "/m/slow/wait", {}, key="slow-1")
             assert (again.status_code, again.json()) == (200, {"done": True}), desc
     finally:
         release.set()
-        d.pool.shutdown()
-        d.worker.shutdown()
-        d.module_worker.shutdown()
-        d.watch.close()
+        close(d)
 
 
 async def test_a_commands_key_covers_its_query_string(moduled):
@@ -1335,7 +1335,10 @@ async def test_a_commands_key_covers_its_query_string(moduled):
     ("GET", "/m/probe/refuse", None, 409, {"error": "not now", "type": "Refused"}, "a route's refusal, as it said it"),
     ("GET", "/m/probe/nothing", None, 404, None, "no such route"),
     ("GET", "/m/off/echo/x", None, 404, None, "a module switched off serves nothing"),
-    ("GET", "/m/probe/broken", None, 500, None, "a route that fails: the daemon's 500"),
+    ("GET", "/m/probe/broken", None, 500, {"error": "the module failed: RuntimeError: bug", "type": "Failed"},
+     "a route that fails: 500, as --local says it"),
+    ("GET", "/m/probe/lookup", None, 500, None, "its own KeyError: 500, not 404"),
+    ("GET", "/m/probe/parse", None, 500, None, "its own ValueError: 500, not 400"),
     ("GET", "/docs?path={tmp}/root/a.md", None, 200, "# A\n", "a doc under a doc root"),
     ("GET", "/docs?path={tmp}/root/../out/c.md", None, 403, None, ".. out of the root"),
     ("GET", "/docs?path={tmp}/root/link.md", None, 403, None, "a symlink out of the root"),
@@ -1378,3 +1381,56 @@ async def test_a_doc_unchanged_is_answered_same(moduled):
 async def test_settings_say_which_modules_are_off(moduled):
     r = await call(moduled[0], "GET", "/settings")
     assert r.json().get("modules.disabled") == '["off"]'
+
+
+def lanes_daemon(store, monkeypatch, release):
+    """A daemon serving two modules: stuck, whose routes wait on release, and quick."""
+    from claude_wheelhouse import api
+    stuck = [api.Route("wait", lambda call: release.wait(5) and {"done": True}, m) for m in ("GET", "POST")]
+    quick = [api.Route("go", lambda call: {"went": True}, m) for m in ("GET", "POST")]
+    monkeypatch.setattr(api, "load", lambda: [
+        api.Loaded("stuck", api.Module("stuck", "S", "1", api.WHEELHOUSE_API, routes=lambda ctx: stuck)),
+        api.Loaded("quick", api.Module("quick", "Q", "1", api.WHEELHOUSE_API, routes=lambda ctx: quick))])
+    monkeypatch.setattr(daemon_mod, "MODULE_WAIT", 0.2)
+    return Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True)
+
+
+def close(d):
+    d.pool.shutdown()
+    d.worker.shutdown()
+    for lane in d.lanes.values():
+        lane.shutdown()
+    d.watch.close()
+
+
+async def test_a_stuck_modules_commands_are_refused_at_once_and_others_run(store, monkeypatch):
+    import threading
+    release = threading.Event()
+    d = lanes_daemon(store, monkeypatch, release)
+    try:
+        assert (await call(d, "POST", "/m/stuck/wait", {})).status_code == 504
+        started = time.monotonic()
+        busy = await call(d, "POST", "/m/stuck/wait", {})
+        assert busy.status_code == 503 and "is busy" in busy.json()["error"], "refused, not queued behind it"
+        assert time.monotonic() - started < 0.15, "at once"
+        assert (await call(d, "POST", "/m/quick/go", {})).json() == {"went": True}, "another module's runs"
+    finally:
+        release.set()
+        close(d)
+
+
+async def test_slow_module_queries_are_bounded_and_the_daemons_own_stay_quick(store, monkeypatch):
+    import threading
+    release = threading.Event()
+    d = lanes_daemon(store, monkeypatch, release)
+    try:
+        slow = await asyncio.gather(*(call(d, "GET", "/m/stuck/wait") for _ in range(daemon_mod.MODULE_GETS)))
+        assert [r.status_code for r in slow] == [504] * daemon_mod.MODULE_GETS
+        assert (await call(d, "GET", "/m/stuck/wait")).status_code == 503, "one more is refused, not queued"
+        started = time.monotonic()
+        assert (await call(d, "GET", "/settings")).status_code == 200
+        assert time.monotonic() - started < 1, "the daemon's own queries aren't behind the module's"
+        assert (await call(d, "GET", "/m/quick/go")).json() == {"went": True}, "nor another module's"
+    finally:
+        release.set()
+        close(d)

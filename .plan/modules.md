@@ -107,7 +107,7 @@ routes. A disabled or uninstalled module's slot collapses, as above.
 **As built (stage 5).** A route is `api.Route(path, handler, method)`, `{name}` segments as
 params, its handler taking an `api.Call(params, query, body)` and answering JSON or raising
 `api.Refused(status, error)`; a GET runs as a query, a POST as a command (Idempotency-Key)
-on the modules' own thread, never the hub's, each waited on `daemon.MODULE_WAIT` (10 s) and
+on the module's own thread (`daemon.Lane`; GETs on 4 more, `MODULE_GETS`, then 503), never the hub's, each waited on `daemon.MODULE_WAIT` (10 s) and
 then answered 504. The fingerprint covers each installed module's entry point, version and
 source, so a module reinstalled restarts the daemon. `served.py` holds the routes and doc roots for the daemon and, the same
 way, for `LocalClient` with `--local`, so `Context.call` answers alike through either. The

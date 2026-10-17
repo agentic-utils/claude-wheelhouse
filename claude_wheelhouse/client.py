@@ -27,6 +27,8 @@ from .hub import RUNNING, Done, Event, Hub, host_context, requested
 from .store import NOTES_SEEN, TOUR_AT, SessionGone
 
 TIMEOUT = 10        # seconds a request may take to be answered (a launch, Relaunch all)
+# a module's route (call_module): longer than the daemon waits on one (daemon.MODULE_WAIT, 10 s), so its 504 is heard
+MODULE_TIMEOUT = 15
 CONNECT = 2         # seconds to connect: the daemon is on this machine, or one hop away
 STREAM_READ = 40    # seconds the stream may go quiet: the daemon pings every 15
 BACKOFF = (0.5, 1, 2, 5)   # seconds between tries to reconnect, the last repeated
@@ -296,7 +298,7 @@ class RemoteClient:
 
     # requests
 
-    def request(self, method: str, path: str, body=None, key: str | None = None):
+    def request(self, method: str, path: str, body=None, key: str | None = None, timeout: float | None = None):
         """One request, answered as JSON, or Refused with the daemon's error (a 401 for a
         token that isn't the daemon's). Unreachable if it couldn't connect; the httpx error
         as it is if the answer was lost after sending."""
@@ -304,7 +306,8 @@ class RemoteClient:
             raise Unreachable(UNREACHABLE)
         headers = {"Idempotency-Key": key} if key else {}
         try:
-            r = self.http.request(method, path, json=body, headers=headers)
+            r = self.http.request(method, path, json=body, headers=headers,
+                                  **({"timeout": timeout} if timeout is not None else {}))
         except (self.httpx.ConnectError, self.httpx.ConnectTimeout, self.httpx.PoolTimeout) as e:
             raise Unreachable(UNREACHABLE) from e
         if r.status_code >= 400:
@@ -618,8 +621,8 @@ class RemoteClient:
         with an Idempotency-Key, with one. api.Refused for any failure, 503 for no daemon."""
         try:
             if body is None:
-                return self.get(f"/m/{mid}/{path}")
-            return self.request("POST", f"/m/{mid}/{path}", body, str(uuid.uuid4()))
+                return self.request("GET", f"/m/{mid}/{path}", timeout=MODULE_TIMEOUT)
+            return self.request("POST", f"/m/{mid}/{path}", body, str(uuid.uuid4()), MODULE_TIMEOUT)
         except Refused as e:
             raise api.Refused(e.status, e.error) from None
         except (Unreachable, self.httpx.TransportError) as e:

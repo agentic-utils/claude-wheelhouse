@@ -18,6 +18,10 @@ def facts(hub) -> list[dict]:
              "cwd": s["cwd"], "doc_dirs": docroots.declared(s["doc_dirs"])} for s in hub.sessions]
 
 
+class Failed(Exception):
+    """A module's route raised something other than api.Refused: 500, through either client."""
+
+
 def match(pattern: str, path: str) -> dict[str, str] | None:
     """A route's path against one asked for, segment by segment, {name} taking any one:
     its params, or None if it doesn't match."""
@@ -57,8 +61,15 @@ class Served:
         raise KeyError(f"no route {method} /m/{mid}/{path}")
 
     def dispatch(self, mid: str, method: str, path: str, query: dict, body: dict | None):
+        """What a route answers. 4xx only for no route (404) or the module's own Refused: any
+        other exception it raises, a KeyError or ValueError of its own too, is Failed (500)."""
         route, params = self.route(mid, method, path)
-        return route.handler(api.Call(params, dict(query), body))
+        try:
+            return route.handler(api.Call(params, dict(query), body))
+        except api.Refused:
+            raise
+        except Exception as e:
+            raise Failed(f"the module failed: {type(e).__name__}: {e}") from e
 
     def call(self, mid: str, path: str, body: dict | None = None):
         """As a pane's Context.call reaches the daemon's, in process: a GET without a body, a
@@ -67,13 +78,11 @@ class Served:
         path, _, qs = path.partition("?")
         try:
             return self.dispatch(mid, "GET" if body is None else "POST", path, dict(parse_qsl(qs)), body)
-        except api.Refused:
-            raise
-        except KeyError as e:
+        except KeyError as e:   # no route: dispatch's own, never the handler's (Failed)
             raise api.Refused(404, e.args[0]) from None
-        except Exception as e:
-            said(f"module {mid}'s route failed", e)
-            raise api.Refused(500, f"the daemon failed: {type(e).__name__}: {e}") from None
+        except Failed as e:
+            said(f"module {mid}'s route failed", e.__cause__)
+            raise api.Refused(500, str(e)) from None
 
     def doc_roots(self) -> list[Path]:
         out = []

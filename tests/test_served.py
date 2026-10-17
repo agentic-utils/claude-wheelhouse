@@ -17,12 +17,20 @@ def broken(call: api.Call):
     raise RuntimeError("bug")
 
 
+def lookup(call: api.Call):
+    return {}["missing"]
+
+
+def parse(call: api.Call):
+    return int("x")
+
+
 def probe(roots=(), routes=None, id="probe"):
     """The test module: routes that echo, refuse and break, and roots as given."""
     def made(ctx):
         return routes if routes is not None else [
             api.Route("echo/{a}", echo), api.Route("echo/{a}", echo, "POST"), api.Route("refuse", refuse),
-            api.Route("broken", broken)]
+            api.Route("broken", broken), api.Route("lookup", lookup), api.Route("parse", parse)]
     return api.Module(id, id.title(), "1.0", api.WHEELHOUSE_API, routes=made,
                       doc_roots=lambda ctx: [Path(r) for r in roots])
 
@@ -48,7 +56,10 @@ def test_match(pattern, path, params, desc):
     ("refuse", None, (409, "not now"), "a route's own refusal, as it said it"),
     ("missing", None, (404, "no route GET /m/probe/missing"), "no such route: 404"),
     ("refuse", {}, (404, "no route POST /m/probe/refuse"), "a route by another method: 404"),
-    ("broken", None, (500, "the daemon failed: RuntimeError: bug"), "a route that fails: 500, as the daemon says it"),
+    ("broken", None, (500, "the module failed: RuntimeError: bug"), "a route that fails: 500, as the daemon says it"),
+    ("lookup", None, (500, "the module failed: KeyError: 'missing'"), "its own KeyError: 500, not 404"),
+    ("parse", None, (500, "the module failed: ValueError: invalid literal for int() with base 10: 'x'"),
+     "its own ValueError: 500, not 400"),
 ])
 def test_call_in_process(path, body, expect, desc):
     s = served.Served([api.Loaded("probe", probe())], CTX)

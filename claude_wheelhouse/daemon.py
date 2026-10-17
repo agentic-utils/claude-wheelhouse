@@ -63,6 +63,8 @@ TICK = 1.0           # seconds between the hub's refreshes, as the TUI's tick
 RING = 1024          # events kept for a client that reconnects
 PING = 15            # seconds between keep-alive comments on a quiet stream
 MODULE_WAIT = 10.0   # seconds a module's route is waited on before 504 (it carries on, off the hub's thread)
+MODULE_GETS = 4      # a module's queries under way at once: one more is refused 503 (Lane)
+BUSY = "module {mid} is busy: {why}. Try again shortly"
 READ_WAIT = 1.0      # seconds a conversation waits on a read of it under way before 503
 LOCK = "daemon.lock"
 LOCK_WAIT = 0.5      # seconds it waits on the lock: a client's glance at it is shorter
@@ -326,6 +328,35 @@ class Guard:
         await self.app(scope, receive, send)
 
 
+class Lane:
+    """One module's threads (served.py): its commands one at a time on a thread of their own,
+    and its queries on MODULE_GETS more, so a slow module holds up neither the hub, the
+    daemon's own queries nor another module. Counted on the event loop alone."""
+
+    def __init__(self, mid: str):
+        self.mid = mid
+        self.commands = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"wheelhouse-{mid}")
+        self.queries = ThreadPoolExecutor(max_workers=MODULE_GETS, thread_name_prefix=f"wheelhouse-{mid}-q")
+        self.querying = 0
+        self.overrun = None   # the command that ran past MODULE_WAIT, while it runs on
+
+    def done_querying(self) -> None:
+        self.querying -= 1
+
+    def shutdown(self) -> None:
+        self.commands.shutdown(wait=False, cancel_futures=True)
+        self.queries.shutdown(wait=False, cancel_futures=True)
+
+
+async def waited(future):
+    """A module's call, waited on MODULE_WAIT seconds, then 504 while it carries on."""
+    try:
+        return await asyncio.wait_for(asyncio.shield(future), MODULE_WAIT)
+    except TimeoutError:
+        raise Refused(504, f"the module took longer than {MODULE_WAIT:g} s and carries on: sent again "
+                      "with another Idempotency-Key, it may be done twice") from None
+
+
 def done_json(done: Done) -> dict:
     return {"ok": done.ok, "notices": [{"text": e.text, "severity": e.severity} for e in done.notices],
             "denied": done.denied, **({"sid": done.sid} if done.sid else {})}
@@ -366,8 +397,7 @@ class Daemon:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="wheelhouse")
         self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wheelhouse-hub")
-        # the modules' commands, one at a time (an Idempotency-Key's twice still done once), never on the hub's
-        self.module_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wheelhouse-modules")
+        self.lanes: dict[str, Lane] = {}   # each module's own threads (Lane), made as it's first called
         self.loop_thread: int | None = None
         # a connection of its own, only to read the marks, outside the store's lock: they move
         # with every commit made by any connection, the hosts', the MCP servers' and the hub's
@@ -589,7 +619,8 @@ class Daemon:
         self.hub.stop_usage()
         self.pool.shutdown(wait=False, cancel_futures=True)
         self.worker.shutdown(wait=False, cancel_futures=True)
-        self.module_worker.shutdown(wait=False, cancel_futures=True)
+        for lane in self.lanes.values():
+            lane.shutdown()
         self.hub.drop_pending_forks()   # a forked callback just cancelled never runs
 
     # requests
@@ -613,16 +644,40 @@ class Daemon:
                 return refusal(e)
         return endpoint
 
-    async def module_run(self, handler, request: Request):
-        """A module's GET on starlette's threads, waited on MODULE_WAIT seconds at most (504)."""
-        return await self.waited(run_in_threadpool(handler, request))
+    def lane(self, mid: str) -> "Lane":
+        """A module's threads; KeyError (404) for a module serving no routes, so a path names
+        no lane into being."""
+        if mid not in self.served.routes:
+            raise KeyError(f"no module {mid} serving routes")
+        if mid not in self.lanes:
+            self.lanes[mid] = Lane(mid)
+        return self.lanes[mid]
 
-    async def waited(self, work):
+    async def module_run(self, handler, request: Request):
+        """A module's GET on its own few threads (Lane), never starlette's, which the daemon's
+        own queries share: 503 while MODULE_GETS are under way, 504 past MODULE_WAIT."""
+        lane = self.lane(request.path_params["mid"])
+        if lane.querying >= MODULE_GETS:
+            raise Refused(503, BUSY.format(mid=lane.mid, why=f"{MODULE_GETS} of its queries are under way"))
+        lane.querying += 1
+        future = asyncio.get_running_loop().run_in_executor(lane.queries, handler, request)
+        future.add_done_callback(lambda f: lane.done_querying())
+        return await waited(future)
+
+    async def module_carry_out(self, handler, request: Request, key: str, raw: bytes) -> Response:
+        """A module's POST on its own thread (Lane), one at a time, so an Idempotency-Key sent
+        twice is still done once: refused 503 at once while one has run past MODULE_WAIT,
+        rather than queued behind it."""
+        lane = self.lane(request.path_params["mid"])
+        if lane.overrun is not None and not lane.overrun.done():
+            raise Refused(503, BUSY.format(mid=lane.mid, why="a command of its own is still running"))
+        future = asyncio.get_running_loop().run_in_executor(
+            lane.commands, functools.partial(self.carry_out, handler, request, key, raw, False))
         try:
-            return await asyncio.wait_for(asyncio.shield(work), MODULE_WAIT)
-        except TimeoutError:
-            raise Refused(504, f"the module took longer than {MODULE_WAIT:g} s: it carries on, and the same "
-                          "command sent again gets its answer once it has one") from None
+            return await waited(future)
+        except Refused:
+            lane.overrun = future
+            raise
 
     def command(self, handler, hub: bool = True):
         """A POST: from a client, not another site's page; with an Idempotency-Key, whose
@@ -639,9 +694,7 @@ class Daemon:
                     raise Refused(400, "every command needs an Idempotency-Key")
                 raw = await request.body()
                 if not hub:   # a module's: on its own thread, so a slow one never holds up the hub
-                    loop = asyncio.get_running_loop()
-                    return await self.waited(loop.run_in_executor(self.module_worker, functools.partial(
-                        self.carry_out, handler, request, key, raw, False)))
+                    return await self.module_carry_out(handler, request, key, raw)
                 return await self.on_hub(self.carry_out, handler, request, key, raw)
             except ClientDisconnect:   # gone before it sent the body: nothing done, nobody to tell
                 return Response(status_code=499)
@@ -1067,7 +1120,7 @@ class Daemon:
 
 # the errors a request is answered with, each as its status (refusal): a command's is kept
 # with its key, as any other (the database locked) may not happen again
-ANSWERED = (Refused, api.Refused, SessionGone, KeyError, ValueError)
+ANSWERED = (Refused, api.Refused, served.Failed, SessionGone, KeyError, ValueError)
 
 
 def refusal(e: Exception) -> JSONResponse:
@@ -1079,6 +1132,10 @@ def refusal(e: Exception) -> JSONResponse:
         status, error, headers = e.status, e.error, e.headers
     elif isinstance(e, api.Refused):   # a module's route refusing
         status, error = e.status, e.error
+    elif isinstance(e, served.Failed):   # a module's route failing: its bug, not the daemon's
+        status, error = 500, str(e)
+        print(f"wheelhouse daemon: {error}", file=sys.stderr, flush=True)
+        traceback.print_exception(e.__cause__ or e)
     elif isinstance(e, (SessionGone, KeyError)):
         status, error = 404, str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e)
     elif isinstance(e, ValueError):
