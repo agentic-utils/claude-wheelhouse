@@ -53,14 +53,13 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, callout, emoji, features, models, ordering, stats, subagents, transcript, tutorial, whatsnew
+from . import api, callout, emoji, features, models, ordering, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import NUDGE_TOKENS
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
-from .stats_pane import SessionStats
 from .tour import Tour
 from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mode, runner, spared, standing)
@@ -2162,11 +2161,11 @@ class ForgetChoice(Dialog):
 def forget_prompt(name: str, warm: bool, expires: float | None, context: int, queued: int) -> str:
     """ForgetChoice's question: which choice is the default, and why, from the cache's warmth."""
     if warm:
-        why = f"Its prompt cache is warm until {stats.clock(expires)}, so its end steps are cheap: " \
+        why = f"Its prompt cache is warm until {transcript_usage.clock(expires)}, so its end steps are cheap: " \
               "let it know (the default)." if expires else "Its prompt cache is warm: let it know (the default)."
     else:
-        since = f"cold since {stats.clock(expires)}" if expires else "cold"
-        cost = f": its end steps would re-read ~{stats.tokens(context)}" if context else ""
+        since = f"cold since {transcript_usage.clock(expires)}" if expires else "cold"
+        cost = f": its end steps would re-read ~{transcript_usage.tokens(context)}" if context else ""
         why = f"Its prompt cache is {since}{cost}, so just stop it (the default)."
     lost = f" {queued} queued answer(s) will be discarded." if queued else ""
     return (f"Stop & Forget {name}? Let it know and it does its end steps (memory, handoff) before it stops; "
@@ -2529,10 +2528,11 @@ def showing(button) -> bool:
     return bool(button and all(w.display for w in (button, *button.ancestors[:3 if isinstance(button, RadioButton) else 1])))
 
 
-def keys_help(sdk: bool = False, shown=()) -> str:
+def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
     """The ? overlay: every key, from the bindings themselves, and every button. Those of SDK
     mode (SDK_BUTTONS, the effort slider) only with it on (sdk), or those of SDK_BUTTONS the
-    screen shows (shown: a host's session's, which run on with it off)."""
+    screen shows (shown: a host's session's, which run on with it off). panes: the modules'
+    widgets, each with a section of its keys if it names one (api.py, KEYS_HELP)."""
     everywhere = [b for b in WheelhouseApp.BINDINGS if b not in BUTTON_KEYS]
     offered = set(SDK_BUTTONS) if sdk else set(shown)
     hidden_keys = {f"press('{b}')" for b in SDK_BUTTONS if b not in offered}
@@ -2544,8 +2544,8 @@ def keys_help(sdk: bool = False, shown=()) -> str:
                 ("An answer box", Compose.BINDINGS), ("The conversation pane", Transcript.BINDINGS),
                 ("An item opened full screen", ThreadView.BINDINGS),
                 ("A doc opened full screen", DocView.BINDINGS),
-                *([("The stats pane, with a session run in the wheelhouse in context", SessionStats.BINDINGS)]
-                  if sdk else [])]
+                *[(w.KEYS_HELP[0], w.BINDINGS) for w in panes
+                  if (keys := getattr(w, "KEYS_HELP", None)) and (sdk or not keys[1])]]
     out = ["# Keys"]
     for title, bindings in sections:
         out.append(f"## {title}")
@@ -2578,7 +2578,7 @@ class KeysHelp(Dialog):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="keys-dialog"):
-            yield Static(RichMarkdown(keys_help(self.app.client.sdk, self.shown)), id="keys")
+            yield Static(RichMarkdown(keys_help(self.app.client.sdk, self.shown, self.app.panes)), id="keys")
 
 
 
@@ -3157,7 +3157,7 @@ class WheelhouseApp(App):
         return self.client.relaunching
 
     @property
-    def contexts(self) -> dict[str, stats.UsageFollower]:
+    def contexts(self) -> dict[str, transcript_usage.UsageFollower]:
         """The hub's context followers: in process alone (--local)."""
         return self.hub.contexts
 
@@ -3228,7 +3228,7 @@ class WheelhouseApp(App):
 
     def context_cell(self, s) -> Text | str:
         size = self.client.context_size(s)
-        return stats.context_bar(size) if size else ""
+        return transcript_usage.context_bar(size) if size else ""
 
     def sweep_eyes(self) -> None:
         """Move the Cylon eye on busy rows without rebuilding the table (SessionList.sweep)."""

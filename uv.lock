@@ -6,6 +6,12 @@ resolution-markers = [
     "python_full_version < '3.14'",
 ]
 
+[manifest]
+members = [
+    "claude-wheelhouse",
+    "claude-wheelhouse-stats",
+]
+
 [[package]]
 name = "annotated-types"
 version = "0.8.0"
@@ -161,6 +167,9 @@ dev = [
     { name = "pytest" },
     { name = "pytest-xdist" },
 ]
+stats = [
+    { name = "claude-wheelhouse-stats" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -179,6 +188,18 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-xdist", specifier = ">=3.8" },
 ]
+stats = [{ name = "claude-wheelhouse-stats", editable = "modules/stats" }]
+
+[[package]]
+name = "claude-wheelhouse-stats"
+version = "0.2.0.dev0"
+source = { editable = "modules/stats" }
+dependencies = [
+    { name = "claude-wheelhouse" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "claude-wheelhouse", editable = "." }]
 
 [[package]]
 name = "click"

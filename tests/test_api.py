@@ -1,9 +1,12 @@
 import pytest
 from textual.widget import Widget
 
+import subprocess
+import sys
+
 from claude_wheelhouse.splitter import Splitter
 
-from claude_wheelhouse import api, stats_pane
+from claude_wheelhouse import api
 from claude_wheelhouse.tui import WheelhouseApp
 
 
@@ -24,8 +27,9 @@ def module(id="demo", api_version=api.WHEELHOUSE_API, slot="left.middle", widget
 
 
 def test_stats_is_found_by_its_entry_point():
+    stats = pytest.importorskip("claude_wheelhouse_stats", reason="installed without the stats module")
     [found] = [m for m in api.load() if m.name == "stats"]
-    assert found.module is stats_pane.module and found.error is None
+    assert found.module is stats.module and found.error is None
 
 
 @pytest.mark.parametrize("loads, error, desc", [
@@ -42,10 +46,31 @@ def test_load(loads, error, desc):
     assert found.error == error, desc
 
 
-def test_the_stats_module_missing_says_to_reinstall(monkeypatch):
-    """An installed copy older than the stats entry point: the slot says why it's empty."""
+@pytest.mark.parametrize("value, error, desc", [
+    ("claude_wheelhouse.stats_pane:module", api.STALE,
+     "an install older than the stats module's own distribution: its card says to reinstall"),
+    ("claude_wheelhouse_gone:module", "failed to load: no module", "another package's: why it failed"),
+])
+def test_an_entry_point_that_wont_import(value, error, desc):
+    [found] = api.load([Entry("stats", ImportError("no module"), value)])
+    assert found.error == error, desc
+
+
+def test_no_modules_installed_is_no_error(monkeypatch):
+    """.plan/modules.md ("No module, no harm"): installed without the stats module, nothing
+    is missing; its slot collapses (test_the_slots)."""
     monkeypatch.setattr(api.importlib.metadata, "entry_points", lambda group: [])
-    assert [(m.name, m.error) for m in api.load()] == [("stats", api.STALE)]
+    assert api.load() == []
+
+
+def test_the_wheelhouse_runs_without_the_stats_module():
+    """Core never imports a module: with claude_wheelhouse_stats unimportable, the app, hub,
+    daemon and client all import, and the ? overlay is drawn."""
+    code = ("import sys; sys.modules['claude_wheelhouse_stats'] = None\n"
+            "from claude_wheelhouse import cli, client, daemon, hub, tui\n"
+            "assert 'Keys' in tui.keys_help(sdk=True)\n")
+    run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
 
 
 @pytest.mark.parametrize("loaded, ids, slot, desc", [
@@ -83,7 +108,7 @@ class Breaks(Widget):
     ([api.Loaded("detail", module("detail"))], ["detail: its id 'detail' is taken by the wheelhouse"],
      "a module with the id of one of the app's widgets, after its slot"),
     ([api.Loaded("title", module("title"))], ["title: its id 'title' is taken by the wheelhouse"], "or before it"),
-    ([api.Loaded("stats", None, api.STALE)], [f"stats: {api.STALE}"], "the stats module not installed"),
+    ([api.Loaded("stats", None, api.STALE)], [f"stats: {api.STALE}"], "a stale install's stats entry point"),
     (api.load([Entry("demo", module(api_version=1, slot="inbox.side"))]),
      [f"demo: written for API 1; this wheelhouse has {api.WHEELHOUSE_API}"], "an API 1 module's card shows, in CARDS"),
     ([api.Loaded("demo", module())], [], "a pane with no hooks runs: Textual's own Widget.animate isn't one"),
@@ -127,7 +152,9 @@ SPLITTERS = {"sessions-pane", "items-pane", "left-bottom", "answer"}   # beside 
 async def test_the_slots(store, monkeypatch, loaded, slots, splitters, desc):
     """.plan/modules.md: six slots in three columns; an empty slot collapses, with the
     splitter beside it, and its column's other slots share the room."""
-    if loaded is not None:
+    if loaded is None:
+        pytest.importorskip("claude_wheelhouse_stats", reason="installed without the stats module")
+    else:
         monkeypatch.setattr(api, "load", lambda: loaded)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:

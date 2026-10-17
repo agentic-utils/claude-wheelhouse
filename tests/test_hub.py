@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from claude_wheelhouse import fork as fork_mod, host as host_mod, hub as hub_mod, launch, liveness, models, plan_usage, stats, subagents, transcript, tutorial, whatsnew
+from claude_wheelhouse import fork as fork_mod, host as host_mod, hub as hub_mod, launch, liveness, models, plan_usage, subagents, transcript, transcript_usage, tutorial, whatsnew
 from claude_wheelhouse.hub import Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone
 
@@ -778,7 +778,7 @@ def test_a_tabs_model_state_is_what_its_transcript_says(hub, store, tmp_path, mo
     sid = store.create_session(str(tmp_path), runner="tab", model="claude-sonnet-5-5", effort="high")
     hub.refresh()
     if ran[0]:
-        follower = stats.follower(sid)
+        follower = transcript_usage.follower(sid)
         follower.ready = True
         follower.snap.model, follower.snap.requested, follower.snap.effort = "claude-opus-5-5", *ran
         hub.contexts[sid] = follower
@@ -796,7 +796,7 @@ def ran_now(snap):
 def ran_in(hub, sid, model, effort, served=None):
     """The hub reads the session's transcript, which shows it ran on model at effort (and
     was answered by served, where given)."""
-    follower = stats.follower(sid)
+    follower = transcript_usage.follower(sid)
     hub.contexts[sid] = follower
     follower.read = lambda now=None: True
     follower.ready = True
@@ -874,7 +874,7 @@ def test_a_tabs_last_model_is_copied_back_after_it_exits(hub, store, tmp_path, m
     status = {"now": "live"}
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: status["now"])
     sid = store.create_session(str(tmp_path), runner="tab", model="claude-sonnet-5-5", effort="high")
-    follower = stats.follower(sid)
+    follower = transcript_usage.follower(sid)
     snap = follower.snap
     shown = iter([None, "claude-haiku-5-5"])
     follower.read = lambda now=None: (setattr(snap, "requested", next(shown, snap.requested)) or ran_now(snap)
@@ -925,7 +925,7 @@ def test_a_model_typed_while_a_turn_streams_is_carried(hub, store, tmp_path, mon
              "content": "<local-command-stdout>Set model to `Haiku 5.5` for this session only</local-command-stdout>"},
             response("m2", t + 3)]
     (folder / f"{sid}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
-    follower = stats.follower(sid)
+    follower = transcript_usage.follower(sid)
     hub.contexts[sid] = follower
     hub.post = lambda work: None
     hub.read_context(follower)
@@ -995,8 +995,8 @@ def test_a_tab_sessions_keepalive_is_sent_under_its_conditions(hub, store, sid, 
         store.claim(sid)
     if state.get("heard"):
         t0 = time.time() - 30   # the transcript's last response, before the message
-    snap = stats.Snapshot(context=state.get("context", 200_000), last_at=t0, stop=state.get("stop", "end_turn"),
-                          compactions=[stats.Compaction(t0, "manual", 300_000, 50_000)] if state.get("compacted") else [])
+    snap = transcript_usage.Snapshot(context=state.get("context", 200_000), last_at=t0, stop=state.get("stop", "end_turn"),
+                          compactions=[transcript_usage.Compaction(t0, "manual", 300_000, 50_000)] if state.get("compacted") else [])
     warm_hub(hub, store, sid, snap, state.get("status", "live"))
     if state.get("old code"):
         store.db.execute("UPDATE sessions SET code_version = 10 WHERE id = ?", (sid,))
@@ -1012,7 +1012,7 @@ def test_a_tab_sessions_keepalive_repeats_every_55_minutes_up_to_the_limit(hub, 
     t0 = time.time()
     store.post_item(sid, "question", "which?")
     hub.keepalive_for = 2 * H
-    snap = stats.Snapshot(context=200_000, last_at=t0, stop="end_turn")
+    snap = transcript_usage.Snapshot(context=200_000, last_at=t0, stop="end_turn")
     warm_hub(hub, store, sid, snap)
     sent_at = []
     for minute in range(0, 4 * 60):
@@ -1027,7 +1027,7 @@ def test_a_tab_sessions_keepalive_repeats_every_55_minutes_up_to_the_limit(hub, 
 def test_a_tab_sessions_check_names_the_items_in_doubt(hub, store, sid, monkeypatch):
     t0 = time.time()
     monkeypatch.setattr(store, "in_doubt", lambda s, at=None: ["T1 waiting"])
-    warm_hub(hub, store, sid, stats.Snapshot(context=200_000, last_at=t0, stop="end_turn"))
+    warm_hub(hub, store, sid, transcript_usage.Snapshot(context=200_000, last_at=t0, stop="end_turn"))
     hub.keep_warm(t0 + 55 * M)
     assert notices(store, sid) == [host_mod.keepalive_body(["T1 waiting"])]
     assert notices(store, sid)[0].startswith("Check: T1 waiting.")
@@ -1037,7 +1037,7 @@ def test_a_real_turn_restarts_the_quiet_time(hub, store, sid):
     t0 = time.time()
     store.post_item(sid, "question", "which?")
     hub.keepalive_for = 1 * H
-    snap = stats.Snapshot(context=200_000, last_at=t0, stop="end_turn")
+    snap = transcript_usage.Snapshot(context=200_000, last_at=t0, stop="end_turn")
     warm_hub(hub, store, sid, snap)
     hub.keep_warm(t0 + 55 * M)
     snap.last_at = t0 + 56 * M   # the keepalive's ok

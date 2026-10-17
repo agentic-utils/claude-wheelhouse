@@ -3,8 +3,17 @@
 
 # where Astral's installer puts uv, which isn't on PATH until a new shell
 export PATH := $(PATH):$(HOME)/.local/bin
-# make install's last step: make run installs first when it's missing, or older than these
+# make install's last step, holding the modules it installed ("none" for none; empty, as
+# an install before modules/ left it, for all): make run installs first when it's missing,
+# or older than these
 STAMP := .venv/.wheelhouse-installed
+# the modules in this repo (modules/), each its own package and dependency group; make install
+# installs them all with the wheelhouse, or those named: WITH="" for none (.plan/modules.md)
+MODULES := $(notdir $(wildcard modules/*))
+WITH ?= $(MODULES)
+WANT = $(filter-out none,$(WITH))   # WITH=none, as the stamp says it, is none too
+# every target runs on what make install installed: a plain uv run would add back a module left out
+RUN := uv run --no-sync
 
 help: ## List the available commands (make help args: the app's command line args)
 ifeq ($(filter args,$(MAKECMDGOALS)),)
@@ -14,34 +23,37 @@ else
 endif
 
 args: uv-check $(STAMP) ## List the app's command line args, for make run ARGS="..."
-	@uv run claude-wheelhouse args
+	@$(RUN) claude-wheelhouse args
 
-install: ## Install, or reinstall after an update (installs uv if it's missing, then uv sync, refreshing this package's entry points)
+install: ## Install, or reinstall after an update, with every module in modules/ or those in WITH="..." (WITH="" for none). Installs uv if it's missing, then uv sync, refreshing the packages' entry points
 	@command -v uv >/dev/null 2>&1 || { \
 		curl -LsSf https://astral.sh/uv/install.sh | sh; \
 		command -v uv >/dev/null 2>&1 || { echo "uv didn't install: see https://docs.astral.sh/uv/" >&2; exit 1; }; \
 		echo "uv is installed in ~/.local/bin: open a new shell to have it on your PATH"; }
-	uv sync --reinstall-package claude-wheelhouse
-	@touch $(STAMP)
+	@for m in $(WANT); do test -d modules/$$m || { echo "no module $$m: modules/ has $(MODULES)" >&2; exit 1; }; done
+	uv sync --reinstall-package claude-wheelhouse $(foreach m,$(WANT),--reinstall-package claude-wheelhouse-$(m)) \
+		$(foreach m,$(filter-out $(WANT),$(MODULES)),--no-group $(m))
+	@echo "$(if $(strip $(WANT)),$(strip $(WANT)),none)" > $(STAMP)
 
-$(STAMP): pyproject.toml uv.lock | uv-check
-	@$(MAKE) --no-print-directory install
+$(STAMP): pyproject.toml uv.lock $(wildcard modules/*/pyproject.toml) | uv-check
+	@w="$$(cat $(STAMP) 2>/dev/null)"; test -n "$$w" || w='$(MODULES)'; \
+		$(MAKE) --no-print-directory install WITH="$$w"
 
 run: uv-check $(STAMP) ## Run the wheelhouse app, installing first if needed (ARGS="..." passes args: make args lists them)
-	uv run claude-wheelhouse $(ARGS)
+	$(RUN) claude-wheelhouse $(ARGS)
 
-stop: uv-check ## Stop the daemon (quit the app first, or it starts a new one)
-	uv run claude-wheelhouse daemon --stop
+stop: uv-check $(STAMP) ## Stop the daemon (quit the app first, or it starts a new one)
+	$(RUN) claude-wheelhouse daemon --stop
 
-tutorial: uv-check ## Have the next make run offer the tutorial again, ending any earlier tutorial session (quit the app and make stop first)
-	uv run claude-wheelhouse tutorial
+tutorial: uv-check $(STAMP) ## Have the next make run offer the tutorial again, ending any earlier tutorial session (quit the app and make stop first)
+	$(RUN) claude-wheelhouse tutorial
 
-test: uv-check ## Run the tests
-	uv run pytest
+test: uv-check $(STAMP) ## Run the tests
+	$(RUN) pytest
 
-stamp: uv-check ## Give every UNRELEASED feature in whatsnew.py a release's version (make stamp VERSION=0.2.0), as a release commit does
+stamp: uv-check $(STAMP) ## Give every UNRELEASED feature in whatsnew.py a release's version (make stamp VERSION=0.2.0), as a release commit does
 	@test -n "$(VERSION)" || { echo "make stamp VERSION=0.2.0"; exit 1; }
-	uv run python -m claude_wheelhouse.whatsnew stamp $(VERSION)
+	$(RUN) python -m claude_wheelhouse.whatsnew stamp $(VERSION)
 
 uv-check:
 	@command -v uv >/dev/null 2>&1 || { echo "uv not found: run make install" >&2; exit 1; }
