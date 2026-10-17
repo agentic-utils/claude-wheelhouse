@@ -5,6 +5,7 @@ import asyncio
 import bisect
 import functools
 import gc
+import json
 import math
 import os
 import re
@@ -22,12 +23,13 @@ from rich.cells import cell_len
 from rich.color import Color
 from rich.text import Text
 from textual import events, on
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.cache import LRUCache
 from textual.message import Message
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
+from textual.errors import NoWidget
 from textual.geometry import Offset
 from textual.screen import ModalScreen, Screen
 from textual.scrollbar import ScrollBar
@@ -103,13 +105,82 @@ def closable(item) -> bool:
         item["kind"] in DISMISSABLE and item["status"] in SETTLED[item["kind"]])
 
 
-def slot(name: str) -> Vertical:
+def slot(name: str) -> "Slot":
     """One of the six places a pane goes (api.SLOTS, .plan/modules.md), found by its name.
     Its splitters size it, not the pane in it. Empty, it collapses (WheelhouseApp.collapse)."""
-    return Vertical(name=name, id="slot-" + name.replace(".", "-"), classes="slot")
+    return Slot(name=name, id="slot-" + name.replace(".", "-"), classes="slot")
+
+
+# the core's panes (.plan/modules.md): each one's id, as layout.slots and the tour
+# (callout.PANES) name it, then its widget's id and its default slot. A module's pane is
+# named by its module's id, which is its widget's id too
+CORE_PANES = {"sessions": ("sessions-pane", "left.top"), "session-info": ("session-info-pane", "left.bottom"),
+              "items": ("items-pane", "middle.top"), "detail": ("detail-pane", "right")}
+PANE_OF = {widget: pane for pane, (widget, _) in CORE_PANES.items()}
+# the least room a pane needs, (columns, rows): its slot and column grow to it wherever it
+# goes (WheelhouseApp.fit_panes). Every button its caption and a row of description; the
+# session list's header and three sessions; the detail pane's text beside its scrollbar
+PANE_MINIMUM = {"session-info": (39, 12), "sessions": (0, 6), "detail": (24, 3)}
+
+
+def pane_of(widget: Widget) -> str:
+    """The pane a widget in a slot is: a core pane's id, a module's (a card's: the module it's for)."""
+    return getattr(widget, "pane_id", None) or PANE_OF.get(widget.id, widget.id or "")
+
+
+def arrange(saved: dict[str, str], defaults: dict[str, str]) -> dict[str, str]:
+    """Where each pane goes (.plan/modules.md, "Swapping panes"), as {pane: slot}, from each
+    pane's default slot (`defaults`, in the order they take an empty one) and the layout kept
+    (layout.slots, {slot: pane}). A pane kept goes where it was; a slot kept for a pane
+    that isn't there (a module uninstalled or disabled) stays empty, so it collapses and the
+    pane's return finds it. Any other pane goes to its default slot if that's empty, else
+    the first empty one, a slot kept for an absent pane only once none is free, and with
+    none at all to its default slot, beside what's there."""
+    out: dict[str, str] = {}
+    for place, pane in saved.items():
+        if place in api.SLOTS and pane in defaults and pane not in out and place not in out.values():
+            out[pane] = place
+    held = {place for place, pane in saved.items() if place in api.SLOTS and pane not in defaults}
+    for pane, home in defaults.items():   # first, those whose default slot is free
+        if pane not in out and home not in out.values() and home not in held:
+            out[pane] = home
+    for pane, home in defaults.items():
+        if pane not in out:
+            empty = [s for s in api.SLOTS if s not in out.values()]
+            room = [s for s in empty if s not in held] or empty
+            out[pane] = room[0] if room else home
+    return out
+
+
+def cells(scalar) -> float:
+    """A stylesheet's minimum as cells: none, 0."""
+    return scalar.value if scalar is not None else 0
+
+
+def kept_slots(value: str | None) -> dict[str, str]:
+    """layout.slots as kept, {slot: pane}; anything else, an empty one."""
+    try:
+        kept = json.loads(value or "{}")
+    except ValueError:
+        return {}
+    return {k: v for k, v in kept.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(kept, dict) else {}
+
+
+def rehome(widget: Widget, to: Widget) -> None:
+    """A pane moved to another slot, the same widget with its state (its rows, scroll, timers,
+    workers): Textual mounts a widget once, so remove and mount would need a new one, and
+    move_child stays within a parent. Done as move_child does it, across parents."""
+    old = widget.parent
+    old._nodes._remove(widget)
+    widget._attach(to)
+    to._nodes._append(widget)
+    widget.app.update_styles(widget)
+    old.refresh(layout=True)
+    to.refresh(layout=True)
 
 
 LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of its parent
+SLOTS_KEY = LAYOUT + "slots"   # where each pane is, {slot: pane}, kept per TUI (.plan/modules.md)
 SESSION_LABELS = ("", "session", "ctx", "?", "D", "✉")   # the session list's headers, as ordering.SESSION_COLUMNS
 # keys no splitter has now, deleted at start: items sized the items over the stats,
 # detail-pane the column between them and Detail, and session-info the description inside
@@ -1387,6 +1458,69 @@ class Columns(Horizontal):
         self.app.call_after_refresh(self.app.fit_layout)
 
 
+class Slot(Vertical):
+    """One of the six places a pane goes (slot()). A pane's title, its top border row, is its
+    drag handle (D116, .plan/modules.md): pressed (the pointer captured, as a splitter does) and dragged, the pane under the pointer
+    lights up teal as the target, and the release swaps the two panes' slots
+    (WheelhouseApp.swap). Esc during the drag (take_key), or a release on its own slot or
+    outside the grid, changes nothing; so does a plain click, as a drag starts only once the
+    pointer leaves the cell pressed. In the style of a row's drag (T114)."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.press: Offset | None = None   # where a title was pressed
+        self.dragging = False
+        self.target: "Slot | None" = None   # the slot the release would swap with, lit
+
+    def titled(self, at: Offset) -> bool:
+        """Whether `at` (screen) is on the title row of a pane here."""
+        return any(w.display and w.region.y == at.y and w.region.x <= at.x < w.region.right for w in self.children)
+
+    def _on_mouse_down(self, event: events.MouseDown) -> None:
+        self.press = None
+        if event.button != 1 or event.ctrl or event.shift or event.meta or not self.titled(event.screen_offset):
+            return
+        self.press = event.screen_offset
+        self.capture_mouse()   # the pointer's moves are this slot's wherever it goes, as a splitter's are
+
+    def _on_mouse_move(self, event: events.MouseMove) -> None:
+        if self.press is None:
+            return
+        if not event.button:   # the release never arrived (outside the terminal, say): nothing moves
+            self.end_drag(drop=False)
+            return
+        if not self.dragging:
+            if event.screen_offset == self.press:   # not yet off the cell pressed: still a click
+                return
+            self.dragging = True
+        event.stop()
+        self.aim(self.app.slot_at(event.screen_offset))
+
+    def _on_mouse_up(self, event: events.MouseUp) -> None:
+        if self.dragging:
+            event.stop()
+            self.end_drag(drop=True)
+        elif self.press is not None:   # a plain click: nothing
+            self.end_drag(drop=False)
+
+    def aim(self, at: "Slot | None") -> None:
+        at = None if at is self or (at is not None and not at.display) else at
+        if at is not self.target:
+            if self.target is not None:
+                self.target.remove_class("-swap-target")
+            if at is not None:
+                at.add_class("-swap-target")
+            self.target = at
+
+    def end_drag(self, drop: bool) -> None:
+        target = self.target
+        self.aim(None)
+        self.press, self.dragging = None, False
+        self.release_mouse()
+        if drop and target is not None:
+            self.app.swap(self, target)
+
+
 class SendBar(Horizontal):
     """Always on screen above the footer: Send all, every session's queue, and a line
     saying what the session in context is doing. Send all's key is Shift+A (BUTTON_KEYS):
@@ -2421,7 +2555,8 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "right-hand end of its row: a click there hides them, and the + it becomes shows them again. "
          "Double-click selects a word. Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
-         "kept for next time, and a double-click on a line puts its default back.")
+         "kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap "
+         "the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back.")
 DIALOGS = ("Esc, or a click outside the box, cancels a dialog (not the tutorial offer, which is all but outside). Enter presses the focused button; with focus on a "
            "one-line box or a checkbox, or nothing, it takes the dialog's one action (Launch, Rename, Fork, Park and "
            "the like), but in a list, a set of choices or a multi-line box it does what it does there. A dialog of "
@@ -2519,16 +2654,18 @@ class WheelhouseApp(App):
     DataTable > .datatable--cursor {{ background: #004466; color: #ffffff; }}   /* deep cyan: clear on black, apart from the marked purple and the grey hover, green and status text readable on it */
     /* the splitters' defaults, and the least each pane keeps when one is dragged (Splitter) */
     /* the columns 45, 45 and the rest (.plan/modules.md); 39 + 12 + 24 + the splitters on 80 */
-    #col-left {{ width: 45; min-width: 39; }}   /* every button its caption; names take the room the other columns leave (name_room) */
+    /* the least each column and slot keeps with any pane in it: the pane's own (PANE_MINIMUM) adds to it */
+    #col-left {{ width: 45; min-width: 12; }}   /* names take the room the other columns leave (name_room) */
     #col-middle {{ width: 45; min-width: 12; }}
-    #col-right {{ width: 1fr; min-width: 24; }}
+    #col-right {{ width: 1fr; min-width: 12; }}
     /* the slots in a column: the top one takes what the others leave, about 12, 11 and 12
        rows at 40 and 21, 17 and 17 at 60 (a chart under the gauges from about 50) */
-    #slot-left-top {{ height: 1fr; min-height: 6; }}   /* the list's header and three sessions: 24 rows fit */
+    #slot-left-top {{ height: 1fr; min-height: 3; }}   /* the sessions: 24 rows fit */
     #slot-left-middle {{ height: 30%; min-height: 1; }}   /* on a short terminal the stats give way first, to a row */
-    #slot-left-bottom {{ height: 30%; min-height: 12; }}   /* every button, and a row of description */
+    #slot-left-bottom {{ height: 30%; min-height: 3; }}   /* session info */
     #slot-middle-top, #slot-middle-bottom {{ height: 1fr; min-height: 3; }}
-    .panel {{ border-title-color: #05d9e8; }}   /* each pane's title, in its top border */
+    .panel {{ border-title-color: #05d9e8; }}   /* each pane's title, in its top border, its drag handle (Slot) */
+    .slot.-swap-target > * {{ outline: round #05d9e8; }}   /* where a pane dragged by its title would go: teal */
     #items {{ height: 1fr; min-height: 3; }}
     #detail-scroll {{ height: 1fr; min-height: 3; scrollbar-gutter: stable; }}   /* its width the same, scrolling or not */
     #docview-scroll {{ height: 1fr; scrollbar-gutter: stable; }}
@@ -2700,7 +2837,7 @@ class WheelhouseApp(App):
     def compose(self) -> ComposeResult:
         yield TitleBar(id="title")
         with Columns(id="main"):
-            with Vertical(id="col-left"):
+            with Vertical(id="col-left", classes="column"):
                 with slot("left.top"):   # the sessions
                     with Vertical(id="sessions-pane", classes="panel") as pane:
                         pane.border_title = "Sessions"
@@ -2722,7 +2859,7 @@ class WheelhouseApp(App):
                             for label, id_, _ in CONVERSATION:
                                 yield BarButton(label, id=id_, compact=True, tooltip=BUTTONS[id_])
             yield Splitter("sessions-pane", "#col-left", "#col-right", "x", default=self.column_width)
-            with Vertical(id="col-middle"):
+            with Vertical(id="col-middle", classes="column"):
                 with slot("middle.top"):
                     with Vertical(id="items-pane", classes="panel") as pane:
                         pane.border_title = "Inbox"
@@ -2730,7 +2867,7 @@ class WheelhouseApp(App):
                 yield Splitter("middle-top", "#slot-middle-top", "#slot-middle-bottom", "y")
                 yield slot("middle.bottom")
             yield Splitter("items-pane", "#col-middle", "#col-right", "x", default=self.column_width)
-            with Vertical(id="col-right"), slot("right"):
+            with Vertical(id="col-right", classes="column"), slot("right"):
                 with Vertical(id="detail-pane", classes="panel") as pane:
                     pane.border_title = "Detail"
                     with VerticalScroll(id="checklist-scroll"):   # scrolls on a short terminal (review 9)
@@ -2868,6 +3005,9 @@ class WheelhouseApp(App):
         if event.key == "escape" and (lists := [t for t in (getattr(self, "items_table", None), getattr(self, "session_list", None))
                                             if t is not None and t.dragging]):
             lists[0].end_drag(drop=False)   # a drag let go: nothing moves, and Esc does nothing else
+            return
+        if event.key == "escape" and self.screen_stack and (titles := [s for s in self.screen_stack[0].query(Slot) if s.dragging]):
+            titles[0].end_drag(drop=False)   # a pane's drag by its title, likewise
             return
         if not (await self._check_bindings(event.key, priority=True) or await self._check_bindings(event.key)):
             (self.focused or self.screen)._forward_event(event)
@@ -3577,16 +3717,115 @@ class WheelhouseApp(App):
         taken = {w.id for w in self.screen.query("*") if w.id}
         for place in self.query(".slot"):
             await place.mount_all(list(self.hosted(place.name, taken)))
+        self.place_panes(kept_slots(self.client.setting(SLOTS_KEY)))
+
+    # the panes' places (.plan/modules.md, "Swapping panes", D116)
+
+    def slots(self) -> dict[str, Slot]:
+        """The six slots, by name, on the inbox's screen whichever screen is on top."""
+        return {s.name: s for s in self.screen_stack[0].query(Slot)}
+
+    def default_slots(self) -> dict[str, str]:
+        """Each pane's default slot, {pane: slot}: the core's, then the modules' as they were mounted."""
+        out = {pane: home for pane, (_, home) in CORE_PANES.items()}
+        for name, place in self.slots().items():
+            for widget in place.children:
+                out.setdefault(pane_of(widget), name)
+        return out
+
+    def layout_now(self) -> dict[str, str]:
+        """Where each pane is, {slot: pane}, an empty slot left out."""
+        return {name: pane_of(place.children[0]) for name, place in self.slots().items() if place.children}
+
+    def place_panes(self, saved: dict[str, str]) -> None:
+        """Every pane moved to where arrange puts it, from the layout kept (`saved`), each
+        slot's widgets together, a card with its module's pane."""
+        slots = self.slots()
+        where = arrange(saved, self.default_slots())
+        moving = [(w, slots[where[pane_of(w)]]) for place in slots.values() for w in list(place.children)
+                  if where.get(pane_of(w), place.name) != place.name]
+        for widget, to in moving:
+            rehome(widget, to)
         self.collapse()
+        self.fit_panes()
 
     def collapse(self) -> None:
         """An empty slot collapses, and the splitter between it and its neighbour with it:
-        its column's other slots share the room."""
-        for place in self.query(".slot"):
+        its column's other slots share the room. A column with every slot empty collapses too."""
+        screen = self.screen_stack[0]
+        for place in screen.query(".slot"):
             place.display = bool(place.children)
-        for splitter in self.query(Splitter):
-            if (panes := splitter.panes()) and all(p.has_class("slot") for p in panes):
+        for column in screen.query(".column"):
+            column.display = any(place.display for place in column.query(".slot"))
+        for splitter in screen.query(Splitter):
+            if (panes := splitter.panes()) and all(p.has_class("slot") or p.has_class("column") for p in panes):
                 splitter.display = all(p.display for p in panes)
+
+    def fit_panes(self) -> None:
+        """Each slot and column at least as big as its panes need (PANE_MINIMUM), wherever
+        they are: a wide pane swapped into a narrow slot grows it, and fit shrinks the rest."""
+        columns: dict[Widget, int] = {}
+        for place in self.slots().values():
+            need = [PANE_MINIMUM.get(pane_of(w), (0, 0)) for w in place.children]
+            rows = max((h for _, h in need), default=0)
+            place.styles.min_height = rows if rows > cells(place.styles.base.min_height) else None
+            column = place.parent if place.parent.has_class("column") else place
+            columns[column] = max([columns.get(column, 0)] + [w for w, _ in need])
+        for column, cols in columns.items():
+            column.styles.min_width = cols if cols > cells(column.styles.base.min_width) else None
+
+    def slot_at(self, at: Offset) -> Slot | None:
+        """The slot under a screen point, on the inbox's screen; None outside them."""
+        screen = self.screen_stack[0]
+        if self.screen is not screen:
+            return None
+        try:
+            widget, _ = screen.get_widget_at(at.x, at.y)
+        except NoWidget:   # off the screen
+            return None
+        return next((w for w in widget.ancestors_with_self if isinstance(w, Slot)), None)
+
+    class LayoutChanged(Message):
+        """Panes moved between slots (a swap, or Reset layout): for whatever follows a pane,
+        as the tour's callout does."""
+
+    def swap(self, one: Slot, other: Slot) -> None:
+        """A pane dragged by its title onto another (Slot): the two swap slots, each keeping
+        its widgets and their state, and the layout is kept for next time. A slot kept for
+        an absent module's pane stays kept for it."""
+        mine, theirs = list(one.children), list(other.children)
+        for widget in mine:
+            rehome(widget, other)
+        for widget in theirs:
+            rehome(widget, one)
+        now = self.layout_now()
+        present = set(self.default_slots())
+        held = {s: p for s, p in kept_slots(self.client.setting(SLOTS_KEY)).items()
+                if s in api.SLOTS and s not in now and p not in present}
+        self.client.set_setting(SLOTS_KEY, json.dumps({**now, **held}, sort_keys=True))
+        self.relaid()
+
+    def relaid(self) -> None:
+        self.collapse()
+        self.fit_panes()
+        self.refit()
+        self.post_message(self.LayoutChanged())
+
+    def action_reset_layout(self) -> None:
+        """Reset layout, in the command palette: every pane in its default slot and every
+        splitter at the stylesheet's size, with nothing kept for either."""
+        self.client.set_setting(SLOTS_KEY, None)
+        self.place_panes({})
+        for splitter in self.screen_stack[0].query(Splitter):
+            splitter.apply(None)
+            self.client.set_setting(LAYOUT + splitter.key, None)
+        self.relaid()
+        self.notify("Layout reset: every pane in its default place.")
+
+    def get_system_commands(self, screen: Screen):
+        yield from super().get_system_commands(screen)
+        yield SystemCommand("Reset layout", "Put every pane back in its default place, and the dividers at their default sizes",
+                            self.action_reset_layout)
 
     def hosted(self, slot: str, taken: set[str]):
         """The widgets for a slot: each module's pane, or a card saying why it isn't running
