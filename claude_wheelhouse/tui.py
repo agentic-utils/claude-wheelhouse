@@ -53,7 +53,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, emoji, features, models, ordering, stats, subagents, transcript, tutorial
+from . import api, emoji, features, models, ordering, stats, subagents, transcript, tutorial, whatsnew
 from .client import LocalClient, Unreachable
 from .host import NUDGE_TOKENS
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
@@ -1696,13 +1696,10 @@ class Dialog(ModalScreen):
     has no ACTION, and Enter presses only the focused button. Tab and Shift+Tab go round its
     buttons and boxes in screen order (cycle_focus). One that asks nothing (RESPONSE False)
     closes on Esc, Enter or a click outside. A click outside within GRACE of the dialog
-    opening is ignored: a double-click on the button that opened it. One whose box doesn't
-    hold the eye (CLICK_OUTSIDE False: the tutorial offer, a line over the whole screen)
-    ignores clicks outside altogether."""
+    opening is ignored: a double-click on the button that opened it."""
     CANCEL = None
     ACTION: str | None = None
     RESPONSE = True
-    CLICK_OUTSIDE = True
     GRACE = 0.4   # seconds
     now = staticmethod(time.monotonic)
     opened = 0.0
@@ -1733,7 +1730,7 @@ class Dialog(ModalScreen):
     def on_click(self, event: events.Click) -> None:
         if event.widget is self:   # the shade around the box, not the box
             event.stop()
-            if self.CLICK_OUTSIDE and self.now() - self.opened >= self.GRACE:
+            if self.now() - self.opened >= self.GRACE:
                 self.action_cancel()
 
 
@@ -2230,19 +2227,48 @@ class RelaunchChoice(Dialog):
         self.action_answer({"relaunch-compact": "compact", "relaunch-now": "now"}.get(event.button.id))
 
 
-class TutorialOffer(Dialog):
-    """The first-run offer, a line that wraps on a narrow screen, so the command it names is
-    never cut: Enter takes the tutorial, Esc dismisses it for good."""
-    BINDINGS = [Binding("enter", "answer(True)", show=False)]   # no button to press: no ACTION
-    CANCEL = False
-    # a line over a screen that is all outside: a click anywhere would turn the offer off for good
-    CLICK_OUTSIDE = False
+INVITE = next(d for d in whatsnew.DIALOGS if d.id == "invite")
+INVITE_HINT = f"Later offers it again at the next start. After Never, {tutorial.AGAIN[0].lower()}{tutorial.AGAIN[1:]}."
+
+
+class TourInvite(Dialog):
+    """The tour's invite (.plan/tutorial-overhaul.md), centred: Start (Enter) takes it, Never (N)
+    turns it off for good, and Later (L, Esc, or a click outside, which a misclick mustn't
+    cost the tour) leaves it to be offered again at the next start."""
+    # Shift too: some terminals send it as the capital, others as shift+
+    BINDINGS = [Binding(k, f"answer('{a}')", show=False)
+                for keys, a in (("l,L,shift+l", "later"), ("n,N,shift+n", "never")) for k in keys.split(",")]
+    ACTION = "invite-start"
+    CANCEL = "later"
 
     def compose(self) -> ComposeResult:
-        yield Label(Text.assemble(("New here? ", "bold #ffd300"), ("Enter", "bold"), ": take the tutorial · ",
-                                  ("Esc", "bold"), f": dismiss · {tutorial.AGAIN}"),
-                    id="offer")
+        with Vertical(id="dialog", classes="invite"):
+            yield Label(INVITE.title, classes="dialog-title")
+            yield Label(INVITE.text, classes="dialog-prompt", id="invite-text")
+            yield Label(INVITE_HINT, classes="dialog-prompt", id="invite-hint")
+            with Horizontal(classes="buttons", id="invite-buttons"):
+                # ids of its own: the app's buttons answer a press that bubbles up
+                yield Button(Text("Start [Enter]"), variant="success", id="invite-start")
+                yield Button(Text("[L]ater"), id="invite-later")
+                yield Button(Text("[N]ever"), id="invite-never")
 
+    STACK_BELOW = 60   # columns: on a screen narrower, the buttons stack, so they stay inside the box
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self.set_focus(self.query_one("#invite-start", Button))
+        self.stack()
+
+    def on_resize(self) -> None:
+        self.stack()
+
+    def stack(self) -> None:
+        self.query_one("#invite-buttons").set_class(self.size.width < self.STACK_BELOW, "stacked")
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_answer(event.button.id.removeprefix("invite-"))
 
 
 def key_name(key: str) -> str:
@@ -2550,8 +2576,10 @@ class WheelhouseApp(App):
     #cwd-row {{ height: auto; }}
     #cwd {{ width: 1fr; }}
     #folders {{ height: 20; background: #000000; }}
-    TutorialOffer {{ align: center top; }}   /* a line across the top, not a box: after Dialog */
-    #offer {{ width: 100%; height: auto; background: #12122a; color: #e8e8e8; padding: 0 1; }}
+    #dialog.invite {{ width: 64; }}
+    #invite-hint {{ color: #999999; margin: 1 0; }}
+    #invite-buttons.stacked {{ layout: vertical; height: auto; }}
+    #invite-buttons.stacked Button {{ width: 100%; }}
     #keys-dialog {{ width: 100; max-width: 100%; height: 90%; background: #000000; color: {MATRIX};
                     border: thick #ff2a6d; padding: 0 1; }}
     /* selected text black on white: the theme's dark teal hid the characters (#52) */
@@ -2763,7 +2791,7 @@ class WheelhouseApp(App):
         for text, severity in self.said:
             self.notify(text, severity=severity)
         if self.client.should_offer():
-            self.push_screen(TutorialOffer(), self.offer_answered)
+            self.push_screen(TourInvite(), self.offer_answered)
 
     def on_unmount(self) -> None:
         """The daemon's stream let go as the app closes: nothing posts to it after."""
@@ -4232,9 +4260,10 @@ class WheelhouseApp(App):
             self.push_screen(KeysHelp([b for b in SDK_BUTTONS
                                        if any(showing(x) for x in self.screen.query(f"#{b}"))]))
 
-    def offer_answered(self, take: bool) -> None:
-        """The first-run offer, answered either way: it never comes back."""
-        if self.told(self.client.answer_offer(take)).ok:
+    def offer_answered(self, answer: str) -> None:
+        """The tour's invite answered. Start or Never: it never comes back. Later records
+        RESET, so every start offers it again, sessions or not, until Start or Never."""
+        if self.told(self.client.answer_offer({"start": True, "never": False}.get(answer))).ok:
             self.refresh_data()
 
     def composing(self):

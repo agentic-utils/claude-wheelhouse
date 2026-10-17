@@ -44,7 +44,7 @@ resume at the same dialog.
 
 | # | Id | Anchors to | Draft text | Advances on |
 |---|---|---|---|---|
-| 0 | `invite` | centred | "New here? A five-minute tour, with a demo session that costs a few cents." Enter Start · L Later · N Never | a choice |
+| 0 | `invite` | centred | "New here? A five-minute tour, with a demo session that costs a few cents." Enter Start · L Later · N Never (Esc, or a click outside, is Later: a misclick never loses the tour) | a choice |
 | 1 | `principles` | centred | "Every Claude session in one place. Sessions ask you questions, record decisions and report tasks, all in one inbox. A session that needs you says so in its row, so you never hunt through tabs." | Next |
 | 2 | `create` | Sessions | "Start a session: press N. For the tour it's filled in for you, so just press Start." | the demo session's row appears |
 | 3 | `sessions` | Sessions | "This is your demo. Its row shows whether it's working, idle or needs you. It runs in a tab (or here, in SDK mode): you won't need to look at it." | the demo posts its first item |
@@ -87,10 +87,10 @@ the callout fits without covering the pane; the callout's border title points at
 pane is narrower than the callout or collapsed, it is centred and its first line names the
 pane by its title ("In the Inbox pane:").
 
-**Staying correct.** Placement reruns on the screen's `Resize`, on the layout message the
-swap posts (modules stage 3, `LayoutChanged`), and on each data refresh if the target's
-region differs from the one last placed against (catches splitter drags). Placing is cheap,
-so there is no other caching. While another screen covers the main one (`ThreadView`,
+**Staying correct.** Placement reruns on every layout refresh of the screen (Textual's
+`screen_layout_refresh_signal`), which a resize, a swap and a splitter drag all cause, and
+does anything only when the screen size or the target's region differs from the one last
+placed against. While another screen covers the main one (`ThreadView`,
 `DocView`, a `Dialog`), the callout is hidden. Step 2 is the one exception: `NewSession`
 shows the tour's line at its top while it is open, and its fields come filled in.
 

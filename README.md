@@ -64,8 +64,10 @@ the clipboard.
 make run
 ```
 
-The first time the wheelhouse opens with no sessions it offers the tutorial in a line at
-the top (wrapped on a narrow screen): `Enter` takes it, `Esc` dismisses it. Taking it starts a short demo session in a new
+The first time the wheelhouse opens with no sessions it invites you to the tutorial, in a
+dialog in the middle of the screen: `Enter` (Start) takes it, `N` (Never) turns the invite
+off, and `L` (Later), `Esc` or a click outside it leaves it to be offered again at the next
+start. Taking it starts a short demo session in a new
 Windows Terminal tab that posts a task, two related questions and a decision; a checklist
 at the top of the right-hand pane walks you through answering, sending, watching it work in
 its conversation, ending it and starting a session of your own (`N`): the checklist stays
@@ -353,7 +355,7 @@ selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued o
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
 as answered, a decision as seen), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
-Every dialog opens centred over the screen, which stays in sight behind it. `Esc`, or a click outside the box, cancels it, though not the first-run tutorial offer (a line over the whole screen, which `Esc` turns off), nor a click outside in the moment a dialog opens (a double-click's second). `Enter` presses the focused button; with focus on a one-line box or a checkbox it takes the dialog's one action (Launch, Rename, Fork, Park and the like), while in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices (Stop & Forget's, Relaunch's) answers `Enter` only on the focused button. `Tab` and `Shift+Tab` go round its boxes and buttons. A dialog asking yes or no takes `Y` or `N` (`Esc` is no, and so is `Enter`, as No has the focus). The `?` list closes on `Esc`, `Enter`, `?` or a click outside.
+Every dialog opens centred over the screen, which stays in sight behind it. `Esc`, or a click outside the box, cancels it (on the tutorial's invite, that is Later, never Never), though not a click outside in the moment a dialog opens (a double-click's second). `Enter` presses the focused button; with focus on a one-line box or a checkbox it takes the dialog's one action (Launch, Rename, Fork, Park and the like), while in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices (Stop & Forget's, Relaunch's) answers `Enter` only on the focused button. `Tab` and `Shift+Tab` go round its boxes and buttons. A dialog asking yes or no takes `Y` or `N` (`Esc` is no, and so is `Enter`, as No has the focus). The `?` list closes on `Esc`, `Enter`, `?` or a click outside.
 
 `Tab` goes round the session list, the items, the answer box, then every button shown, in reading
 order, then the stats pane's effort slider (while it shows) and its zoom's `-` and `+` (`Enter` or

@@ -322,6 +322,7 @@ def refuse(store):
 
 @pytest.mark.parametrize("take, start, started, setting, desc", [
     (False, None, False, "never", "declined: never offered again"),
+    (None, None, False, "reset", "Later: offered at every start, sessions or not"),
     (True, refuse, False, None, "a start that fails is said, and records nothing: offered again"),
     (True, lambda store: store.set_setting(tutorial.OFFER_KEY, "taken"), True, "taken", "taken: it starts"),
 ])
