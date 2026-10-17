@@ -98,6 +98,10 @@ FEATURES: tuple[Feature, ...] = (
     Feature("swap-panes", UNRELEASED, "principles",
             "Drag a pane by its title onto another to swap the two; Reset layout, in the command palette, puts them back.",
             "Drag a pane by its title onto another to swap them. Ctrl+P, Reset layout, puts them back."),
+    Feature("tour-topups", UNRELEASED, "principles",
+            note="After an update, the tour shows only what's new, pane by pane, with no demo; Esc pauses it, "
+                 "and L or the title bar's badge resumes it.",
+            tip="After an update, the badge in the title bar (L) offers just what's new."),
 )
 
 
@@ -132,6 +136,26 @@ def this_release(features=FEATURES) -> str:
     the features not yet stamped (UNRELEASED)."""
     version = running_version()
     return notes(version if is_release(version) else UNRELEASED, features, label=version)
+
+
+def since(seen: str | None, features=FEATURES) -> str:
+    """An upgrader's release notes (Q121 B): this release's (this_release), then every
+    earlier release's newer than `seen` (the last version whose notes the tour showed, None
+    for none), newest first. A release with no features registered has nothing to list."""
+    running = running_version()
+    older = {f.version for f in features if is_release(f.version) and f.version != running
+             and version_key(f.version) < version_key(running)
+             and (seen is None or version_key(f.version) > version_key(seen))}
+    return "\n".join([this_release(features), *(notes(v, features) for v in sorted(older, key=version_key, reverse=True))])
+
+
+def version_key(version: str) -> tuple:
+    """A version's order: its release numbers, a development one (`0.3.0.dev1`) before its
+    release. Anything unreadable sorts first."""
+    found = re.match(r"(\d+(?:\.\d+)*)(?:\.dev(\d+))?", version)
+    if found is None:
+        return ((), 0, 0)
+    return tuple(int(n) for n in found[1].split(".")), found[2] is None, int(found[2] or 0)
 
 
 def tips(stop: str, sdk: bool, features=FEATURES) -> list[Feature]:

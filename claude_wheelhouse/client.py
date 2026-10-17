@@ -23,7 +23,7 @@ from typing import Callable, NamedTuple
 
 from . import adopt, auth, features, fork, plan_usage, transcript_usage, tutorial
 from .hub import RUNNING, Done, Event, Hub, host_context, requested
-from .store import NOTES_SEEN, SessionGone
+from .store import NOTES_SEEN, TOUR_AT, SessionGone
 
 TIMEOUT = 10        # seconds a request may take to be answered (a launch, Relaunch all)
 CONNECT = 2         # seconds to connect: the daemon is on this machine, or one hop away
@@ -121,6 +121,16 @@ class LocalClient(Hub):
         self.store.see_features(ids)
         if notes:
             self.store.set_setting(NOTES_SEEN, notes)
+
+    def tour_state(self) -> dict:
+        """What the tour's offer is decided from (tutorial.state, tour.opening)."""
+        return tutorial.state(self.store)
+
+    def tour_at(self, at: str | None) -> bool:
+        """Where the tour under way resumes (tour.Tour.where), kept so a pause, or the app
+        quitting mid-tour, never loses it; None once it's over. Whether it was kept."""
+        self.set_setting(TOUR_AT, at)
+        return True
 
     def start(self, post=None) -> None:
         pass   # its work runs on the app's own workers (spawn, post)
@@ -624,6 +634,19 @@ class RemoteClient:
 
     def see_features(self, ids: list[str], notes: str | None = None) -> None:
         self.quietly("/tour/seen", {"ids": ids, "notes": notes})
+        tour = self.tour_state()   # as the daemon now has it, until the next fetch says so itself
+        tour["seen"] = sorted({*tour.get("seen", ()), *ids})
+        if notes:
+            tour["notes_seen"] = notes
+
+    def tour_state(self) -> dict:
+        return self.tutorial_state.setdefault("tour", {})
+
+    def tour_at(self, at: str | None) -> bool:
+        ok = self.quietly("/tour/at", {"at": at})
+        if ok:   # as the daemon now has it, until the next fetch says so itself
+            self.tour_state()["at"] = at
+        return ok
 
     def quietly(self, path: str, body: dict) -> bool:
         """A command nobody waits to hear about (a splitter's size, a feature the tour

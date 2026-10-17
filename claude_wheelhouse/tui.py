@@ -62,7 +62,7 @@ from .host import NUDGE_TOKENS
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
-from .tour import Tour
+from .tour import NOTES, PAUSED, TOPUP, TOUR, Tour, opening
 from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mode, runner, spared, standing)
 from .unsent import Unsent
@@ -1805,6 +1805,21 @@ class TitleBar(Static):
         return line
 
 
+class TourBadge(Static):
+    """The title row's right-hand end (.plan/tutorial-overhaul.md): what the tour has to offer
+    once its invite has gone, or a tour paused (BADGES). A click is L (WheelhouseApp.action_tour)."""
+
+    text = ""   # what it says: nothing, hidden
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        self.app.action_tour()
+
+
+# the badge's words by what the tour offers (tour.opening): n, the new tips a top-up brings
+BADGES = {PAUSED: "Tour paused · L", TOUR: "Tour · L", TOPUP: "Tour: {n} new · L", NOTES: "What's new · L"}
+
+
 class Hint(Label):
     """Under an answer box: what the keys do, or emoji suggestions while a :code: is typed."""
 
@@ -2387,23 +2402,38 @@ class RelaunchChoice(Dialog):
 
 INVITE = next(d for d in whatsnew.DIALOGS if d.id == "invite")
 INVITE_HINT = f"Later offers it again at the next start. After Never, {tutorial.AGAIN[0].lower()}{tutorial.AGAIN[1:]}."
+UPGRADE_HINT = ("A few lines beside each pane, and no demo session. Later keeps it in the title bar (L) and offers it "
+                "again at the next start; Never skips these, so only what comes later is offered.")
+
+
+def upgrade_text(found) -> str:
+    """The invite's line for an upgrader's top-up: what's new, and in how many places."""
+    tipped = [f for f in found if f.where != whatsnew.ADVANCED]
+    places = len({f.where for f in tipped})
+    return (f"Updated to {whatsnew.running_version()}: {len(tipped)} new thing{'s' * (len(tipped) != 1)} in "
+            f"{places} place{'s' * (places != 1)}.")
 
 
 class TourInvite(Dialog):
     """The tour's invite (.plan/tutorial-overhaul.md), centred: Start (Enter) takes it, Never (N)
     turns it off for good, and Later (L, Esc, or a click outside, which a misclick mustn't
-    cost the tour) leaves it to be offered again at the next start."""
+    cost the tour) leaves it to be offered again at the next start. Given `text`, an
+    upgrader's top-up (tour.TOPUP) instead, the same three answers."""
     # Shift too: some terminals send it as the capital, others as shift+
     BINDINGS = [Binding(k, f"answer('{a}')", show=False)
                 for keys, a in (("l,L,shift+l", "later"), ("n,N,shift+n", "never")) for k in keys.split(",")]
     ACTION = "invite-start"
     CANCEL = "later"
 
+    def __init__(self, text: str | None = None) -> None:
+        super().__init__()
+        self.text, self.hint = (text, UPGRADE_HINT) if text else (INVITE.text, INVITE_HINT)
+
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog", classes="invite"):
             yield Label(INVITE.title, classes="dialog-title")
-            yield Label(INVITE.text, classes="dialog-prompt", id="invite-text")
-            yield Label(INVITE_HINT, classes="dialog-prompt", id="invite-hint")
+            yield Label(self.text, classes="dialog-prompt", id="invite-text")
+            yield Label(self.hint, classes="dialog-prompt", id="invite-hint")
             with Horizontal(classes="buttons", id="invite-buttons"):
                 # ids of its own: the app's buttons answer a press that bubbles up
                 yield Button(Text("Start [Enter]"), variant="success", id="invite-start")
@@ -2523,6 +2553,8 @@ DESCRIBE = {
                            "(or every marked one); it never reopens one: Ctrl+R does. On an item with children it "
                            "asks first, saying how many are still open or unread, then takes them all"),
     "help": "This list",
+    "tour": ("The tour, while the title bar's badge shows: resume a paused tour where it was, or take what's new "
+             "(in the session list, L is Relaunch: click the badge)"),
     "quit": "Quit the wheelhouse (sessions carry on without it)",
     "toggle_mark": "Mark or unmark the highlighted row",
     "app.mark_finished": "Mark every finished (dimmed) row shown, for Delete to clear them together",
@@ -2646,6 +2678,10 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap "
          "the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back.")
+TOUR_HELP = ("Esc pauses the tour while its box has focus. While the title bar shows a badge, L, or a click on it, "
+             "resumes a paused tour at the dialog it was at, or offers what's new since you last looked: a top-up "
+             "showing only the new tips, pane by pane, with no demo session, then the release notes. {again} at the "
+             "next start.")
 DIALOGS = ("Esc, or a click outside the box, cancels a dialog (not the tutorial offer, which is all but outside). Enter presses the focused button; with focus on a "
            "one-line box or a checkbox, or nothing, it takes the dialog's one action (Launch, Rename, Fork, Park and "
            "the like), but in a list, a set of choices or a multi-line box it does what it does there. A dialog of "
@@ -2708,7 +2744,8 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
     out += ["## Tab order", TABS.format(slider=SLIDER_TAB if sdk else ""), "## Mouse", MOUSE, "## Buttons", whose,
             *[f"- {text}" for text in buttons],
             "## Sending", SEND_RULES, "## Dialogs", DIALOGS,
-            "## The tutorial", f"{tutorial.AGAIN} at the next start. Esc, Enter, ? or a click outside closes this list."]
+            "## Tour", TOUR_HELP.format(again=tutorial.AGAIN),
+            "Esc, Enter, ? or a click outside closes this list."]
     return "\n\n".join(out)
 
 
@@ -2734,7 +2771,9 @@ class WheelhouseApp(App):
     /* every dialog over the screen it was opened on, which shows through, and centred. After
        Screen, which matches a dialog too: its opaque background blanked the screen behind */
     Dialog {{ align: center middle; background: #0a0a12 60%; }}
-    #title {{ height: 1; background: #12122a; content-align: center middle; }}
+    #title-row {{ height: 1; background: #12122a; }}
+    #title {{ width: 1fr; height: 1; background: #12122a; content-align: center middle; }}
+    #tour-badge {{ width: auto; height: 1; padding: 0 1; color: #ffd300; display: none; }}
     #main {{ height: 1fr; }}   /* leaves room for the send bar and footer: no screen scroll */
     .panel {{ background: #000000; color: {MATRIX}; border: round #7b61ff; }}
     .panel:focus-within {{ border: round #ff2a6d; }}
@@ -2846,6 +2885,7 @@ class WheelhouseApp(App):
         Binding("f", "show_finished(True)", "Show finished", key_display="F"),
         Binding("f", "show_finished(False)", "Hide finished", key_display="F"),
         Binding("question_mark", "help", "Keys", key_display="?"),
+        Binding("l", "tour", "Tour", key_display="L"),   # shown while the badge is (check_action)
         Binding("q", "quit", "Quit", key_display="Q"),
         *BUTTON_KEYS,
     ]
@@ -2924,7 +2964,9 @@ class WheelhouseApp(App):
         self.tour_showing: tuple | None = None   # what show_tour last painted: (dialog id, text)
 
     def compose(self) -> ComposeResult:
-        yield TitleBar(id="title")
+        with Horizontal(id="title-row"):
+            yield TitleBar(id="title")
+            yield TourBadge(id="tour-badge")
         with Columns(id="main"):
             with Vertical(id="col-left", classes="column"):
                 with slot("left.top"):   # the sessions
@@ -2974,6 +3016,7 @@ class WheelhouseApp(App):
         await self.mount_panes()
         # held, not queried: timers fire while a dialog is on top and during shutdown
         self.title_bar = self.query_one("#title", TitleBar)
+        self.badge = self.query_one("#tour-badge", TourBadge)
         self.items_table = self.query_one("#items", ItemList)
         self.detail = self.query_one("#detail", Transcript)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
@@ -3014,8 +3057,11 @@ class WheelhouseApp(App):
         self.call_after_refresh(lambda: (gc.collect(), gc.freeze()))
         for text, severity in self.said:
             self.notify(text, severity=severity)
-        if self.client.should_offer():
+        kind, found = self.tour_offer()
+        if kind == TOUR:
             self.push_screen(TourInvite(), self.offer_answered)
+        elif kind == TOPUP:   # Q120 C: only when a tour dialog has new tips; else the badge alone
+            self.push_screen(TourInvite(upgrade_text(found)), self.topup_answered)
 
     def on_unmount(self) -> None:
         """The daemon's stream let go as the app closes: nothing posts to it after."""
@@ -3216,6 +3262,7 @@ class WheelhouseApp(App):
         self.paint_session_info()
         self.paint_sendbar()
         self.show_tour()
+        self.paint_badge()
         if isinstance(self.screen, (ThreadView, DocView)) and self.screen.is_mounted:   # not before its widgets exist
             self.screen.paint()   # an action here (queue, take back) shows at once
 
@@ -4119,6 +4166,68 @@ class WheelhouseApp(App):
         self.tour = Tour(self.client.sdk)
         self.show_tour()
 
+    def begin_topup(self, at: str | None = None) -> None:
+        """An upgrader's top-up (tour.TOPUP): the pending tips shown now, at `at` if it was
+        paused there, then every release's notes since the last ones seen. No demo, no tokens."""
+        _, found = self.tour_offer(stored=True)
+        self.tour = Tour(self.client.sdk, pending=found, notes_seen=self.client.tour_state().get("notes_seen"))
+        if at:
+            self.tour.resume(at)
+        self.tour_showing = None
+        self.show_tour()
+
+    def tour_offer(self, stored: bool = False) -> tuple[str | None, list]:
+        """What the tour has to offer now (tour.opening): nothing while one is under way, a
+        tour paused in this run, else what's stored. stored: what the store says, whatever
+        runs (begin_topup's pending features)."""
+        if not stored and self.tour is not None:
+            return (PAUSED, []) if self.tour.paused else (None, [])
+        st = self.client.tour_state()
+        main = self.screen_stack[0] if self.screen_stack else None
+        pending = whatsnew.pending(st.get("seen", ()), self.client.sdk)
+        at = None if stored else st.get("at")
+        return opening(bool(st.get("offer")), at, pending,
+                       lambda pane: main is not None and callout.find(main, pane) is not None)
+
+    def paint_badge(self) -> None:
+        """The title row's badge (BADGES), and with it L in the footer."""
+        if getattr(self, "badge", None) is None:
+            return   # not mounted yet
+        kind, found = self.tour_offer()
+        text = BADGES[kind].format(n=sum(f.where != whatsnew.ADVANCED for f in found)) if kind else ""
+        if self.badge.text != text:
+            self.badge.text = text
+            self.badge.update(text)
+            self.badge.display = bool(text)
+            self.refresh_bindings()
+
+    def action_tour(self) -> None:
+        """L, or a click on the badge: a paused tour resumes at the dialog it was at (Q122),
+        in this run or one before; the whole tour's invite, or a top-up's, opens again; with
+        only advanced features new, their release notes."""
+        if isinstance(self.focused, (TextArea, Input)) or not self.badge.display:
+            return
+        if self.tour is not None and self.tour.paused:
+            self.tour.paused, self.tour_showing = False, None
+            self.show_tour()
+        else:
+            kind, found = self.tour_offer()
+            at = self.client.tour_state().get("at") or ""
+            if kind == PAUSED and at.startswith(f"{TOPUP}:"):
+                self.begin_topup(at.partition(":")[2])
+            elif kind == PAUSED:
+                self.tour = Tour(self.client.sdk)
+                self.tour.resume(at.partition(":")[2])
+                self.tour_showing = None
+                self.show_tour()
+            elif kind == TOUR:
+                self.push_screen(TourInvite(), self.offer_answered)
+            elif kind == TOPUP:
+                self.push_screen(TourInvite(upgrade_text(found)), self.topup_answered)
+            elif kind == NOTES:
+                self.begin_topup()
+        self.paint_badge()
+
     def show_tour(self) -> None:
         """The tour's dialog as it stands (tour.Tour.follow): a centred one pushed (the
         principles, the release notes), or a callout painted beside its pane on the main
@@ -4151,18 +4260,30 @@ class WheelhouseApp(App):
         if same and found:   # its text alone changed
             found[0].say(text)
             return
-        for old in found:
-            old.remove()
+        self.drop_callouts(found)
+        self.client.tour_at(tour.where())   # kept as it goes: a pause, or quitting, never loses it
         if stop is None:
             self.tour = None
+            self.paint_badge()
             return
         self.client.see_features(tour.shown(stop), whatsnew.running_version() if stop.id == "notes" else None)
         if stop.id == "principles":
             self.push_screen(TourStop(stop.title, text), self.tour_answered)
-        elif stop.id == "notes":
-            self.push_screen(TourNotes(text, whatsnew.this_release()), self.tour_answered)
+        elif stop.id == "notes":   # an upgrader's: every release since the last notes seen (Q121 B)
+            notes = whatsnew.since(tour.notes_seen) if tour.kind == TOPUP else whatsnew.this_release()
+            self.push_screen(TourNotes(text, notes), self.tour_answered)
         else:
             main.mount(TourCallout(stop.pane, text, next=nxt))
+
+    def drop_callouts(self, found: list) -> None:
+        """Callouts taken away. Focus on one's Next goes nowhere, not to the next in the chain
+        (often the answer box, where Enter, meant as Next again, would type): the next Next
+        callout takes it, and meanwhile L and the app's keys are the app's."""
+        main = self.screen_stack[0]
+        for old in found:
+            if main.focused is not None and old in main.focused.ancestors_with_self:
+                main.set_focus(None)
+            old.remove()
 
     def tour_answered(self, answer: str | None) -> None:
         """A centred dialog of the tour answered: Next, pause (Esc), or, for the notes, closed
@@ -4184,21 +4305,19 @@ class WheelhouseApp(App):
             self.show_tour()
 
     def pause_tour(self) -> None:
-        """Esc on the tour: it stops where it is, and, until stage 4 resumes it from the badge,
-        the next start offers it again (the offer set back to reset, as Later does)."""
+        """Esc on the tour (Q122): it stops where it is, kept as tour_at, so the badge or L
+        resumes it at the same dialog, in this run or a later one."""
         if self.tour is None:
             return
         self.tour.paused = True
         self.tour_showing = None
-        for old in self.screen_stack[0].query(TourCallout):
-            old.remove()
-        done = self.client.answer_offer(None)   # Later's answer is never ok: an error notice is the failure
-        failed = [e.text for e in done.notices if e.severity == "error"]
-        if failed:
-            self.notify(f"Tour paused, but the next start won't offer it again ({failed[0]}). {tutorial.AGAIN}.",
-                        severity="error")
-        else:
-            self.notify("Tour paused: the next start offers it again.")
+        self.drop_callouts(list(self.screen_stack[0].query(TourCallout)))
+        if self.client.tour_at(self.tour.where()):
+            self.notify("Tour paused: the badge in the title bar, or L, resumes it here.")
+        else:   # this run's badge still resumes it; a later start may not know where it was
+            self.notify("Tour paused: the badge, or L, resumes it, but the wheelhouse couldn't keep where it was "
+                        "for its next start.", severity="error")
+        self.paint_badge()
 
     def paint_session_info(self) -> None:
         """The current session's description, under the list, and its buttons' captions and
@@ -4497,6 +4616,8 @@ class WheelhouseApp(App):
         """F's two bindings: only the one that applies shows in the footer, and runs."""
         if action == "show_finished":
             return parameters[0] != self.show_finished
+        if action == "tour":   # L: only while the badge offers something
+            return bool(getattr(self, "badge", None) and self.badge.display)
         return True
 
     def action_show_finished(self, show: bool) -> None:
@@ -4666,6 +4787,19 @@ class WheelhouseApp(App):
         RESET, so every start offers it again, sessions or not, until Start or Never."""
         if self.told(self.client.answer_offer({"start": True, "never": False}.get(answer))).ok:
             self.begin_tour()
+        self.paint_badge()
+
+    def topup_answered(self, answer: str) -> None:
+        """An upgrader's invite answered (Q120 C). Start: the top-up. Later: nothing recorded,
+        so the badge carries it and the next start offers it again. Never: every pending
+        feature skipped (Hub.answer_offer), so only later ones are offered."""
+        if answer == "start":
+            self.begin_topup()
+        elif answer == "never":
+            self.told(self.client.answer_offer(False))
+        else:
+            self.notify("Later: the badge in the title bar, or L, offers it; so does the next start.")
+        self.paint_badge()
 
     def composing(self):
         """The compose box in use and the item it answers: the thread view's, or the inbox's."""
@@ -4938,7 +5072,7 @@ class WheelhouseApp(App):
     def action_new_session(self) -> None:
         if isinstance(self.focused, (TextArea, Input)):
             return
-        stop = self.tour.stop if self.tour is not None and not self.tour.paused else None
+        stop = self.tour.stop if self.tour is not None and not self.tour.paused and self.tour.kind == TOUR else None
         if stop is not None and stop.id == "create":   # the tour's demo: filled in (Q119)
             self.push_screen(NewSession(tutorial.form(self.client.tutorial_dir), self.tour.text(stop)), self.launch_new)
         else:

@@ -1,7 +1,7 @@
 import pytest
 
 from claude_wheelhouse import whatsnew
-from claude_wheelhouse.tour import Tour
+from claude_wheelhouse.tour import NOTES, PAUSED, TOPUP, TOUR, Tour, opening
 from claude_wheelhouse.whatsnew import ADVANCED, UNRELEASED, Feature
 
 NONE = {"sid": "demo", "posted": False, "answered": False, "queued": False, "sent": False, "replied": False,
@@ -89,3 +89,56 @@ def test_what_a_dialog_shows(stop, sdk, absent, text, shown, desc):
 
 def test_the_tour_is_every_dialog_but_the_invite():
     assert [d.id for d in Tour(sdk=False).stops] == [d.id for d in whatsnew.DIALOGS][1:]
+
+
+def pending_of(*ids):
+    return [f for f in FEATURES if f.id in ids]
+
+
+@pytest.mark.parametrize("offer, at, pending, absent, kind, brings, desc", [
+    (False, None, (), set(), None, [], "nothing new: nothing offered"),
+    (True, None, ("a", "c"), set(), TOUR, [], "the whole tour offered wins over a top-up"),
+    (True, "tour:answer", (), set(), PAUSED, [], "a tour paused wins over everything: resumed, never lost"),
+    (False, "topup:stats", ("a",), set(), PAUSED, [], "a top-up paused, likewise"),
+    (False, None, ("a", "d"), set(), TOPUP, ["a", "d"], "a dialog with a new tip: the top-up invite (Q120 C)"),
+    (False, None, ("d",), set(), NOTES, ["d"], "advanced only: the badge alone, pointing at the notes"),
+    (False, None, ("c", "d"), {"stats"}, NOTES, ["d"], "a tip whose pane is absent waits for it"),
+    (False, None, ("c",), {"stats"}, None, [], "only that: nothing offered yet"),
+])
+def test_what_a_start_offers(offer, at, pending, absent, kind, brings, desc):
+    found_kind, found = opening(offer, at, pending_of(*pending), lambda pane: pane not in absent)
+    assert (found_kind, [f.id for f in found]) == (kind, brings), desc
+
+
+@pytest.mark.parametrize("pending, sdk, stops, texts, desc", [
+    (("a",), False, ["inbox", "notes"], ["Tip A."], "one dialog, its new tip alone, no base text"),
+    (("c", "a"), False, ["inbox", "stats", "notes"], ["Tip A.", "Tip C."], "in tour order, whatever the registry's"),
+    (("a", "b"), True, ["inbox", "notes"], ["Tip B.\nTip A."], "a dialog's every pending tip, as given"),
+    (("d",), False, ["notes"], [], "advanced only: straight to the notes"),
+    ((), False, ["notes"], [], "nothing pending: the notes alone"),
+])
+def test_a_top_up(pending, sdk, stops, texts, desc):
+    tour = Tour(sdk=sdk, pending=list(reversed(pending_of(*pending))))   # dialogs in tour order, whatever the order given
+    assert tour.kind == TOPUP and [d.id for d in tour.stops] == stops, desc
+    assert [tour.text(d) for d in tour.stops[:-1]] == texts, desc
+    assert all(d.advance == whatsnew.NEXT for d in tour.stops[:-1]), f"{desc}: every one moves on at Next"
+    tour.follow(None, lambda pane: True)
+    assert tour.stop.id == stops[0] and tour.dead is None, f"{desc}: no demo to wait on, or to be dead"
+    assert sorted(tour.shown(tour.stops[-1])) == sorted(pending), f"{desc}: the notes record what it brought"
+
+
+@pytest.mark.parametrize("pending, at, given, stop, dead, desc", [
+    (None, "stats", "facts", "stats", None, "the whole tour at the dialog it was at"),
+    (None, "principles", None, "principles", None, "before the demo: nothing to wait on"),
+    (None, "answer", None, "answer", "the demo has ended", "past its creation with the demo gone: said"),
+    (None, "answer", "facts", "answer", None, "past its creation with the demo there: carried on"),
+    (("a", "c"), "stats", None, "stats", None, "a top-up at its dialog"),
+    (("c",), "inbox", None, "stats", None, "a top-up dialog since seen: the next one that isn't"),
+    (("a",), "stats", None, "notes", None, "past every dialog left: the notes"),
+])
+def test_resume(pending, at, given, stop, dead, desc):
+    tour = Tour(sdk=False, features=FEATURES, pending=None if pending is None else pending_of(*pending))
+    tour.resume(at)
+    tour.follow(facts(posted=True) if given else None, lambda pane: True)
+    assert (tour.stop.id, tour.dead) == (stop, dead), desc
+    assert tour.where() == f"{tour.kind}:{stop}", f"{desc}: kept as tour_at"

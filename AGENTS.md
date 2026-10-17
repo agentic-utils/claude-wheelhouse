@@ -76,8 +76,12 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   capitals to the person first), New session's fields for it (`form`) and what the store
   records of it (`facts`).
 - `tour.py`: the tour's progress, no Textual: which dialog shows and what moves each on
-  (`CHECKS`). The app paints it (`WheelhouseApp.show_tour`): the principles and the release
-  notes as centred dialogs, the rest as callouts (`callout.py`).
+  (`CHECKS`), a new user's whole tour or an upgrader's top-up (`TOPUP`: the pending tips
+  only, at Next, no demo), and what a start offers (`opening`: a paused tour, the invite, a
+  top-up, or the badge alone for advanced features). The app paints it
+  (`WheelhouseApp.show_tour`): the principles and the release notes as centred dialogs, the
+  rest as callouts (`callout.py`). Where a tour is, kept as it goes in the `tour_at` setting,
+  is what the title row's badge and `L` resume (`WheelhouseApp.action_tour`).
 - `whatsnew.py`: the tour's dialogs (`DIALOGS`) and every feature a user can see
   (`FEATURES`), each registered against a dialog or as advanced: what a top-up offers
   (`pending`, by the store's `tour_seen` record, never by version) and the release notes
