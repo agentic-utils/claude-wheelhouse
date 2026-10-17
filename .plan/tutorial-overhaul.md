@@ -226,6 +226,17 @@ titles in their slots); swapping (modules stage 3) needs only its `LayoutChanged
    Launch, New session's button. A dialog's tips count as seen as it shows, and the notes
    dialog records the rest and `notes_seen`. A demo that stops says why in dialog 3.
 4. **Top-ups.** The pending rule, the upgrade invite, the badge and `L`, pause and resume.
+   As built: `tour.opening` decides what a start offers, in order: a tour kept as under way
+   (`tour_at`, written at every dialog, so quitting mid-tour is a pause too) shows only the
+   badge, "Tour paused · L"; the whole tour's invite; a top-up's invite while a dialog whose
+   pane is present has a new tip; the badge alone ("What's new · L", L opens the notes)
+   while only advanced features are new. `tour_at` holds the kind as well as the dialog
+   (`tour:answer`, `topup:stats`). Later on a top-up records nothing (the badge carries it,
+   and the next start offers it again); Never skips the pending features. A whole tour
+   resumed past the demo's creation with the demo gone says so, and Next goes to the notes.
+   The badge is shown only from pending features, not from the version alone, so a
+   fixes-only release offers nothing. `L` is the app's; in the session list it stays
+   Relaunch, and a click on the badge does the same as `L`.
 5. **Release workflow.** `claude-wheelhouse notes` feeding the GitHub release, when
    `release.yml` is built.
 

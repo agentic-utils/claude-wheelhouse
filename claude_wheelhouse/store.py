@@ -250,6 +250,7 @@ TUTORIAL_OFFER = "tutorial_offer"   # settings: the tour's invite as answered (t
 NEVER = "never"   # TUTORIAL_OFFER answered Never: every feature registered then is skipped
 TOUR_HOW = ("shown", "skipped")   # tour_seen.how
 NOTES_SEEN = "notes_seen"   # settings: the last version whose release notes the tour showed
+TOUR_AT = "tour_at"   # settings: where a tour under way, or paused, resumes ("tour:answer", tour.Tour.where)
 # settings: the one-off move to the tour's record (.plan/tutorial-overhaul.md, Migration) has run
 TOUR_MIGRATED = "migrated_tour"
 RETIRED_TUTORIAL_SEEN = "tutorial_seen"   # settings: the old checklist's record, deleted on open

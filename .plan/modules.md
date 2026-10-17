@@ -113,7 +113,7 @@ source, so a module reinstalled restarts the daemon. `served.py` holds the route
 way, for `LocalClient` with `--local`, so `Context.call` answers alike through either. The
 viewer reads a doc root's file through `GET /docs?path=` (403 outside the roots, `have=` as
 a doc item's); `docroots.confine` is the allow-list stage 8 writes through. `show_doc`
-takes the Detail pane until the selection moves. `fingerprint.API` is 4. `set_doc_dirs`
+takes the Detail pane until the selection moves. `fingerprint.API` is 5. `set_doc_dirs`
 stores relative directories on the session (`sessions.doc_dirs`, an empty list for
 `docs/adr` again), never the git root itself, and none for a session in no git repo; a repo's directories are every one its sessions declared
 (`docroots.doc_dirs`, `api.doc_dirs`). `PROTOCOL_VERSION` is not bumped for it yet, as

@@ -92,8 +92,12 @@ def no_usage_fetch(monkeypatch):
 @pytest.fixture(autouse=True)
 def no_tutorial_offer(monkeypatch):
     """The first-run tutorial offer would sit over every test that starts from an empty
-    wheelhouse: tests of the offer itself put it back."""
+    wheelhouse, and a top-up's over every other: tests of the offer itself put them back."""
     monkeypatch.setattr("claude_wheelhouse.tutorial.should_offer", lambda store: False)
+    # nor an upgrader's top-up, or its badge: every feature counts as seen (tutorial.state)
+    from claude_wheelhouse import tutorial, whatsnew
+    real = tutorial.state
+    monkeypatch.setattr(tutorial, "state", lambda store: {**real(store), "seen": [f.id for f in whatsnew.FEATURES]})
 
 
 @pytest.fixture(autouse=True)

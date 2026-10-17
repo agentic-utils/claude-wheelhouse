@@ -1,3 +1,4 @@
+import re
 import tomllib
 from pathlib import Path
 
@@ -167,3 +168,33 @@ def test_the_notes_command(monkeypatch, capsys, argv, version, desc):
     monkeypatch.setattr("sys.argv", ["claude-wheelhouse", *argv])
     cli.main()
     assert capsys.readouterr().out == whatsnew.notes(version or whatsnew.running_version()), desc
+
+
+RELEASES = (feature("new", where="create", note="This one's."),
+            feature("v3", version="0.3.0", where="create", note="0.3.0's."),
+            feature("v2", version="0.2.0", where="create", note="0.2.0's."),
+            feature("v1", version="0.1.0", where="create", note="0.1.0's."))
+
+
+@pytest.mark.parametrize("running, seen, expected, desc", [
+    ("0.4.0.dev0", "0.3.0", ["0.4.0.dev0"], "seen last release's: this one's alone"),
+    ("0.4.0.dev0", "0.1.0", ["0.4.0.dev0", "0.3.0", "0.2.0"], "skipped a release: every one since, newest first"),
+    ("0.4.0.dev0", None, ["0.4.0.dev0", "0.3.0", "0.2.0", "0.1.0"], "never seen any: every release"),
+    ("0.3.0", "0.1.0", ["0.3.0", "0.2.0"], "a release running: its own, not repeated"),
+    ("0.2.0", None, ["0.2.0", "0.1.0"], "nothing newer than the one running"),
+])
+def test_an_upgraders_notes(monkeypatch, running, seen, expected, desc):
+    """Q121 B: an upgrader's last dialog shows every release since the last one they saw."""
+    monkeypatch.setattr(whatsnew, "running_version", lambda: running)
+    found = re.findall(r"^## What's new in (\S+)", whatsnew.since(seen, RELEASES), re.M)
+    assert found == expected, desc
+
+
+@pytest.mark.parametrize("a, b, desc", [
+    ("0.3.0.dev0", "0.3.0", "a development version before its release"),
+    ("0.3.0.dev1", "0.3.0.dev2", "development versions in order"),
+    ("0.2.9", "0.10.0", "by number, not by text"),
+    ("junk", "0.0.1", "an unreadable one first"),
+])
+def test_version_order(a, b, desc):
+    assert whatsnew.version_key(a) < whatsnew.version_key(b), desc

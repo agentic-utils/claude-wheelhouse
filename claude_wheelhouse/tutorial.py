@@ -12,6 +12,7 @@ tutorial session is ended (its items go with it) and its directory recreated (pr
 
 The offer is how it starts. `claude-wheelhouse tutorial` (reset) doesn't start it: run while
 no wheelhouse is, it ends any tutorial session and has the next start offer it again.
+What a start offers (tour.opening) is read from state.
 """
 
 import json
@@ -22,7 +23,7 @@ import time
 from pathlib import Path
 
 from . import liveness, models
-from .store import TUTORIAL_OFFER, Store, runner
+from .store import NOTES_SEEN, TOUR_AT, TUTORIAL_OFFER, Store, runner
 
 NAME = "tutorial"
 OFFER_KEY = TUTORIAL_OFFER   # settings: unset until the first-run offer is taken, or answered Never (store.NEVER)
@@ -96,6 +97,14 @@ def should_offer(store: Store) -> bool:
     return offer == RESET or (offer is None and not store.sessions())
 
 
+def state(store: Store) -> dict:
+    """What the app decides the tour's offer from (tour.opening): whether the whole tour is
+    offered (should_offer), where a tour under way or paused resumes (TOUR_AT), the features
+    seen (store.tour_seen) and the last version whose notes were shown (NOTES_SEEN)."""
+    return {"offer": should_offer(store), "at": store.setting(TOUR_AT), "seen": sorted(store.tour_seen()),
+            "notes_seen": store.setting(NOTES_SEEN)}
+
+
 def stopped(session) -> str | None:
     """Why the tutorial's session stopped, once it isn't running, so the tour can say
     so rather than wait on a dead session. A tab's: it never registered for this launch (wt.exe
@@ -139,6 +148,7 @@ def reset(store: Store) -> bool:
     ended = session_id(store) is not None
     stop_earlier(store)
     store.set_setting(OFFER_KEY, RESET)
+    store.clear_setting(TOUR_AT)   # a tour paused before is over: the whole tour is offered afresh
     return ended
 
 

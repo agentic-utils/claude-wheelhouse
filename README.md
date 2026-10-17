@@ -88,8 +88,20 @@ in (its brief begins with a note in capitals saying it's the tutorial's), so jus
 Launch. The demo posts a task, two related questions and a decision, and each box moves on
 as you do what it asks: answering, sending, reading its reply, closing the decision,
 watching it work in its conversation, Stats (`Enter` for Next), and ending it. The last
-dialog shows this release's notes. `Esc` pauses the tour (`make tutorial`, below, offers it
-again). The demo runs as a new session
+dialog shows this release's notes. `Esc`, while a tour box has the focus, pauses the tour:
+the title bar's badge then reads "Tour paused · L", and `L` (or a click on the badge) resumes
+it at the same box, in this run or after a restart. Quitting mid-tour keeps your place the
+same way.
+
+After an update that brings something new to a pane, the next start offers a top-up in the
+same centred dialog ("Updated to 0.3.0: 3 new things in 2 places"): only the new tips, in a
+box beside each pane they concern, every one moved on with `Enter` (Next), skipping panes
+with nothing new, then the notes of every release since the last ones you saw. It launches
+no demo session and costs no tokens. Later leaves the badge ("Tour: 3 new · L") and offers
+it again at the next start; Never skips those features, so only later ones are offered. An
+update whose features are all for experienced users shows no dialog, only a "What's new · L"
+badge that opens the release notes. In the session list `L` is Relaunch: click the badge
+instead. The demo runs as a new session
 does: hosted in the wheelhouse with SDK mode on, otherwise in a Windows Terminal tab. If
 Claude Code asks whether you trust the demo's folder, say yes in its tab. It always starts
 afresh (any earlier tutorial is ended), in its own scratch directory,

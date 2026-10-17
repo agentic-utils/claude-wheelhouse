@@ -33,6 +33,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import signal
 import socket
 import sqlite3
@@ -55,7 +56,7 @@ from starlette.routing import Route
 
 from . import api, auth, docroots, features, fingerprint, liveness, models, served, transcript_usage, tutorial
 from .hub import Done, Event, Hub, host_context
-from .store import COMPACT_QUESTION, NOTES_SEEN, THEN, SessionGone, Store, inbox_rank, mode, runner, standing
+from .store import COMPACT_QUESTION, NOTES_SEEN, THEN, TOUR_AT, SessionGone, Store, inbox_rank, mode, runner, standing
 
 ADDRESS = "127.0.0.1"   # the port is features.port()
 TICK = 1.0           # seconds between the hub's refreshes, as the TUI's tick
@@ -330,6 +331,9 @@ def done_json(done: Done) -> dict:
             "denied": done.denied, **({"sid": done.sid} if done.sid else {})}
 
 
+TOUR_PLACE = re.compile(r"(tour|topup):[a-z-]+")   # a tour's place, as tour.Tour.where gives it
+
+
 def text(body: dict, key: str, required: bool = True) -> str | None:
     value = body.get(key)
     if value is None and not required:
@@ -417,6 +421,7 @@ class Daemon:
                 lambda request, body: {"text": self.hub.unqueue(request.path_params["id"])}), methods=["POST"]),
             Route("/tutorial/offer", self.command(self.answer_offer), methods=["POST"]),
             Route("/tour/seen", self.command(self.tour_seen), methods=["POST"]),
+            Route("/tour/at", self.command(self.tour_at), methods=["POST"]),
             Route("/shutdown", self.command(self.shutdown_requested), methods=["POST"]),
             # the modules' (served.py): a doc under a doc root, and each module's own routes
             Route("/docs", self.query(self.doc)),
@@ -790,7 +795,7 @@ class Daemon:
         every item (but its body, which its thread brings), with its session's name and
         whether it's parked, so a client filters it as the store would (store.items); what's
         processing, awaiting and drafted, by session and ref (a draft's ref None for a
-        general message); what the tour waits on (tutorial.facts); and whether SDK mode is on (features.py), which
+        general message); what the tour waits on (tutorial.facts) and what it offers (tutorial.state); and whether SDK mode is on (features.py), which
         the TUI's SDK-only controls follow. The ranking is the client's own."""
         rows = self.store._all("SELECT i.*, s.name AS session_name, s.parked AS session_parked FROM items i "
                                "JOIN sessions s ON s.id = i.session_id")
@@ -800,7 +805,7 @@ class Daemon:
                 "drafts": [{"id": m["id"], "session_id": m["session_id"], "item_ref": m["item_ref"]}
                            for m in self.store.drafts()],
                 "tutorial": {"facts": tutorial.facts(self.store), "dir": str(tutorial.tutorial_dir(self.store)),
-                             "offer": tutorial.should_offer(self.store)},
+                             "offer": (tour := tutorial.state(self.store))["offer"], "tour": tour},
                 "sdk": self.hub.sdk, "usage_mode": self.hub.usage_probe.mode}
 
     def usage(self, request: Request) -> dict:
@@ -916,6 +921,17 @@ class Daemon:
         self.store.see_features(ids)
         if notes:
             self.store.set_setting(NOTES_SEEN, notes)
+        return Done()
+
+    def tour_at(self, request: Request, body: dict) -> Done:
+        """Where the tour under way resumes (tour.Tour.where), or null once it's over."""
+        at = text(body, "at", False)
+        if at is not None and not TOUR_PLACE.fullmatch(at):
+            raise Refused(400, "at must be a tour's place, such as tour:answer, or null")
+        if at is None:
+            self.store.clear_setting(TOUR_AT)
+        else:
+            self.store.set_setting(TOUR_AT, at)
         return Done()
 
     def shutdown_requested(self, request: Request, body: dict) -> Done:
