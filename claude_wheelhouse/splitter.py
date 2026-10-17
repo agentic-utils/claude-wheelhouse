@@ -80,11 +80,11 @@ class Splitter(Widget):
 
     def compact(self) -> tuple[bool, bool]:
         """Whether each pane is compact (class -compact: a slot shrunk to its panes' least
-        rows while they have nothing to show, WheelhouseApp.fit_compact). Then nothing here
-        is sized (wanted): a compact pane keeps the rows the app gave it, and with the
-        flexing pane compact the sized one flexes instead, its share kept for when it isn't,
-        so the room goes to it and not to a gap. Nor is it dragged or reset then: the share
-        stays as it was, for when neither is."""
+        rows while they have nothing to show, only in a column of two slots,
+        WheelhouseApp.fit_compact). Then nothing here is sized (wanted): a compact pane keeps
+        the rows the app gave it, and with the flexing pane compact the sized one flexes
+        instead, its share kept for when it isn't, so the room goes to it and not to a gap.
+        Nor is it dragged or reset then: the share stays as it was, for when neither is."""
         panes = self.panes()
         return (panes[0].has_class("-compact"), panes[1].has_class("-compact")) if panes else (False, False)
 

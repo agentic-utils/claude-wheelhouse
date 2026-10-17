@@ -272,8 +272,9 @@ session.
   else `?`. PROPOSED and UNRESOLVED come first, then the rest, newest first; a column's
   header sorts by it, as the inbox's do. Moving the cursor shows the decision in Detail,
   rendered, with no answer box, and `Enter` opens it full screen. With no decisions found
-  the pane shrinks to a line saying where it looked, and the pane above or below it takes the
-  room (alone in its column, swapped onto Detail's, it keeps its size). A session
+  the pane shrinks to a line saying where it looked, and the other pane in its column takes
+  the room. That happens only in a column of two panes, as in the default beside the inbox:
+  swapped into the left-hand column or onto Detail's, it keeps its size. A session
   in a git worktree lists its main repository's decisions, so each is listed once. The pane
   is the `design` module: `make install WITH="stats"` leaves it out.
 - **Sessions.** The left-hand column lists every session (parked ones dimmed, at the

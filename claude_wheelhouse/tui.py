@@ -4040,24 +4040,23 @@ class WheelhouseApp(App):
 
     def fit_compact(self) -> None:
         """A slot whose panes are all compact (a module pane with nothing to show sets
-        `compact`, api) keeps only their least rows (PANE_MINIMUM), and the slots beside it
-        take the room it gives up (Splitter.compact); every other slot its stylesheet's
-        height, or its splitter's share, as it was. Only where a slot in its column that
-        isn't shrinking is shown to take that room: alone in its column (swapped onto Detail,
-        say), it keeps its full size, as a gap would be all it gave. A pane
-        calls it through Context.relayout when its `compact` changes."""
+        `compact`, api) keeps only their least rows (PANE_MINIMUM), and the other slot in its
+        column takes the room it gives up (Splitter.compact). Only in a column showing exactly
+        two slots, the other not compact too: alone in its column, or in a column of three,
+        it keeps its normal size and every splitter behaves as ever. A pane calls it through
+        Context.relayout when its `compact` changes."""
         screen = self.screen_stack[0]
-        places = list(screen.query(".slot"))
-        empty = {place for place in places
-                 if (shown := [w for w in place.children if w.display])
-                 and all(getattr(w, "compact", False) for w in shown)}
-        for place in places:
+
+        def idle(place: Widget) -> bool:
             shown = [w for w in place.children if w.display]
-            column = place.parent if place.parent.has_class("column") else place
-            compact = place in empty and any(other.display and other not in empty
-                                             for other in column.query(".slot") if other is not place)
+            return bool(shown) and all(getattr(w, "compact", False) for w in shown)
+
+        for place in screen.query(".slot"):
+            column = place.parent
+            pair = [s for s in column.query(".slot") if s.display] if column.has_class("column") else [place]
+            compact = len(pair) == 2 and idle(place) and not all(idle(s) for s in pair)
             place.set_class(compact, "-compact")
-            place.styles.height = max(minimum(w)[1] for w in shown) if compact else None
+            place.styles.height = max(minimum(w)[1] for w in place.children if w.display) if compact else None
         for splitter in screen.query(Splitter):
             if (panes := splitter.panes()) and all(p.has_class("slot") for p in panes):
                 splitter.apply(splitter.fraction)

@@ -191,10 +191,12 @@ async def test_every_decisions_swap_fits_80_by_24(store, sid, shipped, onto):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("onto, beside", [(None, "items"), ("stats", "sessions"), ("sessions", "stats")])
-async def test_no_decisions_shrinks_the_pane_to_its_note(store, sid, tmp_path, every_module, onto, beside):
-    """No decisions found: the pane keeps its border and the note, and the pane beside it
-    takes the rest; once one appears, its share again. Swapped into another column too."""
+@pytest.mark.parametrize("onto", [None, "items"])
+async def test_no_decisions_shrinks_the_pane_to_its_note(store, sid, tmp_path, every_module, onto):
+    """No decisions found: the pane keeps its border and the note, and the inbox, the other
+    pane in its column, takes the rest; once one appears, its share again. Swapped with the
+    inbox too."""
+    beside = "items"
     (tmp_path / ".git").mkdir()
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -224,7 +226,8 @@ async def test_no_decisions_shrinks_the_pane_to_its_note(store, sid, tmp_path, e
 async def test_no_column_has_blank_rows_wherever_the_decisions_go(store, sid, tmp_path, every_module, onto, adrs):
     """Swapped with each other pane, with and without decisions found: every column filled
     by its slots and every slot by its panes. With none found the pane shrinks to its note
-    only where a slot beside it takes the room; alone in its column (Detail's), it keeps it."""
+    only in a column of two (the middle one); alone in its column (Detail's) or in one of
+    three (the left-hand one), it keeps its size, and no splitter is pinned by it."""
     repo(tmp_path, ADRS if adrs else {})
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -241,9 +244,11 @@ async def test_no_column_has_blank_rows_wherever_the_decisions_go(store, sid, tm
             widget = pane_widget(app, each)
             assert widget.outer_size.height == widget.parent.size.height, f"<->{onto}, adrs {adrs}: {each} fills its slot"
         p = app.query_one("#design")
-        alone = onto == "detail"
+        paired = onto in (None, "items")
         assert p.compact is not adrs, f"<->{onto}: compact only with none found"
-        assert (p.region.height == 3) is (not adrs and not alone), f"<->{onto}, adrs {adrs}: shrunk only with room taken"
+        assert (p.region.height == 3) is (not adrs and paired), f"<->{onto}, adrs {adrs}: shrunk only in a column of two"
+        squeezed = [s.id for s in app.query(".slot") if s.has_class("-compact")]
+        assert squeezed == ([p.parent.id] if not adrs and paired else []), f"<->{onto}, adrs {adrs}: {squeezed}"
 
 
 @pytest.mark.anyio
@@ -276,6 +281,37 @@ async def test_a_drag_beside_a_compact_pane_is_not_kept(store, sid, tmp_path, ev
         await settled(app, pilot)
         await pilot.pause()
         assert not p.compact and inbox.region.height > 7, f"the inbox its default share: {inbox.region.height}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("name, moved", [("left-middle", "stats"), ("left-bottom", "session-info")])
+async def test_a_drag_in_the_left_column_with_the_empty_decisions_on_top(store, sid, tmp_path, every_module,
+                                                                       name, moved):
+    """Review r3: the Decisions, none found, swapped onto the Sessions' slot (left.top, which
+    both left-hand splitters size against) keep their size, and each splitter there drags and
+    is kept as ever: nothing is pinned until a decision appears."""
+    from textual import events
+    from test_tui import splitter
+    repo(tmp_path, {})
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        app.swap(pane_widget(app, "design").parent, pane_widget(app, "sessions").parent)
+        await pilot.pause()
+        await pilot.pause()
+        p, widget = app.query_one("#design"), pane_widget(app, moved)
+        assert p.compact and p.parent.id == "slot-left-top" and p.region.height > 3, "its size kept on left.top"
+        sp = splitter(app, name)
+        before, height = sp.fraction, widget.region.height
+        x, y = sp.region.offset
+        await pilot.mouse_down(sp)
+        app.post_message(events.MouseMove(None, x, y - 4, 0, -4, button=1, shift=False, meta=False,
+                                          ctrl=False, screen_x=x, screen_y=y - 4))
+        await pilot.pause()
+        await pilot.mouse_up(None, (x, y - 4))
+        await pilot.pause()
+        assert sp.fraction != before and widget.region.height != height, f"{name}: dragged ({height} rows before)"
+        assert app.client.setting(LAYOUT + name) is not None, f"{name}: kept"
 
 
 @pytest.mark.anyio
