@@ -221,6 +221,10 @@ titles in their slots); swapping (modules stage 3) needs only its `LayoutChanged
 3. **The tour.** Dialogs 1 to 12, `NewSession` filled in, the brief's caps line, the SDK
    runner, the checklist removed. The first features registered: the tour itself and the
    modules work, as `UNRELEASED`.
+   As built: the tour's progress is `tour.py` (no Textual), held by the app for its run
+   (`tour_at` comes with resume in stage 4); Esc pauses it with a notice. Dialog 2's line says
+   Launch, New session's button. A dialog's tips count as seen as it shows, and the notes
+   dialog records the rest and `notes_seen`. A demo that stops says why in dialog 3.
 4. **Top-ups.** The pending rule, the upgrade invite, the badge and `L`, pause and resume.
 5. **Release workflow.** `claude-wheelhouse notes` feeding the GitHub release, when
    `release.yml` is built.

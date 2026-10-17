@@ -709,7 +709,7 @@ class Hub:
     def answer_offer(self, take: bool | None) -> Done:
         """The tour's invite, answered: taken (True) or Never (False), it never comes back;
         Later (None) has every start offer it again, sessions or not, until one of those; a
-        start that fails records nothing, so it is offered again. Whether the tutorial started."""
+        start that fails records nothing, so it is offered again. Whether the tour starts."""
         if take is None:
             self.store.set_setting(tutorial.OFFER_KEY, tutorial.RESET)
             return Done(False).say("Later: the next start offers the tour again")
@@ -717,10 +717,10 @@ class Hub:
             self.store.tour_never()
             return Done(False).say(f"{tutorial.AGAIN}; ? lists every key")
         try:
-            tutorial.start(self.store)   # always a tab, SDK mode or not
+            tutorial.start(self.store)   # its directory made ready: the person starts the demo from New session
         except Exception as e:   # claude missing, say: nothing recorded, so offered again
             return Done(False).say(f"couldn't start the tutorial: {e}", "error")
-        return Done().say("tutorial started: follow the checklist on the right")
+        return Done()
 
     # Park and Forget ("end"): a running session is asked; one not running, or one forced, is acted on
 

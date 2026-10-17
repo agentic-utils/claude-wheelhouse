@@ -53,7 +53,7 @@ DIALOGS = (
          "Every Claude session in one place. Sessions ask you questions, record decisions and report tasks, "
          "all in one inbox. A session that needs you says so in its row, so you never hunt through tabs.", NEXT),
     Stop("create", "sessions", "Starting a session",
-         "Start a session: press N. For the tour it's filled in for you, so just press Start.", ACTION),
+         "Start a session: press N. For the tour it's filled in for you, so just press Launch.", ACTION),
     Stop("sessions", "sessions", "The session list",
          "This is your demo. Its row shows whether it's working, idle or needs you. It runs in a tab (or here, "
          "in SDK mode): you won't need to look at it.", ACTION),
@@ -78,6 +78,23 @@ TIPPED = tuple(d.id for d in DIALOGS if d.id not in ("invite", "notes"))
 
 # every feature a user can see, from #78 on: see AGENTS.md, "Docs kept in step"
 FEATURES: tuple[Feature, ...] = (
+    Feature("tour", UNRELEASED, "principles",
+            note="A guided tour: a box beside each pane walks you through a demo session.",
+            tip="This tour is new: a box beside each pane says what it is for."),
+    Feature("session-sort", UNRELEASED, "sessions",
+            note="Every session list column sorts: click its heading to cycle up, down and back.",
+            tip="Click a column heading to sort by it; click again to reverse it."),
+    Feature("stats-pane", UNRELEASED, "stats",
+            note="Stats has a pane of its own, under the session list.",
+            tip="Stats now has a pane of its own, under the session list."),
+    Feature("pane-titles", UNRELEASED, ADVANCED, note="Each pane carries its title in its top border."),
+    Feature("dialog-keys", UNRELEASED, ADVANCED,
+            note="Every dialog answers the same keys: Esc or a click outside cancels, Enter presses its main button."),
+    Feature("tab-order", UNRELEASED, "answer",
+            note="Tab goes round the session list, the inbox, the answer box and the buttons.",
+            tip="Tab goes round the session list, the inbox, the answer box and the buttons."),
+    Feature("make-targets", UNRELEASED, ADVANCED,
+            note="make run installs when it needs to, make install fetches uv, and make args lists the app's flags."),
     Feature("swap-panes", UNRELEASED, "principles",
             "Drag a pane by its title onto another to swap the two; Reset layout, in the command palette, puts them back.",
             "Drag a pane by its title onto another to swap them. Ctrl+P, Reset layout, puts them back."),
@@ -93,10 +110,12 @@ def pending(seen, sdk: bool, features=FEATURES) -> list[Feature]:
     return [f for f in features if f.id not in seen and (f.when != "sdk" or sdk)]
 
 
-def notes(version: str, features=FEATURES, dialogs=DIALOGS) -> str:
+def notes(version: str, features=FEATURES, dialogs=DIALOGS, label: str | None = None) -> str:
     """A version's release notes, as Markdown: its features under their dialogs' titles, in
-    tour order, then Advanced."""
+    tour order, then Advanced. `label` names the version in the heading, where that isn't
+    the one the features carry (this_release)."""
     mine = [f for f in features if f.version == version]
+    version = label or version
     if not mine:
         return f"## What's new in {version}\n\nNothing new to show: fixes only.\n"
     groups = [(d.title, [f for f in mine if f.where == d.id]) for d in dialogs]
@@ -106,6 +125,19 @@ def notes(version: str, features=FEATURES, dialogs=DIALOGS) -> str:
         if found:
             out.append(f"### {title}\n\n" + "\n".join(f"- {f.note}" for f in found))
     return "\n\n".join(out) + "\n"
+
+
+def this_release(features=FEATURES) -> str:
+    """The running version's notes, for the tour's last dialog: a development version's are
+    the features not yet stamped (UNRELEASED)."""
+    version = running_version()
+    return notes(version if is_release(version) else UNRELEASED, features, label=version)
+
+
+def tips(stop: str, sdk: bool, features=FEATURES) -> list[Feature]:
+    """The features whose tips a tour dialog shows, in registry order, leaving out an `sdk`
+    one while SDK mode is off."""
+    return [f for f in features if f.where == stop and f.tip and (f.when != "sdk" or sdk)]
 
 
 def is_release(version: str) -> bool:

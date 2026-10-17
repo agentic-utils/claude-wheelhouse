@@ -247,8 +247,10 @@ DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration
 TUTORIAL_OFFER = "tutorial_offer"   # settings: the tour's invite as answered (tutorial.OFFER_KEY)
 NEVER = "never"   # TUTORIAL_OFFER answered Never: every feature registered then is skipped
 TOUR_HOW = ("shown", "skipped")   # tour_seen.how
+NOTES_SEEN = "notes_seen"   # settings: the last version whose release notes the tour showed
 # settings: the one-off move to the tour's record (.plan/tutorial-overhaul.md, Migration) has run
 TOUR_MIGRATED = "migrated_tour"
+RETIRED_TUTORIAL_SEEN = "tutorial_seen"   # settings: the old checklist's record, deleted on open
 # settings: when this database was first opened by code that tracks subagents. Subagents
 # that had finished by then (or by when their session joined) get no item (#69)
 AGENTS_SINCE = "agents_since"
@@ -386,6 +388,8 @@ class Store:
                               (TUTORIAL_OFFER,)).fetchone():
                     self._never(db)
                 db.execute("INSERT INTO settings (key, value) VALUES (?, '1')", (TOUR_MIGRATED,))
+            # the old tutorial checklist's record (#78 stage 3): the tour keeps its own steps in the app
+            db.execute("DELETE FROM settings WHERE key = ?", (RETIRED_TUTORIAL_SEEN,))
 
     @contextmanager
     def tx(self):

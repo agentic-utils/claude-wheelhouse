@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import features, fork, liveness, models, tutorial
+from . import features, fork, liveness, models
 from .transcript import NO_BRIEF
 from .store import Store, db_path, default_runner, now, runner
 
@@ -231,13 +231,13 @@ def open_session(store: Store, sid: str, may_tab: bool = True) -> None:
         open_tab(store, sid)
 
 
-def restore_runner(store: Store, cwd: str, sdk: bool | None = None) -> str:
+def restore_runner(sdk: bool | None = None) -> str:
     """How Restore, Relaunch of a dead session and Adopt bring a session back: the way new
     sessions run now (store.default_runner, with SDK mode on per sdk, else
     features.sdk_enabled()), whatever it ran as before (Doug's Q27, option A,
     .plan/sdk-sessions.md). So with SDK mode off a host's session comes back as a tab. The
-    tutorial is always a tab (tutorial.py)."""
-    return "tab" if cwd == str(tutorial.tutorial_dir(store)) else default_runner(sdk)
+    tutorial's demo too: it is made as any new session is (#78)."""
+    return default_runner(sdk)
 
 
 def restore_session(store: Store, sid: str, sdk: bool | None = None, may_tab: bool = True) -> None:
@@ -248,7 +248,7 @@ def restore_session(store: Store, sid: str, sdk: bool | None = None, may_tab: bo
     if session is None:
         raise KeyError(sid)
     check_free(session)
-    how = restore_runner(store, session["cwd"], sdk)
+    how = restore_runner(sdk)
     if how == "tab" and not may_tab:
         raise NotHere(session)
     store.set_runner(sid, how)
