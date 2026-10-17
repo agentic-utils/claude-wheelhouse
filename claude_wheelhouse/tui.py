@@ -105,6 +105,7 @@ def closable(item) -> bool:
 # where each module slot (api.SLOTS) is mounted: at the end of this container
 SLOT_PARENTS = {"inbox.side": "#items-pane"}
 LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of its parent
+SESSION_LABELS = ("", "session", "ctx", "?", "D", "✉")   # the session list's headers, as ordering.SESSION_COLUMNS
 
 
 def eye_at(frame: int, width: int = 8) -> int:
@@ -951,7 +952,7 @@ async def select_now(table: DataTable) -> None:
 class SessionList(SinkList):
     """The inbox's sessions. One click selects a row: a plain table selects only on a second
     click, the first just moving the cursor there. A single click on the selected row, or on
-    the list's title, unselects it (the inbox shows every session's items, as Esc), and with none selected the
+    the list's title past its sortable columns, unselects it (the inbox shows every session's items, as Esc), and with none selected the
     highlight is hidden (show_cursor) until a click, Enter or a key that moves it picks one
     (reveal). The buttons under it act on the highlighted row and never take focus, so Tab
     goes straight on to the items; these keys press them instead."""
@@ -1085,13 +1086,13 @@ class SessionList(SinkList):
         if self.swallowed(event):
             return
         row = event.style.meta.get("row", -1)
-        if row == -1 and event.style.meta.get("column") == 0:   # the dot column's header: its sort (sort_by)
+        if row == -1 and event.style.meta.get("column", -1) < len(ordering.SESSION_COLUMNS):   # a sort (sort_by)
             return
         if self.blank(row):   # the gap above the parked sessions
             event.prevent_default()
             return
         self.app.settle()   # first what the keys before it moved, as a key's land does
-        if not 0 <= row < self.row_count:   # the header, its title: all sessions, as Esc
+        if not 0 <= row < self.row_count:   # the header past its sorts, its title: all sessions, as Esc
             if "row" in event.style.meta and self.show_cursor:   # not the room below the rows
                 event.prevent_default()
                 self.app.unfilter()
@@ -2279,7 +2280,7 @@ SEND_RULES = (
     "**Immediate**: Ctrl+Enter sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
 MOUSE = ("Click selects a row; in the session list, a click on the selected session or the list's title "
-         "unselects it, for all sessions' items, as Esc does. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
+         "past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
          "keep Shift+click for itself: Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or "
          "Backspace closes them together, the highlight going to the row above the topmost one taken, "
          "and Ctrl+R reopens the finished ones. An item with children (its subagents and docs, under it) has a - at the "
@@ -2608,7 +2609,7 @@ class WheelhouseApp(App):
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
             if (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
                 splitter.apply(stored)
-        self.eye_col = self.session_list.add_columns("", "session", "ctx", "?", "D", "✉", "")[-1]
+        self.eye_col = self.session_list.add_columns(*SESSION_LABELS, "")[-1]
         self.item_sort = self.kept_sort("items")
         self.session_sort = self.kept_sort("sessions")
         self.paint_session_header()
@@ -2997,9 +2998,10 @@ class WheelhouseApp(App):
         fits = table.name_room([cells for _, cells in rows])
         rows = [(k, (first, cut(name, fits), *rest)) for k, (first, name, *rest) in rows]
         names = table.ordered_columns[1]
-        width = min(fits, max([names.label.cell_len, *(cells[1].cell_len for _, cells in rows)]))
-        resized = names.auto_width or names.width != width   # a column's width shows only once it's rebuilt
-        names.auto_width, names.width = False, width
+        width = min(fits, max([cell_len(self.session_label(1)), *(cells[1].cell_len for _, cells in rows)]))
+        label = self.session_label(1, width)   # a narrow pane cuts the name's header, not its marker
+        resized = names.auto_width or names.width != width or str(names.label) != label   # shows once rebuilt
+        names.auto_width, names.width, names.label = False, width, Text(label)
         cells = dict(rows)
         room = table.scrollable_content_region.height - table.header_height   # above any scrollbar
         table.draggable = set(cells)
@@ -3167,7 +3169,9 @@ class WheelhouseApp(App):
 
     def session_keys(self) -> dict[str, tuple]:
         """Each session's sort key and group (ordering.session_key), by id."""
-        return {s["id"]: ordering.session_key(self.session_sort, s, self.running(s["id"]), at)
+        ctx = ordering.parse(self.session_sort)[0] == "ctx"   # the size only where it sorts
+        return {s["id"]: ordering.session_key(self.session_sort, s, self.running(s["id"]), at, display_name(s),
+                                              self.client.context_size(s) if ctx else None)
                 for at, s in enumerate(self.sessions)}
 
     def pinned_session_keys(self) -> dict[str, tuple]:
@@ -3210,24 +3214,40 @@ class WheelhouseApp(App):
         self.client.set_setting(ordering.SORT_KEYS[which], spec)
 
     def paint_session_header(self) -> None:
-        col = self.session_list.ordered_columns[0]
-        want = ordering.marker(self.session_sort, "dot")
-        if str(col.label) != want:
-            col.label = Text(want)
-            self.session_list._clear_caches()
-            self.session_list.refresh()
+        """The session list's column in force carries its marker (D97): the dot's header is its marker alone."""
+        table, changed = self.session_list, False
+        for i, col in enumerate(table.ordered_columns[:len(SESSION_LABELS)]):
+            want = self.session_label(i)
+            if str(col.label) != want:
+                col.label, changed = Text(want), True
+                # its widest cell or its label, now: a marker gone narrows it again
+                col.content_width = max([col.label.cell_len, *map(cell_width, table.get_column(col.key))])
+        if changed:
+            table._clear_caches()
+            table.refresh()
+
+    def session_label(self, i: int, room: int | None = None) -> str:
+        """The session list's i-th header, with its marker if its sort is in force, cut to
+        `room` cells by its name, never its marker."""
+        label, mark = SESSION_LABELS[i], ordering.marker(self.session_sort, ordering.SESSION_COLUMNS[i])
+        if not (label and mark):
+            return label or mark
+        if room is not None and len(label) + 2 > room:
+            label = cut(Text(label), room - 2).plain
+        return f"{label} {mark}"
 
     @on(DataTable.HeaderSelected)
     def sort_by(self, event: DataTable.HeaderSelected) -> None:
-        """A column's header clicked: the inbox's sorts cycle (ordering.next_item_sort); the
-        session list's dot column has its one (ordering.next_session_sort)."""
+        """A column's header clicked: each list's sorts cycle (ordering.next_item_sort,
+        ordering.next_session_sort)."""
         event.stop()
         self.settle()
         if event.data_table is self.items_table:
             self.set_sort("items", ordering.next_item_sort(self.item_sort, event.column_key.value))
             self.paint_items()
-        elif event.data_table is self.session_list and event.column_index == 0:
-            self.set_sort("sessions", ordering.next_session_sort(self.session_sort))
+        elif event.data_table is self.session_list and event.column_index < len(ordering.SESSION_COLUMNS):
+            self.set_sort("sessions", ordering.next_session_sort(self.session_sort,
+                                                                 ordering.SESSION_COLUMNS[event.column_index]))
             self.paint_sessions()
 
     def drop_row(self, table, moved: str, before: str | None, after: str | None) -> None:
