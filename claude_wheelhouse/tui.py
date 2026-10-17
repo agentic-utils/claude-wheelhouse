@@ -953,8 +953,8 @@ class SessionList(SinkList):
     click, the first just moving the cursor there. A single click on the selected row, or on
     the list's title, unselects it (the inbox shows every session's items, as Esc), and with none selected the
     highlight is hidden (show_cursor) until a click, Enter or a key that moves it picks one
-    (reveal). The buttons under it act on the highlighted row and never take focus, so Tab
-    goes straight on to the items; these keys press them instead."""
+    (reveal). The buttons under it act on the highlighted row; Tab reaches them only after
+    the items and the answer box (#77), so these keys press them too."""
 
     # E, S and Shift+S (End, Restore and Restore all before Forget and Relaunch took them
     # over) are bound to nothing for a release, so muscle memory does nothing rather than
@@ -1239,7 +1239,15 @@ class Compose(TextArea):
     shows suggestions in the hint line, the first taken with Tab or Enter."""
     BINDINGS = [Binding("ctrl+enter", "app.submit", "Submit", show=False),   # the app's shows in the footer
                 Binding("ctrl+j", "app.submit", "Submit", show=False),
-                Binding("ctrl+a", "select_all", "Select all", show=False)]   # not line start
+                Binding("ctrl+a", "select_all", "Select all", show=False),   # not line start
+                # the conversation (or thread) above: focus stays here (#77), so its page keys do
+                Binding("pageup", "page(-1)", "Page up", show=False),
+                Binding("pagedown", "page(1)", "Page down", show=False)]
+
+    def action_page(self, step: int) -> None:
+        scroll = next(iter(self.screen.query("#detail-scroll, #thread-scroll")), None)
+        if scroll is not None:
+            scroll.action_page_down() if step > 0 else scroll.action_page_up()
 
     def _before_cursor(self) -> tuple[int, int, str]:
         row, col = self.cursor_location
@@ -1312,6 +1320,20 @@ def show_button(root: Widget, button_id: str, label: str, disabled: bool, shown:
     button.display = shown
 
 
+class ConversationScroll(VerticalScroll, can_focus=False):
+    """The conversation pane's scroll, never a Tab stop: a click in it puts focus in the
+    answer box (#77), where PgUp and PgDn scroll it."""
+
+    def on_mouse_down(self) -> None:
+        self.app.focus_answer()
+
+
+def tab_stop(button: Button) -> None:
+    """A button Tab reaches (#77) that a click doesn't focus: a click leaves the answer box,
+    and what's typed, where it was."""
+    button.can_focus, button.FOCUS_ON_CLICK = True, False
+
+
 class Columns(Horizontal):
     """The three columns. Every pane sits in them, so their resize, the terminal's (or the
     first layout), is when the splitters' sizes are fitted to the room again."""
@@ -1323,8 +1345,8 @@ class Columns(Horizontal):
 class SendBar(Horizontal):
     """Always on screen above the footer: Send all, every session's queue, and a line
     saying what the session in context is doing. Send all's key is Shift+A (BUTTON_KEYS):
-    Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S as plain Ctrl+S. The buttons never
-    take focus, so clicking one leaves the answer box (and what's typed in it) where it was.
+    Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S as plain Ctrl+S. A click on a button
+    never takes focus, so it leaves the answer box (and what's typed in it) where it was.
 
     On the inbox the session's own buttons (CONVERSATION) sit under the session list. A
     full-screen item has no session list, so its bar carries them too (conversation=True),
@@ -2176,6 +2198,8 @@ DESCRIBE = {
     "extend(-1)": "Extend the marks up",
     "extend(1)": "Extend the marks down",
     "select_all": "Select all of it, to copy",
+    "page(-1)": "Scroll the conversation (or the thread) up a page",
+    "page(1)": "Scroll it down a page",
     "leave": "Back to the inbox",
     "app.press('rename')": "Rename the highlighted session",
     "app.press('relaunch')": "Relaunch it, or Unpark a parked one",
@@ -2256,22 +2280,20 @@ BUTTON_KEYS = [
 # the permission keys, 1 to 3, on the question suggesting Compact: Compact, Leave it and the
 # first then-choice; 4 and 5 (BUTTON_KEYS) the other two
 NUDGE_KEYS = {"allow": "compact-now", "always": "leave-it", "deny": "compact-then-compact"}
-# the inbox's Tab order (WheelhouseApp.cycle_focus): the answer box straight after the
-# items, so Ctrl+Enter (which goes back to the items), Down and Tab answer the next one.
-# Any other pane that takes focus (a module's) comes after these
-TAB_ORDER = ("session-list", "items", "answer", "detail")
+# the inbox's Tab order (WheelhouseApp.cycle_focus, #77): these, the answer box (or Deny's
+# reason in its place), then every button in reading order; nothing else
+TAB_ORDER = ("session-list", "items", "answer", "deny-reason")
 # for the ? overlay, keys bound elsewhere: Tab and Shift+Tab are every screen's own
 # (app.focus_next, which is cycle_focus), the lists' cursor keys DataTable's
 TAB_KEYS = [Binding("tab", "app.focus_next"), Binding("shift+tab", "app.focus_previous")]
 LIST_KEYS = [Binding(key, action) for key, action in (
     ("up", "cursor_up"), ("down", "cursor_down"), ("pageup", "page_up"), ("pagedown", "page_down"),
     ("ctrl+home", "scroll_top"), ("ctrl+end", "scroll_bottom"))]
-SLIDER_TAB = ", then the stats pane's effort slider while it shows"   # SDK mode's alone (keys_help)
-TABS = ("Tab goes round the panes: the session list, the items, the answer box, then the "
-        "conversation{slider}, and Shift+Tab back. Ctrl+Enter in the answer box goes back to the items with "
-        "the cursor where it was, so Down then Tab answers the next one. An item opened full screen "
-        "has two stops, its answer box and its thread. In the conversation or a thread, Up, Down, PgUp, "
-        "PgDn, Home and End scroll it. The buttons never take focus: each has a key.")
+TABS = ("Tab goes round the session list, the items, the answer box, then every button shown, in reading "
+        "order, and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter "
+        "leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus "
+        "where it was, and each has a key. An item opened full screen has two stops, its answer box and its "
+        "thread; in the thread, Up, Down, PgUp, PgDn, Home and End scroll it.")
 SEND_RULES = (
     "**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the "
     "session's queue as one message, so related answers arrive together; ✉ counts what's queued. "
@@ -2341,7 +2363,7 @@ def keys_help(sdk: bool = False, shown=()) -> str:
     whose = WHOSE.format(sdk=SDK_WHOSE if sdk else HOSTED_WHOSE if offered & {"interrupt", "compact", "shell"}
                          else "; then Mode, and Send on one that isn't dead.")
     buttons = [text for id_, text in BUTTONS.items() if id_ not in SDK_BUTTONS or id_ in offered]
-    out += ["## Tab order", TABS.format(slider=SLIDER_TAB if sdk else ""), "## Mouse", MOUSE, "## Buttons", whose,
+    out += ["## Tab order", TABS, "## Mouse", MOUSE, "## Buttons", whose,
             *[f"- {text}" for text in buttons],
             "## Sending", SEND_RULES,
             "## The tutorial", f"{tutorial.AGAIN} at the next start. Esc or ? closes this list."]
@@ -2571,7 +2593,7 @@ class WheelhouseApp(App):
             with Vertical(id="detail-pane", classes="panel"):
                 with VerticalScroll(id="checklist-scroll"):   # scrolls on a short terminal (review 9)
                     yield Static(id="checklist")
-                with VerticalScroll(id="detail-scroll"):
+                with ConversationScroll(id="detail-scroll"):
                     yield Transcript(NOTHING_SELECTED, id="detail")
                 yield Splitter("answer", "#answer", "#detail-scroll", "y")
                 yield PermissionButtons()
@@ -2595,16 +2617,16 @@ class WheelhouseApp(App):
         self.session_list.sink, self.items_table.sink = self.session_sink, self.item_sink
         self.session_info = self.query_one("#session-info-text", Static)
         self.session_activity = self.query_one("#session-activity", Static)
-        # out of the Tab order, which goes from the session list straight to the items: the
-        # buttons still click, and the list's own keys press them (SessionList)
         self.conversation_buttons = self.query_one("#conversation-buttons", Grid)
         self.session_buttons = self.query_one("#session-buttons", Grid)
         self.session_controls = list(self.query("#sessions-pane Grid, #sessions-pane Grid Button"))   # theirs and they
-        # the conversation's one stop is its transcript, not this scroll too: its keys
-        # still scroll it, an ancestor's bindings (TAB_ORDER)
-        for widget in (self.query_one("#session-info-scroll"), self.query_one("#checklist-scroll"), self.detail_scroll,
-                       *self.query("#sessions-pane Grid Button")):
+        # Tab's stops are TAB_ORDER's and the buttons (cycle_focus): not the panes' scrolls,
+        # nor the conversation, whose click puts focus in the answer box (ConversationScroll)
+        for widget in (self.query_one("#session-info-scroll"), self.query_one("#checklist-scroll")):
             widget.can_focus = False
+        self.detail.FOCUS_ON_CLICK = False
+        for button in self.screen.query(Button):
+            tab_stop(button)
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
             if (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
                 splitter.apply(stored)
@@ -4089,9 +4111,7 @@ class WheelhouseApp(App):
             self.repin.add(f"{target[0]}|{target[1]}")
         box.text = ""
         self.refresh_data()
-        if box is self.answer:   # back to the items, cursor where it was: Down, Tab answers the next
-            self.screen.set_focus(self.items_table)
-        elif isinstance(self.screen, ThreadView) and box is self.screen.box:   # to the end, where the answer just given shows
+        if isinstance(self.screen, ThreadView) and box is self.screen.box:   # to the end, where the answer just given shows
             self.screen.query_one("#thread-scroll").scroll_end(animate=False)
 
     @session_action
@@ -4421,17 +4441,21 @@ class WheelhouseApp(App):
         self.cycle_focus(-1)
 
     def cycle_focus(self, step: int) -> None:
-        """Tab and Shift+Tab on the inbox go round TAB_ORDER, then any other pane that takes
-        focus; elsewhere (a full-screen item, a dialog) in screen order. In an answer box
-        with an emoji code being typed, Tab takes the first suggestion instead. Tab is a key,
-        so the cursors have settled (land) before it moves on."""
+        """Tab and Shift+Tab on the inbox go round TAB_ORDER, then the buttons shown and
+        enabled in reading order (each pane's from the left, top to bottom, then the send
+        bar's), and nothing else (#77); elsewhere (a full-screen item, a dialog) in screen
+        order. In an answer box with an emoji code being typed, Tab takes the first suggestion
+        instead. Tab is a key, so the cursors have settled (land) before it moves on."""
         if step > 0 and isinstance(self.focused, Compose) and self.focused.take_suggestion():
             return
         screen = self.screen
         chain = screen.focus_chain
         if screen is self.screen_stack[0]:
-            order = [w for id_ in TAB_ORDER for w in chain if w.id == id_]
-            chain = order + [w for w in chain if w not in order]
+            def reading(b: Button) -> tuple:
+                pane = next((a for a in b.ancestors if isinstance(a, SendBar) or a.has_class("panel")), b)
+                return isinstance(pane, SendBar), pane.region.x, b.region.y, b.region.x
+            chain = [w for id_ in TAB_ORDER for w in chain if w.id == id_] + \
+                sorted((w for w in chain if isinstance(w, Button)), key=reading)
         if not chain:
             return
         here = chain.index(self.focused) if self.focused in chain else (-1 if step > 0 else 0)
@@ -4446,6 +4470,12 @@ class WheelhouseApp(App):
     def label(self, sid: str) -> str:
         s = self.row(sid)
         return f"{s['name'] or os.path.basename(s['cwd'])} ({short(sid)}, {s['cwd']})"
+
+    def focus_answer(self) -> None:
+        """The answer box (or Deny's reason in its place), if it shows: a click in the conversation (#77)."""
+        box = next((w for w in self.screen.focus_chain if w.id in ("answer", "deny-reason")), None)
+        if box is not None:
+            self.screen.set_focus(box, scroll_visible=False)
 
     def action_relaunch_all(self) -> None:
         """Relaunch all: every Available session, once confirmed. Parked and Active ones are

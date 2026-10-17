@@ -293,7 +293,7 @@ session.
   the tab stays open on its error. If the wheelhouse can't start
   a session in its tab, the tab stays open saying why. The wheelhouse never deletes
   anything by itself.
-  The buttons stay out of the Tab order, and each has a key: with the list focused, `R` renames, `L` relaunches
+  `Tab` reaches the buttons after the answer box, and each has a key: with the list focused, `R` renames, `L` relaunches
   (or unparks), `P` parks (or unparks) and `Delete` or `Backspace` forgets; the rest are under Keys below. `E`, `S`
   and `Shift+S` (End, Restore and Restore all before) do nothing for now.
 - **Adopt.** Brings a session the wheelhouse didn't launch into the wheelhouse: pick it
@@ -346,11 +346,11 @@ Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item lis
 as answered, a decision as seen), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
 Every dialog opens centred over the screen, which stays in sight behind it. A dialog asking yes or no takes `Y` or `N` (`Esc` is no, and so is `Enter`, as No has the focus).
 
-`Tab` goes round the panes: the session list, the items, the answer box, then the conversation (one
-stop, where the arrows, `PgUp`, `PgDn`, `Home` and `End` scroll it), and `Shift+Tab` goes back.
-`Ctrl+Enter` in the answer box goes back to the items with the cursor where it was, so answering a run
-of items is: type, `Ctrl+Enter`, `Down`, `Tab`, type, `Ctrl+Enter`. An item opened full screen has two
-stops, its answer box and its thread. Keys typed ahead of the screen end as if typed slowly: each acts once the one
+`Tab` goes round the session list, the items, the answer box, then every button shown, in reading
+order, and `Shift+Tab` goes back. Nothing else is a stop. A click in the conversation puts focus in the
+answer box, where `PgUp` and `PgDn` scroll the conversation, and `Ctrl+Enter` leaves it there. A click on
+a button leaves focus where it was. An item opened full screen has two stops, its answer box and its
+thread. Keys typed ahead of the screen end as if typed slowly: each acts once the one
 before it has done all it does, so the ones behind a key that opens a thread or a dialog go to it, and the ones behind a
 dialog's answer go to the screen it uncovers.
 

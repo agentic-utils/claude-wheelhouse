@@ -386,10 +386,11 @@ async def test_send_bar_and_session_buttons_follow_the_queues(store, sid, tmp_pa
         app.session_list.move_cursor(row=1)
         await pilot.pause()
         assert session_buttons(app)["send"] == ("Send (2)", False), "the highlight moved: the other's queue"
-        assert all(not b.can_focus for b in app.screen.query("SendBar Button, #sessions-pane Button")), \
-            "clicks leave focus alone"
+        app.answer.focus()
+        await pilot.pause()
         await pilot.click("#send-all")
         await pilot.pause()
+        assert focused_id(app) == "answer", "a click on a button leaves focus alone"
         assert bar()["send-all"] == ("Send all (0)", True)
     assert store.drafts() == []
     assert [m["body"] for m in store.pending(sid)] == ["a"]
@@ -1612,7 +1613,7 @@ class Burst:
 @pytest.mark.anyio
 @pytest.mark.parametrize("focus, at, burst, seen, want, desc", [
     ("answer", "qa", ("a", "b", "backspace", "ctrl+enter"), lambda b: (b.answer("qa"), b.status("qa"), b.focus()),
-     (["a"], "open", "items"), "review 14 (1): Backspace edits the box, then Ctrl+Enter sends it; the question stays open"),
+     (["a"], "open", "answer"), "review 14 (1): Backspace edits the box, then Ctrl+Enter sends it; the question stays open"),
     ("items", "qa", ("delete", "down"), lambda b: (b.status("qa"), b.status("qb")), ("closed", "open"),
      "review 14 (2): Delete closes the question it was on, not the next"),
     ("items", "qa", ("ctrl+s", "down"), lambda b: (b.sent("alpha"), b.sent("bravo")), (1, 0),
@@ -5431,7 +5432,7 @@ async def test_the_session_lists_keys_press_its_buttons(store, sid, monkeypatch,
         await pilot.press(key)
         await pilot.pause()
         assert pressed == [button], desc
-        assert not app.query_one(f"#{button}", Button).can_focus, f"{desc}: never focused"
+        assert app.focused is app.session_list, f"{desc}: focus stays on the list"
 
 
 @pytest.mark.anyio
@@ -5584,7 +5585,7 @@ def focused_id(app) -> str | None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("keys, desc", [
-    ("pilot", "Ctrl+Enter, Down, Tab, type, Ctrl+Enter answers the next item (#73)"),
+    ("pilot", "Ctrl+Enter, Shift+Tab, Down, Tab, type, Ctrl+Enter answers the next item (#73, #77)"),
     ("raw", "the same as a burst, no idle wait between keys (#73)"),
 ])
 async def test_answer_one_then_the_next_from_the_keyboard(store, sid, keys, desc):
@@ -5598,20 +5599,20 @@ async def test_answer_one_then_the_next_from_the_keyboard(store, sid, keys, desc
         await pilot.pause()
         app.answer.focus()
         await pilot.pause()
-        flow = [*"aa", "ctrl+enter", "down", "tab", *"bb", "ctrl+enter"]
+        flow = [*"aa", "ctrl+enter", "shift+tab", "down", "tab", *"bb", "ctrl+enter"]
         if keys == "raw":
             raw_keys(app, *flow)
             for _ in range(6):
                 await pilot.pause()
         else:
             await pilot.press(*flow[:3])
-            assert focused_id(app) == "items", f"{desc}: Ctrl+Enter goes back to the items"
+            assert focused_id(app) == "answer", f"{desc}: Ctrl+Enter leaves focus in the box (#77)"
             assert app.items_table.cursor_key() == first, f"{desc}: the cursor where it was"
             await pilot.press(*flow[3:])
         await pilot.pause()
         drafts = {(m["session_id"], m["item_ref"]): m["body"] for m in store.drafts(sid)}
         assert drafts == {tuple(first.split("|")): "aa", tuple(second.split("|")): "bb"}, f"{desc}: {drafts}"
-        assert focused_id(app) == "items" and app.items_table.cursor_key() == second, desc
+        assert focused_id(app) == "answer" and app.items_table.cursor_key() == second, desc
         assert app.answer.text == "", desc
         assert_one_current(app, desc)
 
@@ -5619,9 +5620,10 @@ async def test_answer_one_then_the_next_from_the_keyboard(store, sid, keys, desc
 @pytest.mark.anyio
 @pytest.mark.parametrize("text, focus, desc", [
     ("", "answer", "nothing typed: nothing submitted, the box keeps focus"),
-    ("hi", "thread-answer", "a full-screen item has no items to go back to: its box keeps focus"),
+    ("hi", "answer", "sent: the box keeps focus (#77)"),
+    ("hi", "thread-answer", "a full-screen item's box keeps focus too"),
 ])
-async def test_ctrl_enter_leaves_focus_where_there_is_nothing_to_go_back_to(store, sid, text, focus, desc):
+async def test_ctrl_enter_leaves_focus_in_the_box(store, sid, text, focus, desc):
     q = store.post_item(sid, "question", "one?")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -5636,58 +5638,51 @@ async def test_ctrl_enter_leaves_focus_where_there_is_nothing_to_go_back_to(stor
         assert focused_id(app) == focus, desc
 
 
+# the inbox's Tab stops with a running tab session selected and an answer queued (#77): the
+# lists, the box, then every button shown and enabled in reading order, the session pane's
+# then the send bar's (Model, Mode, Interrupt, Compact and Shell disabled: a wheelhouse-run session's)
+INBOX_STOPS = ["session-list", "items", "answer", "rename", "relaunch", "park", "end", "fork", "send", "send-all"]
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("screen, key, order, desc", [
-    ("inbox", "tab", ["session-list", "items", "answer", "detail", "session-list"],
-     "Tab: the session list, the items, the answer box, the conversation, round again (#73)"),
-    ("inbox", "shift+tab", ["session-list", "detail", "answer", "items", "session-list"], "Shift+Tab: the reverse"),
+    ("inbox", "tab", INBOX_STOPS + ["session-list"],
+     "Tab: the session list, the items, the answer box, every button, round again (#77)"),
+    ("inbox", "shift+tab", ["session-list", *INBOX_STOPS[:0:-1], "session-list"], "Shift+Tab: the reverse"),
     ("thread", "tab", ["thread-answer", "thread", "thread-answer"], "a full-screen item: its box and its thread"),
     ("thread", "shift+tab", ["thread-answer", "thread", "thread-answer"], "and back"),
 ])
-async def test_the_tab_order(store, sid, screen, key, order, desc):
+async def test_the_tab_order(store, sid, monkeypatch, screen, key, order, desc):
+    by_name(monkeypatch, {"demo": "live"})
     q = store.post_item(sid, "question", "one?")
+    store.queue(sid, "queued")   # Send and Send all enabled
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         if screen == "thread":
             app.push_screen(ThreadView(sid, q))
         else:
+            await pick(app, pilot, sid)
             app.session_list.focus()
         await pilot.pause()
         seen = [focused_id(app)]
         for _ in order[1:]:
             await pilot.press(key)
             seen.append(focused_id(app))
-        assert seen == order, desc
+        assert seen == order, f"{desc}: {seen}"
         assert_one_current(app, desc)
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("key, desc", [
-    ("pagedown", "PgDn scrolls the conversation pane it has focus"),
-    ("end", "End goes to its foot"),
-    ("down", "Down scrolls a line"),
+@pytest.mark.parametrize("pane, key, desc", [
+    ("conversation", None, "a long conversation, at its newest turn, stays there"),
+    ("item", None, "a long item scrolled down part way stays there"),
+    ("item", "pageup", "PgUp in the box scrolls the conversation up"),
+    ("item", "pagedown", "PgDn in the box scrolls it down"),
 ])
-async def test_the_focused_conversation_scrolls_from_the_keyboard(store, sid, key, desc):
-    store.post_item(sid, "question", "long?", "\n\n".join(f"line {i}" for i in range(200)))
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        app.items_table.focus()
-        await pilot.press("tab", "tab")
-        assert focused_id(app) == "detail", desc
-        await pilot.press(key)
-        await pilot.pause()
-        assert app.detail_scroll.scroll_y > 0, desc
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("pane, desc", [
-    ("conversation", "a long conversation, at its newest turn, stays there"),
-    ("thread", "a long item scrolled down part way stays there"),
-])
-async def test_tab_into_the_detail_pane_leaves_it_where_it_is_scrolled(store, sid, tmp_path, monkeypatch, pane, desc):
-    """D43: focus moved to the pane by Tab, not a scroll to its top."""
+async def test_a_click_in_the_conversation_focuses_the_answer_box(store, sid, tmp_path, monkeypatch, pane, key, desc):
+    """#77: a click in the conversation puts focus in the answer box, the pane where it is
+    scrolled (as D43 had it for Tab), and the box's PgUp and PgDn scroll the pane."""
     if pane == "conversation":
         long_conversation(sid, tmp_path, monkeypatch)
     else:
@@ -5704,11 +5699,18 @@ async def test_tab_into_the_detail_pane_leaves_it_where_it_is_scrolled(store, si
         before, y = painted(app), app.detail_scroll.scroll_y
         assert y > 0, desc
         app.items_table.focus()
-        await pilot.press("tab", "tab")
+        await pilot.click(app.detail_scroll, offset=(2, 2))
         await pilot.wait_for_scheduled_animations()
         await pilot.pause()
-        assert focused_id(app) == "detail", desc
+        assert focused_id(app) == "answer", desc
         assert (app.detail_scroll.scroll_y, painted(app)) == (y, before), desc
+        if key:
+            await pilot.press(key)
+            await pilot.wait_for_scheduled_animations()
+            await pilot.pause()
+            moved = app.detail_scroll.scroll_y - y
+            assert (moved < 0 if key == "pageup" else moved > 0), desc
+            assert focused_id(app) == "answer", f"{desc}: focus stays in the box"
 
 
 @pytest.fixture
@@ -6107,8 +6109,8 @@ async def shown_stats(app, pilot) -> str:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("on, runner_, slider, desc", [
-    (True, "sdk", True, "a session run by a host: Model, the slider, and a Tab stop to it"),
-    (True, "tab", False, "a tab: neither, and no stop (Q52)"),
+    (True, "sdk", True, "a session run by a host: Model and the slider, which is no Tab stop (#77)"),
+    (True, "tab", False, "a tab: neither (Q52)"),
     (False, "sdk", False, "SDK mode off: a host's session runs on as it was set, with neither"),
 ])
 async def test_model_and_effort_are_offered_only_for_a_hosted_session(store, tmp_path, monkeypatch, on, runner_, slider,
@@ -6123,7 +6125,7 @@ async def test_model_and_effort_are_offered_only_for_a_hosted_session(store, tmp
         app.query_one("#detail").focus()
         await pilot.press("tab")
         await pilot.pause()
-        assert (focused_id(app) == "stats") == slider, f"{desc}: after the inbox's own stops"
+        assert focused_id(app) != "stats", f"{desc}: Tab goes round the inbox's own stops alone (#77)"
         app.session_list.focus()
         await pilot.press("m")
         await pilot.pause()
