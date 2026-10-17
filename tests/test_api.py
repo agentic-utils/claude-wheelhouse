@@ -143,8 +143,8 @@ SPLITTERS = {"sessions-pane", "items-pane", "left-bottom", "answer"}   # beside 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("loaded, slots, splitters, desc", [
-    (None, {**CORE, "left.middle": ["stats"], "middle.bottom": ["design"]}, {"left-middle", "middle-top"},
-     "the default slots, both modules installed: stats under the session list, decisions under the inbox"),
+    (None, {**CORE, "left.middle": ["stats"]}, {"left-middle"},
+     "the default slots: stats under the session list, middle.bottom empty and collapsed"),
     ([], CORE, set(), "no modules: left.middle collapses too"),
     ([api.Loaded("demo", module(slot="middle.bottom"))], {**CORE, "middle.bottom": ["demo"]}, {"middle-top"},
      "a pane for middle.bottom: it shows under the inbox"),
@@ -154,7 +154,6 @@ async def test_the_slots(store, monkeypatch, loaded, slots, splitters, desc):
     splitter beside it, and its column's other slots share the room."""
     if loaded is None:
         pytest.importorskip("claude_wheelhouse_stats", reason="installed without the stats module")
-        pytest.importorskip("claude_wheelhouse_design", reason="installed without the design module")
     else:
         monkeypatch.setattr(api, "load", lambda: loaded)
     app = WheelhouseApp(store)
