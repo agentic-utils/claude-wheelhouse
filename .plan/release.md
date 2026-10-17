@@ -9,7 +9,7 @@ runs `uv tool upgrade` and restarts the app, offered only when no session is mid
 
 ## Where it stands
 
-- `pyproject.toml`: `claude-wheelhouse` 0.1.0, hatchling, one script
+- `pyproject.toml`: `claude-wheelhouse` 0.2.0.dev0 (0.1.0 was never tagged), hatchling, one script
   (`claude-wheelhouse = "claude_wheelhouse.cli:main"`), the stats module's entry point, and
   the Claude Code plugin shipped inside the package (`claude_wheelhouse/plugin/**`).
 - The Makefile assumes a checkout: `make install` is `uv sync`, `make run` and

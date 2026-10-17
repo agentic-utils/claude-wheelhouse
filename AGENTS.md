@@ -165,7 +165,9 @@ Update these in the same commit as the behaviour they describe:
   with `version=UNRELEASED`. Set `where` to the tour dialog for the pane it changes, with a
   `tip` of at most two lines, or to `ADVANCED` when it is for experienced users only. Give
   it a one-line `note` for the release notes. Fixes add nothing. Never change or reuse a
-  released feature's id.
+  released feature's id. Between releases `pyproject.toml`'s version is a `.dev` one (say
+  `0.3.0.dev0` after 0.2.0): a release version fails the tests while any feature is
+  `UNRELEASED`, until `make stamp` gives them that version.
 - `tui.py`'s `DESCRIBE` (each binding's line in the `?` overlay; a test fails when a binding
   has none), `BUTTONS` (each button's tooltip and overlay line), `SEND_RULES` and `MOUSE`.
 - `README.md`: anything a user sees or does.

@@ -1,3 +1,4 @@
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,8 @@ from claude_wheelhouse import whatsnew
 from claude_wheelhouse.whatsnew import ADVANCED, DIALOGS, FEATURES, TIPPED, UNRELEASED, WHENS, Feature
 
 EM_DASH = chr(0x2014)
+# the version being worked on, from pyproject.toml: the installed metadata is stale until `uv sync`
+VERSION = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())["project"]["version"]
 
 
 def problems(features, dialogs=DIALOGS) -> set[str]:
@@ -64,7 +67,7 @@ def test_dialogs_are_the_tour_in_order():
 
 
 @pytest.mark.parametrize("version, features, ok, desc", [
-    ("0.1.0", FEATURES, True, "the package as it stands"),
+    (VERSION, FEATURES, True, "the package as it stands"),
     ("0.3.0", (feature(version=UNRELEASED),), False, "a release with an unstamped feature"),
     ("0.3.0", (feature(version="0.3.0"),), True, "a release, stamped"),
     ("0.3.0.dev1", (feature(version=UNRELEASED),), True, "a development version may hold unreleased features"),
@@ -73,10 +76,9 @@ def test_no_unreleased_feature_in_a_release(version, features, ok, desc):
     assert (not whatsnew.is_release(version) or not whatsnew.unreleased(features)) is ok, desc
 
 
-def test_the_running_package_has_no_unreleased_feature_once_released():
-    version = whatsnew.running_version()
-    assert not whatsnew.is_release(version) or not whatsnew.unreleased(), \
-        f"{version} is a release: make stamp VERSION={version} gives its features their version"
+def test_the_package_has_no_unreleased_feature_once_released():
+    assert not whatsnew.is_release(VERSION) or not whatsnew.unreleased(), \
+        f"{VERSION} is a release: make stamp VERSION={VERSION} gives its features their version"
 
 
 REGISTRY = (feature("tab", where="sessions"), feature("sdk-p", where="answer", when="sdk"),
