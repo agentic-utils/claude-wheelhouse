@@ -140,20 +140,64 @@ async def test_esc_closes_asking_first_with_edits(store, sid, doc, full):
             assert not isinstance(app.screen, tui.DocView), "closed, Esc leaves as before"
 
 
+async def edited(app, pilot, view, editor) -> None:
+    """The editor opened on Build it., edited there, and the edit rendered (Ctrl+Enter)."""
+    await click(pilot, view, row_with(view, "Build it."))
+    editor.insert("Kept. ")
+    await pilot.press("ctrl+j")
+    await pilot.pause()
+
+
 @pytest.mark.anyio
-async def test_the_shown_doc_changing_closes_the_editor(store, sid, doc):
+async def test_edits_outlive_another_doc_shown_and_come_back(store, sid, doc):
     q = store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         view, editor = await shown(app, pilot, doc[0])
-        await click(pilot, view, row_with(view, "Build it."))
-        editor.insert("Dropped. ")
-        notes = []
-        app.notify = lambda message, **_: notes.append(message)
+        await edited(app, pilot, view, editor)
+        cursor = editor.cursor_location
         app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(q))
         await pilot.pause()
-        assert not editor.display and "dropped" in notes[-1], "another item: closed, the edits' loss said"
+        assert not editor.display, "another item: the editor closes"
         assert app.query_one("#detail-pane").border_title == "Detail", "the title back"
+        assert app.doc_edits[str(doc[1])].text.startswith("# The plan\n\nKept. "), "its buffer kept, by its path"
+        view, editor = await shown(app, pilot, doc[0])
+        assert "Kept. Build it." in "\n".join(view._layout(view.size.width)[1]), "shown from the buffer meanwhile"
+        await click(pilot, view, row_with(view, "The plan"))
+        assert editor.text.startswith("# The plan\n\nKept. ") and editor.cursor_location == cursor, \
+            "reopened: the buffer and its cursor back"
+        assert app.query_one("#detail-pane").border_title == "Detail · edited", "and edited"
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+        assert str(doc[1]) not in app.doc_edits, "Discard drops the buffer"
+        assert "Kept" not in "\n".join(view._layout(view.size.width)[1]), "the file shown again"
+        assert doc[1].read_text() == DOC, "the file untouched"
+
+
+@pytest.mark.anyio
+async def test_edits_in_detail_show_full_screen(store, sid, doc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0])
+        await edited(app, pilot, view, editor)
+        full, full_editor = await shown(app, pilot, doc[0], full=True)
+        assert "Kept. Build it." in app.screen.text, "full screen renders the buffer, not the file"
+        await click(pilot, full, row_with(full, "The plan"))
+        assert full_editor.text == editor.text, "its editor opens on the same buffer"
+        full_editor.insert("More. ")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("escape")   # Keep editing: Esc closes nothing
+        await pilot.pause()
+        full_editor.close()
+        await pilot.press("escape")
+        await pilot.pause()
+        app.refresh_data()
+        await pilot.pause()
+        assert "More. " in editor.text, "back in Detail, its editor takes up the edits made full screen"
 
 
 @pytest.fixture

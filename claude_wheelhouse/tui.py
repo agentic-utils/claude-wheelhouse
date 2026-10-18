@@ -538,6 +538,7 @@ class Transcript(Widget, can_focus=False):
         self.warm: set[tuple] = set()   # long doc blocks rendered on a thread, by (who, md, width)
         self.warming: set[tuple] = set()   # ... and those under way
         self.doc_key = None   # the doc shown (its session and ref), set by whoever shows one
+        self.doc_path: str | None = None   # ... and its file's path
         self.stand_in: tuple | None = None   # (doc_key, strips, texts): its last render, shown while the next one renders
         self.doc_at: tuple[int, docblocks.DocMap] | None = None   # the doc block's first row and map, as laid out
         self.on_laid: Callable[[], None] | None = None   # told once a doc rendered off the loop is laid out (DocEditor)
@@ -1789,7 +1790,7 @@ def doc_blocks(item, doc) -> list[tuple[str, str]]:
     as one block (a widget per block made a long one slow to show, and every layout after)."""
     if item is None:
         return [("note", "_gone_")]
-    path = doc["path"] if doc else item["body"]
+    path = doc_path(item, doc)
     out = [("head", f"## {item['ref']} · {item['title']}\n\n`doc` · **{item['status']}** · `{path}`")]
     if doc and doc["gone"]:
         out.append(("warn", f"The file {'has gone' if doc['gone'] == 'gone' else 'is not a regular file'}: "
@@ -1797,6 +1798,11 @@ def doc_blocks(item, doc) -> list[tuple[str, str]]:
     if doc and doc["text"]:
         out.append(("doc", doc["text"]))
     return out
+
+
+def doc_path(item, doc) -> str | None:
+    """A doc item's file, as doc_blocks shows it: the document's path, else the item's body."""
+    return doc["path"] if doc else item["body"] if item else None
 
 
 def file_blocks(path: str, title: str, doc) -> list[tuple[str, str]]:
@@ -1854,17 +1860,30 @@ class DocView(Screen):
         self.query_one("#docview-editor", DocEditor).open_at(event.row)
 
     def paint(self) -> None:
+        view = self.query_one("#docview", Transcript)
         if self.file:
             blocks = file_blocks(*self.file, self.app.client.read_doc(self.file[0]))
+            view.doc_path = self.file[0]
         else:
-            blocks = doc_blocks(self.app.client.item(self.sid, self.ref), self.app.client.document(self.sid, self.ref))
-        blocks = self.query_one("#docview-editor", DocEditor).shown_in(blocks)
+            item, doc = self.app.client.item(self.sid, self.ref), self.app.client.document(self.sid, self.ref)
+            blocks = doc_blocks(item, doc)
+            view.doc_path = doc_path(item, doc)
+        view.doc_key = ("file", self.file[0]) if self.file else (self.sid, self.ref)
+        blocks = self.query_one("#docview-editor", DocEditor).shown_in(blocks, view.doc_path)
         text = "\n\n".join(md for _, md in blocks)
         if text != self.text:
             self.text = text
-            view = self.query_one("#docview", Transcript)
-            view.doc_key = ("file", self.file[0]) if self.file else (self.sid, self.ref)
             view.update(render(blocks))
+
+
+@dataclasses.dataclass(frozen=True)
+class DocEdit:
+    """A doc's unsaved edits, kept by its path (DocEditor.edits): the file's text they began
+    from, the buffer, the buffer as last rendered (Ctrl+Enter), and the cursor."""
+    base: str
+    text: str
+    shown: str
+    cursor: tuple[int, int]
 
 
 def carried(old: str, new: str, line: int) -> int:
@@ -1909,6 +1928,7 @@ class DocEditor(TextArea):
         self.immediate, self.repaint = immediate, repaint
         self.display = False
         self.key = None   # the doc open, as its viewer's doc_key; None while closed
+        self.path: str | None = None   # ... and its file, which its kept buffer goes by (edits)
         self.base = ""   # the doc's text when the editor opened: edits are what differs from it
         self.shown: str | None = None   # the buffer the viewer renders (the last Ctrl+Enter's)
         self.syncing: str | None = None   # the side driving a sync under way: "viewer" or "editor"
@@ -1933,6 +1953,22 @@ class DocEditor(TextArea):
     def edited(self) -> bool:
         return self.key is not None and self.text != self.base
 
+    @property
+    def edits(self) -> "dict[str, DocEdit]":
+        """Every doc's unsaved edits, by its path, kept for the app's life: the Detail
+        editor's and full screen's alike."""
+        return self.app.doc_edits
+
+    def stash(self) -> None:
+        """The buffer kept under the doc's path while it differs from the file's text, so it
+        outlives the editor closing as another doc shows; dropped once it doesn't."""
+        if self.path is None:
+            return
+        if self.text != self.base:
+            self.edits[self.path] = DocEdit(self.base, self.text, self.shown, self.cursor_location)
+        else:
+            self.edits.pop(self.path, None)
+
     # opening, following and closing
 
     def open_at(self, row: int) -> None:
@@ -1945,52 +1981,70 @@ class DocEditor(TextArea):
         if line is None:
             return
         if self.key != view.doc_key:
-            self.key = view.doc_key
-            self.base = self.shown = next((md for who, md in view.blocks if who == "doc"), "")
-            self.load_text(self.base)
+            self.key, self.path = view.doc_key, view.doc_path
+            kept = self.edits.get(self.path)
+            if kept is not None:   # edits kept from before: the buffer, its cursor and edited back
+                self.base, self.shown, line = kept.base, kept.shown, None
+                self.load_text(kept.text)
+            else:
+                self.base = self.shown = next((md for who, md in view.blocks if who == "doc"), "")
+                self.load_text(self.base)
             splitter = self.splitter
             splitter.display = self.display = True
             splitter.apply(share(self.app.client.setting(LAYOUT + splitter.key)))
             self.paint_title()
             self.call_after_refresh(self.reveal, row, row + 1, "viewer")   # once the viewer has shrunk
         self.focus()
-        self.call_after_refresh(self.place, line)   # once the editor has its height
+        # once the editor has its height
+        self.call_after_refresh(self.place, *((line, 0) if line is not None else kept.cursor))
 
-    def place(self, line: int) -> None:
-        """The cursor to the start of a source line, scrolled to the editor's middle: driven
-        by the viewer, so the viewer doesn't follow it."""
+    def place(self, line: int, column: int = 0) -> None:
+        """The cursor to a place in the source, scrolled to the editor's middle: driven by
+        the viewer, so the viewer doesn't follow it."""
         line = min(line, self.document.line_count - 1)
-        self.block = self.view.block_rows(line)
+        self.block = self.view.block_rows(carried(self.shown, self.text, line))
         self.mark("viewer")
-        self.move_cursor((line, 0), center=True)
+        self.move_cursor((line, column), center=True)
 
     def follow(self, key) -> None:
         """The viewer shows a doc (key, its doc_key, or None): a different one closes the
-        editor, its unsaved edits dropped with a word to say so."""
-        if self.key is not None and key != self.key:
-            if self.edited:
-                self.app.notify("The doc shown changed: its unsaved edits were dropped.", severity="warning")
+        editor, its edits kept (stash) for when it opens on this one again. The same one,
+        edited meanwhile in another editor (full screen's), takes those edits up, or closes
+        if they were discarded there."""
+        if self.key is None:
+            return
+        if key != self.key:
+            self.stash()
             self.close()
+        elif (kept := self.edits.get(self.path)) is None and self.text != self.base:
+            self.close()
+        elif kept is not None and (kept.text, kept.shown) != (self.text, self.shown):
+            self.shown = kept.shown
+            self.load_text(kept.text)
+            self.move_cursor(kept.cursor)
+            self.paint_title()
 
     def close(self) -> None:
-        """Closed, edits and all: the viewer shows the file again, and has the focus."""
+        """Closed: the viewer shows the doc as it's kept (shown_in), and has the focus."""
         if self.key is None:
             return
         refocus = self.has_focus
-        self.key = self.shown = self.block = self.anchor = None
+        self.key = self.path = self.shown = self.block = self.anchor = None
         self.splitter.display = self.display = False
         self.paint_title()
         self.repaint()
         if refocus and self.view.can_focus:
             self.view.focus()
 
-    def shown_in(self, blocks: list[tuple[str, str]]) -> list[tuple[str, str]]:
-        """A doc's blocks as the viewer shows them: the doc's text the editor's buffer as of
-        the last Ctrl+Enter while it's open."""
-        if self.shown is None:
+    def shown_in(self, blocks: list[tuple[str, str]], path: str | None) -> list[tuple[str, str]]:
+        """A doc's blocks as the viewer shows them: the doc's text (at `path`) its buffer as
+        of the last Ctrl+Enter, while the editor is open on it or its edits are kept."""
+        kept = self.edits.get(path) if path is not None else None
+        text = self.shown if self.key is not None and path == self.path else kept.shown if kept else None
+        if text is None:
             return blocks
-        out = [(who, self.shown if who == "doc" else md) for who, md in blocks]
-        return out if any(who == "doc" for who, _ in blocks) else out + [("doc", self.shown)]
+        out = [(who, text if who == "doc" else md) for who, md in blocks]
+        return out if any(who == "doc" for who, _ in blocks) else out + [("doc", text)]
 
     def paint_title(self) -> None:
         """`edited` in the pane's title while there are unsaved edits."""
@@ -2011,6 +2065,7 @@ class DocEditor(TextArea):
         rows, scroll = self.view.block_rows(carried(self.shown, self.text, line)), self.view.parent
         self.anchor = (line, rows[0] - scroll.scroll_y) if rows and isinstance(scroll, VerticalScroll) else None
         self.shown = self.text
+        self.stash()
         self.repaint()
         self.view.on_laid = self.anchored   # if it renders off the loop
         self.call_after_refresh(self.anchored)
@@ -2031,17 +2086,17 @@ class DocEditor(TextArea):
         self.app.notify(SAVING_NEXT)
 
     def action_close_editor(self) -> None:
-        """Esc: closed, asking first with unsaved edits: Save, Discard or Keep editing."""
+        """Esc: closed, asking first with unsaved edits: Discard (their buffer dropped) or
+        Keep editing."""
         if not self.edited:
-            self.close()
+            self.discard()
             return
+        self.app.push_screen(LeaveEdits(), lambda choice: choice == "discard" and self.discard())
 
-        def answered(choice: str | None) -> None:
-            if choice == "discard":
-                self.close()
-            elif choice == "save":
-                self.action_save_doc()
-        self.app.push_screen(LeaveEdits(), answered)
+    def discard(self) -> None:
+        """Closed, its buffer dropped: the viewer shows the file again."""
+        self.edits.pop(self.path, None)
+        self.close()
 
     # keeping step
 
@@ -2070,15 +2125,18 @@ class DocEditor(TextArea):
     def on_text_area_selection_changed(self, event: TextArea.SelectionChanged) -> None:
         """The cursor moved into another block (typing, arrows, a click here): the viewer
         scrolls the least that shows it. Within one block nothing moves."""
-        if self.key is None or self.syncing == "viewer":
+        if self.key is None:
             return
+        self.stash()
         rows = self.view.block_rows(carried(self.shown, self.text, self.cursor_location[0]))
         if rows is None or rows == self.block:
             return
         self.block = rows
-        self.reveal(*rows, "editor")
+        if self.syncing != "viewer":   # while the viewer drives, its block noted, the viewer left be
+            self.reveal(*rows, "editor")
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        self.stash()
         self.paint_title()
 
     def reveal(self, start: int, end: int, driver: str) -> None:
@@ -2686,15 +2744,15 @@ class Confirm(Dialog):
 
 
 class LeaveEdits(Dialog):
-    """Esc in a doc's editor with unsaved edits: save them, discard them, or keep editing."""
-    BINDINGS = [Binding("s", "answer('save')", show=False), Binding("d", "answer('discard')", show=False)]
+    """Esc in a doc's editor with unsaved edits: discard them, or keep editing. Saving is
+    stage 8's, so there's no Save until then."""
+    BINDINGS = [Binding("d", "answer('discard')", show=False)]
     CANCEL = "keep"   # no ACTION: Keep editing has the focus, so a reflex Enter loses nothing
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label("This doc has unsaved edits.", classes="dialog-prompt")
+            yield Label("This doc has unsaved edits: discard them?", classes="dialog-prompt")
             with Horizontal(classes="buttons"):
-                yield Button(Text("[S]ave"), variant="success", id="save")
                 yield Button(Text("[D]iscard"), variant="error", id="discard")
                 yield Button(Text("Keep editing [Esc]"), id="keep")
 
@@ -2920,7 +2978,7 @@ DESCRIBE = {
     "leave": "Back to the inbox; with the doc's editor open, close it first",
     "render_edits": "Show the edits in the doc above; in Immediate mode, save them too",
     "save_doc": "Save the doc (saving comes next: for now it says so)",
-    "close_editor": "Close the editor, asking first with unsaved edits: Save, Discard or Keep editing",
+    "close_editor": "Close the editor, asking first with unsaved edits: Discard or Keep editing",
     "app.press('rename')": "Rename the highlighted session",
     "app.press('relaunch')": "Relaunch it, or Unpark a parked one",
     "app.press('park')": "Park it, or Unpark a parked one",
@@ -3311,6 +3369,7 @@ class WheelhouseApp(App):
         # the modules installed, those switched off (claude-wheelhouse modules disable) marked so
         self.modules = api.switch_off(api.load(), api.disabled(self.client.setting(api.DISABLED)))
         self.shown_doc: tuple[str, str] | None = None   # a module's doc in Detail (show_doc): (path, title)
+        self.doc_edits: dict[str, DocEdit] = {}   # each doc's unsaved edits, by its path (DocEditor.edits)
         # the state dir: the database's, for a module that keeps files of its own
         state_dir = self.store.path.parent if self.store else db_path().parent
         self.ctx = api.Context(state_dir, self.module_sessions, self.stats_sid, usage=self.client.usage,
@@ -4213,20 +4272,24 @@ class WheelhouseApp(App):
     def paint_detail(self) -> None:
         agent, doc, shown = False, self.selected_doc(), self.shown_doc
         self.detail.doc_key = ("file", shown[0]) if shown else None if self.viewing or not doc else self.selected
+        self.detail.doc_path = None
         if (editor := getattr(self, "detail_editor", None)) is not None:
             editor.follow(self.detail.doc_key)
         if shown:   # a module's doc, in place of what's selected
             blocks = file_blocks(*shown, self.client.read_doc(shown[0]))
+            self.detail.doc_path = shown[0]
         elif self.viewing:
             blocks = self.conversation(self.viewing)
         elif doc:   # the file rendered, in place of a thread
-            blocks = doc_blocks(doc, self.client.document(*self.selected))
+            document = self.client.document(*self.selected)
+            blocks = doc_blocks(doc, document)
+            self.detail.doc_path = doc_path(doc, document)
         elif self.selected:
             blocks, agent = self.item_blocks(*self.selected)
         else:   # what was shown has gone (a followed session ended, say): not left standing
             blocks = [("note", NOTHING_SELECTED)]
         if editor is not None:
-            blocks = editor.shown_in(blocks)
+            blocks = editor.shown_in(blocks, self.detail.doc_path)
         if not agent and not isinstance(self.screen, ThreadView):   # which may follow one itself
             self.client.unfollow_agent()
         # a conversation, the session's or a subagent's, shows its newest turn, and follows it
