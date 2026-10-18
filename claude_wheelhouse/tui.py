@@ -3706,7 +3706,7 @@ class WheelhouseApp(App):
             self.session_pin = (key, self.session_ranks[key]) if key in self.session_ranks else None
         if self.session_sort and self.session_pin and self.session_pin[0] in keyed:   # off: activity moves nothing
             sid = self.session_pin[0]
-            (band, (parked, idle), *rest), token = keyed[sid]
+            parked = keyed[sid][0][1][0]   # every sort's value leads with parked (ordering.session_key)
             held = self.session_pin[1]
             if sid in self.session_repin:
                 self.session_pin = (sid, keyed[sid][0])
