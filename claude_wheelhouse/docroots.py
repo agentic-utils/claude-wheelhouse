@@ -67,14 +67,34 @@ def read(path, roots, have: str | None = None) -> dict:
 
 
 def git_root(cwd) -> Path | None:
-    """The git root of a directory: the nearest holding .git (a directory, or a linked
-    worktree's file); None outside any repo, which then has no doc dirs (never the directory
-    itself: a session in ~ would otherwise reach all of it)."""
+    """The git root of a directory: the nearest holding .git, or for a linked worktree its
+    main repository's (main_root), so a repo is one repo whichever worktree a session is in;
+    None outside any repo, which then has no doc dirs (never the directory itself: a session
+    in ~ would otherwise reach all of it)."""
     here = Path(os.path.realpath(cwd))
     for d in (here, *here.parents):
         if (d / ".git").exists():
-            return d
+            return main_root(d)
     return None
+
+
+def main_root(root: Path) -> Path:
+    """A linked worktree's main repository: its .git file names its gitdir, whose commondir
+    is the main repository's .git (git rev-parse --git-common-dir, read without running git).
+    root itself otherwise: a main checkout, a submodule (a gitdir with no commondir), or a
+    worktree of a bare repository, which has no main checkout."""
+    dot = root / ".git"
+    try:
+        if not dot.is_file():
+            return root
+        text = dot.read_text(errors="replace").strip()
+        if not text.startswith("gitdir:"):
+            return root
+        gitdir = root / text[len("gitdir:"):].strip()   # an absolute one replaces root
+        common = Path(os.path.realpath(gitdir / (gitdir / "commondir").read_text(errors="replace").strip()))
+    except OSError:
+        return root
+    return common.parent if common.name == ".git" and common.is_dir() else root
 
 
 def checked(paths, cwd) -> list[str]:

@@ -1,0 +1,20 @@
+[project]
+name = "claude-wheelhouse-design"
+version = "0.2.0.dev0"
+description = "The wheelhouse's Decisions pane: every repo's design decisions (ADRs), shown in the Detail pane"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = ["claude-wheelhouse"]
+
+[project.entry-points."claude_wheelhouse.modules"]
+design = "claude_wheelhouse_design:module"
+
+[tool.uv.sources]
+claude-wheelhouse = { workspace = true }
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["claude_wheelhouse_design"]

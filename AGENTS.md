@@ -79,8 +79,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `daemon.MODULE_WAIT` then 504; `fingerprint.code` covers the installed modules too.
 - `docroots.py`: the doc roots' allow-list (`confine`: a path resolved, symlinks and `..`,
   and kept to a `.md` file under a root; stage 8 writes through it too), and where a repo's
-  decisions are (`doc_dirs`: `docs/adr` under its git root unless a session declared others
-  with `set_doc_dirs`, Q114). Never imports Textual.
+  decisions are (`doc_dirs`: `docs/adr` under its git root, a linked worktree's main
+  repository's (`main_root`), unless a session declared others with `set_doc_dirs`, Q114).
+  Never imports Textual.
 - `models.py`: the models and effort levels offered. A new model is a row here.
 - `tutorial.py`: the tutorial's demo session: its directory, its brief (`BRIEF`, a line in
   capitals to the person first), New session's fields for it (`form`) and what the store
@@ -111,8 +112,15 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 `modules/` holds the modules (`.plan/modules.md`), each its own distribution, a uv workspace
 member and a dependency group of the same name (`pyproject.toml`): `modules/stats` is
 `claude-wheelhouse-stats`, the stats pane (`pane.py`) and its drawing, charts and gauges
-(`stats.py`), with its tests in `modules/stats/tests`. Core never imports a module: the app
-finds them by entry point, and must run with none installed (`test_api.py`).
+(`stats.py`), with its tests in `modules/stats/tests`; `modules/design` is
+`claude-wheelhouse-design`, the Decisions pane (`pane.py`: the pane, its route
+`GET /m/design/decisions` and its doc roots, the decision directories `api.doc_dirs` gives)
+and the scan of those directories (`scan.py`, each file read again only when its stat
+changes), with its tests in `modules/design/tests` and the pane's pilot tests, which need
+core's fixtures, in `tests/test_decisions_pane.py`. Core never imports a module: the app
+finds them by entry point, and must run with none installed (`test_api.py`). A module's
+list that sets `TAB_LIST` is a Tab stop after the inbox (`tui.tab_stops`), and
+`Context.open_doc` opens a doc full screen (`DocView(file=...)`).
 
 `tests/` mirrors the modules (`test_<module>.py`); `conftest.py` holds the shared fixtures,
 and `transcripts.py` the transcripts the core's and the stats module's tests write.
@@ -121,11 +129,12 @@ and `transcripts.py` the transcripts the core's and the stats module's tests wri
 
 - `make install` (installs uv if it's missing, then `uv sync --reinstall-package claude-wheelhouse`
   and each module's package, with every module in `modules/` or those `WITH="..."` names,
-  `--no-group` for the rest, and writes the modules installed to
-  `.venv/.wheelhouse-installed`), then `make run` (`ARGS="..."` passes args;
-  it runs `make install` first, with the stamp's modules, when that stamp is missing or
-  older than `pyproject.toml`, `uv.lock` or a module's `pyproject.toml`; `none` in the stamp
-  for none, and an empty one, an install from before `modules/`, for all). Every target
+  `--no-group` for the rest, and writes the modules left out to
+  `.venv/.wheelhouse-installed`, as `without: stats`), then `make run` (`ARGS="..."` passes args;
+  it runs `make install` first, with every module but the stamp's, when that stamp is missing or
+  older than `pyproject.toml`, `uv.lock` or a module's `pyproject.toml`, so a module added since
+  installs by default. A stamp from before held the modules installed, when stats was the only
+  one: `stats` or empty leaves none out, `none` leaves out stats). Every target
   depends on the stamp and runs `uv run --no-sync`, so a module left out stays out; `uv run`
   alone syncs the default groups, every module included. The stats module's tests share
   core's `tests/transcripts.py` (pytest's `pythonpath = ["."]`) and skip without it installed. `make args` (`claude-wheelhouse args`, hidden from `--help`, `cli.args_text`)
@@ -211,7 +220,9 @@ Update these in the same commit as the behaviour they describe:
 - `tutorial.py`'s `BRIEF` and `whatsnew.DIALOGS`' text: what the demo is told and what the tour says.
 - `whatsnew.FEATURES`: every change a user can see adds a `Feature` in the same commit,
   with `version=UNRELEASED`. Set `where` to the tour dialog for the pane it changes, with a
-  `tip` of at most two lines, or to `ADVANCED` when it is for experienced users only. Give
+  `tip` of at most two lines, or to `ADVANCED` when it is for experienced users only. A
+  module's pane has a dialog of its own (`pane` its module's id, as `stats` and `decisions`),
+  so its tips show only with that module loaded: core never advertises a module's pane. Give
   it a one-line `note` for the release notes. Fixes add nothing. Never change or reuse a
   released feature's id. Between releases `pyproject.toml`'s version is a `.dev` one (say
   `0.3.0.dev0` after 0.2.0): a release version fails the tests while any feature is

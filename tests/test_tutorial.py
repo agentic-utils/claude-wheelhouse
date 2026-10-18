@@ -7,7 +7,7 @@ from textual.widgets import Button, DataTable, Input, TextArea
 from claude_wheelhouse import callout, features, launch, tutorial, whatsnew
 from claude_wheelhouse.callout import HIGHLIGHT, TourCallout
 from claude_wheelhouse.store import NOTES_SEEN, TOUR_AT
-from claude_wheelhouse.tour import Tour
+from claude_wheelhouse.tour import PANE, Tour
 from claude_wheelhouse.tui import BUTTONS, Compose, Dialog, ItemList, KeysHelp, NewSession, ThreadView, Transcript, \
     TourInvite, TourNotes, TourStop, SDK_BUTTONS, WheelhouseApp, key_name, keys_help
 from claude_wheelhouse.tutorial import should_offer as real_should_offer   # before conftest stubs it
@@ -161,13 +161,16 @@ async def test_the_tour(store, monkeypatch, fake_claude, sdk, runner_, desc):
         await pilot.press("enter")
         await pilot.pause()
         assert app.tour is None and not isinstance(app.screen, TourNotes), f"{desc}: the tour over"
-    assert store.tour_seen() == {f.id: "shown" for f in whatsnew.FEATURES}, f"{desc}: every feature seen"
+    # every feature seen but the design module's, left out here (conftest.without_design): its
+    # dialog passed over for want of its pane
+    assert store.tour_seen() == {f.id: "shown" for f in whatsnew.FEATURES if PANE.get(f.where) != "design"}, \
+        f"{desc}: every feature seen"
     assert store.setting(NOTES_SEEN) == whatsnew.running_version(), desc
 
 
 @pytest.mark.parametrize("stop", sorted({d.pane for d in whatsnew.DIALOGS if d.pane}))
 @pytest.mark.anyio
-async def test_every_tour_pane_is_on_the_screen(store, stop):
+async def test_every_tour_pane_is_on_the_screen(store, every_module, stop):
     """Each dialog's pane id finds its pane in the default layout (callout.PANES)."""
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:

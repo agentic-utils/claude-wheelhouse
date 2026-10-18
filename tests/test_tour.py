@@ -1,7 +1,7 @@
 import pytest
 
 from claude_wheelhouse import whatsnew
-from claude_wheelhouse.tour import NOTES, PAUSED, TOPUP, TOUR, Tour, opening
+from claude_wheelhouse.tour import NOTES, PAUSED, TOPUP, TOUR, Tour, offered, opening
 from claude_wheelhouse.whatsnew import ADVANCED, UNRELEASED, Feature
 
 NONE = {"sid": "demo", "posted": False, "answered": False, "queued": False, "sent": False, "replied": False,
@@ -27,7 +27,8 @@ def facts(**kw) -> dict:
     ("decision", "demo", facts(replied=True), set(), (), "decision", "waits for the decision closed"),
     ("decision", "demo", facts(closed=True), set(), (), "conversation", "the decision closed"),
     ("conversation", "demo", facts(), {"follow"}, (), "stats", "a turn watched arriving"),
-    ("stats", "demo", facts(), set(), ("stats",), "end", "Stats absent: passed over"),
+    ("stats", "demo", facts(), set(), ("stats",), "decisions", "Stats absent: passed over"),
+    ("decisions", "demo", facts(), set(), ("design",), "end", "the design module absent: its Decisions dialog passed over"),
     ("end", "demo", facts(), set(), (), "end", "waits for the demo to go"),
     ("end", "demo", None, set(), (), "notes", "the demo gone"),
     ("answer", "demo", None, set(), (), "answer", "gone early: the dialog stays, saying so"),
@@ -51,7 +52,7 @@ def test_the_tour_moves_on(at, sid, given, seen, absent, expected, desc):
     ("decision", "demo", None, None, "the demo has ended", "notes", "an ended one, the same"),
     ("reply", "demo", facts(sent=True), None, None, "decision", "running: Next is the next dialog"),
     ("create", None, None, "stopped: never", None, "sessions", "no demo yet: nothing to be dead"),
-    ("stats", "demo", None, None, None, "end", "a Next dialog isn't waiting on the demo"),
+    ("stats", "demo", None, None, None, "decisions", "a Next dialog isn't waiting on the demo"),
 ])
 def test_a_dead_demo_offers_the_notes(at, sid, given, stopped, dead, then, desc):
     tour = Tour(sdk=False)
@@ -142,3 +143,11 @@ def test_resume(pending, at, given, stop, dead, desc):
     tour.follow(facts(posted=True) if given else None, lambda pane: True)
     assert (tour.stop.id, tour.dead) == (stop, dead), desc
     assert tour.where() == f"{tour.kind}:{stop}", f"{desc}: kept as tour_at"
+
+
+def test_a_module_pane_tip_waits_for_its_module():
+    """Core never advertises a module's pane: the Decisions pane's tip is the design module's
+    dialog's, offered only with that pane here."""
+    feature = next(f for f in whatsnew.FEATURES if f.id == "decisions-pane")
+    assert offered([feature], lambda pane: pane != "design") == []
+    assert offered([feature], lambda pane: True) == [feature]

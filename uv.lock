@@ -9,6 +9,7 @@ resolution-markers = [
 [manifest]
 members = [
     "claude-wheelhouse",
+    "claude-wheelhouse-design",
     "claude-wheelhouse-stats",
 ]
 
@@ -163,6 +164,9 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+design = [
+    { name = "claude-wheelhouse-design" },
+]
 dev = [
     { name = "httpx2" },
     { name = "pytest" },
@@ -185,12 +189,24 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+design = [{ name = "claude-wheelhouse-design", editable = "modules/design" }]
 dev = [
     { name = "httpx2", specifier = ">=2.13" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-xdist", specifier = ">=3.8" },
 ]
 stats = [{ name = "claude-wheelhouse-stats", editable = "modules/stats" }]
+
+[[package]]
+name = "claude-wheelhouse-design"
+version = "0.2.0.dev0"
+source = { editable = "modules/design" }
+dependencies = [
+    { name = "claude-wheelhouse" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "claude-wheelhouse", editable = "." }]
 
 [[package]]
 name = "claude-wheelhouse-stats"

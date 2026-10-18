@@ -3,10 +3,12 @@
 
 # where Astral's installer puts uv, which isn't on PATH until a new shell
 export PATH := $(PATH):$(HOME)/.local/bin
-# make install's last step, holding the modules it installed ("none" for none; empty, as
-# an install before modules/ left it, for all): make run installs first when it's missing,
-# or older than these
+# make install's last step, holding the modules it left out ("without: stats"), so a module
+# added since installs on the next make run: make run installs first when it's missing, or
+# older than these. A stamp from before this held the modules installed instead ("stats",
+# "none", or empty for all), when stats was the only module: it leaves out only stats, or none
 STAMP := .venv/.wheelhouse-installed
+OLD_MODULES := stats
 # the modules in this repo (modules/), each its own package and dependency group; make install
 # installs them all with the wheelhouse, or those named: WITH="" for none (.plan/modules.md)
 MODULES := $(notdir $(wildcard modules/*))
@@ -33,11 +35,14 @@ install: ## Install, or reinstall after an update, with every module in modules/
 	@for m in $(WANT); do test -d modules/$$m || { echo "no module $$m: modules/ has $(MODULES)" >&2; exit 1; }; done
 	uv sync --reinstall-package claude-wheelhouse $(foreach m,$(WANT),--reinstall-package claude-wheelhouse-$(m)) \
 		$(foreach m,$(filter-out $(WANT),$(MODULES)),--no-group $(m))
-	@echo "$(if $(strip $(WANT)),$(strip $(WANT)),none)" > $(STAMP)
+	@echo "without: $(strip $(filter-out $(WANT),$(MODULES)))" > $(STAMP)
 
 $(STAMP): pyproject.toml uv.lock $(wildcard modules/*/pyproject.toml) | uv-check
-	@w="$$(cat $(STAMP) 2>/dev/null)"; test -n "$$w" || w='$(MODULES)'; \
-		$(MAKE) --no-print-directory install WITH="$$w"
+	@s="$$(cat $(STAMP) 2>/dev/null)"; \
+		case "$$s" in without:*) out="$${s#without:}";; \
+		*) out=""; test -z "$$s" || for m in $(OLD_MODULES); do case " $$s " in *" $$m "*) ;; *) out="$$out $$m";; esac; done;; esac; \
+		w=""; for m in $(MODULES); do case " $$out " in *" $$m "*) ;; *) w="$$w $$m";; esac; done; \
+		$(MAKE) --no-print-directory install WITH="$${w:-none}"
 
 run: uv-check $(STAMP) ## Run the wheelhouse app, installing first if needed (ARGS="..." passes args: make args lists them)
 	$(RUN) claude-wheelhouse $(ARGS)

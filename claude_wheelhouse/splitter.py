@@ -78,12 +78,28 @@ class Splitter(Widget):
     def room(self) -> int:
         return self.parent.size.width if self.axis == "x" else self.parent.size.height
 
+    def compact(self) -> tuple[bool, bool]:
+        """Whether each pane is compact (class -compact: a slot shrunk to its panes' least
+        rows while they have nothing to show, only in a column of two slots,
+        WheelhouseApp.fit_compact). Then nothing here is sized (wanted): a compact pane keeps
+        the rows the app gave it, and with the flexing pane compact the sized one flexes
+        instead, its share kept for when it isn't, so the room goes to it and not to a gap.
+        Nor is it dragged or reset then: the share stays as it was, for when neither is."""
+        panes = self.panes()
+        return (panes[0].has_class("-compact"), panes[1].has_class("-compact")) if panes else (False, False)
+
     def apply(self, fraction: float | None) -> None:
         """Size the pane as a share of the parent; None puts back its default: `default`'s,
-        else the stylesheet's."""
+        else the stylesheet's. Compact, it keeps its rows; with the flexing pane compact, it
+        flexes (1fr)."""
         self.fraction = fraction
         if panes := self.panes():
-            if fraction is not None:
+            sized, flex = self.compact()
+            if sized:
+                return
+            if flex:
+                self.show(panes[0], "1fr")
+            elif fraction is not None:
                 self.show(panes[0], f"{fraction * 100:.3f}%")
             else:
                 self.show(panes[0], self.default(self) if self.default else None)
@@ -96,7 +112,9 @@ class Splitter(Widget):
 
     def wanted(self, sized: Widget, room: int) -> float | None:
         """The cells the pane would have: its share, else the stylesheet's size. None for a
-        stylesheet's fr, which takes what's left."""
+        stylesheet's fr, which takes what's left, and None while either pane is compact."""
+        if any(self.compact()):
+            return None
         if self.fraction is not None:
             return self.fraction * room
         if self.default and (cells := self.default(self)) is not None:
@@ -112,6 +130,8 @@ class Splitter(Widget):
         if event.button != 1 or (panes := self.panes()) is None:
             return
         event.stop()
+        if any(self.compact()):   # nothing here is sized while compact: a drag would move nothing, so none is kept
+            return
         sized, flex = panes
         self.drag = (self.pointer(event), self.extent(sized), self.extent(flex))
         self.moved = False
@@ -153,7 +173,7 @@ class Splitter(Widget):
             self.post_message(self.Resized(self, self.fraction))
 
     def _on_click(self, event: events.Click) -> None:
-        if event.chain >= 2:
+        if event.chain >= 2 and not any(self.compact()):   # as a drag: nothing to see, so nothing kept
             self.apply(None)
             self.post_message(self.Resized(self, None))
 
