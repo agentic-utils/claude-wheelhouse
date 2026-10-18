@@ -20,7 +20,7 @@ from textual.strip import Strip
 from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
-from claude_wheelhouse import features, launch, models, transcript, transcript_usage, tui, tutorial
+from claude_wheelhouse import features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 
@@ -7555,6 +7555,31 @@ async def test_the_selected_session_holds_its_place_under_the_sort(store, sid, t
         app.refresh_data()
         await pilot.pause()
         assert real() == [held, busy, sid], "settled into its sorted place"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("spec", [f"{col}{mark}" for col in ordering.SESSION_COLUMNS[1:] for mark in (ordering.UP, ordering.DOWN)])
+async def test_a_session_selected_under_any_column_sort_holds_its_place(store, sid, tmp_path, spec):
+    """#102: the pin read each sort's value as the dot's (parked, idle), so under any other
+    column a click on the list raised ValueError. The selected one holds under every column."""
+    other = store.create_session(str(tmp_path), name="other")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.set_sort("sessions", spec)
+        app.refresh_data()
+        await pilot.pause()
+        table = app.session_list
+        await pilot.click(table, offset=(3, table.header_height))
+        await pilot.pause()
+        if isinstance(app.screen, Confirm):   # the offer to relaunch a dead session
+            await pilot.press("n")
+            await pilot.pause()
+        picked = app.current_session()
+        assert picked in (sid, other), spec
+        app.refresh_data()
+        await pilot.pause()
+        assert app.current_session() == picked, f"{spec}: the selected session is kept"
 
 
 @pytest.mark.anyio
