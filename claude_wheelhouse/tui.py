@@ -2383,7 +2383,7 @@ class NewSession(Dialog):
         with Vertical(id="dialog"):
             yield Label("NEW SESSION", classes="dialog-title")
             if self.line:
-                yield Label(self.line, id="tour-line")
+                yield Label(Text(self.line), id="tour-line")   # plain: [Launch] is the button's name, not markup
             with Horizontal(id="cwd-row"):
                 cwd = tour.get("cwd", "" if elsewhere else str(features.session_dir()))
                 yield Input(value=cwd, placeholder="working directory", id="cwd", disabled=bool(tour))
@@ -2948,9 +2948,12 @@ class TourInvite(Dialog):
         self.action_answer(event.button.id.removeprefix("invite-"))
 
 
+ESC_ENDS = "Esc ends the tour at any time."   # the principles' last line (Doug, #101 4)
+
+
 class TourStop(Dialog):
-    """A centred dialog of the tour's (the principles): Next (Enter) moves on, Esc pauses. A
-    click outside does neither."""
+    """A centred dialog of the tour's (the principles): Next (Enter) moves on, Esc ends the tour
+    (pause_tour). A click outside does neither."""
     ACTION = "tour-stop-next"
     CANCEL = "pause"
 
@@ -2961,8 +2964,8 @@ class TourStop(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog", classes="invite"):
             yield Label(self.heading, classes="dialog-title")
-            yield Label(self.text, classes="dialog-prompt", id="tour-stop-text")
-            yield Label("Esc pauses the tour.", classes="dialog-prompt")
+            yield Label(Text(self.text), classes="dialog-prompt", id="tour-stop-text")
+            yield Label(ESC_ENDS, classes="dialog-prompt")
             with Horizontal(classes="buttons"):
                 yield Button(Text("Next [Enter]"), variant="success", id="tour-stop-next")
 
@@ -2971,7 +2974,7 @@ class TourStop(Dialog):
         self.set_focus(self.query_one("#tour-stop-next", Button))
 
     def on_click(self, event: events.Click) -> None:
-        """A click outside the box does nothing: only Esc pauses the tour. Dialog's own handler,
+        """A click outside the box does nothing: only Esc ends the tour. Dialog's own handler,
         which Textual would run after this one, is skipped (prevent_default)."""
         if event.widget is self:
             event.stop()
@@ -3171,10 +3174,10 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap "
          "the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back.")
-TOUR_HELP = ("Esc pauses the tour while its box has focus. While the title bar shows a badge, L, or a click on it, "
-             "resumes a paused tour at the dialog it was at, or offers what's new since you last looked: a top-up "
-             "showing only the new tips, pane by pane, with no demo session, then the release notes. {again} at the "
-             "next start.")
+TOUR_HELP = ("Esc ends the tour at any time, from any of its boxes or the New session it opens. While the title bar "
+             "shows a badge, L, or a click on it, picks an ended tour up at the dialog it was at, or offers what's "
+             "new since you last looked: a top-up showing only the new tips, pane by pane, with no demo session, "
+             "then the release notes. {again} at the next start.")
 DIALOGS = ("Esc, or a click outside the box, cancels a dialog (not the tutorial offer, which is all but outside). Enter presses the focused button; with focus on a "
            "one-line box or a checkbox, or nothing, it takes the dialog's one action (Launch, Rename, Fork, Park and "
            "the like), but in a list, a set of choices or a multi-line box it does what it does there. A dialog of "
@@ -3411,6 +3414,7 @@ class WheelhouseApp(App):
         self.dwell_gen = 0
         self.dwell_timer = None
         self.picked: tuple | None = None   # the selection the person last made, not the app (saw)
+        self.select_new: str | None = None   # the tour's demo, selected once its row shows (launch_tour)
         # where each list's cursor was last left by the app, or settled (settle): a cursor
         # anywhere else is the person's move, not yet acted on
         self.items_cursor: str | None = None
@@ -3636,10 +3640,6 @@ class WheelhouseApp(App):
             return
         if self.focused is not None:
             self.screen._clear_tooltip()
-        if event.key == "escape" and self.focused is not None \
-                and any(isinstance(w, TourCallout) for w in self.focused.ancestors_with_self):
-            self.pause_tour()   # Esc on a callout that has focus pauses the tour (Q122); elsewhere it's Esc
-            return
         if event.key == "escape" and (lists := [t for t in (getattr(self, "items_table", None), getattr(self, "session_list", None))
                                             if t is not None and t.dragging]):
             lists[0].end_drag(drop=False)   # a drag let go: nothing moves, and Esc does nothing else
@@ -3647,10 +3647,28 @@ class WheelhouseApp(App):
         if event.key == "escape" and self.screen_stack and (titles := [s for s in self.screen_stack[0].query(Slot) if s.dragging]):
             titles[0].end_drag(drop=False)   # a pane's drag by its title, likewise
             return
+        if event.key == "escape" and self.esc_ends_tour():
+            return
         if not (await self._check_bindings(event.key, priority=True) or await self._check_bindings(event.key)):
             (self.focused or self.screen)._forward_event(event)
         if isinstance(self.focused, (TextArea, Input)):   # queued behind the key, which restarts the blink if sent there
             self.focused.call_later(self.hold_cursor, self.focused)
+
+    def esc_ends_tour(self) -> bool:
+        """Esc ends the tour at any time (Doug, #101 4): on the main screen while a tour box
+        shows, wherever focus is, and in New session opened for the demo, which closes with it.
+        Not under any other dialog or screen, whose Esc is its own, nor while Deny's reason is
+        open. The principles' own Esc does the same (TourStop). Whether it did."""
+        tour = self.tour
+        if tour is None or tour.paused:
+            return False
+        if isinstance(self.screen, NewSession) and self.screen.tour:
+            self.screen.action_cancel()
+        elif self.screen is not self.screen_stack[0] or not self.screen.query(TourCallout) \
+                or any(r.target is not None for r in self.screen.query(DenyReason)):
+            return False
+        self.pause_tour()
+        return True
 
     def hold_cursor(self, box: TextArea | Input) -> None:
         """A key pressed in a text box: its cursor shows solid until QUIET passes with no key,
@@ -3985,6 +4003,10 @@ class WheelhouseApp(App):
                                   else min(keep, table.row_count - 1), animate=False)
         if not pending:   # where the app put it; the person's move stays theirs to settle
             self.sessions_cursor = self.current_session()
+        if self.select_new in table.rows:   # the demo just launched (launch_tour): the app's pick, not theirs
+            sid, picked, self.select_new = self.select_new, self.picked, None
+            self.follow(sid)
+            self.picked = picked   # so no turn of its first run counts as one the person watched (saw)
 
     display_name = staticmethod(display_name)
 
@@ -4826,10 +4848,12 @@ class WheelhouseApp(App):
         stop = tour.stop
         text = tour.text(stop) if stop else ""
         if tour.dead:   # the demo gone or stopped: one line, and Next to the release notes
-            text += f"\n{tour.dead[0].upper()}{tour.dead[1:]}: Next goes to the release notes."
+            text += f"\n\n{tour.dead[0].upper()}{tour.dead[1:]}: Next goes to the release notes."
         nxt = stop is not None and (stop.advance == whatsnew.NEXT or tour.dead is not None)
         showing = (stop.id, text, nxt) if stop else None
         if showing == self.tour_showing:
+            for shown in main.query(TourCallout):   # the inbox's rows it keeps clear of may have grown
+                shown.place()
             return
         typing = isinstance(main.focused, (TextArea, Input)) and bool(
             main.focused.text if isinstance(main.focused, TextArea) else main.focused.value)
@@ -4896,18 +4920,18 @@ class WheelhouseApp(App):
             self.show_tour()
 
     def pause_tour(self) -> None:
-        """Esc on the tour (Q122): it stops where it is, kept as tour_at, so the badge or L
-        resumes it at the same dialog, in this run or a later one."""
+        """Esc on the tour (Q122; at any time, #101 4: esc_ends_tour): it ends where it is, kept
+        as tour_at, so the badge or L picks it up at the same dialog, in this run or a later one."""
         if self.tour is None:
             return
         self.tour.paused = True
         self.tour_showing = None
         self.drop_callouts(list(self.screen_stack[0].query(TourCallout)))
         if self.client.tour_at(self.tour.where()):
-            self.notify("Tour paused: the badge in the title bar, or L, resumes it here.")
+            self.notify("Tour ended: the badge in the title bar, or L, picks it up here.")
         else:   # this run's badge still resumes it; a later start may not know where it was
-            self.notify("Tour paused: the badge, or L, resumes it, but the wheelhouse couldn't keep where it was "
-                        "for its next start.", severity="error")
+            self.notify("Tour ended: the badge, or L, picks it up again, but the wheelhouse couldn't keep where it "
+                        "was for its next start.", severity="error")
         self.paint_badge()
 
     def paint_session_info(self) -> None:
@@ -5665,13 +5689,20 @@ class WheelhouseApp(App):
             return
         stop = self.tour.stop if self.tour is not None and not self.tour.paused and self.tour.kind == TOUR else None
         if stop is not None and stop.id == "create":   # the tour's demo: filled in (Q119)
-            self.push_screen(NewSession(tutorial.form(self.client.tutorial_dir), self.tour.text(stop)), self.launch_new)
+            self.push_screen(NewSession(tutorial.form(self.client.tutorial_dir), whatsnew.LAUNCH), self.launch_tour)
         else:
             self.push_screen(NewSession(), self.launch_new)
 
     def launch_new(self, form) -> None:
         if form:
             self.told(self.client.new_session(**form))
+
+    def launch_tour(self, form) -> None:
+        """The tour's demo launched from New session: selected in the session list as its row
+        appears (Doug, #101 5; paint_sessions), so its buttons and inbox are at hand."""
+        if form and (done := self.told(self.client.new_session(**form))).ok and done.sid:
+            self.select_new = done.sid
+            self.refresh_data()
 
     def action_adopt(self) -> None:
         if isinstance(self.focused, (TextArea, Input)):

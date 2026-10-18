@@ -48,41 +48,57 @@ class Feature:
 
 DIALOGS = (
     Stop("invite", None, "The tour",
-         "New here? A five-minute tour, with a demo session that costs a few cents.", CHOICE),
+         "New here? A five-minute tour, with a demo session that costs a few cents.\n\n"
+         "Once it's under way, Esc ends it at any time.", CHOICE),
     Stop("principles", None, "The wheelhouse",
          "Every Claude session in one place. Sessions ask you questions, record decisions and report tasks, "
          "all in one inbox. A session that needs you says so in its row, so you never hunt through tabs.", NEXT),
-    Stop("create", "sessions", "Starting a session",
-         "Start a session: press N. For the tour it's filled in for you, so just press Launch.", ACTION),
+    Stop("create", "sessions", "Starting a session", "Start a session: press N now to create a demo session.", ACTION),
     Stop("sessions", "sessions", "The session list",
          "This is your demo. Its row shows whether it's working, idle or needs you. It runs in a tab (or here, "
-         "in SDK mode): you won't need to look at it.", ACTION),
+         "in SDK mode): you won't need to look at it.\n\n"
+         "Wait now while it starts: this box moves on once it posts its first items.", ACTION),
     Stop("inbox", "items", "The inbox",
-         "Questions (Q), decisions (D) and tasks (T) from every session land here, open questions first. "
-         "Highlight Q1.", ACTION),
+         "Questions (Q), decisions (D) and tasks (T) from every session land here, open questions first.\n\n"
+         "Click Q1 now to open it.", ACTION),
     Stop("answer", "detail", "Answering",
-         "Answer both questions here. Ctrl+Enter queues each answer, so related answers go together.", ACTION),
-    Stop("send", "session-info", "Sending", "Ctrl+S, or Send, sends the queue as one message.", ACTION),
-    Stop("reply", "detail", "Replies", "The session's reply arrives in the question's thread.", ACTION),
+         "Answer both questions now: select Q1, then Q2, in the inbox, type an answer to each in the box below "
+         "and press Ctrl+Enter.\n\n"
+         "Ctrl+Enter queues each answer, so related answers go together.", ACTION),
+    Stop("send", "session-info", "Sending", "Press Ctrl+S, or Send, now to send the queue as one message.", ACTION),
+    Stop("reply", "detail", "Replies",
+         "The session's reply arrives in the question's thread.\n\n"
+         "Wait now: this box moves on when it lands.", ACTION),
     Stop("decision", "items", "Decisions",
-         "Decisions record what a session chose. Read D1, then Delete closes it.", ACTION),
+         "Decisions record what a session chose.\n\n"
+         "Select D1 now to read it, then press Delete to close it.", ACTION),
+    Stop("docs", "items", "Documents",
+         "A session declares each document it writes for you to read (a design, plan or report) as a doc item "
+         "(M), under the item it belongs to.\n\n"
+         "Select one and Detail shows it rendered; Enter opens it full screen.", NEXT),
     Stop("conversation", "detail", "The conversation",
-         "Highlight the session to follow its conversation, and ask it for a change in the box below.", ACTION),
+         "Select the demo's conversation now: the top row of the inbox.\n\n"
+         "Then ask it for a change in the box below, and watch its answer arrive.", ACTION),
     Stop("stats", "stats", "Stats", "Tokens, context and your plan's usage, for the highlighted session.", NEXT),
     Stop("decisions", "design", "The Decisions pane",
-         "Your repos' design decisions (docs/adr), open ones first. Highlight one to read it in Detail.", NEXT),
+         "Architecture decision records (ADRs): each design decision a repo keeps as a markdown file in its "
+         "docs/adr directory (or wherever a session there says, set_doc_dirs).\n\n"
+         "This pane lists them for every repo your sessions work in, open ones first. Highlight one to read it "
+         "in Detail.", NEXT),
     Stop("end", "session-info", "Ending a session",
-         "Done with the demo: Stop & Forget ends it and clears its items.", ACTION),
+         "You can park a session to move it to the bottom of the session list and resume later, or you can "
+         "close it entirely by \"forgetting\" it. Press [Stop & Forget] now to close the demo session.", ACTION),
     Stop("notes", None, "Release notes", "N starts a session of your own.", CLOSE),
 )
+# New session's line at its top while the tour has the person create the demo
+LAUNCH = "This is part of the tutorial: press [Launch] to proceed."
 # the dialogs a feature's tip can join: all but the invite and the notes, which show no tips
 TIPPED = tuple(d.id for d in DIALOGS if d.id not in ("invite", "notes"))
 
 # every feature a user can see, from #78 on: see AGENTS.md, "Docs kept in step"
 FEATURES: tuple[Feature, ...] = (
-    Feature("tour", UNRELEASED, "principles",
-            note="A guided tour: a box beside each pane walks you through a demo session.",
-            tip="This tour is new: a box beside each pane says what it is for."),
+    Feature("tour", UNRELEASED, ADVANCED,
+            note="A guided tour: a box beside each pane walks you through a demo session."),
     Feature("session-sort", UNRELEASED, "sessions",
             note="Every session list column sorts: click its heading to cycle up, down and back.",
             tip="Click a column heading to sort by it; click again to reverse it."),
@@ -110,8 +126,8 @@ FEATURES: tuple[Feature, ...] = (
     Feature("doc-editor", UNRELEASED, ADVANCED,
             note="A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered. Saving comes next."),
     Feature("tour-topups", UNRELEASED, "principles",
-            note="After an update, the tour shows only what's new, pane by pane, with no demo; Esc pauses it, "
-                 "and L or the title bar's badge resumes it.",
+            note="After an update, the tour shows only what's new, pane by pane, with no demo; Esc ends it at any "
+                 "time, and L or the title bar's badge picks it up where it was.",
             tip="After an update, the badge in the title bar (L) offers just what's new."),
 )
 

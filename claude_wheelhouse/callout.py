@@ -41,11 +41,23 @@ def width(screen: Size) -> int:
     return max(1, min(WIDTH, screen.width - MARGIN))
 
 
-def place(screen: Size, pane: Region | None, height: int) -> tuple[Region, str]:
+def place(screen: Size, pane: Region | None, height: int, clear: Region | None = None) -> tuple[Region, str]:
     """Where a callout `height` rows high goes for a pane at `pane` (screen coordinates; None:
     absent), and how: beside it on the first side where it fits without covering it (right,
     left, below, above), else inside it over its top rows, else, for a pane narrower than the
-    callout or collapsed, centred on the screen, a row higher for the line naming the pane."""
+    callout or collapsed, centred on the screen, a row higher for the line naming the pane.
+    Beside or inside a pane, it moves down past `clear` (the inbox's rows, #101), where it
+    overlaps it, if it still fits there without covering its pane."""
+    region, side = spot(screen, pane, height)
+    if clear is not None and pane is not None and side != "centred" and region.overlaps(clear):
+        lower = Region(region.x, clear.bottom, region.width, region.height)
+        if lower.bottom <= screen.height and (side == "inside" or not lower.overlaps(pane)):
+            return lower, side
+    return region, side
+
+
+def spot(screen: Size, pane: Region | None, height: int) -> tuple[Region, str]:
+    """place's first choice, before it clears anything."""
     w = width(screen)
 
     def clamp(value: int, low: int, high: int) -> int:
@@ -70,6 +82,16 @@ def place(screen: Size, pane: Region | None, height: int) -> tuple[Region, str]:
                           w, height), "inside"
     height += 1
     return Region((screen.width - w) // 2, max(0, (screen.height - height) // 2), w, height), "centred"
+
+
+def rows(screen: Widget) -> Region | None:
+    """The inbox's rows on the screen, its header included: what a callout for another pane
+    keeps clear of (place), so the items it asks for stay in sight. None while it's absent."""
+    found = screen.query("#items")
+    if not found or not (table := found.first()).display or not table.region.area:
+        return None
+    region = table.region
+    return Region(region.x, region.y, region.width, min(region.height, table.virtual_size.height))
 
 
 def find(screen: Widget, pane: str) -> Widget | None:
@@ -106,7 +128,7 @@ class TourCallout(Vertical):
         self.side = ""
 
     def compose(self) -> ComposeResult:
-        yield Static(self.text, classes="tour-text")
+        yield Static(Text(self.text), classes="tour-text")   # plain: [Launch] is a button's name, not markup
         if self.next:
             yield Button("Next [Enter]", id="tour-next", compact=True, variant="primary")
 
@@ -149,21 +171,22 @@ class TourCallout(Vertical):
         screen = self.screen.size
         target = find(self.screen, self.pane)
         region = target.region if target is not None and target.display else None
-        if self.placed == (screen, region):
+        clear = rows(self.screen) if self.pane != "items" else None
+        if self.placed == (screen, region, clear):
             return
-        self.placed = (screen, region)
+        self.placed = (screen, region, clear)
         self.highlight(target if region is not None else None)
         title = PANES.get(self.pane, ("", self.pane))[1]
         w = width(screen)
-        spot, self.side = place(screen, region, self.lines(w, self.text))
+        at, self.side = place(screen, region, self.lines(w, self.text), clear)
         text = self.text
         if self.side == "centred":   # its pane named first, a line that wraps on a narrow screen
             text = f"In the {title} pane:\n{self.text}"
-            spot, _ = place(screen, None, self.lines(w, text) - 1)
-        self.query_one(".tour-text", Static).update(text)
+            at, _ = place(screen, None, self.lines(w, text) - 1)
+        self.query_one(".tour-text", Static).update(Text(text))
         self.border_title = POINTERS[self.side].format(title) or None
-        self.styles.width, self.styles.height = spot.width, spot.height
-        self.absolute_offset = Offset(spot.x, spot.y)
+        self.styles.width, self.styles.height = at.width, at.height
+        self.absolute_offset = Offset(at.x, at.y)
         self.refresh(layout=True)
 
     @on(Button.Pressed, "#tour-next")

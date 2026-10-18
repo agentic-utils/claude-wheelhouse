@@ -22,7 +22,7 @@ from . import whatsnew
 from .whatsnew import ACTION, ADVANCED, NEXT, TIPPED
 
 TOUR, TOPUP = "tour", "topup"   # a new user's whole tour; an upgrader's top-up
-# what a start, or the badge, offers (opening): a tour paused (Esc, or the app quit mid-tour),
+# what a start, or the badge, offers (opening): a tour paused (ended with Esc, or the app quit mid-tour),
 # the whole tour's invite, an upgrader's top-up, or only the release notes (advanced features)
 PAUSED, NOTES = "paused", "notes"
 PANE = {d.id: d.pane for d in whatsnew.DIALOGS}   # each dialog's pane: None, centred
@@ -92,9 +92,9 @@ class Tour:
 
     def text(self, stop: whatsnew.Stop) -> str:
         """A dialog's text and, below it, every tip registered to it; in a top-up, only its
-        pending tips."""
+        pending tips. Each its own paragraph, a blank line between."""
         tips = [f.tip for f in whatsnew.tips(stop.id, self.sdk, self.features)]
-        return "\n".join(tips if self.kind == TOPUP and stop.id != "notes" else [stop.text, *tips])
+        return "\n\n".join(tips if self.kind == TOPUP and stop.id != "notes" else [stop.text, *tips])
 
     def where(self) -> str | None:
         """Where it is, as tour_at keeps it ("tour:answer"), for resume; None once it's over."""

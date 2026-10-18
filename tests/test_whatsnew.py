@@ -31,7 +31,8 @@ def problems(features, dialogs=DIALOGS) -> set[str]:
             found.add("unknown when")
         if not f.note.strip() or "\n" in f.note:
             found.add("note not one line")
-    texts = [t for f in features for t in (f.note, f.tip)] + [t for d in dialogs for t in (d.title, d.text)]
+    texts = [t for f in features for t in (f.note, f.tip)] + [t for d in dialogs for t in (d.title, d.text)] \
+        + [whatsnew.LAUNCH]
     if any(EM_DASH in t for t in texts):
         found.add("em-dash")
     return found
@@ -63,7 +64,7 @@ def test_registry_rules(features, expected, desc):
 
 def test_dialogs_are_the_tour_in_order():
     assert [d.id for d in DIALOGS] == ["invite", "principles", "create", "sessions", "inbox", "answer", "send",
-                                       "reply", "decision", "conversation", "stats", "decisions", "end", "notes"]
+                                       "reply", "decision", "docs", "conversation", "stats", "decisions", "end", "notes"]
     assert {d.pane for d in DIALOGS} == {None, "sessions", "items", "detail", "session-info", "stats", "design"}
 
 

@@ -84,15 +84,19 @@ off, and `L` (Later), `Esc` or a click outside it leaves it to be offered again 
 start. The tour opens with what the wheelhouse is for (every session in one place, their
 questions, decisions and tasks in one inbox, a row that shows when a session needs you),
 then paints a box beside each pane in turn, its border highlighted, saying what it is and
-what to do there. It starts with the demo session: press `N` and New session opens filled
+what to do there. A box that waits on you says what to do now; one that only explains has
+a Next button. It starts with the demo session: press `N` and New session opens filled
 in (its brief begins with a note in capitals saying it's the tutorial's), so just press
-Launch. The demo posts a task, two related questions and a decision, and each box moves on
-as you do what it asks: answering, sending, reading its reply, closing the decision,
-watching it work in its conversation, Stats (`Enter` for Next), and ending it. The last
-dialog shows this release's notes. `Esc`, while a tour box has the focus, pauses the tour:
-the title bar's badge then reads "Tour paused · L", and `L` (or a click on the badge) resumes
-it at the same box, in this run or after a restart. Quitting mid-tour keeps your place the
-same way.
+Launch, and the demo is selected in the session list. The demo posts a task, two related
+questions and a decision, and each box moves on as you do what it asks: answering, sending,
+reading its reply, closing the decision, documents (how a session's docs show, rendered),
+watching it work in its conversation, Stats, the Decisions pane's ADRs (architecture
+decision records, from each repo's `docs/adr`) while the design module is loaded, and ending
+it. A box beside Detail sits below the inbox's rows, so the items it asks for stay in sight.
+The last dialog shows this release's notes. `Esc` ends the tour at any time, from any of its
+boxes or the New session it opens: the title bar's badge then reads "Tour paused · L", and
+`L` (or a click on the badge) picks it up at the same box, in this run or after a restart.
+Quitting mid-tour keeps your place the same way.
 
 After an update that brings something new to a pane, the next start offers a top-up in the
 same centred dialog ("Updated to 0.3.0: 3 new things in 2 places"): only the new tips, in a

@@ -30,6 +30,21 @@ def test_placement(screen, pane, height, region, side, desc):
     assert place(screen, pane, height) == (region, side), desc
 
 
+ROWS = Region(33, 2, 12, 6)   # the inbox's rows (callout.rows), left of a pane on the right
+
+
+@pytest.mark.parametrize("pane, height, clear, region, desc", [
+    (Region(50, 0, 30, 24), 6, ROWS, Region(4, 8, 46, 6), "over the inbox's rows: moved down past them (#101 6)"),
+    (Region(50, 0, 30, 24), 6, None, Region(4, 0, 46, 6), "nothing to clear: where it was"),
+    (Region(50, 0, 30, 24), 6, Region(0, 12, 4, 4), Region(4, 0, 46, 6), "clear of it already: unmoved"),
+    (Region(50, 0, 30, 24), 20, ROWS, Region(4, 0, 46, 20), "no room below them: left where it was"),
+    (Region(20, 14, 40, 10), 6, Region(20, 8, 10, 4), Region(20, 8, 46, 6), "moved down onto its own pane: unmoved"),
+    (Region(30, 0, 50, 24), 6, Region(32, 1, 46, 3), Region(32, 4, 46, 6), "inside its pane: down past them there"),
+])
+def test_placement_clears_the_inbox(pane, height, clear, region, desc):
+    assert place(S, pane, height, clear)[0] == region, desc
+
+
 class Panes(App):
     """Three fake panes, by the main screen's ids, side by side."""
     CSS = "Horizontal { height: 1fr; } .pane { height: 1fr; border: round #7b61ff; } " \

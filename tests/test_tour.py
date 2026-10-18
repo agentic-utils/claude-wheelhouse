@@ -25,7 +25,7 @@ def facts(**kw) -> dict:
     ("send", "demo", facts(queued=True, sent=True), set(), (), "reply", "sent"),
     ("reply", "demo", facts(sent=True, replied=True), set(), (), "decision", "it replied"),
     ("decision", "demo", facts(replied=True), set(), (), "decision", "waits for the decision closed"),
-    ("decision", "demo", facts(closed=True), set(), (), "conversation", "the decision closed"),
+    ("decision", "demo", facts(closed=True), set(), (), "docs", "the decision closed: documents, a Next dialog, next"),
     ("conversation", "demo", facts(), {"follow"}, (), "stats", "a turn watched arriving"),
     ("stats", "demo", facts(), set(), ("stats",), "decisions", "Stats absent: passed over"),
     ("decisions", "demo", facts(), set(), ("design",), "end", "the design module absent: its Decisions dialog passed over"),
@@ -74,7 +74,7 @@ FEATURES = (
 
 @pytest.mark.parametrize("stop, sdk, absent, text, shown, desc", [
     ("inbox", False, set(), "Tip A.", ["a"], "its tips under its text"),
-    ("inbox", True, set(), "Tip A.\nTip B.", ["a", "b"], "an sdk tip with SDK mode on"),
+    ("inbox", True, set(), "Tip A.\n\nTip B.", ["a", "b"], "an sdk tip with SDK mode on"),
     ("answer", False, set(), "", [], "no tips: its text alone"),
     ("notes", False, set(), "", ["a", "c", "d"], "the notes: every feature seen, but an sdk one with it off"),
     ("notes", True, set(), "", ["a", "b", "c", "d"], "with SDK mode on, that one too"),
@@ -84,7 +84,7 @@ def test_what_a_dialog_shows(stop, sdk, absent, text, shown, desc):
     tour = Tour(sdk=sdk, features=FEATURES)
     tour.absent = absent
     found = next(d for d in tour.stops if d.id == stop)
-    assert tour.text(found) == "\n".join(filter(None, [found.text, text])), desc
+    assert tour.text(found) == "\n\n".join(filter(None, [found.text, text])), f"{desc}: a blank line between paragraphs"
     assert tour.shown(found) == shown, desc
 
 
@@ -114,7 +114,7 @@ def test_what_a_start_offers(offer, at, pending, absent, kind, brings, desc):
 @pytest.mark.parametrize("pending, sdk, stops, texts, desc", [
     (("a",), False, ["inbox", "notes"], ["Tip A."], "one dialog, its new tip alone, no base text"),
     (("c", "a"), False, ["inbox", "stats", "notes"], ["Tip A.", "Tip C."], "in tour order, whatever the registry's"),
-    (("a", "b"), True, ["inbox", "notes"], ["Tip B.\nTip A."], "a dialog's every pending tip, as given"),
+    (("a", "b"), True, ["inbox", "notes"], ["Tip B.\n\nTip A."], "a dialog's every pending tip, as given"),
     (("d",), False, ["notes"], [], "advanced only: straight to the notes"),
     ((), False, ["notes"], [], "nothing pending: the notes alone"),
 ])
