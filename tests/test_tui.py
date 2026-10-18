@@ -5882,7 +5882,7 @@ async def test_focus_lost_with_a_button_goes_to_the_answer_box(store, sid, monke
     ("tab", "pagedown", "Tab from the items reaches a doc in the answer box's place; PgDn scrolls it (#77)"),
     ("tab", "end", "and End"),
     ("tab", "down", "and Down"),
-    ("click", "pagedown", "a click on the doc focuses it, and PgDn scrolls it"),
+    ("escape", "pagedown", "a click on the doc opens its editor, and Esc closing it focuses the doc for PgDn"),
 ])
 async def test_a_doc_in_the_inbox_scrolls_from_the_keyboard(store, sid, tmp_path, how, key, desc):
     doc = tmp_path / "plan.md"
@@ -5901,6 +5901,9 @@ async def test_a_doc_in_the_inbox_scrolls_from_the_keyboard(store, sid, tmp_path
             await pilot.press("tab")
         else:
             await pilot.click(app.detail_scroll, offset=(2, 2))
+            await pilot.pause()
+            assert focused_id(app) == "detail-editor", desc
+            await pilot.press("escape")
         await pilot.pause()
         assert focused_id(app) == "detail", desc
         await pilot.press(key)
@@ -7032,7 +7035,7 @@ async def test_a_doc_sits_under_its_parent_and_opens_rendered(store, sid, tmp_pa
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, tui.DocView), "Enter opens it full screen"
-        assert not app.screen.query(TextArea), "with no answer box"
+        assert not app.screen.query(tui.Compose), "with no answer box"
         assert "twice" in app.screen.text
         doc.unlink()
         app.refresh_data()

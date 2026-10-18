@@ -1,6 +1,6 @@
 # Modules: stats and design docs, pane swapping, editing docs in place
 
-Issue: #79. Status: approved, stages 1 to 5 landed, stage 6 in progress.
+Issue: #79. Status: approved, stages 1 to 6 landed, stage 7 in progress.
 
 The asks, in Doug's words (Q94): "user needs to be able to edit ADR (or any other doc for
 that matter)"; "collapse the tab idea and instead keep a single view. To do that, let's

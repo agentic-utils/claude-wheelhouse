@@ -4,6 +4,7 @@ daemon's hub, over HTTP and SSE, or with --local a hub of its own, in process.""
 import asyncio
 import bisect
 import dataclasses
+import difflib
 import functools
 import gc
 import json
@@ -369,6 +370,12 @@ def band(rank: tuple) -> int:
     return 2 if rank[0] >= FINISHED_RANK else 1 if rank[0] >= SETTLED_RANK else 0
 
 
+def hidden(widget: Widget) -> Widget:
+    """A widget composed hidden (display none), shown when wanted."""
+    widget.display = False
+    return widget
+
+
 def share(stored: str | None) -> float | None:
     """A kept splitter size, a share of its parent: None if it's missing, unreadable or not
     finite, else within 0 to 1 (splitter.fit takes it from there)."""
@@ -515,6 +522,14 @@ class Transcript(Widget, can_focus=False):
     DEFAULT_CSS = "Transcript { height: auto; }"
     BINDINGS = [Binding("ctrl+a", "select_all", "Select all", show=False)]
 
+    class DocClicked(Message):
+        """A click on the doc shown (not a drag, which selects), at a row: its editor opens
+        there, or moves there if it's open (DocEditor)."""
+
+        def __init__(self, view: "Transcript", row: int):
+            super().__init__()
+            self.view, self.row = view, row
+
     def __init__(self, placeholder: str = "", focusable: bool = False, **kwargs):
         super().__init__(**kwargs)
         self.can_focus = focusable
@@ -525,6 +540,7 @@ class Transcript(Widget, can_focus=False):
         self.doc_key = None   # the doc shown (its session and ref), set by whoever shows one
         self.stand_in: tuple | None = None   # (doc_key, strips, texts): its last render, shown while the next one renders
         self.doc_at: tuple[int, docblocks.DocMap] | None = None   # the doc block's first row and map, as laid out
+        self.on_laid: Callable[[], None] | None = None   # told once a doc rendered off the loop is laid out (DocEditor)
 
     def update(self, content: "Blocks | list[tuple[str, str]]") -> None:
         """New blocks. Scrolled up to read (not at the end, which follows), the block at the top
@@ -592,6 +608,25 @@ class Transcript(Widget, can_focus=False):
         row = self.doc_at[1].row_of(line)
         return None if row is None else self.doc_at[0] + row
 
+    def block_rows(self, line: int) -> tuple[int, int] | None:
+        """The rows [start, end) the block holding a source line of the doc shown is on, the
+        nearest block's for a line between blocks; one row for a block that renders none.
+        None as for line_at."""
+        self._layout(self.size.width)
+        if self.doc_at is None or (k := self.doc_at[1].block_at_line(line)) is None:
+            return None
+        start, end = self.doc_at[1].rows[k]
+        if end <= start:
+            row = self.row_of(line)
+            return None if row is None else (row, row + 1)
+        return self.doc_at[0] + start, self.doc_at[0] + end
+
+    def on_click(self, event: events.Click) -> None:
+        """A click on a doc (a left click, not one ending a drag, which leaves a selection)
+        opens its editor there. The event goes on: a double click still selects a word."""
+        if self.doc_at is not None and event.button == 1 and event.chain == 1 and self.text_selection is None:
+            self.post_message(self.DocClicked(self, event.y))
+
     def render_off_loop(self, key: tuple) -> None:
         """A long doc block rendered at a width on a thread (_block_strips keeps it), then laid
         out on the loop (rendered); once only for each, however often it's asked for."""
@@ -623,6 +658,8 @@ class Transcript(Widget, can_focus=False):
             after = len(self._layout(self.size.width)[0])
             target = round(y * after / before)
             self.call_after_refresh(scroll.scroll_to, y=target, animate=False)
+        if self.on_laid is not None:   # after the place kept, so what it anchors wins
+            self.call_after_refresh(self.on_laid)
 
     def get_content_width(self, container, viewport) -> int:
         return container.width
@@ -1462,7 +1499,7 @@ class BarButton(Button):
 # Decisions pane's), then whichever answer box shows (Deny's reason in its place, or a doc shown
 # in the detail pane, which has no box: focusable only then, so its keys scroll it); a
 # full-screen item's box. Any other pane is no stop
-TAB_ORDER = ("session-list", "items", "answer", "detail", "thread-answer", "deny-reason")
+TAB_ORDER = ("session-list", "items", "answer", "detail", "detail-editor", "thread-answer", "deny-reason")
 LISTS_AFTER = "items"   # where a module's lists (TAB_LIST) come in TAB_ORDER: after it
 ANSWER_BOXES = TAB_ORDER[2:]
 
@@ -1791,6 +1828,9 @@ class DocView(Screen):
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="docview-scroll", classes="panel"):
             yield Transcript(id="docview", focusable=True)
+        yield hidden(Splitter("editor", "#docview-editor", "#docview-scroll", "y"))
+        yield DocEditor("#docview", "#docview-scroll", lambda: self.sid is not None and self.app.doc_sends_now(self.sid),
+                        self.paint, id="docview-editor")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -1799,20 +1839,258 @@ class DocView(Screen):
         self.set_focus(self.query_one("#docview", Transcript))
 
     def action_leave(self) -> None:
+        """Esc: back to the inbox, or with the editor open (and Esc not its own, as it is
+        with focus there), the editor closed first."""
+        editor = self.query_one("#docview-editor", DocEditor)
+        if editor.key is not None:
+            editor.action_close_editor()
+            return
         self.app.pop_screen()
         self.app.retarget()
+
+    @on(Transcript.DocClicked)
+    def edit(self, event: Transcript.DocClicked) -> None:
+        event.stop()
+        self.query_one("#docview-editor", DocEditor).open_at(event.row)
 
     def paint(self) -> None:
         if self.file:
             blocks = file_blocks(*self.file, self.app.client.read_doc(self.file[0]))
         else:
             blocks = doc_blocks(self.app.client.item(self.sid, self.ref), self.app.client.document(self.sid, self.ref))
+        blocks = self.query_one("#docview-editor", DocEditor).shown_in(blocks)
         text = "\n\n".join(md for _, md in blocks)
         if text != self.text:
             self.text = text
             view = self.query_one("#docview", Transcript)
             view.doc_key = ("file", self.file[0]) if self.file else (self.sid, self.ref)
             view.update(render(blocks))
+
+
+def carried(old: str, new: str, line: int) -> int:
+    """A line of new's, as the line of old's it was: through the lines the two share, or for
+    one added or changed, where that change starts in old. The viewer's map is of the text
+    last rendered (old), the cursor in the buffer (new)."""
+    if old == new:
+        return line
+    a, b = old.splitlines(), new.splitlines()
+    for tag, i1, _, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if j1 <= line < j2:
+            return i1 + line - j1 if tag == "equal" else i1
+    return len(a)
+
+
+SAVING_NEXT = "Saving comes next: the edits stay in the editor until it closes."
+
+
+class DocEditor(TextArea):
+    """A doc's editor (.plan/modules.md, "Viewing and editing a doc", Q106): a lower split of
+    the viewer it edits (`viewer`, a Transcript's selector), under a splitter kept as
+    layout.editor, opened by a click on the rendered doc with its cursor on the clicked
+    block's first source line. While it's open the viewer renders its buffer as of the last
+    Ctrl+Enter (shown_in), not the file. `pane` is the selector of the pane whose title says
+    `edited` while there are unsaved edits; `immediate` says whether the doc's session sends at
+    once (a doc of no session's, a module's, behaves as Queued); `repaint` paints the viewer
+    again. Saving is stage 8's: here Ctrl+S, and Ctrl+Enter in Immediate mode, say so.
+
+    The two keep step: the viewer scrolled moves the editor's scroll (never its cursor) to
+    the block at the viewer's middle; the cursor moved into another block scrolls the viewer
+    the least that shows it. `syncing` names the side driving a sync, set before the other
+    side is scrolled (with animate=False) and cleared after the refresh: each side's handler
+    returns while the other's mark is set, so one sync is one scroll on each side."""
+    BINDINGS = [Binding("ctrl+enter", "render_edits", "Show the edits", show=False),
+                Binding("ctrl+j", "render_edits", "Show the edits", show=False),   # Ctrl+Enter, as most terminals send it
+                Binding("ctrl+s", "save_doc", "Save", show=False),   # the doc's, never the session's queue
+                Binding("escape", "close_editor", "Close the editor", show=False)]
+
+    def __init__(self, viewer: str, pane: str, immediate: Callable[[], bool], repaint: Callable[[], None], **kwargs):
+        super().__init__(language="markdown", soft_wrap=True, **kwargs)
+        self.viewer, self.pane = viewer, pane
+        self.immediate, self.repaint = immediate, repaint
+        self.display = False
+        self.key = None   # the doc open, as its viewer's doc_key; None while closed
+        self.base = ""   # the doc's text when the editor opened: edits are what differs from it
+        self.shown: str | None = None   # the buffer the viewer renders (the last Ctrl+Enter's)
+        self.syncing: str | None = None   # the side driving a sync under way: "viewer" or "editor"
+        self.block: tuple[int, int] | None = None   # the rows of the block the cursor was last in
+        self.anchor: tuple[int, int] | None = None   # (source line, screen row) a render keeps
+        self.title: str | None = None   # the pane's own title, while edited shows on it
+
+    def on_mount(self) -> None:
+        self.watch(self.view.parent, "scroll_y", self.viewer_scrolled, init=False)
+
+    # the widgets it works with
+
+    @property
+    def view(self) -> Transcript:
+        return self.screen.query_one(self.viewer, Transcript)
+
+    @property
+    def splitter(self) -> Splitter:
+        return next(s for s in self.parent.query_children(Splitter) if s.key == "editor")
+
+    @property
+    def edited(self) -> bool:
+        return self.key is not None and self.text != self.base
+
+    # opening, following and closing
+
+    def open_at(self, row: int) -> None:
+        """A click on the viewer's row: the editor opens with the cursor on the first source
+        line of the block there (or the nearest), that line about its middle, or if it's open
+        on this doc, moves there. The viewer keeps the clicked row where it was on screen if
+        it still shows once the editor takes its room, else scrolls it into view."""
+        view = self.view
+        line = view.line_at(row)
+        if line is None:
+            return
+        if self.key != view.doc_key:
+            self.key = view.doc_key
+            self.base = self.shown = next((md for who, md in view.blocks if who == "doc"), "")
+            self.load_text(self.base)
+            splitter = self.splitter
+            splitter.display = self.display = True
+            splitter.apply(share(self.app.client.setting(LAYOUT + splitter.key)))
+            self.paint_title()
+            self.call_after_refresh(self.reveal, row, row + 1, "viewer")   # once the viewer has shrunk
+        self.focus()
+        self.call_after_refresh(self.place, line)   # once the editor has its height
+
+    def place(self, line: int) -> None:
+        """The cursor to the start of a source line, scrolled to the editor's middle: driven
+        by the viewer, so the viewer doesn't follow it."""
+        line = min(line, self.document.line_count - 1)
+        self.block = self.view.block_rows(line)
+        self.mark("viewer")
+        self.move_cursor((line, 0), center=True)
+
+    def follow(self, key) -> None:
+        """The viewer shows a doc (key, its doc_key, or None): a different one closes the
+        editor, its unsaved edits dropped with a word to say so."""
+        if self.key is not None and key != self.key:
+            if self.edited:
+                self.app.notify("The doc shown changed: its unsaved edits were dropped.", severity="warning")
+            self.close()
+
+    def close(self) -> None:
+        """Closed, edits and all: the viewer shows the file again, and has the focus."""
+        if self.key is None:
+            return
+        refocus = self.has_focus
+        self.key = self.shown = self.block = self.anchor = None
+        self.splitter.display = self.display = False
+        self.paint_title()
+        self.repaint()
+        if refocus and self.view.can_focus:
+            self.view.focus()
+
+    def shown_in(self, blocks: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        """A doc's blocks as the viewer shows them: the doc's text the editor's buffer as of
+        the last Ctrl+Enter while it's open."""
+        if self.shown is None:
+            return blocks
+        out = [(who, self.shown if who == "doc" else md) for who, md in blocks]
+        return out if any(who == "doc" for who, _ in blocks) else out + [("doc", self.shown)]
+
+    def paint_title(self) -> None:
+        """`edited` in the pane's title while there are unsaved edits."""
+        pane = next(iter(self.screen.query(self.pane)), None)
+        if pane is None:
+            return
+        if self.title is None:
+            self.title = pane.border_title or ""
+        edited = " · ".join(t for t in (self.title, "edited") if t)
+        pane.border_title = (edited if self.edited else self.title) or None
+
+    # keys
+
+    def action_render_edits(self) -> None:
+        """Ctrl+Enter: the viewer renders the buffer, the block holding the cursor kept on
+        its row on screen; in Immediate mode it saves too."""
+        line = self.cursor_location[0]
+        rows, scroll = self.view.block_rows(carried(self.shown, self.text, line)), self.view.parent
+        self.anchor = (line, rows[0] - scroll.scroll_y) if rows and isinstance(scroll, VerticalScroll) else None
+        self.shown = self.text
+        self.repaint()
+        self.view.on_laid = self.anchored   # if it renders off the loop
+        self.call_after_refresh(self.anchored)
+        if self.immediate():
+            self.action_save_doc()
+
+    def anchored(self) -> None:
+        """After a render, the cursor's block back on the screen row it had."""
+        if self.anchor is None or (rows := self.view.block_rows(self.anchor[0])) is None:
+            return   # rendering off the loop: on_laid comes back
+        line, at = self.anchor
+        self.anchor = self.view.on_laid = None
+        self.block = rows
+        self.mark("editor")
+        self.view.parent.scroll_to(y=max(rows[0] - at, 0), animate=False, immediate=True)
+
+    def action_save_doc(self) -> None:
+        self.app.notify(SAVING_NEXT)
+
+    def action_close_editor(self) -> None:
+        """Esc: closed, asking first with unsaved edits: Save, Discard or Keep editing."""
+        if not self.edited:
+            self.close()
+            return
+
+        def answered(choice: str | None) -> None:
+            if choice == "discard":
+                self.close()
+            elif choice == "save":
+                self.action_save_doc()
+        self.app.push_screen(LeaveEdits(), answered)
+
+    # keeping step
+
+    def mark(self, driver: str) -> None:
+        """A sync driven from `driver` under way, until the refresh after it."""
+        self.syncing = driver
+        self.call_after_refresh(self.unmark, driver)
+
+    def unmark(self, driver: str) -> None:
+        if self.syncing == driver:
+            self.syncing = None
+
+    def viewer_scrolled(self) -> None:
+        """The viewer scrolled (wheel, keys, scrollbar): the editor's scroll, not its
+        cursor, brings the source of the block at the viewer's middle to its own middle."""
+        if self.key is None or self.syncing == "editor":
+            return
+        scroll = self.view.parent
+        line = self.view.line_at(round(scroll.scroll_y) + scroll.scrollable_content_region.height // 2)
+        if line is None:
+            return
+        y = self.wrapped_document.location_to_offset((min(line, self.document.line_count - 1), 0)).y
+        self.mark("viewer")
+        self.scroll_to(y=max(y - self.scrollable_content_region.height // 2, 0), animate=False, immediate=True)
+
+    def on_text_area_selection_changed(self, event: TextArea.SelectionChanged) -> None:
+        """The cursor moved into another block (typing, arrows, a click here): the viewer
+        scrolls the least that shows it. Within one block nothing moves."""
+        if self.key is None or self.syncing == "viewer":
+            return
+        rows = self.view.block_rows(carried(self.shown, self.text, self.cursor_location[0]))
+        if rows is None or rows == self.block:
+            return
+        self.block = rows
+        self.reveal(*rows, "editor")
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        self.paint_title()
+
+    def reveal(self, start: int, end: int, driver: str) -> None:
+        """The viewer scrolled the least that shows rows [start, end): their top at its top
+        if they don't fit."""
+        scroll = self.view.parent
+        top, height = round(scroll.scroll_y), scroll.scrollable_content_region.height
+        if start >= top and end <= top + height:
+            return
+        y = start if start < top or end - start > height else end - height
+        self.mark(driver)
+        scroll.scroll_to(y=y, animate=False, immediate=True)
 
 
 PERMISSION_HINT = "Allow, Always or Deny above (1, 2, 3), at once"
@@ -2407,6 +2685,27 @@ class Confirm(Dialog):
         self.action_answer(event.button.id == "yes")
 
 
+class LeaveEdits(Dialog):
+    """Esc in a doc's editor with unsaved edits: save them, discard them, or keep editing."""
+    BINDINGS = [Binding("s", "answer('save')", show=False), Binding("d", "answer('discard')", show=False)]
+    CANCEL = "keep"   # no ACTION: Keep editing has the focus, so a reflex Enter loses nothing
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("This doc has unsaved edits.", classes="dialog-prompt")
+            with Horizontal(classes="buttons"):
+                yield Button(Text("[S]ave"), variant="success", id="save")
+                yield Button(Text("[D]iscard"), variant="error", id="discard")
+                yield Button(Text("Keep editing [Esc]"), id="keep")
+
+    def on_mount(self) -> None:
+        self.set_focus(self.query_one("#keep", Button))
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        self.action_answer(event.button.id)
+
+
 class Choice(Dialog):
     """A pending request: cancel it, force it, or leave it be."""
     BINDINGS = [Binding("c", "answer('cancel')", show=False), Binding("f", "answer('force')", show=False)]
@@ -2618,7 +2917,10 @@ DESCRIBE = {
     "select_all": "Select all of it, to copy",
     "page(-1)": "Scroll the conversation (or the thread) up a page",
     "page(1)": "Scroll it down a page",
-    "leave": "Back to the inbox",
+    "leave": "Back to the inbox; with the doc's editor open, close it first",
+    "render_edits": "Show the edits in the doc above; in Immediate mode, save them too",
+    "save_doc": "Save the doc (saving comes next: for now it says so)",
+    "close_editor": "Close the editor, asking first with unsaved edits: Save, Discard or Keep editing",
     "app.press('rename')": "Rename the highlighted session",
     "app.press('relaunch')": "Relaunch it, or Unpark a parked one",
     "app.press('park')": "Park it, or Unpark a parked one",
@@ -2729,6 +3031,7 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "Backspace closes them together, the highlight going to the row above the topmost one taken, "
          "and Ctrl+R reopens the finished ones. An item with children (its subagents and docs, under it) has a - at the "
          "right-hand end of its row: a click there hides them, and the + it becomes shows them again. "
+         "A click on a doc opens its editor below it there, as a click on it moves it while it's open. "
          "Double-click selects a word. Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap "
@@ -2781,6 +3084,7 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
                 ("An answer box", Compose.BINDINGS), ("The conversation pane", Transcript.BINDINGS),
                 ("An item opened full screen", ThreadView.BINDINGS),
                 ("A doc opened full screen", DocView.BINDINGS),
+                ("A doc's editor", DocEditor.BINDINGS),
                 *[(w.KEYS_HELP[0], w.BINDINGS) for w in panes
                   if (keys := getattr(w, "KEYS_HELP", None)) and (sdk or not keys[1])]]
     out = ["# Keys"]
@@ -2854,6 +3158,8 @@ class WheelhouseApp(App):
     #docview-scroll {{ height: 1fr; scrollbar-gutter: stable; }}
     #docview {{ background: #000000; color: {MATRIX}; }}
     #answer {{ min-height: 3; }}
+    DocEditor {{ height: 40%; min-height: 3; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
+    DocEditor:focus {{ border: round #ff2a6d; }}
     #detail, #thread {{ background: #000000; color: {MATRIX}; }}
     #answer, #thread-answer {{ height: 8; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
     #answer:focus, #thread-answer:focus {{ border: round #ff2a6d; }}
@@ -3060,6 +3366,9 @@ class WheelhouseApp(App):
                     pane.border_title = "Detail"
                     with ConversationScroll(id="detail-scroll"):
                         yield Transcript(NOTHING_SELECTED, id="detail")
+                    yield hidden(Splitter("editor", "#detail-editor", "#detail-scroll", "y"))
+                    yield DocEditor("#detail", "#detail-pane", self.detail_doc_sends_now, self.paint_detail,
+                                    id="detail-editor")
                     yield Splitter("answer", "#answer", "#detail-scroll", "y")
                     yield PermissionButtons()
                     yield DenyReason()
@@ -3077,7 +3386,9 @@ class WheelhouseApp(App):
         self.items_table = self.query_one("#items", ItemList)
         self.detail = self.query_one("#detail", Transcript)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
-        self.answer_splitter = self.query_one("#detail-pane > Splitter", Splitter)   # held: a query walks every doc block
+        # held: a query walks every doc block
+        self.answer_splitter = next(s for s in self.query("#detail-pane > Splitter") if s.key == "answer")
+        self.detail_editor = self.query_one("#detail-editor", DocEditor)
         self.answer = self.query_one("#answer", Compose)
         self.session_list = self.query_one("#session-list", SessionList)
         self.session_list.sink, self.items_table.sink = self.session_sink, self.item_sink
@@ -3884,9 +4195,26 @@ class WheelhouseApp(App):
         return dataclasses.replace(self.ctx, call=functools.partial(self.client.call_module, mid),
                                    show_doc=self.show_doc, open_doc=self.open_doc, relayout=self.fit_compact)
 
+    def doc_sends_now(self, sid: str) -> bool:
+        """Whether a doc item of this session's saves on Ctrl+Enter in its editor: its
+        session's send mode, as an answer's (DocEditor)."""
+        s = next((x for x in self.sessions if x["id"] == sid), None)
+        return s is not None and (mode(s) == "immediate" or self.sends_now(sid))
+
+    def detail_doc_sends_now(self) -> bool:
+        """Detail's doc: a doc item's by its session's mode; a module's doc, no session's, Queued."""
+        return self.shown_doc is None and self.selected_doc() is not None and self.doc_sends_now(self.selected[0])
+
+    @on(Transcript.DocClicked)
+    def edit_detail(self, event: Transcript.DocClicked) -> None:
+        if event.view is self.detail:
+            self.detail_editor.open_at(event.row)
+
     def paint_detail(self) -> None:
         agent, doc, shown = False, self.selected_doc(), self.shown_doc
         self.detail.doc_key = ("file", shown[0]) if shown else None if self.viewing or not doc else self.selected
+        if (editor := getattr(self, "detail_editor", None)) is not None:
+            editor.follow(self.detail.doc_key)
         if shown:   # a module's doc, in place of what's selected
             blocks = file_blocks(*shown, self.client.read_doc(shown[0]))
         elif self.viewing:
@@ -3897,6 +4225,8 @@ class WheelhouseApp(App):
             blocks, agent = self.item_blocks(*self.selected)
         else:   # what was shown has gone (a followed session ended, say): not left standing
             blocks = [("note", NOTHING_SELECTED)]
+        if editor is not None:
+            blocks = editor.shown_in(blocks)
         if not agent and not isinstance(self.screen, ThreadView):   # which may follow one itself
             self.client.unfollow_agent()
         # a conversation, the session's or a subagent's, shows its newest turn, and follows it
