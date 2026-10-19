@@ -45,6 +45,19 @@ def test_placement_clears_the_inbox(pane, height, clear, region, desc):
     assert place(S, pane, height, clear)[0] == region, desc
 
 
+LONG = Region(33, 2, 12, 20)   # an inbox too long to go below
+
+
+@pytest.mark.parametrize("height, keep, region, desc", [
+    (6, Region(33, 2, 12, 6), Region(4, 8, 46, 6), "below the demo's rows, when every row is too many"),
+    (20, Region(33, 2, 12, 6), Region(4, 4, 46, 20), "not even that: at the foot of the screen"),
+    (6, None, Region(4, 0, 46, 6), "no demo: where it was"),
+    (6, Region(0, 12, 4, 4), Region(4, 0, 46, 6), "clear of the demo's rows already: unmoved"),
+])
+def test_placement_keeps_the_demos_rows(height, keep, region, desc):
+    assert place(S, Region(50, 0, 30, 24), height, LONG, keep)[0] == region, f"{desc} (#101 6)"
+
+
 class Panes(App):
     """Three fake panes, by the main screen's ids, side by side."""
     CSS = "Horizontal { height: 1fr; } .pane { height: 1fr; border: round #7b61ff; } " \

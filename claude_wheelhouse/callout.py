@@ -41,18 +41,27 @@ def width(screen: Size) -> int:
     return max(1, min(WIDTH, screen.width - MARGIN))
 
 
-def place(screen: Size, pane: Region | None, height: int, clear: Region | None = None) -> tuple[Region, str]:
+def place(screen: Size, pane: Region | None, height: int, clear: Region | None = None,
+          keep: Region | None = None) -> tuple[Region, str]:
     """Where a callout `height` rows high goes for a pane at `pane` (screen coordinates; None:
     absent), and how: beside it on the first side where it fits without covering it (right,
     left, below, above), else inside it over its top rows, else, for a pane narrower than the
     callout or collapsed, centred on the screen, a row higher for the line naming the pane.
-    Beside or inside a pane, it moves down past `clear` (the inbox's rows, #101), where it
-    overlaps it, if it still fits there without covering its pane."""
+    Beside or inside a pane, it keeps clear of the inbox (#101): where it covers `clear`, the
+    inbox's rows, it moves down past them if it fits there without covering its pane; where it
+    still covers `keep`, the demo's own rows, past those, else to the foot of the screen."""
     region, side = spot(screen, pane, height)
-    if clear is not None and pane is not None and side != "centred" and region.overlaps(clear):
-        lower = Region(region.x, clear.bottom, region.width, region.height)
-        if lower.bottom <= screen.height and (side == "inside" or not lower.overlaps(pane)):
-            return lower, side
+    if pane is None or side == "centred":
+        return region, side
+
+    def below(rows: Region) -> Region | None:
+        lower = Region(region.x, rows.bottom, region.width, region.height)
+        return lower if lower.bottom <= screen.height and (side == "inside" or not lower.overlaps(pane)) else None
+
+    if clear is not None and region.overlaps(clear) and (lower := below(clear)):
+        return lower, side
+    if keep is not None and region.overlaps(keep):
+        return below(keep) or Region(region.x, max(0, screen.height - region.height), region.width, region.height), side
     return region, side
 
 
@@ -84,14 +93,26 @@ def spot(screen: Size, pane: Region | None, height: int) -> tuple[Region, str]:
     return Region((screen.width - w) // 2, max(0, (screen.height - height) // 2), w, height), "centred"
 
 
-def rows(screen: Widget) -> Region | None:
-    """The inbox's rows on the screen, its header included: what a callout for another pane
-    keeps clear of (place), so the items it asks for stay in sight. None while it's absent."""
+def rows(screen: Widget, sid: str | None = None) -> tuple[Region | None, Region | None]:
+    """The inbox's rows on the screen, its header included, and those down to the last of
+    session `sid`'s (the demo's): what a callout for another pane keeps clear of (place), so
+    the items it asks for stay in sight. None for either that isn't there."""
     found = screen.query("#items")
     if not found or not (table := found.first()).display or not table.region.area:
-        return None
+        return None, None
     region = table.region
-    return Region(region.x, region.y, region.width, min(region.height, table.virtual_size.height))
+
+    ordered = table.ordered_rows
+    header = table.header_height if table.show_header else 0
+
+    def down_to(n: int) -> Region | None:
+        """The rows from the header to the nth, as far as they're in sight."""
+        bottom = region.y + header + sum(row.height for row in ordered[:n]) - table.scroll_offset.y
+        bottom = min(region.bottom, bottom)
+        return Region(region.x, region.y, region.width, bottom - region.y) if n and bottom > region.y else None
+
+    mine = [i for i, row in enumerate(ordered) if sid and str(row.key.value).startswith(f"{sid}|")]
+    return down_to(len(ordered)), down_to(mine[-1] + 1) if mine else None
 
 
 def find(screen: Widget, pane: str) -> Widget | None:
@@ -120,9 +141,10 @@ class TourCallout(Vertical):
             super().__init__()
             self.callout = callout
 
-    def __init__(self, pane: str, text: str, next: bool = False, id: str | None = None) -> None:
+    def __init__(self, pane: str, text: str, next: bool = False, id: str | None = None, keep: str | None = None) -> None:
         super().__init__(id=id)
         self.pane, self.text, self.next = pane, text, next
+        self.keep = keep   # the session whose rows in the inbox it never covers (place): the demo
         self.target: Widget | None = None
         self.placed: tuple | None = None   # what it was last placed against
         self.side = ""
@@ -171,14 +193,14 @@ class TourCallout(Vertical):
         screen = self.screen.size
         target = find(self.screen, self.pane)
         region = target.region if target is not None and target.display else None
-        clear = rows(self.screen) if self.pane != "items" else None
-        if self.placed == (screen, region, clear):
+        clear, keep = rows(self.screen, self.keep) if self.pane != "items" else (None, None)
+        if self.placed == (screen, region, clear, keep):
             return
-        self.placed = (screen, region, clear)
+        self.placed = (screen, region, clear, keep)
         self.highlight(target if region is not None else None)
         title = PANES.get(self.pane, ("", self.pane))[1]
         w = width(screen)
-        at, self.side = place(screen, region, self.lines(w, self.text), clear)
+        at, self.side = place(screen, region, self.lines(w, self.text), clear, keep)
         text = self.text
         if self.side == "centred":   # its pane named first, a line that wraps on a narrow screen
             text = f"In the {title} pane:\n{self.text}"

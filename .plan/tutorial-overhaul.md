@@ -61,12 +61,16 @@ resume at the same dialog.
 - #101 reworded the dialogs (whatsnew.DIALOGS holds the text now): each one that waits on
   the person says what to do now ("press N now", "Press [Stop & Forget] now"), New session
   opened for the demo says "This is part of the tutorial: press [Launch] to proceed.", and
-  each paragraph has a blank line after it. It added `docs` (Inbox, Next) after `decision`,
-  on documents a session declares, and the Decisions pane's dialog explains ADRs. Esc ends
-  the tour at any time, wherever focus is on the main screen and in the tour's own New
-  session, not only on a callout with focus; the badge and L still pick it up where it was.
+  each paragraph has a blank line after it. It added `docs` (Inbox, an action) after `decision`:
+  the demo now writes a children's bedtime story (questions on its characters and setting, a
+  decision on its length) and declares it as a doc, which the person opens. The Decisions
+  pane's dialog explains ADRs. Esc ends
+  the tour at any time, for good, wherever focus is on the main screen and in the tour's own
+  New session (Q122's pause is replaced): tour_at is cleared and every feature counts as
+  seen, so no badge offers it; the demo keeps running, and `claude-wheelhouse tutorial` offers
+  the tour afresh. Quitting mid-tour still resumes from the badge.
   The launched demo is selected in the session list, and a callout beside another pane keeps
-  clear of the inbox's rows (callout.place's `clear`).
+  clear of the inbox's rows, else the demo's, else goes to the screen's foot (callout.place).
 - The checks for 4 to 9 and 11 are today's step checks, moved over unchanged, including the
   rules that the app's own automatic selection never ticks anything.
 - A callout whose pane is absent (Stats disabled or uninstalled) is skipped, and its

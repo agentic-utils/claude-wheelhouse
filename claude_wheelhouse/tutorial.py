@@ -29,8 +29,9 @@ NAME = "tutorial"
 OFFER_KEY = TUTORIAL_OFFER   # settings: unset until the first-run offer is taken, or answered Never (store.NEVER)
 RESET = "reset"   # OFFER_KEY as reset() leaves it: offered at the next start, sessions or not, until answered
 STOP_WAIT = 5.0   # seconds an earlier tutorial's host gets to exit before it is told to
-# what the tutorial's directory allows: the wheelhouse's own tools run without a prompt
-SETTINGS = {"permissions": {"allow": ["mcp__wheelhouse__*"]}}
+STORY = "story.md"   # the one file the demo writes, the doc the tour has the person open
+# what the tutorial's directory allows: the wheelhouse's own tools, and writing the story, run without a prompt
+SETTINGS = {"permissions": {"allow": ["mcp__wheelhouse__*", f"Write(./{STORY})", f"Edit(./{STORY})"]}}
 
 # the brief's first line, for the person watching the session's tab or conversation
 TO_THE_USER = ("TO THE USER: THIS IS A DUMMY SESSION FOR THE TUTORIAL. FOLLOW THE PROMPTS ON THE WHEELHOUSE SCREEN "
@@ -44,27 +45,33 @@ This is the wheelhouse tutorial. You are a demo session: the person is learning 
 wheelhouse by working with you, and the wheelhouse's tour tells them what to do, so \
 don't explain in chat how to use the wheelhouse. Keep chat short and about the work.
 
-This is a throwaway session in a scratch directory. Touch no files and run no commands. When \
-you're asked to end, skip any session-end routine your own instructions describe (no memory, \
-transcript or handoff notes): just call end_session.
+This is a throwaway session in a scratch directory. The only file you touch is story.md in \
+this directory; run no commands and use no subagents. When you're asked to end, skip any \
+session-end routine your own instructions describe (no memory, transcript or handoff notes): \
+just call end_session.
 
-Your job: draft a two-line welcome message for new wheelhouse users. Do this now, in order:
+Your job: write a short children's bedtime story with the person. Do this now, in order:
 
-1. Set your synopsis: "Tutorial: drafting a welcome message with you."
-2. Post a task, "Draft the welcome message", with status running.
+1. Set your synopsis: "Tutorial: writing a bedtime story with you."
+2. Post a task, "Write the bedtime story", with status running.
 3. Post two related questions as wheelhouse question items, each body standing on its own:
-   - "Tone for the welcome message?": friendly, formal, or pirate.
-   - "Sign it off as whom?": the wheelhouse, the team, or no sign-off. Say in the body that \
-the right sign-off depends on the tone, so they're best answered together.
-4. Post a decision: "Writing it in British English", why: over American English: the \
-wheelhouse's own text is British; undo: say so and it's rewritten.
+   - "Who are the story's main characters?": a sleepy dragon and a brave mouse, two owl \
+siblings, or a lighthouse keeper and her cat.
+   - "Where is the story set?": a moonlit forest, a seaside village, or a castle in the \
+clouds. Say in the body that the setting should suit the characters, so they're best \
+answered together.
+4. Post a decision: "Keeping the story under 200 words", why: over a longer one: it's for \
+reading aloud at bedtime; undo: say so and it's lengthened.
 5. Say in one line of chat that you're waiting on the two questions, then stop.
 
-When the answers arrive, reply to each question as the wheelhouse protocol says, marking it \
-answered, with the two-line message as your answer to both. Then mark the task done, and end \
-your turn with the message in chat and one last line asking whether they'd like anything \
-changed. When they ask for a change, make it in chat, then say in one line that you're \
-finished and the session can be ended."""
+When the answers arrive, write the story (under 200 words, in British English, with a title) \
+as markdown to story.md in this directory, and declare it as a doc item: post_item with \
+kind "doc", title "The bedtime story", path story.md's absolute path, and the task as its \
+parent. Then reply to each question as the wheelhouse protocol says, marking it answered, \
+saying the story is in the doc. Then mark the task done, and end your turn with one line \
+asking whether they'd like anything changed. When they ask for a change, make it in \
+story.md, post the doc again with the same path, then say in one line that you're finished \
+and the session can be ended."""
 
 # what has the next start offer the tutorial again (reset), named by every hint (the offer, the
 # ? overlay, the tour, the dismiss notice): fixed, as which copy the person's own shell

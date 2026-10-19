@@ -74,8 +74,9 @@ DIALOGS = (
          "Select D1 now to read it, then press Delete to close it.", ACTION),
     Stop("docs", "items", "Documents",
          "A session declares each document it writes for you to read (a design, plan or report) as a doc item "
-         "(M), under the item it belongs to.\n\n"
-         "Select one and Detail shows it rendered; Enter opens it full screen.", NEXT),
+         "(M), under the item it belongs to, and Detail shows it rendered.\n\n"
+         "Open the demo's story now: select M1, The bedtime story, under its task. Enter opens it full screen.",
+         ACTION),
     Stop("conversation", "detail", "The conversation",
          "Select the demo's conversation now: the top row of the inbox.\n\n"
          "Then ask it for a change in the box below, and watch its answer arrive.", ACTION),
@@ -127,7 +128,7 @@ FEATURES: tuple[Feature, ...] = (
             note="A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered. Saving comes next."),
     Feature("tour-topups", UNRELEASED, "principles",
             note="After an update, the tour shows only what's new, pane by pane, with no demo; Esc ends it at any "
-                 "time, and L or the title bar's badge picks it up where it was.",
+                 "time, and after quitting mid-tour, L or the title bar's badge resumes it.",
             tip="After an update, the badge in the title bar (L) offers just what's new."),
 )
 

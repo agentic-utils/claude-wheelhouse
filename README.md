@@ -87,16 +87,19 @@ then paints a box beside each pane in turn, its border highlighted, saying what 
 what to do there. A box that waits on you says what to do now; one that only explains has
 a Next button. It starts with the demo session: press `N` and New session opens filled
 in (its brief begins with a note in capitals saying it's the tutorial's), so just press
-Launch, and the demo is selected in the session list. The demo posts a task, two related
-questions and a decision, and each box moves on as you do what it asks: answering, sending,
-reading its reply, closing the decision, documents (how a session's docs show, rendered),
+Launch, and the demo is selected in the session list. The demo writes a short children's
+bedtime story with you: it posts a task, two related questions (the main characters and the
+setting) and a decision, and each box moves on as you do what it asks: answering, sending,
+reading its reply, closing the decision, opening the story it writes as a doc (rendered),
 watching it work in its conversation, Stats, the Decisions pane's ADRs (architecture
 decision records, from each repo's `docs/adr`) while the design module is loaded, and ending
-it. A box beside Detail sits below the inbox's rows, so the items it asks for stay in sight.
+it. A box beside Detail never covers the demo's rows in the inbox: it sits below every row, or
+below the demo's, or at the foot of the screen.
 The last dialog shows this release's notes. `Esc` ends the tour at any time, from any of its
-boxes or the New session it opens: the title bar's badge then reads "Tour paused · L", and
-`L` (or a click on the badge) picks it up at the same box, in this run or after a restart.
-Quitting mid-tour keeps your place the same way.
+boxes or the New session it opens, for good: the demo keeps running until you Stop & Forget
+it, and `claude-wheelhouse tutorial` offers the tour again from the start. Quitting mid-tour
+keeps your place: the title bar's badge then reads "Tour paused · L", and `L` (or a click on
+the badge) resumes it at the same box.
 
 After an update that brings something new to a pane, the next start offers a top-up in the
 same centred dialog ("Updated to 0.3.0: 3 new things in 2 places"): only the new tips, in a

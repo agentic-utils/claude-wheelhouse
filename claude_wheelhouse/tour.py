@@ -4,8 +4,8 @@ callout.py); this holds no Textual.
 
 An action dialog moves on once what it asks has happened: what the store records of the
 demo session (tutorial.facts), or what only the screen has seen the person do (seen: a
-question opened, a turn of Claude's watched arriving), never the app's own automatic
-selection. A Next dialog moves on only on Next. A dialog whose pane is absent (Stats turned
+question or the story's doc opened, a turn of Claude's watched arriving), never the app's
+own automatic selection. A Next dialog moves on only on Next. A dialog whose pane is absent (Stats turned
 off) is passed over. A demo that has gone, or stopped, leaves nothing to wait on: the action
 dialog showing says so (dead) and its Next goes straight to the release notes. Ending it is
 what the last action dialog asks, so there it simply moves on.
@@ -22,7 +22,7 @@ from . import whatsnew
 from .whatsnew import ACTION, ADVANCED, NEXT, TIPPED
 
 TOUR, TOPUP = "tour", "topup"   # a new user's whole tour; an upgrader's top-up
-# what a start, or the badge, offers (opening): a tour paused (ended with Esc, or the app quit mid-tour),
+# what a start, or the badge, offers (opening): a tour paused (the app quit mid-tour),
 # the whole tour's invite, an upgrader's top-up, or only the release notes (advanced features)
 PAUSED, NOTES = "paused", "notes"
 PANE = {d.id: d.pane for d in whatsnew.DIALOGS}   # each dialog's pane: None, centred
@@ -58,6 +58,7 @@ CHECKS = {
     "send": lambda facts, seen: bool(facts and facts["sent"]),
     "reply": lambda facts, seen: bool(facts and facts["replied"]),
     "decision": lambda facts, seen: bool(facts and facts["closed"]),
+    "docs": lambda facts, seen: "read" in seen,   # the story's doc opened
     "conversation": lambda facts, seen: "follow" in seen,
     "end": lambda facts, seen: False,   # only the demo going ends it
 }
@@ -80,10 +81,9 @@ class Tour:
         self.sdk, self.features, self.notes_seen = sdk, features, notes_seen
         self.at = 0
         self.sid: str | None = None   # the demo session, once made
-        self.seen: set[str] = set()   # the steps only the screen sees ("open", "follow")
+        self.seen: set[str] = set()   # the steps only the screen sees ("open", "read", "follow")
         self.absent: set[str] = set()   # the dialogs passed over for want of their pane
         self.dead: str | None = None   # why the demo can't go on (gone or stopped), at an action dialog
-        self.paused = False
 
     @property
     def stop(self) -> whatsnew.Stop | None:
