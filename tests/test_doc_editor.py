@@ -24,7 +24,7 @@ def doc(store, sid, tmp_path):
 async def shown(app, pilot, ref: str, full: bool = False):
     """The doc item highlighted, in Detail or full screen: its viewer and editor."""
     await pilot.pause()
-    app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(f"└ {ref}"))
+    app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(ref))   # in the docs band
     await pilot.pause()
     if full:
         app.items_table.focus()

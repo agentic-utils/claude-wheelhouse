@@ -1576,7 +1576,8 @@ class BarButton(Button):
 # Decisions pane's), then whichever answer box shows (Deny's reason in its place, or a doc shown
 # in the detail pane, which has no box: focusable only then, so its keys scroll it); a
 # full-screen item's box. Any other pane is no stop
-TAB_ORDER = ("session-list", "items", "answer", "detail", "detail-editor", "thread-answer", "deny-reason")
+TAB_ORDER = ("session-list", "items", "answer", "detail", "detail-editor", "thread-answer", "docview", "docview-editor",
+             "docview-answer", "deny-reason")
 LISTS_AFTER = "items"   # where a module's lists (TAB_LIST) come in TAB_ORDER: after it
 ANSWER_BOXES = TAB_ORDER[2:]
 
@@ -1898,6 +1899,11 @@ def file_blocks(path: str, title: str, doc) -> list[tuple[str, str]]:
     return out
 
 
+def boxed(screen) -> bool:
+    """A full-screen item with its own answer box: a ThreadView, or a doc item's DocView."""
+    return isinstance(screen, ThreadView) or isinstance(screen, DocView) and screen.sid is not None
+
+
 def doc_thread_blocks(found) -> list[tuple[str, str]]:
     """A doc's thread: its messages alone (thread_blocks without the item's head and body,
     which for a doc is its path), oldest first."""
@@ -1937,52 +1943,158 @@ class DocTabs(Static):
             self.app.pick_doc_tab(tab)
 
 
+class DocPanes:
+    """A doc item's viewer, thread and editor where it shows, Detail or full screen (DocView),
+    laid out (.plan/docs-section.md 2): split, the doc over its thread and the answer box, or
+    with no comment yet over the box alone; tabbed, one of Doc, Thread (with the box) and,
+    while it's open, Editor. The editor open in split takes the thread's and the box's place
+    (box_shown: the send bar's paint hides the box). Anything else shown there: the doc's
+    widgets put away. Sizes are set only as the layout changes, so a splitter dragged keeps
+    its place. `tab` is the tab shown when tabbed, back to Doc for another doc."""
+
+    def __init__(self, root: Widget, prefix: str):
+        q = root.query_one
+        self.tabs, self.viewer = q(f"#{prefix}-tabs", DocTabs), q(f"#{prefix}", Transcript)
+        self.viewer_scroll, self.editor = q(f"#{prefix}-scroll"), q(f"#{prefix}-editor", DocEditor)
+        self.thread, self.thread_scroll = q(f"#{prefix}-thread", Transcript), q(f"#{prefix}-thread-scroll")
+        splitters = {s.key: s for s in root.query(Splitter)}
+        self.editor_splitter, self.thread_splitter = splitters["editor"], splitters[DOC_THREAD]
+        self.tab, self.tab_for, self.laid, self.text = DOC_TAB, None, None, None
+
+    def tab_names(self) -> list[str]:
+        """The tabs there are: Editor only while the editor is open."""
+        return [DOC_TAB, THREAD_TAB] + ([EDITOR_TAB] if self.editor.key is not None else [])
+
+    def box_shown(self, layout: str) -> bool:
+        """Whether the answer box shows: split with the editor shut, or tabbed on Thread."""
+        if layout == SPLIT:
+            return self.editor.key is None
+        return self.tab == THREAD_TAB
+
+    def paint(self, app: "WheelhouseApp", doc) -> bool:
+        """The doc item's thread (its messages, following the newest), then the layout for
+        it, or with none (doc None) the doc's widgets put away. Whether the layout changed."""
+        found = app.client.thread(doc["session_id"], doc["ref"]) if doc is not None else None
+        blocks = doc_thread_blocks(found)
+        text = "\n\n".join(md for _, md in blocks)
+        if text != self.text:
+            scroll = self.thread_scroll
+            following = scroll.scroll_y >= scroll.max_scroll_y - 1
+            self.text = text
+            self.thread.update(render(blocks))
+            if following:
+                app.call_after_refresh(scroll.scroll_end, animate=False)
+        return self.lay(app, doc, bool(blocks))
+
+    def lay(self, app: "WheelhouseApp", doc, said: bool) -> bool:
+        editing = self.editor.key is not None
+        key = doc and item_key(doc)
+        if key != self.tab_for:   # another doc: its Doc tab first
+            self.tab, self.tab_for = DOC_TAB, key
+        if self.tab == EDITOR_TAB and not editing:   # the editor closed: the thread back
+            self.tab = THREAD_TAB
+        tabbed = doc is not None and app.doc_layout == TABBED
+        tab = self.tab if tabbed else None
+        if tabbed:
+            fresh = ordering.field(doc, "new_replies")
+            names = {DOC_TAB: "Doc", THREAD_TAB: f"Thread ({fresh} new)" if fresh else "Thread", EDITOR_TAB: "Editor"}
+            self.tabs.show([(t, names[t]) for t in self.tab_names()], tab)
+        laid = (doc is not None, tabbed, tab, editing, said)
+        if laid == self.laid:
+            return False
+        self.laid = laid
+        shown = {self.tabs: tabbed, self.viewer_scroll: tab in (None, DOC_TAB),
+                 self.thread_scroll: doc is not None and (tab == THREAD_TAB or not tabbed and said and not editing),
+                 self.thread_splitter: doc is not None and not tabbed and said and not editing}
+        if doc is not None:   # the editor's, while a doc item shows: its own otherwise (DocEditor)
+            shown |= {self.editor: editing and tab in (None, EDITOR_TAB), self.editor_splitter: editing and not tabbed}
+        for widget, show in shown.items():
+            widget.display = show
+        if tabbed:   # one tab, the whole of the pane
+            self.thread_scroll.styles.height = "1fr"
+            self.editor.styles.height = "1fr"
+        else:
+            self.thread_splitter.apply(share(app.client.setting(LAYOUT + DOC_THREAD)))
+            self.editor_splitter.apply(share(app.client.setting(LAYOUT + self.editor_splitter.key)))
+        return True
+
+
 class DocView(Screen):
-    """One doc full screen, rendered, with no answer box: a doc item's, or a module's file
-    (`file`, (path, title), as show_doc gives it: api.Context.open_doc). The app's refresh
-    tick repaints it, so a change to the file shows while it's open, where it was scrolled to."""
+    """One doc full screen, rendered: a doc item's, laid out as in Detail (DocPanes: split or
+    tabbed, its thread and answer box, Ctrl+L), with its send bar; or a module's file (`file`,
+    (path, title), as show_doc gives it: api.Context.open_doc), with no thread or box. The
+    app's refresh tick repaints it, so a change to the file shows while it's open, where it
+    was scrolled to."""
     BINDINGS = [Binding("escape", "leave", "Back", key_display="Esc")]
 
     def __init__(self, sid: str | None = None, ref: str | None = None, file: tuple[str, str] | None = None):
         super().__init__()
         self.sid, self.ref, self.file = sid, ref, file
         self.text = None
+        self.box: Compose | None = None
+        self.panes: DocPanes | None = None
 
     def compose(self) -> ComposeResult:
+        item = self.sid is not None
+        yield hidden(DocTabs(id="docview-tabs"))
         with VerticalScroll(id="docview-scroll", classes="panel"):
             yield Transcript(id="docview", focusable=True)
-        yield hidden(Splitter("editor", "#docview-editor", "#docview-scroll", "y"))
+        yield hidden(Splitter("editor", "#docview-editor", "#docview-scroll", "y", label="editing"))
         yield DocEditor("#docview", "#docview-scroll", lambda: self.sid is not None and self.app.doc_sends_now(self.sid),
                         self.paint, id="docview-editor")
+        yield hidden(Splitter(DOC_THREAD, "#docview-thread-scroll", "#docview-scroll", "y", label="thread"))
+        with hidden(ConversationScroll(id="docview-thread-scroll", classes="panel")):
+            yield Transcript(id="docview-thread")
+        if item:   # a doc item's thread is answered here, as a full-screen item's (ThreadView)
+            yield Compose(id="docview-answer")
+            yield Hint(classes="answer-hint")
+            yield SendBar(conversation=True)
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#docview-scroll").can_focus = False   # the transcript's keys scroll it
         self.view, self.editor = self.query_one("#docview", Transcript), self.query_one("#docview-editor", DocEditor)
+        self.panes = DocPanes(self, "docview")
+        app = self.app
+        if self.sid is not None:
+            self.box = self.query_one("#docview-answer", Compose)
+            app.keep_unsent(app.answer, app.box_target, None)   # the inbox box's text, this doc's included
+            app.box_target = None
+            app.keep_unsent(self.box, None, (self.sid, self.ref))
         self.paint()
-        self.set_focus(self.query_one("#docview", Transcript))
+        app.paint_sendbar()
+        app.paint_quote()
+        self.set_focus(self.view)
 
     def action_leave(self) -> None:
-        """Esc: back to the inbox, or with the editor open (and Esc not its own, as it is
-        with focus there), the editor closed first."""
+        """Esc: back to the inbox. First, with the editor open (and Esc not its own, as it is
+        with focus there), the editor closed; in an empty box under a quote, the quote dropped."""
         editor = self.query_one("#docview-editor", DocEditor)
         if editor.key is not None:
             editor.action_close_editor()
             return
-        self.app.pop_screen()
-        self.app.retarget()
+        app = self.app
+        if self.box is not None and self.focused is self.box and not self.box.text.strip() \
+                and app.doc_quotes.pop((self.sid, self.ref), None):
+            app.paint_quote()
+            return
+        if self.box is not None:
+            app.keep_unsent(self.box, (self.sid, self.ref), None)
+        app.pop_screen()
+        app.retarget()
 
     @on(Transcript.DocClicked)
     def edit(self, event: Transcript.DocClicked) -> None:
         event.stop()
-        self.query_one("#docview-editor", DocEditor).open_at(event.row)
+        self.app.doc_clicked(event, self.query_one("#docview-editor", DocEditor))
 
     def paint(self) -> None:
         """Repainted by the app's refresh, which can reach it as the app ends, its widgets
         going: then nothing. The viewer and editor are held, not queried, for that."""
         view, editor = getattr(self, "view", None), getattr(self, "editor", None)
-        if view is None or editor is None or not view.is_attached:
+        if view is None or editor is None or not view.is_attached or self.panes is None:
             return
+        item = None
         if self.file:
             read = self.app.client.read_doc(self.file[0])
             blocks, gone = file_blocks(*self.file, read), (read.get("gone") or "" if read else "")
@@ -1996,7 +2108,9 @@ class DocView(Screen):
         text = "\n\n".join(md for _, md in blocks)
         if text != self.text:
             self.text = text
-            view.update(render(blocks))
+            view.update(render(blocks))   # posted again: where it was scrolled to stays
+        if self.panes.paint(self.app, item) and self.app.screen is self:
+            self.app.paint_sendbar()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -3160,6 +3274,9 @@ DESCRIBE = {
                            "(or every marked one); it never reopens one: Ctrl+R does. On an item with children it "
                            "asks first, saying how many are still open or unread, then takes them all"),
     "help": "This list",
+    "doc_layout": "With a doc shown: its thread under it (split), or Doc and Thread as tabs (tabbed); kept",
+    "doc_tab(-1)": "With a doc shown tabbed: the tab before",
+    "doc_tab(1)": "With a doc shown tabbed: the tab after",
     "tour": ("The tour, while the title bar's badge shows: resume a tour quit in the middle where it was, or take what's new "
              "(in the session list, L is Relaunch: click the badge)"),
     "quit": "Quit the wheelhouse (sessions carry on without it)",
@@ -3412,16 +3529,16 @@ class WheelhouseApp(App):
     #detail-scroll {{ height: 1fr; min-height: 3; scrollbar-gutter: stable; }}   /* its width the same, scrolling or not */
     #docview-scroll {{ height: 1fr; scrollbar-gutter: stable; }}
     /* a doc's thread under it in Detail (split), its share kept as layout.doc-thread; its tabs (tabbed) */
-    #doc-thread-scroll {{ height: 35%; min-height: 3; }}
-    #doc-thread {{ background: #000000; color: {MATRIX}; }}
-    #doc-tabs {{ height: 1; background: #12122a; }}
+    #detail-thread-scroll, #docview-thread-scroll {{ height: 35%; min-height: 3; }}
+    #detail-thread, #docview-thread {{ background: #000000; color: {MATRIX}; }}
+    DocTabs {{ height: 1; background: #12122a; }}
     #docview {{ background: #000000; color: {MATRIX}; }}
     #answer {{ min-height: 3; }}
     DocEditor {{ height: 40%; min-height: 3; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
     DocEditor:focus {{ border: round #ff2a6d; }}
     #detail, #thread {{ background: #000000; color: {MATRIX}; }}
-    #answer, #thread-answer {{ height: 8; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
-    #answer:focus, #thread-answer:focus {{ border: round #ff2a6d; }}
+    #answer, #thread-answer, #docview-answer {{ height: 8; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
+    #answer:focus, #thread-answer:focus, #docview-answer:focus {{ border: round #ff2a6d; }}
     /* the default cursor is a pale grey cell: a hot block reads as "type here" on black */
     Compose > .text-area--cursor {{ background: #ff2a6d; color: #000000; text-style: bold; }}
     .answer-hint {{ color: #777777; height: 1; }}
@@ -3583,12 +3700,10 @@ class WheelhouseApp(App):
         self.modules = api.switch_off(api.load(), api.disabled(self.client.setting(api.DISABLED)))
         self.shown_doc: tuple[str, str] | None = None   # a module's doc in Detail (show_doc): (path, title)
         self.doc_edits: dict[str, DocEdit] = {}   # each doc's unsaved edits, by its path (DocEditor.edits)
-        # a doc item in Detail (.plan/docs-section.md): split or tabbed (Ctrl+L, kept as DOC_LAYOUT),
-        # the tab shown when tabbed and whose doc that is, how it was last laid out, and each doc's
-        # quote, the first line of the block last clicked, that a comment on it carries
+        # a doc item in Detail and full screen (.plan/docs-section.md): split or tabbed (Ctrl+L,
+        # kept as DOC_LAYOUT; each place's tab is its DocPanes'), and each doc's quote, the first
+        # line of the block last clicked, that a comment on it carries
         self.doc_layout = SPLIT
-        self.doc_tab, self.doc_tab_for = DOC_TAB, None
-        self.doc_laid: tuple | None = None
         self.doc_quotes: dict[tuple[str, str], str] = {}
         # the state dir: the database's, for a module that keeps files of its own
         state_dir = self.store.path.parent if self.store else db_path().parent
@@ -3647,15 +3762,15 @@ class WheelhouseApp(App):
             with Vertical(id="col-right", classes="column"), slot("right"):
                 with Vertical(id="detail-pane", classes="panel") as pane:
                     pane.border_title = "Detail"
-                    yield hidden(DocTabs(id="doc-tabs"))   # a doc's, tabbed (lay_doc)
+                    yield hidden(DocTabs(id="detail-tabs"))   # a doc's, tabbed (DocPanes)
                     with ConversationScroll(id="detail-scroll"):
                         yield Transcript(NOTHING_SELECTED, id="detail")
                     yield hidden(Splitter("editor", "#detail-editor", "#detail-scroll", "y", label="editing"))
                     yield DocEditor("#detail", "#detail-pane", self.detail_doc_sends_now, self.paint_detail,
                                     id="detail-editor")
-                    yield hidden(Splitter(DOC_THREAD, "#doc-thread-scroll", "#detail-scroll", "y", label="thread"))
-                    with hidden(ConversationScroll(id="doc-thread-scroll")):   # a doc's thread (lay_doc)
-                        yield Transcript(id="doc-thread")
+                    yield hidden(Splitter(DOC_THREAD, "#detail-thread-scroll", "#detail-scroll", "y", label="thread"))
+                    with hidden(ConversationScroll(id="detail-thread-scroll")):   # a doc's thread (DocPanes)
+                        yield Transcript(id="detail-thread")
                     yield Splitter("answer", "#answer", "#detail-scroll", "y")
                     yield PermissionButtons()
                     yield DenyReason()
@@ -3676,11 +3791,7 @@ class WheelhouseApp(App):
         # held: a query walks every doc block
         self.answer_splitter = next(s for s in self.query("#detail-pane > Splitter") if s.key == "answer")
         self.detail_editor = self.query_one("#detail-editor", DocEditor)
-        self.doc_tabs = self.query_one("#doc-tabs", DocTabs)
-        self.doc_thread = self.query_one("#doc-thread", Transcript)
-        self.doc_thread_scroll = self.query_one("#doc-thread-scroll", VerticalScroll)
-        self.doc_thread_splitter = next(s for s in self.query("#detail-pane > Splitter") if s.key == DOC_THREAD)
-        self.editor_splitter = next(s for s in self.query("#detail-pane > Splitter") if s.key == "editor")
+        self.detail_panes = DocPanes(self.query_one("#detail-pane"), "detail")
         self.doc_layout = TABBED if self.client.setting(DOC_LAYOUT) == TABBED else SPLIT
         self.answer = self.query_one("#answer", Compose)
         self.session_list = self.query_one("#session-list", SessionList)
@@ -4495,7 +4606,7 @@ class WheelhouseApp(App):
         if move_list:
             self.highlight_session(self.focus_sid())
         self.paint_sendbar()
-        if isinstance(self.screen, ThreadView):   # which holds its item's text itself
+        if boxed(self.screen):   # which holds its item's text itself
             return
         target = self.selected
         self.keep_unsent(self.answer, self.box_target, target)
@@ -4544,25 +4655,33 @@ class WheelhouseApp(App):
     def edit_detail(self, event: Transcript.DocClicked) -> None:
         """A click on Detail's doc: the editor opens there, in the thread's place (split) or as
         a tab (tabbed), and a doc item's next comment quotes the block clicked."""
-        if event.view is not self.detail:
-            return
-        doc = self.shown_doc is None and self.selected_doc()
-        line = self.detail.line_at(event.row)
-        if doc and line is not None:
-            md = next((md for who, md in self.detail.blocks if who == "doc"), "")
-            self.doc_quotes[self.selected] = quote_of(md, line)
+        if event.view is self.detail:
+            self.doc_clicked(event, self.detail_editor)
+
+    def doc_clicked(self, event: Transcript.DocClicked, editor: "DocEditor") -> None:
+        """A click on a doc, in Detail or full screen: its editor opens there, in the thread's
+        place (split) or as a tab (tabbed), and a doc item's next comment quotes the block clicked."""
+        panes, doc, _ = self.doc_here()
+        line = event.view.line_at(event.row)
+        if doc is not None and line is not None:
+            md = next((md for who, md in event.view.blocks if who == "doc"), "")
+            self.doc_quotes[(doc["session_id"], doc["ref"])] = quote_of(md, line)
             self.paint_quote()
-        self.detail_editor.open_at(event.row)
-        if doc and self.detail_editor.key is not None and self.doc_layout == TABBED:
-            self.doc_tab = EDITOR_TAB
-        self.paint_detail()
+        editor.open_at(event.row)
+        if doc is not None and editor.key is not None and self.doc_layout == TABBED:
+            panes.tab = EDITOR_TAB
+        self.repaint_doc()
 
     def paint_quote(self) -> None:
-        """The answer box's title: the line the comment on a doc quotes, if any."""
-        quote = self.box_target and self.doc_quotes.get(self.box_target)
-        title = f'> "{quote}"' if quote else None
-        if self.answer.border_title != title:
-            self.answer.border_title = title
+        """The answer box's title, Detail's and a full-screen doc's: the line its comment on a
+        doc quotes, if any."""
+        boxes = [(self.answer, self.box_target)] + [(screen.box, (screen.sid, screen.ref)) for screen in self.screen_stack
+                                                     if isinstance(screen, DocView) and screen.box is not None]
+        for box, target in boxes:
+            quote = target and self.doc_quotes.get(target)
+            title = f'> "{quote}"' if quote else None
+            if box.border_title != title:
+                box.border_title = title
 
     def paint_detail(self) -> None:
         agent, doc, shown = False, self.selected_doc(), self.shown_doc
@@ -4603,108 +4722,79 @@ class WheelhouseApp(App):
             self.detail.update(render(blocks))   # a doc posted again: where it was scrolled to stays
             if following:   # stay at the newest turn, unless the person has scrolled up to read
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
-        if hasattr(self, "doc_thread"):
+        if hasattr(self, "detail_panes"):
             self.paint_doc_thread(doc if not shown and not self.viewing else None)
 
     def paint_doc_thread(self, doc) -> None:
-        """A doc item's thread under it (split) or on its tab (tabbed), following its newest
-        message, and Detail laid out for it (lay_doc)."""
-        found = self.client.thread(doc["session_id"], doc["ref"]) if doc is not None else None
-        blocks = doc_thread_blocks(found)
-        text = "\n\n".join(md for _, md in blocks)
-        if text != getattr(self, "_doc_thread_text", None):
-            scroll = self.doc_thread_scroll
-            following = scroll.scroll_y >= scroll.max_scroll_y - 1
-            self._doc_thread_text = text
-            self.doc_thread.update(render(blocks))
-            if following:
-                self.call_after_refresh(scroll.scroll_end, animate=False)
-        self.lay_doc(doc, bool(blocks))
-
-    def lay_doc(self, doc, said: bool) -> None:
-        """Detail for a doc item (.plan/docs-section.md 2): split, the doc over its thread and
-        the answer box, or with no comment yet over the box alone; tabbed, one of Doc, Thread
-        (with the box) and, while it's open, Editor. The editor open in split takes the
-        thread's and the box's place (paint_sendbar hides the box: doc_box). Anything else
-        shown: the doc's widgets put away. Sizes are set only as the layout changes, so a
-        splitter dragged keeps its place."""
-        editing = self.detail_editor.key is not None
-        key = doc and item_key(doc)
-        if key != self.doc_tab_for:   # another doc: its Doc tab first
-            self.doc_tab, self.doc_tab_for = DOC_TAB, key
-        if self.doc_tab == EDITOR_TAB and not editing:   # the editor closed: the thread back
-            self.doc_tab = THREAD_TAB
-        tabbed = doc is not None and self.doc_layout == TABBED
-        tab = self.doc_tab if tabbed else None
-        if tabbed:
-            fresh = ordering.field(doc, "new_replies")
-            self.doc_tabs.show([(DOC_TAB, "Doc"), (THREAD_TAB, f"Thread ({fresh} new)" if fresh else "Thread")]
-                               + ([(EDITOR_TAB, "Editor")] if editing else []), tab)
-        laid = (doc is not None, tabbed, tab, editing, said)
-        if laid == self.doc_laid:
-            return
-        self.doc_laid = laid
-        shown = {self.doc_tabs: tabbed, self.detail_scroll: tab in (None, DOC_TAB),
-                 self.doc_thread_scroll: doc is not None and (tab == THREAD_TAB or not tabbed and said and not editing),
-                 self.doc_thread_splitter: doc is not None and not tabbed and said and not editing}
-        if doc is not None:   # the editor's, while a doc item shows: its own otherwise (DocEditor)
-            shown |= {self.detail_editor: editing and tab in (None, EDITOR_TAB), self.editor_splitter: editing and not tabbed}
-        for widget, show in shown.items():
-            widget.display = show
-        if tabbed:   # one tab, the whole of Detail
-            self.doc_thread_scroll.styles.height = "1fr"
-            self.detail_editor.styles.height = "1fr"
-        else:
-            self.doc_thread_splitter.apply(share(self.client.setting(LAYOUT + DOC_THREAD)))
-            self.editor_splitter.apply(share(self.client.setting(LAYOUT + self.editor_splitter.key)))
-        self.paint_sendbar()
-        self.refit()
+        """Detail's doc item: its thread, and Detail laid out for it (DocPanes)."""
+        if self.detail_panes.paint(self, doc):
+            self.paint_sendbar()
+            self.refit()
 
     def doc_box(self) -> bool:
-        """Whether a doc item in Detail shows the answer box: split with the editor shut, or
-        tabbed on its Thread tab."""
-        if self.detail_editor.key is not None and self.doc_layout == SPLIT:
-            return False
-        return self.doc_layout == SPLIT or self.doc_tab == THREAD_TAB
+        """Whether Detail's doc item shows the answer box (DocPanes.box_shown)."""
+        return self.detail_panes.box_shown(self.doc_layout)
+
+    def doc_here(self):
+        """The doc item on the screen in front, as (its DocPanes, the item, its answer box), or
+        Nones: Detail's on the inbox, a full-screen doc item's (DocView)."""
+        screen = self.screen
+        if screen is self.screen_stack[0] and hasattr(self, "detail_panes") and self.shown_doc is None:
+            doc = self.selected_doc()
+            return (self.detail_panes, doc, self.answer) if doc is not None else (None, None, None)
+        if isinstance(screen, DocView) and screen.sid is not None and screen.is_mounted:
+            return screen.panes, self.client.item(screen.sid, screen.ref), screen.box
+        return None, None, None
+
+    def repaint_doc(self) -> None:
+        """The doc in front painted again: Detail's, and a full-screen one's."""
+        self.paint_detail()
+        if isinstance(self.screen, DocView) and self.screen.is_mounted:
+            self.screen.paint()
 
     def pick_doc_tab(self, tab: str) -> None:
         """A doc's tab shown (tabbed): its box focused on Thread, the editor on Editor, the doc on Doc."""
-        if self.doc_layout != TABBED or self.selected_doc() is None:
+        panes, doc, box = self.doc_here()
+        if doc is None or self.doc_layout != TABBED:
             return
-        self.doc_tab = tab
-        self.paint_detail()
-        target = {THREAD_TAB: self.answer, EDITOR_TAB: self.detail_editor, DOC_TAB: self.detail}[tab]
+        panes.tab = tab
+        self.repaint_doc()
+        target = {THREAD_TAB: box, EDITOR_TAB: panes.editor, DOC_TAB: panes.viewer}[tab]
         if target.display and target.can_focus:
             self.screen.set_focus(target)
 
     def action_doc_tab(self, step: int) -> None:
         """Ctrl+PageUp, Ctrl+PageDown: a doc's tab before or after this one, round."""
-        if self.screen is not self.screen_stack[0] or self.doc_layout != TABBED or self.selected_doc() is None:
+        panes, doc, _ = self.doc_here()
+        if doc is None or self.doc_layout != TABBED:
             return
-        tabs = [DOC_TAB, THREAD_TAB] + ([EDITOR_TAB] if self.detail_editor.key is not None else [])
-        self.pick_doc_tab(tabs[(tabs.index(self.doc_tab) + step) % len(tabs)] if self.doc_tab in tabs else DOC_TAB)
+        tabs = panes.tab_names()
+        self.pick_doc_tab(tabs[(tabs.index(panes.tab) + step) % len(tabs)] if panes.tab in tabs else DOC_TAB)
 
     def action_doc_layout(self) -> None:
-        """Ctrl+L while a doc item shows: split and tabbed swapped, and kept (DOC_LAYOUT)."""
-        if self.screen is not self.screen_stack[0] or self.selected_doc() is None:
+        """Ctrl+L while a doc item shows: split and tabbed swapped, and kept (DOC_LAYOUT), for
+        Detail and full screen alike."""
+        panes, doc, box = self.doc_here()
+        if doc is None:
             return
         self.doc_layout = SPLIT if self.doc_layout == TABBED else TABBED
         self.client.set_setting(DOC_LAYOUT, self.doc_layout)
         if self.doc_layout == TABBED:   # the tab for what had focus
-            self.doc_tab = EDITOR_TAB if self.detail_editor.has_focus else THREAD_TAB if self.answer.has_focus else DOC_TAB
-        self.paint_detail()
+            panes.tab = EDITOR_TAB if panes.editor.has_focus else THREAD_TAB if box.has_focus else DOC_TAB
+        self.repaint_doc()
         self.notify(f"docs: {self.doc_layout}")
 
     def type_to_thread(self, event: events.Key) -> bool:
         """A key typed on a doc's Doc tab (tabbed), the doc focused: the Thread tab shown, with
         it typed into the box, so a comment is a keystroke away. Whether it took the key."""
-        if not (event.is_printable and event.character) or self.screen is not self.screen_stack[0] \
-                or self.focused is not getattr(self, "detail", None) or self.doc_layout != TABBED \
-                or self.doc_tab != DOC_TAB or self.selected_doc() is None:
+        if not (event.is_printable and event.character) or self.doc_layout != TABBED:
+            return False
+        panes, doc, box = self.doc_here()
+        if doc is None or panes.tab != DOC_TAB or self.focused is not panes.viewer:
             return False
         self.pick_doc_tab(THREAD_TAB)
-        self.screen.set_focus(self.answer)
-        self.answer.insert(event.character)
+        self.screen.set_focus(box)
+        box.insert(event.character)
         return True
 
     def conversation(self, sid: str) -> list[tuple[str, str]]:
@@ -5068,11 +5158,14 @@ class WheelhouseApp(App):
         for h in hints:
             h.set_base(DENY_HINT if denying else PERMISSION_HINT if asking else COMPACT_HINT if nudged
                        else hint(sends, s is not None and self.dead(s["id"])))
-        thread = isinstance(self.screen, ThreadView)
-        doc = not thread and (self.shown_doc is not None or self.selected_doc() is not None)
-        # a module's doc: no box; a doc item's, its thread's box, but for its Doc and Editor tabs
-        # and the editor open in split (doc_box)
-        reading = doc and (self.shown_doc is not None or not self.doc_box())
+        thread = boxed(self.screen)   # a full-screen item's own box: a ThreadView's, a doc item's DocView's
+        if isinstance(self.screen, DocView):
+            doc = reading = self.screen.panes is not None and not self.screen.panes.box_shown(self.doc_layout)
+        else:
+            doc = not thread and (self.shown_doc is not None or self.selected_doc() is not None)
+            # a module's doc: no box; a doc item's, its thread's box, but for its Doc and Editor
+            # tabs and the editor open in split (doc_box)
+            reading = doc and (self.shown_doc is not None or not self.doc_box())
         doc_gone = not thread and not doc and self.detail.has_focus   # the box back in its place: focus with it
         if not thread:   # the doc a Tab stop (TAB_ORDER)
             self.detail.can_focus = doc
@@ -5811,7 +5904,7 @@ class WheelhouseApp(App):
     def composing(self):
         """The compose box in use and the item it answers: the thread view's, or the inbox's."""
         self.settle()
-        if isinstance(self.screen, ThreadView):
+        if boxed(self.screen):
             return self.screen.box, (self.screen.sid, self.screen.ref)
         if self.screen is self.screen_stack[0]:
             # following a conversation, the box sends the session a general message
@@ -5890,14 +5983,14 @@ class WheelhouseApp(App):
         """The session in context on a screen, which its keys, buttons, hint and activity line
         all act on or describe: the thread's, else the followed session, highlighted in the
         session list (D20), or with none selected the selected item's (focus_sid)."""
-        if isinstance(screen, ThreadView):
+        if boxed(screen):
             return screen.sid
         return self.focus_sid()
 
     def bar_item(self, screen) -> tuple[str, str] | None:
         """The item in context on a screen: the thread's, else the inbox's selected item."""
         self.settle()
-        if isinstance(screen, ThreadView):
+        if boxed(screen):
             return (screen.sid, screen.ref)
         if self.selected and self.selected[1]:
             return self.selected
@@ -6230,7 +6323,7 @@ class WheelhouseApp(App):
 
     def stopped(self, screen: Screen) -> bool:
         """Whether Tab goes round tab_stops there: the inbox and a full-screen item (#77)."""
-        return screen is self.screen_stack[0] or isinstance(screen, ThreadView)
+        return screen is self.screen_stack[0] or boxed(screen)
 
     def focus_answer(self) -> bool:
         """Focus to the answer box on the screen in front (or Deny's reason in its place), if

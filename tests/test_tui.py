@@ -5888,7 +5888,7 @@ async def test_focus_lost_with_a_button_goes_to_the_answer_box(store, sid, monke
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("how, key, desc", [
-    ("tab", "pagedown", "Tab from the items reaches a doc in the answer box's place; PgDn scrolls it (#77)"),
+    ("tab", "pagedown", "Tab from the items reaches the box under a doc, then the doc; PgDn scrolls it (#77)"),
     ("tab", "end", "and End"),
     ("tab", "down", "and Down"),
     ("escape", "pagedown", "a click on the doc opens its editor, and Esc closing it focuses the doc for PgDn"),
@@ -5907,6 +5907,9 @@ async def test_a_doc_in_the_inbox_scrolls_from_the_keyboard(store, sid, tmp_path
         app.items_table.focus()
         await pilot.pause()
         if how == "tab":
+            await pilot.press("tab")
+            await pilot.pause()
+            assert focused_id(app) == "answer", f"{desc}: the box first, for a comment"
             await pilot.press("tab")
         else:
             await pilot.click(app.detail_scroll, offset=(2, 2))
@@ -7019,7 +7022,7 @@ async def test_delete_on_an_item_with_no_children_asks_nothing(store, sid):
 
 @pytest.mark.anyio
 @pytest.mark.both
-async def test_a_doc_sits_under_its_parent_and_opens_rendered(store, sid, tmp_path):
+async def test_a_doc_sits_in_the_docs_band_and_opens_rendered(store, sid, tmp_path):
     doc = tmp_path / "plan.md"
     doc.write_text("# The plan\n\nBuild it **well**.\n")
     t = store.post_item(sid, "task", "design it", status="running")
@@ -7027,11 +7030,11 @@ async def test_a_doc_sits_under_its_parent_and_opens_rendered(store, sid, tmp_pa
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert item_list_rows(app) == [["demo", t], ["", f"└ {m}"]], "the doc under its parent"
-        app.items_table.move_cursor(row=1)
+        assert item_list_rows(app) == [["demo", t], ["", ""], ["demo", m]], "the doc in the docs band, under its header"
+        app.items_table.move_cursor(row=2)
         await pilot.pause()
         assert app.selected == (sid, m)
-        assert not app.query_one("#answer").display, "no answer box on a doc"
+        assert app.query_one("#answer").display, "the answer box under a doc, for a comment (split)"
         assert str(doc) in app._detail_text and "Build it **well**" in app._detail_text, "its path, then the file"
         assert "Build it well" in "\n".join(app.detail.render_line(y).text for y in range(12)), "rendered"
         dwell(app)
@@ -7044,7 +7047,7 @@ async def test_a_doc_sits_under_its_parent_and_opens_rendered(store, sid, tmp_pa
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, tui.DocView), "Enter opens it full screen"
-        assert not app.screen.query(tui.Compose), "with no answer box"
+        assert app.screen.query_one("#docview-answer", tui.Compose).display, "with its answer box, as in Detail"
         assert "twice" in app.screen.text
         doc.unlink()
         app.refresh_data()
@@ -7059,15 +7062,15 @@ async def test_a_doc_sits_under_its_parent_and_opens_rendered(store, sid, tmp_pa
 
 
 @pytest.mark.anyio
-async def test_a_doc_with_no_parent_sits_in_its_sessions_group(store, sid, tmp_path):
+async def test_a_doc_with_no_parent_sits_in_the_docs_band(store, sid, tmp_path):
     (tmp_path / "notes.md").write_text("# Notes\n")
     q = store.post_item(sid, "question", "which db?")
     m = store.post_doc(sid, "the notes", str(tmp_path / "notes.md"))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert item_list_rows(app) == [["demo", q], ["demo", f"└ {m}"]]
-        assert str(app.query_one("#items", DataTable).get_row_at(1)[2]) == "new"
+        assert item_list_rows(app) == [["demo", q], ["", ""], ["demo", m]]
+        assert str(app.query_one("#items", DataTable).get_row_at(2)[2]) == "new"
 
 
 @pytest.mark.anyio
@@ -7110,7 +7113,8 @@ async def test_delete_takes_agent_and_doc_children_for_good(store, sid, tmp_path
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert item_list_rows(app) == [["demo", q], ["", f"└ {agent}"], ["", f"└ {doc}"]]
+        assert item_list_rows(app) == [["demo", q], ["", f"└ {agent}"], ["", ""], ["demo", doc]], \
+            "the doc in the docs band, still its parent's child"
         app.items_table.focus()
         app.items_table.move_cursor(row=0)
         await pilot.pause()
@@ -7176,7 +7180,7 @@ async def test_a_doc_maps_its_rows_to_source_lines_in_detail_and_full_screen(sto
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(f"└ {m}"))
+        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(m))   # in the docs band
         await pilot.pause()
         for where in ("detail", "full screen"):
             view = app.detail if where == "detail" else app.screen.query_one("#docview", tui.Transcript)
@@ -7241,7 +7245,7 @@ async def test_a_long_doc_keeps_its_reading_place_through_a_rewrite_and_a_resize
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(f"└ {m}"))
+        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(m))   # in the docs band
         await pilot.pause()
         laid.clear()
         await rendered_off_loop(app, pilot)
