@@ -70,7 +70,8 @@ DECISION_FIELDS = (("why", "Why"),)
 # design module's Decisions pane now reads (sessions.doc_dirs): an older session has no such tool.
 # 15: the person comments on a doc (a message on its ref), which awaits the session's reply
 # there as a question's answer does (in_doubt), so the protocol asks it to reply on the doc.
-PROTOCOL_VERSION = 15
+# 16: post_item's pinned (items.pinned): a doc is pinned unless the session says it's a scratch report.
+PROTOCOL_VERSION = 16
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.
@@ -213,6 +214,11 @@ TRIGGER_BODIES = {f"{table}_marked_{op.lower()}": f"AFTER {op} ON {table} "
 TRIGGER_BODIES["items_unplaced_on_status"] = (
     "AFTER UPDATE OF status ON items WHEN OLD.status IS NOT NEW.status AND NEW.pos_group LIKE 'status%' "
     "BEGIN UPDATE items SET pos = NULL, pos_group = NULL WHERE id = NEW.id; END")
+# A row inserted without items.pinned (by a session's own process on code from before pins, which
+# never writes it) takes its kind's default: a doc pinned, anything else not. This code always writes it
+TRIGGER_BODIES["items_pinned_by_kind"] = (
+    "AFTER INSERT ON items WHEN NEW.pinned IS NULL "
+    "BEGIN UPDATE items SET pinned = (NEW.kind = 'doc') WHERE id = NEW.id; END")
 OUR_TRIGGER = re.compile(rf"^(?:{'|'.join(TRIGGER_BODIES)})(?:_v(\d+))?$")
 # retired, every version dropped on open: items_seq_* numbered each write of updated_at in
 # items.seq (#70, 2bbb99a), with the unique index items_seq (INDEXES drops it). Ties now go
@@ -247,7 +253,10 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("items", "pos", "REAL"), ("items", "pos_group", "TEXT"),
                  ("sessions", "pos", "REAL"), ("sessions", "pos_group", "TEXT"),
                  # where its repo's decisions are, as it declared them (set_doc_dirs): JSON, NULL for docs/adr
-                 ("sessions", "doc_dirs", "TEXT")]
+                 ("sessions", "doc_dirs", "TEXT"),
+                 # kept out of reach of clearing the inbox (pinned): a doc by default, anything once the person pins it.
+                 # No default: a row older code inserts takes its kind's (items_pinned_by_kind)
+                 ("items", "pinned", "INTEGER")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -362,6 +371,8 @@ class Store:
                 for kind in DISMISSABLE:
                     db.execute(f"UPDATE items SET dismissed = status WHERE kind = ? AND status IN "
                                f"({','.join('?' * len(SETTLED[kind]))})", (kind, *SETTLED[kind]))
+            if ("items", "pinned") in added:   # docs were durable by kind before pins: they stay so
+                db.execute("UPDATE items SET pinned = (kind = 'doc')")
             if ("items", "session_at") in added:
                 # the session's latest word on each item before the column (a note, reply or
                 # status, author claude), so an item it updated a minute ago isn't in doubt
@@ -786,10 +797,11 @@ class Store:
     # items
 
     def post_item(self, sid: str, kind: str, title: str, body: str = "", status: str | None = None,
-                  **decision: str) -> str:
+                  pinned: bool = False, **decision: str) -> str:
         """A decision also takes why (DECISION_FIELDS), required: one short line with the
         option passed over, the reason and how to undo it, which joins its body; its status
-        is the person's (unseen until they view it)."""
+        is the person's (unseen until they view it). pinned: kept out of reach of clearing the
+        inbox (items.pinned), as the person can pin anything."""
         if kind not in KINDS:
             raise ValueError(f"kind must be one of {sorted(KINDS)}")
         if kind == "doc":
@@ -803,14 +815,15 @@ class Store:
         self._check_status(kind, status)
         with self.tx() as db:
             self._require(db, sid)
-            return self._insert_item(db, sid, kind, title, body, status)
+            return self._insert_item(db, sid, kind, title, body, status, pinned)
 
-    def post_doc(self, sid: str, title: str, path: str, parent: str | None = None) -> str:
+    def post_doc(self, sid: str, title: str, path: str, parent: str | None = None, pinned: bool = True) -> str:
         """A markdown document the session declares for the person to read: its absolute path,
         a file that exists, kept as the item's body; parent, a task, question or decision of
         the session's, to list it under. The same path posted again by the same session is the
         same item: its title (and parent, if given) updated, and once read, marked updated,
-        never new again. Returns the item's ref."""
+        never new again; its pin stays as the person last set it. pinned: a new one's (items.pinned),
+        unpinned for a scratch report not worth keeping. Returns the item's ref."""
         if not path or not os.path.isabs(path):
             raise ValueError(f"path must be absolute (the full path from /), not {path!r}")
         path = os.path.normpath(path)
@@ -825,7 +838,7 @@ class Store:
             row = db.execute("SELECT ref FROM items WHERE session_id = ? AND kind = 'doc' AND body = ? ORDER BY id LIMIT 1",
                              (sid, path)).fetchone()
             if row is None:
-                ref = self._insert_item(db, sid, "doc", title, path, INITIAL_STATUS["doc"])
+                ref = self._insert_item(db, sid, "doc", title, path, INITIAL_STATUS["doc"], pinned)
                 db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ?", (parent, sid, ref))
                 return ref
             db.execute(f"""UPDATE items SET title = ?, parent_ref = coalesce(?, parent_ref), updated_at = ?, session_at = ?,
@@ -843,13 +856,13 @@ class Store:
         return ref
 
     @staticmethod
-    def _insert_item(db, sid, kind, title, body, status) -> str:
+    def _insert_item(db, sid, kind, title, body, status, pinned=False) -> str:
         n = db.execute("SELECT count(*) FROM items WHERE session_id = ? AND kind = ?", (sid, kind)).fetchone()[0]
         ref = f"{KINDS[kind]}{n + 1}"
         db.execute(
-            """INSERT INTO items (session_id, ref, kind, title, body, status, created_at, updated_at, session_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (sid, ref, kind, title, body, status, now(), now(), now()),
+            """INSERT INTO items (session_id, ref, kind, title, body, status, created_at, updated_at, session_at, pinned)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (sid, ref, kind, title, body, status, now(), now(), now(), int(pinned)),
         )
         return ref
 
@@ -882,7 +895,7 @@ class Store:
                            (to, new, sid, ref))
                 status = "dropped" if item["kind"] == "task" else "closed"
                 db.execute("""INSERT INTO items (session_id, ref, kind, title, body, status, created_at, updated_at,
-                              dismissed, moved_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              dismissed, moved_to, pinned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",   # a stand-in: never pinned
                            (sid, ref, item["kind"], item["title"], f"Moved to {fork}, a fork of this session, as {new}.",
                             status, item["created_at"], now(), status if item["kind"] in DISMISSABLE else None,
                             f"{fork} as {new}"))
@@ -1150,7 +1163,7 @@ class Store:
         Ctrl+R brings its parent back. Returns the refs deleted."""
         with self.tx() as db:
             self._require(db, sid)
-            rows = family(db.execute("SELECT ref, kind, status, dismissed, parent_ref FROM items WHERE session_id = ?",
+            rows = family(db.execute("SELECT ref, kind, status, dismissed, parent_ref, pinned FROM items WHERE session_id = ?",
                                      (sid,)).fetchall(), ref)
             for r in rows:   # a finished one too: one dismissed already would come back on a change
                 if spared(r):
@@ -1160,6 +1173,16 @@ class Store:
                 db.execute("UPDATE items SET status = ?, dismissed = ?, updated_at = ? WHERE session_id = ? AND ref = ?",
                            (closed, DELETED, now(), sid, r["ref"]))
         return [r["ref"] for r in rows if not spared(r)]
+
+    def set_pinned(self, sid: str, ref: str, pinned: bool) -> None:
+        """The person pins an item, or clears its pin (the inbox's pin column): pinned, clearing
+        the inbox never takes it (family, standing)."""
+        with self.tx() as db:
+            self._require(db, sid)
+            done = db.execute("UPDATE items SET pinned = ? WHERE session_id = ? AND ref = ?",
+                              (int(pinned), sid, ref)).rowcount
+        if not done:
+            raise KeyError(f"no item {ref} in this session")
 
     def undelete(self, sid: str, ref: str) -> None:
         with self.tx() as db:
@@ -1385,14 +1408,23 @@ def spared(item) -> bool:
     return item["status"] == "running" and item["dismissed"] != DELETED
 
 
+def pinned(item) -> bool:
+    """Whether an item is pinned (items.pinned): out of reach of clearing the inbox, and shown
+    finished with F off. Not on a row from older code, which has no such column (or NULL)."""
+    try:
+        return bool(item["pinned"])
+    except (KeyError, IndexError):
+        return False
+
+
 def family(items, ref: str, parent=lambda it: it["parent_ref"]) -> list:
     """What Delete on `ref` acts on, among its session's `items`: its children and, under each
     child that goes, theirs, at any depth. One spared stays, with whatever is under it, so the
-    walk stops there. Never a doc: reference material, out of reach of clearing the inbox
-    (.plan/docs-section.md), it stays in the docs band."""
+    walk stops there. Never one pinned: out of reach of clearing the inbox (.plan/docs-section.md),
+    it stays, under its parent once Ctrl+R brings that back, with whatever is under it."""
     under: dict[str, list] = {}
     for it in items:
-        if it["kind"] != "doc":
+        if not pinned(it):
             under.setdefault(parent(it), []).append(it)
     found, todo = [], [ref]
     while todo:
@@ -1516,7 +1548,8 @@ def decision_body(body: str, status, fields: dict) -> str:
 def standing(item, busy=frozenset()) -> str:
     """Where an item stands in the inbox: active, settled or finished (SETTLED). A settled
     item the person has a word queued or awaiting a reply on, `busy` by (session, ref), is
-    active, even if they dismissed it: the ball isn't back with them."""
+    active, even if they dismissed it: the ball isn't back with them. A pin changes none of
+    this: a pinned item finished is still finished (the inbox shows it with F off all the same)."""
     status, waiting = item["status"], (item["session_id"], item["ref"]) in busy
     if status in CLOSED - SETTLED[item["kind"]] or item["dismissed"] == DELETED or (
             item["dismissed"] == status and not waiting):

@@ -67,7 +67,7 @@ from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .tour import NOTES, PAUSED, ROWS as tour_rows, TOPUP, TOUR, Tour, offered, opening
 from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
-                    family, inbox_rank, mode, runner, spared, stamp, standing)
+                    family, inbox_rank, mode, pinned, runner, spared, stamp, standing)
 from .unsent import Unsent
 
 MATRIX = "#00ff41"
@@ -290,6 +290,8 @@ def session_action(method):
 
 
 CHILD = "child"   # item_rows: a row nested under its parent item
+# the item list's pin column (store.pinned): two cells wide, as Rich and the terminal both count it
+PIN, UNPINNED = "📌", "·"
 GROUPED = ("agent", "doc")   # the kinds that sit in their session's group when no parent of theirs shows
 TOGGLE = Style(color="#e8e8e8", bgcolor="#555555")   # a parent row's + / - at its right-hand end
 
@@ -347,7 +349,7 @@ def unread(item) -> bool:
     return (item["kind"], item["status"]) in {("decision", "unseen"), ("doc", "new"), ("doc", "updated")}
 
 
-def family_prompt(parents: list, family: list, marked: int = 1) -> str:
+def family_prompt(parents: list, family: list, marked: int = 1, pin: bool = False) -> str:
     """Delete on parents (one highlighted, or among `marked` rows): what they take with them,
     and how much of that is open or unread, and how many running children stay (spared)."""
     gone, kept = [it for it in family if not spared(it)], sum(map(spared, family))
@@ -357,7 +359,7 @@ def family_prompt(parents: list, family: list, marked: int = 1) -> str:
     kids = f"{n} {'child' if n == 1 else 'children'}"
     if marked == 1:
         item = parents[0]
-        ask = f"Delete {item['ref']} ({item['title']})" + (f" and its {kids}?" if n else "?")
+        ask = f"Delete {'pinned ' if pin else ''}{item['ref']} ({item['title']})" + (f" and its {kids}?" if n else "?")
     else:
         ask = f"Delete the {marked} marked rows" + (f" and the {kids} of {', '.join(it['ref'] for it in parents)}?"
                                                     if n else "?")
@@ -367,9 +369,11 @@ def family_prompt(parents: list, family: list, marked: int = 1) -> str:
                if kept else ""))
 
 
-def doc_close_prompt(item, awaiting: bool) -> str:
-    """Delete on a doc: what it asks first."""
-    return (f"Close doc {item['ref']}? The file stays on disk."
+def pinned_prompt(item, awaiting: bool, family: list = ()) -> str:
+    """Delete on a pinned item: what it asks first, in one dialog with what its children
+    (family) would ask. Yes clears its pin too."""
+    head = family_prompt([item], family, pin=True) if family else f"Delete pinned {item['ref']}?"
+    return (head + (" The file stays on disk." if item["kind"] == "doc" else "")
             + (" Your comment on it is still awaiting a reply." if awaiting else ""))
 
 
@@ -1302,6 +1306,7 @@ class ItemList(SinkList):
                 Binding("backspace", "app.close_question", "Close", show=False),
                 Binding("space", "toggle_mark", "Mark", show=False),
                 Binding("ctrl+a", "app.mark_finished", "Mark finished", show=False),
+                Binding("p", "app.toggle_pinned", "Pin", show=False),
                 Binding("shift+up", "extend(-1)", "Extend up", show=False),
                 Binding("shift+down", "extend(1)", "Extend down", show=False)]
 
@@ -1368,6 +1373,12 @@ class ItemList(SinkList):
             event.prevent_default()   # not DataTable's, which would clamp the cursor onto the last row
             return
         key = self.keys()[meta["row"]]
+        column = meta.get("column", -1)
+        if 0 <= column < len(self.ordered_columns) and self.ordered_columns[column].key.value == "pin":
+            event.prevent_default()   # its pin toggled, the row not selected
+            if event.chain == 1:
+                self.app.toggle_pinned(key)
+            return
         if event.ctrl or event.shift or event.meta:   # Alt (meta) for Shift, which Windows Terminal keeps
             event.prevent_default()   # not DataTable's: a click on the highlighted row opens it
             self.toggle(key) if event.ctrl else self.extend_to(key)
@@ -3263,8 +3274,10 @@ DESCRIBE = {
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
     "app.close_question": ("Close the highlighted question or decision, or dismiss a done task or subagent, or a doc "
-                           "(or every marked one); it never reopens one: Ctrl+R does. On an item with children it "
-                           "asks first, saying how many are still open or unread, then takes them all"),
+                           "(or every marked one but the pinned); it never reopens one: Ctrl+R does. On a pinned "
+                           "item it asks first; on an item with children it asks first, saying how many are still "
+                           "open or unread, then takes them all but the pinned"),
+    "app.toggle_pinned": "Pin the highlighted item (📌), or clear its pin: Ctrl+A and Delete leave a pinned item",
     "help": "This list",
     "doc_layout": "With a doc shown: its thread under it (split), or Doc and Thread as tabs (tabbed); kept",
     "doc_tab(-1)": "With a doc shown tabbed: the tab before",
@@ -3273,7 +3286,7 @@ DESCRIBE = {
              "(in the session list, L is Relaunch: click the badge)"),
     "quit": "Quit the wheelhouse (sessions carry on without it)",
     "toggle_mark": "Mark or unmark the highlighted row",
-    "app.mark_finished": "Mark every finished (dimmed) row shown, for Delete to clear them together",
+    "app.mark_finished": "Mark every finished (dimmed) row shown but the pinned, for Delete to clear them together",
     "extend(-1)": "Extend the marks up",
     "extend(1)": "Extend the marks down",
     "select_all": "Select all of it, to copy",
@@ -3396,6 +3409,7 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "and Ctrl+R reopens the finished ones. An item with children (its subagents and docs, under it) has a - at the "
          "right-hand end of its row: a click there hides them, and the + it becomes shows them again. "
          "A click on a doc opens its editor below it there, as a click on it moves it while it's open. "
+         "A click on a row's first column pins it (📌) or clears its pin, as P does. "
          "Double-click selects a word. Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap "
@@ -4281,9 +4295,10 @@ class WheelhouseApp(App):
         they settle (Sink) once they aren't selected (ranked), then with F the finished. The
         session column shows only where the inbox has every session's items (D31)."""
         table = self.items_table
-        names_of = ("ref", "status", "title") if self.filter_sid else ("session", "ref", "status", "title")
+        names_of = ("pin", "ref", "status", "title") if self.filter_sid else ("pin", "session", "ref", "status", "title")
         # the column in force carries its marker (D97): a sort changed rebuilds the columns
-        columns = tuple(f"{c} {m}" if (m := ordering.marker(self.item_sort, c)) else c for c in names_of)
+        columns = tuple("" if c == "pin" else f"{c} {m}" if (m := ordering.marker(self.item_sort, c)) else c
+                        for c in names_of)
         if tuple(str(c.label) for c in table.ordered_columns) != columns:
             with table.prevent(DataTable.RowHighlighted):
                 table.clear(columns=True)
@@ -4302,16 +4317,17 @@ class WheelhouseApp(App):
         active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
         for key, it in keyed:
             # ordering off: one band, nothing moves between them, but the finished still wait for F
-            if self.item_sort or self.show_finished or standing(it, busy) != "finished":
+            if self.item_sort or self.show_finished or pinned(it) or standing(it, busy) != "finished":
                 bands[self.ranks[key][0]].append(it)
-        rows, counts = item_rows([active, settled, finished if self.show_finished else []], names, self.collapsed)
+        rows, counts = item_rows([active, settled, finished if self.show_finished else list(filter(pinned, finished))],
+                                 names, self.collapsed)
         table.draggable = {key_of[id(it)] for it, nested, _ in rows if nested is None}
         table.followers = {key_of[id(it)] for it, nested, _ in rows if nested == CHILD}
         table.toggles = {key: key in self.collapsed for key in counts}
         sunk = {key_of[id(it)] for it, _, n in rows if n}
         if self.filter_sid:   # the session's own conversation, pinned first
             general = (self.filter_sid, None) in queued
-            rows_out.append((f"{self.filter_sid}|", (names.get(self.filter_sid, "")[:14], Text("💬"),
+            rows_out.append((f"{self.filter_sid}|", ("", names.get(self.filter_sid, "")[:14], Text("💬"),
                              Text("queued", style="bold #05d9e8") if general else "",
                              Text("Conversation", style="bold"))))
         for it, nested, _ in rows:
@@ -4335,16 +4351,17 @@ class WheelhouseApp(App):
             if (fresh := ordering.field(it, "new_replies")) and status not in ("queued", "processing") \
                     and key not in awaiting:   # a doc's replies the person hasn't seen (store._said)
                 shown = Text(f"{fresh} new", style=DECISION)
+            pin = Text(PIN) if pinned(it) else Text(UNPINNED, style="dim")
             if nested is None:
-                cells = (name, it["ref"], shown, title)
+                cells = (pin, name, it["ref"], shown, title)
             elif nested == CHILD:   # under its parent, as a subagent is under its session's name
-                cells = ("", Text(f"└ {it['ref']}", style="dim"), shown, Text(it["title"], style="dim"))
+                cells = (pin, "", Text(f"└ {it['ref']}", style="dim"), shown, Text(it["title"], style="dim"))
             else:   # a subagent, tucked under its session's name
-                cells = (name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
+                cells = (pin, name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
                          shown, Text(it["title"], style="dim"))
             rows_out.append((key_of[id(it)], cells))
         if self.filter_sid:   # the session column goes: the inbox follows the one session
-            rows_out = [(k, cells[1:]) for k, cells in rows_out]
+            rows_out = [(k, cells[:1] + cells[2:]) for k, cells in rows_out]
         cells = dict(rows_out)
         rows_out = [(k, cells[k]) for k in self.item_sink.lay(self, list(cells), sunk) if k]
         table.marked &= {k for k, _ in rows_out}   # a marked item that went is unmarked
@@ -4502,6 +4519,8 @@ class WheelhouseApp(App):
         ordering.next_session_sort)."""
         event.stop()
         self.settle()
+        if event.data_table is self.items_table and event.column_key.value == "pin":
+            return   # the pin column: no sort of its own
         if event.data_table is self.items_table:
             self.set_sort("items", ordering.next_item_sort(self.item_sort, event.column_key.value))
             self.paint_items()
@@ -5702,14 +5721,15 @@ class WheelhouseApp(App):
             self.notify(f"{item['ref']} is {what}: its status is the session's to set", severity="warning")
             return
         verb = "closed" if item["kind"] in CLOSABLE else "dismissed"
-        if standing(item) == "finished" and self.show_finished:
+        if standing(item) == "finished" and (self.show_finished or pinned(item)):   # a pinned one shows anyway
             self.notify(f"{item['ref']} is {verb} already: Ctrl+R reopens it")
             return
-        if item["kind"] == "doc":   # reference material: closed only once the person says so (No the default)
-            awaiting = (item["session_id"], item["ref"]) in self.client.inbox(item["session_id"]).awaiting
-            self.push_screen(Confirm(doc_close_prompt(item, awaiting)), lambda yes: yes and self.close_doc(item))
-            return
         family = self.family(item)
+        if pinned(item):   # kept out of reach of clearing the inbox: deleted only once the person says so (No the default)
+            awaiting = (item["session_id"], item["ref"]) in self.client.inbox(item["session_id"]).awaiting
+            self.push_screen(Confirm(pinned_prompt(item, awaiting, family)),
+                             lambda yes: yes and self.close_pinned(item, family))
+            return
         if family:   # it goes with its children, finished or not, a running one orphaned, once the person says so
             self.push_screen(Confirm(family_prompt([item], family)),
                              lambda yes: yes and self.close_family(item, family))
@@ -5718,15 +5738,40 @@ class WheelhouseApp(App):
         self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
         self.refresh_data()
 
-    def close_doc(self, item) -> None:
-        """Delete confirmed on a doc: closed as Delete closes a task (close), its file left be."""
+    def close_pinned(self, item, family: list) -> None:
+        """Delete confirmed on a pinned item (its children with it, in the same dialog): its pin
+        cleared only now, then it deleted as any other, a doc's file left be."""
         try:
-            self.close(item, True)
+            self.told(self.client.set_pinned(item["session_id"], item["ref"], False))
         except (SessionGone, KeyError) as e:   # ended or gone meanwhile
             self.notify(str(e), severity="warning")
             return
-        self.notify(f"closed {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
+        if family:
+            self.close_family(item, family)
+            return
+        self.close(item, True)
+        verb = "closed" if item["kind"] in CLOSABLE else "dismissed"
+        self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
         self.refresh_data()
+
+    def toggle_pinned(self, key: str) -> None:
+        """The pin column clicked, or P in the item list: the row's item pinned, or its pin cleared."""
+        sid, _, ref = key.partition("|")
+        item = ref and self.client.item(sid, ref)
+        if not item:   # the conversation row, or gone meanwhile
+            return
+        try:
+            self.told(self.client.set_pinned(sid, ref, not pinned(item)))
+        except (SessionGone, KeyError) as e:
+            self.notify(str(e), severity="warning")
+            return
+        self.notify(f"{'unpinned' if pinned(item) else 'pinned'} {ref}")
+        self.refresh_data()
+
+    def action_toggle_pinned(self) -> None:
+        self.settle()
+        if not isinstance(self.focused, (TextArea, Input)) and (key := self.items_table.cursor_key()):
+            self.toggle_pinned(key)
 
     def family(self, item) -> list:
         """An item's children at any depth, finished or not: what Delete on it takes with it (one
@@ -5791,9 +5836,9 @@ class WheelhouseApp(App):
             return (not finished or not self.show_finished) if closed else finished
         picked = [it for key in self.items_table.final() if key in self.items_table.marked   # as they'll stand
                   if (it := self.client.item(*key.split("|"))) and closable(it)]
-        docs = sum(it["kind"] == "doc" for it in picked) if closed else 0   # Delete never takes a doc: one at a time
-        picked = [it for it in picked if not closed or it["kind"] != "doc"]
-        kept = f"{docs} doc{'' if docs == 1 else 's'} kept" if docs else ""
+        kept = sum(map(pinned, picked)) if closed else 0   # Delete never takes a pinned one: one at a time
+        picked = [it for it in picked if not closed or not pinned(it)]
+        kept = f"{kept} pinned kept" if kept else ""
         families = {item_key(it): self.family(it) for it in filter(acts, picked)} if closed else {}
         if any(families.values()):   # the children go with their parents, once the person says so
             kids = [c for f in families.values() for c in f]
@@ -5815,7 +5860,7 @@ class WheelhouseApp(App):
         found, _, queued, awaiting = self.client.inbox(self.filter_sid)
         by_key = {item_key(it): it for it in found}
         marks = {k for k in self.items_table.final() if (it := by_key.get(k)) and closable(it)
-                 and it["kind"] != "doc" and standing(it, queued | awaiting) != "active"}   # never a doc
+                 and not pinned(it) and standing(it, queued | awaiting) != "active"}   # never a pinned one
         if not marks:
             self.notify("no finished rows to mark", severity="warning")
             return
@@ -5824,7 +5869,7 @@ class WheelhouseApp(App):
     def close_picked(self, picked: list, families: dict, closed: bool = True, kept: str = "") -> None:
         """The marked rows closed (or reopened), each with its children deleted if it has any
         (families, by row key, confirmed): as Delete does them one at a time. kept: the marked
-        docs it left, said with the rest ("1 doc kept")."""
+        pinned ones it left, said with the rest ("1 pinned kept")."""
         done = []
         for it in picked:
             try:

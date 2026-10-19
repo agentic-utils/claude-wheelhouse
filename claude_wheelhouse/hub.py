@@ -953,6 +953,11 @@ class Hub:
             self.store.update_item(sid, ref, status="closed" if closed else "answered")
         return Done()
 
+    def set_pinned(self, sid: str, ref: str, pinned: bool) -> Done:
+        """The person pins an item or clears its pin (Store.set_pinned)."""
+        self.store.set_pinned(sid, ref, pinned)
+        return Done()
+
     def all_items(self) -> list:
         """Every item, parked sessions' too, for the person's order (ordering.py)."""
         return self.store.all_items()

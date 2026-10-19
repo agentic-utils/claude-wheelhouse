@@ -47,7 +47,7 @@ async def test_answer_reaches_the_session(store, sid, live):
         await pilot.pause()
         items = app.query_one("#items", DataTable)
         assert items.row_count == 2
-        assert items.get_row_at(0)[1] == q, "open question first"
+        assert items.get_row_at(0)[2] == q, "open question first"
         items.move_cursor(row=0)
         await pilot.pause()
         assert app.selected == (sid, q)
@@ -55,7 +55,7 @@ async def test_answer_reaches_the_session(store, sid, live):
         await pilot.press("ctrl+enter")
         await pilot.pause()
         assert store.pending(sid) == [], "Ctrl+Enter queues: sessions start in queued mode"
-        assert str(items.get_row_at(0)[2]) == "queued", "the item list shows the queued answer"
+        assert str(items.get_row_at(0)[3]) == "queued", "the item list shows the queued answer"
         assert "✉ 1" in str(app.query_one("#session-list", DataTable).get_row_at(0)[5])
         await pilot.press("ctrl+s")
         await pilot.pause()
@@ -75,7 +75,7 @@ async def test_subagents_sit_under_their_session(store, sid, tmp_path):
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         items = app.query_one("#items", DataTable)
-        rows = [[str(c) for c in items.get_row_at(i)][:2] for i in range(items.row_count)]
+        rows = [[str(c) for c in items.get_row_at(i)][1:3] for i in range(items.row_count)]
     assert rows[0] == ["demo", q], "tasks and questions first, in inbox order"
     assert [r[1] for r in rows[1:]] == ["└ A2", "└ A1", "└ A1"]
     assert [r[0] for r in rows[1:]] == ["demo", "", "other"], "each session's agents grouped under its name"
@@ -90,7 +90,7 @@ async def test_finished_items_toggle_in_and_take_a_message(store, sid):
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         items = app.query_one("#items", DataTable)
-        refs = lambda: [str(items.get_row_at(i)[1]) for i in range(items.row_count)]
+        refs = lambda: [str(items.get_row_at(i)[2]) for i in range(items.row_count)]
         assert refs() == [t, done], "a done task stays, settled, at the foot; a closed question is hidden (T71)"
         await pilot.press("f")
         await pilot.pause()
@@ -2414,7 +2414,7 @@ async def test_unsent_text_stays_with_the_item_it_was_typed_for(store, sid, tmp_
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         items, box = app.query_one("#items", DataTable), app.query_one("#answer", TextArea)
-        row = lambda ref: [str(items.get_row_at(i)[1]) for i in range(items.row_count)].index(ref)
+        row = lambda ref: [str(items.get_row_at(i)[2]) for i in range(items.row_count)].index(ref)
         steps = [
             (lambda: items.move_cursor(row=row(q1)), "", "a fresh item starts empty"),
             (lambda: setattr(box, "text", "SQLite"), "SQLite", "typed for Q1"),
@@ -2716,7 +2716,7 @@ async def test_the_item_list_shows_a_question_awaiting_the_session(store, sid, k
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert str(app.items_table.get_row_at(0)[2]) == shown, desc
+        assert str(app.items_table.get_row_at(0)[3]) == shown, desc
         assert str(app.query_one("#session-list", DataTable).get_row_at(0)[3]) == count, f"{desc}: the Q count"
 
 
@@ -3129,8 +3129,8 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         items, sessions = app.items_table, app.query_one("#session-list", DataTable)
-        assert [items.get_row_at(i)[1] for i in range(items.row_count)] == [q, d], "the question ranks first"
-        assert str(items.get_row_at(1)[2]) == "unseen"
+        assert [items.get_row_at(i)[2] for i in range(items.row_count)] == [q, d], "the question ranks first"
+        assert str(items.get_row_at(1)[3]) == "unseen"
         assert str(sessions.get_row_at(0)[4]) == "1", "the session list counts unseen decisions"
         assert store.item(sid, d)["status"] == "unseen", "not seen until the person looks"
         items.focus()
@@ -3143,12 +3143,12 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
         assert str(sessions.get_row_at(0)[4]) == ""
         items.move_cursor(row=0)
         await refresh(pilot, sid)
-        assert [items.get_row_at(i)[1] for i in range(items.row_count)] == [q, d], "moving on leaves it there"
+        assert [items.get_row_at(i)[2] for i in range(items.row_count)] == [q, d], "moving on leaves it there"
         items.move_cursor(row=1)
         await pilot.press("delete")
         await pilot.pause()
         assert store.item(sid, d)["status"] == "closed", "Delete closes it"
-        assert [items.get_row_at(i)[1] for i in range(items.row_count)] == [q], "then it's finished"
+        assert [items.get_row_at(i)[2] for i in range(items.row_count)] == [q], "then it's finished"
 
 
 @pytest.mark.anyio
@@ -3205,8 +3205,8 @@ async def test_marking_rows(store, sid, steps, marked, desc):
                                 meta=how == "alt")
             await pilot.pause()
         assert sorted(k.split("|")[1] for k in items.marked) == marked, desc
-        shaded = [items.get_row_at(i)[1] for i in range(items.row_count)
-                  if isinstance(cell := items.get_row_at(i)[3], Text) and cell.style.bgcolor]
+        shaded = [items.get_row_at(i)[2] for i in range(items.row_count)
+                  if isinstance(cell := items.get_row_at(i)[4], Text) and cell.style.bgcolor]
         assert [str(r) for r in shaded] == marked, f"{desc}: marked rows are shaded"
 
 
@@ -3247,7 +3247,7 @@ async def test_delete_puts_the_highlight_above_the_topmost_row_it_took(store, si
     async with app.run_test(size=(160, 40)) as pilot:
         await five_questions(store, sid, pilot, steps)
         await pilot.pause()
-        refs = {k: str(app.items_table.get_row(k)[1]) for k in app.items_table.rows}
+        refs = {k: str(app.items_table.get_row(k)[2]) for k in app.items_table.rows}
         assert refs[app.items_table.cursor_key()] == lands, desc
         assert app.selected == tuple(app.items_table.cursor_key().split("|")), f"{desc}: selected there too"
 
@@ -6890,7 +6890,7 @@ async def test_fork_dialog(store, tmp_path, worktree, claude_home, monkeypatch, 
 
 def item_list_rows(app) -> list[list[str]]:
     items = app.query_one("#items", DataTable)
-    return [[str(c) for c in items.get_row_at(i)][:2] for i in range(items.row_count)]
+    return [[str(c) for c in items.get_row_at(i)][1:3] for i in range(items.row_count)]
 
 
 def family(store, sid):
@@ -7070,7 +7070,7 @@ async def test_a_doc_with_no_parent_sits_in_its_sessions_group(store, sid, tmp_p
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         assert item_list_rows(app) == [["demo", q], ["demo", f"└ {m}"]]
-        assert str(app.query_one("#items", DataTable).get_row_at(1)[2]) == "new"
+        assert str(app.query_one("#items", DataTable).get_row_at(1)[3]) == "new"
 
 
 @pytest.mark.anyio
@@ -7125,12 +7125,12 @@ async def test_delete_takes_agent_children_and_leaves_docs(store, sid, tmp_path)
         await pilot.pause()
         assert item_list_rows(app) == [["demo", f"└ {agent}"], ["", f"└ {doc}"]], \
             "the running subagent and the doc stay, in their session's group"
-        assert store.item(sid, doc)["dismissed"] is None, "the doc never deleted with its parent"
+        assert store.item(sid, doc)["dismissed"] is None, "a pinned doc never deleted with its parent"
         store.agent_status(sid, "agent-1", "done", "finished")   # as the transcript says it ended
         store.post_doc(sid, "the plan, v2", str(tmp_path / "plan.md"))
         await refresh(pilot, sid)
-        assert sorted(r[1] for r in item_list_rows(app)) == sorted([f"└ {agent}", f"└ {doc}"]), \
-            "the doc still there, at its session's level"
+        assert [r[1] for r in item_list_rows(app)] == [f"└ {agent}", f"└ {doc}"], \
+            "the pinned doc still there, at its session's level"
 
 
 def test_items_from_an_older_daemon_have_no_parents():
@@ -7165,8 +7165,8 @@ async def test_delete_on_marked_rows_asks_once_and_takes_the_children(store, sid
         await pilot.pause()
         store.agent_status(sid, "agent-1", "done", "finished")
         await refresh(pilot, sid)
-        assert sorted(r[1] for r in item_list_rows(app)) == sorted([f"└ {agent}", f"└ {doc}"]), \
-            "both rows gone, the running subagent and the doc kept, at their session's level"
+        assert [r[1] for r in item_list_rows(app)] == [f"└ {agent}", f"└ {doc}"], \
+            "both rows gone, the running subagent and the pinned doc kept, at their session's level"
 
 
 @pytest.mark.anyio
@@ -7322,7 +7322,7 @@ async def test_a_marked_child_its_parent_took_is_not_said_twice(store, sid, tmp_
 def item_refs(app) -> list[str]:
     table = app.items_table
     # the order once any move has ended (Sink): a settled row rising to its place falls into it over 0.4 s
-    return [str(table.get_row(k)[0 if app.filter_sid else 1]).lstrip("└ ") for k in table.final() if k and not k.endswith("|")]
+    return [str(table.get_row(k)[1 if app.filter_sid else 2]).lstrip("└ ") for k in table.final() if k and not k.endswith("|")]
 
 
 def header_x(table, name: str | int) -> int:
@@ -7381,7 +7381,7 @@ async def test_drag_within_the_band_keeps_the_sort_and_across_turns_it_off(store
         assert item_refs(app) == [q, t3, t1, t2, done], "back to running: at the head of running, not above q"
         await drag_row(pilot, table, 2, 4)
         assert item_refs(app) == [q, t3, t2, done, t1], "t1 into the settled band: across"
-        assert [str(c.label) for c in table.ordered_columns] == ["session", "ref", "status", "title"], "no marker"
+        assert [str(c.label) for c in table.ordered_columns] == ["", "session", "ref", "status", "title"], "no marker"
         assert store.setting("layout.sort.items") == ""
         store.update_item(sid, t2, status="todo")
         app.refresh_data()
@@ -7428,7 +7428,7 @@ async def test_header_clicks_cycle_the_markers(store, sid):
         assert seen == [["status ▲"], ["status ▼"], ["status *"], ["title ▲"], ["title ▼"], ["status *"]]
         await pilot.click(table, offset=(header_x(table, "title"), 0))
         await pilot.pause()
-        assert [str(table.get_row(k)[3]) for k in table.keys()] == ["a", "b"], "title ▲"
+        assert [str(table.get_row(k)[4]) for k in table.keys()] == ["a", "b"], "title ▲"
         assert store.setting("layout.sort.items") == "title▲", "kept for the next start"
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
