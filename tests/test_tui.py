@@ -7,6 +7,7 @@ import re
 import time
 import random
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -21,6 +22,7 @@ from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
 from claude_wheelhouse import features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
+from claude_wheelhouse.host import NO_NOTES
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 
@@ -1723,6 +1725,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead" if s["id"] == gone else "live")
     qa = store.post_item(alpha, "question", "which db?")
     store.request(alpha, "park")
+    monkeypatch.setattr(tui, "BUSY_FOR", 0)   # asked long ago: Park on again, so P reaches Cancel or Force (#107)
     hosts, exits, launched = [], [], []
     monkeypatch.setattr(WheelhouseApp, "host_command", lambda self, sid, what: hosts.append(what))
     monkeypatch.setattr(WheelhouseApp, "exit", lambda self, *a, **k: exits.append(True))
@@ -4532,12 +4535,18 @@ async def test_stop_and_forget_pending_keeps_its_choice(store, tmp_path, monkeyp
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     sid = store.create_session(str(tmp_path), name="asked", runner=runner_)
     store.request(sid, "end")
+    now = [0.0]
+    monkeypatch.setattr(tui.Press, "now", staticmethod(lambda: now[0]))
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
         await pick(app, pilot, sid)
+        assert app.session_buttons.query_one("#end", Button).disabled, f"{desc}: off while it's asked (#107)"
+        now[0] = tui.BUSY_FOR
+        app.refresh_data()
+        await pilot.pause()
         await pilot.click("#end")
         await pilot.pause()
-        assert isinstance(app.screen, Choice), desc
+        assert isinstance(app.screen, Choice), f"{desc}: on again after BUSY_FOR"
 
 
 @pytest.mark.anyio
@@ -5031,7 +5040,7 @@ async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, statu
             assert str(b.label) in drawn and b.region.height == 1, f"{desc}: {b.label!s} drawn whole, got {drawn!r}"
             assert app.screen.get_widget_at(*b.region.offset)[0] is b, f"{desc}: {b.label} is on screen, not covered"
             assert b.tooltip == BUTTONS[b.id], f"{desc}: {b.id}'s tooltip"
-            grey = ("#333333", "#8C8C8C") if b.disabled else ("#4D4D4D", "#FFFFFF")   # dimmed when disabled
+            grey = (tui.OFF.upper(), "#000000") if b.disabled else ("#4D4D4D", "#FFFFFF")   # OFF when disabled (#107)
             assert (b.styles.background.hex, b.styles.color.hex) == grey, f"{desc}: {b.id} grey"
         for grid in app.query("#session-info-pane Grid"):
             mine = [b for b in buttons if b.parent is grid]
@@ -7901,3 +7910,140 @@ async def test_reset_puts_module_panes_in_their_declared_slots(store, sid, monke
         app.action_reset_layout()
         await pilot.pause()
         assert (app.layout_now()["left.middle"], app.layout_now()["middle.bottom"]) == ("one", "two"), "home again"
+
+
+class Presses:
+    """The app's busy-button bookkeeping (#107) on a session row of the test's own, with no
+    app: WheelhouseApp's own methods, borrowed, over plain attributes."""
+    follow_presses = WheelhouseApp.follow_presses
+    under_way = WheelhouseApp.under_way
+    busy_buttons = WheelhouseApp.busy_buttons
+    press = WheelhouseApp.press
+    heard = WheelhouseApp.heard
+    display_name = staticmethod(lambda s: s["name"])
+
+    def __init__(self, row: dict, status: str):
+        self.pressed, self.toasts, self.question = {}, [], True
+        self.sessions, self.statuses, self.relaunching = [row], {row["id"]: status}, set()
+        self.client = SimpleNamespace(compact_question=lambda target: {} if self.question else None)
+
+    def notify(self, text, severity="information"):
+        self.toasts.append(text)
+
+    def paint_session_info(self):
+        pass
+
+    def change(self, step: dict) -> None:
+        """A step of the store's, or the hub's: columns, and _status, _relaunching, _gone,
+        _closed (the question suggesting Compact) or _notice (an announce about the session)."""
+        row = self.sessions[0] if self.sessions else None
+        for key, value in step.items():
+            if key == "_status":
+                self.statuses[row["id"]] = value
+            elif key == "_relaunching":
+                self.relaunching = {row["id"]} if value else set()
+            elif key == "_gone":
+                self.sessions = []
+            elif key == "_closed":
+                self.question = False
+            elif key == "_notice":
+                self.heard(tui.Event("notice", "forked demo as demo (fork)", "information", row["id"]))
+            else:
+                row[key] = value
+        self.follow_presses()
+
+
+BUSY_ROW = {"id": "s1", "name": "demo", "host_command": None, "activity": "idle", "model": "opus",
+            "applied_model": "opus", "park_requested_at": None, "end_requested_at": None, "interrupted_at": None,
+            "shell": None}
+
+
+@pytest.mark.parametrize("button, status, starts, lands, desc", [
+    ("interrupt", "live", {"host_command": "interrupt"}, {"host_command": None, "interrupted_at": "9999"}, "Interrupt: until the host stamps it"),
+    ("interrupt", "live", {}, {"interrupted_at": "9999"}, "Interrupt taken before a refresh saw it: its stamp lands it"),
+    ("compact", "live", {"host_command": "compact"}, {"host_command": None, "activity": "idle · compacted 300k → 40k tokens"}, "Compact: until compacted"),
+    ("compact", "live", {"activity": "compacting: collecting notes"}, {"activity": NO_NOTES}, "Compact: through the notes, until it stops"),
+    ("compact", "live", {"host_command": "compact"}, {"_status": "dead"}, "Compact: the host dying ends it"),
+    ("shell", "live", {"host_command": "shell"}, {"host_command": None, "activity": "", "shell": "tab"}, "Shell: until handed over"),
+    ("model", "live", {"model": "sonnet"}, {"applied_model": "sonnet"}, "Model: until applied"),
+    ("park", "live", {"park_requested_at": "x"}, {"park_requested_at": None, "_status": "dead"}, "Park: until parked"),
+    ("end", "live", {"end_requested_at": "x"}, {"_gone": True}, "Forget, let it know: until it's gone"),
+    ("relaunch", "live", {"_relaunching": True}, {"_relaunching": False}, "Relaunch a running one: until it's back"),
+    ("relaunch", "dead", {"_status": "starting"}, {"_status": "live"}, "Relaunch or Unpark a dead one: until it runs"),
+    ("fork", "live", {}, {"_notice": True}, "Fork: until the hub's word of it, with the parent's id"),
+    ("compact-now", "live", {"host_command": "compact"}, {"host_command": None, "activity": NO_NOTES, "_closed": True}, "the question's Compact: until it closes"),
+])
+def test_a_pressed_button_stays_off_until_its_action_lands(monkeypatch, button, status, starts, lands, desc):
+    now = [100.0]
+    monkeypatch.setattr(tui.Press, "now", staticmethod(lambda: now[0]))
+    for phase in ("lands", "fallback"):
+        app = Presses(dict(BUSY_ROW), status)
+        app.press("s1", button, "Q1" if button == "compact-now" else None)
+        app.change(starts)
+        now[0] += 1
+        app.change({})
+        assert button in app.busy_buttons(app.sessions[0]), f"{desc}: off once pressed"
+        if phase == "lands":
+            app.change(lands)
+            assert not app.sessions or button not in app.busy_buttons(app.sessions[0]), f"{desc}: on again once it lands"
+            assert not [x for x in app.toasts if x.startswith("no word")] and not [k for k in app.pressed if k[1] == button], \
+                f"{desc}: no word of a fallback, nothing kept"
+        else:
+            now[0] += tui.BUSY_FOR - 1.5
+            app.change({})
+            assert button in app.busy_buttons(app.sessions[0]), f"{desc}: off still, just short of BUSY_FOR"
+            now[0] += 1
+            app.change({})
+            assert button not in app.busy_buttons(app.sessions[0]), f"{desc}: on again after BUSY_FOR"
+            assert app.toasts == [f"no word from demo after {tui.BUSY_FOR} s"], f"{desc}: said once"
+            now[0] += tui.BUSY_FOR
+            app.change({})
+            assert button not in app.busy_buttons(app.sessions[0]) and len(app.toasts) == 1, \
+                f"{desc}: still on, for a press again (Park and Forget's: Cancel or Force)"
+
+
+def test_an_action_under_way_not_pressed_here_is_followed_silently(monkeypatch):
+    """A Park asked before this app started, or by another: off as if pressed, back on after
+    BUSY_FOR without a word, as no one here pressed it."""
+    now = [0.0]
+    monkeypatch.setattr(tui.Press, "now", staticmethod(lambda: now[0]))
+    app = Presses(dict(BUSY_ROW, park_requested_at="x", host_command="compact"), "live")
+    app.follow_presses()
+    assert app.busy_buttons(app.sessions[0]) == {"park", "compact", "compact-now"}, "off, Compact's with the question's"
+    now[0] = tui.BUSY_FOR
+    app.follow_presses()
+    assert app.busy_buttons(app.sessions[0]) == set() and not app.toasts, "on again, unsaid"
+
+
+@pytest.mark.anyio
+async def test_a_disabled_button_is_dark_grey_with_black_text(store, sid, clock):
+    """Every button off, whatever the reason (#107): a dialog's full-height one, its borders
+    the same grey, and the one-row (compact) ones of the bar, the question suggesting Compact
+    (the success variant) and the session pane's grid. Each label drawn in black on OFF, at
+    full strength: not faded into what's behind, as Textual's own disabled look is. clock: no
+    refresh puts the question's Compact back on meanwhile."""
+    app = WheelhouseApp(store)
+
+    def drawn(b) -> list[str]:
+        row = app.screen._compositor.render_strips()[b.content_region.y]
+        return [str(seg.style) for seg in row if seg.text.strip() and seg.text.strip() in str(b.label)]
+
+    async with app.run_test(size=(160, 40)) as pilot:
+        app.push_screen(tui.Confirm("Go?"))
+        await pilot.pause()
+        dialog = app.screen.query_one("#yes", Button)
+        dialog.disabled = True
+        await pilot.pause()
+        off = Color.parse(tui.OFF)
+        assert dialog.styles.border_top[1].rich_color == off == dialog.styles.border_bottom[1].rich_color, \
+            "a dialog's button: its tall borders the same grey, its height kept"
+        assert drawn(dialog) == [f"bold #000000 on {tui.OFF}"], f"the dialog's: {drawn(dialog)}"
+        await pilot.press("escape")
+        await pilot.pause()
+        compact_now = app.screen.query_one("#compact-now", Button)
+        compact_now.disabled = True
+        compact_now.parent.display = True
+        await pilot.pause()
+        for b in (app.screen.query_one("#send-all", Button), compact_now, app.session_buttons.query_one("#fork", Button)):
+            assert b.disabled and b.region.height == 1, f"{b.id}: off, and one row still"
+            assert drawn(b) == [f"bold #000000 on {tui.OFF}"], f"{b.id}: black on dark grey, got {drawn(b)}"

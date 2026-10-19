@@ -582,6 +582,9 @@ async def test_a_status_changing_with_no_write_is_published(daemon, sid, monkeyp
 @pytest.mark.parametrize("event, published, desc", [
     (Event("notice", "relaunched demo", "information"),
      [{"kind": "notice", "text": "relaunched demo", "severity": "information"}], "a notice of the hub's own"),
+    (Event("notice", "forked demo as demo (fork)", "information", "s1"),
+     [{"kind": "notice", "sid": "s1", "text": "forked demo as demo (fork)", "severity": "information"}],
+     "a Fork's word, with its parent's id (#107)"),
     (Event("landed", sid="s1"), [{"kind": "conversation", "sid": "s1"}, {"kind": "stats", "sid": "s1"}],
      "a transcript read that brought something"),
 ])

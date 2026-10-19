@@ -1155,6 +1155,8 @@ def test_fork(hub, store, sid, tmp_path, claude_home, opened, heard, refs, fork_
     claude_home(sid, str(tmp_path))
     parent_items(store, sid)
     store.queue(sid, "left", "Q1")
+    about = []
+    hub.listen(lambda e: about.append(e.sid))
     done = hub.fork(sid, refs)
     [f] = forks(store, sid)
     new = f["id"]
@@ -1173,6 +1175,7 @@ def test_fork(hub, store, sid, tmp_path, claude_home, opened, heard, refs, fork_
         assert [m["body"] for m in store.thread(new, "Q1")] == ["left"], f"{desc}: its thread moves with it"
     assert store.post_item(sid, "task", "after") == "T4", f"{desc}: the parent's refs stay numbered"
     assert heard[-1][0].startswith("forked demo as demo (fork)"), desc
+    assert about == [sid], f"{desc}: said with the parent's id, so its Fork button comes back (#107)"
 
 
 @pytest.mark.parametrize("dirty, where, desc", [
@@ -1248,10 +1251,12 @@ def test_a_fork_that_fails_leaves_nothing_behind(store, worktree, claude_home, o
     spawn = (lambda work, group: (store.end(sid), work())) if fails == "parent forgotten" else None
     hub = Hub(store, spawn=spawn)
     said_ = []
-    hub.listen(lambda e: said_.append(e.text))
+    hub.listen(lambda e: said_.append((e.text, e.sid)))
     done = hub.fork(sid, ["T1"], "feat/x-fork")
-    texts = [n.text for n in done.notices] + said_
+    texts = [n.text for n in done.notices] + [text for text, _ in said_]
     assert any(said in t for t in texts), f"{desc}: {texts}"
+    assert all(about == sid for _, about in said_) and bool(said_) == (fails != "branch taken"), \
+        f"{desc}: a failure on the worker said with the parent's id, so its Fork button comes back (#107)"
     assert not forks(store, sid) and not opened, f"{desc}: no row, no launch"
     assert sorted(p.stem for p in claude_home.projects.glob("*/*.jsonl")) == ([] if fails == "no transcript" else [sid]), \
         f"{desc}: no copy left"
@@ -1362,7 +1367,7 @@ def test_what_a_fork_makes_is_logged_and_never_left_unsaid(store, sid, tmp_path,
     log = (store.path.parent / "launch.log").read_text()
     assert "if no line for" in log and said in log, f"{desc}: {log}"
     if delivered:
-        assert events[-1].sid == forks(store, sid)[0]["id"], f"{desc}: the announcement names the fork"
+        assert events[-1].sid == sid, f"{desc}: the announcement names the parent, whose Fork it ends (#107)"
 
 
 @pytest.mark.parametrize("closing, desc", [

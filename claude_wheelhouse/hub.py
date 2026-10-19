@@ -125,8 +125,9 @@ class Event:
     """What a surface should know. "notice": text to show the person, with its severity
     (information, warning or error): to every listener, of what the hub did by itself (a
     relaunch finishing, a subagent sync failing), or in a command's Done, to its surface
-    alone. "landed": a read of a session's transcript (sid) brought something, so what
-    shows its context size can repaint."""
+    alone. A notice's sid is the session whose Fork it ends, made or failed, so the
+    surface that pressed it knows (#107). "landed": a read of a session's transcript (sid)
+    brought something, so what shows its context size can repaint."""
     kind: str
     text: str = ""
     severity: str = "information"
@@ -251,7 +252,7 @@ class Hub:
 
     def announce(self, text: str, severity: str = "information", sid: str | None = None) -> None:
         """To every listener: only for what the hub does by itself. A command's notices go
-        in its Done, to the surface that gave it. sid: the session it's about (a fork made)."""
+        in its Done, to the surface that gave it. sid: the session whose Fork it ends (Event)."""
         self.emit(Event("notice", text, severity, sid))
 
     # sessions and their liveness
@@ -646,10 +647,10 @@ class Hub:
                     fork.drop_worktree(t, branch)
                 raise
         except FileNotFoundError:
-            self.post(functools.partial(self.announce, f"{display_name(s)} has no conversation to fork yet", "error"))
+            self.post(functools.partial(self.announce, f"{display_name(s)} has no conversation to fork yet", "error", sid=sid))
             return
         except Exception as e:   # git refused the branch, the transcript unreadable...
-            self.post(functools.partial(self.announce, f"couldn't fork {display_name(s)}: {e}", "error"))
+            self.post(functools.partial(self.announce, f"couldn't fork {display_name(s)}: {e}", "error", sid=sid))
             return
         made = (f"transcript {new}.jsonl" + (f", worktree {fork.worktree_path(t, branch)} on branch {branch}"
                                              if branch else ""))
@@ -684,18 +685,18 @@ class Hub:
                 self.store.end(new)
             fork.undo(new, t, branch)
             fork.log(self.store, f"fork {new} failed ({e}): taken away again")
-            self.announce(f"couldn't fork {display_name(s)}: {e}", "error")
+            self.announce(f"couldn't fork {display_name(s)}: {e}", "error", sid=sid)
             return
         fork.log(self.store, f"fork {new} made, {name}, in {cwd}")
         try:
             (launch.open_host if how == "sdk" else launch.open_tab)(self.store, new, notice=False)
         except Exception as e:   # wt.exe missing...: the fork stays, to Relaunch
-            self.announce(f"forked {name}, but it didn't start: {e}. Relaunch it", "error", sid=new)
+            self.announce(f"forked {name}, but it didn't start: {e}. Relaunch it", "error", sid=sid)
             return
         self.announce(f"forked {display_name(s)} as {name}"
                       + (f", {len(moved)} item(s) moved to it" if moved else "")
                       + (f"; {', '.join(left)} changed meanwhile, so stayed" if left else ""),
-                      "warning" if left else "information", sid=new)
+                      "warning" if left else "information", sid=sid)
 
     def drop_pending_forks(self) -> None:
         """The owner closing (a daemon stopping, the app quitting): each fork made on a worker
