@@ -362,3 +362,29 @@ async def test_a_failed_ask_keeps_the_pane_as_it_was(store, sid, tmp_path, every
         await pilot.pause()
         assert p.compact is not adrs and p.region.height == height, f"adrs {adrs}: as it was"
         assert "boom" in str(app.query_one("#decisions-note").render()), f"adrs {adrs}: the error in the note"
+
+
+@pytest.mark.anyio
+async def test_a_decision_edits_in_detail_as_queued_with_every_module(store, sid, shipped):
+    """The shipped default: a decision shown in Detail opens its editor on a click, and as a
+    doc of no session's, Ctrl+Enter only re-renders (Queued), never saving."""
+    store.set_mode(sid, "immediate")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        app.query_one("#decision-list").focus()
+        await pilot.press("down")
+        await pilot.pause()
+        region = app.detail_scroll.scrollable_content_region
+        row = next(y for y, t in enumerate(app.detail._layout(app.detail.size.width)[1]) if "Use SQLite" in t)
+        await pilot.click(offset=(region.x + 2, region.y + row))
+        await pilot.pause()
+        await pilot.pause()
+        editor = app.detail_editor
+        assert editor.display and editor.has_focus and editor.cursor_location == (0, 0), "open on the heading"
+        notes = []
+        app.notify = lambda message, **_: notes.append(message)
+        editor.insert("Edited. ")
+        await pilot.press("ctrl+j")
+        await pilot.pause()
+        assert "Edited. # Use SQLite" in app._detail_text and notes == [], "re-rendered, not saved: Queued"

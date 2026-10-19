@@ -200,6 +200,20 @@ session.
   `updated`, never new again. Select one and the right-hand pane shows its path and the
   file rendered, with no answer box; `Enter` opens it full screen. The file is read again
   whenever it changes, and if it has gone (or isn't a regular file) the pane says so. `Delete` dismisses one.
+- **Editing a doc.** A click on a doc shown, an item's or a decision, in Detail or full
+  screen, opens an editor below it, its cursor on the first line of the block clicked
+  (dragging the line between them resizes it, kept as `layout.editor`). `Ctrl+Enter`
+  shows the edits rendered above, as an answer queues; nothing re-renders as you type.
+  The two keep step: scrolling the doc scrolls the editor to the same place, and moving
+  the cursor into another block scrolls the doc to show it. `Esc` closes the editor,
+  asking first if there are edits (Close keeping them, the default; Discard; or Keep
+  editing), and the pane's title says `edited` while there are. Edits not discarded are kept, doc by doc, while the app
+  runs: another doc shown closes the editor, and opening it on the first again brings them
+  back, a click putting the cursor on its block; until then that doc shows them rendered,
+  full screen too. A file changed on disk meanwhile keeps the edits, said once and as
+  `file changed` in the title. One file has one buffer, however it's reached. Saving
+  comes next: for now `Ctrl+S` (and `Ctrl+Enter` for a session in Immediate mode) says so,
+  and the file is never written.
 - **Decisions.** If your own instructions let a session decide some things without asking
   you, it reports each one as a decision (`D1`): what it decided, and one short line with
   the alternative, why, and how to reverse it. Decisions block nothing. Each session

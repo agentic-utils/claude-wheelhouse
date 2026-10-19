@@ -107,6 +107,8 @@ FEATURES: tuple[Feature, ...] = (
     Feature("swap-panes", UNRELEASED, "principles",
             "Drag a pane by its title onto another to swap the two; Reset layout, in the command palette, puts them back.",
             "Drag a pane by its title onto another to swap them. Ctrl+P, Reset layout, puts them back."),
+    Feature("doc-editor", UNRELEASED, ADVANCED,
+            note="A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered. Saving comes next."),
     Feature("tour-topups", UNRELEASED, "principles",
             note="After an update, the tour shows only what's new, pane by pane, with no demo; Esc pauses it, "
                  "and L or the title bar's badge resumes it.",
