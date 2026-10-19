@@ -15,6 +15,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `daemon` adds `--address`, `--name` (repeatable) and `--stop`; `tutorial` takes `--yes`.
 - `store.py`: the SQLite store, the only source of truth. Schema, added columns,
   triggers, `PROTOCOL_VERSION`. Every public write is its own committed transaction.
+  Clearing the inbox keys on `items.pinned` (`store.pinned`), never on an item's kind:
+  `family`, `standing` and the TUI's Delete and Ctrl+A all skip a pinned item (#110).
 - `hub.py`: what the wheelhouse knows and does, whatever shows it. Owns liveness, the session states
   and their verbs (`VERBS`, `.plan/session-states.md`), and
   Relaunch. Never imports Textual: it tells surfaces what happened as events.

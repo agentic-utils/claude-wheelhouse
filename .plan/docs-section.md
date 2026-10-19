@@ -1,33 +1,29 @@
-# Docs section and doc threads (#106)
+# Docs section and doc threads (#106), and pins (#110)
 
-Docs are reference material. They get a section of their own in the inbox, where clearing the inbox can't reach them. Each doc also gets a discussion thread, so the person can read a doc and type questions or suggestions about it right beside it.
+Docs are reference material, so clearing the inbox can't reach them: they come pinned, and any other item can be pinned too. Each doc also gets a discussion thread, so the person can read a doc and type questions or suggestions about it right beside it.
 
-Status: rough draft for Doug's review. The mock-ups are what to react to.
+## 1. Pins
 
-## 1. The Docs band
-
-**Dropped before merge (Doug, Q133).** A pin column replaces the band (#110): any item can be pinned, docs are pinned by default, and Delete and Ctrl+A ignore pinned items. Until then docs stay where they sorted before (under their parent, or their session's group), and the rules below that don't depend on the band (Ctrl+A, the multi-select and single Delete, "n new", awaiting) key on the doc kind. The original proposal follows.
-
-Docs move out of the inbox's status bands into a band of their own at the foot of the list. The band's header row collapses like a session's children (- and +).
+Any inbox item can be pinned (Doug, Q133). The pin replaces a docs band of its own: docs sort under their parent, or in their session's group, as before.
 
 ```
  Inbox                                                  ▲
- ● T3   Modules stage 7                  doug-f5   run
- ? Q125 Docs section: band or pane?      doug-f5   open
- ✓ T122 Fresh-clone smoke test           doug-f5   done
- - Docs (3)
- ≡ M2   Tour: features not yet shown     doug-f5   2 new
- ≡ M1   Tutorial overhaul plan           doug-f5
- ≡ M3   Docs section design              doug-f5
+ ·  doug-f5  Q125 open     Docs section: band or pane?
+ 📌 doug-f5  T3   running  Modules stage 7
+ ·  doug-f5  T122 done     Fresh-clone smoke test
+ 📌 doug-f5  └ M2 2 new    Tour: features not yet shown
+ ·  doug-f5  └ M3 read     Scratch report
 ```
 
-- The sort applies inside the band. The band itself always stays at the foot.
-- The session filter narrows the band too.
-- Ctrl+A ("every finished row") never marks a doc row.
-- A multi-select Delete skips doc rows and says so in the notice ("2 closed, 1 doc kept").
-- Delete on a single doc row asks first: "Close doc M2? The file stays on disk." The default is No.
-- A doc with replies you haven't seen shows "n new" and stays in the band. It doesn't jump into the active band.
-- A doc with a message from you that hasn't been answered yet counts as awaiting a reply, like a question. Delete warns about that as well.
+- **The column.** The inbox's first column shows 📌 on a pinned row and a dim dot on any other. A click there, or P in the item list, pins the row or clears its pin. Its header is blank and doesn't sort. 📌 is two cells wide in Rich and in the terminal alike (Emoji_Presentation), so the columns stay aligned.
+- **Defaults.** A doc is pinned when posted; anything else is not, decisions included. A row inserted without the column (a session on code from before pins) takes its kind's default, by trigger. A session can post a doc with `pinned=false` for a scratch report not worth keeping once read (Q132), or any other item with `pinned=true`. A doc posted again keeps whatever pin the person last set. Docs from before pins come up pinned.
+- **Ctrl+A** ("every finished row") never marks a pinned row.
+- **A multi-select Delete** skips pinned rows and says so in the notice ("dismissed T1; 1 pinned kept").
+- **Delete on a single pinned row** asks first: "Delete pinned M2? The file stays on disk." (the last sentence for a doc only). The default is No. On a parent the same dialog says what its children would take ("Delete pinned T3 (build it) and its 2 children? ..."). Yes clears the pin, then deletes it as any other item; No leaves it pinned.
+- **A parent's Delete** leaves its pinned children and takes its unpinned ones, an unpinned doc included. A pinned child stays under its parent, so Ctrl+R on the parent nests it again.
+- **F and sinking.** A pin changes nothing about where an item stands: one finished stays finished, so Ctrl+R reopens it and Delete says it's closed already. F off still shows a pinned finished item, dimmed at the foot.
+- A doc with replies you haven't seen shows "n new".
+- A doc with a message from you that hasn't been answered yet counts as awaiting a reply, like a question. Delete on it warns about that as well.
 
 ## 2. Detail for a doc: three states
 
@@ -113,7 +109,7 @@ A click on a block of the doc opens the stage 7 editor (PR #105) in the lower ha
 ## 4. What changes
 
 - The store and the protocol: a doc item can carry messages (it already has a ref), and AWAITING counts docs. This may need a PROTOCOL_VERSION bump.
-- The inbox ordering: a docs band (ordering.py bands), with Ctrl+A and the multi-select Delete taught to skip it.
+- The inbox: a pin column (items.pinned, #110), with Ctrl+A, the multi-select Delete and a parent's Delete taught to skip pinned rows.
 - Detail: a doc container with split, tabbed and editing states, the Ctrl+L toggle, and the `layout.doc-thread` splitter.
 - The MCP side: nothing new. Sessions already receive messages on a ref, and they re-post a doc to update it.
 - The tour: the docs step (#101) says "comment on the story now". It lands after #104.

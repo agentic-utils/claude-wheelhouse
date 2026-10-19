@@ -134,6 +134,10 @@ FEATURES: tuple[Feature, ...] = (
             note="A pressed button (Compact, Interrupt, Relaunch, Park, Fork...) stays off, dark grey, until what it "
                  "started has finished, or for 30 seconds with no word from the session.",
             tip="A pressed button stays dark grey until what it started has finished."),
+    Feature("pins", UNRELEASED, "inbox",
+            note="Pin any inbox item (📌, a click on its first column or P) and clearing the inbox leaves it; "
+                 "docs come pinned.",
+            tip="Click a row's first column, or press P, to pin it (📌): Ctrl+A and Delete leave pinned rows."),
 )
 
 

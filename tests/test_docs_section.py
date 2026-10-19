@@ -1,10 +1,10 @@
-"""The docs section (.plan/docs-section.md, #106): docs out of reach of clearing the inbox,
-and each doc's thread beside it in Detail and full screen, split or tabbed."""
+"""The docs section (.plan/docs-section.md, #106): each doc's thread beside it in Detail and
+full screen, split or tabbed. A doc out of reach of clearing the inbox is a pin (test_pins)."""
 
 import pytest
 
 from claude_wheelhouse import tui
-from claude_wheelhouse.tui import Confirm, WheelhouseApp
+from claude_wheelhouse.tui import WheelhouseApp
 from test_tui import item_list_rows
 
 DOC = "# The plan\n\nBuild it.\n\n## Recommendation\n\n**Add as tips.** They are cheap.\n"
@@ -53,68 +53,7 @@ async def test_a_doc_with_unseen_replies_says_how_many(store, sid, doc):
         await pilot.pause()
         rows = item_list_rows(app)
         assert [r[1] for r in rows] == [q, f"└ {doc[0]}"], "in its session's group"
-        assert str(app.items_table.get_row_at(1)[2]) == "2 new"
-
-
-@pytest.mark.anyio
-async def test_ctrl_a_never_marks_a_doc(store, sid, doc):
-    t = store.post_item(sid, "task", "tidy", status="done")
-    store.mark_seen(sid, doc[0])   # read: settled, as a finished row would be
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        app.items_table.focus()
-        await pilot.press("ctrl+a")
-        await pilot.pause()
-        assert app.items_table.marked == {f"{sid}|{t}"}
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("docs, said, desc", [
-    (1, "dismissed T1; 1 doc kept", "a task and a doc: the doc kept, and said"),
-    (2, "dismissed T1; 2 docs kept", "two docs kept"),
-])
-async def test_a_multi_select_delete_skips_docs_and_says_so(store, sid, tmp_path, docs, said, desc):
-    t = store.post_item(sid, "task", "tidy", status="done")
-    refs = []
-    for n in range(docs):
-        (tmp_path / f"d{n}.md").write_text("# D\n")
-        refs.append(store.post_doc(sid, f"d{n}", str(tmp_path / f"d{n}.md")))
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        app.items_table.focus()
-        app.items_table.set_marks({f"{sid}|{r}" for r in [t, *refs]})
-        await pilot.pause()
-        await pilot.press("delete")
-        await pilot.pause()
-        assert any(n.startswith(said) for n in notices(app)), f"{desc}: {notices(app)}"
-        assert all(store.item(sid, r)["dismissed"] is None for r in refs), desc
-        assert store.item(sid, t)["dismissed"] == "done", desc
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("comment, key, closed, desc", [
-    (False, "enter", False, "Enter takes the default, No"),
-    (False, "y", True, "Y closes it"),
-    (True, "n", False, "a comment awaiting a reply: said, and N keeps it"),
-])
-async def test_delete_on_a_doc_asks_first(store, sid, doc, comment, key, closed, desc):
-    if comment:
-        store.send(sid, "why this?", doc[0])
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await select(app, pilot, doc[0])
-        app.items_table.focus()
-        await pilot.press("delete")
-        await pilot.pause()
-        assert isinstance(app.screen, Confirm), desc
-        assert app.screen.prompt.startswith(f"Close doc {doc[0]}? The file stays on disk."), desc
-        assert ("still awaiting a reply" in app.screen.prompt) == comment, desc
-        await pilot.press(key)
-        await pilot.pause()
-        assert (tui.standing(store.item(sid, doc[0])) == "finished") == closed, desc
-        assert doc[1].exists(), f"{desc}: the file stays"
+        assert str(app.items_table.get_row_at(1)[3]) == "2 new"
 
 
 # Detail

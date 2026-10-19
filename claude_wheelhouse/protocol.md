@@ -20,7 +20,9 @@ anything here seems to conflict with them, follow yours.
   wherever it lives (`~/.claude` included), and as `parent` the ref of the task, question or
   decision it belongs to, if any. It shows under that item and opens rendered. Post the same
   path again after changing it, and it shows as updated. Don't declare scratch files,
-  working notes, briefs, hand-backs or memory files. The person may comment on a doc: a
+  working notes, briefs, hand-backs or memory files. A doc is pinned, kept when the person
+  clears their inbox; post a scratch report not worth keeping once read with
+  `pinned=false`. The person can pin or unpin any item. The person may comment on a doc: a
   message on its ref, which may quote the line it's about. Reply on that ref with `reply`
   and no status; if the comment leads you to change the doc, post its path again.
 - Every question you put to the person gets its own question item, posted with
