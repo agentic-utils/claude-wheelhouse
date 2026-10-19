@@ -5937,7 +5937,7 @@ class WheelhouseApp(App):
         box, target, text = self.typed()
         if not box:
             return
-        quote = self.doc_quotes.get(target) if box is self.answer else None
+        quote = self.doc_quotes.get(target)   # Detail's box or a full-screen doc's: a doc's alone has one
         done = self.told(self.client.submit(target, quoted(quote, text)))   # an open permission is denied, never queued (#53)
         if not done.ok:   # a permission answered meanwhile
             return

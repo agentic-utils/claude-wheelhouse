@@ -215,25 +215,33 @@ async def test_a_click_on_a_block_opens_the_editor_in_the_threads_place(store, s
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("mode, sent, desc", [("queued", False, "queued, as an answer is"),
-                                               ("immediate", True, "sent at once, as an answer is")])
-async def test_a_comment_quotes_the_block_clicked_and_goes_by_the_sessions_mode(store, sid, doc, mode, sent, desc):
+@pytest.mark.parametrize("mode, sent, full, desc", [
+    ("queued", False, False, "queued, as an answer is"),
+    ("immediate", True, False, "sent at once, as an answer is"),
+    ("queued", False, True, "from full screen, its own box"),
+])
+async def test_a_comment_quotes_the_block_clicked_and_goes_by_the_sessions_mode(store, sid, doc, mode, sent, full, desc):
     store.set_mode(sid, mode)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await select(app, pilot, doc[0])
-        await click_line(app, pilot, app.detail, "Add as tips")
+        if full:
+            app.items_table.focus()
+            await pilot.press("enter")
+            await pilot.pause()
+        view, box = (app.screen.view, app.screen.box) if full else (app.detail, app.answer)
+        await click_line(app, pilot, view, "Add as tips")
         await pilot.press("escape")
         await pilot.pause()
-        assert app.answer.border_title == '> "Add as tips. They are cheap."', desc
-        app.screen.set_focus(app.answer)
+        assert box.border_title == '> "Add as tips. They are cheap."', desc
+        app.screen.set_focus(box)
         await pilot.press("o", "k")
         await pilot.press("ctrl+enter")
         await pilot.pause()
         msgs = store.thread(sid, doc[0])
         assert [m["body"] for m in msgs] == ['> "Add as tips. They are cheap."\n\nok'], desc
         assert (not msgs[0]["draft"]) == sent, desc
-        assert app.answer.border_title is None, f"{desc}: said, the next comment general"
+        assert box.border_title is None and not app.doc_quotes, f"{desc}: said, the next comment general"
 
 
 @pytest.mark.anyio

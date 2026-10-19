@@ -1388,10 +1388,12 @@ def spared(item) -> bool:
 def family(items, ref: str, parent=lambda it: it["parent_ref"]) -> list:
     """What Delete on `ref` acts on, among its session's `items`: its children and, under each
     child that goes, theirs, at any depth. One spared stays, with whatever is under it, so the
-    walk stops there."""
+    walk stops there. Never a doc: reference material, out of reach of clearing the inbox
+    (.plan/docs-section.md), it stays in the docs band."""
     under: dict[str, list] = {}
     for it in items:
-        under.setdefault(parent(it), []).append(it)
+        if it["kind"] != "doc":
+            under.setdefault(parent(it), []).append(it)
     found, todo = [], [ref]
     while todo:
         for it in under.get(todo.pop(), ()):

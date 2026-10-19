@@ -200,7 +200,8 @@ session.
   app runs). `Delete` on an item with children asks first, saying how many it takes and
   how many of them are still open or unread, and how many running ones stay, then closes
   or dismisses it and deletes the rest, at any depth. They stay deleted, even when a
-  subagent finishes or a doc is posted again; `Ctrl+R` with `F` showing brings one back.
+  subagent finishes; `Ctrl+R` with `F` showing brings one back. A doc under it is never
+  deleted or counted: it stays in the Docs band.
   A running child (a subagent still at work, say) is never deleted: it stays in the list
   with no parent, at the top level, and stays there if `Ctrl+R` brings its parent back.
 - **Docs.** A session declares each markdown document it writes for you to read (a design,

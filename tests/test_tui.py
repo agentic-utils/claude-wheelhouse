@@ -7104,7 +7104,7 @@ async def test_the_toggle_answers_its_click_at_any_width(store, sid, size, extra
 
 @pytest.mark.anyio
 @pytest.mark.both
-async def test_delete_takes_agent_and_doc_children_for_good(store, sid, tmp_path):
+async def test_delete_takes_agent_children_and_leaves_docs(store, sid, tmp_path):
     (tmp_path / "plan.md").write_text("# Plan\n")
     q = store.post_item(sid, "question", "which db?")
     store.track_agent(sid, "agent-1", f"{q}: look into it", "", datetime.now(timezone.utc))
@@ -7120,15 +7120,17 @@ async def test_delete_takes_agent_and_doc_children_for_good(store, sid, tmp_path
         await pilot.pause()
         await pilot.press("delete")
         await pilot.pause()
-        assert "its 1 child? 1 unread. It stays deleted" in app.screen.prompt
+        assert "child?" not in app.screen.prompt and "unread" not in app.screen.prompt, "the doc isn't counted"
         assert "1 running child stays in the list, at the top level." in app.screen.prompt
         await pilot.press("y")
         await pilot.pause()
-        assert item_list_rows(app) == [["demo", f"└ {agent}"]], "the running subagent stays, in its session's group"
+        assert item_list_rows(app) == [["demo", f"└ {agent}"], ["", ""], ["demo", doc]], \
+            "the running subagent stays, in its session's group; the doc stays in the docs band"
+        assert store.item(sid, doc)["dismissed"] is None, "the doc never deleted with its parent"
         store.agent_status(sid, "agent-1", "done", "finished")   # as the transcript says it ended
         store.post_doc(sid, "the plan, v2", str(tmp_path / "plan.md"))
         await refresh(pilot, sid)
-        assert [r[1] for r in item_list_rows(app)] == [f"└ {agent}"], "the doc posted again doesn't come back"
+        assert [r[1] for r in item_list_rows(app)] == [f"└ {agent}", "", doc], "the doc still in its band"
 
 
 def test_items_from_an_older_daemon_have_no_parents():
@@ -7156,14 +7158,15 @@ async def test_delete_on_marked_rows_asks_once_and_takes_the_children(store, sid
         await pilot.press("delete")
         await pilot.pause()
         assert isinstance(app.screen, Confirm), "a marked parent asks first"
-        assert app.screen.prompt.startswith(f"Delete the 2 marked rows and the 1 child of {q}? 1 unread."), \
-            app.screen.prompt
+        assert app.screen.prompt.startswith("Delete the 2 marked rows? 1 running"), \
+            f"the doc under {q} neither taken nor counted: {app.screen.prompt}"
         assert "1 running child stays in the list" in app.screen.prompt, app.screen.prompt
         await pilot.press("y")
         await pilot.pause()
         store.agent_status(sid, "agent-1", "done", "finished")
         await refresh(pilot, sid)
-        assert [r[1] for r in item_list_rows(app)] == [f"└ {agent}"], "both rows and the doc gone, the running subagent kept"
+        assert [r[1] for r in item_list_rows(app)] == [f"└ {agent}", "", doc], \
+            "both rows gone, the running subagent kept, the doc in its band"
 
 
 @pytest.mark.anyio
@@ -7275,10 +7278,9 @@ async def test_a_long_doc_keeps_its_reading_place_through_a_rewrite_and_a_resize
 @pytest.mark.anyio
 @pytest.mark.both
 async def test_delete_asks_and_takes_finished_children_too(store, sid, tmp_path):
-    (tmp_path / "plan.md").write_text("# Plan\n")
     t = store.post_item(sid, "task", "design it", status="done")
-    m = store.post_doc(sid, "the plan", str(tmp_path / "plan.md"), t)
-    store.mark_seen(sid, m)
+    m = store.post_item(sid, "agent", "look", status="done")   # a finished child (a doc is never one: #106)
+    store.db.execute("UPDATE items SET parent_ref = ? WHERE ref = ?", (t, m))
     store.dismiss(sid, m)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -7290,9 +7292,9 @@ async def test_delete_asks_and_takes_finished_children_too(store, sid, tmp_path)
         assert app.screen.prompt.endswith("and its 1 child? It stays deleted, even once finished or changed.")
         await pilot.press("y")
         await pilot.pause()
-        store.post_doc(sid, "the plan, v2", str(tmp_path / "plan.md"))
+        store.update_item(sid, m, status="failed")
         await refresh(pilot, sid)
-        assert item_list_rows(app) == [], "the doc posted again stays deleted"
+        assert item_list_rows(app) == [], "the child changed again stays deleted"
 
 
 @pytest.mark.anyio
