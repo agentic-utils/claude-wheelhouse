@@ -75,6 +75,21 @@ def test_docs_from_before_pins_come_up_pinned(store, sid, tmp_path, db_file):
     assert [bool(again.item(sid, r)["pinned"]) for r in (doc, task)] == [True, False]
 
 
+@pytest.mark.anyio
+async def test_docs_cleared_before_pins_stay_unpinned_and_hidden(store, sid, tmp_path, db_file):
+    live, dismissed, deleted = (post(store, sid, tmp_path, "doc", n) for n in ("live", "dismissed", "deleted"))
+    store.dismiss(sid, dismissed)
+    store.db.execute("UPDATE items SET dismissed = 'deleted' WHERE ref = ?", (deleted,))
+    store.db.execute("DROP TRIGGER items_pinned_by_kind_v1")   # as before pins: neither it nor the column
+    store.db.execute("ALTER TABLE items DROP COLUMN pinned")
+    again = Store(db_file)
+    assert [again.item(sid, r)["pinned"] for r in (live, dismissed, deleted)] == [1, 0, 0], "only the live doc"
+    app = WheelhouseApp(again)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert set(app.items_table.rows) == {f"{sid}|{live}"}, "the cleared docs stay hidden with F off"
+
+
 def test_a_parents_delete_leaves_its_pinned_children(store, sid, tmp_path):
     t = post(store, sid, tmp_path, "task", "t", status="done")
     kept = post(store, sid, tmp_path, "doc", "kept", parent=t)
