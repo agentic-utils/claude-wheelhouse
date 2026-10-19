@@ -175,6 +175,19 @@ async def test_hidden_under_another_screen_and_unhighlighted_once_gone():
 
 
 @pytest.mark.anyio
+async def test_the_next_steps_callout_keeps_the_highlight():
+    """Review of #104: the decision step's callout leaving after the docs step's, on the same
+    pane, mounted, leaves that pane highlighted."""
+    app = Panes(TourCallout("items", "Decisions."))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await app.mount(TourCallout("items", "Documents."))
+        await pilot.pause()
+        await app.callout.remove()
+        await pilot.pause()
+        assert HIGHLIGHT in app.query_one("#items-pane").classes, "kept: the next step's callout holds it"
+
+@pytest.mark.anyio
 async def test_every_pane_resolves_in_the_real_app(store, every_module):   # design: its module loaded
     """Review of #86: a PANES selector left at an id the six slots changed finds no pane, or
     the wrong one, and the callout sits centred, describing nothing."""

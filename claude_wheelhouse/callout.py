@@ -221,8 +221,12 @@ class TourCallout(Vertical):
         self.display = self.app.screen is self.screen
 
     def highlight(self, target: Widget | None) -> None:
-        if self.target is not None and self.target is not target:
-            self.target.remove_class(HIGHLIGHT)
+        """Its pane highlighted, and the last one not, unless another callout holds that one
+        (the next step's, mounted before this one goes, #101)."""
+        old = self.target
+        if old is not None and old is not target and not any(   # a pane torn down has no screen: none hold it
+                c is not self and c.target is old for c in (old.screen.query(TourCallout) if old.is_attached else ())):
+            old.remove_class(HIGHLIGHT)
         if target is not None:
             target.add_class(HIGHLIGHT)
         self.target = target
