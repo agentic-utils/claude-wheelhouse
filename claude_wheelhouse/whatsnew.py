@@ -138,6 +138,10 @@ FEATURES: tuple[Feature, ...] = (
             note="Pin any inbox item (📌, a click on its first column or P) and clearing the inbox leaves it; "
                  "docs come pinned.",
             tip="Click a row's first column, or press P, to pin it (📌): Ctrl+A and Delete leave pinned rows."),
+    Feature("doc-threads", UNRELEASED, "docs",
+            note="A doc has a thread of its own: comment on it below the doc (split) or on a Thread tab (tabbed); "
+                 "Ctrl+L switches the two, Ctrl+PgUp and Ctrl+PgDn the tabs.",
+            tip="Comment on a doc in its thread, below it. Ctrl+L switches to tabs, Ctrl+PgUp and Ctrl+PgDn between them."),
 )
 
 
