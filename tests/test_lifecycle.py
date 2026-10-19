@@ -108,6 +108,7 @@ async def test_a_pending_request_can_be_cancelled_or_forced(
     getattr(store, f"request_{flag}")(sid)
     monitor.poll_once(store, sid, io.StringIO())   # the session has been told
     fake_status(monkeypatch, "live")
+    store.db.execute(f"UPDATE sessions SET {flag}_requested_at = ?", ("2020-01-01T00:00:00.000000+00:00",))   # asked long ago: past BUSY_FOR (#107)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -360,6 +361,8 @@ async def test_a_dialog_outliving_its_session_does_not_crash(
     if request_first:
         store.request(sid, request_first)
     fake_status(monkeypatch, state)
+    if request_first:   # asked long ago: its button on again, past BUSY_FOR (#107)
+        store.db.execute(f"UPDATE sessions SET {request_first}_requested_at = ?", ("2020-01-01T00:00:00.000000+00:00",))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         seen = notices(app, monkeypatch)

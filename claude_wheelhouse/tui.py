@@ -16,6 +16,7 @@ import sqlite3
 import subprocess
 import time
 import weakref
+from datetime import datetime, timezone
 from typing import Callable, Self
 
 from rich.markdown import Markdown as RichMarkdown
@@ -60,16 +61,17 @@ from textual.widgets import (
 from . import api, callout, docblocks, docroots, emoji, features, models, ordering, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
-from .host import NUDGE_TOKENS
+from .host import AWAITING_NOTES, HOLD_EXPIRED, NUDGE_TOKENS, SHELL_OPENING
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
 from .tour import NOTES, PAUSED, ROWS as tour_rows, TOPUP, TOUR, Tour, offered, opening
 from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
-                    family, inbox_rank, mode, runner, spared, standing)
+                    family, inbox_rank, mode, runner, spared, stamp, standing)
 from .unsent import Unsent
 
 MATRIX = "#00ff41"
+OFF = "#666666"   # a disabled button's dark grey, under black text (#107)
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
 MARKED = Style(bgcolor="#3a1060")   # rows picked to close together
 DECISION = "bold #b967ff"   # an unseen decision: noticeable, not urgent
@@ -1476,6 +1478,61 @@ def show_button(root: Widget, button_id: str, label: str, disabled: bool, shown:
         button.set_class(len(label) > WIDE_CAPTION, "wide")
     button.disabled = disabled
     button.display = shown
+
+
+BUSY_FOR = 30   # seconds a pressed button stays off for want of word from its session (#107)
+# the buttons that stay off while what they started is under way (busy_buttons): a session's
+# lifecycle and conversation buttons, and Compact on the question suggesting it
+BUSY_BUTTONS = ("relaunch", "park", "end", "model", "fork", "interrupt", "compact", "shell", "compact-now")
+OUTLIVE = ("relaunch", "fork")   # pressed whether or not the session runs: its death doesn't end them
+
+
+@dataclasses.dataclass
+class Press:
+    """A busy button's action, from its press (or from the store showing it under way, by
+    another app or before this one started: pressed False) until it lands. since: when, on
+    Press.now; at: the store's stamp then, against the session's own stamps; seen: the store
+    has shown it under way; ref: the question a Compact from it answers; expired: BUSY_FOR
+    passed with no word, the button on again."""
+    since: float
+    at: str
+    pressed: bool = True
+    seen: bool = False
+    ref: str | None = None
+    expired: bool = False
+    now = staticmethod(time.monotonic)   # a test runs it on its own clock
+
+
+def asked_ago(s, button: str) -> float:
+    """How long ago, in seconds, the store says a Park or Forget was asked (its UTC
+    *_requested_at), so one followed after a restart has its BUSY_FOR counted from then,
+    not from now. 0 for any other button, or a stamp that doesn't read."""
+    at = models.field(s, f"{button}_requested_at") if button in ("park", "end") else None
+    try:
+        return max(0.0, (datetime.now(timezone.utc) - datetime.fromisoformat(at)).total_seconds()) if at else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def under_way(button: str, s, status: str, relaunching: bool) -> bool:
+    """Whether a session's row shows a busy button's action under way, before it lands: a
+    host command not yet taken, a compaction or a shell hand-over going on, a model not yet
+    applied, a Park or Forget request not yet acted on, a Relaunch not yet back. Fork and the
+    question's Compact have no column: their word is a notice, or the question closing."""
+    command, activity = models.field(s, "host_command"), models.field(s, "activity") or ""
+    if button == "compact":
+        return (command == "compact" or activity == AWAITING_NOTES
+                or activity.startswith("compacting") and activity != HOLD_EXPIRED)
+    if button in ("interrupt", "shell"):
+        return command == button or button == "shell" and activity == SHELL_OPENING and not models.field(s, "shell")
+    if button == "model":
+        want, got = models.field(s, "model"), models.field(s, "applied_model")
+        return bool(want and got and want != got)   # none applied yet: a host that never will (on relaunch)
+    if button in ("park", "end"):
+        return bool(models.field(s, f"{button}_requested_at"))
+    if button == "relaunch":
+        return relaunching or status == "starting"
+    return False
 
 
 class ConversationScroll(VerticalScroll, can_focus=False):
@@ -3111,12 +3168,14 @@ BUTTONS = {
              "conversation so far, which carries on too. Ticked items move to it; in a linked git worktree, it "
              "works in a new one on a new branch from the last commit (uncommitted changes stay behind), or this one"),
     "park": ("Park (P in the session list): a running session writes its handoff notes into its items, then stops; "
-             "it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark"),
+             "it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark. Off while it's "
+             f"asked; on again after {BUSY_FOR} s, pressed again to cancel or force it"),
     "end": ("Stop & Forget, or Forget (Delete or Backspace in the session list): a running session asks first, "
             "Let it know (L: it does its own end steps, then stops) or Just stop it (J: stopped now, told nothing), "
             "the first by default while its prompt cache is warm, the second once cold, as its end steps would "
             "re-read its whole context; its wheelhouse data is deleted either way, queued answers with it. One not "
-            "running is deleted at once, once you confirm. Adopt brings a forgotten one back"),
+            "running is deleted at once, once you confirm. Adopt brings a forgotten one back. Off while it's asked; "
+            f"on again after {BUSY_FOR} s, pressed again to cancel or force it"),
 }
 # keys for the buttons that have no other: each presses its button on the screen in front,
 # outside a text box (whose letters and digits are typing). 1, 2 and 3 number the
@@ -3314,14 +3373,21 @@ class WheelhouseApp(App):
        apply show, and a hidden one leaves no hole: the grid places the shown ones in turn.
        The lifecycle buttons, then the conversation's: Mode across two columns, for its
        longest caption, then Send; Interrupt, Compact and Shell under. All 30% grey with
-       white text, a little lighter under the pointer and pressed, dimmed when disabled */
+       white text, a little lighter under the pointer and pressed, OFF when disabled */
     #session-buttons, #conversation-buttons {{ grid-size: 3; grid-columns: 1fr 1fr 1fr; grid-rows: 1;
         grid-gutter: 1 1; height: auto; background: #000000; }}
     #conversation-buttons {{ padding-top: 1; }}   /* padding, not margin: the splitters fit by region */
     #session-info-pane Grid Button {{ width: 1fr; min-width: 0; padding: 0; background: #4d4d4d; color: #ffffff; }}
     #session-info-pane Grid Button:hover {{ background: #5e5e5e; }}
     #session-info-pane Grid Button.-active {{ background: #6e6e6e; }}
-    #session-info-pane Grid Button:disabled {{ background: #333333; color: #8c8c8c; }}
+    /* every button off, whatever keeps it off (it doesn't apply, nothing to send, its action
+       under way: #107): dark grey, black text, both at full strength (not Textual's faded
+       disabled look, which blends them into what's behind), its tall borders (a dialog's)
+       the same grey, so it keeps its size; a one-row (compact) button has none */
+    Button:disabled, #session-info-pane Grid Button:disabled {{ background: {OFF}; color: #000000;
+        text-opacity: 100%; opacity: 100%; }}
+    Button.-style-default:disabled {{ border-top: tall {OFF}; border-bottom: tall {OFF}; }}
+    Button.-style-default.-textual-compact:disabled {{ border: none; }}
     #conversation-buttons #mode, #session-buttons Button.wide {{ column-span: 2; }}
     #dialog {{ width: 80; max-width: 100%; height: auto; max-height: 100%; overflow-y: auto; padding: 1 2;
                background: #000000; color: {MATRIX}; border: thick #ff2a6d; }}
@@ -3459,6 +3525,10 @@ class WheelhouseApp(App):
         self.box_target: tuple | None = None
         self.landing = False   # a key's land under way, which the refresh tick waits out (tick)
         self.held_bars: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()   # by screen (bar_widgets)
+        self.pressed: dict[tuple[str, str], Press] = {}   # (sid, button id): its action under way (busy_buttons)
+        # each session's Forks pressed here and not yet heard of (heard), by when, on Press.now: one
+        # BUSY_FOR old is let go (follow_presses), as a fork can end unsaid (a daemon stopping mid-fork)
+        self.forking: dict[str, list[float]] = {}
         self.said: list[tuple[str, str]] = []   # what to say as it opens, (text, severity): how it found the daemon
         self.client.listen(self.heard)
         self.tour: Tour | None = None   # the tour under way (tour.py), painted by show_tour
@@ -3771,6 +3841,7 @@ class WheelhouseApp(App):
 
     def refresh_data(self) -> None:
         self.client.refresh()
+        self.follow_presses()
         if self.filter_sid and not any(s["id"] == self.filter_sid for s in self.sessions):
             self.clear_filter()   # the followed session went (ended elsewhere): as Esc, no ghost row
         self.client.background()   # in process, the hub's reading: the daemon's hub does its own
@@ -3911,6 +3982,12 @@ class WheelhouseApp(App):
         the daemon lost or found again is said, and the title bar shows it lost."""
         if event.kind in ("notice", "link"):
             self.notify(event.text, severity=event.severity)
+            if self.forking.get(event.sid):   # a Fork of it made, or failed: the oldest under way
+                self.forking[event.sid].pop(0)
+                if not self.forking[event.sid]:   # none left under way
+                    del self.forking[event.sid]
+                    if self.pressed.pop((event.sid, "fork"), None):
+                        self.paint_session_info()
         elif event.kind == "landed":
             self.read_landed(event.sid)
 
@@ -4648,12 +4725,13 @@ class WheelhouseApp(App):
         state = self.state(s)
         hosted = state == "active" and runner(s) == "sdk" and not s["shell"]
         caption = {verb: VERBS.get((state, verb), ("", False))[0] for verb in ("relaunch", "park", "end")}
+        busy = self.busy_buttons(s)
         return [("rename", "Rename", False, state == "active"),
-                ("relaunch", caption["relaunch"], False, True),
-                ("park", "Park", False, state != "parked"),
-                ("end", caption["end"], False, True),
-                ("model", "Model", False, hosted and self.client.sdk),
-                ("fork", "Fork", False, True)]
+                ("relaunch", caption["relaunch"], "relaunch" in busy, True),
+                ("park", "Park", "park" in busy, state != "parked"),
+                ("end", caption["end"], "end" in busy, True),
+                ("model", "Model", "model" in busy, hosted and self.client.sdk),
+                ("fork", "Fork", "fork" in busy, True)]
 
     def state(self, s) -> str:
         """A session's state (hub.VERBS): active, available or parked."""
@@ -4674,8 +4752,60 @@ class WheelhouseApp(App):
         n = s["drafts"]
         hosted = runner(s) == "sdk" and self.running(s["id"]) and not s["shell"]
         dead = self.statuses.get(s["id"]) == "dead"
+        busy = self.busy_buttons(s)
         return [("mode", *mode_, True), ("send", f"Send ({n})", not n, not dead),
-                *[(b, b.capitalize(), False, hosted) for b in ("interrupt", "compact", "shell")]]
+                *[(b, b.capitalize(), b in busy, hosted) for b in ("interrupt", "compact", "shell")]]
+
+    def busy_buttons(self, s) -> set[str]:
+        """A session's busy buttons (#107): those whose action, pressed here or shown under way
+        in its row (under_way), hasn't landed, for at most BUSY_FOR (follow_presses). Compact on
+        the question suggesting it, with Compact's own: the same command."""
+        busy = {b for (sid, b), press in self.pressed.items() if sid == s["id"] and not press.expired}
+        return busy | {"compact-now"} if "compact" in busy else busy
+
+    def press(self, sid: str, button: str, ref: str | None = None) -> None:
+        """A busy button's action sent: the button off from now (busy_buttons)."""
+        self.pressed[(sid, button)] = Press(Press.now(), stamp(), ref=ref)
+
+    def follow_presses(self) -> None:
+        """Each refresh, the busy buttons against the store: an action shown under way is
+        seen, and one seen and no longer under way has landed, as has an Interrupt the host
+        has stamped since, the question's Compact once the question closes, and anything
+        once its session goes, or, but for OUTLIVE's, stops running. One with no word in
+        BUSY_FOR comes back on, said if it was pressed here. One under way that wasn't pressed
+        here (another app's, or before this one started) is followed as if it had been."""
+        now = Press.now()
+        rows = {s["id"]: s for s in self.sessions}
+        for sid, times in list(self.forking.items()):   # a fork with no word in BUSY_FOR: let go
+            if not (kept := [at for at in times if now - at < BUSY_FOR]):
+                del self.forking[sid]
+            else:
+                self.forking[sid] = kept
+        for s in self.sessions:
+            for button in BUSY_BUTTONS:
+                if (s["id"], button) not in self.pressed and self.under_way(button, s):
+                    self.pressed[(s["id"], button)] = Press(now - asked_ago(s, button), stamp(), pressed=False)
+        for (sid, button), press in list(self.pressed.items()):
+            s = rows.get(sid)
+            if s is None or button not in OUTLIVE and self.statuses.get(sid) not in ("live", "stalled"):
+                del self.pressed[(sid, button)]
+                continue
+            on = self.under_way(button, s)
+            press.seen |= on
+            landed = (press.seen and not on
+                      or button == "interrupt" and (models.field(s, "interrupted_at") or "") >= press.at
+                      or button == "compact-now" and self.client.compact_question((sid, press.ref)) is None)
+            if landed:
+                del self.pressed[(sid, button)]
+            elif not press.expired and now - press.since >= BUSY_FOR:
+                press.expired = True
+                if press.pressed:
+                    self.notify(f"no word from {self.display_name(s)} after {BUSY_FOR} s", severity="warning")
+                if not on:   # nothing in the store to wait on: gone, so a later one is followed afresh
+                    del self.pressed[(sid, button)]
+
+    def under_way(self, button: str, s) -> bool:
+        return under_way(button, s, self.statuses.get(s["id"], "dead"), s["id"] in self.relaunching)
 
     def bar_widgets(self, screen: Screen) -> tuple:
         """A screen's send bar, answer hints, permission buttons, Compact question buttons and
@@ -4731,6 +4861,9 @@ class WheelhouseApp(App):
                     self.refit()   # a row more or less over the answer box
         if doc_gone and not self.focus_answer():
             self.screen.set_focus(self.items_table)
+        compacting = s is not None and "compact-now" in self.busy_buttons(s)
+        for row in compact_rows:
+            show_button(row, "compact-now", "Compact", compacting)
         show_button(bar, "send-all", f"Send all ({total})", not total)
         if s is not None and runner(s) == "sdk":
             bar.activity("in a shell tab" if s["shell"] else (s["activity"] or "") if self.running(s["id"]) else "")
@@ -5025,6 +5158,7 @@ class WheelhouseApp(App):
     @session_action
     def relaunch(self, sid: str) -> None:
         if self.told(self.client.relaunch(sid)).ok:
+            self.press(sid, "relaunch")
             self.refresh_data()
 
     @on(Button.Pressed, "#relaunch")
@@ -5068,6 +5202,7 @@ class WheelhouseApp(App):
         stops it once the session is compacted (hub.Hub.compact_then_relaunch)."""
         stop = self.client.compact_then_relaunch if compact else self.client.stop_host
         if self.told(stop(sid, host)).ok:
+            self.press(sid, "relaunch")
             self.refresh_data()
 
     async def action_quit(self) -> None:
@@ -5611,7 +5746,9 @@ class WheelhouseApp(App):
                              lambda yes: yes and self.host_command(sid, what))
 
     def host_command(self, sid: str, what: str, notes: str | None = None, then: str | None = None) -> None:
-        self.told(self.client.host_command(sid, what, notes, then))
+        if self.told(self.client.host_command(sid, what, notes, then)).ok:
+            self.press(sid, what)
+            self.refresh_data()
 
     @on(Button.Pressed, "#compact-now, #leave-it")
     def compact_question_pressed(self, event: Button.Pressed) -> None:
@@ -5642,8 +5779,10 @@ class WheelhouseApp(App):
         notes = emoji.convert(box.text.strip()) if box is not None and aimed_at == target else ""
         rows = self.bar_widgets(self.screen)[3]
         then = rows[0].then if rows else DEFAULT_THEN
-        if self.told(self.client.host_command(target[0], "compact", notes or None, then)).ok and notes:
-            box.text = ""
+        if self.told(self.client.host_command(target[0], "compact", notes or None, then)).ok:
+            self.press(target[0], "compact-now", target[1])   # off until the question closes (follow_presses)
+            if notes:
+                box.text = ""
         self.refresh_data()
 
     @on(Button.Pressed, "#model")
@@ -5660,6 +5799,7 @@ class WheelhouseApp(App):
     @session_action
     def change_model(self, sid: str, model: str | None) -> None:
         if model and self.told(self.client.set_model(sid, model)).ok:   # not if cancelled, or unchanged
+            self.press(sid, "model")
             self.refresh_data()
 
     @on(Splitter.Resized)
@@ -5733,7 +5873,9 @@ class WheelhouseApp(App):
             whose = "the item in context" if button_id in ("allow", "always", "deny") else "this session"
             self.notify(f"{button.label} doesn't apply to {whose}", severity="warning")
         elif button.disabled:
-            self.notify(f"{button.label}: nothing to do", severity="warning")
+            whose = self.current_session() if button_id in dict(LIFECYCLE).values() else self.bar_session(self.screen)
+            busy = whose is not None and button_id in self.busy_buttons(self.row(whose))
+            self.notify(f"{button.label}: " + ("still under way" if busy else "nothing to do"), severity="warning")
         elif isinstance(button, RadioButton):
             button.value = True   # a then-choice: pressed in its set
         else:
@@ -5921,6 +6063,8 @@ class WheelhouseApp(App):
     def fork(self, sid: str, form: dict) -> None:
         done = self.told(self.client.fork(sid, form["refs"], form["branch"]))
         if done.ok:
+            self.press(sid, "fork")   # until the hub's word of it, made or failed (heard)
+            self.forking.setdefault(sid, []).append(Press.now())
             self.refresh_data()
 
     @on(Button.Pressed, "#end")
@@ -5983,7 +6127,8 @@ class WheelhouseApp(App):
 
     @session_action
     def ask(self, sid: str, what: str, compact: bool = False) -> None:
-        self.told(self.client.ask(sid, what, compact))
+        if self.told(self.client.ask(sid, what, compact)).ok:
+            self.press(sid, what)   # Park or Forget, off while asked: pressed again past BUSY_FOR, Cancel or Force
         self.keep_current(sid, what)
         self.refresh_data()
 

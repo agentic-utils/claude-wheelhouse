@@ -130,6 +130,10 @@ FEATURES: tuple[Feature, ...] = (
             note="After an update, the tour shows only what's new, pane by pane, with no demo; Esc ends it at any "
                  "time, and after quitting mid-tour, L or the title bar's badge resumes it.",
             tip="After an update, the badge in the title bar (L) offers just what's new."),
+    Feature("busy-buttons", UNRELEASED, "send",
+            note="A pressed button (Compact, Interrupt, Relaunch, Park, Fork...) stays off, dark grey, until what it "
+                 "started has finished, or for 30 seconds with no word from the session.",
+            tip="A pressed button stays dark grey until what it started has finished."),
 )
 
 

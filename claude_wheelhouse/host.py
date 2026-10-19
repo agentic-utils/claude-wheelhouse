@@ -58,6 +58,7 @@ NO_NOTES = (f"idle · Compact got no notes back in {COMPACT_TIMEOUT // 60} quiet
 AWAITING_NOTES = "idle · Compact is waiting for the session's notes (Interrupt cancels it)"
 HOLD_EXPIRED = (f"compacting for {COMPACT_TIMEOUT // 60}+ minutes: it won't park after all, and your "
                 "messages are no longer held")
+SHELL_OPENING = "opening a shell tab"   # the activity line while Shell hands the session over
 COMPACTED = "idle · compacted"   # how the activity line starts once a compaction's turn has ended
 # A context past this many tokens gets one question item suggesting Compact, per crossing
 # (COMPACT_QUESTION): every turn re-reads the whole context from the prompt cache
@@ -937,7 +938,7 @@ class Host:
         Another host taking the session meanwhile (a Restore once the tab has exited) clears
         the shell flag as it starts, and holds the registration: either way this host lets
         go without a word, since the session's activity line is the new owner's."""
-        self.store.set_activity(self.sid, "opening a shell tab")
+        self.store.set_activity(self.sid, SHELL_OPENING)
         if self.pending:
             await self.client.interrupt()
         await self.disconnect()

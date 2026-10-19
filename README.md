@@ -328,7 +328,13 @@ session.
   a tooltip saying what it does: its lifecycle (Rename on a running session, Relaunch
   (Unpark on a parked one), Forget (Stop & Forget on a running one) and Fork on any, and Park on one
   that isn't parked), then its
-  conversation (Mode, and Send on one that isn't dead). New (`N`), Adopt (`A`, a list of the sessions on disk you can adopt) and
+  conversation (Mode, and Send on one that isn't dead). A button that's off, whatever the reason, is
+  dark grey with black text. One you press stays off until what it started has finished: Interrupt
+  until the session is interrupted, Compact until it's compacted (Compact on the question suggesting it,
+  until that question closes), Shell until the tab has it, Model until the session runs on the new
+  one, Relaunch and Unpark until it's running again, Park until it's parked, Forget until it's gone,
+  Fork until the fork is made or fails. With no word from the session in 30 seconds it comes back on
+  and says so. New (`N`), Adopt (`A`, a list of the sessions on disk you can adopt) and
   Relaunch all (`Shift+L`) act on no one session, so they're keys in the footer. Ctrl+S, Ctrl+T and the
   hint under the answer box act on or describe the same session (with none selected, the highlighted item's).
   An item opened full screen has Mode, Send and the rest in its bar, for its own session. New session (directory, optional name, optional ticket, opening brief,
@@ -367,7 +373,7 @@ session.
   default), at `<main checkout>/.worktrees/<branch>`, on a new branch from the session's last
   commit (`<branch>-fork` unless changed), or this one. Uncommitted changes stay where they are:
   the dialog warns when there are any, and the fork is told it won't see them. A
-  pending Park or Stop & Forget is pressed again to choose: `C` cancels the request, `F` forces
+  pending Park or Stop & Forget, its button back on after 30 seconds, is pressed again to choose: `C` cancels the request, `F` forces
   it (the session is stopped at once, without its steps), `Esc` leaves it be. In the session's
   tab, `/wheelhouse park` and `/wheelhouse end` do the same from there. A tab closes once its
   session stops, by `/exit` or by the wheelhouse: its shell then exits cleanly, which Windows
