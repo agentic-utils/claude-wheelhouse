@@ -206,10 +206,12 @@ session.
   shows the edits rendered above, as an answer queues; nothing re-renders as you type.
   The two keep step: scrolling the doc scrolls the editor to the same place, and moving
   the cursor into another block scrolls the doc to show it. `Esc` closes the editor,
-  asking first if there are edits (Discard or Keep editing), and the pane's title
-  says `edited` while there are. Edits not discarded are kept, doc by doc, while the app
+  asking first if there are edits (Close keeping them, the default; Discard; or Keep
+  editing), and the pane's title says `edited` while there are. Edits not discarded are kept, doc by doc, while the app
   runs: another doc shown closes the editor, and opening it on the first again brings them
-  back, cursor and all; until then that doc shows them rendered, full screen too. Saving
+  back, a click putting the cursor on its block; until then that doc shows them rendered,
+  full screen too. A file changed on disk meanwhile keeps the edits, said once and as
+  `file changed` in the title. One file has one buffer, however it's reached. Saving
   comes next: for now `Ctrl+S` (and `Ctrl+Enter` for a session in Immediate mode) says so,
   and the file is never written.
 - **Decisions.** If your own instructions let a session decide some things without asking

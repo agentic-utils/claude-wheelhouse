@@ -130,6 +130,14 @@ async def test_esc_closes_asking_first_with_edits(store, sid, doc, full):
         assert editor.display and editor.text.startswith("# The plan\n\nNot yet."), "Keep editing keeps them"
         await pilot.press("escape")
         await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not editor.display and str(doc[1]) in app.doc_edits, "Close, the default, keeps the edits"
+        title = "#detail-pane" if not full else "#docview-scroll"
+        assert app.screen.query_one(title).border_title.endswith("edited"), "and the title says so"
+        await click(pilot, view, row_with(view, "Build it."))
+        await pilot.press("escape")
+        await pilot.pause()
         await pilot.press("d")
         await pilot.pause()
         assert not editor.display and editor.key is None, "Discard closes it"
@@ -155,7 +163,6 @@ async def test_edits_outlive_another_doc_shown_and_come_back(store, sid, doc):
     async with app.run_test(size=(160, 40)) as pilot:
         view, editor = await shown(app, pilot, doc[0])
         await edited(app, pilot, view, editor)
-        cursor = editor.cursor_location
         app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(q))
         await pilot.pause()
         assert not editor.display, "another item: the editor closes"
@@ -163,9 +170,9 @@ async def test_edits_outlive_another_doc_shown_and_come_back(store, sid, doc):
         assert app.doc_edits[str(doc[1])].text.startswith("# The plan\n\nKept. "), "its buffer kept, by its path"
         view, editor = await shown(app, pilot, doc[0])
         assert "Kept. Build it." in "\n".join(view._layout(view.size.width)[1]), "shown from the buffer meanwhile"
-        await click(pilot, view, row_with(view, "The plan"))
-        assert editor.text.startswith("# The plan\n\nKept. ") and editor.cursor_location == cursor, \
-            "reopened: the buffer and its cursor back"
+        await click(pilot, view, row_with(view, "x = 1"))
+        assert editor.text.startswith("# The plan\n\nKept. ") and editor.cursor_location == (7, 0), \
+            "reopened: the buffer back, the cursor on the clicked block's line"
         assert app.query_one("#detail-pane").border_title == "Detail · edited", "and edited"
         await pilot.press("escape")
         await pilot.pause()
@@ -188,13 +195,10 @@ async def test_edits_in_detail_show_full_screen(store, sid, doc):
         assert full_editor.text == editor.text, "its editor opens on the same buffer"
         full_editor.insert("More. ")
         await pilot.pause()
-        await pilot.press("escape")
-        await pilot.pause()
-        await pilot.press("escape")   # Keep editing: Esc closes nothing
-        await pilot.pause()
-        full_editor.close()
-        await pilot.press("escape")
-        await pilot.pause()
+        for key in ("escape", "enter", "escape"):   # asked, Close keeping them, and out
+            await pilot.press(key)
+            await pilot.pause()
+        assert not isinstance(app.screen, tui.DocView), "full screen left with its edits kept"
         app.refresh_data()
         await pilot.pause()
         assert "More. " in editor.text, "back in Detail, its editor takes up the edits made full screen"
@@ -270,3 +274,70 @@ async def test_a_render_keeps_the_cursors_block_on_its_row(store, sid, long_doc)
         await pilot.pause()
         await pilot.pause()
         assert view.block_rows(52)[0] - round(view.parent.scroll_y) == before, "the block on its row, the rows above grown"
+
+
+@pytest.mark.anyio
+async def test_a_click_on_a_block_the_edits_took_out_keeps_the_cursor(store, sid, doc):
+    q = store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0])
+        await edited(app, pilot, view, editor)
+        editor.delete((4, 0), (6, 0))   # the list, not rendered again
+        editor.move_cursor((2, 3))
+        await pilot.pause()
+        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(q))
+        await pilot.pause()
+        view, editor = await shown(app, pilot, doc[0])
+        await click(pilot, view, row_with(view, "one"))
+        assert editor.cursor_location == (2, 3), "the list gone from the buffer: the cursor where it was"
+
+
+@pytest.mark.anyio
+async def test_discard_full_screen_clears_detail_at_once(store, sid, doc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0])
+        await edited(app, pilot, view, editor)
+        full, full_editor = await shown(app, pilot, doc[0], full=True)
+        await click(pilot, full, row_with(full, "The plan"))
+        for key in ("escape", "d"):
+            await pilot.press(key)
+            await pilot.pause()
+        assert not editor.display and editor.key is None, "Detail's editor on it closed too"
+        assert app.screen_stack[0].query_one("#detail-pane").border_title == "Detail", "its title at once"
+        assert "Kept" not in "\n".join(view._layout(view.size.width)[1]), "and its viewer the file's"
+        assert str(doc[1]) not in app.doc_edits
+
+
+@pytest.mark.anyio
+async def test_the_file_changing_on_disk_keeps_the_edits_and_says_so(store, sid, doc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        notes = []
+        app.notify = lambda message, **_: notes.append(message)
+        view, editor = await shown(app, pilot, doc[0])
+        await edited(app, pilot, view, editor)
+        doc[1].write_text(DOC.replace("Build it.", "Changed on disk."))
+        for _ in range(2):
+            app.refresh_data()
+            await pilot.pause()
+        assert editor.text.startswith("# The plan\n\nKept. Build it."), "the buffer kept"
+        assert "Kept. Build it." in app._detail_text, "and shown"
+        assert notes == ["plan.md changed on disk since you started editing; your edits are kept"], f"once: {notes}"
+        assert app.query_one("#detail-pane").border_title == "Detail · edited · file changed", "and in the title"
+        assert app.doc_edits[str(doc[1])].changed, "noted for the save to come"
+
+
+@pytest.mark.anyio
+async def test_one_file_has_one_buffer_however_reached(store, sid, doc, tmp_path):
+    link = tmp_path / "link.md"
+    link.symlink_to(doc[1])
+    other = store.post_doc(sid, "the plan again", str(link))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0])
+        await edited(app, pilot, view, editor)
+        view, editor = await shown(app, pilot, other)
+        assert list(app.doc_edits) == [str(doc[1].resolve())], "kept by the real path"
+        assert "Kept. Build it." in app._detail_text, "the link's doc shows the same buffer"
