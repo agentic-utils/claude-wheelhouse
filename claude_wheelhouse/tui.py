@@ -196,6 +196,13 @@ def rehome(widget: Widget, to: Widget) -> None:
 
 
 LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of its parent
+# a doc item in Detail and full screen (.plan/docs-section.md): split, the doc over its thread
+# (their splitter kept as layout.doc-thread), or tabbed (Doc, Thread, and Editor while it's
+# open), switched by Ctrl+L and kept as layout.doc-view
+DOC_THREAD, DOC_LAYOUT = "doc-thread", LAYOUT + "doc-view"
+SPLIT, TABBED = "split", "tabbed"
+DOC_TAB, THREAD_TAB, EDITOR_TAB = "doc", "thread", "editor"
+QUOTE_CUT = 80   # a comment's quote of the block it's about: its first line, cut to this
 SLOTS_KEY = LAYOUT + "slots"   # where each pane is, {slot: pane}, kept per TUI (.plan/modules.md)
 SESSION_LABELS = ("", "session", "ctx", "?", "D", "✉")   # the session list's headers, as ordering.SESSION_COLUMNS
 # keys no splitter has now, deleted at start: items sized the items over the stats,
@@ -360,9 +367,23 @@ def family_prompt(parents: list, family: list, marked: int = 1) -> str:
                if kept else ""))
 
 
+def doc_close_prompt(item, awaiting: bool) -> str:
+    """Delete on a doc: what it asks first."""
+    return (f"Close doc {item['ref']}? The file stays on disk."
+            + (" Your comment on it is still awaiting a reply." if awaiting else ""))
+
+
 def item_key(item) -> str:
     """An item's row key in the item list."""
     return f"{item['session_id']}|{item['ref']}"
+
+
+DOCS_ROW = "|docs"   # the docs band's header row (.plan/docs-section.md): no item's, never marked or selected
+
+
+def docs_header(n: int) -> tuple[str, tuple]:
+    """The docs band's header row: its + / - (ItemList.toggles) collapses the band."""
+    return DOCS_ROW, ("", "", "", Text(f"Docs ({n})", style="bold #05d9e8"))
 
 
 def band(rank: tuple) -> int:
@@ -1322,7 +1343,7 @@ class ItemList(SinkList):
         return Strip.join([strip.crop(0, width - 2), mark])
 
     def set_marks(self, marks: set[str], anchor: str | None = None) -> None:
-        self.marked = {k for k in marks if not k.endswith("|")}   # not the conversation row
+        self.marked = {k for k in marks if not k.endswith("|") and k != DOCS_ROW}   # not the conversation row, nor the docs header
         self.anchor = anchor
         self.post_message(self.MarksChanged())
 
@@ -1875,6 +1896,45 @@ def file_blocks(path: str, title: str, doc) -> list[tuple[str, str]]:
     if doc and doc.get("text"):
         out.append(("doc", doc["text"]))
     return out
+
+
+def doc_thread_blocks(found) -> list[tuple[str, str]]:
+    """A doc's thread: its messages alone (thread_blocks without the item's head and body,
+    which for a doc is its path), oldest first."""
+    return thread_blocks(found)[2:] if found is not None else []
+
+
+def quote_of(md: str, line: int) -> str:
+    """The first line of a doc's block (its source line), as a comment on it quotes it: its
+    markdown markers off (a heading's #, a list's bullet, a quote's >, emphasis), cut to QUOTE_CUT."""
+    lines = md.splitlines()
+    text = lines[line] if 0 <= line < len(lines) else ""
+    text = re.sub(r"^\s*(?:#+|>+|[-*+]|\d+[.)])\s*", "", text).replace("**", "").replace("`", "").strip()
+    return text if len(text) <= QUOTE_CUT else text[:QUOTE_CUT - 1].rstrip() + "…"
+
+
+def quoted(quote: str | None, text: str) -> str:
+    """A comment on a doc, with the line it's about quoted first, if any."""
+    return f'> "{quote}"\n\n{text}' if quote else text
+
+
+class DocTabs(Static):
+    """A doc's tabs when tabbed (.plan/docs-section.md 2b): Doc, Thread (with its count of
+    new replies), and Editor while the editor is open. A click on one shows it; so do
+    Ctrl+PageUp and Ctrl+PageDown (WheelhouseApp.action_doc_tab)."""
+
+    def show(self, tabs: list[tuple[str, str]], current: str) -> None:
+        text = Text()
+        for key, label in tabs:
+            here = key == current
+            text.append(f"[ {label} ]" if here else f"  {label}  ",
+                        Style(color="#ffd300" if here else "#999999", bold=here) + Style.from_meta({"tab": key}))
+            text.append(" ")
+        self.update(text)
+
+    def on_click(self, event: events.Click) -> None:
+        if tab := event.style.meta.get("tab"):
+            self.app.pick_doc_tab(tab)
 
 
 class DocView(Screen):
@@ -3351,6 +3411,10 @@ class WheelhouseApp(App):
     #items {{ height: 1fr; min-height: 3; }}
     #detail-scroll {{ height: 1fr; min-height: 3; scrollbar-gutter: stable; }}   /* its width the same, scrolling or not */
     #docview-scroll {{ height: 1fr; scrollbar-gutter: stable; }}
+    /* a doc's thread under it in Detail (split), its share kept as layout.doc-thread; its tabs (tabbed) */
+    #doc-thread-scroll {{ height: 35%; min-height: 3; }}
+    #doc-thread {{ background: #000000; color: {MATRIX}; }}
+    #doc-tabs {{ height: 1; background: #12122a; }}
     #docview {{ background: #000000; color: {MATRIX}; }}
     #answer {{ min-height: 3; }}
     DocEditor {{ height: 40%; min-height: 3; background: #000000; color: {MATRIX}; border: round #05d9e8; }}
@@ -3448,6 +3512,10 @@ class WheelhouseApp(App):
         Binding("f", "show_finished(True)", "Show finished", key_display="F"),
         Binding("f", "show_finished(False)", "Hide finished", key_display="F"),
         Binding("question_mark", "help", "Keys", key_display="?"),
+        # a doc item in Detail (.plan/docs-section.md): split or tabbed, and the tabs
+        Binding("ctrl+l", "doc_layout", "Doc layout", show=False, key_display="Ctrl+L"),
+        Binding("ctrl+pageup", "doc_tab(-1)", "Doc's tab before", show=False),
+        Binding("ctrl+pagedown", "doc_tab(1)", "Doc's tab after", show=False),
         Binding("l", "tour", "Tour", key_display="L"),   # shown while the badge is (check_action)
         Binding("q", "quit", "Quit", key_display="Q"),
         *BUTTON_KEYS,
@@ -3515,6 +3583,13 @@ class WheelhouseApp(App):
         self.modules = api.switch_off(api.load(), api.disabled(self.client.setting(api.DISABLED)))
         self.shown_doc: tuple[str, str] | None = None   # a module's doc in Detail (show_doc): (path, title)
         self.doc_edits: dict[str, DocEdit] = {}   # each doc's unsaved edits, by its path (DocEditor.edits)
+        # a doc item in Detail (.plan/docs-section.md): split or tabbed (Ctrl+L, kept as DOC_LAYOUT),
+        # the tab shown when tabbed and whose doc that is, how it was last laid out, and each doc's
+        # quote, the first line of the block last clicked, that a comment on it carries
+        self.doc_layout = SPLIT
+        self.doc_tab, self.doc_tab_for = DOC_TAB, None
+        self.doc_laid: tuple | None = None
+        self.doc_quotes: dict[tuple[str, str], str] = {}
         # the state dir: the database's, for a module that keeps files of its own
         state_dir = self.store.path.parent if self.store else db_path().parent
         self.ctx = api.Context(state_dir, self.module_sessions, self.stats_sid, usage=self.client.usage,
@@ -3572,11 +3647,15 @@ class WheelhouseApp(App):
             with Vertical(id="col-right", classes="column"), slot("right"):
                 with Vertical(id="detail-pane", classes="panel") as pane:
                     pane.border_title = "Detail"
+                    yield hidden(DocTabs(id="doc-tabs"))   # a doc's, tabbed (lay_doc)
                     with ConversationScroll(id="detail-scroll"):
                         yield Transcript(NOTHING_SELECTED, id="detail")
-                    yield hidden(Splitter("editor", "#detail-editor", "#detail-scroll", "y"))
+                    yield hidden(Splitter("editor", "#detail-editor", "#detail-scroll", "y", label="editing"))
                     yield DocEditor("#detail", "#detail-pane", self.detail_doc_sends_now, self.paint_detail,
                                     id="detail-editor")
+                    yield hidden(Splitter(DOC_THREAD, "#doc-thread-scroll", "#detail-scroll", "y", label="thread"))
+                    with hidden(ConversationScroll(id="doc-thread-scroll")):   # a doc's thread (lay_doc)
+                        yield Transcript(id="doc-thread")
                     yield Splitter("answer", "#answer", "#detail-scroll", "y")
                     yield PermissionButtons()
                     yield DenyReason()
@@ -3597,6 +3676,12 @@ class WheelhouseApp(App):
         # held: a query walks every doc block
         self.answer_splitter = next(s for s in self.query("#detail-pane > Splitter") if s.key == "answer")
         self.detail_editor = self.query_one("#detail-editor", DocEditor)
+        self.doc_tabs = self.query_one("#doc-tabs", DocTabs)
+        self.doc_thread = self.query_one("#doc-thread", Transcript)
+        self.doc_thread_scroll = self.query_one("#doc-thread-scroll", VerticalScroll)
+        self.doc_thread_splitter = next(s for s in self.query("#detail-pane > Splitter") if s.key == DOC_THREAD)
+        self.editor_splitter = next(s for s in self.query("#detail-pane > Splitter") if s.key == "editor")
+        self.doc_layout = TABBED if self.client.setting(DOC_LAYOUT) == TABBED else SPLIT
         self.answer = self.query_one("#answer", Compose)
         self.session_list = self.query_one("#session-list", SessionList)
         self.session_list.sink, self.items_table.sink = self.session_sink, self.item_sink
@@ -3716,6 +3801,8 @@ class WheelhouseApp(App):
             titles[0].end_drag(drop=False)   # a pane's drag by its title, likewise
             return
         if event.key == "escape" and self.esc_ends_tour():
+            return
+        if self.type_to_thread(event):
             return
         if not (await self._check_bindings(event.key, priority=True) or await self._check_bindings(event.key)):
             (self.focused or self.screen)._forward_event(event)
@@ -4108,21 +4195,31 @@ class WheelhouseApp(App):
         keyed = self.ranked_keyed(found, processing, busy, names)
         key_of = {id(it): key for key, it in keyed}   # each item's row key, made once
         active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
+        docs = []   # the docs band, at the foot under any sort (.plan/docs-section.md): finished ones with F
         for key, it in keyed:
+            if it["kind"] == "doc":
+                if self.show_finished or standing(it, busy) != "finished":
+                    docs.append(it)
             # ordering off: one band, nothing moves between them, but the finished still wait for F
-            if self.item_sort or self.show_finished or standing(it, busy) != "finished":
-                bands[self.ranks[key][0]].append(it)
+            elif self.item_sort or self.show_finished or standing(it, busy) != "finished":
+                bands[min(self.ranks[key][0], 2)].append(it)
         rows, counts = item_rows([active, settled, finished if self.show_finished else []], names, self.collapsed)
+        if docs and DOCS_ROW not in self.collapsed:
+            rows += [(it, None, ordering.DOCS) for it in docs]
         table.draggable = {key_of[id(it)] for it, nested, _ in rows if nested is None}
         table.followers = {key_of[id(it)] for it, nested, _ in rows if nested == CHILD}
-        table.toggles = {key: key in self.collapsed for key in counts}
-        sunk = {key_of[id(it)] for it, _, n in rows if n}
+        table.toggles = {key: key in self.collapsed for key in counts} | ({DOCS_ROW: DOCS_ROW in self.collapsed} if docs else {})
+        sunk = {key_of[id(it)] for it, _, n in rows if n} | {DOCS_ROW}   # the docs band: always at the foot
         if self.filter_sid:   # the session's own conversation, pinned first
             general = (self.filter_sid, None) in queued
             rows_out.append((f"{self.filter_sid}|", (names.get(self.filter_sid, "")[:14], Text("💬"),
                              Text("queued", style="bold #05d9e8") if general else "",
                              Text("Conversation", style="bold"))))
-        for it, nested, _ in rows:
+        header = False
+        for it, nested, n in rows:
+            if n == ordering.DOCS and not header:
+                header = True
+                rows_out.append(docs_header(len(docs)))
             # an unfinished item of any kind with an answer waiting to be sent shows as queued, and one
             # whose answer went with no reply since as processing (D28); neither is stored
             key = (it["session_id"], it["ref"])
@@ -4140,6 +4237,9 @@ class WheelhouseApp(App):
                 title = Text(it["title"], style="dim")
             else:
                 shown, title = Text(status, style=style), Text(it["title"], style="dim") if where != "active" else it["title"]
+            if (fresh := ordering.field(it, "new_replies")) and status not in ("queued", "processing") \
+                    and key not in awaiting:   # a doc's replies the person hasn't seen (store._said)
+                shown = Text(f"{fresh} new", style=DECISION)
             if nested is None:
                 cells = (name, it["ref"], shown, title)
             elif nested == CHILD:   # under its parent, as a subagent is under its session's name
@@ -4148,6 +4248,8 @@ class WheelhouseApp(App):
                 cells = (name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
                          shown, Text(it["title"], style="dim"))
             rows_out.append((key_of[id(it)], cells))
+        if docs and not header:   # collapsed: the band's header alone
+            rows_out.append(docs_header(len(docs)))
         if self.filter_sid:   # the session column goes: the inbox follows the one session
             rows_out = [(k, cells[1:]) for k, cells in rows_out]
         cells = dict(rows_out)
@@ -4398,6 +4500,7 @@ class WheelhouseApp(App):
         target = self.selected
         self.keep_unsent(self.answer, self.box_target, target)
         self.box_target = target
+        self.paint_quote()
 
     def item_blocks(self, sid: str, ref: str, session_name: str = "") -> tuple[list[tuple[str, str]], bool]:
         """An item's thread (thread_blocks), and for a subagent's, under it, the subagent's own
@@ -4439,8 +4542,27 @@ class WheelhouseApp(App):
 
     @on(Transcript.DocClicked)
     def edit_detail(self, event: Transcript.DocClicked) -> None:
-        if event.view is self.detail:
-            self.detail_editor.open_at(event.row)
+        """A click on Detail's doc: the editor opens there, in the thread's place (split) or as
+        a tab (tabbed), and a doc item's next comment quotes the block clicked."""
+        if event.view is not self.detail:
+            return
+        doc = self.shown_doc is None and self.selected_doc()
+        line = self.detail.line_at(event.row)
+        if doc and line is not None:
+            md = next((md for who, md in self.detail.blocks if who == "doc"), "")
+            self.doc_quotes[self.selected] = quote_of(md, line)
+            self.paint_quote()
+        self.detail_editor.open_at(event.row)
+        if doc and self.detail_editor.key is not None and self.doc_layout == TABBED:
+            self.doc_tab = EDITOR_TAB
+        self.paint_detail()
+
+    def paint_quote(self) -> None:
+        """The answer box's title: the line the comment on a doc quotes, if any."""
+        quote = self.box_target and self.doc_quotes.get(self.box_target)
+        title = f'> "{quote}"' if quote else None
+        if self.answer.border_title != title:
+            self.answer.border_title = title
 
     def paint_detail(self) -> None:
         agent, doc, shown = False, self.selected_doc(), self.shown_doc
@@ -4478,9 +4600,112 @@ class WheelhouseApp(App):
         if text != getattr(self, "_detail_text", None):
             following = self.detail_follows and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1
             self._detail_text = text
-            self.detail.update(render(blocks))
+            self.detail.update(render(blocks))   # a doc posted again: where it was scrolled to stays
             if following:   # stay at the newest turn, unless the person has scrolled up to read
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
+        if hasattr(self, "doc_thread"):
+            self.paint_doc_thread(doc if not shown and not self.viewing else None)
+
+    def paint_doc_thread(self, doc) -> None:
+        """A doc item's thread under it (split) or on its tab (tabbed), following its newest
+        message, and Detail laid out for it (lay_doc)."""
+        found = self.client.thread(doc["session_id"], doc["ref"]) if doc is not None else None
+        blocks = doc_thread_blocks(found)
+        text = "\n\n".join(md for _, md in blocks)
+        if text != getattr(self, "_doc_thread_text", None):
+            scroll = self.doc_thread_scroll
+            following = scroll.scroll_y >= scroll.max_scroll_y - 1
+            self._doc_thread_text = text
+            self.doc_thread.update(render(blocks))
+            if following:
+                self.call_after_refresh(scroll.scroll_end, animate=False)
+        self.lay_doc(doc, bool(blocks))
+
+    def lay_doc(self, doc, said: bool) -> None:
+        """Detail for a doc item (.plan/docs-section.md 2): split, the doc over its thread and
+        the answer box, or with no comment yet over the box alone; tabbed, one of Doc, Thread
+        (with the box) and, while it's open, Editor. The editor open in split takes the
+        thread's and the box's place (paint_sendbar hides the box: doc_box). Anything else
+        shown: the doc's widgets put away. Sizes are set only as the layout changes, so a
+        splitter dragged keeps its place."""
+        editing = self.detail_editor.key is not None
+        key = doc and item_key(doc)
+        if key != self.doc_tab_for:   # another doc: its Doc tab first
+            self.doc_tab, self.doc_tab_for = DOC_TAB, key
+        if self.doc_tab == EDITOR_TAB and not editing:   # the editor closed: the thread back
+            self.doc_tab = THREAD_TAB
+        tabbed = doc is not None and self.doc_layout == TABBED
+        tab = self.doc_tab if tabbed else None
+        if tabbed:
+            fresh = ordering.field(doc, "new_replies")
+            self.doc_tabs.show([(DOC_TAB, "Doc"), (THREAD_TAB, f"Thread ({fresh} new)" if fresh else "Thread")]
+                               + ([(EDITOR_TAB, "Editor")] if editing else []), tab)
+        laid = (doc is not None, tabbed, tab, editing, said)
+        if laid == self.doc_laid:
+            return
+        self.doc_laid = laid
+        shown = {self.doc_tabs: tabbed, self.detail_scroll: tab in (None, DOC_TAB),
+                 self.doc_thread_scroll: doc is not None and (tab == THREAD_TAB or not tabbed and said and not editing),
+                 self.doc_thread_splitter: doc is not None and not tabbed and said and not editing}
+        if doc is not None:   # the editor's, while a doc item shows: its own otherwise (DocEditor)
+            shown |= {self.detail_editor: editing and tab in (None, EDITOR_TAB), self.editor_splitter: editing and not tabbed}
+        for widget, show in shown.items():
+            widget.display = show
+        if tabbed:   # one tab, the whole of Detail
+            self.doc_thread_scroll.styles.height = "1fr"
+            self.detail_editor.styles.height = "1fr"
+        else:
+            self.doc_thread_splitter.apply(share(self.client.setting(LAYOUT + DOC_THREAD)))
+            self.editor_splitter.apply(share(self.client.setting(LAYOUT + self.editor_splitter.key)))
+        self.paint_sendbar()
+        self.refit()
+
+    def doc_box(self) -> bool:
+        """Whether a doc item in Detail shows the answer box: split with the editor shut, or
+        tabbed on its Thread tab."""
+        if self.detail_editor.key is not None and self.doc_layout == SPLIT:
+            return False
+        return self.doc_layout == SPLIT or self.doc_tab == THREAD_TAB
+
+    def pick_doc_tab(self, tab: str) -> None:
+        """A doc's tab shown (tabbed): its box focused on Thread, the editor on Editor, the doc on Doc."""
+        if self.doc_layout != TABBED or self.selected_doc() is None:
+            return
+        self.doc_tab = tab
+        self.paint_detail()
+        target = {THREAD_TAB: self.answer, EDITOR_TAB: self.detail_editor, DOC_TAB: self.detail}[tab]
+        if target.display and target.can_focus:
+            self.screen.set_focus(target)
+
+    def action_doc_tab(self, step: int) -> None:
+        """Ctrl+PageUp, Ctrl+PageDown: a doc's tab before or after this one, round."""
+        if self.screen is not self.screen_stack[0] or self.doc_layout != TABBED or self.selected_doc() is None:
+            return
+        tabs = [DOC_TAB, THREAD_TAB] + ([EDITOR_TAB] if self.detail_editor.key is not None else [])
+        self.pick_doc_tab(tabs[(tabs.index(self.doc_tab) + step) % len(tabs)] if self.doc_tab in tabs else DOC_TAB)
+
+    def action_doc_layout(self) -> None:
+        """Ctrl+L while a doc item shows: split and tabbed swapped, and kept (DOC_LAYOUT)."""
+        if self.screen is not self.screen_stack[0] or self.selected_doc() is None:
+            return
+        self.doc_layout = SPLIT if self.doc_layout == TABBED else TABBED
+        self.client.set_setting(DOC_LAYOUT, self.doc_layout)
+        if self.doc_layout == TABBED:   # the tab for what had focus
+            self.doc_tab = EDITOR_TAB if self.detail_editor.has_focus else THREAD_TAB if self.answer.has_focus else DOC_TAB
+        self.paint_detail()
+        self.notify(f"docs: {self.doc_layout}")
+
+    def type_to_thread(self, event: events.Key) -> bool:
+        """A key typed on a doc's Doc tab (tabbed), the doc focused: the Thread tab shown, with
+        it typed into the box, so a comment is a keystroke away. Whether it took the key."""
+        if not (event.is_printable and event.character) or self.screen is not self.screen_stack[0] \
+                or self.focused is not getattr(self, "detail", None) or self.doc_layout != TABBED \
+                or self.doc_tab != DOC_TAB or self.selected_doc() is None:
+            return False
+        self.pick_doc_tab(THREAD_TAB)
+        self.screen.set_focus(self.answer)
+        self.answer.insert(event.character)
+        return True
 
     def conversation(self, sid: str) -> list[tuple[str, str]]:
         blocks = self.client.conversation(sid)
@@ -4844,10 +5069,13 @@ class WheelhouseApp(App):
             h.set_base(DENY_HINT if denying else PERMISSION_HINT if asking else COMPACT_HINT if nudged
                        else hint(sends, s is not None and self.dead(s["id"])))
         thread = isinstance(self.screen, ThreadView)
-        reading = not thread and (self.shown_doc is not None or self.selected_doc() is not None)   # a doc: no box
-        doc_gone = not thread and not reading and self.detail.has_focus   # the box back in its place: focus with it
-        if not thread:   # the doc in the box's place (TAB_ORDER)
-            self.detail.can_focus = reading
+        doc = not thread and (self.shown_doc is not None or self.selected_doc() is not None)
+        # a module's doc: no box; a doc item's, its thread's box, but for its Doc and Editor tabs
+        # and the editor open in split (doc_box)
+        reading = doc and (self.shown_doc is not None or not self.doc_box())
+        doc_gone = not thread and not doc and self.detail.has_focus   # the box back in its place: focus with it
+        if not thread:   # the doc a Tab stop (TAB_ORDER)
+            self.detail.can_focus = doc
         splitters = [] if thread else [self.answer_splitter]
         for rows, shown in ((permission_rows, asking and not denying), (reasons, denying), (compact_rows, nudged),
                             (boxes, not asking and not reading), (hints, not reading), (splitters, not reading)):
@@ -5284,6 +5512,12 @@ class WheelhouseApp(App):
             self.paint_items()
 
     def select_row(self, key: str) -> None:
+        if key == DOCS_ROW:   # the docs band's header: nothing selected, Detail empty
+            if self.selected is not None:
+                self.selected = None
+                self.retarget()
+                self.paint_detail()
+            return
         sid, ref = key.split("|")
         if self.selected != (sid, ref or None):
             self.selected = (sid, ref or None)   # an unseen decision is seen once looked at (dwelt)
@@ -5296,6 +5530,9 @@ class WheelhouseApp(App):
     @on(DataTable.RowSelected, "#items")
     def open_thread(self, event: DataTable.RowSelected) -> None:
         self.settle()
+        if event.row_key.value == DOCS_ROW:   # Enter on the docs band's header: it collapses, or opens
+            self.toggle_children(DOCS_ROW)
+            return
         sid, ref = event.row_key.value.split("|")
         self.saw(sid, ref or None)
         if ref:
@@ -5321,6 +5558,9 @@ class WheelhouseApp(App):
 
     def action_clear_filter(self) -> None:
         if self.deny_back():
+            return
+        if self.focused is self.answer and not self.answer.text.strip() and self.doc_quotes.pop(self.box_target, None):
+            self.paint_quote()   # Esc in an empty box under a doc: its quote dropped, the comment general
             return
         if self.screen.selections:   # a text selection first, as the screen's own Esc does
             self.screen.clear_selection()
@@ -5396,6 +5636,10 @@ class WheelhouseApp(App):
         if standing(item) == "finished" and self.show_finished:
             self.notify(f"{item['ref']} is {verb} already: Ctrl+R reopens it")
             return
+        if item["kind"] == "doc":   # reference material: closed only once the person says so (No the default)
+            awaiting = (item["session_id"], item["ref"]) in self.client.inbox(item["session_id"]).awaiting
+            self.push_screen(Confirm(doc_close_prompt(item, awaiting)), lambda yes: yes and self.close_doc(item))
+            return
         family = self.family(item)
         if family:   # it goes with its children, finished or not, a running one orphaned, once the person says so
             self.push_screen(Confirm(family_prompt([item], family)),
@@ -5403,6 +5647,16 @@ class WheelhouseApp(App):
             return
         self.close(item, True)
         self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
+        self.refresh_data()
+
+    def close_doc(self, item) -> None:
+        """Delete confirmed on a doc: closed as Delete closes a task (close), its file left be."""
+        try:
+            self.close(item, True)
+        except (SessionGone, KeyError) as e:   # ended or gone meanwhile
+            self.notify(str(e), severity="warning")
+            return
+        self.notify(f"closed {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
         self.refresh_data()
 
     def family(self, item) -> list:
@@ -5435,7 +5689,11 @@ class WheelhouseApp(App):
         they're hidden gives the selection to its parent."""
         self.collapsed ^= {key}
         sid, ref = key.split("|")
-        if key in self.collapsed and self.selected and self.selected[0] == sid and self.selected[1]:
+        if key == DOCS_ROW:   # the docs band: a doc selected as it collapses gives the selection to its header
+            item = key in self.collapsed and self.selected and self.selected[1] and self.client.item(*self.selected)
+            if item and item["kind"] == "doc":
+                self.select_row(key)
+        elif key in self.collapsed and self.selected and self.selected[0] == sid and self.selected[1]:
             item = self.client.item(*self.selected)
             if item is not None and parent_of(item) == ref:
                 self.select_row(key)
@@ -5468,18 +5726,22 @@ class WheelhouseApp(App):
             return (not finished or not self.show_finished) if closed else finished
         picked = [it for key in self.items_table.final() if key in self.items_table.marked   # as they'll stand
                   if (it := self.client.item(*key.split("|"))) and closable(it)]
+        docs = sum(it["kind"] == "doc" for it in picked) if closed else 0   # Delete never takes a doc: one at a time
+        picked = [it for it in picked if not closed or it["kind"] != "doc"]
+        kept = f"{docs} doc{'' if docs == 1 else 's'} kept" if docs else ""
         families = {item_key(it): self.family(it) for it in filter(acts, picked)} if closed else {}
         if any(families.values()):   # the children go with their parents, once the person says so
             kids = [c for f in families.values() for c in f]
             parents = [it for it in filter(acts, picked) if families[item_key(it)]]
             self.push_screen(Confirm(family_prompt(parents, kids, len(families))),
-                             lambda yes: yes and self.close_picked(list(filter(acts, picked)), families))
+                             lambda yes: yes and self.close_picked(list(filter(acts, picked)), families, kept=kept))
             return
         if not picked or not any(acts(it) for it in picked):
-            self.notify("the marked rows are finished already: Ctrl+R reopens them" if picked and closed else
-                        f"nothing among the marked rows to {'close' if closed else 'reopen'}", severity="warning")
+            self.notify(("the marked rows are finished already: Ctrl+R reopens them" if picked and closed else
+                         f"nothing among the marked rows to {'close' if closed else 'reopen'}") + (f": {kept}" if kept else ""),
+                        severity="warning")
             return
-        self.close_picked(list(filter(acts, picked)), families, closed)
+        self.close_picked(list(filter(acts, picked)), families, closed, kept)
 
     def action_mark_finished(self) -> None:
         """Ctrl+A in the item list: every finished row shown marked, the dimmed ones (settled,
@@ -5488,15 +5750,16 @@ class WheelhouseApp(App):
         found, _, queued, awaiting = self.client.inbox(self.filter_sid)
         by_key = {item_key(it): it for it in found}
         marks = {k for k in self.items_table.final() if (it := by_key.get(k)) and closable(it)
-                 and standing(it, queued | awaiting) != "active"}
+                 and it["kind"] != "doc" and standing(it, queued | awaiting) != "active"}   # never a doc
         if not marks:
             self.notify("no finished rows to mark", severity="warning")
             return
         self.items_table.set_marks(marks)
 
-    def close_picked(self, picked: list, families: dict, closed: bool = True) -> None:
+    def close_picked(self, picked: list, families: dict, closed: bool = True, kept: str = "") -> None:
         """The marked rows closed (or reopened), each with its children deleted if it has any
-        (families, by row key, confirmed): as Delete does them one at a time."""
+        (families, by row key, confirmed): as Delete does them one at a time. kept: the marked
+        docs it left, said with the rest ("1 doc kept")."""
         done = []
         for it in picked:
             try:
@@ -5517,7 +5780,7 @@ class WheelhouseApp(App):
             verb = ("deleted with its children" if families.get(item_key(it)) else
                     "closed" if it["kind"] in CLOSABLE else "dismissed") if closed else "reopened"
             said.setdefault(verb, []).append(it["ref"])
-        self.notify("; ".join(f"{verb} {', '.join(refs)}" for verb, refs in said.items())
+        self.notify("; ".join([f"{verb} {', '.join(refs)}" for verb, refs in said.items()] + ([kept] if kept else []))
                     + ("" if not closed or self.show_finished else ": F shows finished items"))
         self.refresh_data()
 
@@ -5576,12 +5839,16 @@ class WheelhouseApp(App):
         box, target, text = self.typed()
         if not box:
             return
-        done = self.told(self.client.submit(target, text))   # an open permission is denied, never queued (#53)
+        quote = self.doc_quotes.get(target) if box is self.answer else None
+        done = self.told(self.client.submit(target, quoted(quote, text)))   # an open permission is denied, never queued (#53)
         if not done.ok:   # a permission answered meanwhile
             return
         if done.denied:   # an explicit act, as Delete is: selected, the item moves at once (ranked)
             self.repin.add(f"{target[0]}|{target[1]}")
         box.text = ""
+        if quote:   # said: the next comment is general, unless another block is clicked
+            self.doc_quotes.pop(target, None)
+            self.paint_quote()
         self.refresh_data()
         if isinstance(self.screen, ThreadView) and box is self.screen.box:   # to the end, where the answer just given shows
             self.call_after_refresh(self.screen.query_one("#thread-scroll").scroll_end, animate=False)   # as paint

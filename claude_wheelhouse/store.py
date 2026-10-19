@@ -68,7 +68,9 @@ DECISION_FIELDS = (("why", "Why"),)
 # and a subagent's description naming its item's ref, which files it under that item.
 # 14: set_doc_dirs, the tool a session says where its repo's decisions are with, which the
 # design module's Decisions pane now reads (sessions.doc_dirs): an older session has no such tool.
-PROTOCOL_VERSION = 14
+# 15: the person comments on a doc (a message on its ref), which awaits the session's reply
+# there as a question's answer does (in_doubt), so the protocol asks it to reply on the doc.
+PROTOCOL_VERSION = 15
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.
@@ -238,6 +240,7 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "applied_model", "TEXT"), ("sessions", "applied_effort", "TEXT"),
                  ("sessions", "interrupted_at", "TEXT"), ("sessions", "model_chosen_at", "TEXT"),
                  ("sessions", "effort_chosen_at", "TEXT"), ("sessions", "launched_over", "INTEGER"),
+                 ("items", "new_replies", "INTEGER NOT NULL DEFAULT 0"),
                  ("items", "session_at", "TEXT"), ("items", "moved_to", "TEXT"), ("sessions", "compact_plan", "TEXT"),
                  ("sessions", "park_compact", "INTEGER NOT NULL DEFAULT 0"), ("items", "parent_ref", "TEXT"),
                  # the person's order (ordering.py): a row's place, and the group it was placed in
@@ -1017,6 +1020,11 @@ class Store:
 
     @staticmethod
     def _said(db, sid, ref, text, kind) -> int:
+        """The session's word on an item. A reply on a doc is one more the person hasn't seen
+        (items.new_replies, until they view it: _mark_seen)."""
+        if kind == "reply":
+            db.execute("UPDATE items SET new_replies = new_replies + 1 WHERE session_id = ? AND ref = ? AND kind = 'doc'",
+                       (sid, ref))
         return db.execute(
             """INSERT INTO messages (session_id, item_ref, author, body, created_at, delivered_at, kind)
                VALUES (?, ?, 'claude', ?, ?, ?, ?)""",
@@ -1056,7 +1064,7 @@ class Store:
 
     def in_doubt(self, sid: str, at: datetime | None = None) -> list[str]:
         """The items the wheelhouse doubts are still open, oldest first, each as `T1 running`
-        or `Q2 reply owed`: a task running, blocked or waiting, or a question whose latest
+        or `Q2 reply owed`: a task running, blocked or waiting, or a question or doc whose latest
         word is the person's (awaiting the session's reply), that the session has said
         nothing on (post_item, update_item, reply: session_at, else created_at) for
         DOUBT_AFTER or more; on a question, nor the person since their latest message on it,
@@ -1070,14 +1078,14 @@ class Store:
         cutoff = ((at or datetime.now(timezone.utc)) - DOUBT_AFTER).isoformat(timespec="seconds")
         rows = self._all(
             f"""SELECT ref, kind, status FROM items i WHERE session_id = ?
-                AND max(coalesce(session_at, created_at), CASE WHEN kind = 'question' THEN coalesce(
+                AND max(coalesce(session_at, created_at), CASE WHEN kind IN ('question', 'doc') THEN coalesce(
                     (SELECT max({REACHED.format(m="m.")}) FROM messages m WHERE m.session_id = i.session_id
                      AND m.item_ref = i.ref AND m.author = 'person' AND m.draft = 0), '') ELSE '' END) <= ?
                 AND ((kind = 'task' AND status IN ({','.join('?' * len(TRANSIENT))}))
-                     OR (kind = 'question' AND status = 'open'
+                     OR (((kind = 'question' AND status = 'open') OR kind = 'doc')
                          AND (session_id, ref) IN ({AWAITING})))
                 ORDER BY id""", (sid, cutoff, *TRANSIENT))
-        return [f"{r['ref']} {'reply owed' if r['kind'] == 'question' else r['status']}" for r in rows]
+        return [f"{r['ref']} {'reply owed' if r['kind'] in ('question', 'doc') else r['status']}" for r in rows]
 
     def heard_at(self, sid: str) -> str | None:
         """When the session was last sent anything: the latest a message of the person's (a
@@ -1119,9 +1127,10 @@ class Store:
         dwell. In the answer's own transaction, so a command that fails between the two never
         leaves one done without the other."""
         return ref is not None and db.execute(
-            "UPDATE items SET status = CASE kind WHEN 'decision' THEN 'seen' ELSE 'read' END, updated_at = ? "
+            "UPDATE items SET status = CASE kind WHEN 'decision' THEN 'seen' ELSE 'read' END, new_replies = 0, "
+            "updated_at = CASE WHEN status IN ('unseen', 'new', 'updated') THEN ? ELSE updated_at END "
             "WHERE session_id = ? AND ref = ? AND ((kind = 'decision' AND status = 'unseen') "
-            "OR (kind = 'doc' AND status IN ('new', 'updated')))", (now(), sid, ref)).rowcount > 0
+            "OR (kind = 'doc' AND (status IN ('new', 'updated') OR new_replies > 0)))", (now(), sid, ref)).rowcount > 0
 
     def dismiss(self, sid: str, ref: str, dismissed: bool = True) -> None:
         """The person dismisses a settled task or subagent (Delete), or brings it back (Ctrl+R). Kept as
