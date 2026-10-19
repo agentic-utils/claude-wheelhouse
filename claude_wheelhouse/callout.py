@@ -44,29 +44,35 @@ def width(screen: Size) -> int:
 def place(screen: Size, pane: Region | None, height: int, clear: Region | None = None,
           keep: Region | None = None) -> tuple[Region, str]:
     """Where a callout `height` rows high goes for a pane at `pane` (screen coordinates; None:
-    absent), and how: beside it on the first side where it fits without covering it (right,
-    left, below, above), else inside it over its top rows, else, for a pane narrower than the
-    callout or collapsed, centred on the screen, a row higher for the line naming the pane.
-    Beside or inside a pane, it keeps clear of the inbox (#101): where it covers `clear`, the
-    inbox's rows, it moves down past them if it fits there without covering its pane; where it
-    still covers `keep`, the demo's own rows, past those, else to the foot of the screen."""
-    region, side = spot(screen, pane, height)
-    if pane is None or side == "centred":
-        return region, side
+    absent), and how. One rule (#101): of the candidates in turn (spot's choice, beside the
+    pane, inside it or centred; then below every inbox row, `clear`; below the demo's rows,
+    `keep`; the screen's foot; its top), the first on screen that covers neither the demo's
+    rows nor the pane (but inside it, as spot put it there); with none, the one covering least of the demo's rows, then of the pane."""
+    first, side = spot(screen, pane, height)
+    spots = candidates(screen, first, clear, keep)
+    if side == "inside":   # placed over its pane by design: only the demo's rows to keep clear of
+        pane = None
 
-    def below(rows: Region) -> Region | None:
-        lower = Region(region.x, rows.bottom, region.width, region.height)
-        return lower if lower.bottom <= screen.height and (side == "inside" or not lower.overlaps(pane)) else None
+    def covers(r: Region, of: Region | None) -> int:
+        return r.intersection(of).area if of is not None else 0
 
-    if clear is not None and region.overlaps(clear) and (lower := below(clear)):
-        return lower, side
-    if keep is not None and region.overlaps(keep):
-        return below(keep) or Region(region.x, max(0, screen.height - region.height), region.width, region.height), side
-    return region, side
+    clear_of = [r for r in spots if not covers(r, keep) and not covers(r, pane)]
+    return (clear_of[0] if clear_of else min(spots, key=lambda r: (covers(r, keep), covers(r, pane)))), side
+
+
+def candidates(screen: Size, first: Region, clear: Region | None, keep: Region | None) -> list[Region]:
+    """place's candidates, in order, those on screen: `first`, then the same box below every
+    inbox row, below the demo's, at the screen's foot and at its top."""
+    tops = [first.y] + [r.bottom for r in (clear, keep) if r is not None] + [screen.height - first.height, 0]
+    spots = [Region(first.x, y, first.width, first.height) for y in tops]
+    return [r for r in spots if r.y >= 0 and r.bottom <= screen.height] or [first]
 
 
 def spot(screen: Size, pane: Region | None, height: int) -> tuple[Region, str]:
-    """place's first choice, before it clears anything."""
+    """place's first candidate: beside the pane on the first side where it fits without
+    covering it (right, left, below, above), else inside it over its top rows, else, for a
+    pane narrower than the callout or collapsed, centred on the screen, a row higher for the
+    line naming the pane."""
     w = width(screen)
 
     def clamp(value: int, low: int, high: int) -> int:
@@ -193,7 +199,7 @@ class TourCallout(Vertical):
         screen = self.screen.size
         target = find(self.screen, self.pane)
         region = target.region if target is not None and target.display else None
-        clear, keep = rows(self.screen, self.keep) if self.pane != "items" else (None, None)
+        clear, keep = rows(self.screen, self.keep)
         if self.placed == (screen, region, clear, keep):
             return
         self.placed = (screen, region, clear, keep)
@@ -204,7 +210,7 @@ class TourCallout(Vertical):
         text = self.text
         if self.side == "centred":   # its pane named first, a line that wraps on a narrow screen
             text = f"In the {title} pane:\n{self.text}"
-            at, _ = place(screen, None, self.lines(w, text) - 1)
+            at, _ = place(screen, None, self.lines(w, text) - 1, clear, keep)
         self.query_one(".tour-text", Static).update(Text(text))
         self.border_title = POINTERS[self.side].format(title) or None
         self.styles.width, self.styles.height = at.width, at.height

@@ -249,6 +249,8 @@ async def test_esc_ends_the_tour(store, tut, stop, focus, desc):
         assert f"Tour ended. {tutorial.AGAIN}." in said, desc
         assert badge(app) == "", f"{desc}: no badge offers it"
         assert store.setting(TOUR_AT) is None, f"{desc}: nothing kept to resume"
+        assert "decisions-pane" not in store.tour_seen() and "session-sort" in store.tour_seen(), \
+            f"{desc}: what it would have shown seen, not an absent pane's (the design module's, left out here)"
         assert store.session(tut) is not None, f"{desc}: the demo keeps running"
         app.set_focus(None)
         await pilot.press("l")
@@ -283,41 +285,42 @@ async def test_esc_in_a_dialog_over_the_tour(store, dialog, ends, desc):
         assert bool(app.screen_stack[0].query(TourCallout)) is not ends, desc
 
 
-@pytest.mark.parametrize("more, others", [(0, 0), (3, 0), (0, 25)])
-@pytest.mark.parametrize("stop", ["answer", "reply", "conversation"])
+CALLOUT_STEPS = [d.id for d in whatsnew.DIALOGS if d.pane]   # every step painted as a callout
+
+
+@pytest.mark.parametrize("more", [0, 3])
+@pytest.mark.parametrize("stop", CALLOUT_STEPS)
 @pytest.mark.parametrize("size", [(160, 40), (100, 30), (80, 24)])
 @pytest.mark.anyio
-async def test_a_callout_keeps_clear_of_the_inbox(store, tut, tmp_path, stop, size, more, others):
-    """Doug (#101 6): a box beside Detail never covers the demo's rows in the inbox, the
-    questions it asks for: below every row where it fits, else below the demo's, else at the
-    foot of the screen. `more` of the demo's own items, `others` of another session's."""
-    with one_second():   # the other session's first, so the demo's open questions rank above them
-        other = store.create_session(str(tmp_path), name="real work")
-        for n in range(others):
-            store.post_item(other, "task", f"other {n}", status="running")
+async def test_a_callout_keeps_clear_of_the_demos_rows(store, tut, every_module, stop, size, more):
+    """Doug (#101 6): a step's box never covers the demo's rows in the inbox, the items it
+    asks for, wherever one of place's candidates is clear of them; nor its own pane beside it.
+    `more`: the demo's extra items."""
     setup_items(store, tut)
+    post_story(store, tut)
     for n in range(more):
         store.post_item(tut, "task", f"more {n}", status="running")
     app = WheelhouseApp(store)
-    where = f"{stop} at {size} with {more} more and {others} others"
+    where = f"{stop} at {size} with {more} more"
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
-        if not others:
-            app.follow(tut)   # as launching it does
-        tour_at(app, stop, tut)
+        app.follow(tut)   # as launching it does
+        tour_at(app, stop, None if stop == "create" else tut)
         await pilot.pause()
         every, mine = callout.rows(app.screen, tut)
-        box = app.screen.query_one(TourCallout).region
-        assert mine is not None and mine.height >= 5, f"{where}: the header and the demo's rows"
+        found = app.screen.query_one(TourCallout)
+        box = found.region
+        pane = callout.find(app.screen, found.pane)
         assert app.screen.region.contains_region(box), f"{where}: {box} on screen"
-        if box.bottom < size[1]:   # not left at the foot of the screen, as when nowhere else fits
-            assert not box.overlaps(mine), f"{where}: {box} clear of the demo's rows {mine}"
-        table = app.items_table
-        questions = table.region.y + table.header_height + table.get_row_index(f"{tut}|Q2") + 1 - table.scroll_offset.y
-        assert not box.overlaps(Region(table.region.x, table.region.y, table.region.width, questions - table.region.y)), \
-            f"{where}: {box} never over Q1 and Q2"
-        if not (more or others):
-            assert not box.overlaps(every), f"{where}: clear of every row, where it fits"
+        assert mine is not None and mine.height >= 5, f"{where}: the header and the demo's rows"
+        if stop == "create":   # no demo yet: nothing of its to keep clear of
+            return
+        options = callout.candidates(app.screen.size, box, every, mine)
+        if any(not o.overlaps(mine) for o in options):
+            assert not box.overlaps(mine), f"{where}: {box} ({found.side}) clear of the demo's rows {mine}"
+        if found.side not in ("inside", "centred") and any(not o.overlaps(mine) and not o.overlaps(pane.region)
+                                                            for o in options):
+            assert not box.overlaps(pane.region), f"{where}: {box} clear of its pane {pane.region}"
 
 
 @pytest.mark.parametrize("at, gesture, then, desc", [

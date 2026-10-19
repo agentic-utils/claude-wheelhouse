@@ -30,32 +30,24 @@ def test_placement(screen, pane, height, region, side, desc):
     assert place(screen, pane, height) == (region, side), desc
 
 
-ROWS = Region(33, 2, 12, 6)   # the inbox's rows (callout.rows), left of a pane on the right
+ROWS = Region(33, 2, 12, 6)   # the demo's rows in the inbox (callout.rows), left of a pane on the right
+EVERY = Region(33, 2, 12, 20)   # every row, too many to go below
+RIGHT = Region(50, 0, 30, 24)
 
 
-@pytest.mark.parametrize("pane, height, clear, region, desc", [
-    (Region(50, 0, 30, 24), 6, ROWS, Region(4, 8, 46, 6), "over the inbox's rows: moved down past them (#101 6)"),
-    (Region(50, 0, 30, 24), 6, None, Region(4, 0, 46, 6), "nothing to clear: where it was"),
-    (Region(50, 0, 30, 24), 6, Region(0, 12, 4, 4), Region(4, 0, 46, 6), "clear of it already: unmoved"),
-    (Region(50, 0, 30, 24), 20, ROWS, Region(4, 0, 46, 20), "no room below them: left where it was"),
-    (Region(20, 14, 40, 10), 6, Region(20, 8, 10, 4), Region(20, 8, 46, 6), "moved down onto its own pane: unmoved"),
-    (Region(30, 0, 50, 24), 6, Region(32, 1, 46, 3), Region(32, 4, 46, 6), "inside its pane: down past them there"),
+@pytest.mark.parametrize("pane, height, clear, keep, region, desc", [
+    (RIGHT, 6, None, None, Region(4, 0, 46, 6), "nothing to keep clear of: spot's choice"),
+    (RIGHT, 6, ROWS, ROWS, Region(4, 8, 46, 6), "over the demo's rows: below them"),
+    (RIGHT, 6, EVERY, ROWS, Region(4, 8, 46, 6), "below every row doesn't fit: below the demo's"),
+    (RIGHT, 6, None, Region(0, 12, 4, 4), Region(4, 0, 46, 6), "clear of them already: unmoved"),
+    (RIGHT, 20, EVERY, ROWS, Region(4, 4, 46, 20), "nowhere clear: the least over them, the foot"),
+    (Region(20, 14, 40, 10), 6, None, Region(20, 2, 10, 10), Region(20, 12, 46, 6),
+     "none clear of both: off the demo's rows, the least over its pane"),
+    (Region(30, 0, 50, 24), 6, None, Region(32, 1, 10, 4), Region(32, 5, 46, 6), "inside its pane: below the rows there"),
+    (None, 6, None, Region(17, 6, 10, 4), Region(17, 10, 46, 7), "centred too: the same search"),
 ])
-def test_placement_clears_the_inbox(pane, height, clear, region, desc):
-    assert place(S, pane, height, clear)[0] == region, desc
-
-
-LONG = Region(33, 2, 12, 20)   # an inbox too long to go below
-
-
-@pytest.mark.parametrize("height, keep, region, desc", [
-    (6, Region(33, 2, 12, 6), Region(4, 8, 46, 6), "below the demo's rows, when every row is too many"),
-    (20, Region(33, 2, 12, 6), Region(4, 4, 46, 20), "not even that: at the foot of the screen"),
-    (6, None, Region(4, 0, 46, 6), "no demo: where it was"),
-    (6, Region(0, 12, 4, 4), Region(4, 0, 46, 6), "clear of the demo's rows already: unmoved"),
-])
-def test_placement_keeps_the_demos_rows(height, keep, region, desc):
-    assert place(S, Region(50, 0, 30, 24), height, LONG, keep)[0] == region, f"{desc} (#101 6)"
+def test_placement_keeps_clear(pane, height, clear, keep, region, desc):
+    assert place(S, pane, height, clear, keep)[0] == region, f"{desc} (#101 6)"
 
 
 class Panes(App):

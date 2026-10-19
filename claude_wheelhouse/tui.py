@@ -64,7 +64,7 @@ from .host import NUDGE_TOKENS
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
-from .tour import NOTES, PAUSED, TOPUP, TOUR, Tour, opening
+from .tour import NOTES, PAUSED, TOPUP, TOUR, Tour, offered, opening
 from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mode, runner, spared, standing)
 from .unsent import Unsent
@@ -4917,15 +4917,16 @@ class WheelhouseApp(App):
     def end_tour(self) -> None:
         """Esc on the tour, at any time (Doug, #101 4: esc_ends_tour): it ends there, for good.
         Nothing is kept to resume (tour_at cleared), and every feature it would have shown
-        counts as seen, so the badge offers nothing. The demo, if any, keeps running for Stop &
+        counts as seen (not an absent pane's, kept for when it's there), so the badge offers nothing. The demo, if any, keeps running for Stop &
         Forget; `claude-wheelhouse tutorial` offers the tour afresh."""
         tour, self.tour, self.tour_showing = self.tour, None, None
         if tour is None:
             return
         self.drop_callouts(list(self.screen_stack[0].query(TourCallout)))
         self.client.tour_at(None)
-        self.client.see_features([f.id for f in whatsnew.pending((), self.client.sdk, tour.features)],
-                                 whatsnew.running_version())
+        main = self.screen_stack[0]   # what it would have shown (Tour.shown): an absent pane's features stay pending
+        here = offered(whatsnew.pending((), self.client.sdk, tour.features), lambda pane: callout.find(main, pane) is not None)
+        self.client.see_features([f.id for f in here if f.where not in tour.absent], whatsnew.running_version())
         self.notify(f"Tour ended. {tutorial.AGAIN}.")
         self.paint_badge()
 
