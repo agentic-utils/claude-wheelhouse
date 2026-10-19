@@ -33,31 +33,52 @@ PANES = {
 }
 
 SIDES = ("right", "left", "below", "above")   # tried in turn, beside the pane; then inside, then centred
-# the border title, pointing from the callout at its pane
-POINTERS = {"right": "◀ {}", "left": "{} ▶", "below": "▲ {}", "above": "▼ {}", "inside": "{}", "centred": ""}
+# the border title, pointing from the callout at its pane, by where the box ends up (facing)
+POINTERS = {"right": "◀ {}", "left": "{} ▶", "below": "▲ {}", "above": "▼ {}", "below-right": "◤ {}",
+            "below-left": "{} ◥", "above-right": "◣ {}", "above-left": "{} ◢", "inside": "{}", "centred": ""}
 
 
 def width(screen: Size) -> int:
     return max(1, min(WIDTH, screen.width - MARGIN))
 
 
+def covers(r: Region, of: Region | None) -> int:
+    """How much of `of` the box `r` covers, in cells."""
+    return r.intersection(of).area if of is not None else 0
+
+
+def gap(r: Region, pane: Region | None) -> int:
+    """The box's distance from the pane, edge to edge: 0 touching or over it."""
+    if pane is None:
+        return 0
+    return max(0, pane.x - r.right, r.x - pane.right) + max(0, pane.y - r.bottom, r.y - pane.bottom)
+
+
+def facing(r: Region, pane: Region | None) -> str:
+    """Which side of the pane the box sits on, for its pointer (POINTERS)."""
+    if pane is None:
+        return "centred"
+    across = "right" if r.x >= pane.right else "left" if r.right <= pane.x else ""
+    down = "below" if r.y >= pane.bottom else "above" if r.bottom <= pane.y else ""
+    return "-".join(filter(None, (down, across))) or "inside"
+
+
 def place(screen: Size, pane: Region | None, height: int, clear: Region | None = None,
-          keep: Region | None = None) -> tuple[Region, str]:
+          keep: Region | None = None, centre: bool = False) -> tuple[Region, str]:
     """Where a callout `height` rows high goes for a pane at `pane` (screen coordinates; None:
-    absent), and how. One rule (#101): of the candidates in turn (spot's choice, beside the
-    pane, inside it or centred; then below every inbox row, `clear`; below the demo's rows,
-    `keep`; the screen's foot; its top), the first on screen that covers neither the demo's
-    rows nor the pane (but inside it, as spot put it there); with none, the one covering least of the demo's rows, then of the pane."""
-    first, side = spot(screen, pane, height)
+    absent), and the side it then points from (facing; "centred" with `centre`, the box
+    centred as spot puts it for a pane too narrow or collapsed). One rule (#101): of the
+    candidates (spot's choice; then below every inbox row, `clear`; below the step's own rows
+    of the demo, `keep`; the screen's foot; its top), those on screen that cover neither `keep`
+    nor the pane (bar a box spot put inside it), the nearest the pane; with none, the one
+    covering least of `keep`, then of the pane."""
+    first, side = spot(screen, None if centre else pane, height)
+    avoid = None if side == "inside" else pane
     spots = candidates(screen, first, clear, keep)
-    if side == "inside":   # placed over its pane by design: only the demo's rows to keep clear of
-        pane = None
-
-    def covers(r: Region, of: Region | None) -> int:
-        return r.intersection(of).area if of is not None else 0
-
-    clear_of = [r for r in spots if not covers(r, keep) and not covers(r, pane)]
-    return (clear_of[0] if clear_of else min(spots, key=lambda r: (covers(r, keep), covers(r, pane)))), side
+    clear_of = [r for r in spots if not covers(r, keep) and not covers(r, avoid)]
+    best = min(clear_of, key=lambda r: gap(r, pane)) if clear_of \
+        else min(spots, key=lambda r: (covers(r, keep), covers(r, avoid), gap(r, pane)))
+    return best, "centred" if side == "centred" else facing(best, pane)
 
 
 def candidates(screen: Size, first: Region, clear: Region | None, keep: Region | None) -> list[Region]:
@@ -99,26 +120,32 @@ def spot(screen: Size, pane: Region | None, height: int) -> tuple[Region, str]:
     return Region((screen.width - w) // 2, max(0, (screen.height - height) // 2), w, height), "centred"
 
 
-def rows(screen: Widget, sid: str | None = None) -> tuple[Region | None, Region | None]:
-    """The inbox's rows on the screen, its header included, and those down to the last of
-    session `sid`'s (the demo's): what a callout for another pane keeps clear of (place), so
-    the items it asks for stay in sight. None for either that isn't there."""
+def rows(screen: Widget, sid: str | None = None, kinds: tuple[str, ...] = ()) -> tuple[Region | None, Region | None]:
+    """The inbox's rows on the screen, its header included, and the span of session `sid`'s
+    (the demo's) whose refs are of `kinds` (tour.ROWS: "Q", "D", "M"; "" its conversation
+    row), the rows a step needs the person to see: what a callout keeps clear of (place). None
+    for either that isn't in sight."""
     found = screen.query("#items")
     if not found or not (table := found.first()).display or not table.region.area:
         return None, None
     region = table.region
-
     ordered = table.ordered_rows
-    header = table.header_height if table.show_header else 0
+    top = region.y + (table.header_height if table.show_header else 0) - table.scroll_offset.y
+    starts = [top + sum(row.height for row in ordered[:n]) for n in range(len(ordered) + 1)]
 
-    def down_to(n: int) -> Region | None:
-        """The rows from the header to the nth, as far as they're in sight."""
-        bottom = region.y + header + sum(row.height for row in ordered[:n]) - table.scroll_offset.y
-        bottom = min(region.bottom, bottom)
-        return Region(region.x, region.y, region.width, bottom - region.y) if n and bottom > region.y else None
+    def span(first: int, last: int, start: int | None = None) -> Region | None:
+        """Rows first to last, as far as they're in sight."""
+        y = max(region.y, starts[first] if start is None else start)
+        bottom = min(region.bottom, starts[last + 1])
+        return Region(region.x, y, region.width, bottom - y) if bottom > y else None
 
-    mine = [i for i, row in enumerate(ordered) if sid and str(row.key.value).startswith(f"{sid}|")]
-    return down_to(len(ordered)), down_to(mine[-1] + 1) if mine else None
+    def kind(key: str) -> str | None:
+        owner, _, ref = key.partition("|")
+        return ref.rstrip("0123456789") if sid and owner == sid else None
+
+    mine = [i for i, row in enumerate(ordered) if kind(str(row.key.value)) in kinds]
+    every = span(0, len(ordered) - 1, region.y) if ordered else None
+    return every, span(mine[0], mine[-1]) if mine else None
 
 
 def find(screen: Widget, pane: str) -> Widget | None:
@@ -147,10 +174,14 @@ class TourCallout(Vertical):
             super().__init__()
             self.callout = callout
 
-    def __init__(self, pane: str, text: str, next: bool = False, id: str | None = None, keep: str | None = None) -> None:
+    def __init__(self, pane: str, text: str, next: bool = False, id: str | None = None, keep: str | None = None,
+                 kinds: tuple[str, ...] = ()) -> None:
         super().__init__(id=id)
         self.pane, self.text, self.next = pane, text, next
-        self.keep = keep   # the session whose rows in the inbox it never covers (place): the demo
+        # the demo session, and the kinds of its inbox rows the step needs in sight (tour.ROWS):
+        # what it never covers where it can help it (place)
+        self.keep, self.kinds = keep, kinds
+        self.at: Region | None = None   # where it was last put
         self.target: Widget | None = None
         self.placed: tuple | None = None   # what it was last placed against
         self.side = ""
@@ -173,7 +204,7 @@ class TourCallout(Vertical):
 
     def say(self, text: str) -> None:
         """Its text changed: placed again, as its height may have."""
-        self.text, self.placed = text, None
+        self.text, self.placed, self.at = text, None, None
         self.place()
 
     def cover(self) -> None:
@@ -192,25 +223,31 @@ class TourCallout(Vertical):
         return len(Text(text).wrap(self.app.console, max(1, w - 4))) + self.next + 2
 
     def place(self) -> None:
-        """Beside its pane, as place says, again only once the screen or the pane has moved.
-        Nothing while it has no text to place (not composed yet, or being removed)."""
+        """Placed as place says when it shows, when its text changes (say), and when the screen
+        is resized or its pane moves (a swap, a splitter dragged). Otherwise it stays put
+        (#101), the inbox growing under it and all, unless it now covers the rows the step
+        needs or its own pane. Nothing while it has no text to place (not composed yet, or
+        being removed)."""
         if not self.query(".tour-text"):
             return
         screen = self.screen.size
         target = find(self.screen, self.pane)
         region = target.region if target is not None and target.display else None
-        clear, keep = rows(self.screen, self.keep)
-        if self.placed == (screen, region, clear, keep):
+        clear, keep = rows(self.screen, self.keep, self.kinds)
+        beside = self.side not in ("inside", "centred")
+        if self.placed == (screen, region) and self.at is not None \
+                and not covers(self.at, keep) and not (beside and covers(self.at, region)):
             return
-        self.placed = (screen, region, clear, keep)
-        self.highlight(target if region is not None else None)
+        self.placed = (screen, region)
+        self.highlight(target if region is not None else None)   # held for the step: the link, wherever it sits
         title = PANES.get(self.pane, ("", self.pane))[1]
         w = width(screen)
         at, self.side = place(screen, region, self.lines(w, self.text), clear, keep)
         text = self.text
         if self.side == "centred":   # its pane named first, a line that wraps on a narrow screen
             text = f"In the {title} pane:\n{self.text}"
-            at, _ = place(screen, None, self.lines(w, text) - 1, clear, keep)
+            at, _ = place(screen, region, self.lines(w, text) - 1, clear, keep, centre=True)
+        self.at = at
         self.query_one(".tour-text", Static).update(Text(text))
         self.border_title = POINTERS[self.side].format(title) or None
         self.styles.width, self.styles.height = at.width, at.height

@@ -64,7 +64,7 @@ from .host import NUDGE_TOKENS
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import Splitter, fit
-from .tour import NOTES, PAUSED, TOPUP, TOUR, Tour, offered, opening
+from .tour import NOTES, PAUSED, ROWS as tour_rows, TOPUP, TOUR, Tour, offered, opening
 from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mode, runner, spared, standing)
 from .unsent import Unsent
@@ -4874,7 +4874,7 @@ class WheelhouseApp(App):
             notes = whatsnew.since(tour.notes_seen) if tour.kind == TOPUP else whatsnew.this_release()
             self.push_screen(TourNotes(text, notes), self.tour_answered)
         else:
-            main.mount(TourCallout(stop.pane, text, next=nxt, keep=tour.sid or None))
+            main.mount(TourCallout(stop.pane, text, next=nxt, keep=tour.sid or None, kinds=tour_rows.get(stop.id, ())))
 
     def passed(self) -> None:
         """Next on a top-up's dialog: its tips count as seen now, not as it showed, so one paused

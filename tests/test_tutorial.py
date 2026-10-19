@@ -8,7 +8,7 @@ from textual.widgets import Button, DataTable, Input, TextArea
 from claude_wheelhouse import callout, features, launch, tutorial, whatsnew
 from claude_wheelhouse.callout import HIGHLIGHT, TourCallout
 from claude_wheelhouse.store import NOTES_SEEN, TOUR_AT
-from claude_wheelhouse.tour import PANE, Tour
+from claude_wheelhouse.tour import PANE, ROWS, Tour
 from claude_wheelhouse.tui import BUTTONS, Compose, Dialog, ItemList, KeysHelp, NewSession, ThreadView, Transcript, \
     TourInvite, TourNotes, TourStop, SDK_BUTTONS, WheelhouseApp, key_name, keys_help
 from claude_wheelhouse.tutorial import should_offer as real_should_offer   # before conftest stubs it
@@ -288,39 +288,99 @@ async def test_esc_in_a_dialog_over_the_tour(store, dialog, ends, desc):
 CALLOUT_STEPS = [d.id for d in whatsnew.DIALOGS if d.pane]   # every step painted as a callout
 
 
-@pytest.mark.parametrize("more", [0, 3])
-@pytest.mark.parametrize("stop", CALLOUT_STEPS)
-@pytest.mark.parametrize("size", [(160, 40), (100, 30), (80, 24)])
-@pytest.mark.anyio
-async def test_a_callout_keeps_clear_of_the_demos_rows(store, tut, every_module, stop, size, more):
-    """Doug (#101 6): a step's box never covers the demo's rows in the inbox, the items it
-    asks for, wherever one of place's candidates is clear of them; nor its own pane beside it.
-    `more`: the demo's extra items."""
+async def demo_at(app, pilot, store, tut, stop, more=0):
+    """The demo's items (and `more` tasks) in the inbox, followed, the tour at `stop`: its
+    callout, its pane's region, and the demo's rows the step protects (tour.ROWS)."""
+    app.follow(tut)   # as launching it does
+    tour_at(app, stop, None if stop == "create" else tut)
+    await pilot.pause()
+    found = app.screen.query_one(TourCallout)
+    every, mine = callout.rows(app.screen, tut, ROWS.get(stop, ()))
+    return found, callout.find(app.screen, found.pane), every, mine
+
+
+def fill_demo(store, tut, more=0):
     setup_items(store, tut)
     post_story(store, tut)
     for n in range(more):
         store.post_item(tut, "task", f"more {n}", status="running")
+
+
+@pytest.mark.parametrize("more", [0, 3])
+@pytest.mark.parametrize("stop", CALLOUT_STEPS)
+@pytest.mark.parametrize("size", [(160, 40), (100, 30), (80, 24)])
+@pytest.mark.anyio
+async def test_a_callout_keeps_clear_of_what_its_step_needs(store, tut, every_module, stop, size, more):
+    """Doug (#101 6): a step's box never covers the demo's rows that step needs (tour.ROWS),
+    nor its pane, wherever one of place's candidates is clear of both. `more`: the demo's
+    extra items."""
+    fill_demo(store, tut, more)
     app = WheelhouseApp(store)
     where = f"{stop} at {size} with {more} more"
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
-        app.follow(tut)   # as launching it does
-        tour_at(app, stop, None if stop == "create" else tut)
-        await pilot.pause()
-        every, mine = callout.rows(app.screen, tut)
-        found = app.screen.query_one(TourCallout)
+        found, pane, every, mine = await demo_at(app, pilot, store, tut, stop)
         box = found.region
-        pane = callout.find(app.screen, found.pane)
         assert app.screen.region.contains_region(box), f"{where}: {box} on screen"
-        assert mine is not None and mine.height >= 5, f"{where}: the header and the demo's rows"
-        if stop == "create":   # no demo yet: nothing of its to keep clear of
-            return
+        assert (mine is not None) is (stop in ROWS), f"{where}: the rows it protects are in sight, and only its own"
+        avoid = None if found.side == "inside" else pane.region
         options = callout.candidates(app.screen.size, box, every, mine)
-        if any(not o.overlaps(mine) for o in options):
-            assert not box.overlaps(mine), f"{where}: {box} ({found.side}) clear of the demo's rows {mine}"
-        if found.side not in ("inside", "centred") and any(not o.overlaps(mine) and not o.overlaps(pane.region)
-                                                            for o in options):
-            assert not box.overlaps(pane.region), f"{where}: {box} clear of its pane {pane.region}"
+        if any(not callout.covers(o, mine) and not callout.covers(o, avoid) for o in options):
+            assert not callout.covers(box, mine), f"{where}: {box} ({found.side}) clear of its rows {mine}"
+            assert found.side == "centred" or not callout.covers(box, avoid), \
+                f"{where}: {box} clear of its pane {pane.region}"
+
+
+@pytest.mark.parametrize("stop, size", [("answer", (160, 40)), ("stats", (100, 30)), ("reply", (80, 24)),
+                                        ("send", (160, 40))])
+@pytest.mark.anyio
+async def test_a_callout_stays_put_as_the_inbox_grows(store, tut, stop, size):
+    """Review of #104: a box is placed as its step starts and stays there through refreshes,
+    eleven new inbox rows and all, moving only when it would cover what its step needs."""
+    fill_demo(store, tut)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        found, pane, _, _ = await demo_at(app, pilot, store, tut, stop)
+        moves = 0
+        for n in range(11):
+            before = found.region
+            store.post_item(tut, "task", f"new {n}", status="running")
+            app.refresh_data()
+            await pilot.pause()
+            _, mine = callout.rows(app.screen, tut, ROWS.get(stop, ()))
+            if found.region != before:
+                assert callout.covers(before, mine) or callout.covers(before, pane.region), \
+                    f"{stop} at {size}: moved from {before} to {found.region} though nothing covered"
+                moves += 1
+        assert moves == 0, f"{stop} at {size}: moved {moves} of 11 times"
+
+
+@pytest.mark.parametrize("stop", CALLOUT_STEPS)
+@pytest.mark.parametrize("size", [(160, 40), (100, 30), (80, 24)])
+@pytest.mark.anyio
+async def test_a_callout_points_at_its_pane(store, tut, every_module, stop, size):
+    """Review of #104: the box's pointer faces its pane from where the box ended up, and the
+    pane is highlighted for the step, wherever the box sits."""
+    fill_demo(store, tut)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        found, pane, _, _ = await demo_at(app, pilot, store, tut, stop)
+        box, at = found.region, pane.region
+        assert HIGHLIGHT in pane.classes, f"{stop} at {size}: its pane highlighted"
+        faces = {"right": box.x >= at.right, "left": box.right <= at.x, "below": box.y >= at.bottom,
+                 "above": box.bottom <= at.y}
+        if found.side == "centred":
+            assert "In the" in str(found.query_one(".tour-text").render()), f"{stop} at {size}: centred, naming it"
+        else:
+            title = str(found.border_title)
+            assert title == callout.POINTERS[found.side].format(callout.PANES.get(found.pane, ("", found.pane))[1]), \
+                f"{stop} at {size}: {title}"
+            sides = [side for side in faces if side in found.side.split("-")]
+            assert all(faces[side] for side in sides) and sides == [s for s in found.side.split("-")
+                                                                    if s != "inside"], \
+                f"{stop} at {size}: {title} ({found.side}) from {box} at its pane {at}"
 
 
 @pytest.mark.parametrize("at, gesture, then, desc", [

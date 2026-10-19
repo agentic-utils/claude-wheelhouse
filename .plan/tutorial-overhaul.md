@@ -69,8 +69,13 @@ resume at the same dialog.
   New session (Q122's pause is replaced): tour_at is cleared and every feature counts as
   seen, so no badge offers it; the demo keeps running, and `claude-wheelhouse tutorial` offers
   the tour afresh. Quitting mid-tour still resumes from the badge.
-  The launched demo is selected in the session list, and a callout beside another pane keeps
-  clear of the inbox's rows, else the demo's, else goes to the screen's foot (callout.place).
+  The launched demo is selected in the session list. A callout's place (callout.place) is
+  one rule: of its candidates (beside, inside or centred as before; below every inbox row;
+  below the step's rows; the screen's foot; its top), the nearest its pane that covers
+  neither the demo's rows its step needs (tour.ROWS: the questions, D1, M1 or the
+  conversation row) nor its pane, else the least over them. It is placed as the step starts,
+  on a resize or when its pane moves, and otherwise stays put unless it comes to cover them.
+  Its pointer faces the pane from where it ends up, and the pane stays highlighted.
 - The checks for 4 to 9 and 11 are today's step checks, moved over unchanged, including the
   rules that the app's own automatic selection never ticks anything.
 - A callout whose pane is absent (Stats disabled or uninstalled) is skipped, and its

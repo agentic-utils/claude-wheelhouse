@@ -7,7 +7,7 @@ from textual.geometry import Region, Size
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
-from claude_wheelhouse.callout import HIGHLIGHT, TourCallout, place
+from claude_wheelhouse.callout import POINTERS, facing, HIGHLIGHT, TourCallout, place
 
 S = Size(80, 24)
 
@@ -48,6 +48,32 @@ RIGHT = Region(50, 0, 30, 24)
 ])
 def test_placement_keeps_clear(pane, height, clear, keep, region, desc):
     assert place(S, pane, height, clear, keep)[0] == region, f"{desc} (#101 6)"
+
+
+P = Region(20, 8, 20, 6)   # a pane in the middle
+
+
+@pytest.mark.parametrize("box, side, desc", [
+    (Region(40, 8, 10, 4), "right", "level, to its right"),
+    (Region(5, 9, 15, 4), "left", "level, to its left"),
+    (Region(22, 14, 10, 4), "below", "under it"),
+    (Region(22, 0, 10, 8), "above", "over it"),
+    (Region(40, 16, 10, 4), "below-right", "rows below and to the right: not just right (Stats, #101)"),
+    (Region(0, 0, 10, 4), "above-left", "up and to the left"),
+    (Region(22, 9, 10, 2), "inside", "over it"),
+])
+def test_facing(box, side, desc):
+    assert facing(box, P) == side, desc
+    assert POINTERS[side].format("x"), desc
+
+
+def test_the_nearest_clear_candidate_wins():
+    """#101: below the demo's rows is nearer the pane than the screen's foot."""
+    pane = Region(50, 0, 30, 24)
+    region, side = place(S, pane, 6, None, Region(4, 0, 46, 3))
+    assert (region, side) == (Region(4, 3, 46, 6), "left"), "the first clear spot, touching the pane"
+    assert place(S, Region(0, 0, 30, 6), 6, None, Region(30, 0, 46, 8)) == (Region(30, 8, 46, 6), "below-right"), \
+        "moved down off the rows: pointing up and back at the pane"
 
 
 class Panes(App):

@@ -64,6 +64,19 @@ CHECKS = {
 }
 
 
+# the demo's inbox rows each step needs in sight, by their refs' kind ("" its conversation
+# row): what its callout keeps clear of (callout.place). A step not listed needs none: its
+# callout keeps clear of its own pane alone
+ROWS = {
+    "inbox": ("Q",),
+    "answer": ("Q",),
+    "reply": ("Q",),
+    "decision": ("D",),
+    "docs": ("M",),
+    "conversation": ("",),
+}
+
+
 class Tour:
     """A new user's tour, from the principles to the release notes: every dialog whose pane is here. Given
     `pending` (whatsnew.pending), an upgrader's top-up instead: the dialogs with a pending
