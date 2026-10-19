@@ -9,7 +9,7 @@ import threading
 
 import pytest
 
-from claude_wheelhouse import hub, launch, liveness, monitor
+from claude_wheelhouse import hub, launch, liveness, monitor, tui
 from claude_wheelhouse.store import Store
 from claude_wheelhouse.tui import WheelhouseApp
 
@@ -108,6 +108,7 @@ async def test_a_pending_request_can_be_cancelled_or_forced(
     getattr(store, f"request_{flag}")(sid)
     monitor.poll_once(store, sid, io.StringIO())   # the session has been told
     fake_status(monkeypatch, "live")
+    monkeypatch.setattr(tui, "BUSY_FOR", 0)   # asked long ago: its button on again, pressed for Cancel or Force (#107)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -360,6 +361,7 @@ async def test_a_dialog_outliving_its_session_does_not_crash(
     if request_first:
         store.request(sid, request_first)
     fake_status(monkeypatch, state)
+    monkeypatch.setattr(tui, "BUSY_FOR", 0)   # a request asked long ago: its button on again (#107)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         seen = notices(app, monkeypatch)
