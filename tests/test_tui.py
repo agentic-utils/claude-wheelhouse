@@ -7979,7 +7979,7 @@ def test_a_pressed_button_stays_off_until_its_action_lands(monkeypatch, button, 
     for phase in ("lands", "fallback"):
         app = Presses(dict(BUSY_ROW), status)
         app.press("s1", button, "Q1" if button == "compact-now" else None)
-        app.forking = {"s1": 1} if button == "fork" else {}
+        app.forking = {"s1": [now[0]]} if button == "fork" else {}
         app.change(starts)
         now[0] += 1
         app.change({})
@@ -8015,15 +8015,24 @@ def test_a_request_followed_after_a_restart_counts_from_when_it_was_asked(monkey
     assert app.busy_buttons(app.sessions[0]) == busy and not app.toasts, desc
 
 
-def test_a_late_word_of_an_earlier_fork_leaves_the_next_one_off(monkeypatch):
-    monkeypatch.setattr(tui.Press, "now", staticmethod(lambda: 0.0))
+def test_a_fork_never_heard_of_is_let_go_and_the_next_clears_on_its_own_word(monkeypatch):
+    """A fork that ends unsaid (a daemon stopping mid-fork, a notice lost on reconnecting) is
+    let go at BUSY_FOR, so the next Fork's own word brings the button back on (#107)."""
+    now = [0.0]
+    monkeypatch.setattr(tui.Press, "now", staticmethod(lambda: now[0]))
     app = Presses(dict(BUSY_ROW), "live")
-    app.forking = {"s1": 2}   # the first one's 30 s ran out, and Fork was pressed again
     app.press("s1", "fork")
+    app.forking = {"s1": [now[0]]}
+    now[0] = tui.BUSY_FOR
+    app.change({})
+    assert app.forking == {} and "fork" not in app.busy_buttons(app.sessions[0]), "unsaid: let go at BUSY_FOR"
+    now[0] += 1
+    app.press("s1", "fork")
+    app.forking = {"s1": [now[0]]}   # as fork() records it
+    app.change({})
+    assert "fork" in app.busy_buttons(app.sessions[0]), "the next: off"
     app.change({"_notice": True})
-    assert "fork" in app.busy_buttons(app.sessions[0]), "the first one's word: the second still under way"
-    app.change({"_notice": True})
-    assert "fork" not in app.busy_buttons(app.sessions[0]), "the second's: on again"
+    assert "fork" not in app.busy_buttons(app.sessions[0]) and app.forking == {}, "the next's own word: on again"
 
 
 def test_an_action_under_way_not_pressed_here_is_followed_silently(monkeypatch):

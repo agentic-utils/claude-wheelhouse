@@ -3526,7 +3526,9 @@ class WheelhouseApp(App):
         self.landing = False   # a key's land under way, which the refresh tick waits out (tick)
         self.held_bars: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()   # by screen (bar_widgets)
         self.pressed: dict[tuple[str, str], Press] = {}   # (sid, button id): its action under way (busy_buttons)
-        self.forking: dict[str, int] = {}   # each session's Forks pressed here and not yet heard of (heard)
+        # each session's Forks pressed here and not yet heard of (heard), by when, on Press.now: one
+        # BUSY_FOR old is let go (follow_presses), as a fork can end unsaid (a daemon stopping mid-fork)
+        self.forking: dict[str, list[float]] = {}
         self.said: list[tuple[str, str]] = []   # what to say as it opens, (text, severity): how it found the daemon
         self.client.listen(self.heard)
         self.tour: Tour | None = None   # the tour under way (tour.py), painted by show_tour
@@ -3980,9 +3982,9 @@ class WheelhouseApp(App):
         the daemon lost or found again is said, and the title bar shows it lost."""
         if event.kind in ("notice", "link"):
             self.notify(event.text, severity=event.severity)
-            if event.sid and event.sid in self.forking:   # a Fork of it made, or failed
-                self.forking[event.sid] -= 1
-                if self.forking[event.sid] <= 0:   # not an earlier one's late word, with another still under way
+            if self.forking.get(event.sid):   # a Fork of it made, or failed: the oldest under way
+                self.forking[event.sid].pop(0)
+                if not self.forking[event.sid]:   # none left under way
                     del self.forking[event.sid]
                     if self.pressed.pop((event.sid, "fork"), None):
                         self.paint_session_info()
@@ -4774,6 +4776,11 @@ class WheelhouseApp(App):
         here (another app's, or before this one started) is followed as if it had been."""
         now = Press.now()
         rows = {s["id"]: s for s in self.sessions}
+        for sid, times in list(self.forking.items()):   # a fork with no word in BUSY_FOR: let go
+            if not (kept := [at for at in times if now - at < BUSY_FOR]):
+                del self.forking[sid]
+            else:
+                self.forking[sid] = kept
         for s in self.sessions:
             for button in BUSY_BUTTONS:
                 if (s["id"], button) not in self.pressed and self.under_way(button, s):
@@ -6057,7 +6064,7 @@ class WheelhouseApp(App):
         done = self.told(self.client.fork(sid, form["refs"], form["branch"]))
         if done.ok:
             self.press(sid, "fork")   # until the hub's word of it, made or failed (heard)
-            self.forking[sid] = self.forking.get(sid, 0) + 1
+            self.forking.setdefault(sid, []).append(Press.now())
             self.refresh_data()
 
     @on(Button.Pressed, "#end")
