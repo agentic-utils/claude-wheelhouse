@@ -126,12 +126,14 @@ class Event:
     (information, warning or error): to every listener, of what the hub did by itself (a
     relaunch finishing, a subagent sync failing), or in a command's Done, to its surface
     alone. A notice's sid is the session whose Fork it ends, made or failed, so the
-    surface that pressed it knows (#107). "landed": a read of a session's transcript (sid)
+    surface that pressed it knows (#107), and made, the fork's own when it was made, so that
+    surface can select it (#116). "landed": a read of a session's transcript (sid)
     brought something, so what shows its context size can repaint."""
     kind: str
     text: str = ""
     severity: str = "information"
     sid: str | None = None
+    made: str | None = None
 
 
 @dataclass
@@ -250,10 +252,12 @@ class Hub:
         for listener in self.listeners:
             listener(event)
 
-    def announce(self, text: str, severity: str = "information", sid: str | None = None) -> None:
+    def announce(self, text: str, severity: str = "information", sid: str | None = None,
+                 made: str | None = None) -> None:
         """To every listener: only for what the hub does by itself. A command's notices go
-        in its Done, to the surface that gave it. sid: the session whose Fork it ends (Event)."""
-        self.emit(Event("notice", text, severity, sid))
+        in its Done, to the surface that gave it. sid: the session whose Fork it ends, made:
+        the fork it made (Event)."""
+        self.emit(Event("notice", text, severity, sid, made))
 
     # sessions and their liveness
 
@@ -696,7 +700,7 @@ class Hub:
         self.announce(f"forked {display_name(s)} as {name}"
                       + (f", {len(moved)} item(s) moved to it" if moved else "")
                       + (f"; {', '.join(left)} changed meanwhile, so stayed" if left else ""),
-                      "warning" if left else "information", sid=sid)
+                      "warning" if left else "information", sid=sid, made=new)
 
     def drop_pending_forks(self) -> None:
         """The owner closing (a daemon stopping, the app quitting): each fork made on a worker

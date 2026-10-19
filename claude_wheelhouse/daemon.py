@@ -500,7 +500,8 @@ class Daemon:
         size) moving. Said even if the tick has said the conversation for the same change:
         a client may refetch once more, but none misses one."""
         if event.kind == "notice":
-            self.publish("notice", event.sid, text=event.text, severity=event.severity)
+            self.publish("notice", event.sid, text=event.text, severity=event.severity,
+                         **({"made": event.made} if event.made else {}))
         elif event.kind == "landed":
             self.view = self.session_views()   # its context size
             self.publish("conversation", event.sid)

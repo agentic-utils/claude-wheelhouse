@@ -4598,6 +4598,49 @@ async def test_new_session_runner(store, tmp_path, monkeypatch, on, tick, runner
     assert launched == [runner_], desc
 
 
+@pytest.mark.anyio
+async def test_new_session_selected_as_it_appears(store, sid, tmp_path, monkeypatch):
+    monkeypatch.setattr(launch, "open_session", lambda s, i, watch=None, may_tab=True: None)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pick(app, pilot, sid)
+        app.session_list.focus()
+        await pilot.press("n")
+        await pilot.pause()
+        app.screen.query_one("#cwd", Input).value = str(tmp_path)
+        app.screen.query_one("#name", Input).value = "fresh"
+        await pilot.click("#launch")
+        await pilot.pause()
+        new = next(s["id"] for s in store.sessions() if s["name"] == "fresh")
+        assert app.current_session() == new and app.filter_sid == new, "the new session selected, not the one before"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("meanwhile, selected, desc", [
+    (None, "new", "nothing changed while it registered: selected as its row appears"),
+    ("pick", "other", "another session picked meanwhile: that pick stays"),
+    ("type", "old", "typing in the answer box: the selection stays under it"),
+])
+async def test_new_session_selected_only_if_left_be(store, sid, tmp_path, meanwhile, selected, desc):
+    other = store.create_session(str(tmp_path), name="other")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pick(app, pilot, sid)
+        app.select_on_show("s-later", app.selected)   # launched, its row not yet registered
+        await pilot.pause()
+        assert app.current_session() == sid, f"{desc}: nothing to select yet"
+        if meanwhile == "pick":
+            await pick(app, pilot, other)
+        elif meanwhile == "type":
+            app.answer.focus()
+            await pilot.pause()
+        store.create_session(str(tmp_path), name="later", sid="s-later")
+        app.refresh_data()
+        await pilot.pause()
+        assert app.current_session() == {"new": "s-later", "other": other, "old": sid}[selected], desc
+        assert app.select_new is None, f"{desc}: asked once, not again on a later refresh"
+
+
 @pytest.mark.parametrize("activity, busy, desc", [
     ("thinking", True, "working"),
     ("running Bash: ls", True, "running a tool"),
@@ -6842,7 +6885,7 @@ async def test_a_refresh_with_nothing_new_draws_nothing_again(store, sid, monkey
     ("linked", True, ["Q1", "T1"], False, "new", "a worktree: a new one by default, the uncommitted warning shown"),
     ("linked", True, [], True, "linked", "this worktree chosen: no branch, the warning hidden"),
 ])
-async def test_fork_dialog(store, tmp_path, worktree, claude_home, monkeypatch, where, dirty, tick, same, want_cwd, desc):
+async def test_fork_dialog(store, tmp_path, worktree, claude_home, monkeypatch, via, where, dirty, tick, same, want_cwd, desc):
     from textual.widgets import RadioButton, SelectionList
     monkeypatch.setattr(launch, "open_tab", lambda s, i, notice=True: None)
     main, wt = worktree
@@ -6886,6 +6929,14 @@ async def test_fork_dialog(store, tmp_path, worktree, claude_home, monkeypatch, 
         want = {"plain": cwd, "linked": cwd, "new": str(main.resolve() / ".worktrees/feat-x-fork")}[want_cwd]
         assert forks[0]["cwd"] == want, desc
         assert sorted(i["ref"] for i in store.items(forks[0]["id"])) == sorted(tick), f"{desc}: the ticked moved"
+        if via == "daemon":   # that test client has no stream: it never hears the fork's notice
+            return
+        for _ in range(50):   # through the daemon, word of the fork comes on the stream
+            if app.current_session() == forks[0]["id"]:
+                break
+            app.refresh_data()
+            await pilot.pause(0.05)
+        assert app.current_session() == forks[0]["id"], f"{desc}: the fork selected as its row appears (#116)"
 
 
 def item_list_rows(app) -> list[list[str]]:
@@ -7929,7 +7980,7 @@ class Presses:
     display_name = staticmethod(lambda s: s["name"])
 
     def __init__(self, row: dict, status: str):
-        self.pressed, self.toasts, self.question, self.forking = {}, [], True, {}
+        self.pressed, self.toasts, self.question, self.forking, self.fork_from = {}, [], True, {}, {}
         self.sessions, self.statuses, self.relaunching = [row], {row["id"]: status}, set()
         self.client = SimpleNamespace(compact_question=lambda target: {} if self.question else None)
 
