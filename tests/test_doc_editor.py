@@ -341,3 +341,27 @@ async def test_one_file_has_one_buffer_however_reached(store, sid, doc, tmp_path
         view, editor = await shown(app, pilot, other)
         assert list(app.doc_edits) == [str(doc[1].resolve())], "kept by the real path"
         assert "Kept. Build it." in app._detail_text, "the link's doc shows the same buffer"
+
+
+@pytest.mark.anyio
+async def test_the_file_gone_under_kept_edits_says_so(store, sid, doc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        notes = []
+        app.notify = lambda message, **_: notes.append(message)
+        view, editor = await shown(app, pilot, doc[0])
+        await edited(app, pilot, view, editor)
+        doc[1].unlink()
+        for _ in range(2):
+            app.refresh_data()
+            await pilot.pause()
+        assert notes == ["plan.md has gone from disk since you started editing; your edits are kept"], f"once: {notes}"
+        assert app.query_one("#detail-pane").border_title == "Detail · edited · file gone", "and in the title"
+        assert "Kept. Build it." in app._detail_text, "the edits still shown"
+
+
+def test_a_refresh_before_the_editor_mounts_or_after_it_goes_paints_nothing_of_it():
+    editor = DocEditor("#detail", "#detail-pane", lambda: False, lambda: None)
+    blocks = [("doc", "# x")]
+    assert editor.shown_in(blocks, "/x.md") == blocks, "unmounted: the blocks as they are"
+    editor.paint_title()   # no screen, no viewer: nothing, and no error

@@ -1843,6 +1843,7 @@ class DocView(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#docview-scroll").can_focus = False   # the transcript's keys scroll it
+        self.view, self.editor = self.query_one("#docview", Transcript), self.query_one("#docview-editor", DocEditor)
         self.paint()
         self.set_focus(self.query_one("#docview", Transcript))
 
@@ -1862,16 +1863,21 @@ class DocView(Screen):
         self.query_one("#docview-editor", DocEditor).open_at(event.row)
 
     def paint(self) -> None:
-        view = self.query_one("#docview", Transcript)
+        """Repainted by the app's refresh, which can reach it as the app ends, its widgets
+        going: then nothing. The viewer and editor are held, not queried, for that."""
+        view, editor = getattr(self, "view", None), getattr(self, "editor", None)
+        if view is None or editor is None or not view.is_attached:
+            return
         if self.file:
-            blocks = file_blocks(*self.file, self.app.client.read_doc(self.file[0]))
+            read = self.app.client.read_doc(self.file[0])
+            blocks, gone = file_blocks(*self.file, read), bool(read and read.get("gone"))
             view.doc_path = os.path.realpath(self.file[0])
         else:
             item, doc = self.app.client.item(self.sid, self.ref), self.app.client.document(self.sid, self.ref)
-            blocks = doc_blocks(item, doc)
+            blocks, gone = doc_blocks(item, doc), bool(doc and doc["gone"])
             view.doc_path = doc_path(item, doc)
         view.doc_key = ("file", self.file[0]) if self.file else (self.sid, self.ref)
-        blocks = self.query_one("#docview-editor", DocEditor).shown_in(blocks, view.doc_path)
+        blocks = editor.shown_in(blocks, view.doc_path, gone)
         text = "\n\n".join(md for _, md in blocks)
         if text != self.text:
             self.text = text
@@ -1888,6 +1894,7 @@ class DocEdit:
     shown: str
     cursor: tuple[int, int]
     changed: bool = False
+    gone: bool = False   # the file gone from disk since, likewise
 
 
 def carried(old: str, new: str, line: int, added: int | None = -1) -> int | None:
@@ -1943,13 +1950,24 @@ class DocEditor(TextArea):
         self.titled: str | None = None   # ... and the title last set, own and marks
 
     def on_mount(self) -> None:
+        # held, not queried: the app's refresh paints through here (shown_in, paint_title),
+        # and may come before this mounts or after it's gone (a screen popped, the app ending)
+        self.held = (self.screen.query_one(self.viewer, Transcript), self.screen.query_one(self.pane))
         self.watch(self.view.parent, "scroll_y", self.viewer_scrolled, init=False)
 
     # the widgets it works with
 
+    held: tuple[Transcript, Widget] | None = None   # its viewer and pane, once mounted
+
+    @property
+    def live(self) -> bool:
+        """Mounted, in the DOM, with its viewer and pane: what the refresh's paths here ask
+        before touching a widget."""
+        return self.held is not None and self.is_attached
+
     @property
     def view(self) -> Transcript:
-        return self.screen.query_one(self.viewer, Transcript)
+        return self.held[0]
 
     @property
     def splitter(self) -> Splitter:
@@ -1971,8 +1989,9 @@ class DocEditor(TextArea):
         if self.path is None:
             return
         if self.text != self.base:
-            changed = (old := self.edits.get(self.path)) is not None and old.changed
-            self.edits[self.path] = DocEdit(self.base, self.text, self.shown, self.cursor_location, changed)
+            old = self.edits.get(self.path)
+            self.edits[self.path] = DocEdit(self.base, self.text, self.shown, self.cursor_location,
+                                            bool(old and old.changed), bool(old and old.gone))
         else:
             self.edits.pop(self.path, None)
 
@@ -2021,7 +2040,7 @@ class DocEditor(TextArea):
         editor, its edits kept (stash) for when it opens on this one again. The same one,
         edited meanwhile in another editor (full screen's), takes those edits up, or closes
         if they were discarded there."""
-        if self.key is None:
+        if self.key is None or not self.live:
             return
         if key != self.key:
             self.stash()
@@ -2046,12 +2065,15 @@ class DocEditor(TextArea):
         if refocus and self.view.can_focus:
             self.view.focus()
 
-    def shown_in(self, blocks: list[tuple[str, str]], path: str | None) -> list[tuple[str, str]]:
+    def shown_in(self, blocks: list[tuple[str, str]], path: str | None, gone: bool = False) -> list[tuple[str, str]]:
         """A doc's blocks as the viewer shows them: the doc's text (at `path`) its buffer as
         of the last Ctrl+Enter, while the editor is open on it or its edits are kept. The
         file changed on disk meanwhile: kept edits stay, said once and in the title; with
-        none, the editor open takes up the file's new text."""
+        none, the editor open takes up the file's new text. The file gone (`gone`) likewise,
+        as `file gone`."""
         on_disk = next((md for who, md in blocks if who == "doc"), None)
+        if not self.live:   # not mounted yet, or gone: the blocks as they are
+            return blocks
         if path is not None and path == self.path and self.key is not None and not self.edited \
                 and on_disk is not None and on_disk != self.base:
             cursor = self.cursor_location
@@ -2059,7 +2081,11 @@ class DocEditor(TextArea):
             self.load_text(on_disk)
             self.move_cursor(cursor)
         kept = self.edits.get(path) if path is not None else None
-        if kept is not None and not kept.changed and on_disk is not None and on_disk != kept.base:
+        if kept is not None and gone and not kept.gone:
+            kept = self.edits[path] = dataclasses.replace(kept, gone=True)
+            self.app.notify(f"{os.path.basename(path)} has gone from disk since you started editing; "
+                            "your edits are kept", severity="warning")
+        elif kept is not None and not gone and not kept.changed and on_disk is not None and on_disk != kept.base:
             kept = self.edits[path] = dataclasses.replace(kept, changed=True)
             self.app.notify(f"{os.path.basename(path)} changed on disk since you started editing; "
                             "your edits are kept", severity="warning")
@@ -2072,15 +2098,15 @@ class DocEditor(TextArea):
 
     def paint_title(self) -> None:
         """`edited` in the pane's title while the doc it shows has unsaved edits, open here
-        or kept, and `file changed` once its file has changed on disk since."""
-        pane = next(iter(self.screen.query(self.pane)), None)
-        if pane is None:
+        or kept, and `file changed` (or `file gone`) once its file has changed on disk since."""
+        if not self.live:
             return
+        pane = self.held[1]
         if self.title is None:
             self.title = self.titled = pane.border_title or ""
         kept = self.edits.get(self.view.doc_path) if self.view.doc_path else None
         marks = ("edited",) if self.edited or kept else ()
-        marks += ("file changed",) if kept and kept.changed else ()
+        marks += ("file gone",) if kept and kept.gone else ("file changed",) if kept and kept.changed else ()
         title = " · ".join(t for t in (self.title, *marks) if t) or None
         if title != self.titled:   # set only when it changes: setting it redraws the pane
             self.titled = pane.border_title = title
@@ -4319,24 +4345,25 @@ class WheelhouseApp(App):
     def paint_detail(self) -> None:
         agent, doc, shown = False, self.selected_doc(), self.shown_doc
         self.detail.doc_key = ("file", shown[0]) if shown else None if self.viewing or not doc else self.selected
-        self.detail.doc_path = None
+        self.detail.doc_path, gone = None, False
         if (editor := getattr(self, "detail_editor", None)) is not None:
             editor.follow(self.detail.doc_key)
         if shown:   # a module's doc, in place of what's selected
-            blocks = file_blocks(*shown, self.client.read_doc(shown[0]))
+            read = self.client.read_doc(shown[0])
+            blocks, gone = file_blocks(*shown, read), bool(read and read.get("gone"))
             self.detail.doc_path = os.path.realpath(shown[0])
         elif self.viewing:
             blocks = self.conversation(self.viewing)
         elif doc:   # the file rendered, in place of a thread
             document = self.client.document(*self.selected)
-            blocks = doc_blocks(doc, document)
+            blocks, gone = doc_blocks(doc, document), bool(document and document["gone"])
             self.detail.doc_path = doc_path(doc, document)
         elif self.selected:
             blocks, agent = self.item_blocks(*self.selected)
         else:   # what was shown has gone (a followed session ended, say): not left standing
             blocks = [("note", NOTHING_SELECTED)]
         if editor is not None:
-            blocks = editor.shown_in(blocks, self.detail.doc_path)
+            blocks = editor.shown_in(blocks, self.detail.doc_path, gone)
         if not agent and not isinstance(self.screen, ThreadView):   # which may follow one itself
             self.client.unfollow_agent()
         # a conversation, the session's or a subagent's, shows its newest turn, and follows it
