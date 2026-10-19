@@ -1940,6 +1940,7 @@ class DocEditor(TextArea):
         self.block: tuple[int, int] | None = None   # the rows of the block the cursor was last in
         self.anchor: tuple[int, int] | None = None   # (source line, screen row) a render keeps
         self.title: str | None = None   # the pane's own title, while edited shows on it
+        self.titled: str | None = None   # ... and the title last set, own and marks
 
     def on_mount(self) -> None:
         self.watch(self.view.parent, "scroll_y", self.viewer_scrolled, init=False)
@@ -2076,11 +2077,13 @@ class DocEditor(TextArea):
         if pane is None:
             return
         if self.title is None:
-            self.title = pane.border_title or ""
+            self.title = self.titled = pane.border_title or ""
         kept = self.edits.get(self.view.doc_path) if self.view.doc_path else None
         marks = ("edited",) if self.edited or kept else ()
         marks += ("file changed",) if kept and kept.changed else ()
-        pane.border_title = " · ".join(t for t in (self.title, *marks) if t) or None
+        title = " · ".join(t for t in (self.title, *marks) if t) or None
+        if title != self.titled:   # set only when it changes: setting it redraws the pane
+            self.titled = pane.border_title = title
 
     # keys
 
