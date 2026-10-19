@@ -7022,7 +7022,7 @@ async def test_delete_on_an_item_with_no_children_asks_nothing(store, sid):
 
 @pytest.mark.anyio
 @pytest.mark.both
-async def test_a_doc_sits_in_the_docs_band_and_opens_rendered(store, sid, tmp_path):
+async def test_a_doc_sits_under_its_parent_and_opens_rendered(store, sid, tmp_path):
     doc = tmp_path / "plan.md"
     doc.write_text("# The plan\n\nBuild it **well**.\n")
     t = store.post_item(sid, "task", "design it", status="running")
@@ -7030,8 +7030,8 @@ async def test_a_doc_sits_in_the_docs_band_and_opens_rendered(store, sid, tmp_pa
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert item_list_rows(app) == [["demo", t], ["", ""], ["demo", m]], "the doc in the docs band, under its header"
-        app.items_table.move_cursor(row=2)
+        assert item_list_rows(app) == [["demo", t], ["", f"└ {m}"]], "the doc under its parent"
+        app.items_table.move_cursor(row=1)
         await pilot.pause()
         assert app.selected == (sid, m)
         assert app.query_one("#answer").display, "the answer box under a doc, for a comment (split)"
@@ -7062,15 +7062,15 @@ async def test_a_doc_sits_in_the_docs_band_and_opens_rendered(store, sid, tmp_pa
 
 
 @pytest.mark.anyio
-async def test_a_doc_with_no_parent_sits_in_the_docs_band(store, sid, tmp_path):
+async def test_a_doc_with_no_parent_sits_in_its_sessions_group(store, sid, tmp_path):
     (tmp_path / "notes.md").write_text("# Notes\n")
     q = store.post_item(sid, "question", "which db?")
     m = store.post_doc(sid, "the notes", str(tmp_path / "notes.md"))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert item_list_rows(app) == [["demo", q], ["", ""], ["demo", m]]
-        assert str(app.query_one("#items", DataTable).get_row_at(2)[2]) == "new"
+        assert item_list_rows(app) == [["demo", q], ["demo", f"└ {m}"]]
+        assert str(app.query_one("#items", DataTable).get_row_at(1)[2]) == "new"
 
 
 @pytest.mark.anyio
@@ -7113,8 +7113,7 @@ async def test_delete_takes_agent_children_and_leaves_docs(store, sid, tmp_path)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert item_list_rows(app) == [["demo", q], ["", f"└ {agent}"], ["", ""], ["demo", doc]], \
-            "the doc in the docs band, still its parent's child"
+        assert item_list_rows(app) == [["demo", q], ["", f"└ {agent}"], ["", f"└ {doc}"]]
         app.items_table.focus()
         app.items_table.move_cursor(row=0)
         await pilot.pause()
@@ -7124,13 +7123,14 @@ async def test_delete_takes_agent_children_and_leaves_docs(store, sid, tmp_path)
         assert "1 running child stays in the list, at the top level." in app.screen.prompt
         await pilot.press("y")
         await pilot.pause()
-        assert item_list_rows(app) == [["demo", f"└ {agent}"], ["", ""], ["demo", doc]], \
-            "the running subagent stays, in its session's group; the doc stays in the docs band"
+        assert item_list_rows(app) == [["demo", f"└ {agent}"], ["", f"└ {doc}"]], \
+            "the running subagent and the doc stay, in their session's group"
         assert store.item(sid, doc)["dismissed"] is None, "the doc never deleted with its parent"
         store.agent_status(sid, "agent-1", "done", "finished")   # as the transcript says it ended
         store.post_doc(sid, "the plan, v2", str(tmp_path / "plan.md"))
         await refresh(pilot, sid)
-        assert [r[1] for r in item_list_rows(app)] == [f"└ {agent}", "", doc], "the doc still in its band"
+        assert sorted(r[1] for r in item_list_rows(app)) == sorted([f"└ {agent}", f"└ {doc}"]), \
+            "the doc still there, at its session's level"
 
 
 def test_items_from_an_older_daemon_have_no_parents():
@@ -7165,8 +7165,8 @@ async def test_delete_on_marked_rows_asks_once_and_takes_the_children(store, sid
         await pilot.pause()
         store.agent_status(sid, "agent-1", "done", "finished")
         await refresh(pilot, sid)
-        assert [r[1] for r in item_list_rows(app)] == [f"└ {agent}", "", doc], \
-            "both rows gone, the running subagent kept, the doc in its band"
+        assert sorted(r[1] for r in item_list_rows(app)) == sorted([f"└ {agent}", f"└ {doc}"]), \
+            "both rows gone, the running subagent and the doc kept, at their session's level"
 
 
 @pytest.mark.anyio
@@ -7183,7 +7183,7 @@ async def test_a_doc_maps_its_rows_to_source_lines_in_detail_and_full_screen(sto
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(m))   # in the docs band
+        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(f"└ {m}"))
         await pilot.pause()
         for where in ("detail", "full screen"):
             view = app.detail if where == "detail" else app.screen.query_one("#docview", tui.Transcript)
@@ -7248,7 +7248,7 @@ async def test_a_long_doc_keeps_its_reading_place_through_a_rewrite_and_a_resize
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(m))   # in the docs band
+        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(f"└ {m}"))
         await pilot.pause()
         laid.clear()
         await rendered_off_loop(app, pilot)

@@ -1,12 +1,11 @@
-"""The docs section (.plan/docs-section.md, #106): docs in a band of their own at the inbox's
-foot, out of reach of clearing the inbox, and each doc's thread beside it in Detail and full
-screen, split or tabbed."""
+"""The docs section (.plan/docs-section.md, #106): docs out of reach of clearing the inbox,
+and each doc's thread beside it in Detail and full screen, split or tabbed."""
 
 import pytest
 
 from claude_wheelhouse import tui
-from claude_wheelhouse.tui import DOCS_ROW, Confirm, WheelhouseApp
-from test_tui import item_list_rows, one_second
+from claude_wheelhouse.tui import Confirm, WheelhouseApp
+from test_tui import item_list_rows
 
 DOC = "# The plan\n\nBuild it.\n\n## Recommendation\n\n**Add as tips.** They are cheap.\n"
 LONG = "".join(f"## Section {i}\n\nProse for section {i}.\n\n" for i in range(60))
@@ -22,7 +21,7 @@ def doc(store, sid, tmp_path):
 
 async def select(app, pilot, ref: str) -> None:
     await pilot.pause()
-    app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(ref))
+    app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(f"└ {ref}"))   # in its session's group
     await pilot.pause()
 
 
@@ -40,38 +39,11 @@ async def click_line(app, pilot, view, text: str) -> None:
     await pilot.pause()
 
 
-# the band
+# the inbox
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("sort, desc", [
-    ("status*", "the default sort"), ("title▲", "by title"), ("", "ordering off"),
-])
-async def test_the_docs_band_sits_at_the_foot_and_collapses(store, sid, doc, sort, desc):
-    with one_second():
-        t = store.post_item(sid, "task", "zzz last by title", status="done")
-        q = store.post_item(sid, "question", "aaa first?")
-    store.set_setting("layout.sort.items", sort)
-    app = WheelhouseApp(store)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause()
-        rows = [r[1] for r in item_list_rows(app)]
-        assert rows[-2:] == ["", doc[0]] and {q, t} <= set(rows[:-2]), f"{desc}: the header, then the doc, at the foot"
-        assert "Docs (1)" in str(app.items_table.get_row_at(len(rows) - 2)[3]), desc
-        app.toggle_children(DOCS_ROW)
-        await pilot.pause()
-        assert [r[1] for r in item_list_rows(app)][-1] == "", f"{desc}: collapsed, the header alone"
-        app.items_table.move_cursor(row=len(rows) - 2)
-        app.items_table.focus()
-        await pilot.pause()
-        assert app.selected is None, f"{desc}: the header selects nothing"
-        await pilot.press("enter")
-        await pilot.pause()
-        assert [r[1] for r in item_list_rows(app)][-1] == doc[0], f"{desc}: Enter on the header opens it again"
-
-
-@pytest.mark.anyio
-async def test_a_doc_with_unseen_replies_says_how_many_and_stays_in_the_band(store, sid, doc):
+async def test_a_doc_with_unseen_replies_says_how_many(store, sid, doc):
     q = store.post_item(sid, "question", "which?")
     store.mark_seen(sid, doc[0])
     for _ in range(2):
@@ -80,8 +52,8 @@ async def test_a_doc_with_unseen_replies_says_how_many_and_stays_in_the_band(sto
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         rows = item_list_rows(app)
-        assert [r[1] for r in rows] == [q, "", doc[0]], "in the band, not the active rows"
-        assert str(app.items_table.get_row_at(2)[2]) == "2 new"
+        assert [r[1] for r in rows] == [q, f"└ {doc[0]}"], "in its session's group"
+        assert str(app.items_table.get_row_at(1)[2]) == "2 new"
 
 
 @pytest.mark.anyio

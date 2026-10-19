@@ -63,17 +63,9 @@ class Desc:
         return repr(self.v)
 
 
-DOCS = 3   # the docs band (.plan/docs-section.md): every doc, at the inbox's foot, under any sort
-
-
 def band_of(rank: tuple) -> int:
     """Where an inbox rank (store.inbox_rank) puts an item: 0 active, 1 settled, 2 finished."""
     return 2 if rank[0] >= FINISHED_RANK else 1 if rank[0] >= SETTLED_RANK else 0
-
-
-def item_band(item, rank: tuple) -> int:
-    """An item's band: a doc's is DOCS, whatever its status; the rest by their rank (band_of)."""
-    return DOCS if item["kind"] == "doc" else band_of(rank)
 
 
 def parse(spec: str) -> tuple[str | None, str | None]:
@@ -133,12 +125,12 @@ def keyed(row, token: str, band: int, value, tie) -> tuple[tuple, str]:
 
 def item_key(spec: str, item, processing=frozenset(), busy=frozenset(), names=None) -> tuple[tuple, str]:
     """An item's sort key under spec and its group's token. The key's first element is its
-    band (0 active, 1 settled, 2 finished, DOCS the docs): a sort keeps the bands; with
-    ordering off there is one band and the docs', and nothing moves between them."""
+    band (0 active, 1 settled, 2 finished): a sort keeps the bands; with ordering off there
+    is one band, and nothing moves between them."""
     rank = inbox_rank(item, processing, busy)
     if not spec:
-        return keyed(item, MANUAL, DOCS if item["kind"] == "doc" else 0, 0, rank)
-    band = item_band(item, rank)
+        return keyed(item, MANUAL, 0, 0, rank)
+    band = band_of(rank)
     col, mark = parse(spec)
     tie = rank
     if col == "status" and mark == STAR:

@@ -201,16 +201,14 @@ session.
   how many of them are still open or unread, and how many running ones stay, then closes
   or dismisses it and deletes the rest, at any depth. They stay deleted, even when a
   subagent finishes; `Ctrl+R` with `F` showing brings one back. A doc under it is never
-  deleted or counted: it stays in the Docs band.
+  deleted or counted: it stays, at its session's level.
   A running child (a subagent still at work, say) is never deleted: it stays in the list
   with no parent, at the top level, and stays there if `Ctrl+R` brings its parent back.
 - **Docs.** A session declares each markdown document it writes for you to read (a design,
-  plan, report or review, wherever it lives, `~/.claude` included) as a doc item (`M1`).
-  Docs are reference material: they sit in a band of their own, **Docs (n)**, at the foot
-  of the inbox under any sort (the sort orders them inside it; the session filter narrows
-  it), where clearing the inbox can't reach them. The band's header row collapses with its
-  `-` (or `Enter` on it) and opens again with its `+`. Its scratch and working notes stay
-  out. A doc shows `new` until it has been in sight for a second, then `read`; when the
+  plan, report or review, wherever it lives, `~/.claude` included) as a doc item (`M1`),
+  under the task, question or decision it belongs to, or under the session's name if none
+  (or if that item has been deleted). Docs are reference material, out of reach of clearing
+  the inbox. Its scratch and working notes stay out. A doc shows `new` until it has been in sight for a second, then `read`; when the
   session changes it and posts it again it shows `updated`, never new again, and replies
   you haven't seen show as `2 new`. The file is read again whenever it changes, and if it
   has gone (or isn't a regular file) the pane says so. `Ctrl+A` never marks a doc, a

@@ -6,6 +6,8 @@ Status: rough draft for Doug's review. The mock-ups are what to react to.
 
 ## 1. The Docs band
 
+**Dropped before merge (Doug, Q133).** A pin column replaces the band (#110): any item can be pinned, docs are pinned by default, and Delete and Ctrl+A ignore pinned items. Until then docs stay where they sorted before (under their parent, or their session's group), and the rules below that don't depend on the band (Ctrl+A, the multi-select and single Delete, "n new", awaiting) key on the doc kind. The original proposal follows.
+
 Docs move out of the inbox's status bands into a band of their own at the foot of the list. The band's header row collapses like a session's children (- and +).
 
 ```

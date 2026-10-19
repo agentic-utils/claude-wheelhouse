@@ -68,7 +68,7 @@ def test_session_sort_defaults():
     ("status▲", [item(1, "T1", "done"), item(2, "T2", "done")], ["T1", "T2"],
      "▲: the settled as * has them, the latest to settle lowest"),
     ("status▲", [item(1, "T1", "running"), item(2, "M1", "new", "doc"), item(3, "Q1", "open", "question")],
-     ["Q1", "T1", "M1"], "▲: a doc in the docs band at the foot, whatever its status (#106)"),
+     ["Q1", "M1", "T1"], "▲: a status not in the table between open and running"),
     ("ref▲", [item(1, "T10", "running"), item(2, "T2", "running"), item(3, "Q1", "open", "question")],
      ["Q1", "T2", "T10"], "ref: natural order"),
     ("title▼", [item(1, "T1", "running", title="apple"), item(2, "T2", "running", title="Banana")],
@@ -236,17 +236,3 @@ def test_a_drop_into_another_band_is_across():
     rows = [item(1, "T1", "running"), item(2, "T2", "running"), item(3, "T3", "done")]
     got, tokens = order("status*", rows)
     assert ordering.drop(got, tokens, "T2", after="T3")[0] is None
-
-
-@pytest.mark.parametrize("spec, desc", [
-    ("", "ordering off"), ("status*", "the inbox's default"), ("status▲", "status"), ("title▼", "by title"),
-])
-@pytest.mark.parametrize("kind, status, band, what", [
-    ("doc", "new", ordering.DOCS, "a doc unread"),
-    ("doc", "read", ordering.DOCS, "a doc read"),
-    ("task", "running", 0, "a task: its own band"),
-])
-def test_a_doc_is_in_the_docs_band_under_any_sort(spec, desc, kind, status, band, what):
-    item = {"kind": kind, "status": status, "session_id": "s", "ref": "M1", "id": 1, "title": "t",
-            "updated_at": "2026-10-19T08:00:00+00:00", "dismissed": None, "pos": None, "pos_group": None}
-    assert ordering.item_key(spec, item)[0][0] == band, f"{what}, {desc}"

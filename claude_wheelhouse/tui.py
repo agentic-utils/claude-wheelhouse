@@ -378,14 +378,6 @@ def item_key(item) -> str:
     return f"{item['session_id']}|{item['ref']}"
 
 
-DOCS_ROW = "|docs"   # the docs band's header row (.plan/docs-section.md): no item's, never marked or selected
-
-
-def docs_header(n: int) -> tuple[str, tuple]:
-    """The docs band's header row: its + / - (ItemList.toggles) collapses the band."""
-    return DOCS_ROW, ("", "", "", Text(f"Docs ({n})", style="bold #05d9e8"))
-
-
 def band(rank: tuple) -> int:
     """Where an inbox rank (store.inbox_rank) puts an item: 0 active, 1 settled, 2 finished."""
     return 2 if rank[0] >= FINISHED_RANK else 1 if rank[0] >= SETTLED_RANK else 0
@@ -1343,7 +1335,7 @@ class ItemList(SinkList):
         return Strip.join([strip.crop(0, width - 2), mark])
 
     def set_marks(self, marks: set[str], anchor: str | None = None) -> None:
-        self.marked = {k for k in marks if not k.endswith("|") and k != DOCS_ROW}   # not the conversation row, nor the docs header
+        self.marked = {k for k in marks if not k.endswith("|")}   # not the conversation row
         self.anchor = anchor
         self.post_message(self.MarksChanged())
 
@@ -4308,31 +4300,21 @@ class WheelhouseApp(App):
         keyed = self.ranked_keyed(found, processing, busy, names)
         key_of = {id(it): key for key, it in keyed}   # each item's row key, made once
         active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
-        docs = []   # the docs band, at the foot under any sort (.plan/docs-section.md): finished ones with F
         for key, it in keyed:
-            if it["kind"] == "doc":
-                if self.show_finished or standing(it, busy) != "finished":
-                    docs.append(it)
             # ordering off: one band, nothing moves between them, but the finished still wait for F
-            elif self.item_sort or self.show_finished or standing(it, busy) != "finished":
-                bands[min(self.ranks[key][0], 2)].append(it)
+            if self.item_sort or self.show_finished or standing(it, busy) != "finished":
+                bands[self.ranks[key][0]].append(it)
         rows, counts = item_rows([active, settled, finished if self.show_finished else []], names, self.collapsed)
-        if docs and DOCS_ROW not in self.collapsed:
-            rows += [(it, None, ordering.DOCS) for it in docs]
         table.draggable = {key_of[id(it)] for it, nested, _ in rows if nested is None}
         table.followers = {key_of[id(it)] for it, nested, _ in rows if nested == CHILD}
-        table.toggles = {key: key in self.collapsed for key in counts} | ({DOCS_ROW: DOCS_ROW in self.collapsed} if docs else {})
-        sunk = {key_of[id(it)] for it, _, n in rows if n} | {DOCS_ROW}   # the docs band: always at the foot
+        table.toggles = {key: key in self.collapsed for key in counts}
+        sunk = {key_of[id(it)] for it, _, n in rows if n}
         if self.filter_sid:   # the session's own conversation, pinned first
             general = (self.filter_sid, None) in queued
             rows_out.append((f"{self.filter_sid}|", (names.get(self.filter_sid, "")[:14], Text("💬"),
                              Text("queued", style="bold #05d9e8") if general else "",
                              Text("Conversation", style="bold"))))
-        header = False
-        for it, nested, n in rows:
-            if n == ordering.DOCS and not header:
-                header = True
-                rows_out.append(docs_header(len(docs)))
+        for it, nested, _ in rows:
             # an unfinished item of any kind with an answer waiting to be sent shows as queued, and one
             # whose answer went with no reply since as processing (D28); neither is stored
             key = (it["session_id"], it["ref"])
@@ -4361,8 +4343,6 @@ class WheelhouseApp(App):
                 cells = (name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
                          shown, Text(it["title"], style="dim"))
             rows_out.append((key_of[id(it)], cells))
-        if docs and not header:   # collapsed: the band's header alone
-            rows_out.append(docs_header(len(docs)))
         if self.filter_sid:   # the session column goes: the inbox follows the one session
             rows_out = [(k, cells[1:]) for k, cells in rows_out]
         cells = dict(rows_out)
@@ -5607,12 +5587,6 @@ class WheelhouseApp(App):
             self.paint_items()
 
     def select_row(self, key: str) -> None:
-        if key == DOCS_ROW:   # the docs band's header: nothing selected, Detail empty
-            if self.selected is not None:
-                self.selected = None
-                self.retarget()
-                self.paint_detail()
-            return
         sid, ref = key.split("|")
         if self.selected != (sid, ref or None):
             self.selected = (sid, ref or None)   # an unseen decision is seen once looked at (dwelt)
@@ -5625,9 +5599,6 @@ class WheelhouseApp(App):
     @on(DataTable.RowSelected, "#items")
     def open_thread(self, event: DataTable.RowSelected) -> None:
         self.settle()
-        if event.row_key.value == DOCS_ROW:   # Enter on the docs band's header: it collapses, or opens
-            self.toggle_children(DOCS_ROW)
-            return
         sid, ref = event.row_key.value.split("|")
         self.saw(sid, ref or None)
         if ref:
@@ -5787,11 +5758,7 @@ class WheelhouseApp(App):
         they're hidden gives the selection to its parent."""
         self.collapsed ^= {key}
         sid, ref = key.split("|")
-        if key == DOCS_ROW:   # the docs band: a doc selected as it collapses gives the selection to its header
-            item = key in self.collapsed and self.selected and self.selected[1] and self.client.item(*self.selected)
-            if item and item["kind"] == "doc":
-                self.select_row(key)
-        elif key in self.collapsed and self.selected and self.selected[0] == sid and self.selected[1]:
+        if key in self.collapsed and self.selected and self.selected[0] == sid and self.selected[1]:
             item = self.client.item(*self.selected)
             if item is not None and parent_of(item) == ref:
                 self.select_row(key)
