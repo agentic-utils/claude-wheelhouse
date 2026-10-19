@@ -1915,7 +1915,7 @@ def quote_of(md: str, line: int) -> str:
     markdown markers off (a heading's #, a list's bullet, a quote's >, emphasis), cut to QUOTE_CUT."""
     lines = md.splitlines()
     text = lines[line] if 0 <= line < len(lines) else ""
-    text = re.sub(r"^\s*(?:#+|>+|[-*+]|\d+[.)])\s*", "", text).replace("**", "").replace("`", "").strip()
+    text = re.sub(r"^\s*(?:#+\s*|>+\s*|[-*+]\s+|\d+[.)]\s+)", "", text).replace("**", "").replace("`", "").strip()
     return text if len(text) <= QUOTE_CUT else text[:QUOTE_CUT - 1].rstrip() + "…"
 
 
@@ -3631,8 +3631,10 @@ class WheelhouseApp(App):
         Binding("question_mark", "help", "Keys", key_display="?"),
         # a doc item in Detail (.plan/docs-section.md): split or tabbed, and the tabs
         Binding("ctrl+l", "doc_layout", "Doc layout", show=False, key_display="Ctrl+L"),
-        Binding("ctrl+pageup", "doc_tab(-1)", "Doc's tab before", show=False),
-        Binding("ctrl+pagedown", "doc_tab(1)", "Doc's tab after", show=False),
+        # priority: a scrolling container's own (page left and right) would take them first; they
+        # act only while a tabbed doc shows (check_action), else go on as before
+        Binding("ctrl+pageup", "doc_tab(-1)", "Doc's tab before", show=False, priority=True),
+        Binding("ctrl+pagedown", "doc_tab(1)", "Doc's tab after", show=False, priority=True),
         Binding("l", "tour", "Tour", key_display="L"),   # shown while the badge is (check_action)
         Binding("q", "quit", "Quit", key_display="Q"),
         *BUTTON_KEYS,
@@ -5690,9 +5692,12 @@ class WheelhouseApp(App):
         self.paint_session_info()
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
-        """F's two bindings: only the one that applies shows in the footer, and runs."""
+        """F's two bindings: only the one that applies shows in the footer, and runs. A doc's keys
+        (Ctrl+L, its tabs') only while a doc item shows, so they fall through otherwise."""
         if action == "show_finished":
             return parameters[0] != self.show_finished
+        if action in ("doc_tab", "doc_layout"):   # only while a doc item shows: tabbed, for its tabs
+            return self.doc_here()[1] is not None and (action == "doc_layout" or self.doc_layout == TABBED)
         if action == "tour":   # L: only while the badge offers something
             return bool(getattr(self, "badge", None) and self.badge.display)
         return True

@@ -1011,3 +1011,36 @@ def test_a_status_change_ends_a_status_placement(store, sid, group, status, kept
     store.update_item(sid, ref, status=status)
     row = store.item(sid, ref)
     assert ((row["pos"], row["pos_group"]) == (0, group)) == kept, desc
+
+
+@pytest.mark.parametrize("steps, listed, desc", [
+    ([], None, "a doc nothing's been said on"),
+    (["send"], "M1 reply owed", "a comment on a doc awaits the session's reply, as a question's answer does"),
+    (["send", "reply"], None, "replied: back with the person"),
+    (["queue"], None, "a comment still queued awaits nothing"),
+])
+def test_a_doc_comment_awaits_a_reply(store, sid, written_at, tmp_path, steps, listed, desc):
+    store.mark_version(sid)
+    (tmp_path / "d.md").write_text("# D\n")
+    ref = store.post_doc(sid, "d", str(tmp_path / "d.md"))
+    for step in steps:
+        {"send": lambda: store.send(sid, "why this?", ref), "queue": lambda: store.queue(sid, "why?", ref),
+         "reply": lambda: store.reply(sid, ref, "because", by_session=True)}[step]()
+    assert store.in_doubt(sid, at(60)) == ([listed] if listed else []), desc
+    assert ((sid, ref) in store.awaiting()) == bool(listed), desc
+
+
+@pytest.mark.parametrize("kind, replies, seen, left, desc", [
+    ("doc", 2, False, 2, "a doc's replies count until the person views it"),
+    ("doc", 2, True, 0, "viewed: none new"),
+    ("question", 1, False, 0, "a question's replies are never counted"),
+])
+def test_a_docs_new_replies(store, sid, tmp_path, kind, replies, seen, left, desc):
+    (tmp_path / "d.md").write_text("# D\n")
+    ref = store.post_doc(sid, "d", str(tmp_path / "d.md")) if kind == "doc" else store.post_item(sid, kind, "q?")
+    store.mark_seen(sid, ref)
+    for _ in range(replies):
+        store.reply(sid, ref, "a reply", "open" if kind == "question" else None, by_session=True)
+    if seen:
+        assert store.mark_seen(sid, ref), f"{desc}: seeing them is a change"
+    assert store.item(sid, ref)["new_replies"] == left, desc
