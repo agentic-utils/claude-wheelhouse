@@ -83,9 +83,9 @@ and how many unread (a decision unseen). Yes closes or dismisses the
 parent and every child, whatever its status; No or Esc takes nothing. A parent that can't be
 closed (a running task) still says so, as before.
 
-Docs are the exception (#106, Q132): a doc is durable, so Delete on its parent leaves it in
-the Docs band (`.plan/docs-section.md`), uncounted in the Confirm and untaken. Only the doc's
-own Delete removes it. Item durability as metadata of its own is #110.
+Pinned items are the exception (#110, Q133): a pinned child stays when its parent is deleted,
+uncounted in the Confirm and untaken (`.plan/docs-section.md` §1). A doc is pinned by default.
+Only the pinned item's own Delete removes it, once the person confirms.
 
 Delete takes the children whatever their status: a finished one, dismissed already, would
 otherwise come back when posted again. It always asks first; the dialog's open and unread
