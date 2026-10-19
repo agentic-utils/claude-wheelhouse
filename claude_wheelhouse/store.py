@@ -371,8 +371,11 @@ class Store:
                 for kind in DISMISSABLE:
                     db.execute(f"UPDATE items SET dismissed = status WHERE kind = ? AND status IN "
                                f"({','.join('?' * len(SETTLED[kind]))})", (kind, *SETTLED[kind]))
-            if ("items", "pinned") in added:   # docs were durable by kind before pins: they stay so
-                db.execute("UPDATE items SET pinned = (kind = 'doc')")
+            if ("items", "pinned") in added:
+                # docs were durable by kind before pins: those still showing stay so, but not one
+                # already dismissed or deleted (finished, standing), which a pin would bring back
+                db.execute(f"""UPDATE items SET pinned = (kind = 'doc' AND coalesce(dismissed NOT IN
+                               ('{DELETED}', status), 1))""")
             if ("items", "session_at") in added:
                 # the session's latest word on each item before the column (a note, reply or
                 # status, author claude), so an item it updated a minute ago isn't in doubt
