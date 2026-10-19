@@ -56,7 +56,7 @@ async def test_answer_reaches_the_session(store, sid, live):
         await pilot.pause()
         assert store.pending(sid) == [], "Ctrl+Enter queues: sessions start in queued mode"
         assert str(items.get_row_at(0)[3]) == "queued", "the item list shows the queued answer"
-        assert "✉ 1" in str(app.query_one("#session-list", DataTable).get_row_at(0)[5])
+        assert str(app.query_one("#session-list", DataTable).get_row_at(0)[5]) == "1"
         await pilot.press("ctrl+s")
         await pilot.pause()
     assert [m["body"] for m in store.pending(sid)] == ["SQLite, it's local"]

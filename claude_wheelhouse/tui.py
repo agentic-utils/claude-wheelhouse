@@ -4263,7 +4263,7 @@ class WheelhouseApp(App):
             name = Text(self.display_name(s), style="dim" if s["parked"] else "")
             if self.stale(s["id"]):
                 name.append(" ⟳", style="bold #ff2a6d")
-            queued = Text(f"✉ {s['drafts']}", style="bold #05d9e8") if s["drafts"] else ""
+            queued = Text(str(s["drafts"]), style="bold #05d9e8") if s["drafts"] else ""
             # decisions inform, they don't block: counted, but not blinking like questions
             unseen = Text(str(s["unseen_decisions"]), style=DECISION) if s["unseen_decisions"] else ""
             q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
