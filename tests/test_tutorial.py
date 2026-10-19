@@ -356,6 +356,37 @@ async def test_a_callout_stays_put_as_the_inbox_grows(store, tut, stop, size):
         assert moves == 0, f"{stop} at {size}: moved {moves} of 11 times"
 
 
+@pytest.mark.parametrize("stop", ["docs", "answer"])
+@pytest.mark.anyio
+async def test_a_callout_with_nowhere_clear_rests(store, tut, stop):
+    """Review of #104: at 60x20 nowhere is clear of the step's rows, and the box put in the
+    least bad spot stays there: placing it again doesn't loop on its own layout refresh."""
+    fill_demo(store, tut)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(60, 20)) as pilot:
+        await pilot.pause()
+        found, _, _, _ = await demo_at(app, pilot, store, tut, stop)
+        await pilot.pause()
+        calls, place = [], found.place
+        found.place = lambda: (calls.append(1), place())
+        await pilot.pause(1.0)   # idle: a second of wall-clock time, the loop's to show
+        assert len(calls) <= 2, f"{stop}: placed {len(calls)} times in a second idle"
+        assert found.forced is not False, f"{stop}: nowhere clear at 60x20, as the test assumes"
+
+
+@pytest.mark.parametrize("size", [(40, 16), (60, 20)])
+@pytest.mark.parametrize("stop", CALLOUT_STEPS)
+@pytest.mark.anyio
+async def test_a_callout_fits_a_small_screen(store, tut, every_module, stop, size):
+    """Review of #104: on a screen too short for the box, it is cut to fit, never off screen."""
+    fill_demo(store, tut)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        found, _, _, _ = await demo_at(app, pilot, store, tut, stop)
+        assert app.screen.region.contains_region(found.region), f"{stop} at {size}: {found.region} on screen"
+
+
 @pytest.mark.parametrize("stop", CALLOUT_STEPS)
 @pytest.mark.parametrize("size", [(160, 40), (100, 30), (80, 24)])
 @pytest.mark.anyio

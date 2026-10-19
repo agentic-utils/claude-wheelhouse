@@ -30,6 +30,7 @@ PANES = {
     "items": ("#items-pane", "Inbox"),
     "detail": ("#detail-pane", "Detail"),
     "stats": ("#stats", "Stats"),
+    "design": ("#design", "Decisions"),   # the design module's pane
 }
 
 SIDES = ("right", "left", "below", "above")   # tried in turn, beside the pane; then inside, then centred
@@ -78,6 +79,9 @@ def place(screen: Size, pane: Region | None, height: int, clear: Region | None =
     clear_of = [r for r in spots if not covers(r, keep) and not covers(r, avoid)]
     best = min(clear_of, key=lambda r: gap(r, pane)) if clear_of \
         else min(spots, key=lambda r: (covers(r, keep), covers(r, avoid), gap(r, pane)))
+    tall = min(best.height, screen.height)   # a screen too short for it: cut to fit, its text clipped
+    best = Region(max(0, min(best.x, screen.width - best.width)), max(0, min(best.y, screen.height - tall)),
+                  best.width, tall)
     return best, "centred" if side == "centred" else facing(best, pane)
 
 
@@ -162,7 +166,9 @@ class TourCallout(Vertical):
     the app. Hidden while another screen covers the one it's on."""
     SCOPED_CSS = False   # the highlight is on the pane, outside the callout
     DEFAULT_CSS = f"""
-    TourCallout {{ overlay: screen; width: {WIDTH}; height: auto; padding: 0 1; background: #12122a;
+    /* constrain: kept on screen, and so its offset applies even at (0, 0), which Textual
+       otherwise takes for none and lays the box out in the flow */
+    TourCallout {{ overlay: screen; constrain: inside inside; width: {WIDTH}; height: auto; padding: 0 1; background: #12122a;
                    color: #e8e8e8; border: round #ffd300; border-title-color: #ffd300; }}
     TourCallout .tour-text {{ width: 1fr; height: auto; }}
     TourCallout Button {{ width: auto; min-width: 0; }}
@@ -182,6 +188,9 @@ class TourCallout(Vertical):
         # what it never covers where it can help it (place)
         self.keep, self.kinds = keep, kinds
         self.at: Region | None = None   # where it was last put
+        # put there with nowhere clear (place's fallback): the step's rows it was placed against,
+        # left be until they move. False: placed clear
+        self.forced: Region | None | bool = False
         self.target: Widget | None = None
         self.placed: tuple | None = None   # what it was last placed against
         self.side = ""
@@ -204,7 +213,7 @@ class TourCallout(Vertical):
 
     def say(self, text: str) -> None:
         """Its text changed: placed again, as its height may have."""
-        self.text, self.placed, self.at = text, None, None
+        self.text, self.placed, self.at, self.forced = text, None, None, False
         self.place()
 
     def cover(self) -> None:
@@ -235,21 +244,25 @@ class TourCallout(Vertical):
         region = target.region if target is not None and target.display else None
         clear, keep = rows(self.screen, self.keep, self.kinds)
         beside = self.side not in ("inside", "centred")
-        if self.placed == (screen, region) and self.at is not None \
-                and not covers(self.at, keep) and not (beside and covers(self.at, region)):
-            return
+        if self.placed == (screen, region) and self.at is not None and (
+                self.forced is not False and self.forced == keep
+                or not covers(self.at, keep) and not (beside and covers(self.at, region))):
+            return   # a fallback stays while its rows do: placing it again would only find the same spot
         self.placed = (screen, region)
         self.highlight(target if region is not None else None)   # held for the step: the link, wherever it sits
         title = PANES.get(self.pane, ("", self.pane))[1]
         w = width(screen)
-        at, self.side = place(screen, region, self.lines(w, self.text), clear, keep)
+        at, side = place(screen, region, self.lines(w, self.text), clear, keep)
         text = self.text
-        if self.side == "centred":   # its pane named first, a line that wraps on a narrow screen
+        if side == "centred":   # its pane named first, a line that wraps on a narrow screen
             text = f"In the {title} pane:\n{self.text}"
             at, _ = place(screen, region, self.lines(w, text) - 1, clear, keep, centre=True)
-        self.at = at
+        self.forced = keep if covers(at, keep) or side not in ("inside", "centred") and covers(at, region) else False
+        if (at, side, text) == (self.at, self.side, getattr(self, "shown", None)):
+            return   # unchanged: no refresh, which would only bring it back here (a layout loop)
+        self.at, self.side, self.shown = at, side, text
         self.query_one(".tour-text", Static).update(Text(text))
-        self.border_title = POINTERS[self.side].format(title) or None
+        self.border_title = POINTERS[side].format(title) or None
         self.styles.width, self.styles.height = at.width, at.height
         self.absolute_offset = Offset(at.x, at.y)
         self.refresh(layout=True)

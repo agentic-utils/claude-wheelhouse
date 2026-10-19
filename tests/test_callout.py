@@ -175,7 +175,7 @@ async def test_hidden_under_another_screen_and_unhighlighted_once_gone():
 
 
 @pytest.mark.anyio
-async def test_every_pane_resolves_in_the_real_app(store):
+async def test_every_pane_resolves_in_the_real_app(store, every_module):   # design: its module loaded
     """Review of #86: a PANES selector left at an id the six slots changed finds no pane, or
     the wrong one, and the callout sits centred, describing nothing."""
     from claude_wheelhouse.callout import PANES
