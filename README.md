@@ -166,7 +166,7 @@ session.
   its turn to end. Emoji codes work as in chat apps: `:tada:` turns into 🎉, and while
   you type `:gri` the hint line suggests matches (Tab or Enter takes the first). Text you haven't sent stays with the item (or session) you typed it
   for: moving to another clears the box, and coming back restores it. Each session shows
-  its queued count (`✉ 3`). Sending doesn't change a question's status: the session's
+  its queued count in the ✉ column. Sending doesn't change a question's status: the session's
   reply declares it, `open` while it still needs you or `answered`. Until it replies the
   question shows as `processing` (dimmed), awaiting the session, and the session list's
   question count leaves it out: it counts only questions awaiting you, a queued answer
@@ -200,19 +200,41 @@ session.
   app runs). `Delete` on an item with children asks first, saying how many it takes and
   how many of them are still open or unread, and how many running ones stay, then closes
   or dismisses it and deletes the rest, at any depth. They stay deleted, even when a
-  subagent finishes or a doc is posted again; `Ctrl+R` with `F` showing brings one back.
+  subagent finishes; `Ctrl+R` with `F` showing brings one back. A pinned child is never
+  deleted or counted: it stays, at its session's level.
   A running child (a subagent still at work, say) is never deleted: it stays in the list
   with no parent, at the top level, and stays there if `Ctrl+R` brings its parent back.
 - **Docs.** A session declares each markdown document it writes for you to read (a design,
   plan, report or review, wherever it lives, `~/.claude` included) as a doc item (`M1`),
-  under the task, question or decision it belongs to, or under the session's name if none.
-  Its scratch and working notes stay out. A doc shows `new` until it has been in sight for
-  a second, then `read`; when the session changes it and posts it again it shows
-  `updated`, never new again. Select one and the right-hand pane shows its path and the
-  file rendered, with no answer box; `Enter` opens it full screen. The file is read again
-  whenever it changes, and if it has gone (or isn't a regular file) the pane says so. `Delete` dismisses one.
+  under the task, question or decision it belongs to, or under the session's name if none
+  (or if that item has been deleted). The session leaves out its scratch and working
+  notes. A doc shows `new` until it has been in sight for a second, then `read`; when the
+  session changes it and posts it again it shows `updated`, never new again, and replies
+  you haven't seen show as `2 new`. The file is read again whenever it changes, and if it
+  has gone (or isn't a regular file) the pane says so.
+- **Pins.** The inbox's first column pins an item (📌): a click there, or `P` in the item
+  list, pins the row or clears its pin. A doc comes pinned (a session can post a scratch
+  report unpinned), anything else unpinned, and a doc posted again keeps the pin you set.
+  Clearing the inbox never takes a pinned item: `Ctrl+A` never marks one, a `Delete` on
+  marked rows leaves them (and says so: `1 pinned kept`), a parent's `Delete` leaves its
+  pinned children, and `F` never hides one. `Delete` on a pinned item asks first ("Delete
+  pinned M2? The file stays on disk.", No by default), saying so too if a comment of
+  yours on it awaits a reply; Yes clears its pin and deletes it.
+- **A doc's thread.** Select a doc and Detail shows it with its thread: **split** (the
+  default), the doc above and its thread and the answer box below, the line between them
+  kept as `layout.doc-thread` (with no comment yet, the box alone, so the doc has the
+  room); or **tabbed**, Doc and Thread (with its count of new replies) as tabs, switched
+  by `Ctrl+PageUp` and `Ctrl+PageDown` or a click, where typing on the Doc tab moves you
+  to Thread with what you typed. `Ctrl+L` switches between the two, kept as
+  `layout.doc-view`; `Enter` opens the doc full screen, laid out the same way. A comment
+  goes to the session that posted the doc, on its ref, queued or sent at once by the
+  session's mode, as an answer does. After a click on a block of the doc, the comment
+  quotes that block's first line (shown in the box's title); `Esc` in the empty box drops
+  the quote. The session replies in the thread; when it revises the doc and posts it
+  again, the doc reloads where you were reading.
 - **Editing a doc.** A click on a doc shown, an item's or a decision, in Detail or full
-  screen, opens an editor below it, its cursor on the first line of the block clicked
+  screen, opens an editor below it (a doc item's in place of its thread and the answer
+  box, or as a third tab, Editor, when tabbed), its cursor on the first line of the block clicked
   (dragging the line between them resizes it, kept as `layout.editor`). `Ctrl+Enter`
   shows the edits rendered above, as an answer queues; nothing re-renders as you type.
   The two keep step: scrolling the doc scrolls the editor to the same place, and moving
@@ -338,7 +360,9 @@ session.
   Relaunch all (`Shift+L`) act on no one session, so they're keys in the footer. Ctrl+S, Ctrl+T and the
   hint under the answer box act on or describe the same session (with none selected, the highlighted item's).
   An item opened full screen has Mode, Send and the rest in its bar, for its own session. New session (directory, optional name, optional ticket, opening brief,
-  model and effort) opens Claude in a Windows Terminal tab.
+  model and effort) opens Claude in a Windows Terminal tab. The new session is selected in the session list
+  as soon as its row appears, unless you have picked another session or are typing in the answer box by then;
+  a fork is selected the same way once it's made.
   The model is Sonnet 5.5, Opus 5.5, Haiku 5.5 or Fable 5.1 (Sonnet 5.5 unless changed), and the effort
   any level from low to max, starting at the model's default (high; xhigh for Haiku). Every launch of the
   session passes both, Relaunch included; to change them while it runs, use `/model` and
@@ -427,7 +451,7 @@ along with the launch command.
 
 Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision or dismiss a done task or subagent or a doc, `N` new session, `A` adopt, `Shift+L` relaunch all, `K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
+highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first), `N` new session, `A` adopt, `Shift+L` relaunch all, `K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
@@ -441,8 +465,8 @@ answer box, where `PgUp` and `PgDn` scroll the conversation, and `Ctrl+Enter` le
 a button leaves focus where it was. A focused button that is disabled or hidden (Send, once it has sent)
 gives focus to the answer box. Send (its button or `Ctrl+S`) from the answer box or a button leaves focus in
 the box; from the session list or the items, focus stays there. An item opened full screen goes the same way: its
-answer box, then its buttons, and a click in its thread puts focus in the box. A doc shown in the inbox
-has no answer box: it takes the box's place in the Tab order, and a click on it focuses it, so the arrows,
+answer box, then its buttons, and a click in its thread puts focus in the box. A doc shown in Detail
+is a stop after the answer box (in its place when the box doesn't show), and focused, the arrows,
 `PgUp`, `PgDn`, `Home` and `End` scroll it. Keys typed ahead of the screen end as if typed slowly: each acts once the one
 before it has done all it does, so the ones behind a key that opens a thread or a dialog go to it, and the ones behind a
 dialog's answer go to the screen it uncovers.
@@ -473,8 +497,8 @@ Closing several questions or decisions at once: in the item list, `Ctrl`+click m
 and `Shift`+click or `Alt`+click marks the range from the last one marked (Windows Terminal keeps
 `Shift`+click for its own text selection, so use `Alt` there); from the keyboard, `Space`
 marks or unmarks the highlighted row, `Shift+Up`/`Shift+Down` extend the range, and `Ctrl+A`
-marks every finished (dimmed) row shown. A `Ctrl`+, `Shift`+ or `Alt`+click never starts a drag. `Delete` or `Backspace` then closes the marked
-questions and decisions and dismisses the done tasks and subagents, `Ctrl+R` brings back the finished ones, `Esc` clears the marks, and a plain click
+marks every finished (dimmed) row shown, never a pinned one. A `Ctrl`+, `Shift`+ or `Alt`+click never starts a drag. `Delete` or `Backspace` then closes the marked
+questions and decisions and dismisses the done tasks and subagents, leaving any pinned one among them, `Ctrl+R` brings back the finished ones, `Esc` clears the marks, and a plain click
 starts afresh. Once `Delete` has taken the highlighted row (one row, or several marked), the
 highlight goes to the row immediately above the topmost row it took, or to the new first row
 if that was the first.

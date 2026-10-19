@@ -15,6 +15,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `daemon` adds `--address`, `--name` (repeatable) and `--stop`; `tutorial` takes `--yes`.
 - `store.py`: the SQLite store, the only source of truth. Schema, added columns,
   triggers, `PROTOCOL_VERSION`. Every public write is its own committed transaction.
+  Clearing the inbox keys on `items.pinned` (`store.pinned`), never on an item's kind:
+  `family`, `standing` and the TUI's Delete and Ctrl+A all skip a pinned item (#110).
 - `hub.py`: what the wheelhouse knows and does, whatever shows it. Owns liveness, the session states
   and their verbs (`VERBS`, `.plan/session-states.md`), and
   Relaunch. Never imports Textual: it tells surfaces what happened as events.
@@ -105,6 +107,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   map (`DocMap`: each block's source lines and rendered rows), for the viewer
   (`Transcript.line_at`, `Transcript.row_of`; `.plan/modules.md`, Q106), and its editor's
   (`tui.DocEditor`: opened by a click on a doc, in Detail and `DocView`; saving is stage 8's).
+  A doc item's thread and layout there, split or tabbed (`tui.DocPanes`, Ctrl+L):
+  `.plan/docs-section.md`.
   Never imports Textual.
 - `splitter.py`, `knurl.py`, `emoji.py`, `unsent.py`: TUI pieces (dividers, scrollbars,
   emoji shortcodes, unsent text).

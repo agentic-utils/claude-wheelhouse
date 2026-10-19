@@ -287,8 +287,8 @@ async def test_delete_dismisses_settled_tasks_and_subagents(store, sid, monkeypa
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("filtered, columns, desc", [
-    (False, ["session", "ref", "status *", "title"], "every session's items: whose each is"),
-    (True, ["ref", "status *", "title"], "the inbox following one session: no session column (D31)"),
+    (False, ["", "session", "ref", "status *", "title"], "every session's items: whose each is"),
+    (True, ["", "ref", "status *", "title"], "the inbox following one session: no session column (D31)"),
 ])
 async def test_the_session_column_only_with_every_session(store, sid, filtered, columns, desc):
     store.post_item(sid, "question", "which db?")
@@ -304,7 +304,7 @@ async def test_the_session_column_only_with_every_session(store, sid, filtered, 
         assert_one_current(app, desc)
         app.action_clear_filter()
         await pilot.pause()
-        assert len(table.ordered_columns) == 4, f"{desc}: back with Esc"
+        assert len(table.ordered_columns) == 5, f"{desc}: back with Esc (the pin column first, #110)"
 
 
 def slots(app) -> dict[str, int]:

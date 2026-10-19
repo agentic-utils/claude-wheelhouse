@@ -43,10 +43,11 @@ class Splitter(Widget):
             self.splitter, self.fraction = splitter, fraction
 
     def __init__(self, key: str, sized: str, flex: str, axis: str,
-                 default: "Callable[[Splitter], int | None] | None" = None, **kwargs):
+                 default: "Callable[[Splitter], int | None] | None" = None, label: str = "", **kwargs):
         super().__init__(classes=f"-{axis}", **kwargs)
         self.key, self.sized_selector, self.flex_selector, self.axis = key, sized, flex, axis
         self.default = default   # the pane's size in cells with none set, if not the stylesheet's
+        self.label = label   # a "y" splitter's word at its middle, as "thread" over a doc's thread
         self.drag: tuple[int, int, int] | None = None   # the pointer, sized and flex at the press
         self.fraction: float | None = None   # set by a drag or a stored size; None: the stylesheet's
         self.moved = False
@@ -54,7 +55,11 @@ class Splitter(Widget):
     def render(self) -> Text:
         if self.axis == "x":
             return Text("\n".join("┊" * self.size.height))
-        return Text("─" * self.size.width)
+        width, label = self.size.width, f" {self.label} " if self.label else ""
+        if not label or len(label) + 4 > width:
+            return Text("─" * width)
+        left = (width - len(label)) // 2
+        return Text("─" * left + label + "─" * (width - left - len(label)))
 
     # the panes and their sizes along the axis
 
