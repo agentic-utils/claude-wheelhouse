@@ -16,12 +16,12 @@ Any inbox item can be pinned (Doug, Q133). The pin replaces a docs band of its o
 ```
 
 - **The column.** The inbox's first column shows 📌 on a pinned row and a dim dot on any other. A click there, or P in the item list, pins the row or clears its pin. Its header is blank and doesn't sort. 📌 is two cells wide in Rich and in the terminal alike (Emoji_Presentation), so the columns stay aligned.
-- **Defaults.** A doc is pinned when posted; anything else is not, decisions included. A session can post a doc with `pinned=false` for a scratch report not worth keeping once read (Q132), or any other item with `pinned=true`. A doc posted again keeps whatever pin the person last set. Docs from before pins come up pinned.
+- **Defaults.** A doc is pinned when posted; anything else is not, decisions included. A row inserted without the column (a session on code from before pins) takes its kind's default, by trigger. A session can post a doc with `pinned=false` for a scratch report not worth keeping once read (Q132), or any other item with `pinned=true`. A doc posted again keeps whatever pin the person last set. Docs from before pins come up pinned.
 - **Ctrl+A** ("every finished row") never marks a pinned row.
 - **A multi-select Delete** skips pinned rows and says so in the notice ("dismissed T1; 1 pinned kept").
-- **Delete on a single pinned row** asks first: "Delete pinned M2? The file stays on disk." (the last sentence for a doc only). The default is No. Yes clears the pin, then deletes it as any other item, asking about its children if it has any.
+- **Delete on a single pinned row** asks first: "Delete pinned M2? The file stays on disk." (the last sentence for a doc only). The default is No. On a parent the same dialog says what its children would take ("Delete pinned T3 (build it) and its 2 children? ..."). Yes clears the pin, then deletes it as any other item; No leaves it pinned.
 - **A parent's Delete** leaves its pinned children and takes its unpinned ones, an unpinned doc included. A pinned child stays under its parent, so Ctrl+R on the parent nests it again.
-- **F and sinking.** A pinned item is never finished: settled at most, so it sinks and dims as a settled one does, and F never hides it.
+- **F and sinking.** A pin changes nothing about where an item stands: one finished stays finished, so Ctrl+R reopens it and Delete says it's closed already. F off still shows a pinned finished item, dimmed at the foot.
 - A doc with replies you haven't seen shows "n new".
 - A doc with a message from you that hasn't been answered yet counts as awaiting a reply, like a question. Delete on it warns about that as well.
 

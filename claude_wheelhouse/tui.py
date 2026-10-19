@@ -349,7 +349,7 @@ def unread(item) -> bool:
     return (item["kind"], item["status"]) in {("decision", "unseen"), ("doc", "new"), ("doc", "updated")}
 
 
-def family_prompt(parents: list, family: list, marked: int = 1) -> str:
+def family_prompt(parents: list, family: list, marked: int = 1, pin: bool = False) -> str:
     """Delete on parents (one highlighted, or among `marked` rows): what they take with them,
     and how much of that is open or unread, and how many running children stay (spared)."""
     gone, kept = [it for it in family if not spared(it)], sum(map(spared, family))
@@ -359,7 +359,7 @@ def family_prompt(parents: list, family: list, marked: int = 1) -> str:
     kids = f"{n} {'child' if n == 1 else 'children'}"
     if marked == 1:
         item = parents[0]
-        ask = f"Delete {item['ref']} ({item['title']})" + (f" and its {kids}?" if n else "?")
+        ask = f"Delete {'pinned ' if pin else ''}{item['ref']} ({item['title']})" + (f" and its {kids}?" if n else "?")
     else:
         ask = f"Delete the {marked} marked rows" + (f" and the {kids} of {', '.join(it['ref'] for it in parents)}?"
                                                     if n else "?")
@@ -369,9 +369,11 @@ def family_prompt(parents: list, family: list, marked: int = 1) -> str:
                if kept else ""))
 
 
-def pinned_prompt(item, awaiting: bool) -> str:
-    """Delete on a pinned item: what it asks first. Yes clears its pin too."""
-    return (f"Delete pinned {item['ref']}?" + (" The file stays on disk." if item["kind"] == "doc" else "")
+def pinned_prompt(item, awaiting: bool, family: list = ()) -> str:
+    """Delete on a pinned item: what it asks first, in one dialog with what its children
+    (family) would ask. Yes clears its pin too."""
+    head = family_prompt([item], family, pin=True) if family else f"Delete pinned {item['ref']}?"
+    return (head + (" The file stays on disk." if item["kind"] == "doc" else "")
             + (" Your comment on it is still awaiting a reply." if awaiting else ""))
 
 
@@ -4315,9 +4317,10 @@ class WheelhouseApp(App):
         active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
         for key, it in keyed:
             # ordering off: one band, nothing moves between them, but the finished still wait for F
-            if self.item_sort or self.show_finished or standing(it, busy) != "finished":
+            if self.item_sort or self.show_finished or pinned(it) or standing(it, busy) != "finished":
                 bands[self.ranks[key][0]].append(it)
-        rows, counts = item_rows([active, settled, finished if self.show_finished else []], names, self.collapsed)
+        rows, counts = item_rows([active, settled, finished if self.show_finished else list(filter(pinned, finished))],
+                                 names, self.collapsed)
         table.draggable = {key_of[id(it)] for it, nested, _ in rows if nested is None}
         table.followers = {key_of[id(it)] for it, nested, _ in rows if nested == CHILD}
         table.toggles = {key: key in self.collapsed for key in counts}
@@ -5718,20 +5721,15 @@ class WheelhouseApp(App):
             self.notify(f"{item['ref']} is {what}: its status is the session's to set", severity="warning")
             return
         verb = "closed" if item["kind"] in CLOSABLE else "dismissed"
-        if standing(item) == "finished" and self.show_finished:
+        if standing(item) == "finished" and (self.show_finished or pinned(item)):   # a pinned one shows anyway
             self.notify(f"{item['ref']} is {verb} already: Ctrl+R reopens it")
             return
+        family = self.family(item)
         if pinned(item):   # kept out of reach of clearing the inbox: deleted only once the person says so (No the default)
             awaiting = (item["session_id"], item["ref"]) in self.client.inbox(item["session_id"]).awaiting
-            self.push_screen(Confirm(pinned_prompt(item, awaiting)), lambda yes: yes and self.close_pinned(item))
+            self.push_screen(Confirm(pinned_prompt(item, awaiting, family)),
+                             lambda yes: yes and self.close_pinned(item, family))
             return
-        self.close_one(item)
-
-    def close_one(self, item) -> None:
-        """Delete on an item not pinned (or its pin just cleared): closed at once, or with its
-        children once the person says so."""
-        verb = "closed" if item["kind"] in CLOSABLE else "dismissed"
-        family = self.family(item)
         if family:   # it goes with its children, finished or not, a running one orphaned, once the person says so
             self.push_screen(Confirm(family_prompt([item], family)),
                              lambda yes: yes and self.close_family(item, family))
@@ -5740,15 +5738,21 @@ class WheelhouseApp(App):
         self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
         self.refresh_data()
 
-    def close_pinned(self, item) -> None:
-        """Delete confirmed on a pinned item: its pin cleared, then deleted as any other (close_one),
-        a doc's file left be."""
+    def close_pinned(self, item, family: list) -> None:
+        """Delete confirmed on a pinned item (its children with it, in the same dialog): its pin
+        cleared only now, then it deleted as any other, a doc's file left be."""
         try:
             self.told(self.client.set_pinned(item["session_id"], item["ref"], False))
         except (SessionGone, KeyError) as e:   # ended or gone meanwhile
             self.notify(str(e), severity="warning")
             return
-        self.close_one(self.client.item(item["session_id"], item["ref"]) or item)
+        if family:
+            self.close_family(item, family)
+            return
+        self.close(item, True)
+        verb = "closed" if item["kind"] in CLOSABLE else "dismissed"
+        self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
+        self.refresh_data()
 
     def toggle_pinned(self, key: str) -> None:
         """The pin column clicked, or P in the item list: the row's item pinned, or its pin cleared."""

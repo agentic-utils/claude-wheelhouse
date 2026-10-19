@@ -69,6 +69,7 @@ def test_the_mcp_tools_pinned(store, sid, tmp_path, kind, pinned, expected, desc
 
 def test_docs_from_before_pins_come_up_pinned(store, sid, tmp_path, db_file):
     doc, task = post(store, sid, tmp_path, "doc"), post(store, sid, tmp_path, "task")
+    store.db.execute("DROP TRIGGER items_pinned_by_kind_v1")   # as before pins: neither it nor the column
     store.db.execute("ALTER TABLE items DROP COLUMN pinned")
     again = Store(db_file)
     assert [bool(again.item(sid, r)["pinned"]) for r in (doc, task)] == [True, False]
@@ -84,15 +85,28 @@ def test_a_parents_delete_leaves_its_pinned_children(store, sid, tmp_path):
     assert [standing(store.item(sid, r)) for r in (kept, q)] == ["active", "active"]
 
 
-@pytest.mark.parametrize("status, dismissed, pinned, expected, desc", [
-    ("done", "done", True, "settled", "dismissed but pinned: settled, never hidden"),
-    ("done", "done", False, "finished", "dismissed, not pinned: finished"),
-    ("done", "deleted", True, "settled", "deleted with its parent before being pinned: settled"),
+@pytest.mark.parametrize("columns, kind, expected, desc", [
+    ("", "doc", True, "a doc inserted by older code, pinned not written: pinned by its kind"),
+    ("", "task", False, "a task the same way: not"),
+    (", pinned", "doc", False, "a doc written unpinned stays so"),
 ])
-def test_a_pinned_item_is_never_finished(store, sid, status, dismissed, pinned, expected, desc):
-    ref = store.post_item(sid, "task", "t", status=status, pinned=pinned)
+def test_a_row_inserted_without_pinned_takes_its_kinds_default(store, sid, columns, kind, expected, desc):
+    values = ", 0" if columns else ""
+    store.db.execute(f"""INSERT INTO items (session_id, ref, kind, title, body, status, created_at, updated_at{columns})
+                         VALUES (?, 'X1', ?, 't', 'b', 'new', '2026-10-19T09:00:00+00:00',
+                         '2026-10-19T09:00:00+00:00'{values})""", (sid, kind))
+    assert store.item(sid, "X1")["pinned"] == expected, desc
+
+
+@pytest.mark.parametrize("dismissed, pinned, desc", [
+    ("done", True, "dismissed and pinned: finished all the same, so Ctrl+R reopens it"),
+    ("done", False, "dismissed, not pinned: finished"),
+    ("deleted", True, "deleted with its parent, then pinned: finished"),
+])
+def test_a_pin_leaves_finished_as_it_was(store, sid, dismissed, pinned, desc):
+    ref = store.post_item(sid, "task", "t", status="done", pinned=pinned)
     store.db.execute("UPDATE items SET dismissed = ? WHERE ref = ?", (dismissed, ref))
-    assert standing(store.item(sid, ref)) == expected, desc
+    assert standing(store.item(sid, ref)) == "finished", desc
 
 
 # the inbox
@@ -113,6 +127,7 @@ async def test_the_pin_column_toggles(store, sid, tmp_path, how, desc):
         await pilot.pause()
         table = app.items_table
         assert str(table.get_row(f"{sid}|{t}")[0]) == UNPINNED, desc
+        selected, screen = app.selected, app.screen
         for expected in (True, False):   # pinned, then its pin cleared
             if how == "click":
                 await pilot.click(table, offset=(header_x(table, "pin"), table.header_height))
@@ -122,6 +137,7 @@ async def test_the_pin_column_toggles(store, sid, tmp_path, how, desc):
             await pilot.pause()
             assert bool(store.item(sid, t)["pinned"]) == expected, desc
             assert str(table.get_row(f"{sid}|{t}")[0]) == (PIN if expected else UNPINNED), desc
+            assert (app.selected, app.screen) == (selected, screen), f"{desc}: nothing selected or opened"
 
 
 @pytest.mark.anyio
@@ -203,3 +219,46 @@ async def test_f_never_hides_a_pinned_item(store, sid, tmp_path):
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         assert set(app.items_table.rows) == {f"{sid}|{kept}"}, "the pinned one shows with F off"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key, gone, desc", [
+    ("n", False, "No: the parent and its child kept, the pin too"),
+    ("y", True, "Yes: both gone, the pin cleared"),
+])
+async def test_delete_on_a_pinned_parent_asks_once(store, sid, key, gone, desc):
+    t = store.post_item(sid, "task", "build it", status="done", pinned=True)
+    q = store.post_item(sid, "question", "which?")
+    store.db.execute("UPDATE items SET parent_ref = ? WHERE ref = ?", (t, q))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{t}"))
+        await pilot.pause()
+        await pilot.press("delete")
+        await pilot.pause()
+        assert app.screen.prompt.startswith(f"Delete pinned {t} (build it) and its 1 child?"), app.screen.prompt
+        await pilot.press(key)
+        await pilot.pause()
+        assert not isinstance(app.screen, Confirm), f"{desc}: one dialog, not two"
+        assert [standing(store.item(sid, r)) == "finished" for r in (t, q)] == [gone, gone], desc
+        assert bool(store.item(sid, t)["pinned"]) == (not gone), desc
+
+
+@pytest.mark.anyio
+async def test_a_pinned_finished_item_reopens_and_is_not_deleted_again(store, sid):
+    t = store.post_item(sid, "task", "kept", status="done", pinned=True)
+    store.dismiss(sid, t)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{t}"))
+        await pilot.pause()
+        await pilot.press("delete")
+        await pilot.pause()
+        assert not isinstance(app.screen, Confirm) and any("already" in n for n in notices(app)), notices(app)
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        assert standing(store.item(sid, t)) == "settled", "Ctrl+R reopens it"

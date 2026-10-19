@@ -214,6 +214,11 @@ TRIGGER_BODIES = {f"{table}_marked_{op.lower()}": f"AFTER {op} ON {table} "
 TRIGGER_BODIES["items_unplaced_on_status"] = (
     "AFTER UPDATE OF status ON items WHEN OLD.status IS NOT NEW.status AND NEW.pos_group LIKE 'status%' "
     "BEGIN UPDATE items SET pos = NULL, pos_group = NULL WHERE id = NEW.id; END")
+# A row inserted without items.pinned (by a session's own process on code from before pins, which
+# never writes it) takes its kind's default: a doc pinned, anything else not. This code always writes it
+TRIGGER_BODIES["items_pinned_by_kind"] = (
+    "AFTER INSERT ON items WHEN NEW.pinned IS NULL "
+    "BEGIN UPDATE items SET pinned = (NEW.kind = 'doc') WHERE id = NEW.id; END")
 OUR_TRIGGER = re.compile(rf"^(?:{'|'.join(TRIGGER_BODIES)})(?:_v(\d+))?$")
 # retired, every version dropped on open: items_seq_* numbered each write of updated_at in
 # items.seq (#70, 2bbb99a), with the unique index items_seq (INDEXES drops it). Ties now go
@@ -249,8 +254,9 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "pos", "REAL"), ("sessions", "pos_group", "TEXT"),
                  # where its repo's decisions are, as it declared them (set_doc_dirs): JSON, NULL for docs/adr
                  ("sessions", "doc_dirs", "TEXT"),
-                 # kept out of reach of clearing the inbox (pinned): a doc by default, anything once the person pins it
-                 ("items", "pinned", "INTEGER NOT NULL DEFAULT 0")]
+                 # kept out of reach of clearing the inbox (pinned): a doc by default, anything once the person pins it.
+                 # No default: a row older code inserts takes its kind's (items_pinned_by_kind)
+                 ("items", "pinned", "INTEGER")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -366,7 +372,7 @@ class Store:
                     db.execute(f"UPDATE items SET dismissed = status WHERE kind = ? AND status IN "
                                f"({','.join('?' * len(SETTLED[kind]))})", (kind, *SETTLED[kind]))
             if ("items", "pinned") in added:   # docs were durable by kind before pins: they stay so
-                db.execute("UPDATE items SET pinned = 1 WHERE kind = 'doc'")
+                db.execute("UPDATE items SET pinned = (kind = 'doc')")
             if ("items", "session_at") in added:
                 # the session's latest word on each item before the column (a note, reply or
                 # status, author claude), so an item it updated a minute ago isn't in doubt
@@ -889,7 +895,7 @@ class Store:
                            (to, new, sid, ref))
                 status = "dropped" if item["kind"] == "task" else "closed"
                 db.execute("""INSERT INTO items (session_id, ref, kind, title, body, status, created_at, updated_at,
-                              dismissed, moved_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              dismissed, moved_to, pinned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",   # a stand-in: never pinned
                            (sid, ref, item["kind"], item["title"], f"Moved to {fork}, a fork of this session, as {new}.",
                             status, item["created_at"], now(), status if item["kind"] in DISMISSABLE else None,
                             f"{fork} as {new}"))
@@ -1403,8 +1409,8 @@ def spared(item) -> bool:
 
 
 def pinned(item) -> bool:
-    """Whether an item is pinned (items.pinned): out of reach of clearing the inbox, never hidden
-    as finished. Not on a row from older code, which has no such column."""
+    """Whether an item is pinned (items.pinned): out of reach of clearing the inbox, and shown
+    finished with F off. Not on a row from older code, which has no such column (or NULL)."""
     try:
         return bool(item["pinned"])
     except (KeyError, IndexError):
@@ -1542,12 +1548,12 @@ def decision_body(body: str, status, fields: dict) -> str:
 def standing(item, busy=frozenset()) -> str:
     """Where an item stands in the inbox: active, settled or finished (SETTLED). A settled
     item the person has a word queued or awaiting a reply on, `busy` by (session, ref), is
-    active, even if they dismissed it: the ball isn't back with them. A pinned one is never
-    finished: settled at most, so F never hides it."""
+    active, even if they dismissed it: the ball isn't back with them. A pin changes none of
+    this: a pinned item finished is still finished (the inbox shows it with F off all the same)."""
     status, waiting = item["status"], (item["session_id"], item["ref"]) in busy
     if status in CLOSED - SETTLED[item["kind"]] or item["dismissed"] == DELETED or (
             item["dismissed"] == status and not waiting):
-        return "settled" if pinned(item) else "finished"
+        return "finished"
     if status in SETTLED[item["kind"]] and not waiting:
         return "settled"
     return "active"
