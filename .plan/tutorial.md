@@ -149,12 +149,14 @@ their tokens per run.
   So a session of the person's own started in that directory is taken for the tutorial's,
   and ended with it (`stop_earlier`, on taking the offer or on `make tutorial`). The README
   says not to start one there.
-  The tutorial directory's `.claude/settings.json` allows the wheelhouse's own tools (so a tester in default
-  permission mode isn't asked about each post).
-- The brief has the session post a task, two related questions (tone, and a sign-off that
-  depends on the tone) and a decision, then wait. On the answers it replies, writes the
-  message in chat, then marks the task done. It's told to touch nothing else and to skip its own session-end routine (no
-  memory or handoff notes) when ended. It asks for the decision outright, so the demo posts
+  The tutorial directory's `.claude/settings.json` allows the wheelhouse's own tools and
+  writing `story.md` (so a tester in default permission mode isn't asked about each post).
+- The brief (#101) has the session write a short children's bedtime story: it posts a task,
+  two related questions (the main characters, and a setting that suits them) and a decision
+  (keeping it under 200 words), then waits. On the answers it writes the story to `story.md`
+  in its directory, declares it as a doc item under the task, replies to both questions,
+  then marks the task done. It's told to touch no other file, run no commands, use no
+  subagents, and to skip its own session-end routine (no memory or handoff notes) when ended. It asks for the decision outright, so the demo posts
   one even under `WHEELHOUSE_DECISIONS=0`, which only drops the protocol's decisions section.
 - Immediate mode has no step of its own: the hint under the answer box names the mode and
   Ctrl+T, and `?` gives the send-mode rules.

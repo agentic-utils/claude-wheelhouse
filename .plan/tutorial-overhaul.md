@@ -58,6 +58,24 @@ resume at the same dialog.
 | 11 | `end` | Session info | "Done with the demo: Stop & Forget ends it and clears its items." | the demo session gone |
 | 12 | `notes` | centred | This release's notes (below), then "N starts a session of your own." | Close |
 
+- #101 reworded the dialogs (whatsnew.DIALOGS holds the text now): each one that waits on
+  the person says what to do now ("press N now", "Press [Stop & Forget] now"), New session
+  opened for the demo says "This is part of the tutorial: press [Launch] to proceed.", and
+  each paragraph has a blank line after it. It added `docs` (Inbox, an action) after `decision`:
+  the demo now writes a children's bedtime story (questions on its characters and setting, a
+  decision on its length) and declares it as a doc, which the person opens. The Decisions
+  pane's dialog explains ADRs. Esc ends
+  the tour at any time, for good, wherever focus is on the main screen and in the tour's own
+  New session (Q122's pause is replaced): tour_at is cleared and every feature counts as
+  seen, so no badge offers it; the demo keeps running, and `claude-wheelhouse tutorial` offers
+  the tour afresh. Quitting mid-tour still resumes from the badge.
+  The launched demo is selected in the session list. A callout's place (callout.place) is
+  one rule: of its candidates (beside, inside or centred as before; below every inbox row;
+  below the step's rows; the screen's foot; its top), the nearest its pane that covers
+  neither the demo's rows its step needs (tour.ROWS: the questions, D1, M1 or the
+  conversation row) nor its pane, else the least over them. It is placed as the step starts,
+  on a resize or when its pane moves, and otherwise stays put unless it comes to cover them.
+  Its pointer faces the pane from where it ends up, and the pane stays highlighted.
 - The checks for 4 to 9 and 11 are today's step checks, moved over unchanged, including the
   rules that the app's own automatic selection never ticks anything.
 - A callout whose pane is absent (Stats disabled or uninstalled) is skipped, and its

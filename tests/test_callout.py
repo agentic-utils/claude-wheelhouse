@@ -7,7 +7,7 @@ from textual.geometry import Region, Size
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
-from claude_wheelhouse.callout import HIGHLIGHT, TourCallout, place
+from claude_wheelhouse.callout import POINTERS, facing, HIGHLIGHT, TourCallout, place
 
 S = Size(80, 24)
 
@@ -28,6 +28,52 @@ S = Size(80, 24)
 ])
 def test_placement(screen, pane, height, region, side, desc):
     assert place(screen, pane, height) == (region, side), desc
+
+
+ROWS = Region(33, 2, 12, 6)   # the demo's rows in the inbox (callout.rows), left of a pane on the right
+EVERY = Region(33, 2, 12, 20)   # every row, too many to go below
+RIGHT = Region(50, 0, 30, 24)
+
+
+@pytest.mark.parametrize("pane, height, clear, keep, region, desc", [
+    (RIGHT, 6, None, None, Region(4, 0, 46, 6), "nothing to keep clear of: spot's choice"),
+    (RIGHT, 6, ROWS, ROWS, Region(4, 8, 46, 6), "over the demo's rows: below them"),
+    (RIGHT, 6, EVERY, ROWS, Region(4, 8, 46, 6), "below every row doesn't fit: below the demo's"),
+    (RIGHT, 6, None, Region(0, 12, 4, 4), Region(4, 0, 46, 6), "clear of them already: unmoved"),
+    (RIGHT, 20, EVERY, ROWS, Region(4, 4, 46, 20), "nowhere clear: the least over them, the foot"),
+    (Region(20, 14, 40, 10), 6, None, Region(20, 2, 10, 10), Region(20, 12, 46, 6),
+     "none clear of both: off the demo's rows, the least over its pane"),
+    (Region(30, 0, 50, 24), 6, None, Region(32, 1, 10, 4), Region(32, 5, 46, 6), "inside its pane: below the rows there"),
+    (None, 6, None, Region(17, 6, 10, 4), Region(17, 10, 46, 7), "centred too: the same search"),
+])
+def test_placement_keeps_clear(pane, height, clear, keep, region, desc):
+    assert place(S, pane, height, clear, keep)[0] == region, f"{desc} (#101 6)"
+
+
+P = Region(20, 8, 20, 6)   # a pane in the middle
+
+
+@pytest.mark.parametrize("box, side, desc", [
+    (Region(40, 8, 10, 4), "right", "level, to its right"),
+    (Region(5, 9, 15, 4), "left", "level, to its left"),
+    (Region(22, 14, 10, 4), "below", "under it"),
+    (Region(22, 0, 10, 8), "above", "over it"),
+    (Region(40, 16, 10, 4), "below-right", "rows below and to the right: not just right (Stats, #101)"),
+    (Region(0, 0, 10, 4), "above-left", "up and to the left"),
+    (Region(22, 9, 10, 2), "inside", "over it"),
+])
+def test_facing(box, side, desc):
+    assert facing(box, P) == side, desc
+    assert POINTERS[side].format("x"), desc
+
+
+def test_the_nearest_clear_candidate_wins():
+    """#101: below the demo's rows is nearer the pane than the screen's foot."""
+    pane = Region(50, 0, 30, 24)
+    region, side = place(S, pane, 6, None, Region(4, 0, 46, 3))
+    assert (region, side) == (Region(4, 3, 46, 6), "left"), "the first clear spot, touching the pane"
+    assert place(S, Region(0, 0, 30, 6), 6, None, Region(30, 0, 46, 8)) == (Region(30, 8, 46, 6), "below-right"), \
+        "moved down off the rows: pointing up and back at the pane"
 
 
 class Panes(App):
@@ -129,7 +175,20 @@ async def test_hidden_under_another_screen_and_unhighlighted_once_gone():
 
 
 @pytest.mark.anyio
-async def test_every_pane_resolves_in_the_real_app(store):
+async def test_the_next_steps_callout_keeps_the_highlight():
+    """Review of #104: the decision step's callout leaving after the docs step's, on the same
+    pane, mounted, leaves that pane highlighted."""
+    app = Panes(TourCallout("items", "Decisions."))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await app.mount(TourCallout("items", "Documents."))
+        await pilot.pause()
+        await app.callout.remove()
+        await pilot.pause()
+        assert HIGHLIGHT in app.query_one("#items-pane").classes, "kept: the next step's callout holds it"
+
+@pytest.mark.anyio
+async def test_every_pane_resolves_in_the_real_app(store, every_module):   # design: its module loaded
     """Review of #86: a PANES selector left at an id the six slots changed finds no pane, or
     the wrong one, and the callout sits centred, describing nothing."""
     from claude_wheelhouse.callout import PANES
