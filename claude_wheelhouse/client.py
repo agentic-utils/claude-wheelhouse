@@ -937,7 +937,8 @@ class RemoteClient:
         thread or conversation not shown now let go, to be fetched afresh if it's shown again."""
         kind, sid = event["kind"], event.get("sid")
         if kind == "notice":
-            self.post(lambda: self.emit(Event("notice", event.get("text", ""), event.get("severity", "information"), sid)))
+            self.post(lambda: self.emit(Event("notice", event.get("text", ""), event.get("severity", "information"), sid,
+                                                 event.get("made"))))
             return
         with self.lock:
             kept = set(self.cache) | self.wanted | self.asked

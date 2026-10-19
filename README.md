@@ -360,7 +360,9 @@ session.
   Relaunch all (`Shift+L`) act on no one session, so they're keys in the footer. Ctrl+S, Ctrl+T and the
   hint under the answer box act on or describe the same session (with none selected, the highlighted item's).
   An item opened full screen has Mode, Send and the rest in its bar, for its own session. New session (directory, optional name, optional ticket, opening brief,
-  model and effort) opens Claude in a Windows Terminal tab.
+  model and effort) opens Claude in a Windows Terminal tab. The new session is selected in the session list
+  as soon as its row appears, unless you have picked another session or are typing in the answer box by then;
+  a fork is selected the same way once it's made.
   The model is Sonnet 5.5, Opus 5.5, Haiku 5.5 or Fable 5.1 (Sonnet 5.5 unless changed), and the effort
   any level from low to max, starting at the model's default (high; xhigh for Haiku). Every launch of the
   session passes both, Relaunch included; to change them while it runs, use `/model` and

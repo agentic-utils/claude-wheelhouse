@@ -3671,7 +3671,11 @@ class WheelhouseApp(App):
         self.dwell_gen = 0
         self.dwell_timer = None
         self.picked: tuple | None = None   # the selection the person last made, not the app (saw)
-        self.select_new: str | None = None   # the tour's demo, selected once its row shows (launch_tour)
+        # a session launched or forked here, selected once its row shows (paint_sessions), and
+        # the selection when it was asked for: one the person changes meanwhile stays theirs (#116)
+        self.select_new: str | None = None
+        self.select_from: tuple | None = None
+        self.fork_from: dict[str, tuple | None] = {}   # each session's Fork pressed here: the selection then
         # where each list's cursor was last left by the app, or settled (settle): a cursor
         # anywhere else is the person's move, not yet acted on
         self.items_cursor: str | None = None
@@ -4190,10 +4194,14 @@ class WheelhouseApp(App):
             self.notify(event.text, severity=event.severity)
             if self.forking.get(event.sid):   # a Fork of it made, or failed: the oldest under way
                 self.forking[event.sid].pop(0)
+                was = self.fork_from.get(event.sid)
                 if not self.forking[event.sid]:   # none left under way
                     del self.forking[event.sid]
+                    self.fork_from.pop(event.sid, None)
                     if self.pressed.pop((event.sid, "fork"), None):
                         self.paint_session_info()
+                if event.made:   # made: selected as it shows, as a new session is (#116)
+                    self.select_on_show(event.made, was)
         elif event.kind == "landed":
             self.read_landed(event.sid)
 
@@ -4283,10 +4291,12 @@ class WheelhouseApp(App):
                                   else min(keep, table.row_count - 1), animate=False)
         if not pending:   # where the app put it; the person's move stays theirs to settle
             self.sessions_cursor = self.current_session()
-        if self.select_new in table.rows:   # the demo just launched (launch_tour): the app's pick, not theirs
+        if self.select_new in table.rows:   # just launched or forked here: the app's pick, not theirs
             sid, picked, self.select_new = self.select_new, self.picked, None
-            self.follow(sid)
-            self.picked = picked   # so no turn of its first run counts as one the person watched (saw)
+            # not if they've picked another meanwhile, nor under text they're typing (#116)
+            if self.selected == self.select_from and not isinstance(self.focused, (TextArea, Input)):
+                self.follow(sid)
+                self.picked = picked   # so no turn of its first run counts as one the person watched (saw)
 
     display_name = staticmethod(display_name)
 
@@ -5095,6 +5105,7 @@ class WheelhouseApp(App):
         for sid, times in list(self.forking.items()):   # a fork with no word in BUSY_FOR: let go
             if not (kept := [at for at in times if now - at < BUSY_FOR]):
                 del self.forking[sid]
+                self.fork_from.pop(sid, None)
             else:
                 self.forking[sid] = kept
         for s in self.sessions:
@@ -6199,21 +6210,20 @@ class WheelhouseApp(App):
         if isinstance(self.focused, (TextArea, Input)):
             return
         stop = self.tour.stop if self.tour is not None and self.tour.kind == TOUR else None
-        if stop is not None and stop.id == "create":   # the tour's demo: filled in (Q119)
-            self.push_screen(NewSession(tutorial.form(self.client.tutorial_dir), whatsnew.LAUNCH), self.launch_tour)
-        else:
-            self.push_screen(NewSession(), self.launch_new)
+        demo = stop is not None and stop.id == "create"   # the tour's demo: filled in (Q119)
+        self.push_screen(NewSession(tutorial.form(self.client.tutorial_dir), whatsnew.LAUNCH) if demo else NewSession(),
+                         self.launch_new)
 
     def launch_new(self, form) -> None:
-        if form:
-            self.told(self.client.new_session(**form))
-
-    def launch_tour(self, form) -> None:
-        """The tour's demo launched from New session: selected in the session list as its row
-        appears (Doug, #101 5; paint_sessions), so its buttons and inbox are at hand."""
+        """New session's launch: selected in the session list as its row appears (#116;
+        paint_sessions), as the tour's demo is (Doug, #101 5), so its buttons and inbox are at hand."""
         if form and (done := self.told(self.client.new_session(**form))).ok and done.sid:
-            self.select_new = done.sid
-            self.refresh_data()
+            self.select_on_show(done.sid, self.selected)
+
+    def select_on_show(self, sid: str, was: tuple | None) -> None:
+        """Select sid once its row shows (paint_sessions), unless the selection has moved from was."""
+        self.select_new, self.select_from = sid, was
+        self.refresh_data()
 
     def action_adopt(self) -> None:
         if isinstance(self.focused, (TextArea, Input)):
@@ -6442,6 +6452,7 @@ class WheelhouseApp(App):
         if done.ok:
             self.press(sid, "fork")   # until the hub's word of it, made or failed (heard)
             self.forking.setdefault(sid, []).append(Press.now())
+            self.fork_from[sid] = self.selected
             self.refresh_data()
 
     @on(Button.Pressed, "#end")
