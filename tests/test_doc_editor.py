@@ -365,3 +365,25 @@ def test_a_refresh_before_the_editor_mounts_or_after_it_goes_paints_nothing_of_i
     blocks = [("doc", "# x")]
     assert editor.shown_in(blocks, "/x.md") == blocks, "unmounted: the blocks as they are"
     editor.paint_title()   # no screen, no viewer: nothing, and no error
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("back, title, desc", [
+    (None, "Detail · edited · file gone", "gone, and not back"),
+    (DOC, "Detail · edited", "back unchanged (an atomic save, a checkout): neither"),
+    (DOC.replace("Build it.", "Changed."), "Detail · edited · file changed", "back changed: a change"),
+])
+async def test_a_file_gone_and_back_under_kept_edits(store, sid, doc, back, title, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0])
+        await edited(app, pilot, view, editor)
+        doc[1].unlink()
+        app.refresh_data()
+        await pilot.pause()
+        if back is not None:
+            doc[1].write_text(back)
+        for _ in range(2):
+            app.refresh_data()
+            await pilot.pause()
+        assert app.query_one("#detail-pane").border_title == title, f"{desc}: {app.query_one('#detail-pane').border_title}"

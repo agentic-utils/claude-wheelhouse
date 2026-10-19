@@ -1870,11 +1870,11 @@ class DocView(Screen):
             return
         if self.file:
             read = self.app.client.read_doc(self.file[0])
-            blocks, gone = file_blocks(*self.file, read), bool(read and read.get("gone"))
+            blocks, gone = file_blocks(*self.file, read), (read.get("gone") or "" if read else "")
             view.doc_path = os.path.realpath(self.file[0])
         else:
             item, doc = self.app.client.item(self.sid, self.ref), self.app.client.document(self.sid, self.ref)
-            blocks, gone = doc_blocks(item, doc), bool(doc and doc["gone"])
+            blocks, gone = doc_blocks(item, doc), (doc["gone"] or "" if doc else "")
             view.doc_path = doc_path(item, doc)
         view.doc_key = ("file", self.file[0]) if self.file else (self.sid, self.ref)
         blocks = editor.shown_in(blocks, view.doc_path, gone)
@@ -1894,7 +1894,7 @@ class DocEdit:
     shown: str
     cursor: tuple[int, int]
     changed: bool = False
-    gone: bool = False   # the file gone from disk since, likewise
+    gone: str = ""   # the file gone since ("gone"), or no longer a regular file: why, till it's back
 
 
 def carried(old: str, new: str, line: int, added: int | None = -1) -> int | None:
@@ -1991,7 +1991,7 @@ class DocEditor(TextArea):
         if self.text != self.base:
             old = self.edits.get(self.path)
             self.edits[self.path] = DocEdit(self.base, self.text, self.shown, self.cursor_location,
-                                            bool(old and old.changed), bool(old and old.gone))
+                                            bool(old and old.changed), old.gone if old else "")
         else:
             self.edits.pop(self.path, None)
 
@@ -2065,12 +2065,13 @@ class DocEditor(TextArea):
         if refocus and self.view.can_focus:
             self.view.focus()
 
-    def shown_in(self, blocks: list[tuple[str, str]], path: str | None, gone: bool = False) -> list[tuple[str, str]]:
+    def shown_in(self, blocks: list[tuple[str, str]], path: str | None, gone: str = "") -> list[tuple[str, str]]:
         """A doc's blocks as the viewer shows them: the doc's text (at `path`) its buffer as
         of the last Ctrl+Enter, while the editor is open on it or its edits are kept. The
         file changed on disk meanwhile: kept edits stay, said once and in the title; with
-        none, the editor open takes up the file's new text. The file gone (`gone`) likewise,
-        as `file gone`."""
+        none, the editor open takes up the file's new text. The file gone, or no longer a
+        regular file (`gone`, as the read says), likewise, as `file gone`, until it's back,
+        when what it's back with is checked as a change."""
         on_disk = next((md for who, md in blocks if who == "doc"), None)
         if not self.live:   # not mounted yet, or gone: the blocks as they are
             return blocks
@@ -2081,11 +2082,14 @@ class DocEditor(TextArea):
             self.load_text(on_disk)
             self.move_cursor(cursor)
         kept = self.edits.get(path) if path is not None else None
-        if kept is not None and gone and not kept.gone:
-            kept = self.edits[path] = dataclasses.replace(kept, gone=True)
-            self.app.notify(f"{os.path.basename(path)} has gone from disk since you started editing; "
+        if kept is not None and gone and kept.gone != gone:
+            kept = self.edits[path] = dataclasses.replace(kept, gone=gone)
+            what = "has gone from disk" if gone == "gone" else "is no longer a regular file"
+            self.app.notify(f"{os.path.basename(path)} {what} since you started editing; "
                             "your edits are kept", severity="warning")
-        elif kept is not None and not gone and not kept.changed and on_disk is not None and on_disk != kept.base:
+        elif kept is not None and not gone and kept.gone:   # back (an atomic save, a checkout)
+            kept = self.edits[path] = dataclasses.replace(kept, gone="")
+        if kept is not None and not gone and not kept.changed and on_disk is not None and on_disk != kept.base:
             kept = self.edits[path] = dataclasses.replace(kept, changed=True)
             self.app.notify(f"{os.path.basename(path)} changed on disk since you started editing; "
                             "your edits are kept", severity="warning")
@@ -4345,18 +4349,18 @@ class WheelhouseApp(App):
     def paint_detail(self) -> None:
         agent, doc, shown = False, self.selected_doc(), self.shown_doc
         self.detail.doc_key = ("file", shown[0]) if shown else None if self.viewing or not doc else self.selected
-        self.detail.doc_path, gone = None, False
+        self.detail.doc_path, gone = None, ""
         if (editor := getattr(self, "detail_editor", None)) is not None:
             editor.follow(self.detail.doc_key)
         if shown:   # a module's doc, in place of what's selected
             read = self.client.read_doc(shown[0])
-            blocks, gone = file_blocks(*shown, read), bool(read and read.get("gone"))
+            blocks, gone = file_blocks(*shown, read), (read.get("gone") or "" if read else "")
             self.detail.doc_path = os.path.realpath(shown[0])
         elif self.viewing:
             blocks = self.conversation(self.viewing)
         elif doc:   # the file rendered, in place of a thread
             document = self.client.document(*self.selected)
-            blocks, gone = doc_blocks(doc, document), bool(document and document["gone"])
+            blocks, gone = doc_blocks(doc, document), (document["gone"] or "" if document else "")
             self.detail.doc_path = doc_path(doc, document)
         elif self.selected:
             blocks, agent = self.item_blocks(*self.selected)
