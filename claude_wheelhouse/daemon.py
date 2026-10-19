@@ -423,6 +423,7 @@ class Daemon:
             Route("/items/{sid}/{ref}/thread", self.query(self.thread)),
             Route("/items/{sid}/{ref}/permission", self.command(self.permission), methods=["POST"]),
             Route("/items/{sid}/{ref}/close", self.command(self.close), methods=["POST"]),
+            Route("/items/{sid}/{ref}/pin", self.command(self.pin), methods=["POST"]),
             Route("/items/{sid}/{ref}/delete-family", self.command(
                 lambda request, body: self.hub.delete_family(request.path_params["sid"], request.path_params["ref"])),
                 methods=["POST"]),
@@ -1116,6 +1117,12 @@ class Daemon:
         if not isinstance(closed, bool):
             raise Refused(400, "closed must be true or false")
         return self.hub.close(request.path_params["sid"], request.path_params["ref"], closed)
+
+    def pin(self, request: Request, body: dict) -> Done:
+        pinned = body.get("pinned")
+        if not isinstance(pinned, bool):
+            raise Refused(400, "pinned must be true or false")
+        return self.hub.set_pinned(request.path_params["sid"], request.path_params["ref"], pinned)
 
 
 # the errors a request is answered with, each as its status (refusal): a command's is kept

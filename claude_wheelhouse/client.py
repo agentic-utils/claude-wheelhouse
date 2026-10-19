@@ -809,6 +809,9 @@ class RemoteClient:
     def delete_family(self, sid: str, ref: str) -> Done:
         return self.done(f"/items/{sid}/{ref}/delete-family", {})
 
+    def set_pinned(self, sid: str, ref: str, pinned: bool) -> Done:
+        return self.done(f"/items/{sid}/{ref}/pin", {"pinned": pinned})
+
     def all_items(self) -> list[dict]:
         """Every item, parked sessions' too, for the person's order (ordering.py)."""
         self.catch_up()

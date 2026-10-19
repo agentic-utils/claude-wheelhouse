@@ -952,7 +952,7 @@ def test_a_child_deleted_with_its_parent_stays_deleted(store, sid, tmp_path):
     (tmp_path / "notes.md").write_text("# Notes\n")
     old = store.post_doc(sid, "the old notes", str(tmp_path / "notes.md"), t)
     store.dismiss(sid, old)   # dismissed already, before its parent went
-    assert sorted(store.delete_children(sid, t)) == sorted([agent, q]), "never a doc (#106)"
+    assert sorted(store.delete_children(sid, t)) == sorted([agent, q]), "never a pinned one, as a doc is by default (#110)"
     store.agent_status(sid, "agent-1", "failed", "ended badly")
     store.post_doc(sid, "the plan, v2", str(tmp_path / "plan.md"))
     store.update_item(sid, q, status="answered", declares=False)
@@ -960,7 +960,7 @@ def test_a_child_deleted_with_its_parent_stays_deleted(store, sid, tmp_path):
     assert [standing(store.item(sid, r)) for r in (agent, q)] == ["finished"] * 2, \
         "a subagent's status changed, a question changed: both still deleted"
     assert [store.item(sid, r)["dismissed"] for r in (doc, old)] == [None, None], \
-        "the docs left in the docs band, one dismissed before brought back by its repost as ever"
+        "the pinned docs stay, one dismissed before brought back by its repost as ever"
     store.undelete(sid, agent)
     assert standing(store.item(sid, agent)) == "settled", "Ctrl+R brings one back"
 
