@@ -104,7 +104,7 @@ def test_run_registers_its_own_pid_before_exec(store, sid, tmp_path, monkeypatch
 
 
 def test_open_tab_logs_the_launcher_output(store, sid, monkeypatch):
-    """A failing cmd.exe or wt.exe must leave a trace (review #11)."""
+    """A failing cmd.exe or wt.exe (osascript on macOS) must leave a trace (review #11)."""
     calls = []
     monkeypatch.setattr(launch.liveness, "is_alive", lambda *a: False)
     monkeypatch.setattr(launch.subprocess, "Popen", lambda argv, **kw: calls.append((argv, kw)))
@@ -112,7 +112,7 @@ def test_open_tab_logs_the_launcher_output(store, sid, monkeypatch):
     (argv, kw), = calls
     assert kw["stdout"].name == str(store.path.parent / "launch.log")
     assert kw["stderr"] == launch.subprocess.STDOUT
-    assert "wt.exe" in (store.path.parent / "launch.log").read_text()
+    assert f"launching {argv[0]}" in (store.path.parent / "launch.log").read_text()
 
 
 def test_open_tab_refuses_a_session_that_is_still_starting(store, sid, monkeypatch):

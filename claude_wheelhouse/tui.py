@@ -250,15 +250,13 @@ def _shimmer(frame: int) -> Text:
 
 def system_clipboard() -> str | None:
     """The system clipboard's text, for a right-click paste. No terminal lets an app read
-    it, so under WSL it's Windows', through PowerShell (most of a second: call it off the
+    it, so under WSL it's Windows', through PowerShell (on macOS, pbpaste) (most of a second: call it off the
     UI thread). None where there's no way to read it."""
     exe = shutil.which("powershell.exe")
-    if exe is None:
-        return None
+    argv = [exe, "-NoProfile", "-NonInteractive", "-Command",
+            "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw"] if exe else ["pbpaste"]   # macOS
     try:
-        out = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-Command",
-                              "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw"],
-                             capture_output=True, timeout=5).stdout
+        out = subprocess.run(argv, capture_output=True, timeout=5).stdout
     except (OSError, subprocess.TimeoutExpired):
         return None
     return out.decode("utf-8", "replace").replace("\r\n", "\n").removesuffix("\n")   # PowerShell's own newline

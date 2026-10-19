@@ -125,9 +125,33 @@ def wt_argv(session, *, python: str, distro: str, user: str, shell: str) -> list
         # failure keeps its code, and the tab stays open on its error. run itself execs
         # claude, so the registered pid is still Claude Code's
         # each `;` written `\;`, as wt.exe would otherwise split its own command line there
-        "--", shell, "-lic", (f"{shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}; "
-                              "rc=$?; if [ $rc -eq 143 -o $rc -eq 137 ]; then exit 0; fi; exit $rc").replace(";", r"\;"),
+        "--", shell, "-lic", run_line(session, python).replace(";", r"\;"),
     ]
+
+
+def run_line(session, python: str) -> str:
+    return (f"{shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}; "
+            "rc=$?; if [ $rc -eq 143 -o $rc -eq 137 ]; then exit 0; fi; exit $rc")
+
+
+# A new iTerm tab, in the front window or a new one if there is none, named for the session.
+# The command and title come in as arguments, so nothing in them is read as AppleScript
+ITERM = """on run argv
+    tell application "iTerm"
+        if (count of windows) is 0 then
+            set t to current tab of (create window with default profile command (item 1 of argv))
+        else
+            set t to (create tab with default profile command (item 1 of argv)) of current window
+        end if
+        set name of current session of t to item 2 of argv
+    end tell
+end run"""
+
+
+def iterm_argv(session, *, python: str, shell: str) -> list[str]:
+    """macOS: the session in an iTerm tab, as wt_argv opens one in Windows Terminal."""
+    line = f"cd {shlex.quote(session['cwd'])} && {run_line(session, python)}"
+    return ["osascript", "-e", ITERM, shlex.join([shell, "-lic", line]), session["name"] or Path(session["cwd"]).name]
 
 
 def transcript_exists(sid: str, projects: Path = Path.home() / ".claude/projects") -> bool:
@@ -283,7 +307,7 @@ def open_host(store: Store, sid: str, notice: bool = True) -> None:
         # setsid --fork: the host is init's child, not ours, so when it exits it is reaped
         # rather than left a zombie of the TUI that still looks alive. It runs in the
         # session's directory, without the app's flags: told how long to keep it warm
-        subprocess.run(["setsid", "--fork", sys.executable, "-m", "claude_wheelhouse", "host", sid,
+        subprocess.run([*liveness.DETACH, sys.executable, "-m", "claude_wheelhouse", "host", sid,
                         features.KEEPALIVE_FLAG, f"{features.keepalive_hours():g}"],
                        cwd=session["cwd"], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                        env=clean_env(WHEELHOUSE_DB=str(store.path)), check=True)
@@ -299,15 +323,16 @@ def open_tab(store: Store, sid: str, notice: bool = True) -> None:
     if session is None:
         raise KeyError(sid)
     check_free(session)
-    argv = wt_argv(session, python=sys.executable,
-                   distro=os.environ.get("WSL_DISTRO_NAME", "Ubuntu"), user=getpass.getuser(),
-                   shell=login_shell())
+    mac = sys.platform == "darwin"
+    argv = iterm_argv(session, python=sys.executable, shell=login_shell()) if mac else \
+        wt_argv(session, python=sys.executable, distro=os.environ.get("WSL_DISTRO_NAME", "Ubuntu"),
+                user=getpass.getuser(), shell=login_shell())
     store.mark_launched(sid)
     # cmd.exe or wt.exe failing would otherwise be invisible: keep their output
     with open(store.path.parent / "launch.log", "a") as log:
         print(now(), sid, "launching", " ".join(argv), file=log, flush=True)
         # cmd.exe warns about (and ignores) a \\wsl$ working directory, so start it from C:
-        subprocess.Popen(argv, cwd="/mnt/c", stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+        subprocess.Popen(argv, cwd=None if mac else "/mnt/c", stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                          start_new_session=True, env=clean_env())
     if notice and transcript_exists(sid):   # resuming: the session takes seconds to start, the notice waits
         store.notice(sid, JOINED_TEXT)
