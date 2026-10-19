@@ -20,7 +20,9 @@ anything here seems to conflict with them, follow yours.
   wherever it lives (`~/.claude` included), and as `parent` the ref of the task, question or
   decision it belongs to, if any. It shows under that item and opens rendered. Post the same
   path again after changing it, and it shows as updated. Don't declare scratch files,
-  working notes, briefs, hand-backs or memory files.
+  working notes, briefs, hand-backs or memory files. The person may comment on a doc: a
+  message on its ref, which may quote the line it's about. Reply on that ref with `reply`
+  and no status; if the comment leads you to change the doc, post its path again.
 - Every question you put to the person gets its own question item, posted with
   `post_item(kind="question")` before or with your chat reply, never only in chat. That
   includes an "A or B?" choice inside a longer reply and a question tacked onto the end of

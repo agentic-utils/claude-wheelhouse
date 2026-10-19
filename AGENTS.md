@@ -105,6 +105,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   map (`DocMap`: each block's source lines and rendered rows), for the viewer
   (`Transcript.line_at`, `Transcript.row_of`; `.plan/modules.md`, Q106), and its editor's
   (`tui.DocEditor`: opened by a click on a doc, in Detail and `DocView`; saving is stage 8's).
+  A doc item's thread and layout there, split or tabbed (`tui.DocPanes`, Ctrl+L):
+  `.plan/docs-section.md`.
   Never imports Textual.
 - `splitter.py`, `knurl.py`, `emoji.py`, `unsent.py`: TUI pieces (dividers, scrollbars,
   emoji shortcodes, unsent text).

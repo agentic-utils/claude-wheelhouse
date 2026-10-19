@@ -79,9 +79,13 @@ Doug: "a simple confirm dialog, then delete that item AND all its children. If a
 are open/unread, the confirm dialog should make that clear." Delete on an item with no
 children behaves as before. On one with children not yet finished, a Confirm names how many
 it takes, how many are still open (a question unanswered, a task or subagent not settled)
-and how many unread (a decision unseen, a doc new or updated). Yes closes or dismisses the
+and how many unread (a decision unseen). Yes closes or dismisses the
 parent and every child, whatever its status; No or Esc takes nothing. A parent that can't be
 closed (a running task) still says so, as before.
+
+Docs are the exception (#106, Q132): a doc is durable, so Delete on its parent leaves it in
+the Docs band (`.plan/docs-section.md`), uncounted in the Confirm and untaken. Only the doc's
+own Delete removes it. Item durability as metadata of its own is #110.
 
 Delete takes the children whatever their status: a finished one, dismissed already, would
 otherwise come back when posted again. It always asks first; the dialog's open and unread
