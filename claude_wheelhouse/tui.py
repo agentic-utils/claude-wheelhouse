@@ -16,6 +16,7 @@ import sqlite3
 import subprocess
 import time
 import weakref
+from datetime import datetime, timezone
 from typing import Callable, Self
 
 from rich.markdown import Markdown as RichMarkdown
@@ -1500,6 +1501,17 @@ class Press:
     ref: str | None = None
     expired: bool = False
     now = staticmethod(time.monotonic)   # a test runs it on its own clock
+
+
+def asked_ago(s, button: str) -> float:
+    """How long ago, in seconds, the store says a Park or Forget was asked (its UTC
+    *_requested_at), so one followed after a restart has its BUSY_FOR counted from then,
+    not from now. 0 for any other button, or a stamp that doesn't read."""
+    at = models.field(s, f"{button}_requested_at") if button in ("park", "end") else None
+    try:
+        return max(0.0, (datetime.now(timezone.utc) - datetime.fromisoformat(at)).total_seconds()) if at else 0.0
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def under_way(button: str, s, status: str, relaunching: bool) -> bool:
@@ -3157,13 +3169,13 @@ BUTTONS = {
              "works in a new one on a new branch from the last commit (uncommitted changes stay behind), or this one"),
     "park": ("Park (P in the session list): a running session writes its handoff notes into its items, then stops; "
              "it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark. Off while it's "
-             "asked; on again after 30 s, pressed again to cancel or force it"),
+             f"asked; on again after {BUSY_FOR} s, pressed again to cancel or force it"),
     "end": ("Stop & Forget, or Forget (Delete or Backspace in the session list): a running session asks first, "
             "Let it know (L: it does its own end steps, then stops) or Just stop it (J: stopped now, told nothing), "
             "the first by default while its prompt cache is warm, the second once cold, as its end steps would "
             "re-read its whole context; its wheelhouse data is deleted either way, queued answers with it. One not "
             "running is deleted at once, once you confirm. Adopt brings a forgotten one back. Off while it's asked; "
-            "on again after 30 s, pressed again to cancel or force it"),
+            f"on again after {BUSY_FOR} s, pressed again to cancel or force it"),
 }
 # keys for the buttons that have no other: each presses its button on the screen in front,
 # outside a text box (whose letters and digits are typing). 1, 2 and 3 number the
@@ -3514,6 +3526,7 @@ class WheelhouseApp(App):
         self.landing = False   # a key's land under way, which the refresh tick waits out (tick)
         self.held_bars: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()   # by screen (bar_widgets)
         self.pressed: dict[tuple[str, str], Press] = {}   # (sid, button id): its action under way (busy_buttons)
+        self.forking: dict[str, int] = {}   # each session's Forks pressed here and not yet heard of (heard)
         self.said: list[tuple[str, str]] = []   # what to say as it opens, (text, severity): how it found the daemon
         self.client.listen(self.heard)
         self.tour: Tour | None = None   # the tour under way (tour.py), painted by show_tour
@@ -3967,8 +3980,12 @@ class WheelhouseApp(App):
         the daemon lost or found again is said, and the title bar shows it lost."""
         if event.kind in ("notice", "link"):
             self.notify(event.text, severity=event.severity)
-            if event.sid and self.pressed.pop((event.sid, "fork"), None):   # its Fork made, or failed
-                self.paint_session_info()
+            if event.sid and event.sid in self.forking:   # a Fork of it made, or failed
+                self.forking[event.sid] -= 1
+                if self.forking[event.sid] <= 0:   # not an earlier one's late word, with another still under way
+                    del self.forking[event.sid]
+                    if self.pressed.pop((event.sid, "fork"), None):
+                        self.paint_session_info()
         elif event.kind == "landed":
             self.read_landed(event.sid)
 
@@ -4760,7 +4777,7 @@ class WheelhouseApp(App):
         for s in self.sessions:
             for button in BUSY_BUTTONS:
                 if (s["id"], button) not in self.pressed and self.under_way(button, s):
-                    self.pressed[(s["id"], button)] = Press(now, stamp(), pressed=False)
+                    self.pressed[(s["id"], button)] = Press(now - asked_ago(s, button), stamp(), pressed=False)
         for (sid, button), press in list(self.pressed.items()):
             s = rows.get(sid)
             if s is None or button not in OUTLIVE and self.statuses.get(sid) not in ("live", "stalled"):
@@ -6040,6 +6057,7 @@ class WheelhouseApp(App):
         done = self.told(self.client.fork(sid, form["refs"], form["branch"]))
         if done.ok:
             self.press(sid, "fork")   # until the hub's word of it, made or failed (heard)
+            self.forking[sid] = self.forking.get(sid, 0) + 1
             self.refresh_data()
 
     @on(Button.Pressed, "#end")

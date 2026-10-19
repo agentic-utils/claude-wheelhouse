@@ -1725,7 +1725,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead" if s["id"] == gone else "live")
     qa = store.post_item(alpha, "question", "which db?")
     store.request(alpha, "park")
-    monkeypatch.setattr(tui, "BUSY_FOR", 0)   # asked long ago: Park on again, so P reaches Cancel or Force (#107)
+    store.db.execute("UPDATE sessions SET park_requested_at = ?", ("2020-01-01T00:00:00.000000+00:00",))   # asked long ago: P reaches Cancel or Force (#107)
     hosts, exits, launched = [], [], []
     monkeypatch.setattr(WheelhouseApp, "host_command", lambda self, sid, what: hosts.append(what))
     monkeypatch.setattr(WheelhouseApp, "exit", lambda self, *a, **k: exits.append(True))
@@ -7923,7 +7923,7 @@ class Presses:
     display_name = staticmethod(lambda s: s["name"])
 
     def __init__(self, row: dict, status: str):
-        self.pressed, self.toasts, self.question = {}, [], True
+        self.pressed, self.toasts, self.question, self.forking = {}, [], True, {}
         self.sessions, self.statuses, self.relaunching = [row], {row["id"]: status}, set()
         self.client = SimpleNamespace(compact_question=lambda target: {} if self.question else None)
 
@@ -7979,6 +7979,7 @@ def test_a_pressed_button_stays_off_until_its_action_lands(monkeypatch, button, 
     for phase in ("lands", "fallback"):
         app = Presses(dict(BUSY_ROW), status)
         app.press("s1", button, "Q1" if button == "compact-now" else None)
+        app.forking = {"s1": 1} if button == "fork" else {}
         app.change(starts)
         now[0] += 1
         app.change({})
@@ -8002,14 +8003,37 @@ def test_a_pressed_button_stays_off_until_its_action_lands(monkeypatch, button, 
                 f"{desc}: still on, for a press again (Park and Forget's: Cancel or Force)"
 
 
+@pytest.mark.parametrize("ago, busy, desc", [
+    (5, {"park"}, "asked 5 s ago: off for the rest of BUSY_FOR"),
+    (3600, set(), "asked an hour ago: on at once, counted from the store's stamp, not this app's start"),
+])
+def test_a_request_followed_after_a_restart_counts_from_when_it_was_asked(monkeypatch, ago, busy, desc):
+    monkeypatch.setattr(tui.Press, "now", staticmethod(lambda: 1000.0))
+    at = (datetime.now(timezone.utc) - timedelta(seconds=ago)).isoformat(timespec="microseconds")
+    app = Presses(dict(BUSY_ROW, park_requested_at=at), "live")
+    app.follow_presses()
+    assert app.busy_buttons(app.sessions[0]) == busy and not app.toasts, desc
+
+
+def test_a_late_word_of_an_earlier_fork_leaves_the_next_one_off(monkeypatch):
+    monkeypatch.setattr(tui.Press, "now", staticmethod(lambda: 0.0))
+    app = Presses(dict(BUSY_ROW), "live")
+    app.forking = {"s1": 2}   # the first one's 30 s ran out, and Fork was pressed again
+    app.press("s1", "fork")
+    app.change({"_notice": True})
+    assert "fork" in app.busy_buttons(app.sessions[0]), "the first one's word: the second still under way"
+    app.change({"_notice": True})
+    assert "fork" not in app.busy_buttons(app.sessions[0]), "the second's: on again"
+
+
 def test_an_action_under_way_not_pressed_here_is_followed_silently(monkeypatch):
-    """A Park asked before this app started, or by another: off as if pressed, back on after
-    BUSY_FOR without a word, as no one here pressed it."""
+    """A Compact under way before this app started, or by another: off as if pressed, back on
+    after BUSY_FOR without a word, as no one here pressed it."""
     now = [0.0]
     monkeypatch.setattr(tui.Press, "now", staticmethod(lambda: now[0]))
-    app = Presses(dict(BUSY_ROW, park_requested_at="x", host_command="compact"), "live")
+    app = Presses(dict(BUSY_ROW, host_command="compact"), "live")
     app.follow_presses()
-    assert app.busy_buttons(app.sessions[0]) == {"park", "compact", "compact-now"}, "off, Compact's with the question's"
+    assert app.busy_buttons(app.sessions[0]) == {"compact", "compact-now"}, "off, Compact's with the question's"
     now[0] = tui.BUSY_FOR
     app.follow_presses()
     assert app.busy_buttons(app.sessions[0]) == set() and not app.toasts, "on again, unsaid"
