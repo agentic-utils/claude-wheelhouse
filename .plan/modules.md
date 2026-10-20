@@ -18,7 +18,7 @@ editor behaviour in Q106 (below); the inbox stays core (Q107).
 
 ## The layout
 
-Six slots in three columns. The splitters stay where they are today and size slots, not
+Seven slots in three columns (six until #111 gave the middle column a third, `middle.middle`, for the PRs pane). The splitters stay where they are today and size slots, not
 panes, so a swap keeps each slot's size. Default panes:
 
 ```
@@ -27,12 +27,12 @@ panes, so a swap keeps each slot's size. Default panes:
 | Sessions          | Inbox                 | Detail                |
 |                   |                       | (thread, answer box,  |
 +-------------------+                       |  or a doc's viewer    |
-| left.middle       |                       |  and its editor)      |
-| Stats (module)    +-----------------------+                       |
-+-------------------+ middle.bottom         |                       |
-| left.bottom       | Decisions (module)    |                       |
-| Session info,     |                       |                       |
-| buttons           |                       |                       |
+| left.middle       +-----------------------+  and its editor)      |
+| Stats (module)    | middle.middle         |                       |
++-------------------+ PRs (module)          |                       |
+| left.bottom       +-----------------------+                       |
+| Session info,     | middle.bottom         |                       |
+| buttons           | Decisions (module)    |                       |
 +-------------------+-----------------------+-----------------------+
 ```
 
@@ -40,8 +40,8 @@ panes, so a swap keeps each slot's size. Default panes:
   grids, one pane so the buttons stay with what they act on), Inbox (the item list) and
   Detail. Each gets its `id` from today's widget ids and a title in its top border
   (`border_title`), which is also its drag handle.
-- **Module panes** declare a default slot. Stats takes `left.middle`, Decisions
-  `middle.bottom` (where Stats is today).
+- **Module panes** declare a default slot. Stats takes `left.middle`, PRs
+  `middle.middle`, Decisions `middle.bottom`.
 - **An empty slot collapses**: its column's other slots share the room, as the items table
   takes the whole column today when no module is in `inbox.side`. A column with every slot
   empty collapses too. A module that failed to start still shows its error card in its slot.
@@ -88,7 +88,7 @@ A module provides:
 
 | Part | What | Who uses it |
 |---|---|---|
-| `panes` | `Pane(title, slot, surfaces)`; `slot` is now its default slot, one of the six | TUI |
+| `panes` | `Pane(title, slot, surfaces)`; `slot` is now its default slot, one of the seven | TUI |
 | `routes` (new, optional) | `routes(ctx) -> list[Route]`, mounted by the daemon under `/m/<id>/` | daemon |
 | `doc_roots` (new, optional) | `doc_roots(ctx) -> list[Path]`: directories whose `.md` files the core viewer may read and write | daemon |
 | its own database | `<state dir>/<id>.db` if it needs one, never `wheelhouse.db` (suite architecture) | daemon |

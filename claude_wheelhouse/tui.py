@@ -114,7 +114,7 @@ def closable(item) -> bool:
 
 
 def slot(name: str) -> "Slot":
-    """One of the six places a pane goes (api.SLOTS, .plan/modules.md), found by its name.
+    """One of the seven places a pane goes (api.SLOTS, .plan/modules.md), found by its name.
     Its splitters size it, not the pane in it. Empty, it collapses (WheelhouseApp.collapse)."""
     return Slot(name=name, id="slot-" + name.replace(".", "-"), classes="slot")
 
@@ -1657,7 +1657,7 @@ class Columns(Horizontal):
 
 
 class Slot(Vertical):
-    """One of the six places a pane goes (slot()). A pane's title, its top border row, is its
+    """One of the seven places a pane goes (slot()). A pane's title, its top border row, is its
     drag handle (D116, .plan/modules.md): pressed (the pointer captured, as a splitter does) and dragged, the pane under the pointer
     lights up teal as the target, and the release swaps the two panes' slots
     (WheelhouseApp.swap). Esc during the drag (take_key), or a release on its own slot or
@@ -3565,6 +3565,7 @@ class WheelhouseApp(App):
     #slot-left-middle {{ height: 30%; min-height: 1; }}   /* on a short terminal the stats give way first, to a row */
     #slot-left-bottom {{ height: 30%; min-height: 3; }}   /* session info */
     #slot-middle-top, #slot-middle-bottom {{ height: 1fr; min-height: 3; }}
+    #slot-middle-middle {{ height: 30%; min-height: 3; }}   /* the PRs, under the inbox */
     .panel {{ border-title-color: #05d9e8; }}   /* each pane's title, in its top border, its drag handle (Slot) */
     .slot.-swap-target > * {{ outline: round #05d9e8; }}   /* where a pane dragged by its title would go: teal */
     #items {{ height: 1fr; min-height: 3; }}
@@ -3805,6 +3806,8 @@ class WheelhouseApp(App):
                         pane.border_title = "Inbox"
                         yield ItemList(id="items", cursor_type="row")
                 yield Splitter("middle-top", "#slot-middle-top", "#slot-middle-bottom", "y")
+                yield slot("middle.middle")   # the PRs module's (#111): a slot of its own, nothing moved
+                yield Splitter("middle-middle", "#slot-middle-middle", "#slot-middle-bottom", "y")
                 yield slot("middle.bottom")
             yield Splitter("items-pane", "#col-middle", "#col-right", "x", default=self.column_width)
             with Vertical(id="col-right", classes="column"), slot("right"):
@@ -4885,7 +4888,7 @@ class WheelhouseApp(App):
     # the panes' places (.plan/modules.md, "Swapping panes", D116)
 
     def slots(self) -> dict[str, Slot]:
-        """The six slots, by name, on the inbox's screen whichever screen is on top."""
+        """The seven slots, by name, on the inbox's screen whichever screen is on top."""
         return {s.name: s for s in self.screen_stack[0].query(Slot)}
 
     def default_slots(self) -> dict[str, str]:
@@ -5055,6 +5058,8 @@ class WheelhouseApp(App):
         saying so; the app and the other panes carry on. Textual's own Widget.animate is
         not the hook: a pane without one isn't called."""
         for widget in list(self.panes):
+            if widget.parent is None:   # not mounted yet (mount_panes) or gone: no hook, and no card to put in its place
+                continue
             try:
                 if getattr(type(widget), hook, None) not in (None, getattr(Widget, hook, None)):
                     getattr(widget, hook)(*args)

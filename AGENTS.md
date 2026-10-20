@@ -74,7 +74,7 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `--usage-mode persistent`), and, in SDK mode only, from SDK sessions' rate_limit_events.
 - `api.py`: the module protocol (entry point group `claude_wheelhouse.modules`), and all a
   module imports of the wheelhouse: what it may use is re-exported there. Bump
-  `WHEELHOUSE_API` on any breaking change to it. `SLOTS` names the six places a pane goes
+  `WHEELHOUSE_API` on any breaking change to it. `SLOTS` names the seven places a pane goes
   (`tui.slot`, `.plan/modules.md`): an empty one collapses (`WheelhouseApp.collapse`). A pane
   dragged by its title swaps slots with another (`tui.Slot`, `WheelhouseApp.swap`), kept as
   `layout.slots` and placed at start by `tui.arrange`.

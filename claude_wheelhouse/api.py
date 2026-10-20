@@ -62,8 +62,9 @@ GROUP = "claude_wheelhouse.modules"
 # longer has (stats, before it was its own distribution): its module fails to import
 STALE = "not found: the installed package is out of date. Reinstall it with make install"
 OWN = "claude_wheelhouse."         # where this package's own entry points pointed
-# the six places a pane goes, by column; an empty one collapses (.plan/modules.md)
-SLOTS = ("left.top", "left.middle", "left.bottom", "middle.top", "middle.bottom", "right")
+# the seven places a pane goes, by column (the middle's third, middle.middle, from #111); an empty one
+# collapses (.plan/modules.md)
+SLOTS = ("left.top", "left.middle", "left.bottom", "middle.top", "middle.middle", "middle.bottom", "right")
 CARDS = "left.middle"              # where a module that didn't load says why: it has no slot to say
 DISABLED = "modules.disabled"      # settings: the modules switched off, a JSON list of their names
 

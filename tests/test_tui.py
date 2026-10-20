@@ -7717,6 +7717,9 @@ DEFAULT_LAYOUT = {"left.top": "sessions", "left.middle": "stats", "left.bottom":
                   "middle.top": "items", "right": "detail"}
 DEFAULT_LAYOUT_SLOT = {p: s.replace(".", "-") for s, p in DEFAULT_LAYOUT.items()}
 CORE_DEFAULTS = {pane: home for pane, (_, home) in tui.CORE_PANES.items()}
+SHIPPED_DEFAULTS = {**CORE_DEFAULTS, "design": "middle.bottom", "prs": "middle.middle", "stats": "left.middle"}
+SIX_KEPT = {"left.top": "sessions", "left.middle": "stats", "left.bottom": "session-info", "middle.top": "items",
+            "middle.bottom": "design", "right": "detail"}   # a layout kept before the seventh slot
 
 
 @pytest.mark.parametrize("saved, defaults, want, desc", [
@@ -7729,12 +7732,21 @@ CORE_DEFAULTS = {pane: home for pane, (_, home) in tui.CORE_PANES.items()}
      "a pane the layout doesn't name, its default taken: the first empty slot"),
     ({"left.top": "items", "left.middle": "gone", "middle.bottom": "gone2"}, CORE_DEFAULTS,
      {**CORE_DEFAULTS, "items": "left.top", "sessions": "middle.top"}, "a slot kept for an absent pane is passed over"),
-    ({"left.top": "items", "left.middle": "x", "middle.top": "y", "middle.bottom": "z"}, CORE_DEFAULTS,
+    ({"left.top": "items", "left.middle": "x", "middle.top": "y", "middle.middle": "w", "middle.bottom": "z"}, CORE_DEFAULTS,
      {**CORE_DEFAULTS, "items": "left.top", "sessions": "left.middle"}, "and taken once no other is empty"),
     ({"left.top": "items", "middle.top": "items", "nowhere": "sessions"}, CORE_DEFAULTS,
-     {**CORE_DEFAULTS, "items": "left.top", "sessions": "left.middle"}, "a pane named twice, or a slot not one of six: once, ignored"),
-    ({}, {**CORE_DEFAULTS, "a": "left.middle", "b": "left.middle"}, {**CORE_DEFAULTS, "a": "left.middle", "b": "middle.bottom"},
+     {**CORE_DEFAULTS, "items": "left.top", "sessions": "left.middle"}, "a pane named twice, or a slot not one of seven: once, ignored"),
+    ({}, {**CORE_DEFAULTS, "a": "left.middle", "b": "left.middle"}, {**CORE_DEFAULTS, "a": "left.middle", "b": "middle.middle"},
      "two panes for one slot: the second to the first empty one"),
+    # upgrading to seven slots (#111): a layout kept with six loads as it was, PRs in the new one
+    (SIX_KEPT, SHIPPED_DEFAULTS, {**SHIPPED_DEFAULTS}, "six kept as they were: PRs takes middle.middle"),
+    ({**SIX_KEPT, "left.middle": "design", "middle.bottom": "stats"}, SHIPPED_DEFAULTS,
+     {**SHIPPED_DEFAULTS, "design": "left.middle", "stats": "middle.bottom"}, "a kept swap stays; PRs still takes its own"),
+    ({**SIX_KEPT, "middle.middle": "design", "middle.bottom": "stats", "left.middle": "prs"}, SHIPPED_DEFAULTS,
+     {**SHIPPED_DEFAULTS, "design": "middle.middle", "stats": "middle.bottom", "prs": "left.middle"},
+     "swaps across the new slot are kept"),
+    (SIX_KEPT, {k: v for k, v in SHIPPED_DEFAULTS.items() if k != "prs"},
+     {k: v for k, v in SHIPPED_DEFAULTS.items() if k != "prs"}, "without the PRs module: as before, middle.middle empty"),
 ])
 def test_arrange(saved, defaults, want, desc):
     assert tui.arrange(saved, defaults) == want, desc

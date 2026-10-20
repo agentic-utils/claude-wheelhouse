@@ -143,13 +143,13 @@ class Prs(Vertical):
         self.ask(fresh=True)
 
     def tick(self) -> None:
-        if time.monotonic() - self.asked_at >= EVERY:
+        if self.is_mounted and time.monotonic() - self.asked_at >= EVERY:
             self.ask()
 
     def animate(self, frame: int) -> None:
         """The orange lights flash, on for three frames and off for three, while any is lit."""
         lit = frame // 3 % 2 == 0
-        if lit == self.lit:
+        if lit == self.lit or not self.is_mounted:   # not composed yet: nothing to flash
             return
         self.lit = lit
         table = self.query_one(PrTable)
@@ -306,5 +306,5 @@ class Prs(Vertical):
 
 module = api.Module(
     id="prs", title="PRs", version=importlib.metadata.version("claude-wheelhouse-prs"),
-    api=api.WHEELHOUSE_API, panes=[api.Pane("PRs", "middle.bottom", {"tui": Prs})],
+    api=api.WHEELHOUSE_API, panes=[api.Pane("PRs", "middle.middle", {"tui": Prs})],
     routes=routes)

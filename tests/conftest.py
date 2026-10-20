@@ -61,6 +61,13 @@ def without_design(monkeypatch):
                                                            if m.name not in ("design", "prs")])
 
 
+@pytest.fixture
+def middle_of_two(monkeypatch, every_module):
+    """Every module but the PRs: the middle column of two slots (the inbox and the Decisions),
+    where a pane with nothing to show shrinks to its note (WheelhouseApp.fit_compact)."""
+    monkeypatch.setattr(api, "load", lambda entries=None: [m for m in SHIPPED_LOAD(entries) if m.name != "prs"])
+
+
 @pytest.fixture(autouse=True)
 def no_gh(monkeypatch):
     """No test runs the real gh: the PRs pane's route, wherever it's loaded, finds it logged

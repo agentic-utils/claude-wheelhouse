@@ -331,9 +331,7 @@ session.
   every 5 minutes, when the pane is shown, 20 seconds after a session pushes or merges,
   and on `r`; every app shares it, and a merged or closed PR leaves the pane at once.
   Highlighting a session's PR shows it in Detail with its thread; `Enter` opens it in the
-  browser. Without `gh`, or not logged in, the pane says so. The PRs pane and the
-  Decisions pane both default to the slot under the inbox and share it there until you
-  drag one elsewhere.
+  browser. Without `gh`, or not logged in, the pane says so.
 - **The Decisions pane.** Under the inbox, the design decisions (ADRs) of every repo a session works
   in: each `NNNN-*.md` file in the repo's `docs/adr`, or in the directories a session there
   named with `set_doc_dirs` instead (`.plan/`, say, only if named), read again every 10
@@ -537,7 +535,7 @@ wheelhouse's own last copy. Hold `Shift` to drag with the terminal's own selecti
 instead.
 
 The left column holds Sessions, Stats and Session info, top to bottom; the Inbox and,
-under it, Decisions and PRs are in the middle, and Detail on the right. Sessions, Session info,
+under it, PRs and Decisions are in the middle, and Detail on the right. Sessions, Session info,
 Inbox, Decisions, PRs and Detail are titled in their top border; the Stats panel's own border names the session it shows. The first two
 columns are 45 wide where there's room; on a narrower terminal they give way in proportion,
 each down to its minimum, so Detail keeps 40. Every boundary between areas can be

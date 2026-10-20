@@ -119,6 +119,24 @@ async def test_no_decisions_says_where_it_looked(store, sid, tmp_path, monkeypat
         assert note.display and "docs/adr" in str(note.render()), "the empty pane says why"
 
 
+@pytest.mark.anyio
+async def test_the_shipped_slots_and_a_swap_into_the_new_one(store, sid, tmp_path, every_module):
+    """Every module loaded (#111): PRs under the inbox in the middle column's third slot,
+    Decisions under it; a pane dragged onto the new slot swaps with PRs, and is kept so."""
+    import json
+    from claude_wheelhouse.tui import SLOTS_KEY
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        assert app.layout_now() == {"left.top": "sessions", "left.middle": "stats", "left.bottom": "session-info",
+                                    "middle.top": "items", "middle.middle": "prs", "middle.bottom": "design",
+                                    "right": "detail"}, "the default seven"
+        app.swap(pane_widget(app, "design").parent, pane_widget(app, "prs").parent)
+        await pilot.pause()
+        assert (app.layout_now()["middle.middle"], app.layout_now()["middle.bottom"]) == ("design", "prs"), "swapped"
+        assert json.loads(store.setting(SLOTS_KEY))["middle.middle"] == "design", "and kept"
+
+
 # the shipped default: every module loaded (conftest.every_module), not the stats pane alone
 
 ADRS = {"0001-ACCEPTED-use-sqlite.md": "# Use SQLite\n", "0002-PROPOSED-drop-redis.md": "# Drop Redis\n"}
@@ -192,7 +210,7 @@ async def test_every_decisions_swap_fits_80_by_24(store, sid, shipped, onto):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("onto", [None, "items"])
-async def test_no_decisions_shrinks_the_pane_to_its_note(store, sid, tmp_path, every_module, onto):
+async def test_no_decisions_shrinks_the_pane_to_its_note(store, sid, tmp_path, middle_of_two, onto):
     """No decisions found: the pane keeps its border and the note, and the inbox, the other
     pane in its column, takes the rest; once one appears, its share again. Swapped with the
     inbox too."""
@@ -223,7 +241,7 @@ async def test_no_decisions_shrinks_the_pane_to_its_note(store, sid, tmp_path, e
 @pytest.mark.anyio
 @pytest.mark.parametrize("adrs", [False, True])
 @pytest.mark.parametrize("onto", [None, *(p for p in PANES if p != "design")])
-async def test_no_column_has_blank_rows_wherever_the_decisions_go(store, sid, tmp_path, every_module, onto, adrs):
+async def test_no_column_has_blank_rows_wherever_the_decisions_go(store, sid, tmp_path, middle_of_two, onto, adrs):
     """Swapped with each other pane, with and without decisions found: every column filled
     by its slots and every slot by its panes. With none found the pane shrinks to its note
     only in a column of two (the middle one); alone in its column (Detail's) or in one of
@@ -252,7 +270,7 @@ async def test_no_column_has_blank_rows_wherever_the_decisions_go(store, sid, tm
 
 
 @pytest.mark.anyio
-async def test_a_drag_beside_a_compact_pane_is_not_kept(store, sid, tmp_path, every_module):
+async def test_a_drag_beside_a_compact_pane_is_not_kept(store, sid, tmp_path, middle_of_two):
     """The splitter between the inbox and the Decisions, shrunk to its note, moves nothing:
     a drag is ignored, and once a decision appears the inbox has the share it had."""
     from textual import events
@@ -315,7 +333,7 @@ async def test_a_drag_in_the_left_column_with_the_empty_decisions_on_top(store, 
 
 
 @pytest.mark.anyio
-async def test_the_note_fits_one_row_when_compact_comes_without_a_resize(store, sid, tmp_path, every_module):
+async def test_the_note_fits_one_row_when_compact_comes_without_a_resize(store, sid, tmp_path, middle_of_two):
     """Review r3: the slot dragged to its least rows while decisions show, then the last one
     goes: no resize comes, and the note still says what fits on its row, with an ellipsis."""
     from claude_wheelhouse.splitter import NUDGE

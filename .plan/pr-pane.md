@@ -164,15 +164,19 @@ PR items still arrive and show, but stay at the status they were posted with.
 
 ### Where it sits
 
-Its default slot is `middle.bottom`, under the inbox (Doug chose this). Decisions loses its
-default slot: with no free slot it isn't shown until the person swaps it in by dragging a
-pane's title (D116), which the saved `layout.slots` then keeps. As built: `tui.arrange` has
-no hidden pane (with every slot taken, a pane goes to its default slot beside what's
-there, and a hidden pane couldn't be dragged in), so both declare `middle.bottom` and
-share it until one is dragged elsewhere. Hiding one needs a new layout concept: open for Doug. A saved layout that already
-names Decisions in `middle.bottom` keeps it there, and PRs waits for a swap in turn
-(`tui.arrange`'s rule for a pane the layout doesn't name). `claude-wheelhouse modules`
-says which pane has no slot, as now.
+Its default slot is a new one, `middle.middle`, under the inbox: the middle column gains a
+third row, as the left has, so there are seven slots (Doug: "just introduce a third row in
+the middle column, giving us 7 slots in total, then we have one available for PRs").
+Decisions keeps `middle.bottom`, shown as today; nothing is hidden.
+
+- The inbox's splitter keeps its key and meaning (`middle-top`: the inbox's share, against
+  `middle.bottom`), so a saved size stays. The new slot is 30% of the column by default,
+  sized by its own splitter, `middle-middle`, against `middle.bottom` too.
+- Upgrading: a saved `layout.slots` names six slots. Every pane it names stays where it was;
+  PRs, which it doesn't name, takes its default slot, empty in any saved layout
+  (`tui.arrange`'s rule). Without the module, `middle.middle` is empty and collapses, with its
+  splitter, and the column is as before.
+- Swapping by a pane's title works across the new slot as across any other.
 
 ### One call, cached in the daemon
 

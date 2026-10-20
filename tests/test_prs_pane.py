@@ -75,7 +75,7 @@ async def test_the_pane_lists_the_sessions_prs_then_all(store, sid, github):
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         p = app.query_one("#prs")
-        assert p.parent.id == "slot-middle-bottom" and p.border_title == "PRs · mine", "its slot, mine first"
+        assert p.parent.id == "slot-middle-middle" and p.border_title == "PRs · mine", "its slot, mine first"
         assert cells(app) == ["PR108", "PR109"], "red before green"
         assert len(app.query_one("#pr-list").columns) == 3, "one repo: no Repo column"
         assert github.calls == 1, "fresh as it's shown, once"
