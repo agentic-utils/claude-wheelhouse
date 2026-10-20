@@ -98,6 +98,16 @@ def aimed(target) -> str:
     return target[1] or "the session"
 
 
+def still_queued(s, target, drafts) -> str:
+    """After Alt+S (#124): what's still queued for the session, and how much of it the answer
+    just sent has overtaken, being for the same item (or, a general message, the session)."""
+    n, mine = len(drafts), sum(m["item_ref"] == target[1] for m in drafts)
+    out = f"{n} answer{'' if n == 1 else 's'} still queued for {display_name(s)}"
+    if mine:
+        out += f" ({mine} for {aimed(target)}, which this one has overtaken)"
+    return out + f": Ctrl+S or Send sends {'it' if n == 1 else 'them'}"
+
+
 def host_context(s) -> api.HostContext | None:
     """The context size an SDK session's host last recorded, for the stats to show after a
     compaction. A tab session's sizes come from its transcript alone."""
@@ -798,9 +808,10 @@ class Hub:
             done.say(f"denied {target[1]}, with your message")
         elif now or mode(s) == "immediate":
             self.store.send(target[0], text, target[1])
-            done.say(f"sent to {aimed(target)}")
-            if mode(s) == "queued" and (n := len(self.store.drafts(target[0]))):
-                done.say(f"{n} answer(s) still queued for {display_name(s)}: Ctrl+S or Send sends them")
+            late = "" if self.running(target[0]) else " (not running: delivered when it's relaunched)"
+            done.say(f"sent to {aimed(target)}{late}")
+            if mode(s) == "queued" and (drafts := self.store.drafts(target[0])):
+                done.say(still_queued(s, target, drafts))
         # on the row as it is now: its old monitor would deliver a draft at once anyway
         elif self.sends_at_once(s):
             self.store.send(target[0], text, target[1])

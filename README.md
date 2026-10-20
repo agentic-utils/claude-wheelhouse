@@ -155,8 +155,9 @@ session.
   and go out together, Ctrl+S sending the session's as one message; in Immediate mode each
   goes as you submit it. The line under the answer box says which: "Ctrl+Enter to queue"
   or "Ctrl+Enter to send". Alt+S sends just the answer in the box at once, whatever the
-  mode, leaving the mode and the rest of the queue as they are. Ctrl+T switches the session's mode. Under the session list, Mode
-  and Send (n) do the same, for the same session, and a bar above the footer
+  mode, leaving the mode and the rest of the queue as they are. Ctrl+T switches the
+  session's mode. Under the session list, Mode and Send (n) do the same, for the
+  same session, and a bar above the footer
   always shows Send all (n), every running session's queue; each Send is greyed out while its
   queue is empty. Send all's key is `Shift+A`: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S
   as plain Ctrl+S. A dead session's queue waits for it: Ctrl+S on one says to Relaunch it first,
