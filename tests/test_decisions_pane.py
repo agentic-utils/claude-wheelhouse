@@ -244,8 +244,9 @@ async def test_no_decisions_shrinks_the_pane_to_its_note(store, sid, tmp_path, m
 async def test_no_column_has_blank_rows_wherever_the_decisions_go(store, sid, tmp_path, middle_of_two, onto, adrs):
     """Swapped with each other pane, with and without decisions found: every column filled
     by its slots and every slot by its panes. With none found the pane shrinks to its note
-    only in a column of two (the middle one); alone in its column (Detail's) or in one of
-    three (the left-hand one), it keeps its size, and no splitter is pinned by it."""
+    in a column of two (the middle one) or below the top of one of three (the left-hand
+    one, #111); alone in its column (Detail's) or at the top of three, it keeps its size,
+    and no splitter is pinned by it."""
     repo(tmp_path, ADRS if adrs else {})
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -262,9 +263,9 @@ async def test_no_column_has_blank_rows_wherever_the_decisions_go(store, sid, tm
             widget = pane_widget(app, each)
             assert widget.outer_size.height == widget.parent.size.height, f"<->{onto}, adrs {adrs}: {each} fills its slot"
         p = app.query_one("#design")
-        paired = onto in (None, "items")
+        paired = onto not in ("sessions", "detail")   # a column's sized slot; not left.top, nor alone (#111)
         assert p.compact is not adrs, f"<->{onto}: compact only with none found"
-        assert (p.region.height == 3) is (not adrs and paired), f"<->{onto}, adrs {adrs}: shrunk only in a column of two"
+        assert (p.region.height == 3) is (not adrs and paired), f"<->{onto}, adrs {adrs}: shrunk only in a sized slot"
         squeezed = [s.id for s in app.query(".slot") if s.has_class("-compact")]
         assert squeezed == ([p.parent.id] if not adrs and paired else []), f"<->{onto}, adrs {adrs}: {squeezed}"
 
@@ -282,7 +283,7 @@ async def test_a_drag_beside_a_compact_pane_is_not_kept(store, sid, tmp_path, mi
         await pilot.pause()
         p, inbox = app.query_one("#design"), pane_widget(app, "items")
         assert p.compact and p.region.height == 3, "shrunk to its note"
-        sp = splitter(app, "middle-top")
+        sp = splitter(app, "middle-bottom")
         before, roomy = sp.fraction, inbox.region.height
         x, y = sp.region.offset
         await pilot.mouse_down(sp)
@@ -293,7 +294,7 @@ async def test_a_drag_beside_a_compact_pane_is_not_kept(store, sid, tmp_path, mi
         await pilot.pause()
         assert not sp.has_class("-dragging") and sp.fraction == before, "no drag, nothing kept"
         assert inbox.region.height == roomy, "the inbox as it was"
-        assert app.client.setting(LAYOUT + "middle-top") is None, "nothing stored"
+        assert app.client.setting(LAYOUT + "middle-bottom") is None, "nothing stored"
         repo(tmp_path, ADRS)
         p.asked_at -= pane.EVERY
         await settled(app, pilot)
@@ -343,9 +344,9 @@ async def test_the_note_fits_one_row_when_compact_comes_without_a_resize(store, 
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         p, note = app.query_one("#design"), app.query_one("#decisions-note")
-        sp = splitter(app, "middle-top")
+        sp = splitter(app, "middle-bottom")   # it sizes the Decisions (#111): to their border and a row
         room = sp.room()
-        sp.apply((room - sp.outer_size.height - 3 + NUDGE) / room)
+        sp.apply((3 + NUDGE) / room)
         await pilot.pause()
         await pilot.pause()
         assert not p.compact and p.region.height == 3 and not note.has_class("-one-row"), "dragged small"

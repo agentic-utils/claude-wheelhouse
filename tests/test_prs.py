@@ -264,3 +264,16 @@ def test_delete_on_prs():
     assert closable(pr), "a PR is deleted whatever its state"
     parent = {"ref": "T1", "title": "work"}
     assert "1 still open on GitHub" in family_prompt([parent], [pr])
+
+
+def test_a_subagents_pr_from_before_the_cutoff_is_not_found(store, sid, tmp_path):
+    """A subagent transcript is read from its start: its records before the cut-off
+    (store.PRS_SINCE) make nothing, so an upgrade never back-fills old PRs (#111 review 1)."""
+    main, sub = tmp_path / "main.jsonl", tmp_path / "agent-old.jsonl"
+    main.write_text("")
+    write(sub, rec("assistant", 9, bash("a", "gh pr create -t Old")), rec("user", 8, result("a", URL)),
+          rec("assistant", 1, bash("b", "gh pr create -t New")), rec("user", 0, result("b", OTHER)))
+    cutoff = datetime.fromtimestamp(1_700_000_000 - 5, timezone.utc)
+    prs.PrWatcher(sid).sync(store, main, {sub: None}, cutoff)
+    assert [(r["ref"], r["title"]) for r in store.items(sid) if r["kind"] == "pr"] == [("PR108", "New")]
+    assert store.item(sid, "PR108")["body"] == OTHER, "only the one made after it"

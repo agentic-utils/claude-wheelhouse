@@ -12,7 +12,8 @@
   PRs pane takes as a cue to fetch again (Hub.pr_activity_at).
 
 Reads are incremental, each transcript from where the last read stopped, after a byte
-filter. A main transcript's first read starts at the cut-off (store.PRS_SINCE, or when the
+filter. A record older than the cut-off counts for nothing, a subagent's too (whose
+transcript is read from its start). A main transcript's first read starts at the cut-off (store.PRS_SINCE, or when the
 session joined, whichever is later), so a PR made while the wheelhouse was down still arrives.
 Never imports Textual.
 """
@@ -96,7 +97,7 @@ class PrWatcher:
         made: list[tuple[str, str, str | None]] = []
         for path, parent in [(main, None), *logs.items()]:
             if path is not None:
-                made += self.read(path, parent, cutoff.timestamp() if path == main else None)
+                made += self.read(path, parent, cutoff.timestamp(), main=path == main)
         refs = []
         for url, title, parent in made:
             ref = store.post_pr(self.sid, url, title, parent=parent, detected=True)
@@ -104,8 +105,9 @@ class PrWatcher:
                 refs.append(ref)
         return refs
 
-    def read(self, path: Path, parent: str | None, since: float | None) -> list[tuple[str, str, str | None]]:
-        """One transcript's new lines: the PRs made in them, as (url, title, parent)."""
+    def read(self, path: Path, parent: str | None, since: float, main: bool = True) -> list[tuple[str, str, str | None]]:
+        """One transcript's new lines: the PRs made in them, as (url, title, parent). Records
+        before `since` count for nothing; a main transcript's first read starts there."""
         try:
             st = path.stat()
         except OSError:
@@ -116,7 +118,7 @@ class PrWatcher:
         with open(path, "rb") as f:
             offset = self.offsets.get(path)
             if offset is None or st.st_size < offset:
-                offset = transcript_usage.window_start(f, st.st_size, since) if since is not None else 0
+                offset = transcript_usage.window_start(f, st.st_size, since) if main else 0
             f.seek(offset)
             data = f.read(st.st_size - offset)
         end = data.rfind(b"\n") + 1   # a half-written last line waits for the next read
@@ -124,19 +126,22 @@ class PrWatcher:
         found = []
         for line in data[:end].splitlines():
             try:
-                found += self.take(line, parent)
+                found += self.take(line, parent, since)
             except (ValueError, AttributeError, TypeError):
                 continue
         return found
 
-    def take(self, line: bytes, parent: str | None) -> list[tuple[str, str, str | None]]:
-        """One record, parsed only when its bytes say it may matter."""
+    def take(self, line: bytes, parent: str | None, since: float | None = None) -> list[tuple[str, str, str | None]]:
+        """One record, parsed only when its bytes say it may matter; nothing from one dated
+        before `since` (store.PRS_SINCE, or when the session joined)."""
         creates, acts = CREATES.search(line), ACTS_BYTES.search(line)
         answers = self.pending and b'"tool_result"' in line and any(
             i.decode() in self.pending for i in RESULT_ID.findall(line))
         if not (creates or acts or answers):
             return []
         rec = json.loads(line)
+        if since is not None and (at := stamp_of(rec)) is not None and at < since:
+            return []
         blocks = (rec.get("message") or {}).get("content") or []
         found = []
         for block in blocks if isinstance(blocks, list) else []:

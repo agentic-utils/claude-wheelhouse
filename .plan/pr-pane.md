@@ -169,9 +169,14 @@ third row, as the left has, so there are seven slots (Doug: "just introduce a th
 the middle column, giving us 7 slots in total, then we have one available for PRs").
 Decisions keeps `middle.bottom`, shown as today; nothing is hidden.
 
-- The inbox's splitter keeps its key and meaning (`middle-top`: the inbox's share, against
-  `middle.bottom`), so a saved size stays. The new slot is 30% of the column by default,
-  sized by its own splitter, `middle-middle`, against `middle.bottom` too.
+- As the left column: the inbox takes what the others leave, and each splitter sizes the
+  slot below it against the inbox (`middle-middle` the PRs, 25% by default; `middle-bottom`
+  the Decisions, 35%). A splitter hides only with its own slot, so with Decisions absent the
+  PRs' still shows, and a drag moves its line by as many rows as the pointer. The old
+  `middle-top` share (the inbox's, against Decisions) becomes `middle-bottom`'s (1 minus
+  it) on first start, then is deleted, so a split the person dragged to stays.
+- With nothing to show, Decisions shrink to their note here too (`fit_compact`: a column of
+  two, or a sized slot of three), and the inbox takes the room.
 - Upgrading: a saved `layout.slots` names six slots. Every pane it names stays where it was;
   PRs, which it doesn't name, takes its default slot, empty in any saved layout
   (`tui.arrange`'s rule). Without the module, `middle.middle` is empty and collapses, with its

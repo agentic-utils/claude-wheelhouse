@@ -152,3 +152,39 @@ async def test_tab_stops_at_the_prs_after_the_inbox(store, sid, github):
         await settled(app, pilot)
         ids = [w.id for w, _ in tab_stops(app.screen)]
         assert ids[ids.index("items") + 1] == "pr-list", "after the inbox"
+
+
+# the middle column's three slots (#111 review 1)
+
+@pytest.mark.anyio
+async def test_prs_without_the_decisions_keep_their_splitter_and_it_tracks_the_pointer(store, sid, monkeypatch):
+    """Decisions absent: the splitter between the inbox and the PRs still shows (it is
+    theirs, not the empty slot's), and a drag moves it by as many rows as the pointer."""
+    from test_tui import drag, splitter
+    monkeypatch.setattr(api, "load", lambda: [api.Loaded("prs", prs.module)])
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        shown = {s.key for s in app.query("Splitter") if s.display and s.key.startswith("middle")}
+        assert shown == {"middle-middle"}, "the PRs' splitter shows; the empty Decisions' doesn't"
+        sp = splitter(app, "middle-middle")
+        at = sp.region.y
+        await drag(pilot, "middle-middle", 0, 4)
+        await pilot.pause()
+        assert sp.region.y == at + 4, "a drag of 4 rows moves it 4"
+
+
+@pytest.mark.anyio
+async def test_an_empty_decisions_pane_leaves_the_inbox_its_room(store, sid, tmp_path, every_module):
+    """The shipped default with no ADRs: the Decisions shrink to their note in the middle
+    column's three slots too, and the inbox takes what they give up."""
+    (tmp_path / ".git").mkdir()
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        await pilot.pause()
+        design, inbox, prs_pane = app.query_one("#design"), app.query_one("#items-pane"), app.query_one("#prs")
+        assert design.compact and design.region.height == 3, "the Decisions at their border and note"
+        assert inbox.region.height > 2 * prs_pane.region.height, "the inbox has the room"
+        column = app.query_one("#col-middle")
+        assert sum(w.outer_size.height for w in column.children if w.display) == column.size.height, "no gap"

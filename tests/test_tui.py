@@ -5295,7 +5295,11 @@ async def test_the_left_column_rows(store, sid, size, rows, desc):
     ({"items": "0.5"}, {"items": None}, "the old items-over-stats share: deleted, and sizes nothing"),
     ({"detail-pane": "0.3"}, {"detail-pane": None}, "the old Detail column share: deleted"),
     ({"session-info": "0.7"}, {"session-info": None}, "the old description-in-sessions share: deleted"),
-    ({"middle-top": "0.5"}, {"middle-top": "0.5"}, "a share for the Inbox over an empty slot: kept, not applied"),
+    ({"middle-top": "0.3"}, {"middle-top": None, "middle-bottom": "0.700000"},
+     "the old Inbox-over-Decisions share (#111): the Decisions' now, kept, not applied over an empty slot"),
+    ({"middle-top": "0.3", "middle-bottom": "0.2"}, {"middle-top": None, "middle-bottom": "0.2"},
+     "a share already kept for the Decisions wins over the old one"),
+    ({"middle-bottom": "0.4"}, {"middle-bottom": "0.4"}, "a share for an empty slot: kept, not applied"),
 ])
 async def test_the_inbox_fills_its_column_whatever_was_stored(store, sid, stored, kept, desc):
     """Review of #86: a share kept for a splitter beside a collapsed slot left half the Inbox

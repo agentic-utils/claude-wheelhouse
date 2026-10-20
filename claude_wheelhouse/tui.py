@@ -210,7 +210,10 @@ SESSION_LABELS = ("", "session", "ctx", "?", "D", "✉")   # the session list's 
 # keys no splitter has now, deleted at start: items sized the items over the stats,
 # detail-pane the column between them and Detail, and session-info the description inside
 # the sessions pane, before the six slots (.plan/modules.md); left-bottom sizes its slot now
-RETIRED_LAYOUT = ("items", "detail-pane", "session-info")
+RETIRED_LAYOUT = ("items", "detail-pane", "session-info", "middle-top")
+# middle-top sized the inbox against the Decisions, before the middle column's third slot (#111):
+# the share it kept becomes middle-bottom's, the Decisions' (1 - it), so the split stays
+OLD_MIDDLE, NEW_MIDDLE = "middle-top", "middle-bottom"
 DETAIL_ROOM = 40   # the columns Detail keeps on a narrow terminal while the others can give way
 
 
@@ -3567,8 +3570,9 @@ class WheelhouseApp(App):
     #slot-left-top {{ height: 1fr; min-height: 3; }}   /* the sessions: 24 rows fit */
     #slot-left-middle {{ height: 30%; min-height: 1; }}   /* on a short terminal the stats give way first, to a row */
     #slot-left-bottom {{ height: 30%; min-height: 3; }}   /* session info */
-    #slot-middle-top, #slot-middle-bottom {{ height: 1fr; min-height: 3; }}
-    #slot-middle-middle {{ height: 30%; min-height: 3; }}   /* the PRs, under the inbox */
+    #slot-middle-top {{ height: 1fr; min-height: 3; }}   /* the inbox: what the others leave */
+    #slot-middle-middle {{ height: 25%; min-height: 3; }}   /* the PRs, under it */
+    #slot-middle-bottom {{ height: 35%; min-height: 3; }}   /* the Decisions */
     .panel {{ border-title-color: #05d9e8; }}   /* each pane's title, in its top border, its drag handle (Slot) */
     .slot.-swap-target > * {{ outline: round #05d9e8; }}   /* where a pane dragged by its title would go: teal */
     #items {{ height: 1fr; min-height: 3; }}
@@ -3808,9 +3812,11 @@ class WheelhouseApp(App):
                     with Vertical(id="items-pane", classes="panel") as pane:
                         pane.border_title = "Inbox"
                         yield ItemList(id="items", cursor_type="row")
-                yield Splitter("middle-top", "#slot-middle-top", "#slot-middle-bottom", "y")
+                # as the left column: the top slot takes what the others leave, and each splitter
+                # sizes the slot below it against it, so a drag moves only its own line's rows
+                yield Splitter("middle-middle", "#slot-middle-middle", "#slot-middle-top", "y")
                 yield slot("middle.middle")   # the PRs module's (#111): a slot of its own, nothing moved
-                yield Splitter("middle-middle", "#slot-middle-middle", "#slot-middle-bottom", "y")
+                yield Splitter("middle-bottom", "#slot-middle-bottom", "#slot-middle-top", "y")
                 yield slot("middle.bottom")
             yield Splitter("items-pane", "#col-middle", "#col-right", "x", default=self.column_width)
             with Vertical(id="col-right", classes="column"), slot("right"):
@@ -3857,6 +3863,9 @@ class WheelhouseApp(App):
         self.session_controls = list(self.query("#session-info-pane Grid, #session-info-pane Grid Button"))   # theirs and they
         # no Tab stops (tab_stops), nor taken by a click, which leaves the answer box where it was
         self.query_one("#session-info-scroll").can_focus = False
+        old = share(self.client.setting(LAYOUT + OLD_MIDDLE))
+        if old is not None and self.client.setting(LAYOUT + NEW_MIDDLE) is None:
+            self.client.set_setting(LAYOUT + NEW_MIDDLE, f"{1 - old:.6f}")
         for key in RETIRED_LAYOUT:   # once: after that they're gone
             if self.client.setting(LAYOUT + key) is not None:
                 self.client.set_setting(LAYOUT + key, None)
@@ -4995,9 +5004,11 @@ class WheelhouseApp(App):
     def fit_compact(self) -> None:
         """A slot whose panes are all compact (a module pane with nothing to show sets
         `compact`, api) keeps only their least rows (PANE_MINIMUM), and the other slot in its
-        column takes the room it gives up (Splitter.compact). Only in a column showing exactly
-        two slots, the other not compact too: alone in its column, or in a column of three,
-        it keeps its normal size and every splitter behaves as ever. A pane calls it through
+        column takes the room it gives up (Splitter.compact). Only in a column showing two
+        slots, or three where it isn't the top one, which takes what the others leave (#111:
+        so an empty Decisions under the PRs leaves the inbox its room); not all of them
+        compact. Alone in its column, or a column of three's top, it keeps its normal size,
+        and every splitter behaves as ever. A pane calls it through
         Context.relayout when its `compact` changes."""
         screen = self.screen_stack[0]
 
@@ -5008,7 +5019,9 @@ class WheelhouseApp(App):
         for place in screen.query(".slot"):
             column = place.parent
             pair = [s for s in column.query(".slot") if s.display] if column.has_class("column") else [place]
-            compact = len(pair) == 2 and idle(place) and not all(idle(s) for s in pair)
+            # in a column of three, not its top slot: that one takes what the others leave
+            sized = len(pair) == 2 or (len(pair) > 2 and place is not pair[0])
+            compact = sized and idle(place) and not all(idle(s) for s in pair)
             place.set_class(compact, "-compact")
             place.styles.height = max(minimum(w)[1] for w in place.children if w.display) if compact else None
         for splitter in screen.query(Splitter):
