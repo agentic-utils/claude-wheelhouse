@@ -4996,6 +4996,58 @@ async def test_right_click_paste_is_exclusive(store, sid, monkeypatch, clicks, b
         assert app.answer.text == box, desc
 
 
+async def right_click_at(app, selector: str, offset: tuple[int, int]) -> None:
+    """A right-click at an offset in a widget, through the app's own event handling (right_click)."""
+    args = _get_mouse_message_arguments(app.screen.query_one(selector), offset, button=3)
+    for cls in (events.MouseDown, events.MouseUp):
+        await app.on_event(cls(**args))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("busy, keys, pressed, desc", [
+    (None, ["enter"], ["relaunch"], "Enter presses the first that applies, on the session clicked"),
+    (None, ["down", "enter"], ["park"], "Down moves to the next"),
+    ("park", ["down", "enter"], ["end"], "a busy button greyed, as under the list, and passed over"),
+    (None, ["escape"], [], "Esc closes it, pressing nothing"),
+])
+async def test_right_click_on_a_session_opens_its_menu(store, sid, busy, keys, pressed, desc):
+    """#125: a right-click on a session's row selects it and shows its buttons as a menu."""
+    other = store.create_session("/tmp", name="other")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.session_list
+        row = table.keys().index(sid)
+        if busy:
+            app.press(sid, busy)
+        app.follow(other)
+        await pilot.pause()
+        await right_click_at(app, "#session-list", (3, table.header_height + row))
+        await pilot.pause()
+        assert isinstance(app.screen, tui.SessionMenu), desc
+        assert app.current_session() == sid and app.filter_sid == sid, f"{desc}: the session clicked selected"
+        s = next(x for x in app.sessions if x["id"] == sid)
+        want = [(i, str(c), d) for i, c, d, shown in app.lifecycle_buttons(s) + app.controls(s) if shown]
+        assert app.screen.buttons == want, f"{desc}: the buttons under the list, as they show"
+        got = []
+        for id_, *_ in want:
+            app.screen_stack[0].query_one(f"#{id_}", Button).press = functools.partial(got.append, id_)
+        for key in keys:
+            await pilot.press(key)
+            await pilot.pause()
+        assert not isinstance(app.screen, tui.SessionMenu) and got == pressed, desc
+
+
+@pytest.mark.anyio
+async def test_right_click_on_the_session_lists_header_opens_no_menu(store, sid):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await right_click_at(app, "#session-list", (3, 0))
+        await pilot.pause()
+        assert app.screen is app.screen_stack[0], "the header: copy or paste, as anywhere else"
+
+
 @pytest.mark.anyio
 async def test_the_session_list_and_stats_pane_share_a_reader(store, sid):
     """OBS 2 (#51): each transcript read once, not once for the context bar and again for the pane."""

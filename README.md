@@ -505,7 +505,8 @@ if that was the first.
 
 Text: drag the mouse over the conversation or a thread to select part of it (shown black
 on white), double-click to select a word, `Ctrl+A` in the answer box selects its text (in the item list it marks the finished rows; in a doc opened
-full screen it selects the whole doc), and `Ctrl+C` copies the selection (through the terminal, which Windows Terminal supports). Right-click does as a
+full screen it selects the whole doc), and `Ctrl+C` copies the selection (through the terminal, which Windows Terminal supports). Right-click on a session in the session list selects it and opens a menu of
+its buttons (greyed as they are under the list; Esc or a click outside closes it). Elsewhere right-click does as a
 terminal's does: it copies the selection, or with nothing selected pastes the clipboard
 into the answer box under the pointer (or the focused one). Under WSL the paste reads the
 Windows clipboard through PowerShell, so it takes most of a second; elsewhere it pastes the
