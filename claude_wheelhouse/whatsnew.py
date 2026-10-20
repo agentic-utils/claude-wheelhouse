@@ -145,6 +145,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("session-menu", UNRELEASED, "sessions",
             note="Right-click a session in the session list for a menu of its buttons, acting on that session.",
             tip="Right-click a session for a menu of its buttons."),
+    Feature("send-now", UNRELEASED, "send",
+            note="Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits.",
+            tip="Alt+S sends just this answer now, leaving the rest of the queue for Ctrl+S."),
 )
 
 

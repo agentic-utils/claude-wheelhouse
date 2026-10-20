@@ -2469,7 +2469,8 @@ def hint(sends: str, dead: bool = False) -> str:
     by its mode, queue or send. dead: it isn't running, so Ctrl+S refuses (#62) and goes
     unmentioned."""
     ctrl_s = "" if dead else " · Ctrl+S sends its queue"
-    return (f"Ctrl+Enter to {sends}{ctrl_s} · Ctrl+T switches mode"
+    alt_s = " · Alt+S sends this one now" if sends == "queue" else ""
+    return (f"Ctrl+Enter to {sends}{alt_s}{ctrl_s} · Ctrl+T switches mode"
             " · Ctrl+R takes a queued answer back")
 
 
@@ -3310,6 +3311,7 @@ def key_name(key: str) -> str:
 DESCRIBE = {
     "submit": "Submit what's typed: queued, or sent at once, by the session's mode",
     "app.submit": "Submit what's typed: queued, or sent at once, by the session's mode",
+    "submit(True)": "Send what's typed at once, whatever the mode, leaving the mode and the rest of the queue as they are",
     "send_session": "Send the current session's queue (a dead one's waits: Relaunch it first)",
     "toggle_mode": "Switch the session between Queued and Immediate",
     "recall": ("Take this item's latest queued answer back into the box; with none queued, in the item list, "
@@ -3447,7 +3449,8 @@ SEND_RULES = (
     "**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the "
     "session's queue as one message, so related answers arrive together; ✉ counts what's queued. "
     "A dead session's queue waits: Ctrl+S and Send all leave it until the session is relaunched. "
-    "**Immediate**: Ctrl+Enter sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
+    "Alt+S sends just the answer in the box at once, leaving the queue and the mode as they are. "
+    "**Immediate**: Ctrl+Enter (or Alt+S) sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
 MOUSE = ("Click selects a row; in the session list, a click on the selected session or the list's title "
          "past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
@@ -3669,6 +3672,9 @@ class WheelhouseApp(App):
     BINDINGS = [
         Binding("ctrl+enter", "submit", "Submit", key_display="Ctrl+Enter"),
         Binding("ctrl+j", "submit", "Submit", show=False),   # Ctrl+Enter, as most terminals send it
+        # Alt+S (#124): Ctrl+Shift+Enter can't be told from Ctrl+Enter in Windows Terminal. A terminal
+        # sends it as a printable s, but the app's binding takes it before the answer box types it
+        Binding("alt+s", "submit(True)", "Send now", key_display="Alt+S"),
         Binding("ctrl+s", "send_session", "Send", key_display="Ctrl+S"),
         Binding("ctrl+t", "toggle_mode", "Mode", key_display="Ctrl+T"),
         Binding("ctrl+r", "recall", "Edit queued", show=False, key_display="Ctrl+R"),
@@ -6052,8 +6058,9 @@ class WheelhouseApp(App):
         return box, target, text
 
     @session_action
-    def action_submit(self) -> None:
-        """Ctrl+Enter: queued or sent at once, by the session's mode."""
+    def action_submit(self, now: bool = False) -> None:
+        """Ctrl+Enter: queued or sent at once, by the session's mode. Alt+S (now): sent at
+        once whatever the mode, the rest of the queue left queued (#124)."""
         self.settle()
         box, target = self.composing()
         if box is not None and target and self.nudged(target):
@@ -6063,7 +6070,7 @@ class WheelhouseApp(App):
         if not box:
             return
         quote = self.doc_quotes.get(target)   # Detail's box or a full-screen doc's: a doc's alone has one
-        done = self.told(self.client.submit(target, quoted(quote, text)))   # an open permission is denied, never queued (#53)
+        done = self.told(self.client.submit(target, quoted(quote, text), now))   # an open permission is denied, never queued (#53)
         if not done.ok:   # a permission answered meanwhile
             return
         if done.denied:   # an explicit act, as Delete is: selected, the item moves at once (ranked)

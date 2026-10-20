@@ -64,6 +64,47 @@ async def test_answer_reaches_the_session(store, sid, live):
 
 
 @pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("send_mode, key, drafts, sent, desc", [
+    ("queued", "ctrl+enter", ["earlier", "this"], [], "queued: Ctrl+Enter holds it behind the earlier draft"),
+    ("queued", "ctrl+j", ["earlier", "this"], [], "queued: Ctrl+Enter as most terminals send it"),
+    ("queued", "alt+s", ["earlier"], ["this"], "queued: Alt+S sends this one now, the earlier draft left queued"),
+    ("immediate", "ctrl+enter", ["earlier"], ["this"], "immediate: Ctrl+Enter sends at once"),
+    ("immediate", "alt+s", ["earlier"], ["this"], "immediate: Alt+S does as Ctrl+Enter"),
+])
+async def test_alt_s_sends_one_answer_now(store, sid, live, clock, send_mode, key, drafts, sent, desc):
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
+    store.set_mode(sid, send_mode)
+    store.queue(sid, "earlier")
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#items", DataTable).move_cursor(row=0)
+        await pilot.pause()
+        box = app.query_one("#answer", TextArea)
+        box.focus()
+        box.text = "this"
+        if key == "alt+s":   # as a terminal sends it (ESC s): printable, so the box would type it
+            app.post_message(events.Key("alt+s", "s"))
+        else:
+            await pilot.press(key)
+        await pilot.pause()
+        assert box.text == "", f"{desc}: submitted, and no s typed into the box"
+    assert [m["body"] for m in store.drafts(sid)] == drafts, desc
+    assert [m["body"] for m in store.pending(sid)] == sent, desc
+    assert mode(store.session(sid)) == send_mode, f"{desc}: the session's mode left as it was"
+
+
+@pytest.mark.parametrize("sends, shown, desc", [
+    ("queue", True, "queued: the hint offers Alt+S"),
+    ("send", False, "immediate: Ctrl+Enter sends already, so no Alt+S"),
+])
+def test_the_hint_offers_alt_s_only_when_queued(sends, shown, desc):
+    assert ("Alt+S sends this one now" in hint(sends)) is shown, desc
+
+
+@pytest.mark.anyio
 async def test_subagents_sit_under_their_session(store, sid, tmp_path):
     other = store.create_session(str(tmp_path), name="other")
     with one_second():   # active, so the last posted first: A2 before A1 in demo's group

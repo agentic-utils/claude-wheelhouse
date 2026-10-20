@@ -10,7 +10,7 @@ import pytest
 
 from claude_wheelhouse import fork as fork_mod, host as host_mod, hub as hub_mod, launch, liveness, models, plan_usage, subagents, transcript, transcript_usage, tutorial, whatsnew
 from claude_wheelhouse.hub import Hub
-from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone
+from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone, mode as store_mode
 
 real_open_session = launch.open_session   # before any test stubs it
 
@@ -234,21 +234,25 @@ def queues(store, sid):
     store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # on code that queues
 
 
-@pytest.mark.parametrize("kind, mode, status, queued, sent, said, desc", [
-    ("question", "queued", "live", ["yes"], [], "queued for Q1: Ctrl+S", "queued, by default"),
-    ("question", "queued", "dead", ["yes"], [], "but the session isn't running", "a dead session's queue waits"),
-    ("question", "immediate", "live", [], ["yes"], "sent to Q1", "immediate mode sends at once"),
-    (None, "queued", "live", ["yes"], [], "queued for the session", "a general message, to the session"),
-    ("permission", "queued", "live", [], [], "denied P1, with your message", "a permission is denied, never queued"),
+@pytest.mark.parametrize("kind, mode, status, now, queued, sent, said, desc", [
+    ("question", "queued", "live", False, ["yes"], [], "queued for Q1: Ctrl+S", "queued, by default"),
+    ("question", "queued", "dead", False, ["yes"], [], "but the session isn't running", "a dead session's queue waits"),
+    ("question", "immediate", "live", False, [], ["yes"], "sent to Q1", "immediate mode sends at once"),
+    (None, "queued", "live", False, ["yes"], [], "queued for the session", "a general message, to the session"),
+    ("permission", "queued", "live", False, [], [], "denied P1, with your message", "a permission is denied, never queued"),
+    ("question", "queued", "live", True, [], ["yes"], "sent to Q1", "Alt+S sends at once in queued mode (#124)"),
+    ("question", "queued", "dead", True, [], ["yes"], "sent to Q1", "Alt+S to a dead session: delivered on relaunch"),
+    ("question", "immediate", "live", True, [], ["yes"], "sent to Q1", "Alt+S in immediate mode is Ctrl+Enter"),
+    ("permission", "queued", "live", True, [], [], "denied P1, with your message", "Alt+S on a permission denies too"),
 ])
-def test_submit_queues_or_sends_by_the_sessions_mode(hub, store, sid, heard, monkeypatch, kind, mode, status,
+def test_submit_queues_or_sends_by_the_sessions_mode(hub, store, sid, heard, monkeypatch, kind, mode, status, now,
                                                      queued, sent, said, desc):
     queues(store, sid)
     store.set_mode(sid, mode)
     monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
     ref = kind and store.post_item(sid, kind, "which db?")
     hub.refresh()
-    done = hub.submit((sid, ref), "yes")
+    done = hub.submit((sid, ref), "yes", now)
     assert done.ok, desc
     assert [m["body"] for m in store.drafts(sid)] == queued, desc
     assert [m["body"] for m in store.pending(sid)] == sent, desc
@@ -256,6 +260,22 @@ def test_submit_queues_or_sends_by_the_sessions_mode(hub, store, sid, heard, mon
     assert heard == [], f"{desc}: said to the surface that gave it, not broadcast"
     assert done.denied == (kind == "permission"), desc
     assert kind != "permission" or store.item(sid, ref)["status"] == "denied", desc
+
+
+@pytest.mark.parametrize("mode, said, desc", [
+    ("queued", ["sent to the session", "1 answer(s) still queued for demo: Ctrl+S or Send sends them"],
+     "queued: the earlier draft stays, and is said"),
+    ("immediate", ["sent to the session"], "immediate: nothing more to say"),
+])
+def test_send_now_leaves_the_mode_and_the_rest_of_the_queue(hub, store, sid, heard, mode, said, desc):
+    queues(store, sid)
+    store.set_mode(sid, mode)
+    store.queue(sid, "earlier")
+    done = hub.submit((sid, None), "now", now=True)
+    assert [m["body"] for m in store.drafts(sid)] == ["earlier"], desc
+    assert [m["body"] for m in store.pending(sid)] == ["now"], desc
+    assert store_mode(store.session(sid)) == mode, desc
+    assert [text for text, _ in told(done)] == said, desc
 
 
 def test_a_permission_answered_meanwhile_is_not_submitted(hub, store, sid, heard):
