@@ -142,6 +142,9 @@ FEATURES: tuple[Feature, ...] = (
             note="A doc has a thread of its own: comment on it below the doc (split) or on a Thread tab (tabbed); "
                  "Ctrl+L switches the two, Ctrl+PgUp and Ctrl+PgDn the tabs.",
             tip="Comment on a doc in its thread, below it. Ctrl+L switches to tabs, Ctrl+PgUp and Ctrl+PgDn between them."),
+    Feature("session-menu", UNRELEASED, "sessions",
+            note="Right-click a session in the session list for a menu of its buttons, acting on that session.",
+            tip="Right-click a session for a menu of its buttons."),
 )
 
 
