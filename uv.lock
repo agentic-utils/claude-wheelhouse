@@ -10,6 +10,7 @@ resolution-markers = [
 members = [
     "claude-wheelhouse",
     "claude-wheelhouse-design",
+    "claude-wheelhouse-prs",
     "claude-wheelhouse-stats",
 ]
 
@@ -174,6 +175,9 @@ dev = [
     { name = "pytest" },
     { name = "pytest-xdist" },
 ]
+prs = [
+    { name = "claude-wheelhouse-prs" },
+]
 stats = [
     { name = "claude-wheelhouse-stats" },
 ]
@@ -199,12 +203,24 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-xdist", specifier = ">=3.8" },
 ]
+prs = [{ name = "claude-wheelhouse-prs", editable = "modules/prs" }]
 stats = [{ name = "claude-wheelhouse-stats", editable = "modules/stats" }]
 
 [[package]]
 name = "claude-wheelhouse-design"
 version = "0.2.0.dev0"
 source = { editable = "modules/design" }
+dependencies = [
+    { name = "claude-wheelhouse" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "claude-wheelhouse", editable = "." }]
+
+[[package]]
+name = "claude-wheelhouse-prs"
+version = "0.2.0.dev0"
+source = { editable = "modules/prs" }
 dependencies = [
     { name = "claude-wheelhouse" },
 ]
