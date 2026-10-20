@@ -31,6 +31,7 @@ PANES = {
     "detail": ("#detail-pane", "Detail"),
     "stats": ("#stats", "Stats"),
     "design": ("#design", "Decisions"),   # the design module's pane
+    "prs": ("#prs", "PRs"),   # the PRs module's pane
 }
 
 SIDES = ("right", "left", "below", "above")   # tried in turn, beside the pane; then inside, then centred

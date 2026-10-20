@@ -1,6 +1,6 @@
 # PRs: PR items in the inbox, a PRs pane, and colour by item kind
 
-Issue: #111. Status: design, for Doug's review.
+Issue: #111. Status: approved, built (notes on what changed in building are marked "As built").
 
 The ask, in Doug's words: "A pane that lists open PRs. The old claude-dashboard
 implementation was slow because it simply polled gh for all open PRs; let's be smarter. PR
@@ -33,8 +33,10 @@ today's styles, so the row still reads by status and the ref says what it is at 
 | agent | A | grey |
 | permission | P | orange |
 
-- One table, `KIND_COLOUR` in `tui.py`, keyed by kind, and the ref cell is the only reader.
-  A kind missing from it (one an older TUI doesn't know) draws as today.
+- One table, `KIND_COLOUR`, keyed by kind, and the ref cell is the only reader. A kind
+  missing from it (one an older TUI doesn't know) draws as today. As built, it lives in
+  `rows.py` (no Textual), so `api.py` can re-export it to the PRs pane without the daemon
+  importing the TUI.
 - A doc takes `$foreground`, not a literal white, so it stays visible on a light theme. The
   others are fixed Rich colours, checked for contrast on the default dark and light themes.
 - A settled row is dimmed as now, and its ref keeps its colour under the dim, so a settled
@@ -56,6 +58,8 @@ which a narrow column cuts off:
 One core helper sets a `DataTable`'s tooltip from the row under the pointer (Textual's
 `tooltip`, updated on mouse move by row, so it only changes when the row does), and each
 list supplies the text for a row. The PRs pane reaches it through `api.py`'s re-exports.
+As built: `rows.RowTips`, a mixin on `DataTable.watch_hover_coordinate`; a list fills
+`tips` (row key to text) as it paints.
 
 ## 2. PR items
 
@@ -119,7 +123,9 @@ PR under its task. Posting a URL already detected in the session updates that it
   the person: `update_item` on a PR refuses a status, saying it comes from GitHub. A
   session may still change its title or parent.
 - The Detail pane shows the title, URL (a terminal link), branch, checks, review decision
-  and the thread. The answer box stays: a message on a PR goes to its session on the
+  and the thread. As built, core's Detail shows the title, `owner/repo#n` and the URL as a
+  link, with the thread: the branch, checks and review live in the module's `prs.db`,
+  which core never reads, and show in the PRs pane. The answer box stays: a message on a PR goes to its session on the
   PR's ref, as on any item ("fix the failing lint"). As with docs (protocol 15), the
   session is asked to reply there.
 
@@ -160,7 +166,10 @@ PR items still arrive and show, but stay at the status they were posted with.
 
 Its default slot is `middle.bottom`, under the inbox (Doug chose this). Decisions loses its
 default slot: with no free slot it isn't shown until the person swaps it in by dragging a
-pane's title (D116), which the saved `layout.slots` then keeps. A saved layout that already
+pane's title (D116), which the saved `layout.slots` then keeps. As built: `tui.arrange` has
+no hidden pane (with every slot taken, a pane goes to its default slot beside what's
+there, and a hidden pane couldn't be dragged in), so both declare `middle.bottom` and
+share it until one is dragged elsewhere. Hiding one needs a new layout concept: open for Doug. A saved layout that already
 names Decisions in `middle.bottom` keeps it there, and PRs waits for a swap in turn
 (`tui.arrange`'s rule for a pane the layout doesn't name). `claude-wheelhouse modules`
 says which pane has no slot, as now.
@@ -242,12 +251,12 @@ The light, taking the first that applies:
 
 ## 4. Versions and schema
 
-- `PROTOCOL_VERSION`: the next number, 17 if #110 (which takes 16) lands first. The
+- `PROTOCOL_VERSION`: 17 (#110 took 16). The
   protocol gains the `post_item(kind="pr", url)` line and asks a session to reply on a PR's
   ref when the person writes there. An older session's MCP server knows no `pr` kind, so it
   is shown as needing a relaunch, as with doc items at 13. Detection needs nothing from the
   session, so its PRs arrive regardless.
-- `fingerprint.API`: 6. `/items` now returns a kind an older TUI cannot place, so a TUI and
+- `fingerprint.API`: 7 (6 was taken meanwhile). `/items` now returns a kind an older TUI cannot place, so a TUI and
   daemon from either side of this must not pair.
 - `ADDED_COLUMNS`: none for core. The URL lives in `body`; GitHub's state lives in
   `prs.db`.
@@ -272,7 +281,7 @@ The light, taking the first that applies:
 8. The light's order: red, then orange (flashing), yellow, green, grey; unknown
    mergeability holds it at yellow.
 9. The session list's tooltip shows the full name and the synopsis.
-10. `fingerprint.API` goes to 6; `WHEELHOUSE_API` stays 2.
+10. `fingerprint.API` goes to 7; `WHEELHOUSE_API` stays 2.
 
 ## Open for Doug
 

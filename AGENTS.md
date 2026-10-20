@@ -60,6 +60,11 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   its process group after `KILL_AFTER`). Tests never signal a real process: stub `os.kill`
   (conftest stubs `os.getpgid` and `os.killpg`).
 - `subagents.py`: A items for subagents, from the files Claude Code writes.
+- `prs.py`: PR items (kind `pr`, ref `PR<number>`), found in the same transcripts
+  (`PrWatcher`, run after the subagents' in `Hub.sync_agents`), and a pull request URL's
+  parsing; GitHub's state comes from the PRs module through `Context.set_pr_states`.
+- `rows.py`: each item kind's colour (`KIND_COLOUR`) and a list row's full text on hover
+  (`RowTips`), shared with the modules through `api.py`. Never imports Textual.
 - `transcript.py`: a session's conversation, read from its Claude Code transcript.
 - `transcript_usage.py`: a session's token use, read from its transcripts (`parse`,
   `UsageFollower`, `follower`, `Snapshot`, `current`, `carry`), for the session list's
@@ -123,7 +128,9 @@ member and a dependency group of the same name (`pyproject.toml`): `modules/stat
 `GET /m/design/decisions` and its doc roots, the decision directories `api.doc_dirs` gives)
 and the scan of those directories (`scan.py`, each file read again only when its stat
 changes), with its tests in `modules/design/tests` and the pane's pilot tests, which need
-core's fixtures, in `tests/test_decisions_pane.py`. Core never imports a module: the app
+core's fixtures, in `tests/test_decisions_pane.py`; `modules/prs` is `claude-wheelhouse-prs`,
+the PRs pane, its route and its cache of GitHub's state (`prs.db`), with its tests in
+`modules/prs/tests` and `tests/test_prs_pane.py`. Core never imports a module: the app
 finds them by entry point, and must run with none installed (`test_api.py`). A module's
 list that sets `TAB_LIST` is a Tab stop after the inbox (`tui.tab_stops`), and
 `Context.open_doc` opens a doc full screen (`DocView(file=...)`).

@@ -86,6 +86,10 @@ DIALOGS = (
          "docs/adr directory (or wherever a session there says, set_doc_dirs).\n\n"
          "This pane lists them for every repo your sessions work in, open ones first. Highlight one to read it "
          "in Detail.", NEXT),
+    Stop("prs", "prs", "The PRs pane",
+         "The open pull requests your sessions made, each with a light: red for failing checks, changes asked or "
+         "a conflict, orange while checks run, yellow awaiting review, green ready to merge, grey a draft.\n\n"
+         "M switches to every open PR you authored, R fetches now.", NEXT),
     Stop("end", "session-info", "Ending a session",
          "You can park a session to move it to the bottom of the session list and resume later, or you can "
          "close it entirely by \"forgetting\" it. Press [Stop & Forget] now to close the demo session.", ACTION),
@@ -142,6 +146,18 @@ FEATURES: tuple[Feature, ...] = (
             note="A doc has a thread of its own: comment on it below the doc (split) or on a Thread tab (tabbed); "
                  "Ctrl+L switches the two, Ctrl+PgUp and Ctrl+PgDn the tabs.",
             tip="Comment on a doc in its thread, below it. Ctrl+L switches to tabs, Ctrl+PgUp and Ctrl+PgDn between them."),
+    Feature("kind-colours", UNRELEASED, "inbox",
+            note="An inbox item's ref is coloured by its kind (a task green, a question yellow, a decision purple, "
+                 "a PR light blue), and resting the pointer on a row, there or in the session list, shows it in full.",
+            tip="A ref's colour says its kind. Rest the pointer on a row to read its full title."),
+    Feature("pr-items", UNRELEASED, "inbox",
+            note="A pull request a session makes shows in the inbox as PR and its number, under the task it was "
+                 "made for, with GitHub's status: merged and closed ones dim.",
+            tip="A session's pull requests show as PR and their number, with GitHub's status."),
+    Feature("prs-pane", UNRELEASED, "prs",
+            note="The PRs pane lists the open PRs your sessions made, or with M every open PR you authored, each "
+                 "with a traffic light for checks, review and conflicts.",
+            tip="M switches between your sessions' PRs and all of yours; R fetches now."),
 )
 
 

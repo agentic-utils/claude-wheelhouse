@@ -12,7 +12,7 @@ sort's own order. Pure: no Textual, no store."""
 import functools
 import re
 
-from .store import FINISHED_RANK, SETTLED_RANK, _neg_time, inbox_rank
+from .store import FINISHED_RANK, SETTLED_RANK, _neg_time, inbox_rank, ranked_status
 
 UP, DOWN, STAR = "▲", "▼", "*"
 MANUAL = "manual"   # pos_group of a row placed with ordering off
@@ -137,7 +137,7 @@ def item_key(spec: str, item, processing=frozenset(), busy=frozenset(), names=No
         value = rank[0]
     elif col == "status":
         status = "processing" if item["status"] == "open" and (item["session_id"], item["ref"]) in processing \
-            else item["status"]
+            else ranked_status(item)
         value = URGENCY.get(status, URGENCY["answered"]) if band == 0 else 0
         # newest first; the settled and finished as the inbox has them, the latest to settle lowest
         tie = (_neg_time(item["updated_at"]), -item["id"]) if band == 0 else rank

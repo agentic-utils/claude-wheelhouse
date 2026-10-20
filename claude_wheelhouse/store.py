@@ -16,14 +16,15 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import features, models, whatsnew
+from . import features, models, prs, whatsnew
 
 DEFAULT_DB = Path.home() / ".local/state/claude-wheelhouse/wheelhouse.db"
 
 # permission: a tool call waiting for the person's approval, posted by a session's SDK host
 # (never by the session itself). Allow or Deny answer it; a message on it denies with that text.
 # doc: a markdown document the session declares for the person to read (post_doc), M for markdown
-KINDS = {"task": "T", "question": "Q", "agent": "A", "decision": "D", "permission": "P", "doc": "M"}
+# pr: a pull request the session made (post_pr, prs.py), its ref the repo's PR number (PR108)
+KINDS = {"task": "T", "question": "Q", "agent": "A", "decision": "D", "permission": "P", "doc": "M", "pr": "PR"}
 STATUSES = {
     "task": {"todo", "running", "blocked", "waiting", "done", "dropped"},
     "question": {"open", "answered", "closed"},
@@ -33,18 +34,21 @@ STATUSES = {
     "permission": {"open", "allowed", "denied"},
     # the person's too: new until viewed, read once viewed, updated when posted again after that
     "doc": {"new", "updated", "read"},
+    # GitHub's, never the session's or the person's (set_pr_states, from the PRs pane's fetch)
+    "pr": {"draft", "open", "merged", "closed"},
 }
 INITIAL_STATUS = {"task": "todo", "question": "open", "agent": "running", "decision": "unseen",
-                  "permission": "open", "doc": "new"}
+                  "permission": "open", "doc": "new", "pr": "open"}
 CLOSED = {"done", "dropped", "closed", "failed", "allowed", "denied"}
 # Where an item stands in the inbox (standing), one table for every kind (T71). Active: ranked
 # as it has always been. Settled: done with, but kept in sight: dimmed, after the rest. Finished:
 # off the inbox until F shows it (closed, a permission answered, or dismissed by the person).
 SETTLED = {"task": {"done", "dropped"}, "question": {"answered"}, "decision": {"seen"},
-           "agent": {"done", "failed"}, "permission": set(), "doc": {"read"}}
+           "agent": {"done", "failed"}, "permission": set(), "doc": {"read"},
+           "pr": {"merged", "closed"}}
 # kinds whose settled items the person dismisses (Delete), recorded in items.dismissed; a
-# question or a decision is closed instead
-DISMISSABLE = ("task", "agent", "doc")
+# question or a decision is closed instead. A PR is dismissed whatever its state (never on GitHub)
+DISMISSABLE = ("task", "agent", "doc", "pr")
 # what a session may hand to a fork (Store.move_items): an item not under way and the
 # person's to answer, never an agent, decision or permission
 MOVABLE = {"task": ("todo", "blocked"), "question": ("open",)}
@@ -71,7 +75,9 @@ DECISION_FIELDS = (("why", "Why"),)
 # 15: the person comments on a doc (a message on its ref), which awaits the session's reply
 # there as a question's answer does (in_doubt), so the protocol asks it to reply on the doc.
 # 16: post_item's pinned (items.pinned): a doc is pinned unless the session says it's a scratch report.
-PROTOCOL_VERSION = 16
+# 17: PR items (kind pr, its ref the PR's number), which post_item(kind="pr", url=...) posts and
+# the protocol asks a session to reply on when the person writes on one: an older one knows no pr.
+PROTOCOL_VERSION = 17
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.
@@ -271,6 +277,9 @@ RETIRED_TUTORIAL_SEEN = "tutorial_seen"   # settings: the old checklist's record
 # settings: when this database was first opened by code that tracks subagents. Subagents
 # that had finished by then (or by when their session joined) get no item (#69)
 AGENTS_SINCE = "agents_since"
+# settings: when this database was first opened by code that finds PRs in transcripts (prs.py).
+# A PR made before then (or before its session joined) is never found (#111)
+PRS_SINCE = "prs_since"
 # seconds: how long before a subagent starts the session's own A item for it may be made
 AGENT_MATCH_BEFORE = 600
 AGENT_MATCH_AFTER = 15   # subagents.GRACE: by then the wheelhouse makes its own
@@ -403,6 +412,7 @@ class Store:
                 db.execute("UPDATE items SET status = 'closed' WHERE kind = 'decision' AND status = 'seen'")
                 db.execute("INSERT INTO settings (key, value) VALUES (?, '1')", (DECISIONS_CLOSE,))
             db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (AGENTS_SINCE, now()))
+            db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (PRS_SINCE, now()))
             # the old offer's dismissed becomes Never, skipping every feature registered now;
             # taken, reset and unset are kept, so the registered features are pending for them
             if db.execute("SELECT 1 FROM settings WHERE key = ?", (TOUR_MIGRATED,)).fetchone() is None:
@@ -809,6 +819,8 @@ class Store:
             raise ValueError(f"kind must be one of {sorted(KINDS)}")
         if kind == "doc":
             raise ValueError("a doc is posted with its path (post_doc)")
+        if kind == "pr":
+            raise ValueError("a PR is posted with its url (post_pr)")
         if kind == "decision":
             body = decision_body(body, status, decision)
             status = None
@@ -848,6 +860,64 @@ class Store:
                           status = CASE WHEN status = 'new' THEN 'new' ELSE 'updated' END, dismissed = {KEEP_DELETED}
                           WHERE session_id = ? AND ref = ?""", (title, parent, now(), now(), sid, row["ref"]))
             return row["ref"]
+
+    def post_pr(self, sid: str, url: str, title: str, parent: str | None = None, pinned: bool = False,
+                detected: bool = False) -> str | None:
+        """A pull request the session made: its GitHub URL, kept canonical as the item's body
+        (prs.canonical), and its ref the PR's number, PR108 (then PR108b, c... for another
+        repo's same number in this session, so refs stay unique). The same URL posted again
+        in the session is the same item: its title (and parent, if given) updated, its status
+        left to GitHub. parent: a task, question or decision of the session's to list it under.
+        detected: found in a transcript (prs.PrWatcher), not posted by the session: nothing
+        is made when any session already has the URL, and an existing item keeps its title.
+        Returns the item's ref, or None for a detected PR passed over."""
+        canon = prs.canonical(url)
+        if canon is None or canon != url.strip().rstrip("/"):
+            raise ValueError(f"url must be a GitHub pull request, https://github.com/<owner>/<repo>/pull/<n>, not {url!r}")
+        with self.tx() as db:
+            self._require(db, sid)
+            if parent:
+                row = db.execute("SELECT kind FROM items WHERE session_id = ? AND ref = ?", (sid, parent)).fetchone()
+                if row is None or row["kind"] not in PARENTS:
+                    if not detected:
+                        raise ValueError(f"parent {parent} is not a task, question or decision of this session")
+                    parent = None
+            if detected and db.execute("SELECT 1 FROM items WHERE kind = 'pr' AND body = ?", (canon,)).fetchone():
+                return None
+            row = db.execute("SELECT ref FROM items WHERE session_id = ? AND kind = 'pr' AND body = ? ORDER BY id LIMIT 1",
+                             (sid, canon)).fetchone()
+            if row is None:
+                base = f"{KINDS['pr']}{prs.parse(canon)[2]}"
+                taken = {r["ref"] for r in db.execute("SELECT ref FROM items WHERE session_id = ? AND ref LIKE ?",
+                                                      (sid, base + "%"))}
+                ref = next(base + s for s in ("", *"bcdefghijklmnopqrstuvwxyz") if base + s not in taken)
+                db.execute("""INSERT INTO items (session_id, ref, kind, title, body, status, created_at, updated_at,
+                              session_at, pinned, parent_ref) VALUES (?, ?, 'pr', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           (sid, ref, title, canon, INITIAL_STATUS["pr"], now(), now(), now(), int(pinned), parent))
+                return ref
+            db.execute("UPDATE items SET title = ?, parent_ref = coalesce(?, parent_ref), updated_at = ?, session_at = ? "
+                       "WHERE session_id = ? AND ref = ?", (title, parent, now(), now(), sid, row["ref"]))
+            return row["ref"]
+
+    def pr_items(self) -> list[dict]:
+        """Every PR item in the store, any session's: its url, session, ref, status and title."""
+        return [{"url": r["body"], "session_id": r["session_id"], "ref": r["ref"], "status": r["status"],
+                 "title": r["title"]} for r in self._all("SELECT * FROM items WHERE kind = 'pr' ORDER BY id")]
+
+    def set_pr_states(self, states: dict[str, str]) -> int:
+        """GitHub's state for each PR, {url: draft, open, merged or closed}, on every item of
+        it, any session's (the PRs pane's fetch). Only a change is written. One the person
+        dismissed or deleted stays so, whatever its new state. Returns the items changed."""
+        changed = 0
+        with self.tx() as db:
+            for url, status in states.items():
+                self._check_status("pr", status)
+                changed += db.execute(
+                    f"""UPDATE items SET status = ?, updated_at = ?, dismissed = CASE WHEN dismissed IS NULL
+                        THEN NULL WHEN dismissed = '{DELETED}' THEN dismissed ELSE ? END
+                        WHERE kind = 'pr' AND body = ? AND status != ?""",
+                    (status, now(), status, url, status)).rowcount
+        return changed
 
     def post_compact_question(self, sid: str, title: str, body: str) -> str:
         """The host's question suggesting Compact, marked (COMPACT_QUESTION) as it is posted:
@@ -1209,6 +1279,9 @@ class Store:
         if item["kind"] == "doc":
             raise ValueError(f"{item['ref']} is a doc: whether it has been read is the person's. Post its "
                              "path again to say it changed.")
+        if item["kind"] == "pr":
+            raise ValueError(f"{item['ref']} is a PR: its status comes from GitHub. Change its title or "
+                             "parent, or reply without a status.")
         cls._check_status(item["kind"], status)
 
     @staticmethod
@@ -1395,6 +1468,12 @@ class Store:
         )
 
 
+def ranked_status(item) -> str:
+    """The status an item ranks by: a PR's draft or open as a running task's (it waits on no one
+    here), everything else its own."""
+    return "running" if item["kind"] == "pr" and item["status"] in ("draft", "open") else item["status"]
+
+
 RANK = {"open": 0, "blocked": 1, "waiting": 1, "answered": 2, "processing": 2, "unseen": 2, "seen": 2,
         "running": 3, "todo": 4}
 SETTLED_RANK, FINISHED_RANK = 10, 11   # after every active item's rank
@@ -1573,7 +1652,7 @@ def inbox_rank(item, processing=frozenset(), busy=frozenset()) -> tuple:
     if where != "active":
         return (SETTLED_RANK if where == "settled" else FINISHED_RANK, -_neg_time(item["updated_at"]), item["id"])
     status = "processing" if item["status"] == "open" and (item["session_id"], item["ref"]) in processing \
-        else item["status"]
+        else ranked_status(item)
     return (RANK.get(status, 9), _neg_time(item["updated_at"]), -item["id"])
 
 

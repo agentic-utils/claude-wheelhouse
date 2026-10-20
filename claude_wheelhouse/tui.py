@@ -58,7 +58,8 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, callout, docblocks, docroots, emoji, features, models, ordering, subagents, transcript, transcript_usage, tutorial, whatsnew
+from . import api, callout, docblocks, docroots, emoji, features, models, ordering, prs, subagents, transcript, transcript_usage, tutorial, whatsnew
+from .rows import KIND_COLOUR, RowTips
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import AWAITING_NOTES, HOLD_EXPIRED, NUDGE_TOKENS, SHELL_OPENING
@@ -105,9 +106,10 @@ CLOSABLE = {"question": "answered", "decision": "seen"}   # what Delete closes, 
 
 
 def closable(item) -> bool:
-    """What Delete acts on: a question, decision or doc whatever its status, a task or subagent
-    once it has settled (store.SETTLED), dismissed or not."""
-    return item["kind"] in CLOSABLE or item["kind"] == "doc" or (
+    """What Delete acts on: a question, decision, doc or PR whatever its status (a PR only off
+    the inbox, never on GitHub), a task or subagent once it has settled (store.SETTLED),
+    dismissed or not."""
+    return item["kind"] in CLOSABLE or item["kind"] in ("doc", "pr") or (
         item["kind"] in DISMISSABLE and item["status"] in SETTLED[item["kind"]])
 
 
@@ -338,10 +340,37 @@ def item_rows(bands, names, collapsed=frozenset()) -> tuple[list[tuple], dict[st
     return rows, {key: len(cs) for key, cs in children.items()}
 
 
+def ref_text(item, child: bool = False, dim: bool = False) -> Text | str:
+    """An inbox row's ref, in its kind's colour (KIND_COLOUR), dimmed under a child's └ or on a
+    settled row; a kind with no colour (one newer code knows) as before."""
+    label = f"└ {item['ref']}" if child else item["ref"]
+    colour = KIND_COLOUR.get(item["kind"])
+    if colour is None:
+        return Text(label, style="dim") if child else label
+    return Text(label, style=" ".join(s for s in ("dim" if child or dim else "", colour) if s))
+
+
+def titled(item, style: str = "") -> Text:
+    """An inbox row's title: a PR's with its repo's short name before it, dimmed."""
+    repo = prs.repo_of(ordering.field(item, "body")) if item["kind"] == "pr" else ""
+    return Text.assemble(*([(f"{repo} · ", "dim")] if repo else []), (item["title"], style))
+
+
+def item_tip(item) -> str:
+    """An inbox row's hover text: its ref and full title, a PR's with its repo."""
+    repo = prs.repo_of(ordering.field(item, "body")) if item["kind"] == "pr" else ""
+    return f"{item['ref']}  {repo + ' · ' if repo else ''}{item['title']}"
+
+
 def still_open(item) -> bool:
     """Whether a child is still under way: a question unanswered, a task or subagent not settled."""
     return (item["kind"], item["status"]) in {("question", "open"), ("permission", "open")} or (
         item["kind"] in ("task", "agent") and item["status"] not in SETTLED[item["kind"]])
+
+
+def open_pr(item) -> bool:
+    """Whether a PR item is still open on GitHub (a draft or open): Delete asks first."""
+    return item["kind"] == "pr" and item["status"] in ("draft", "open")
 
 
 def unread(item) -> bool:
@@ -355,6 +384,7 @@ def family_prompt(parents: list, family: list, marked: int = 1, pin: bool = Fals
     gone, kept = [it for it in family if not spared(it)], sum(map(spared, family))
     n, under_way = len(gone), [it for it in gone if standing(it) != "finished"]
     said = [f"{k} {what}" for k, what in ((sum(map(still_open, under_way)), "still open"),
+                                          (sum(map(open_pr, under_way)), "still open on GitHub"),
                                           (sum(map(unread, under_way)), "unread")) if k]
     kids = f"{n} {'child' if n == 1 else 'children'}"
     if marked == 1:
@@ -403,6 +433,12 @@ def share(stored: str | None) -> float | None:
     return min(max(value, 0.0), 1.0) if math.isfinite(value) else None
 
 
+def pr_body(item) -> str:
+    """A PR item's detail: its repo and URL, a terminal link; its live state is the PRs pane's."""
+    owner, repo, n = prs.parse(item["body"]) or ("", "", 0)
+    return f"Pull request **{owner}/{repo}#{n}**: [{item['body']}]({item['body']})" if repo else item["body"]
+
+
 def thread_blocks(found, session_name: str = "") -> list[tuple[str, str]]:
     """An item's detail and conversation, oldest first, as (who, markdown) blocks, from the
     item and its messages (client.thread): the person's messages (queued ones marked, and
@@ -416,7 +452,7 @@ def thread_blocks(found, session_name: str = "") -> list[tuple[str, str]]:
     where = f"{session_name} · " if session_name else ""
     out = [("head", f"## {ref} · {item['title']}\n\n{where}`{item['kind']}` · **{item['status']}**"
                     f"{' · answer queued' if queued else ''} · updated {item['updated_at']}"),
-           ("claude", item["body"] or "_no detail_")]
+           ("claude", pr_body(item) if item["kind"] == "pr" else item["body"] or "_no detail_")]
     for m in msgs:
         if m["author"] == "person":
             out.append(("you", f"**you{' · queued' if m['draft'] else ' · sending' if not m['delivered_at'] else ''}** · "
@@ -813,7 +849,7 @@ class Sink:
             self.sunk = None
 
 
-class SinkList(DataTable):
+class SinkList(RowTips, DataTable):
     """A list a Sink lays. Every key that moves its cursor (Up, Down, PageUp, PageDown,
     Ctrl+Home, Ctrl+End, the item list's Shift+Up and Shift+Down) acts in its final order
     (final), never a moving frame's, so keys typed during a move act as they would after it;
@@ -4272,6 +4308,10 @@ class WheelhouseApp(App):
         # of sight: it is cut to the room the others leave, at whatever width the pane is (#51)
         fits = table.name_room([cells for _, cells in rows])
         rows = [(k, (first, cut(name, fits), *rest)) for k, (first, name, *rest) in rows]
+        # the full name and the synopsis, on hover: a narrow pane cuts the name (#111)
+        table.tips = {s["id"]: "\n".join(t for t in (self.display_name(s), s["synopsis"] or "") if t)
+                      for s in self.sessions}
+        table.tip_again()
         names = table.ordered_columns[1]
         width = min(fits, max([cell_len(self.session_label(1)), *(cells[1].cell_len for _, cells in rows)]))
         label = self.session_label(1, width)   # a narrow pane cuts the name's header, not its marker
@@ -4318,7 +4358,7 @@ class WheelhouseApp(App):
         # goes falls to the neighbour it has once moves end, as typed slowly (SinkList)
         keep = table.final_row()
         before = [k for k in table.final() if k]   # the rows as they stood, for above_deleted
-        rows_out = []
+        rows_out, tips = [], {}
         names = self.session_names()
         found, processing, queued, awaiting = self.client.inbox(self.filter_sid)
         busy = queued | awaiting
@@ -4348,28 +4388,28 @@ class WheelhouseApp(App):
             status = it["status"] if where != "active" else "queued" if key in queued \
                 else "processing" if key in processing else it["status"]
             style = "dim" if where != "active" else "bold #05d9e8" if status == "queued" \
-                else "bold #ffd300" if status == "open" else DECISION if status in UNREAD \
+                else "bold #ffd300" if status == "open" and it["kind"] != "pr" else DECISION if status in UNREAD \
                 else "bold #ff2a6d" if status in ("blocked", "waiting") else MATRIX
             name = names.get(it["session_id"], "")[:14]
             if status == "processing" or key in awaiting and status != "queued":
                 # the person spoke last: the ball is in the session's court until it replies. A
                 # finished item keeps its status, with the hourglass
                 shown = Text(status if status == "processing" else f"⏳ {status}", style="dim")
-                title = Text(it["title"], style="dim")
+                title = titled(it, "dim")
             else:
-                shown, title = Text(status, style=style), Text(it["title"], style="dim") if where != "active" else it["title"]
+                shown, title = Text(status, style=style), titled(it, "dim" if where != "active" else "")
             if (fresh := ordering.field(it, "new_replies")) and status not in ("queued", "processing") \
                     and key not in awaiting:   # a doc's replies the person hasn't seen (store._said)
                 shown = Text(f"{fresh} new", style=DECISION)
             pin = Text(PIN) if pinned(it) else Text(UNPINNED, style="dim")
             if nested is None:
-                cells = (pin, name, it["ref"], shown, title)
+                cells = (pin, name, ref_text(it, dim=where != "active"), shown, title)
             elif nested == CHILD:   # under its parent, as a subagent is under its session's name
-                cells = (pin, "", Text(f"└ {it['ref']}", style="dim"), shown, Text(it["title"], style="dim"))
+                cells = (pin, "", ref_text(it, child=True), shown, titled(it, "dim"))
             else:   # a subagent, tucked under its session's name
-                cells = (pin, name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
-                         shown, Text(it["title"], style="dim"))
+                cells = (pin, name if nested == 0 else "", ref_text(it, child=True), shown, titled(it, "dim"))
             rows_out.append((key_of[id(it)], cells))
+            tips[key_of[id(it)]] = item_tip(it)
         if self.filter_sid:   # the session column goes: the inbox follows the one session
             rows_out = [(k, cells[:1] + cells[2:]) for k, cells in rows_out]
         cells = dict(rows_out)
@@ -4379,6 +4419,8 @@ class WheelhouseApp(App):
         arrow = table.cursor_key()
         pending = arrow != self.items_cursor   # the person's move, its highlight not yet handled
         rebuilt = fill(table, rows_out)
+        table.tips = tips
+        table.tip_again()
         pending = pending and arrow in table.rows
         # the cursor goes by key, rebuilt or not: items arriving above must not move it, and a
         # selection made without it (following the session already followed) takes it. Except
@@ -4643,6 +4685,18 @@ class WheelhouseApp(App):
         self.paint_sendbar()
         self.paint_detail()
 
+    def show_item(self, sid: str, ref: str) -> None:
+        """A module's pick of an item (api.Context.show_item, the PRs pane's row that is one):
+        shown in Detail with its thread and answer box, and highlighted in the inbox if listed there."""
+        self.shown_doc = None
+        key, table = f"{sid}|{ref}", self.items_table
+        if key in table.rows:
+            with table.prevent(DataTable.RowHighlighted):
+                table.move_cursor(row=table.get_row_index(key), animate=False)
+            self.items_cursor = key
+        self.select_row(key)
+        self.paint_sendbar()
+
     def open_doc(self, path: str, title: str) -> None:
         """A module's doc full screen (api.Context.open_doc), as Enter opens a doc item."""
         self.push_screen(DocView(file=(path, title)))
@@ -4650,7 +4704,8 @@ class WheelhouseApp(App):
     def module_ctx(self, mid: str) -> api.Context:
         """The context a module's pane is made with: the app's, with its own routes (call)."""
         return dataclasses.replace(self.ctx, call=functools.partial(self.client.call_module, mid),
-                                   show_doc=self.show_doc, open_doc=self.open_doc, relayout=self.fit_compact)
+                                   show_doc=self.show_doc, open_doc=self.open_doc, relayout=self.fit_compact,
+                                   show_item=self.show_item)
 
     def doc_sends_now(self, sid: str) -> bool:
         """Whether a doc item of this session's saves on Ctrl+Enter in its editor: its
@@ -5745,6 +5800,14 @@ class WheelhouseApp(App):
             self.push_screen(Confirm(family_prompt([item], family)),
                              lambda yes: yes and self.close_family(item, family))
             return
+        if open_pr(item):   # off the inbox only: say so before it goes
+            self.push_screen(Confirm(f"Delete {item['ref']} ({item['title']})? It stays open on GitHub."),
+                             lambda yes: yes and self.dismiss_now(item, verb))
+            return
+        self.dismiss_now(item, verb)
+
+    def dismiss_now(self, item, verb: str) -> None:
+        """Delete on an item with nothing to ask first: closed or dismissed now."""
         self.close(item, True)
         self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
         self.refresh_data()

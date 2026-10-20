@@ -47,6 +47,9 @@ from .docroots import Outside, confine  # noqa: F401  (a path resolved, if a doc
 # what a module may use of the wheelhouse: a session's token use (transcript_usage.py), read
 # by the hub's shared followers, the account's usage, and the effort levels
 from .models import EFFORTS, name as model_label  # noqa: F401
+# a pull request's URL read (prs.py), and how the lists colour a kind and show a row's full text
+from .prs import STATES as PR_STATES, canonical as pr_url, parse as parse_pr, repo_of  # noqa: F401
+from .rows import KIND_COLOUR, RowTips  # noqa: F401
 from .plan_usage import EVERY as USAGE_EVERY, AccountUsage  # noqa: F401
 from .transcript_usage import (AMBER, BUCKET, CHARTS, DAY, HOT, HOUR, OK, PARTIAL, SERIES,  # noqa: F401
                                SPAN, WARN, WEEK, History, Snapshot, Turn, UsageFollower, clock,
@@ -150,6 +153,15 @@ class Context:
     open_doc: Callable[[str, str], None] | None = None
     # a pane's `compact` changed: its slot shrinks to its least rows, or takes its share again. None daemon side
     relayout: Callable[[], None] | None = None
+    # pull requests (#111): every PR item in the store, any session's, as
+    # {"url", "session_id", "ref", "status", "title"}. None TUI side
+    pr_items: Callable[[], list[dict]] | None = None
+    # GitHub's state for PRs, {url: one of PR_STATES}, written to their items. None TUI side
+    set_pr_states: Callable[[dict[str, str]], None] | None = None
+    # when a session last pushed, merged, readied or closed a PR (epoch seconds), else None. None TUI side
+    pr_activity: Callable[[], float | None] | None = None
+    # an item shown in the Detail pane, highlighted in the inbox: (session id, ref). None daemon side
+    show_item: Callable[[str, str], None] | None = None
 
 
 @dataclass
