@@ -350,9 +350,12 @@ def ref_text(item, child: bool = False, dim: bool = False) -> Text | str:
     return Text(label, style=" ".join(s for s in ("dim" if child or dim else "", colour) if s))
 
 
-def titled(item, style: str = "") -> Text:
-    """An inbox row's title: a PR's with its repo's short name before it, dimmed."""
+def titled(item, style: str = "") -> Text | str:
+    """An inbox row's title: a PR's with its repo's short name before it, dimmed; plain
+    text, as ever, for any other with no style."""
     repo = prs.repo_of(ordering.field(item, "body")) if item["kind"] == "pr" else ""
+    if not repo:
+        return Text(item["title"], style=style) if style else item["title"]
     return Text.assemble(*([(f"{repo} · ", "dim")] if repo else []), (item["title"], style))
 
 

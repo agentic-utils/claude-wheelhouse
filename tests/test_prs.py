@@ -255,7 +255,7 @@ def test_pr_title_and_tip_carry_its_repo():
     item = {"kind": "pr", "ref": "PR108", "title": "Inbox pins", "body": URL}
     assert titled(item).plain == "claude-wheelhouse · Inbox pins"
     assert item_tip(item) == "PR108  claude-wheelhouse · Inbox pins"
-    assert titled({"kind": "task", "title": "t", "body": URL}).plain == "t"
+    assert titled({"kind": "task", "title": "t", "body": URL}) == "t"
 
 
 def test_delete_on_prs():

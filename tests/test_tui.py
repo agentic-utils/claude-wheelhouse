@@ -47,7 +47,7 @@ async def test_answer_reaches_the_session(store, sid, live):
         await pilot.pause()
         items = app.query_one("#items", DataTable)
         assert items.row_count == 2
-        assert items.get_row_at(0)[2] == q, "open question first"
+        assert str(items.get_row_at(0)[2]) == q, "open question first"
         items.move_cursor(row=0)
         await pilot.pause()
         assert app.selected == (sid, q)
@@ -3129,7 +3129,7 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         items, sessions = app.items_table, app.query_one("#session-list", DataTable)
-        assert [items.get_row_at(i)[2] for i in range(items.row_count)] == [q, d], "the question ranks first"
+        assert [str(items.get_row_at(i)[2]) for i in range(items.row_count)] == [q, d], "the question ranks first"
         assert str(items.get_row_at(1)[3]) == "unseen"
         assert str(sessions.get_row_at(0)[4]) == "1", "the session list counts unseen decisions"
         assert store.item(sid, d)["status"] == "unseen", "not seen until the person looks"
@@ -3143,12 +3143,12 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
         assert str(sessions.get_row_at(0)[4]) == ""
         items.move_cursor(row=0)
         await refresh(pilot, sid)
-        assert [items.get_row_at(i)[2] for i in range(items.row_count)] == [q, d], "moving on leaves it there"
+        assert [str(items.get_row_at(i)[2]) for i in range(items.row_count)] == [q, d], "moving on leaves it there"
         items.move_cursor(row=1)
         await pilot.press("delete")
         await pilot.pause()
         assert store.item(sid, d)["status"] == "closed", "Delete closes it"
-        assert [items.get_row_at(i)[2] for i in range(items.row_count)] == [q], "then it's finished"
+        assert [str(items.get_row_at(i)[2]) for i in range(items.row_count)] == [q], "then it's finished"
 
 
 @pytest.mark.anyio
