@@ -3075,37 +3075,45 @@ class LeaveEdits(Dialog):
 
 class SessionMenu(Dialog):
     """A right-click on a session in the session list (#125): its buttons as a menu at the
-    pointer, those the buttons under the list show for it, captioned and greyed (off, or
-    busy) as they are. The answer is the button's id, pressed there by the app (session_menu).
-    Up and Down, as Tab and Shift+Tab, go round the ones that apply; Esc or a click outside
-    closes it (#81)."""
+    pointer, as the buttons under the list show them for it: captioned, greyed (off, or
+    busy) and shown as they are, repainted with them each refresh (paint). The answer is the
+    button's id, pressed there by the app (session_menu). Up and Down, as Tab and Shift+Tab,
+    go round the ones that apply; Esc or a click outside closes it (#81)."""
     DEFAULT_CSS = """
     SessionMenu { align: left top; }
-    SessionMenu #dialog { width: auto; min-width: 18; padding: 0 1; }
+    SessionMenu #dialog { width: auto; min-width: 18; padding: 0 1; constrain: inside inside; }
     SessionMenu #dialog Button { width: 100%; }
     """
     BINDINGS = [Binding("down", "app.focus_next", show=False), Binding("up", "app.focus_previous", show=False)]
 
-    def __init__(self, title: str, buttons: list[tuple[str, str, bool]], at: Offset) -> None:
+    def __init__(self, sid: str, title: str, buttons: list[tuple[str, str, bool, bool]], at: Offset) -> None:
         super().__init__()
-        self.heading, self.buttons, self.at = title, buttons, at
+        self.sid, self.heading, self.buttons, self.at = sid, title, buttons, at
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label(Text(self.heading), classes="dialog-title")
-            for id_, caption, disabled in self.buttons:
-                yield Button(caption, id=f"menu-{id_}", disabled=disabled, compact=True, tooltip=BUTTONS[id_])
+            for id_, caption, disabled, shown in self.buttons:
+                button = Button(caption, id=f"menu-{id_}", disabled=disabled, compact=True, tooltip=BUTTONS[id_])
+                button.display = shown
+                yield button
 
     def on_mount(self) -> None:
-        if enabled := [b for b in self.query(Button) if not b.disabled]:
-            self.set_focus(enabled[0])
-        self.call_after_refresh(self.place)
+        self.query_one("#dialog").styles.offset = (self.at.x, self.at.y)   # before it's drawn: constrain keeps it on the screen
+        self.focus_first()
 
-    def place(self) -> None:
-        """At the pointer, kept on the screen."""
-        box = self.query_one("#dialog")
-        w, h = box.outer_size
-        box.styles.offset = (max(0, min(self.at.x, self.size.width - w)), max(0, min(self.at.y, self.size.height - h)))
+    def focus_first(self) -> None:
+        """The first that applies focused, as the menu opens or the one focused goes off."""
+        if enabled := [b for b in self.query(Button) if b.display and not b.disabled]:
+            self.set_focus(enabled[0])
+
+    def paint(self, buttons: list[tuple[str, str, bool, bool]]) -> None:
+        """The session's buttons as they are now (lifecycle_buttons and controls)."""
+        self.buttons = buttons
+        for id_, caption, disabled, shown in buttons:
+            show_button(self, f"menu-{id_}", caption, disabled, shown)
+        if self.focused is None:
+            self.focus_first()
 
     @on(Button.Pressed)
     def pressed(self, event: Button.Pressed) -> None:
@@ -4007,10 +4015,19 @@ class WheelhouseApp(App):
     def session_menu(self, event: events.MouseDown) -> bool:
         """A right-click on a session's row in the session list (#125): the session selected,
         as a click selects it, and a menu of its buttons at the pointer (SessionMenu), the
-        one chosen pressed as a click on it would be. Whether the click was one."""
+        one chosen pressed as a click on it would be. Only on the row itself, the topmost
+        widget there (not a tour callout over it, nor the list's scrollbar). Whether the
+        click was one."""
         table = self.session_list
-        if self.screen is not self.screen_stack[0] or not table.display or not table.region.contains(event.screen_x, event.screen_y):
+        if self.screen is not self.screen_stack[0] or not table.display:
             return False
+        try:
+            under, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
+        except Exception:
+            return False
+        if under is not table:   # a callout over it, or its scrollbar (a widget of its own)
+            return False
+        self.settle()   # the cursor where the keys before it left it, as a click finds it (SessionList._on_click)
         top = table.content_region.y + (table.header_height if table.show_header else 0)   # the first row's line
         row = event.screen_y - top + int(table.scroll_y)
         if event.screen_y < top or not 0 <= row < table.row_count or table.blank(row):
@@ -4024,14 +4041,26 @@ class WheelhouseApp(App):
                 table.show_cursor = True
             self.follow(sid)
         self.paint_session_info()
-        buttons = [(id_, str(caption), disabled) for id_, caption, disabled, shown
-                   in self.lifecycle_buttons(s) + self.controls(s) if shown]
 
         def chosen(button_id: str | None) -> None:
-            if button_id is not None and self.current_session() == sid:
-                self.screen_stack[0].query_one(f"#{button_id}", Button).press()   # greyed meanwhile: nothing
-        self.push_screen(SessionMenu(self.display_name(s), buttons, Offset(event.screen_x, event.screen_y)), chosen)
+            if button_id is None:
+                return
+            button = self.screen_stack[0].query_one(f"#{button_id}", Button)
+            if self.current_session() != sid or not showing(button):   # since the menu opened
+                self.notify(f"{button.label} no longer applies to this session", severity="warning")
+            elif button.disabled:
+                busy = button_id in self.busy_buttons(next((x for x in self.sessions if x["id"] == sid), s))
+                self.notify(f"{button.label}: " + ("still under way" if busy else "nothing to do"), severity="warning")
+            else:
+                button.press()
+        self.push_screen(SessionMenu(sid, self.display_name(s), self.session_menu_buttons(s),
+                                     Offset(event.screen_x, event.screen_y)), chosen)
         return True
+
+    def session_menu_buttons(self, s) -> list[tuple[str, str, bool, bool]]:
+        """A session's buttons for its menu: (id, caption, disabled, shown), as under the list."""
+        return [(id_, str(caption), disabled, shown) for id_, caption, disabled, shown
+                in self.lifecycle_buttons(s) + self.controls(s)]
 
     def right_click(self, event: events.MouseDown) -> None:
         """Copies the selection in a pane, else in the box clicked (or focused); with none,
@@ -5487,6 +5516,9 @@ class WheelhouseApp(App):
             grid.display = any(shown for *_, shown in buttons)   # none: no blank row for it either
         if [b.display for b in self.session_controls] != before:
             self.refit()   # rows of buttons more or less under the description
+        for menu in self.screen_stack:   # a session's menu open (#125): its buttons as they are now
+            if isinstance(menu, SessionMenu) and (m := next((x for x in self.sessions if x["id"] == menu.sid), None)):
+                menu.paint(self.session_menu_buttons(m))
 
     def describe_all(self) -> Text:
         """With no session selected: what the inbox shows, every session's items, in counts."""
