@@ -3880,10 +3880,6 @@ class WheelhouseApp(App):
         self.session_controls = list(self.query("#session-info-pane Grid, #session-info-pane Grid Button"))   # theirs and they
         # no Tab stops (tab_stops), nor taken by a click, which leaves the answer box where it was
         self.query_one("#session-info-scroll").can_focus = False
-        if self.client.setting(LAYOUT + columns.WEIGHTS_KEY) is None:   # the splitters' shares, once (#111)
-            moved = columns.migrate({key: self.client.setting(LAYOUT + key) for key in columns.OLD_KEYS})
-            if moved:
-                self.client.set_setting(LAYOUT + columns.WEIGHTS_KEY, json.dumps(moved))
         for key in (*RETIRED_LAYOUT, *columns.OLD_KEYS):   # once: after that they're gone
             if self.client.setting(LAYOUT + key) is not None:
                 self.client.set_setting(LAYOUT + key, None)
@@ -5068,14 +5064,18 @@ class WheelhouseApp(App):
                 splitter.display = pair is not None
             if not weighted:
                 continue
-            room = (column.size.height - sum(1 for s in splitters if s.display)
-                    - sum(compact_rows(place) for place in shown if place.has_class("-compact")))
-            weights = columns.weights([s.name for s in weighted], self.weights)
-            if weights is None:   # none kept: the stylesheet's sizes, to the row
-                weights = columns.styled([styled_size(place) for place in weighted], room, column.size.height)
+            room, weights = self.weighed(column, splitters, shown, weighted)
             if room > 0:
                 for place, n in zip(weighted, columns.rows(room, weights, [least(place) for place in weighted])):
                     place.styles.height = n
+
+    def weighed(self, column: Widget, splitters: list, shown: list, weighted: list) -> tuple[int, list[float]]:
+        """A column's room to share (its rows less its splitters' and compact slots') and its
+        weighted slots' weights (columns.weights), the stylesheet's while none is kept."""
+        room = (column.size.height - sum(1 for s in splitters if s.display)
+                - sum(compact_rows(place) for place in shown if place.has_class("-compact")))
+        styled = columns.styled([styled_size(place) for place in weighted], room, column.size.height)
+        return room, columns.weights([s.name for s in weighted], self.weights, styled)
 
     def column_heights(self, column_id: str) -> dict[str, int]:
         """Each weighted slot's rows in a column now, as a drag there begins (SlotSplitter)."""
@@ -5086,8 +5086,13 @@ class WheelhouseApp(App):
         """A splitter dragged `delta` rows from where it began: the column weighed by the rows
         its slots have, those two alone moved (columns.dragged), so the line follows the pointer."""
         column = self.screen_stack[0].query_one(f"#{column_id}")
-        least_of = {s.name: least(s) for s in column.query(".slot")}
-        self.weights = {**self.weights, **columns.dragged(heights, above, below, delta, least_of)}
+        slots = list(column.query(".slot"))
+        shown = [s for s in slots if s.display]
+        weighted = [s for s in shown if not s.has_class("-compact")]
+        splitters = [w for w in column.children if isinstance(w, SlotSplitter)]
+        _, now = self.weighed(column, splitters, shown, weighted)   # in DEFAULT's scale
+        to = columns.dragged(heights, above, below, delta, {s.name: least(s) for s in slots})
+        self.weights = {**self.weights, **columns.as_weights(to, sum(now))}
         self.lay_columns()
 
     @on(SlotSplitter.Weighed)

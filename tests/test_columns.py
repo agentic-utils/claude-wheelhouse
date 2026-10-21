@@ -59,29 +59,25 @@ def test_dragged(above, below, delta, expected, desc):
     assert columns.dragged(H, above, below, delta, LEAST) == expected, desc
 
 
-@pytest.mark.parametrize("slots, kept, expected, desc", [
-    ([T, B], {}, None, "none kept: the stylesheet's"),
-    ([T, B], {T: 20, B: 10}, [20, 10], "kept"),
-    ([T, M, B], {T: 20, B: 20}, [20, 10, 20], "a slot with none kept: its default, in the scale of the rest"),
+@pytest.mark.parametrize("slots, kept, styled, expected, desc", [
+    ([T, B], {}, [17.5, 17.5], [0.4, 0.4], "none kept: the stylesheet's rows, in DEFAULT's scale"),
+    ([T, M, B], {}, [14, 7, 14], [0.4, 0.2, 0.4], "all three, none kept"),
+    ([T, B], {T: 0.6, B: 0.2}, [17.5, 17.5], [0.6, 0.2], "kept: as kept"),
+    ([T, M, B], {T: 0.5, M: 0.1}, [14, 7, 14], [0.5, 0.1, 0.4], "a slot with none kept: its DEFAULT, the same unit"),
 ])
-def test_weights(slots, kept, expected, desc):
-    assert columns.weights(slots, kept) == expected, desc
+def test_weights(slots, kept, styled, expected, desc):
+    assert columns.weights(slots, kept, styled) == pytest.approx(expected), desc
 
 
-@pytest.mark.parametrize("old, expected, desc", [
-    ({}, None, "nothing kept: no weights, the defaults"),
-    ({"middle-top": "0.3"}, {T: 0.4, M: 0.2, B: 0.4}, "s 0.3: the inbox at its default share at least"),
-    ({"middle-top": "0"}, {T: 0.4, M: 0.2, B: 0.4}, "s 0: the same"),
-    ({"middle-top": "0.7"}, {T: 0.7, M: 0.2, B: 0.1}, "s 0.7: the inbox its own, the PRs theirs, the Decisions the rest"),
-    ({"middle-top": "1"}, {T: 1.0, M: 0.2, B: 0.0}, "s 1: the Decisions at their least"),
-    ({"middle-top": "junk"}, None, "unreadable: the defaults"),
-    ({"middle-top": "nan"}, None, "not finite: the defaults"),
-    ({"left-middle": "0.2", "left-bottom": "0.5"}, {"left.top": 0.3, "left.middle": 0.2, "left.bottom": 0.5},
-     "the left column's shares"),
-    ({"left-bottom": "0.4"}, {"left.top": 0.3, "left.middle": 0.3, "left.bottom": 0.4}, "one of them: the other its default"),
+@pytest.mark.parametrize("rows_, total, expected, desc", [
+    ({T: 16, M: 5, B: 14}, 1.0, {T: 16 / 35, M: 5 / 35, B: 14 / 35}, "in proportion to the rows, the total kept"),
+    ({T: 26, M: 7}, 0.6, {T: 0.6 * 26 / 33, M: 0.6 * 7 / 33}, "two of three shown: their DEFAULT total"),
 ])
-def test_migrate(old, expected, desc):
-    assert columns.migrate(old) == expected, desc
+def test_as_weights(rows_, total, expected, desc):
+    got = columns.as_weights(rows_, total)
+    assert got == pytest.approx(expected) and sum(got.values()) == pytest.approx(total), desc
+    assert columns.rows(sum(rows_.values()), list(got.values()), [1] * len(got)) == list(rows_.values()), \
+        f"{desc}: the same rows back"
 
 
 # the app's columns
@@ -206,33 +202,85 @@ async def test_a_drag_moves_its_line_with_the_pointer(store, sid, tmp_path, monk
         assert again[above.name] == after[above.name], f"{desc}: as it was left, next run"
 
 
+async def adrs_found(app, pilot, found: bool) -> None:
+    design = app.query_one("#design")
+    for _ in range(50):
+        if design.compact is not found:
+            break
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+    await opened(app, pilot)
+
+
+def middle_rows(app) -> list[int]:
+    return [app.query_one(f"#slot-{n}").outer_size.height if app.query_one(f"#slot-{n}").display else 0
+            for n in ("middle-top", "middle-middle", "middle-bottom")]
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("stored, desc", [
     ("0.3", "s 0.3"), ("0", "s 0"), ("1", "s 1"), ("junk", "garbage"), (None, "missing"),
 ])
-async def test_the_old_share_migrates_and_resizes(store, sid, tmp_path, monkeypatch, stored, desc):
-    """The old two-slot share at 160x40, then the terminal at 80x24: the column filled, the
-    inbox never squeezed, and the old key gone."""
+async def test_old_shares_are_dropped_for_the_defaults(store, sid, tmp_path, monkeypatch, stored, desc):
+    """The splitters' shares kept before #111 are deleted on start (review 3): the column as
+    a person who never dragged sees it, whatever was kept."""
     (tmp_path / ".git").mkdir()
-    (tmp_path / "docs" / "adr").mkdir(parents=True)
-    (tmp_path / "docs" / "adr" / "0001-a.md").write_text("# 1. A\n\nStatus: accepted\n")
     monkeypatch.setattr(api, "load", modules({"design", "prs", "stats"}))
-    if stored is not None:
-        store.set_setting(LAYOUT + "middle-top", stored)
+    for key in columns.OLD_KEYS:
+        if stored is not None:
+            store.set_setting(LAYOUT + key, stored)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await opened(app, pilot)
-        design = app.query_one("#design")
-        for _ in range(50):
-            if not design.compact:
-                break
-            await app.workers.wait_for_complete()
-            await pilot.pause()
+        await adrs_found(app, pilot, False)
+        got = middle_rows(app)
+        assert got[2] == 3 and got[0] > 3 * got[1] and filled(app), f"{desc}: the default, the inbox with the room ({got})"
+    assert all(store.setting(LAYOUT + key) is None for key in columns.OLD_KEYS), f"{desc}: the old keys gone"
+    assert store.setting(LAYOUT + "weights") is None, f"{desc}: nothing kept in their place"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("absent, later, desc", [
+    ("design-empty", "design", "the Decisions compact during the drag, then decisions appear (review 3 repro 1)"),
+    ("prs", "prs", "the PRs absent during the drag, then loaded (review 3 repro 2)"),
+])
+async def test_a_slot_out_of_a_drag_comes_back_at_its_default(store, sid, tmp_path, monkeypatch, absent, later, desc):
+    """Weights are in one unit: a drag changes only its two slots', so a slot compact or absent
+    meanwhile comes back with the rows its default gives, not squeezed."""
+    from test_tui import drag
+    (tmp_path / ".git").mkdir()
+    store.set_setting(LAYOUT + "middle-top", "0.5")   # an old share, dropped on start
+    # the default with every pane shown, decisions found: the rows the slot comes back to
+    adr = tmp_path / "docs" / "adr"
+    adr.mkdir(parents=True)
+    (adr / "0001-a.md").write_text("# 1. A\n\nStatus: accepted\n")
+    monkeypatch.setattr(api, "load", modules({"design", "prs", "stats"}))
+    default = {}
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
         await opened(app, pilot)
-        rows = [app.query_one(f"#slot-{n}").outer_size.height for n in ("middle-top", "middle-middle", "middle-bottom")]
-        print(f"MIGRATED {desc}: {rows}")
-        assert filled(app) and rows[0] >= 14, f"{desc}: the inbox at its default share at least ({rows})"
-        await pilot.resize_terminal(80, 24)
+        await adrs_found(app, pilot, True)
+        default = dict(zip(("items", "prs", "design"), middle_rows(app)))
+    store.clear_setting(LAYOUT + "weights")
+    if absent == "design-empty":
+        (adr / "0001-a.md").unlink()
+    monkeypatch.setattr(api, "load", modules({"design", "stats"} if absent == "prs" else {"design", "prs", "stats"}))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
         await opened(app, pilot)
-        assert filled(app), f"{desc}: filled at 80x24"
-    assert store.setting(LAYOUT + "middle-top") is None, f"{desc}: the old key gone"
+        await adrs_found(app, pilot, absent == "prs")
+        key = "middle-middle" if absent == "design-empty" else "middle-bottom"
+        await drag(pilot, key, 0, 2)
+        await pilot.pause()
+    kept = json.loads(store.setting(LAYOUT + "weights"))
+    assert all(v < 2 for v in kept.values()), f"{desc}: one unit, DEFAULT's ({kept})"
+    if absent == "design-empty":
+        (adr / "0001-a.md").write_text("# 1. A\n\nStatus: accepted\n")
+    monkeypatch.setattr(api, "load", modules({"design", "prs", "stats"}))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await opened(app, pilot)
+        await adrs_found(app, pilot, True)
+        back = dict(zip(("items", "prs", "design"), middle_rows(app)))
+        assert abs(back[later] - default[later]) <= 1, f"{desc}: {later} at {back[later]} rows, its default {default[later]}"
+        assert filled(app), desc

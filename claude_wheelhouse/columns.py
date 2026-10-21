@@ -1,16 +1,21 @@
-"""How a column's slots share its rows (#111 review 2, .plan/modules.md): one rule for any
-column, without Textual.
+"""How a column's slots share its rows (#111, .plan/modules.md): one rule for any column,
+without Textual.
 
 - Each visible slot that isn't compact has a weight; a compact one (a pane with nothing to
   show, an empty Decisions) keeps its own rows; an empty slot is hidden. The weights share
   what's left, each slot at least its minimum, to the row (`rows`).
-- A splitter lies between each pair of neighbouring weighted slots (`pairs`): dragging it
-  moves rows between those two alone (`dragged`), so its line follows the pointer exactly.
-- Until the person drags one, a column's weights are the stylesheet's sizes in rows (`styled`:
-  today's layout, to the row); a drag turns it to weights of its own, kept per slot (`layout.weights`, {slot: weight}), and a double-click
-  puts the column's defaults back. A slot with no weight kept weighs its DEFAULT share, in
-  the scale of the weights kept beside it (`weights`).
-- The splitters' shares kept before (`migrate`) become weights once.
+- A splitter joins each pair of neighbouring weighted slots (`pairs`), a compact or empty
+  slot between them or not: it sits just above the lower of the two, so it may lie beside a
+  compact one. Dragging it moves rows between those two alone (`dragged`), its line on the
+  pointer's row.
+- Weights are unitless, in one scale everywhere: DEFAULT's, each slot's share of its column.
+  Until the person drags, a column's weights are the stylesheet's sizes in rows (today's
+  layout, to the row), brought to that scale (`weights`). A drag sets the weighted slots'
+  weights to their rows, in that scale, keeping their total (`as_weights`): its two slots
+  trade rows, their sum kept, the others' rows unchanged, and a compact or hidden slot's
+  weight means what it did. Kept per slot
+  (`layout.weights`); a double-click puts the column's defaults back. A slot with none kept
+  weighs its DEFAULT share.
 """
 
 import json
@@ -21,8 +26,8 @@ WEIGHTS_KEY = "weights"   # under layout.: {slot: weight}
 # (tui.py's #slot-* rules), for a slot with no weight kept
 DEFAULT = {"left.top": 0.4, "left.middle": 0.3, "left.bottom": 0.3,
            "middle.top": 0.4, "middle.middle": 0.2, "middle.bottom": 0.4, "right": 1.0}
-# the splitters' shares kept before weights (each its slot's share of the column), and the
-# second round of #111's, never released: read once by migrate, then deleted
+# the splitters' shares kept before weights, and the second round of #111's, never released:
+# deleted on start, each column starting from its defaults (a share dragged once is dragged again)
 OLD_KEYS = ("left-middle", "left-bottom", "middle-top", "middle-middle", "middle-bottom")
 
 
@@ -88,44 +93,22 @@ def styled(sizes: list[tuple[str, float]], room: int, height: int) -> list[float
     return [v * height / 100 if unit == "%" else rest * v / frs for unit, v in sizes]
 
 
-def weights(slots: list[str], kept: dict[str, float]) -> list[float] | None:
-    """The weights of a column's weighted `slots`, in order, from the weights kept; None while
-    none of them has one (then the stylesheet's sizes, styled). One with none weighs its
-    DEFAULT share in the scale of those kept: theirs over their defaults."""
-    have = [s for s in slots if s in kept]
-    if not have:
-        return None
-    scale = sum(kept[s] for s in have) / (sum(DEFAULT[s] for s in have) or 1.0)
-    return [kept[s] if s in kept else DEFAULT[s] * scale for s in slots]
+def weights(slots: list[str], kept: dict[str, float], styled_rows: list[float]) -> list[float]:
+    """The weights of a column's weighted `slots`, in order, in DEFAULT's scale: those kept,
+    and DEFAULT's for a slot with none. With none of them kept, the stylesheet's rows
+    (`styled_rows`), brought to that scale: the same rows, in the same unit as any kept."""
+    if any(s in kept for s in slots):
+        return [kept.get(s, DEFAULT[s]) for s in slots]
+    scale = sum(DEFAULT[s] for s in slots) / (sum(styled_rows) or 1.0)
+    return [r * scale for r in styled_rows]
 
 
-def share(stored) -> float | None:
-    """A share kept by a splitter: a finite number from 0 to 1, else None."""
-    try:
-        value = float(stored)
-    except (TypeError, ValueError):
-        return None
-    return min(max(value, 0.0), 1.0) if math.isfinite(value) else None
-
-
-def migrate(old: dict[str, str | None]) -> dict[str, float] | None:
-    """The weights the splitters' shares kept before become (OLD_KEYS: {key: value as stored}),
-    None if none is readable. The left column's: the stats' and session info's shares as
-    theirs, the sessions the rest. The middle column's two-slot share s (the inbox's, against
-    the Decisions): the inbox at least its default share, the PRs theirs, the Decisions what
-    is left, so a person who never dragged sees the default, and the inbox is never squeezed."""
-    out: dict[str, float] = {}
-    sm, sb = share(old.get("left-middle")), share(old.get("left-bottom"))
-    if sm is not None or sb is not None:
-        m = DEFAULT["left.middle"] if sm is None else sm
-        b = DEFAULT["left.bottom"] if sb is None else sb
-        out.update({"left.top": max(1.0 - m - b, 0.0), "left.middle": m, "left.bottom": b})
-    s = share(old.get("middle-top"))
-    if s is not None:
-        inbox = max(s, DEFAULT["middle.top"])
-        prs = DEFAULT["middle.middle"]
-        out.update({"middle.top": inbox, "middle.middle": prs, "middle.bottom": max(1.0 - inbox - prs, 0.0)})
-    return {k: round(v, 6) for k, v in out.items()} or None
+def as_weights(rows: dict[str, int], total: float) -> dict[str, float]:
+    """Weighted slots' rows as weights summing to `total` (the weights they had, in DEFAULT's
+    scale): each in proportion to its rows, so `rows` gives back exactly these rows, and any
+    other slot's weight, compact or hidden, keeps its meaning beside them."""
+    count = sum(rows.values()) or 1
+    return {slot: n * total / count for slot, n in rows.items()}
 
 
 def kept(raw: str | None) -> dict[str, float]:

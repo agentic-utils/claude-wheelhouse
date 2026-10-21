@@ -23,8 +23,8 @@ A pane's widget may also name a section of the ? overlay for its BINDINGS: `KEYS
 Decisions pane's table) that sets `TAB_LIST = True` is a Tab stop after the inbox, before the
 answer box (tui.tab_stops, #77). A pane's widget may say the least room it needs, `PANE_MINIMUM = (columns,
 rows)`, which its slot and column keep wherever it is swapped, and while it has nothing to
-show set `compact = True` and call `Context.relayout`: in a column of two slots its slot
-shrinks to those rows, the other taking the rest; alone in its column or in one of three, it
+show set `compact = True` and call `Context.relayout`: in a column of two slots or more its
+slot shrinks to those rows, the others taking the rest (columns.py); alone in its column, it
 keeps its size.
 
 A module may also serve the daemon side (.plan/modules.md, "The module boundary"):

@@ -5299,8 +5299,8 @@ async def test_the_left_column_rows(store, sid, size, rows, desc):
     ({"items": "0.5"}, {"items": None}, "the old items-over-stats share: deleted, and sizes nothing"),
     ({"detail-pane": "0.3"}, {"detail-pane": None}, "the old Detail column share: deleted"),
     ({"session-info": "0.7"}, {"session-info": None}, "the old description-in-sessions share: deleted"),
-    ({"middle-top": "0.3"}, {"middle-top": None, "weights": '{"middle.top": 0.4, "middle.middle": 0.2, "middle.bottom": 0.4}'},
-     "the old Inbox-over-Decisions share (#111): weights now, the inbox at least its default, over empty slots"),
+    ({"middle-top": "0.3"}, {"middle-top": None, "weights": None},
+     "the old Inbox-over-Decisions share (#111): deleted, the defaults"),
     ({"weights": '{"middle.bottom": 0.9}'}, {"weights": '{"middle.bottom": 0.9}'}, "a weight for an empty slot: kept, not applied"),
 ])
 async def test_the_inbox_fills_its_column_whatever_was_stored(store, sid, stored, kept, desc):
