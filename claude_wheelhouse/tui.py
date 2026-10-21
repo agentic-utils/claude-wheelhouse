@@ -128,10 +128,11 @@ CORE_PANES = {"sessions": ("sessions-pane", "left.top"), "session-info": ("sessi
 PANE_OF = {widget: pane for pane, (widget, _) in CORE_PANES.items()}
 # the least room a pane needs, (columns, rows): its slot and column grow to it wherever it
 # goes (WheelhouseApp.fit_panes), every core pane its own. Every button its caption and a row
-# of description; the session list's header and two sessions; the inbox's header; the
-# detail pane's text beside its scrollbar. Small enough that any one column of them fits 80
-# by 24 (Session info's 12, Sessions' 5, the Inbox's 3 and two splitters in 22 rows)
-PANE_MINIMUM = {"session-info": (39, 12), "sessions": (12, 5), "items": (12, 3), "detail": (24, 3)}
+# of description; the session list's header and three sessions (#58: the stats give way
+# first, columns.py sharing only what the minimums leave); the inbox's header; the detail
+# pane's text beside its scrollbar. Small enough that the left column fits 80 by 24 (Session
+# info's 12, Sessions' 6, the stats' row and two splitters in 21 rows)
+PANE_MINIMUM = {"session-info": (39, 12), "sessions": (12, 6), "items": (12, 3), "detail": (24, 3)}
 
 
 def pane_of(widget: Widget) -> str:

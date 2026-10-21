@@ -117,10 +117,13 @@ def dragged(height: int, slots: list[Slot], kept: dict[str, float], above: str, 
             delta: int) -> dict[str, float]:
     """`kept` once the splitter between the weighted slots `above` and `below` has moved
     `delta` rows down (up, negative) from where `kept` lays it: those two slots' weights
-    alone are set, their unrounded rows summing to what they did, so the scale and every
-    other slot's share are as they were. The line lands on the pointer's row, or where
-    one of the two reaches its least rows. A slot left at its least keeps the weight it
-    had, if that's less, so a drag never makes a slot bigger anywhere for being shrunk."""
+    alone are set, their unrounded rows summing to what they did, so every other slot keeps
+    its rows. The line lands on the pointer's row, or where one of the two reaches its
+    least rows. Their weights keep their sum, so the other slots keep their shares at any
+    size, unless one of the two was held at its least and another slot holds the scale (one
+    sharing the room, or one the pair's own scale would free): then the two take the rows
+    they show, a little more weight, never less. A slot left at its least keeps the weight it had, if that's less, so a
+    drag never makes a slot bigger anywhere for being shrunk."""
     weighted = [s for s in slots if s.own is None]
     names = [s.name for s in weighted]
     if above not in names or names.index(above) + 1 >= len(names) or names[names.index(above) + 1] != below:
@@ -136,6 +139,10 @@ def dragged(height: int, slots: list[Slot], kept: dict[str, float], above: str, 
     a = min(max(now + delta - top, least[i]), pair - least[i + 1])
     if line(top + a) == now:   # either slot at its least already: nothing moves, nothing kept
         return kept
+    others = [k for k in range(len(ws)) if k not in (i, i + 1)]
+    if not any(real[k] > least[k] + EPS for k in others):   # none shares the room: the scale is the pair's
+        held = min((least[k] / ws[k] for k in others), default=math.inf)   # past it, another would grow
+        scale = min(pair / (ws[i] + ws[i + 1]), held)
 
     def weight(n: int, rows_: float) -> float:
         return min(ws[n], least[n] / scale) if rows_ <= least[n] + EPS else rows_ / scale

@@ -86,6 +86,18 @@ def test_a_drag_beside_a_compact_slot_keeps_its_direction(after, expected, desc)
     assert columns.lay(37, after, to) == expected, desc
 
 
+@pytest.mark.parametrize("height, desc", [(37, "at 40 rows"), (57, "at 60"), (90, "at 93")])
+def test_a_drag_on_a_short_column_leaves_the_others_their_shares(height, desc):
+    """Review 5: on a short column the Sessions and the Session info are held at their least;
+    a drag between Sessions and Stats keeps the pair's weights' sum, so the Session info,
+    outside it, has its default rows at any size (it had 20 of 26 at 93 rows)."""
+    left = [Slot("left.top", 6), Slot("left.middle", 1), Slot("left.bottom", 12)]
+    to = columns.dragged(23, left, {}, "left.top", "left.middle", 1)
+    assert columns.lay(23, left, to) == {"left.top": 7, "left.middle": 2, "left.bottom": 12}, "dragged a row"
+    assert to["left.top"] + to["left.middle"] == pytest.approx(0.7), "the pair's sum kept"
+    assert columns.lay(height, left, to)["left.bottom"] == columns.lay(height, left, {})["left.bottom"], desc
+
+
 @pytest.mark.parametrize("raw, expected, desc", [
     ('{"middle.top": 0.5, "right": 1}', {T: 0.5, "right": 1.0}, "as kept"),
     ('{"middle.top": 0, "middle.middle": -1, "x": 1, "left.top": true, "right": "1"}', {}, "nothing usable"),
@@ -105,16 +117,23 @@ COLUMNS = {"left": ["left.top", "left.middle", "left.bottom"], "middle": [T, M, 
 
 def reals(height: int, slots: list[Slot], kept: dict) -> dict[str, float]:
     """The weighted slots' unrounded rows, by name."""
+    return state(height, slots, kept)[0]
+
+
+def state(height: int, slots: list[Slot], kept: dict) -> tuple[dict[str, float], set[str]]:
+    """The weighted slots' unrounded rows, by name, and those held at their least rows (their
+    weight's share under it)."""
     weighted = [s for s in slots if s.own is None]
-    real, _ = columns.shares(columns.room(height, slots), columns.weights(slots, kept), [s.least for s in weighted])
-    return dict(zip([s.name for s in weighted], real))
+    ws = columns.weights(slots, kept)
+    real, scale = columns.shares(columns.room(height, slots), ws, [s.least for s in weighted])
+    held = {s.name for s, w in zip(weighted, ws) if w * scale < s.least - 1e-9}
+    return dict(zip([s.name for s in weighted], real)), held
 
 
 def fits(height: int, slots: list[Slot]) -> bool:
     return sum(s.least for s in slots if s.own is None) <= columns.room(height, slots)
 
 
-states = st.one_of(st.none(), st.just("compact"), st.just(0))   # weighted, compact, hidden
 
 
 class Column(RuleBasedStateMachine):
@@ -138,8 +157,7 @@ class Column(RuleBasedStateMachine):
         return [p for p in columns.pairs(self.names, {s.name for s in slots if s.own is None}) if p]
 
     def other_states(self, data) -> tuple[int, list[Slot]]:
-        own = data.draw(st.lists(states, min_size=3, max_size=3), label="other state")
-        own = [m if o == "compact" else o for o, m in zip(own, self.least)]
+        own = [data.draw(st.one_of(st.none(), st.integers(0, m)), label="other state") for m in self.least]
         return data.draw(st.integers(4, 90), label="other height"), self.slots(own)
 
     @invariant()
@@ -186,15 +204,33 @@ class Column(RuleBasedStateMachine):
         assert columns.dragged(self.height, slots, self.kept, above, below, 0) == self.kept, "back at the start: as it began"
         grown, shrunk = (above, below) if after[above] > a else (below, above)
         if after[above] != a:
-            for _ in range(3):   # never reversed, in any other state at any height
+            ws = dict(zip([s.name for s in slots if s.own is None], columns.weights(slots, self.kept)))
+            total, now_total = ws[above] + ws[below], to[above] + to[below]
+            real, held = state(self.height, slots, self.kept)
+            least = dict(zip(self.names, self.least))
+            others = set(real) - {above, below}
+            # the scale held by another slot: one sharing the room, or one the pair's own scale would free
+            scaled = any(real[o] > least[o] + 1e-9 or least[o] / ws[o] < (real[above] + real[below]) / total
+                         for o in others)
+            assert now_total >= total * (1 - 1e-9), "the pair's weights never lose weight to the others"
+            kept_sum = abs(now_total - total) <= 1e-9 * total
+            assert kept_sum or (held & {above, below} and scaled), \
+                "the pair's weights keep their sum, unless one was held at its least and another holds the scale"
+            for _ in range(4):   # never reversed, in any other state at any height, nor the others moved
                 height, other = self.other_states(data)
-                old, new = reals(height, other, self.kept), reals(height, other, to)
+                (old, held_old), (new, held_new) = state(height, other, self.kept), state(height, other, to)
                 if grown in new:
                     assert new[grown] >= old[grown] - 1e-9, f"{grown} grown here, never smaller elsewhere"
                 if shrunk in new:
                     assert new[shrunk] <= old[shrunk] + 1e-9, f"{shrunk} shrunk here, never bigger elsewhere"
                 was, now = columns.lay(height, other, self.kept), columns.lay(height, other, to)
                 assert now[grown] >= was[grown] - 1 and now[shrunk] <= was[shrunk] + 1, "nor by more than a row's rounding"
+                if {above, below} <= set(new) and not (held_old | held_new) & {above, below}:
+                    for name in set(new) - {above, below}:   # the others: their shares, at any size
+                        assert new[name] <= old[name] + 1e-9, f"{name}, outside the pair, never grown by it"
+                        if kept_sum:
+                            assert abs(new[name] - old[name]) <= 1e-6 * max(old[name], 1) and \
+                                abs(now[name] - was[name]) <= 1, f"{name}, outside the pair, keeps its rows"
         self.kept = to
 
     @rule(data=st.data(), slot=st.integers(0, 2))
@@ -203,7 +239,7 @@ class Column(RuleBasedStateMachine):
         if self.own[slot] is not None or sum(o is None for o in self.own) < 2:
             return
         own = list(self.own)
-        own[slot] = data.draw(st.sampled_from([self.least[slot], 0]), label="compact or hidden")
+        own[slot] = data.draw(st.integers(0, self.least[slot]), label="compact (its panes' least) or hidden (0)")
         before, after = self.slots(), self.slots(own)
         old, new = reals(self.height, before, self.kept), reals(self.height, after, self.kept)
         was, now = columns.lay(self.height, before, self.kept), columns.lay(self.height, after, self.kept)
@@ -228,8 +264,15 @@ class Column(RuleBasedStateMachine):
     def reset(self):
         """A double-click: the column's weights dropped, DEFAULT's layout."""
         self.kept = {k: v for k, v in self.kept.items() if k not in self.names}
-        assert columns.lay(self.height, self.slots(), self.kept) == \
-               columns.lay(self.height, self.slots(), {n: columns.DEFAULT[n] for n in self.names})
+        slots = self.slots()
+        weighted = [s.name for s in slots if s.own is None]
+        assert columns.weights(slots, self.kept) == [columns.DEFAULT[n] for n in weighted], "DEFAULT's weights"
+        real, held = state(self.height, slots, self.kept)
+        free = [n for n in weighted if n not in held]
+        if fits(self.height, slots) and free:
+            k = real[free[0]] / columns.DEFAULT[free[0]]
+            assert all(abs(real[n] - k * columns.DEFAULT[n]) <= 1e-9 * real[n] for n in free), \
+                f"each not held at its least has its DEFAULT share: {real}"
 
     @rule()
     def reload(self):
@@ -418,11 +461,7 @@ async def test_old_shares_are_dropped_for_the_defaults(store, sid, tmp_path, mon
         await opened(app, pilot)
         await adrs_found(app, pilot, False)
         got = middle_rows(app)
-        column = app.query_one("#col-middle")
-        default = columns.lay(column.size.height, app.column_slots(column)[0], {})
-        assert got == [default[T], default[M], default[B]] and got[2] == 3 and filled(app), \
-            f"{desc}: the default ({got}, {default})"
-        assert got[0] > got[1], f"{desc}: the inbox with the room ({got})"
+        assert got == [22, 11, 3] and filled(app), f"{desc}: the default, the empty Decisions' room shared 2:1 ({got})"
     assert all(store.setting(LAYOUT + key) is None for key in columns.OLD_KEYS), f"{desc}: the old keys gone"
     assert store.setting(LAYOUT + "weights") is None, f"{desc}: nothing kept in their place"
 
