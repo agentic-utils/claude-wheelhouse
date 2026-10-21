@@ -154,8 +154,10 @@ session.
   each session has a send mode: in Queued mode (where every session starts) answers wait
   and go out together, Ctrl+S sending the session's as one message; in Immediate mode each
   goes as you submit it. The line under the answer box says which: "Ctrl+Enter to queue"
-  or "Ctrl+Enter to send". Ctrl+T switches the session's mode. Under the session list, Mode
-  and Send (n) do the same, for the same session, and a bar above the footer
+  or "Ctrl+Enter to send". Alt+S sends just the answer in the box at once, whatever the
+  mode, leaving the mode and the rest of the queue as they are. Ctrl+T switches the
+  session's mode. Under the session list, Mode and Send (n) do the same, for the
+  same session, and a bar above the footer
   always shows Send all (n), every running session's queue; each Send is greyed out while its
   queue is empty. Send all's key is `Shift+A`: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S
   as plain Ctrl+S. A dead session's queue waits for it: Ctrl+S on one says to Relaunch it first,
@@ -474,7 +476,7 @@ along with the launch command.
 Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
 highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first), `N` new session, `A` adopt, `Shift+L` relaunch all, `K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
-selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode),
+selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode), `Alt+S` send this one answer now (the queue and mode left as they are),
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
 as answered, a decision as seen), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
@@ -527,7 +529,8 @@ if that was the first.
 
 Text: drag the mouse over the conversation or a thread to select part of it (shown black
 on white), double-click to select a word, `Ctrl+A` in the answer box selects its text (in the item list it marks the finished rows; in a doc opened
-full screen it selects the whole doc), and `Ctrl+C` copies the selection (through the terminal, which Windows Terminal supports). Right-click does as a
+full screen it selects the whole doc), and `Ctrl+C` copies the selection (through the terminal, which Windows Terminal supports). Right-click on a session in the session list selects it and opens a menu of
+its buttons (greyed as they are under the list; Esc or a click outside closes it). Elsewhere right-click does as a
 terminal's does: it copies the selection, or with nothing selected pastes the clipboard
 into the answer box under the pointer (or the focused one). Under WSL the paste reads the
 Windows clipboard through PowerShell, so it takes most of a second; elsewhere it pastes the

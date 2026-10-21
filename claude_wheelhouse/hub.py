@@ -98,6 +98,16 @@ def aimed(target) -> str:
     return target[1] or "the session"
 
 
+def still_queued(s, target, drafts) -> str:
+    """After Alt+S (#124): what's still queued for the session, and how much of it the answer
+    just sent has overtaken, being for the same item (or, a general message, the session)."""
+    n, mine = len(drafts), sum(m["item_ref"] == target[1] for m in drafts)
+    out = f"{n} answer{'' if n == 1 else 's'} still queued for {display_name(s)}"
+    if mine:
+        out += f" ({mine} for {aimed(target)}, which this one has overtaken)"
+    return out + f": Ctrl+S or Send sends {'it' if n == 1 else 'them'}"
+
+
 def host_context(s) -> api.HostContext | None:
     """The context size an SDK session's host last recorded, for the stats to show after a
     compaction. A tab session's sizes come from its transcript alone."""
@@ -782,9 +792,11 @@ class Hub:
         item = target and target[1] and self.store.item(*target)
         return item if item and item["kind"] == "permission" and item["status"] == "open" else None
 
-    def submit(self, target: tuple, text: str) -> Done:
+    def submit(self, target: tuple, text: str, now: bool = False) -> Done:
         """What the person submitted for a target: an open permission is denied with it at
         once, never queued (#53); otherwise it's queued or sent at once, by the session's mode.
+        `now` (Alt+S, #124) sends this one answer at once, as Immediate mode would, leaving
+        the session's mode and the rest of its queue as they are.
         Answering an item is an explicit act: a decision is seen at once, not after the dwell,
         in the same transaction as the send or the queue (store._mark_seen).
         Whether it went (not if the permission was answered meanwhile), and whether it denied
@@ -798,9 +810,12 @@ class Hub:
                 return Done(False).say(str(e.args[0]), "warning")
             done.denied = True
             done.say(f"denied {target[1]}, with your message")
-        elif mode(s) == "immediate":
+        elif now or mode(s) == "immediate":
             self.store.send(target[0], text, target[1])
-            done.say(f"sent to {aimed(target)}")
+            late = "" if self.running(target[0]) else " (not running: delivered when it's relaunched)"
+            done.say(f"sent to {aimed(target)}{late}")
+            if mode(s) == "queued" and (drafts := self.store.drafts(target[0])):
+                done.say(still_queued(s, target, drafts))
         # on the row as it is now: its old monitor would deliver a draft at once anyway
         elif self.sends_at_once(s):
             self.store.send(target[0], text, target[1])
