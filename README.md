@@ -43,7 +43,7 @@ make install
 installer, `curl -LsSf https://astral.sh/uv/install.sh | sh`, which puts it in
 `~/.local/bin`: open a new shell to have it on your `PATH`). It then runs
 `uv sync --reinstall-package claude-wheelhouse` (plain `uv sync` does for a first install),
-with the modules in `modules/` (today, the stats and Decisions panes), which builds a `.venv` inside the clone: the wheelhouse installs
+with the modules in `modules/` (today, the stats, Decisions and PRs panes), which builds a `.venv` inside the clone: the wheelhouse installs
 nothing outside it (uv keeps its own cache of downloads, and any Python it fetched). To
 update, `git pull`, `make install` again, then quit and reopen the app straight away
 (with `--local` too, and on every machine that opens this database): a session relaunched
@@ -59,8 +59,8 @@ its environment variable and `.env` key where it has them (see [Settings](#setti
 and runs `make install` first when the clone has none, or `pyproject.toml` or `uv.lock`
 changed since. Without uv, every other target stops with `uv not found: run make install`.
 
-The stats pane and the Decisions pane are modules, each its own package (`modules/stats`,
-`modules/design`), which `make install` installs with the wheelhouse. To leave them out,
+The stats pane, the Decisions pane and the PRs pane are modules, each its own package
+(`modules/stats`, `modules/design`, `modules/prs`), which `make install` installs with the wheelhouse. To leave them out,
 `make install WITH=""`: the wheelhouse runs without them, and the space each took goes to
 the panes beside it. `WITH` names the modules to install, `WITH="stats"` for the stats pane
 alone. Leaving a module out
@@ -214,6 +214,18 @@ session.
   session changes it and posts it again it shows `updated`, never new again, and replies
   you haven't seen show as `2 new`. The file is read again whenever it changes, and if it
   has gone (or isn't a regular file) the pane says so.
+- **Pull requests.** A PR a session makes with `gh pr create` (or the GitHub MCP server),
+  itself or through a subagent, shows in the inbox by itself, found in its transcript: its
+  ref is `PR` and the repo's PR number (`PR108`), and its title starts with the repo's
+  short name, dimmed. A subagent's PR sits under the task the subagent was made for. A
+  session posts one it made another way with `post_item(kind="pr", url=...)`. Its status
+  is GitHub's (`draft`, `open`, `merged`, `closed`), which the PRs pane brings in; merged
+  and closed ones dim. `Delete` takes one off the inbox, asking first while it's open: it
+  stays open on GitHub. A message on a PR goes to its session, as on any item.
+- **Colour by kind.** Each inbox row's ref is coloured by its kind: a task green, a
+  question yellow, a decision purple, a PR light blue, a doc the theme's text colour, a
+  subagent grey and a permission orange. Resting the pointer on a row shows its full title
+  (a PR's with its repo), and on a session its full name and synopsis.
 - **Pins.** The inbox's first column pins an item (📌): a click there, or `P` in the item
   list, pins the row or clears its pin. A doc comes pinned (a session can post a scratch
   report unpinned), anything else unpinned, and a doc posted again keeps the pin you set.
@@ -312,6 +324,16 @@ session.
   rather than freezing the app. The inbox's session list shows each session's context
   size the same way, as a one-cell bar in the same colours, filled in eighths on a
   linear scale: an eighth for each 125k begun, so the cell is full past 875k.
+- **The PRs pane.** Under the inbox, the open pull requests your sessions made (`PRs ·
+  mine`), or with `m` every open PR you authored in any repo (`PRs · all`). Each row is its
+  `PR` number, repo (when there's more than one), title and a light: red for a failed
+  check, changes requested or a conflict with its base; orange, flashing, while checks
+  run; yellow while a review is awaited; green when it's ready to merge; grey for a draft.
+  One `gh api graphql` call, made by the daemon with `gh`'s own login, fetches them all
+  every 5 minutes, when the pane is shown, 20 seconds after a session pushes or merges,
+  and on `r`; every app shares it, and a merged or closed PR leaves the pane at once.
+  Highlighting a session's PR shows it in Detail with its thread; `Enter` opens it in the
+  browser. Without `gh`, or not logged in, the pane says so.
 - **The Decisions pane.** Under the inbox, the design decisions (ADRs) of every repo a session works
   in: each `NNNN-*.md` file in the repo's `docs/adr`, or in the directories a session there
   named with `set_doc_dirs` instead (`.plan/`, say, only if named), read again every 10
@@ -321,9 +343,9 @@ session.
   else `?`. PROPOSED and UNRESOLVED come first, then the rest, newest first; a column's
   header sorts by it, as the inbox's do. Moving the cursor shows the decision in Detail,
   rendered, with no answer box, and `Enter` opens it full screen. With no decisions found
-  the pane shrinks to a line saying where it looked, and the other pane in its column takes
-  the room. That happens only in a column of two panes, as in the default beside the inbox:
-  swapped into the left-hand column or onto Detail's, it keeps its size. A session
+  the pane shrinks to a line saying where it looked, and the other panes in its column share
+  the room, each in proportion to its size (the inbox twice the PRs', by default). That
+  happens in any column with another pane in it: swapped onto Detail's, alone, it keeps its size. A session
   in a git worktree lists its main repository's decisions, so each is listed once. The pane
   is the `design` module: `make install WITH="stats"` leaves it out.
 - **Sessions.** The left-hand column lists every session (parked ones dimmed, at the
@@ -516,12 +538,12 @@ wheelhouse's own last copy. Hold `Shift` to drag with the terminal's own selecti
 instead.
 
 The left column holds Sessions, Stats and Session info, top to bottom; the Inbox and,
-under it, Decisions are in the middle, and Detail on the right. Sessions, Session info,
-Inbox, Decisions and Detail are titled in their top border; the Stats panel's own border names the session it shows. The first two
+under it, PRs and Decisions are in the middle, and Detail on the right. Sessions, Session info,
+Inbox, Decisions, PRs and Detail are titled in their top border; the Stats panel's own border names the session it shows. The first two
 columns are 45 wide where there's room; on a narrower terminal they give way in proportion,
 each down to its minimum, so Detail keeps 40. Every boundary between areas can be
-dragged: the lines between the three columns, between the panes in the left column, and
-above the answer box. A line turns teal under the pointer and while you drag it, and no pane goes
+dragged: the lines between the three columns, between the panes in the left and middle
+columns, and above the answer box. A line turns teal under the pointer and while you drag it, and no pane goes
 below its minimum (the session column never gets too narrow for its buttons' captions).
 The sizes are kept in the wheelhouse's database, as shares of the space, so they follow a
 resized terminal; double-click a line to put its default back. A size that doesn't fit a

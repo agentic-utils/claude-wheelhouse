@@ -53,10 +53,37 @@ SHIPPED_LOAD = api.load   # every module installed, as the app loads them
 
 @pytest.fixture(autouse=True)
 def without_design(monkeypatch):
-    """The modules installed, less the design module: the app's layout and Tab order are
-    tested with the stats pane alone, as written before it. The Decisions pane's own tests
-    (test_decisions_pane.py) load it themselves, and every_module tests the shipped default."""
+    """The modules installed, less the design and PRs modules: the app's layout and Tab order
+    are tested with the stats pane alone, as written before them. Their panes' own tests
+    (test_decisions_pane.py, test_prs_pane.py) load them themselves, and every_module tests
+    the shipped default."""
+    monkeypatch.setattr(api, "load", lambda entries=None: [m for m in SHIPPED_LOAD(entries)
+                                                           if m.name not in ("design", "prs")])
+
+
+@pytest.fixture
+def with_prs(monkeypatch):
+    """The modules installed less the design module, the PRs pane's among them (its gh logged
+    out, no_gh): the tour walks its dialog."""
     monkeypatch.setattr(api, "load", lambda entries=None: [m for m in SHIPPED_LOAD(entries) if m.name != "design"])
+
+
+@pytest.fixture
+def middle_of_two(monkeypatch, every_module):
+    """Every module but the PRs: the middle column of two slots (the inbox and the Decisions),
+    where a pane with nothing to show shrinks to its note (WheelhouseApp.fit_compact)."""
+    monkeypatch.setattr(api, "load", lambda entries=None: [m for m in SHIPPED_LOAD(entries) if m.name != "prs"])
+
+
+@pytest.fixture(autouse=True)
+def no_gh(monkeypatch):
+    """No test runs the real gh: the PRs pane's route, wherever it's loaded, finds it logged
+    out unless a test puts its own stub there (test_prs_pane.py)."""
+    try:
+        from claude_wheelhouse_prs import pane
+    except ImportError:
+        return
+    monkeypatch.setattr(pane, "RUNNER", lambda argv: (4, "", "To get started with GitHub CLI, please run:  gh auth login"))
 
 
 @pytest.fixture

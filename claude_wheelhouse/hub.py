@@ -27,10 +27,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import adopt, api, features, fork, launch, liveness, models, plan_usage, subagents, transcript, transcript_usage, tutorial
+from . import adopt, api, features, fork, launch, liveness, models, plan_usage, prs, subagents, transcript, transcript_usage, tutorial
 from .docroots import DOC_CAP
 from .host import AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, NO_NOTES, keepalive_body, waits_on_person
-from .store import COMPACT_QUESTION, DISMISSABLE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
+from .store import COMPACT_QUESTION, DISMISSABLE, PRS_SINCE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
 
 RUNNING = ("live", "stalled", "starting")
 # a hosted session's activity when nothing is under way: errored and stopped count as resting
@@ -219,6 +219,10 @@ class Hub:
         # each session's subagents, tracked as A items (#69): read on workers, as contexts are
         self.agent_watchers: dict[str, subagents.AgentWatcher] = {}
         self.agent_errors: dict[str, str] = {}   # each session's watcher error last said
+        # each session's PRs, found in the same transcripts on the same workers (prs.py, #111),
+        # and when any session last pushed or merged one (the PRs pane's cue to fetch)
+        self.pr_watchers: dict[str, prs.PrWatcher] = {}
+        self.pr_activity_at: float | None = None
         # the subagents whose own conversation a surface shows (agent_conversation), by their
         # session's id and item's ref: only the last AGENTS_FOLLOWED asked for are followed,
         # of the hundreds a session can have (the inbox's and a full screen's), and none once
@@ -1101,6 +1105,7 @@ class Hub:
         for sid in [sid for sid in watchers if sid not in listed]:
             del watchers[sid]
             self.agent_errors.pop(sid, None)
+            self.pr_watchers.pop(sid, None)
         for sid, s in listed.items():
             watcher = watchers.setdefault(sid, subagents.AgentWatcher(sid))
             if watcher.error and watcher.error != self.agent_errors.get(sid):
@@ -1119,10 +1124,29 @@ class Hub:
         try:
             watcher.sync(self.store, alive=alive)
             watcher.error = None
+            self.sync_prs(watcher)
         except Exception as e:
             watcher.error = f"couldn't track subagents: {e}"[:120]
         finally:
             watcher.syncing = False
+
+    def sync_prs(self, watcher: subagents.AgentWatcher) -> None:
+        """The session's PRs brought in as items (prs.PrWatcher), from the transcripts the
+        subagent watcher has found: the main one's, and each subagent's, a PR made there filed
+        under the item the subagent was made for. On the same worker, after the subagents'."""
+        if watcher.main is None or watcher.cutoff is None:
+            return
+        found = self.pr_watchers.setdefault(watcher.sid, prs.PrWatcher(watcher.sid))
+        links = self.store.agent_links(watcher.sid)
+        logs = {}
+        for aid, agent in watcher.agents.items():
+            if agent.log is not None:
+                item = self.store.item(watcher.sid, links[aid][0]) if aid in links else None
+                logs[agent.log] = item["parent_ref"] if item else None
+        since = max(watcher.cutoff, subagents.when(self.store.setting(PRS_SINCE)) or watcher.cutoff)
+        found.sync(self.store, watcher.main, logs, since)
+        if found.activity and found.activity > (self.pr_activity_at or 0):
+            self.pr_activity_at = found.activity
 
     def fetch_usage(self) -> None:
         """The account's plan usage: /usage asked on a worker thread when it's due, every

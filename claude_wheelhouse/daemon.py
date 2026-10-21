@@ -85,7 +85,8 @@ MOVES = {"sessions": {"sessions"}, "listed": {"items"}, "named": {"conversation"
 HOW = {"ask": Hub.ask, "now": Hub.act_on_dead, "cancel": Hub.cancel_request, "force": Hub.force}
 LAYOUT = "layout."   # the only settings a client reads and writes: the TUI's splitter sizes
 # what the inbox leaves out of each item, as the item list shows none of it: the body and
-# answer come with its thread, and seq is retired (store.RETIRED_TRIGGER)
+# answer come with its thread, and seq is retired (store.RETIRED_TRIGGER). A PR's body, its URL,
+# stays: the row shows its repo (#111)
 UNLISTED = ("body", "answer", "seq")
 
 
@@ -854,7 +855,7 @@ class Daemon:
         the TUI's SDK-only controls follow. The ranking is the client's own."""
         rows = self.store._all("SELECT i.*, s.name AS session_name, s.parked AS session_parked FROM items i "
                                "JOIN sessions s ON s.id = i.session_id")
-        return {"items": [{**{k: v for k, v in dict(r).items() if k not in UNLISTED},
+        return {"items": [{**{k: v for k, v in dict(r).items() if k not in UNLISTED or (k == "body" and r["kind"] == "pr")},
                             "compact_question": r["answer"] == COMPACT_QUESTION} for r in rows],
                 "processing": sorted(self.store.processing()), "awaiting": sorted(self.store.awaiting()),
                 "drafts": [{"id": m["id"], "session_id": m["session_id"], "item_ref": m["item_ref"]}

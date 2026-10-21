@@ -104,7 +104,7 @@ def test_prepare_starts_afresh(store, tmp_path):
 ])
 @pytest.mark.both
 @pytest.mark.anyio
-async def test_the_tour(store, monkeypatch, fake_claude, sdk, runner_, desc):
+async def test_the_tour(store, monkeypatch, fake_claude, with_prs, sdk, runner_, desc):
     """Doug (#78): the principles first, then a walk round the screen in dialogs painted over
     the panes, starting with the demo's creation (N, New session filled in: Q119), and last
     this release's notes. Each action dialog moves on as the person does what it asks."""
@@ -168,6 +168,9 @@ async def test_the_tour(store, monkeypatch, fake_claude, sdk, runner_, desc):
         assert isinstance(app.focused, TextArea), f"{desc}: a Next callout leaves focus in the answer box"
         app.screen_stack[0].query_one("#tour-next", Button).press()
         await pilot.pause()
+        assert shown(app) == ("prs", "prs"), f"{desc}: Next, the Decisions passed over for want of their pane"
+        app.screen_stack[0].query_one("#tour-next", Button).press()
+        await pilot.pause()
         assert shown(app) == ("end", "session-info"), f"{desc}: Next"
         await step(lambda: store.end(sid), ("notes", None), "the demo gone")
         assert isinstance(app.screen, TourNotes), desc
@@ -177,8 +180,8 @@ async def test_the_tour(store, monkeypatch, fake_claude, sdk, runner_, desc):
         await pilot.press("enter")
         await pilot.pause()
         assert app.tour is None and not isinstance(app.screen, TourNotes), f"{desc}: the tour over"
-    # every feature seen but the design module's, left out here (conftest.without_design): its
-    # dialog passed over for want of its pane
+    # every feature seen but the design module's, left out here (conftest.with_prs): its
+    # dialog passed over for want of its pane; the PRs module's shown
     assert store.tour_seen() == {f.id: "shown" for f in whatsnew.FEATURES if PANE.get(f.where) != "design"}, \
         f"{desc}: every feature seen"
     assert store.setting(NOTES_SEEN) == whatsnew.running_version(), desc
@@ -329,6 +332,45 @@ async def test_a_callout_keeps_clear_of_what_its_step_needs(store, tut, every_mo
             assert not callout.covers(box, mine), f"{where}: {box} ({found.side}) clear of its rows {mine}"
             assert found.side == "centred" or not callout.covers(box, avoid), \
                 f"{where}: {box} clear of its pane {pane.region}"
+
+
+@pytest.mark.parametrize("stop, more, end", [("docs", 3, None), ("docs", 12, None), ("inbox", 12, "esc"),
+                                             ("decision", 12, "esc"), ("decision", 12, "done")])
+@pytest.mark.anyio
+async def test_a_step_scrolls_the_rows_it_needs_into_sight(store, tut, every_module, stop, more, end):
+    """Q152: the inbox shares an empty Decisions' room with the PRs, so at 80x24 it's short;
+    with more items than it shows, the step's rows (tour.ROWS) are scrolled into sight as it
+    starts, wherever they sort. `end`: the tour then ended with Esc, or finished, the inbox
+    back where the person had it, their cursor row in sight."""
+    fill_demo(store, tut, more)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        app.follow(tut)   # as launching it does
+        await pilot.pause()
+        items = app.query_one("#items")
+        items.focus()
+        items.move_cursor(row=items.row_count - 1)   # at the bottom: scrolled to its end
+        await pilot.pause()
+        await pilot.pause()
+        before = items.scroll_offset.y
+        tour_at(app, stop, tut)
+        await pilot.pause()
+        every, mine = callout.rows(app.screen, tut, ROWS.get(stop, ()))
+        assert mine is not None and every.contains_region(mine), f"{stop} with {more} more: its rows in sight"
+        if end is None:
+            return
+        assert items.scroll_offset.y != before, f"{stop}: scrolled to its rows"
+        if end == "esc":
+            await pilot.press("escape")
+        else:
+            app.tour.at = len(app.tour.stops)
+            app.show_tour()
+        await pilot.pause()
+        assert app.tour is None, f"{stop}: the tour over ({end})"
+        assert items.scroll_offset.y == before, f"{stop}, {end}: the inbox back where it was"
+        assert before <= items.cursor_row < before + items.scrollable_content_region.height - 1, \
+            f"{stop}, {end}: the cursor row in sight"
 
 
 @pytest.mark.parametrize("stop, size", [("answer", (160, 40)), ("stats", (100, 30)), ("reply", (80, 24)),

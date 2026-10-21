@@ -7,6 +7,8 @@ takes its callout with it, and it places itself again whenever the screen's layo
 (a resize, a pane swapped, a splitter dragged). Where it goes is a pure function, place.
 """
 
+from typing import Callable
+
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
@@ -31,6 +33,7 @@ PANES = {
     "detail": ("#detail-pane", "Detail"),
     "stats": ("#stats", "Stats"),
     "design": ("#design", "Decisions"),   # the design module's pane
+    "prs": ("#prs", "PRs"),   # the PRs module's pane
 }
 
 SIDES = ("right", "left", "below", "above")   # tried in turn, beside the pane; then inside, then centred
@@ -143,13 +146,40 @@ def rows(screen: Widget, sid: str | None = None, kinds: tuple[str, ...] = ()) ->
         bottom = min(region.bottom, starts[last + 1])
         return Region(region.x, y, region.width, bottom - y) if bottom > y else None
 
+    mine = needed(ordered, sid, kinds)
+    every = span(0, len(ordered) - 1, region.y) if ordered else None
+    return every, span(mine[0], mine[-1]) if mine else None
+
+
+def needed(ordered: list, sid: str | None, kinds: tuple[str, ...]) -> list[int]:
+    """The inbox rows (in `ordered`, the table's) of session `sid`'s whose refs are of `kinds`."""
+
     def kind(key: str) -> str | None:
         owner, _, ref = key.partition("|")
         return ref.rstrip("0123456789") if sid and owner == sid else None
 
-    mine = [i for i, row in enumerate(ordered) if kind(str(row.key.value)) in kinds]
-    every = span(0, len(ordered) - 1, region.y) if ordered else None
-    return every, span(mine[0], mine[-1]) if mine else None
+    return [i for i, row in enumerate(ordered) if kind(str(row.key.value)) in kinds]
+
+
+def bring(screen: Widget, sid: str | None, kinds: tuple[str, ...]) -> float | None:
+    """The inbox scrolled, if it must be, so the rows a step needs (`rows`) are in sight, as
+    many as fit from the first: a short inbox, or a long one, never hides them as the step
+    starts. The scroll it was at, if it moved it, for the tour's end to put back."""
+    found = screen.query("#items")
+    if not kinds or not found or not (table := found.first()).display or not table.region.area:
+        return None
+    ordered = table.ordered_rows
+    if not (mine := needed(ordered, sid, kinds)):
+        return None
+    first = sum(row.height for row in ordered[:mine[0]])
+    last = sum(row.height for row in ordered[:mine[-1] + 1])
+    seen = table.scrollable_content_region.height - (table.header_height if table.show_header else 0)
+    y = table.scroll_offset.y
+    if not (first < y or last > y + seen):
+        return None
+    table.scroll_to(y=first if first < y or last - first >= seen else last - seen,   # from the first, or as
+                    animate=False, immediate=True)                                    # far down as shows the last
+    return y
 
 
 def find(screen: Widget, pane: str) -> Widget | None:
@@ -181,12 +211,13 @@ class TourCallout(Vertical):
             self.callout = callout
 
     def __init__(self, pane: str, text: str, next: bool = False, id: str | None = None, keep: str | None = None,
-                 kinds: tuple[str, ...] = ()) -> None:
+                 kinds: tuple[str, ...] = (), scrolled: Callable[[float], None] | None = None) -> None:
         super().__init__(id=id)
         self.pane, self.text, self.next = pane, text, next
         # the demo session, and the kinds of its inbox rows the step needs in sight (tour.ROWS):
         # what it never covers where it can help it (place)
         self.keep, self.kinds = keep, kinds
+        self.scrolled = scrolled   # told the inbox's scroll before bring moved it
         self.at: Region | None = None   # where it was last put
         # put there with nowhere clear (place's fallback): the step's rows it was placed against,
         # left be until they move. False: placed clear
@@ -203,6 +234,8 @@ class TourCallout(Vertical):
     def on_mount(self) -> None:
         self.screen.screen_layout_refresh_signal.subscribe(self, lambda _: self.place())
         self.app.screen_change_signal.subscribe(self, lambda _: self.cover(), immediate=True)
+        if (was := bring(self.screen, self.keep, self.kinds)) is not None and self.scrolled:   # the step's rows in sight
+            self.scrolled(was)
         self.place()
         found = self.query("#tour-next")   # none in one removed before it was composed
         if found and not isinstance(self.screen.focused, EDITABLE):   # never from a box being typed in

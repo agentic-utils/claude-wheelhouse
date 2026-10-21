@@ -47,7 +47,7 @@ async def test_answer_reaches_the_session(store, sid, live):
         await pilot.pause()
         items = app.query_one("#items", DataTable)
         assert items.row_count == 2
-        assert items.get_row_at(0)[2] == q, "open question first"
+        assert str(items.get_row_at(0)[2]) == q, "open question first"
         items.move_cursor(row=0)
         await pilot.pause()
         assert app.selected == (sid, q)
@@ -3170,7 +3170,7 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         items, sessions = app.items_table, app.query_one("#session-list", DataTable)
-        assert [items.get_row_at(i)[2] for i in range(items.row_count)] == [q, d], "the question ranks first"
+        assert [str(items.get_row_at(i)[2]) for i in range(items.row_count)] == [q, d], "the question ranks first"
         assert str(items.get_row_at(1)[3]) == "unseen"
         assert str(sessions.get_row_at(0)[4]) == "1", "the session list counts unseen decisions"
         assert store.item(sid, d)["status"] == "unseen", "not seen until the person looks"
@@ -3184,12 +3184,12 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
         assert str(sessions.get_row_at(0)[4]) == ""
         items.move_cursor(row=0)
         await refresh(pilot, sid)
-        assert [items.get_row_at(i)[2] for i in range(items.row_count)] == [q, d], "moving on leaves it there"
+        assert [str(items.get_row_at(i)[2]) for i in range(items.row_count)] == [q, d], "moving on leaves it there"
         items.move_cursor(row=1)
         await pilot.press("delete")
         await pilot.pause()
         assert store.item(sid, d)["status"] == "closed", "Delete closes it"
-        assert [items.get_row_at(i)[2] for i in range(items.row_count)] == [q], "then it's finished"
+        assert [str(items.get_row_at(i)[2]) for i in range(items.row_count)] == [q], "then it's finished"
 
 
 @pytest.mark.anyio
@@ -5258,6 +5258,9 @@ def sized(app, key: str) -> int:
     return sp.extent(sp.panes()[0])
 
 
+SLOT_SPLITTERS = {"left-middle", "left-bottom", "middle-middle", "middle-bottom"}   # columns.py's
+
+
 async def drag(pilot, key: str, dx: int, dy: int) -> None:
     sp = splitter(pilot.app, key)
     x, y = sp.region.offset
@@ -5294,7 +5297,9 @@ async def test_dragging_a_splitter_resizes_and_is_kept(store, sid, key, dx, dy, 
         after = sized(app, key)
         assert after - before == change, desc
         assert not splitter(app, key).has_class("-dragging"), desc
-    assert store.setting("layout." + key) is not None, f"{desc}: kept"
+    kept = "layout." + ("weights" if key in SLOT_SPLITTERS else key)   # a column's slots: their weights (#111)
+    assert (store.setting(kept) is not None) is (bool(change) or key not in SLOT_SPLITTERS), \
+        f"{desc}: kept, unless a column's line didn't move (columns.dragged)"
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, rows)) as pilot:
         await pilot.pause()
@@ -5302,7 +5307,7 @@ async def test_dragging_a_splitter_resizes_and_is_kept(store, sid, key, dx, dy, 
         await pilot.double_click(splitter(app, key))
         await pilot.pause()
         assert sized(app, key) == before, f"{desc}: a double-click puts the default back"
-    assert store.setting("layout." + key) is None, desc
+    assert store.setting(kept) is None, desc
 
 
 @pytest.mark.anyio
@@ -5417,8 +5422,8 @@ async def test_detail_keeps_its_room_on_a_narrow_terminal(store, sid, width, sto
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("size, rows, desc", [
-    ((160, 40), (12, 11, 12), "40 rows: the session list keeps a share, the stats too small for a chart"),
-    ((200, 60), (21, 17, 17), "60 rows: the session list grows most"),
+    ((160, 40), (13, 10, 12), "40 rows: the session list keeps a share, the stats too small for a chart"),
+    ((200, 60), (22, 17, 16), "60 rows: the session list grows most (columns.DEFAULT's shares)"),
 ])
 async def test_the_left_column_rows(store, sid, size, rows, desc):
     """Review of #86: Sessions, Stats and Session info, top to bottom; the session list
@@ -5435,7 +5440,9 @@ async def test_the_left_column_rows(store, sid, size, rows, desc):
     ({"items": "0.5"}, {"items": None}, "the old items-over-stats share: deleted, and sizes nothing"),
     ({"detail-pane": "0.3"}, {"detail-pane": None}, "the old Detail column share: deleted"),
     ({"session-info": "0.7"}, {"session-info": None}, "the old description-in-sessions share: deleted"),
-    ({"middle-top": "0.5"}, {"middle-top": "0.5"}, "a share for the Inbox over an empty slot: kept, not applied"),
+    ({"middle-top": "0.3"}, {"middle-top": None, "weights": None},
+     "the old Inbox-over-Decisions share (#111): deleted, the defaults"),
+    ({"weights": '{"middle.bottom": 0.9}'}, {"weights": '{"middle.bottom": 0.9}'}, "a weight for an empty slot: kept, not applied"),
 ])
 async def test_the_inbox_fills_its_column_whatever_was_stored(store, sid, stored, kept, desc):
     """Review of #86: a share kept for a splitter beside a collapsed slot left half the Inbox
@@ -7857,6 +7864,9 @@ DEFAULT_LAYOUT = {"left.top": "sessions", "left.middle": "stats", "left.bottom":
                   "middle.top": "items", "right": "detail"}
 DEFAULT_LAYOUT_SLOT = {p: s.replace(".", "-") for s, p in DEFAULT_LAYOUT.items()}
 CORE_DEFAULTS = {pane: home for pane, (_, home) in tui.CORE_PANES.items()}
+SHIPPED_DEFAULTS = {**CORE_DEFAULTS, "design": "middle.bottom", "prs": "middle.middle", "stats": "left.middle"}
+SIX_KEPT = {"left.top": "sessions", "left.middle": "stats", "left.bottom": "session-info", "middle.top": "items",
+            "middle.bottom": "design", "right": "detail"}   # a layout kept before the seventh slot
 
 
 @pytest.mark.parametrize("saved, defaults, want, desc", [
@@ -7869,12 +7879,21 @@ CORE_DEFAULTS = {pane: home for pane, (_, home) in tui.CORE_PANES.items()}
      "a pane the layout doesn't name, its default taken: the first empty slot"),
     ({"left.top": "items", "left.middle": "gone", "middle.bottom": "gone2"}, CORE_DEFAULTS,
      {**CORE_DEFAULTS, "items": "left.top", "sessions": "middle.top"}, "a slot kept for an absent pane is passed over"),
-    ({"left.top": "items", "left.middle": "x", "middle.top": "y", "middle.bottom": "z"}, CORE_DEFAULTS,
+    ({"left.top": "items", "left.middle": "x", "middle.top": "y", "middle.middle": "w", "middle.bottom": "z"}, CORE_DEFAULTS,
      {**CORE_DEFAULTS, "items": "left.top", "sessions": "left.middle"}, "and taken once no other is empty"),
     ({"left.top": "items", "middle.top": "items", "nowhere": "sessions"}, CORE_DEFAULTS,
-     {**CORE_DEFAULTS, "items": "left.top", "sessions": "left.middle"}, "a pane named twice, or a slot not one of six: once, ignored"),
-    ({}, {**CORE_DEFAULTS, "a": "left.middle", "b": "left.middle"}, {**CORE_DEFAULTS, "a": "left.middle", "b": "middle.bottom"},
+     {**CORE_DEFAULTS, "items": "left.top", "sessions": "left.middle"}, "a pane named twice, or a slot not one of seven: once, ignored"),
+    ({}, {**CORE_DEFAULTS, "a": "left.middle", "b": "left.middle"}, {**CORE_DEFAULTS, "a": "left.middle", "b": "middle.middle"},
      "two panes for one slot: the second to the first empty one"),
+    # upgrading to seven slots (#111): a layout kept with six loads as it was, PRs in the new one
+    (SIX_KEPT, SHIPPED_DEFAULTS, {**SHIPPED_DEFAULTS}, "six kept as they were: PRs takes middle.middle"),
+    ({**SIX_KEPT, "left.middle": "design", "middle.bottom": "stats"}, SHIPPED_DEFAULTS,
+     {**SHIPPED_DEFAULTS, "design": "left.middle", "stats": "middle.bottom"}, "a kept swap stays; PRs still takes its own"),
+    ({**SIX_KEPT, "middle.middle": "design", "middle.bottom": "stats", "left.middle": "prs"}, SHIPPED_DEFAULTS,
+     {**SHIPPED_DEFAULTS, "design": "middle.middle", "stats": "middle.bottom", "prs": "left.middle"},
+     "swaps across the new slot are kept"),
+    (SIX_KEPT, {k: v for k, v in SHIPPED_DEFAULTS.items() if k != "prs"},
+     {k: v for k, v in SHIPPED_DEFAULTS.items() if k != "prs"}, "without the PRs module: as before, middle.middle empty"),
 ])
 def test_arrange(saved, defaults, want, desc):
     assert tui.arrange(saved, defaults) == want, desc
