@@ -3730,7 +3730,7 @@ class WheelhouseApp(App):
         Binding("ctrl+j", "submit", "Submit", show=False),   # Ctrl+Enter, as most terminals send it
         # Alt+S (#124): Ctrl+Shift+Enter can't be told from Ctrl+Enter in Windows Terminal. A terminal
         # sends it as a printable s, but the app's binding takes it before the answer box types it
-        Binding("alt+s", "submit(True)", "Send now", key_display="Alt+S"),
+        Binding("alt+s", "submit(True)", "Send now", show=False, key_display="Alt+S"),   # off the footer, as Ctrl+R is: Relaunch must fit at 100 columns
         Binding("ctrl+s", "send_session", "Send", key_display="Ctrl+S"),
         Binding("ctrl+t", "toggle_mode", "Mode", key_display="Ctrl+T"),
         Binding("ctrl+r", "recall", "Edit queued", show=False, key_display="Ctrl+R"),
