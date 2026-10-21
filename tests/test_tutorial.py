@@ -104,7 +104,7 @@ def test_prepare_starts_afresh(store, tmp_path):
 ])
 @pytest.mark.both
 @pytest.mark.anyio
-async def test_the_tour(store, monkeypatch, fake_claude, sdk, runner_, desc):
+async def test_the_tour(store, monkeypatch, fake_claude, with_prs, sdk, runner_, desc):
     """Doug (#78): the principles first, then a walk round the screen in dialogs painted over
     the panes, starting with the demo's creation (N, New session filled in: Q119), and last
     this release's notes. Each action dialog moves on as the person does what it asks."""
@@ -168,6 +168,9 @@ async def test_the_tour(store, monkeypatch, fake_claude, sdk, runner_, desc):
         assert isinstance(app.focused, TextArea), f"{desc}: a Next callout leaves focus in the answer box"
         app.screen_stack[0].query_one("#tour-next", Button).press()
         await pilot.pause()
+        assert shown(app) == ("prs", "prs"), f"{desc}: Next, the Decisions passed over for want of their pane"
+        app.screen_stack[0].query_one("#tour-next", Button).press()
+        await pilot.pause()
         assert shown(app) == ("end", "session-info"), f"{desc}: Next"
         await step(lambda: store.end(sid), ("notes", None), "the demo gone")
         assert isinstance(app.screen, TourNotes), desc
@@ -177,8 +180,8 @@ async def test_the_tour(store, monkeypatch, fake_claude, sdk, runner_, desc):
         await pilot.press("enter")
         await pilot.pause()
         assert app.tour is None and not isinstance(app.screen, TourNotes), f"{desc}: the tour over"
-    # every feature seen but the design module's, left out here (conftest.without_design): its
-    # dialog passed over for want of its pane
+    # every feature seen but the design module's, left out here (conftest.with_prs): its
+    # dialog passed over for want of its pane; the PRs module's shown
     assert store.tour_seen() == {f.id: "shown" for f in whatsnew.FEATURES if PANE.get(f.where) != "design"}, \
         f"{desc}: every feature seen"
     assert store.setting(NOTES_SEEN) == whatsnew.running_version(), desc

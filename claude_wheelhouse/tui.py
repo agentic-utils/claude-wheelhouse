@@ -58,14 +58,15 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, callout, docblocks, docroots, emoji, features, models, ordering, prs, subagents, transcript, transcript_usage, tutorial, whatsnew
+from . import api, callout, columns, docblocks, docroots, emoji, features, models, ordering, prs, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .rows import KIND_COLOUR, RowTips
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import AWAITING_NOTES, HOLD_EXPIRED, NUDGE_TOKENS, SHELL_OPENING
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
-from .splitter import Splitter, fit
+from .splitter import SlotSplitter, Splitter, fit
+from textual.css.scalar import Unit
 from .tour import NOTES, PAUSED, ROWS as tour_rows, TOPUP, TOUR, Tour, offered, opening
 from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mode, pinned, runner, spared, stamp, standing)
@@ -168,6 +169,26 @@ def arrange(saved: dict[str, str], defaults: dict[str, str]) -> dict[str, str]:
     return out
 
 
+def styled_size(place: Widget) -> tuple[str, float]:
+    """A slot's height as the stylesheet gives it: ("%", its share of the column) or ("fr", n)."""
+    base = place.styles.base.height
+    if base is not None and base.unit in (Unit.PERCENT, Unit.HEIGHT):   # a height's % is the parent's (h)
+        return "%", base.value
+    return "fr", base.value if base is not None and base.unit == Unit.FRACTION else 1.0
+
+
+def least(place: Widget) -> int:
+    """The fewest rows a slot keeps: its min-height, the stylesheet's or its panes' (fit_panes)."""
+    scalar = place.styles.min_height
+    return int(scalar.value) if scalar is not None and scalar.unit == Unit.CELLS else 1
+
+
+def compact_rows(place: Widget) -> int:
+    """A compact slot's rows: its panes' least (fit_compact sets them)."""
+    height = place.styles.height
+    return int(height.value) if height is not None and height.unit == Unit.CELLS else place.outer_size.height
+
+
 def cells(scalar) -> float:
     """A stylesheet's minimum as cells: none, 0."""
     return scalar.value if scalar is not None else 0
@@ -210,10 +231,7 @@ SESSION_LABELS = ("", "session", "ctx", "?", "D", "✉")   # the session list's 
 # keys no splitter has now, deleted at start: items sized the items over the stats,
 # detail-pane the column between them and Detail, and session-info the description inside
 # the sessions pane, before the six slots (.plan/modules.md); left-bottom sizes its slot now
-RETIRED_LAYOUT = ("items", "detail-pane", "session-info", "middle-top")
-# middle-top sized the inbox against the Decisions, before the middle column's third slot (#111):
-# the share it kept becomes middle-bottom's, the Decisions' (1 - it), so the split stays
-OLD_MIDDLE, NEW_MIDDLE = "middle-top", "middle-bottom"
+RETIRED_LAYOUT = ("items", "detail-pane", "session-info")
 DETAIL_ROOM = 40   # the columns Detail keeps on a narrow terminal while the others can give way
 
 
@@ -3570,9 +3588,8 @@ class WheelhouseApp(App):
     #slot-left-top {{ height: 1fr; min-height: 3; }}   /* the sessions: 24 rows fit */
     #slot-left-middle {{ height: 30%; min-height: 1; }}   /* on a short terminal the stats give way first, to a row */
     #slot-left-bottom {{ height: 30%; min-height: 3; }}   /* session info */
-    #slot-middle-top {{ height: 1fr; min-height: 3; }}   /* the inbox: what the others leave */
-    #slot-middle-middle {{ height: 25%; min-height: 3; }}   /* the PRs, under it */
-    #slot-middle-bottom {{ height: 35%; min-height: 3; }}   /* the Decisions */
+    #slot-middle-top, #slot-middle-bottom {{ height: 1fr; min-height: 3; }}   /* the inbox and the Decisions, halves as before */
+    #slot-middle-middle {{ height: 20%; min-height: 3; }}   /* the PRs, between them (#111) */
     .panel {{ border-title-color: #05d9e8; }}   /* each pane's title, in its top border, its drag handle (Slot) */
     .slot.-swap-target > * {{ outline: round #05d9e8; }}   /* where a pane dragged by its title would go: teal */
     #items {{ height: 1fr; min-height: 3; }}
@@ -3766,6 +3783,7 @@ class WheelhouseApp(App):
         self.ctx = api.Context(state_dir, self.module_sessions, self.stats_sid, usage=self.client.usage,
                                set_effort=self.set_effort)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
+        self.weights: dict[str, float] = {}   # each slot's weight in its column, as kept (columns.py)
         self.module_ids: dict[str, str] = {}   # each pane's widget id: the module that has it
         self.pane_homes: dict[str, str] = {}   # each module pane's default slot, as it declares it (hosted)
         self.box_target: tuple | None = None
@@ -3790,9 +3808,9 @@ class WheelhouseApp(App):
                     with Vertical(id="sessions-pane", classes="panel") as pane:
                         pane.border_title = "Sessions"
                         yield SessionList(id="session-list", cursor_type="row", show_cursor=False)   # none selected (D20)
-                yield Splitter("left-middle", "#slot-left-middle", "#slot-left-top", "y")
+                yield SlotSplitter("left-middle", "col-left")
                 yield slot("left.middle")   # the stats module's
-                yield Splitter("left-bottom", "#slot-left-bottom", "#slot-left-top", "y")
+                yield SlotSplitter("left-bottom", "col-left")
                 with slot("left.bottom"):   # the highlighted session's description, and what can be done to it
                     with Vertical(id="session-info-pane", classes="panel") as pane:
                         pane.border_title = "Session info"
@@ -3812,11 +3830,10 @@ class WheelhouseApp(App):
                     with Vertical(id="items-pane", classes="panel") as pane:
                         pane.border_title = "Inbox"
                         yield ItemList(id="items", cursor_type="row")
-                # as the left column: the top slot takes what the others leave, and each splitter
-                # sizes the slot below it against it, so a drag moves only its own line's rows
-                yield Splitter("middle-middle", "#slot-middle-middle", "#slot-middle-top", "y")
+                # each splitter between the two slots it moves rows between (columns.pairs)
+                yield SlotSplitter("middle-middle", "col-middle")
                 yield slot("middle.middle")   # the PRs module's (#111): a slot of its own, nothing moved
-                yield Splitter("middle-bottom", "#slot-middle-bottom", "#slot-middle-top", "y")
+                yield SlotSplitter("middle-bottom", "col-middle")
                 yield slot("middle.bottom")
             yield Splitter("items-pane", "#col-middle", "#col-right", "x", default=self.column_width)
             with Vertical(id="col-right", classes="column"), slot("right"):
@@ -3863,10 +3880,11 @@ class WheelhouseApp(App):
         self.session_controls = list(self.query("#session-info-pane Grid, #session-info-pane Grid Button"))   # theirs and they
         # no Tab stops (tab_stops), nor taken by a click, which leaves the answer box where it was
         self.query_one("#session-info-scroll").can_focus = False
-        old = share(self.client.setting(LAYOUT + OLD_MIDDLE))
-        if old is not None and self.client.setting(LAYOUT + NEW_MIDDLE) is None:
-            self.client.set_setting(LAYOUT + NEW_MIDDLE, f"{1 - old:.6f}")
-        for key in RETIRED_LAYOUT:   # once: after that they're gone
+        if self.client.setting(LAYOUT + columns.WEIGHTS_KEY) is None:   # the splitters' shares, once (#111)
+            moved = columns.migrate({key: self.client.setting(LAYOUT + key) for key in columns.OLD_KEYS})
+            if moved:
+                self.client.set_setting(LAYOUT + columns.WEIGHTS_KEY, json.dumps(moved))
+        for key in (*RETIRED_LAYOUT, *columns.OLD_KEYS):   # once: after that they're gone
             if self.client.setting(LAYOUT + key) is not None:
                 self.client.set_setting(LAYOUT + key, None)
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
@@ -3874,6 +3892,7 @@ class WheelhouseApp(App):
             # size a slot that has the column to itself
             if splitter.display and (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
                 splitter.apply(stored)
+        self.weights = columns.kept(self.client.setting(LAYOUT + columns.WEIGHTS_KEY))
         self.eye_col = self.session_list.add_columns(*SESSION_LABELS, "")[-1]
         self.item_sort = self.kept_sort("items")
         self.session_sort = self.kept_sort("sessions")
@@ -3930,6 +3949,7 @@ class WheelhouseApp(App):
         """The panes' sizes kept within the terminal: one kept from a wider one shrinks."""
         if self.screen_stack:
             fit(self.screen_stack[0].query(Splitter))
+            self.lay_columns()
 
     def refit(self) -> None:
         """Fit again once laid out: a pane's content changed height, not the terminal."""
@@ -4947,8 +4967,7 @@ class WheelhouseApp(App):
                 elif getattr(column, "filling", False):   # the rest no more: its own width again
                     column.filling = False
                     splitter.apply(splitter.fraction)
-            elif (panes := splitter.panes()) and all(p.has_class("slot") for p in panes):
-                splitter.display = all(p.display for p in panes)
+        self.lay_columns()
 
     def fit_panes(self) -> None:
         """Each slot and column at least as big as its panes need (PANE_MINIMUM), wherever
@@ -5004,11 +5023,9 @@ class WheelhouseApp(App):
     def fit_compact(self) -> None:
         """A slot whose panes are all compact (a module pane with nothing to show sets
         `compact`, api) keeps only their least rows (PANE_MINIMUM), and the other slot in its
-        column takes the room it gives up (Splitter.compact). Only in a column showing two
-        slots, or three where it isn't the top one, which takes what the others leave (#111:
-        so an empty Decisions under the PRs leaves the inbox its room); not all of them
-        compact. Alone in its column, or a column of three's top, it keeps its normal size,
-        and every splitter behaves as ever. A pane calls it through
+        column's other slots share the room it gives up (columns.py, lay_columns). Only in a
+        column showing two slots or more, not all of them compact: alone in its column, it
+        keeps its normal size. A pane calls it through
         Context.relayout when its `compact` changes."""
         screen = self.screen_stack[0]
 
@@ -5019,15 +5036,69 @@ class WheelhouseApp(App):
         for place in screen.query(".slot"):
             column = place.parent
             pair = [s for s in column.query(".slot") if s.display] if column.has_class("column") else [place]
-            # in a column of three, not its top slot: that one takes what the others leave
-            sized = len(pair) == 2 or (len(pair) > 2 and place is not pair[0])
-            compact = sized and idle(place) and not all(idle(s) for s in pair)
+            compact = len(pair) >= 2 and idle(place) and not all(idle(s) for s in pair)
             place.set_class(compact, "-compact")
             place.styles.height = max(minimum(w)[1] for w in place.children if w.display) if compact else None
         for splitter in screen.query(Splitter):
-            if (panes := splitter.panes()) and all(p.has_class("slot") for p in panes):
+            if not isinstance(splitter, SlotSplitter) and (panes := splitter.panes()) and all(
+                    p.has_class("slot") for p in panes):
                 splitter.apply(splitter.fraction)
+        self.lay_columns()
         self.refit()
+
+    # a column's slots (columns.py, #111): one rule for any column
+
+    def lay_columns(self) -> None:
+        """Each column of slots laid out: an empty slot hidden, a compact one at its own rows,
+        and the rest by their weights (columns.weights), or the stylesheet's sizes while the
+        column has none kept, one slot at least taking what's left so the column is filled.
+        Each splitter joined to the two weighted slots it moves rows between, or hidden."""
+        if not self.screen_stack:
+            return
+        for column in self.screen_stack[0].query(".column"):
+            splitters = [w for w in column.children if isinstance(w, SlotSplitter)]
+            if not splitters:
+                continue
+            slots = list(column.query(".slot"))
+            shown = [s for s in slots if s.display]
+            weighted = [s for s in shown if not s.has_class("-compact")]
+            by_name = {s.name: s for s in slots}
+            for splitter, pair in zip(splitters, columns.pairs([s.name for s in slots], {s.name for s in weighted})):   # each before its slot
+                splitter.pair = (by_name[pair[1]], by_name[pair[0]]) if pair else None
+                splitter.display = pair is not None
+            if not weighted:
+                continue
+            room = (column.size.height - sum(1 for s in splitters if s.display)
+                    - sum(compact_rows(place) for place in shown if place.has_class("-compact")))
+            weights = columns.weights([s.name for s in weighted], self.weights)
+            if weights is None:   # none kept: the stylesheet's sizes, to the row
+                weights = columns.styled([styled_size(place) for place in weighted], room, column.size.height)
+            if room > 0:
+                for place, n in zip(weighted, columns.rows(room, weights, [least(place) for place in weighted])):
+                    place.styles.height = n
+
+    def column_heights(self, column_id: str) -> dict[str, int]:
+        """Each weighted slot's rows in a column now, as a drag there begins (SlotSplitter)."""
+        column = self.screen_stack[0].query_one(f"#{column_id}")
+        return {s.name: s.outer_size.height for s in column.query(".slot") if s.display and not s.has_class("-compact")}
+
+    def drag_column(self, column_id: str, above: str, below: str, delta: int, heights: dict[str, int]) -> None:
+        """A splitter dragged `delta` rows from where it began: the column weighed by the rows
+        its slots have, those two alone moved (columns.dragged), so the line follows the pointer."""
+        column = self.screen_stack[0].query_one(f"#{column_id}")
+        least_of = {s.name: least(s) for s in column.query(".slot")}
+        self.weights = {**self.weights, **columns.dragged(heights, above, below, delta, least_of)}
+        self.lay_columns()
+
+    @on(SlotSplitter.Weighed)
+    def keep_weights(self, event: SlotSplitter.Weighed) -> None:
+        """A column's weights kept for next time; a double-click: its defaults back."""
+        if event.reset:
+            column = self.screen_stack[0].query_one(f"#{event.splitter.column}")
+            gone = {s.name for s in column.query(".slot")}
+            self.weights = {k: v for k, v in self.weights.items() if k not in gone}
+            self.lay_columns()
+        self.client.set_setting(LAYOUT + columns.WEIGHTS_KEY, json.dumps(self.weights) if self.weights else None)
 
     def action_reset_layout(self) -> None:
         """Reset layout, in the command palette: every pane in its default slot and every
@@ -5037,6 +5108,8 @@ class WheelhouseApp(App):
         for splitter in self.screen_stack[0].query(Splitter):
             splitter.apply(None)
             self.client.set_setting(LAYOUT + splitter.key, None)
+        self.weights = {}
+        self.client.set_setting(LAYOUT + columns.WEIGHTS_KEY, None)
         self.relaid()
         self.notify("Layout reset: every pane in its default place.")
 

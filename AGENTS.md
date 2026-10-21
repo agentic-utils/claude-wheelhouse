@@ -63,6 +63,10 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `prs.py`: PR items (kind `pr`, ref `PR<number>`), found in the same transcripts
   (`PrWatcher`, run after the subagents' in `Hub.sync_agents`), and a pull request URL's
   parsing; GitHub's state comes from the PRs module through `Context.set_pr_states`.
+- `columns.py`: how a column's slots share its rows, one rule for any column (weights per
+  slot, kept as `layout.weights`; a splitter, `splitter.SlotSplitter`, between neighbouring
+  weighted slots; the old splitter shares migrated once). `WheelhouseApp.lay_columns` applies
+  it. Never imports Textual.
 - `rows.py`: each item kind's colour (`KIND_COLOUR`) and a list row's full text on hover
   (`RowTips`), shared with the modules through `api.py`. Never imports Textual.
 - `transcript.py`: a session's conversation, read from its Claude Code transcript.

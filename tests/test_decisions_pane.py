@@ -244,9 +244,8 @@ async def test_no_decisions_shrinks_the_pane_to_its_note(store, sid, tmp_path, m
 async def test_no_column_has_blank_rows_wherever_the_decisions_go(store, sid, tmp_path, middle_of_two, onto, adrs):
     """Swapped with each other pane, with and without decisions found: every column filled
     by its slots and every slot by its panes. With none found the pane shrinks to its note
-    in a column of two (the middle one) or below the top of one of three (the left-hand
-    one, #111); alone in its column (Detail's) or at the top of three, it keeps its size,
-    and no splitter is pinned by it."""
+    in any column of two slots or more (#111: one rule); alone in its column (Detail's) it
+    keeps its size."""
     repo(tmp_path, ADRS if adrs else {})
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -263,18 +262,18 @@ async def test_no_column_has_blank_rows_wherever_the_decisions_go(store, sid, tm
             widget = pane_widget(app, each)
             assert widget.outer_size.height == widget.parent.size.height, f"<->{onto}, adrs {adrs}: {each} fills its slot"
         p = app.query_one("#design")
-        paired = onto not in ("sessions", "detail")   # a column's sized slot; not left.top, nor alone (#111)
+        paired = onto != "detail"   # in any column of two slots or more, not alone (#111)
         assert p.compact is not adrs, f"<->{onto}: compact only with none found"
-        assert (p.region.height == 3) is (not adrs and paired), f"<->{onto}, adrs {adrs}: shrunk only in a sized slot"
+        assert (p.region.height == 3) is (not adrs and paired), f"<->{onto}, adrs {adrs}: shrunk only beside another slot"
         squeezed = [s.id for s in app.query(".slot") if s.has_class("-compact")]
         assert squeezed == ([p.parent.id] if not adrs and paired else []), f"<->{onto}, adrs {adrs}: {squeezed}"
 
 
 @pytest.mark.anyio
 async def test_a_drag_beside_a_compact_pane_is_not_kept(store, sid, tmp_path, middle_of_two):
-    """The splitter between the inbox and the Decisions, shrunk to its note, moves nothing:
-    a drag is ignored, and once a decision appears the inbox has the share it had."""
-    from textual import events
+    """No splitter lies beside the Decisions shrunk to their note (columns.pairs: a compact
+    slot has none), so nothing is dragged or kept; once a decision appears the inbox has the
+    share it had."""
     from test_tui import splitter
     repo(tmp_path, {})
     app = WheelhouseApp(store)
@@ -283,18 +282,9 @@ async def test_a_drag_beside_a_compact_pane_is_not_kept(store, sid, tmp_path, mi
         await pilot.pause()
         p, inbox = app.query_one("#design"), pane_widget(app, "items")
         assert p.compact and p.region.height == 3, "shrunk to its note"
-        sp = splitter(app, "middle-bottom")
-        before, roomy = sp.fraction, inbox.region.height
-        x, y = sp.region.offset
-        await pilot.mouse_down(sp)
-        app.post_message(events.MouseMove(None, x, 8, 0, 8 - y, button=1, shift=False, meta=False,
-                                          ctrl=False, screen_x=x, screen_y=8))
-        await pilot.pause()
-        await pilot.mouse_up(None, (x, 8))
-        await pilot.pause()
-        assert not sp.has_class("-dragging") and sp.fraction == before, "no drag, nothing kept"
-        assert inbox.region.height == roomy, "the inbox as it was"
-        assert app.client.setting(LAYOUT + "middle-bottom") is None, "nothing stored"
+        assert not splitter(app, "middle-bottom").display, "no splitter beside it"
+        assert inbox.region.height + 3 == app.query_one("#col-middle").size.height, "the inbox has the rest, no splitter row"
+        assert app.client.setting(LAYOUT + "weights") is None, "nothing stored"
         repo(tmp_path, ADRS)
         p.asked_at -= pane.EVERY
         await settled(app, pilot)
@@ -303,12 +293,12 @@ async def test_a_drag_beside_a_compact_pane_is_not_kept(store, sid, tmp_path, mi
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("name, moved", [("left-middle", "stats"), ("left-bottom", "session-info")])
+@pytest.mark.parametrize("name, moved", [("left-bottom", "session-info")])
 async def test_a_drag_in_the_left_column_with_the_empty_decisions_on_top(store, sid, tmp_path, every_module,
                                                                        name, moved):
-    """Review r3: the Decisions, none found, swapped onto the Sessions' slot (left.top, which
-    both left-hand splitters size against) keep their size, and each splitter there drags and
-    is kept as ever: nothing is pinned until a decision appears."""
+    """Review r3, and #111's one rule: the Decisions, none found, swapped onto the Sessions'
+    slot (left.top) shrink to their note there too, with no splitter beside them; the one
+    between the other two drags and is kept."""
     from textual import events
     from test_tui import splitter
     repo(tmp_path, {})
@@ -319,7 +309,8 @@ async def test_a_drag_in_the_left_column_with_the_empty_decisions_on_top(store, 
         await pilot.pause()
         await pilot.pause()
         p, widget = app.query_one("#design"), pane_widget(app, moved)
-        assert p.compact and p.parent.id == "slot-left-top" and p.region.height > 3, "its size kept on left.top"
+        assert p.compact and p.parent.id == "slot-left-top" and p.region.height == 3, "at its note on left.top"
+        assert not splitter(app, "left-middle").display, "no splitter beside it"
         sp = splitter(app, name)
         before, height = sp.fraction, widget.region.height
         x, y = sp.region.offset
@@ -329,8 +320,8 @@ async def test_a_drag_in_the_left_column_with_the_empty_decisions_on_top(store, 
         await pilot.pause()
         await pilot.mouse_up(None, (x, y - 4))
         await pilot.pause()
-        assert sp.fraction != before and widget.region.height != height, f"{name}: dragged ({height} rows before)"
-        assert app.client.setting(LAYOUT + name) is not None, f"{name}: kept"
+        assert widget.region.height == height + 4, f"{name}: dragged 4 rows ({height} before)"
+        assert app.client.setting(LAYOUT + "weights") is not None, f"{name}: kept"
 
 
 @pytest.mark.anyio
@@ -344,9 +335,8 @@ async def test_the_note_fits_one_row_when_compact_comes_without_a_resize(store, 
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         p, note = app.query_one("#design"), app.query_one("#decisions-note")
-        sp = splitter(app, "middle-bottom")   # it sizes the Decisions (#111): to their border and a row
-        room = sp.room()
-        sp.apply((3 + NUDGE) / room)
+        heights = app.column_heights("col-middle")   # dragged down to their border and a row (#111)
+        app.drag_column("col-middle", "middle.top", "middle.bottom", heights["middle.bottom"] - 3, heights)
         await pilot.pause()
         await pilot.pause()
         assert not p.compact and p.region.height == 3 and not note.has_class("-one-row"), "dragged small"

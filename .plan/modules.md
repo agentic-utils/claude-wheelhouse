@@ -18,7 +18,7 @@ editor behaviour in Q106 (below); the inbox stays core (Q107).
 
 ## The layout
 
-Seven slots in three columns (six until #111 gave the middle column a third, `middle.middle`, for the PRs pane). The splitters stay where they are today and size slots, not
+Seven slots in three columns (six until #111 gave the middle column a third, `middle.middle`, for the PRs pane). A column's slots share its rows by one rule, `columns.py`: weights per slot, a splitter between each pair of neighbouring weighted slots. The splitters stay where they are today and size slots, not
 panes, so a swap keeps each slot's size. Default panes:
 
 ```

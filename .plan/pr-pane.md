@@ -169,18 +169,19 @@ third row, as the left has, so there are seven slots (Doug: "just introduce a th
 the middle column, giving us 7 slots in total, then we have one available for PRs").
 Decisions keeps `middle.bottom`, shown as today; nothing is hidden.
 
-- As the left column: the inbox takes what the others leave, and each splitter sizes the
-  slot below it against the inbox (`middle-middle` the PRs, 25% by default; `middle-bottom`
-  the Decisions, 35%). A splitter hides only with its own slot, so with Decisions absent the
-  PRs' still shows, and a drag moves its line by as many rows as the pointer. The old
-  `middle-top` share (the inbox's, against Decisions) becomes `middle-bottom`'s (1 minus
-  it) on first start, then is deleted, so a split the person dragged to stays.
-- With nothing to show, Decisions shrink to their note here too (`fit_compact`: a column of
-  two, or a sized slot of three), and the inbox takes the room.
-- Upgrading: a saved `layout.slots` names six slots. Every pane it names stays where it was;
-  PRs, which it doesn't name, takes its default slot, empty in any saved layout
-  (`tui.arrange`'s rule). Without the module, `middle.middle` is empty and collapses, with its
-  splitter, and the column is as before.
+- Every column follows one rule (`columns.py`): an empty slot is hidden, a compact one (an
+  empty Decisions) keeps its own rows, and the rest share what's left by their weights, each
+  at least its minimum. Until the person drags, the weights are the stylesheet's sizes in
+  rows (the inbox and Decisions halves as before, the PRs 20%), the first slot shown taking
+  what's left, so a person who never dragged sees today's layout plus the PRs.
+- A splitter lies between each pair of neighbouring weighted slots, none beside a compact
+  one; a drag moves rows between those two alone, its line on the pointer's row. The
+  weights are kept per slot (`layout.weights`); a double-click puts the column's defaults back.
+- Upgrading: the old splitter shares become weights once. The middle column's two-slot share
+  s (the inbox's) gives the inbox max(s, its default 0.4), the PRs 0.2 and the Decisions the
+  rest: at 160x40, s = 0.3 lays out 14, 7 and 14 rows, as the default does.
+- A saved `layout.slots` naming six slots loads as it was: PRs take the empty new slot
+  (`tui.arrange`'s rule).
 - Swapping by a pane's title works across the new slot as across any other.
 
 ### One call, cached in the daemon

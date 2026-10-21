@@ -5118,6 +5118,9 @@ def sized(app, key: str) -> int:
     return sp.extent(sp.panes()[0])
 
 
+SLOT_SPLITTERS = {"left-middle", "left-bottom", "middle-middle", "middle-bottom"}   # columns.py's
+
+
 async def drag(pilot, key: str, dx: int, dy: int) -> None:
     sp = splitter(pilot.app, key)
     x, y = sp.region.offset
@@ -5154,7 +5157,8 @@ async def test_dragging_a_splitter_resizes_and_is_kept(store, sid, key, dx, dy, 
         after = sized(app, key)
         assert after - before == change, desc
         assert not splitter(app, key).has_class("-dragging"), desc
-    assert store.setting("layout." + key) is not None, f"{desc}: kept"
+    kept = "layout." + ("weights" if key in SLOT_SPLITTERS else key)   # a column's slots: their weights (#111)
+    assert store.setting(kept) is not None, f"{desc}: kept"
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, rows)) as pilot:
         await pilot.pause()
@@ -5162,7 +5166,7 @@ async def test_dragging_a_splitter_resizes_and_is_kept(store, sid, key, dx, dy, 
         await pilot.double_click(splitter(app, key))
         await pilot.pause()
         assert sized(app, key) == before, f"{desc}: a double-click puts the default back"
-    assert store.setting("layout." + key) is None, desc
+    assert store.setting(kept) is None, desc
 
 
 @pytest.mark.anyio
@@ -5295,11 +5299,9 @@ async def test_the_left_column_rows(store, sid, size, rows, desc):
     ({"items": "0.5"}, {"items": None}, "the old items-over-stats share: deleted, and sizes nothing"),
     ({"detail-pane": "0.3"}, {"detail-pane": None}, "the old Detail column share: deleted"),
     ({"session-info": "0.7"}, {"session-info": None}, "the old description-in-sessions share: deleted"),
-    ({"middle-top": "0.3"}, {"middle-top": None, "middle-bottom": "0.700000"},
-     "the old Inbox-over-Decisions share (#111): the Decisions' now, kept, not applied over an empty slot"),
-    ({"middle-top": "0.3", "middle-bottom": "0.2"}, {"middle-top": None, "middle-bottom": "0.2"},
-     "a share already kept for the Decisions wins over the old one"),
-    ({"middle-bottom": "0.4"}, {"middle-bottom": "0.4"}, "a share for an empty slot: kept, not applied"),
+    ({"middle-top": "0.3"}, {"middle-top": None, "weights": '{"middle.top": 0.4, "middle.middle": 0.2, "middle.bottom": 0.4}'},
+     "the old Inbox-over-Decisions share (#111): weights now, the inbox at least its default, over empty slots"),
+    ({"weights": '{"middle.bottom": 0.9}'}, {"weights": '{"middle.bottom": 0.9}'}, "a weight for an empty slot: kept, not applied"),
 ])
 async def test_the_inbox_fills_its_column_whatever_was_stored(store, sid, stored, kept, desc):
     """Review of #86: a share kept for a splitter beside a collapsed slot left half the Inbox
