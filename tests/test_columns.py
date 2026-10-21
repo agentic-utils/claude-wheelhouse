@@ -213,8 +213,10 @@ class Column(RuleBasedStateMachine):
             scaled = any(real[o] > least[o] + 1e-9 or least[o] / ws[o] < (real[above] + real[below]) / total
                          for o in others)
             assert now_total >= total * (1 - 1e-9), "the pair's weights never lose weight to the others"
-            kept_sum = abs(now_total - total) <= 1e-9 * total
-            assert kept_sum or (held & {above, below} and scaled), \
+            # by the state the drag began in, not by what dragged() gave: the sum is kept unless one
+            # of the pair was held at its least and another slot holds the scale
+            kept_sum = not (held & {above, below} and scaled)
+            assert not kept_sum or abs(now_total - total) <= 1e-9 * total, \
                 "the pair's weights keep their sum, unless one was held at its least and another holds the scale"
             for _ in range(4):   # never reversed, in any other state at any height, nor the others moved
                 height, other = self.other_states(data)
