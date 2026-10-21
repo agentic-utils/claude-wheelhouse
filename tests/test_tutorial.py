@@ -334,18 +334,43 @@ async def test_a_callout_keeps_clear_of_what_its_step_needs(store, tut, every_mo
                 f"{where}: {box} clear of its pane {pane.region}"
 
 
-@pytest.mark.parametrize("stop, more", [("docs", 3), ("docs", 12), ("inbox", 12), ("decision", 12)])
+@pytest.mark.parametrize("stop, more, end", [("docs", 3, None), ("docs", 12, None), ("inbox", 12, "esc"),
+                                             ("decision", 12, "esc"), ("decision", 12, "done")])
 @pytest.mark.anyio
-async def test_a_step_scrolls_the_rows_it_needs_into_sight(store, tut, every_module, stop, more):
+async def test_a_step_scrolls_the_rows_it_needs_into_sight(store, tut, every_module, stop, more, end):
     """Q152: the inbox shares an empty Decisions' room with the PRs, so at 80x24 it's short;
     with more items than it shows, the step's rows (tour.ROWS) are scrolled into sight as it
-    starts, wherever they sort."""
+    starts, wherever they sort. `end`: the tour then ended with Esc, or finished, the inbox
+    back where the person had it, their cursor row in sight."""
     fill_demo(store, tut, more)
     app = WheelhouseApp(store)
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
-        _, _, every, mine = await demo_at(app, pilot, store, tut, stop)
+        app.follow(tut)   # as launching it does
+        await pilot.pause()
+        items = app.query_one("#items")
+        items.focus()
+        items.move_cursor(row=items.row_count - 1)   # at the bottom: scrolled to its end
+        await pilot.pause()
+        await pilot.pause()
+        before = items.scroll_offset.y
+        tour_at(app, stop, tut)
+        await pilot.pause()
+        every, mine = callout.rows(app.screen, tut, ROWS.get(stop, ()))
         assert mine is not None and every.contains_region(mine), f"{stop} with {more} more: its rows in sight"
+        if end is None:
+            return
+        assert items.scroll_offset.y != before, f"{stop}: scrolled to its rows"
+        if end == "esc":
+            await pilot.press("escape")
+        else:
+            app.tour.at = len(app.tour.stops)
+            app.show_tour()
+        await pilot.pause()
+        assert app.tour is None, f"{stop}: the tour over ({end})"
+        assert items.scroll_offset.y == before, f"{stop}, {end}: the inbox back where it was"
+        assert before <= items.cursor_row < before + items.scrollable_content_region.height - 1, \
+            f"{stop}, {end}: the cursor row in sight"
 
 
 @pytest.mark.parametrize("stop, size", [("answer", (160, 40)), ("stats", (100, 30)), ("reply", (80, 24)),

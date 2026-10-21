@@ -3792,6 +3792,7 @@ class WheelhouseApp(App):
         self.client.listen(self.heard)
         self.tour: Tour | None = None   # the tour under way (tour.py), painted by show_tour
         self.tour_showing: tuple | None = None   # what show_tour last painted: (dialog id, text)
+        self.inbox_scroll: float | None = None   # the inbox's scroll before a tour step first moved it (callout.bring)
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="title-row"):
@@ -5463,6 +5464,7 @@ class WheelhouseApp(App):
         self.client.tour_at(tour.where())   # kept as it goes: a pause, or quitting, never loses it
         if stop is None:
             self.tour = None
+            self.restore_inbox()
             self.paint_badge()
             return
         if tour.kind == TOUR or stop.id == "notes":   # a top-up's dialog counts once passed (passed)
@@ -5473,7 +5475,21 @@ class WheelhouseApp(App):
             notes = whatsnew.since(tour.notes_seen) if tour.kind == TOPUP else whatsnew.this_release()
             self.push_screen(TourNotes(text, notes), self.tour_answered)
         else:
-            main.mount(TourCallout(stop.pane, text, next=nxt, keep=tour.sid or None, kinds=tour_rows.get(stop.id, ())))
+            main.mount(TourCallout(stop.pane, text, next=nxt, keep=tour.sid or None, kinds=tour_rows.get(stop.id, ()),
+                                   scrolled=self.tour_scrolled))
+
+    def tour_scrolled(self, was: float) -> None:
+        """A tour step scrolled the inbox to its rows: where it was before the first, kept to put
+        back as the tour ends (restore_inbox), the person's place and cursor in sight again."""
+        if self.inbox_scroll is None:
+            self.inbox_scroll = was
+
+    def restore_inbox(self) -> None:
+        """The tour over, finished or ended with Esc: the inbox back where it was before a step
+        scrolled it."""
+        was, self.inbox_scroll = self.inbox_scroll, None
+        if was is not None and (found := self.screen_stack[0].query("#items")):
+            found.first().scroll_to(y=was, animate=False, immediate=True)
 
     def passed(self) -> None:
         """Next on a top-up's dialog: its tips count as seen now, not as it showed, so one paused
@@ -5522,6 +5538,7 @@ class WheelhouseApp(App):
         if tour is None:
             return
         self.drop_callouts(list(self.screen_stack[0].query(TourCallout)))
+        self.restore_inbox()
         self.client.tour_at(None)
         main = self.screen_stack[0]   # what it would have shown (Tour.shown): an absent pane's features stay pending
         here = offered(whatsnew.pending((), self.client.sdk, tour.features), lambda pane: callout.find(main, pane) is not None)
