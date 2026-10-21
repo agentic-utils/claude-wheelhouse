@@ -5158,7 +5158,8 @@ async def test_dragging_a_splitter_resizes_and_is_kept(store, sid, key, dx, dy, 
         assert after - before == change, desc
         assert not splitter(app, key).has_class("-dragging"), desc
     kept = "layout." + ("weights" if key in SLOT_SPLITTERS else key)   # a column's slots: their weights (#111)
-    assert store.setting(kept) is not None, f"{desc}: kept"
+    assert (store.setting(kept) is not None) is (bool(change) or key not in SLOT_SPLITTERS), \
+        f"{desc}: kept, unless a column's line didn't move (columns.dragged)"
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, rows)) as pilot:
         await pilot.pause()
@@ -5281,8 +5282,8 @@ async def test_detail_keeps_its_room_on_a_narrow_terminal(store, sid, width, sto
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("size, rows, desc", [
-    ((160, 40), (12, 11, 12), "40 rows: the session list keeps a share, the stats too small for a chart"),
-    ((200, 60), (21, 17, 17), "60 rows: the session list grows most"),
+    ((160, 40), (13, 10, 12), "40 rows: the session list keeps a share, the stats too small for a chart"),
+    ((200, 60), (22, 17, 16), "60 rows: the session list grows most (columns.DEFAULT's shares)"),
 ])
 async def test_the_left_column_rows(store, sid, size, rows, desc):
     """Review of #86: Sessions, Stats and Session info, top to bottom; the session list

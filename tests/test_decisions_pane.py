@@ -335,8 +335,8 @@ async def test_the_note_fits_one_row_when_compact_comes_without_a_resize(store, 
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         p, note = app.query_one("#design"), app.query_one("#decisions-note")
-        heights = app.column_heights("col-middle")   # dragged down to their border and a row (#111)
-        app.drag_column("col-middle", "middle.top", "middle.bottom", heights["middle.bottom"] - 3, heights)
+        bottom = app.query_one("#slot-middle-bottom").outer_size.height   # dragged down to their border and a row (#111)
+        app.drag_column("col-middle", "middle.top", "middle.bottom", bottom - 3, dict(app.weights))
         await pilot.pause()
         await pilot.pause()
         assert not p.compact and p.region.height == 3 and not note.has_class("-one-row"), "dragged small"

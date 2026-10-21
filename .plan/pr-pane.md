@@ -170,18 +170,22 @@ the middle column, giving us 7 slots in total, then we have one available for PR
 Decisions keeps `middle.bottom`, shown as today; nothing is hidden.
 
 - Every column follows one rule (`columns.py`): an empty slot is hidden, a compact one (an
-  empty Decisions) keeps its own rows, and the rest share what's left by their weights, each
-  at least its minimum. Until the person drags, the weights are the stylesheet's sizes in
-  rows (the inbox and Decisions halves as before, the PRs 20%), the first slot shown taking
-  what's left, so a person who never dragged sees today's layout plus the PRs.
+  empty Decisions) keeps its own rows, and the rest share what's left in proportion to
+  their weights, each at least its minimum, each line on the row nearest it. A slot with no
+  weight kept weighs its default share (the stylesheet's with every slot shown: inbox and
+  Decisions 40%, the PRs 20%), so a person who never dragged sees today's layout plus the
+  PRs; with a slot compact or hidden, its room goes to the others in proportion (an empty
+  Decisions: the inbox twice the PRs).
 - A splitter joins each pair of neighbouring weighted slots, sitting just above the lower
-  one (so it may lie beside a compact slot between them); a drag moves rows between those two alone, its line on the pointer's row. The
+  one (so it may lie beside a compact slot between them); a drag sets those two slots'
+  weights alone, its line on the pointer's row, every other slot keeping its rows. The
   weights are kept per slot (`layout.weights`); a double-click puts the column's defaults back.
 - Upgrading: the splitter shares kept before are deleted, and each column starts from its
   defaults (Doug, review 3: a person who once dragged a splitter drags it again once).
-- Weights are unitless, in one scale (each slot's default share): a drag sets the shown
-  slots' weights to their rows in that scale, so a slot compact or absent meanwhile comes
-  back at its default.
+- Weights are in one unit, and being compact or hidden is applied at layout only, never
+  written back (review 4, rethought with property tests, `tests/test_columns.py`): a slot
+  coming or going changes no weight, the others keep their proportions, and a drag's
+  direction holds whatever comes or goes after it.
 - A saved `layout.slots` naming six slots loads as it was: PRs take the empty new slot
   (`tui.arrange`'s rule).
 - Swapping by a pane's title works across the new slot as across any other.

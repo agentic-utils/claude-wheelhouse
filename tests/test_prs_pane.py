@@ -177,7 +177,8 @@ async def test_prs_without_the_decisions_keep_their_splitter_and_it_tracks_the_p
 @pytest.mark.anyio
 async def test_an_empty_decisions_pane_leaves_the_inbox_its_room(store, sid, tmp_path, every_module):
     """The shipped default with no ADRs: the Decisions shrink to their note in the middle
-    column's three slots too, and the inbox takes what they give up."""
+    column's three slots too, and the inbox and the PRs share what they give up, by their
+    weights (columns.py): the inbox twice the PRs' rows."""
     (tmp_path / ".git").mkdir()
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -185,6 +186,6 @@ async def test_an_empty_decisions_pane_leaves_the_inbox_its_room(store, sid, tmp
         await pilot.pause()
         design, inbox, prs_pane = app.query_one("#design"), app.query_one("#items-pane"), app.query_one("#prs")
         assert design.compact and design.region.height == 3, "the Decisions at their border and note"
-        assert inbox.region.height > 2 * prs_pane.region.height, "the inbox has the room"
+        assert inbox.region.height >= 2 * prs_pane.region.height, "the inbox has the room"
         column = app.query_one("#col-middle")
         assert sum(w.outer_size.height for w in column.children if w.display) == column.size.height, "no gap"

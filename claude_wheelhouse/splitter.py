@@ -85,7 +85,7 @@ class Splitter(Widget):
 
     def compact(self) -> tuple[bool, bool]:
         """Whether each pane is compact (class -compact: a slot shrunk to its panes' least
-        rows while they have nothing to show, only in a column of two slots,
+        rows while they have nothing to show, beside a slot in its column that isn't,
         WheelhouseApp.fit_compact). Then nothing here is sized (wanted): a compact pane keeps
         the rows the app gave it, and with the flexing pane compact the sized one flexes
         instead, its share kept for when it isn't, so the room goes to it and not to a gap.
@@ -186,9 +186,10 @@ class Splitter(Widget):
 class SlotSplitter(Splitter):
     """A splitter in a column of slots (columns.py, #111): the app joins it to the two
     weighted slots it moves rows between (`pair`: below, above, as panes() gives the sized one
-    first), or to none, when it is hidden. A drag hands the app the rows each slot would have
-    (WheelhouseApp.drag_column), its line following the pointer to the row; its end, and a
-    double-click (the column's defaults back), post Weighed for the app to keep."""
+    first), or to none, when it is hidden. A drag hands the app how far the pointer has moved
+    and the weights as it began (WheelhouseApp.drag_column, columns.dragged), its line
+    following the pointer to the row; its end, and a double-click (the column's defaults
+    back), post Weighed for the app to keep."""
 
     class Weighed(Message):
         """A drag ended, or a double-click put the column's defaults back (reset)."""
@@ -201,7 +202,7 @@ class SlotSplitter(Splitter):
         super().__init__(key, "", "", "y", **kwargs)
         self.column = column   # its column's id
         self.pair: tuple[Widget, Widget] | None = None
-        self.heights: dict[str, int] | None = None   # each weighted slot's rows as the drag began
+        self.kept: dict[str, float] | None = None   # the weights as the drag began
 
     def panes(self) -> tuple[Widget, Widget] | None:
         return self.pair
@@ -219,7 +220,7 @@ class SlotSplitter(Splitter):
         if event.button != 1 or self.pair is None:
             return
         event.stop()
-        self.heights = self.app.column_heights(self.column)
+        self.kept = dict(self.app.weights)
         self.drag = (self.pointer(event), 0, 0)
         self.moved = False
         self.capture_mouse()
@@ -231,15 +232,15 @@ class SlotSplitter(Splitter):
         if not event.button:   # the release was lost (outside the terminal, say): it ends here
             self.end_drag()
             return
-        if self.pair is None or self.heights is None:
+        if self.pair is None or self.kept is None:
             return
         below, above = self.pair
         delta = self.pointer(event) - self.drag[0]
         self.moved = self.moved or bool(delta)
-        self.app.drag_column(self.column, above.name, below.name, delta, self.heights)
+        self.app.drag_column(self.column, above.name, below.name, delta, self.kept)
 
     def end_drag(self) -> None:
-        self.drag = self.heights = None
+        self.drag = self.kept = None
         self.release_mouse()
         self.remove_class("-dragging")
         if self.moved:

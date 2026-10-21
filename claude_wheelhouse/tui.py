@@ -169,14 +169,6 @@ def arrange(saved: dict[str, str], defaults: dict[str, str]) -> dict[str, str]:
     return out
 
 
-def styled_size(place: Widget) -> tuple[str, float]:
-    """A slot's height as the stylesheet gives it: ("%", its share of the column) or ("fr", n)."""
-    base = place.styles.base.height
-    if base is not None and base.unit in (Unit.PERCENT, Unit.HEIGHT):   # a height's % is the parent's (h)
-        return "%", base.value
-    return "fr", base.value if base is not None and base.unit == Unit.FRACTION else 1.0
-
-
 def least(place: Widget) -> int:
     """The fewest rows a slot keeps: its min-height, the stylesheet's or its panes' (fit_panes)."""
     scalar = place.styles.min_height
@@ -3583,8 +3575,9 @@ class WheelhouseApp(App):
     #col-left {{ width: 45; min-width: 12; }}   /* names take the room the other columns leave (name_room) */
     #col-middle {{ width: 45; min-width: 12; }}
     #col-right {{ width: 1fr; min-width: 12; }}
-    /* the slots in a column: the top one takes what the others leave, about 12, 11 and 12
-       rows at 40 and 21, 17 and 17 at 60 (a chart under the gauges from about 50) */
+    /* the slots in a column, until lay_columns sizes them by their weights (columns.DEFAULT,
+       these shares with every slot shown): about 13, 10 and 12 rows at 40 and 22, 17 and 16
+       at 60 (a chart under the gauges from about 50) */
     #slot-left-top {{ height: 1fr; min-height: 3; }}   /* the sessions: 24 rows fit */
     #slot-left-middle {{ height: 30%; min-height: 1; }}   /* on a short terminal the stats give way first, to a row */
     #slot-left-bottom {{ height: 30%; min-height: 3; }}   /* session info */
@@ -5045,54 +5038,40 @@ class WheelhouseApp(App):
     # a column's slots (columns.py, #111): one rule for any column
 
     def lay_columns(self) -> None:
-        """Each column of slots laid out: an empty slot hidden, a compact one at its own rows,
-        and the rest by their weights (columns.weights), or the stylesheet's sizes while the
-        column has none kept, one slot at least taking what's left so the column is filled.
-        Each splitter joined to the two weighted slots it moves rows between, or hidden."""
+        """Each column of slots laid out by columns.lay: an empty slot hidden, a compact one at
+        its own rows, and the rest sharing what's left by their weights. Each splitter joined to
+        the two weighted slots it moves rows between, or hidden."""
         if not self.screen_stack:
             return
         for column in self.screen_stack[0].query(".column"):
             splitters = [w for w in column.children if isinstance(w, SlotSplitter)]
             if not splitters:
                 continue
-            slots = list(column.query(".slot"))
-            shown = [s for s in slots if s.display]
-            weighted = [s for s in shown if not s.has_class("-compact")]
-            by_name = {s.name: s for s in slots}
-            for splitter, pair in zip(splitters, columns.pairs([s.name for s in slots], {s.name for s in weighted})):   # each before its slot
-                splitter.pair = (by_name[pair[1]], by_name[pair[0]]) if pair else None
+            slots, places = self.column_slots(column)
+            weighted = {s.name for s in slots if s.own is None}
+            for splitter, pair in zip(splitters, columns.pairs([s.name for s in slots], weighted)):   # each before its slot
+                splitter.pair = (places[pair[1]], places[pair[0]]) if pair else None
                 splitter.display = pair is not None
-            if not weighted:
-                continue
-            room, weights = self.weighed(column, splitters, shown, weighted)
-            if room > 0:
-                for place, n in zip(weighted, columns.rows(room, weights, [least(place) for place in weighted])):
-                    place.styles.height = n
+            if weighted and columns.room(column.size.height, slots) > 0:
+                for name, n in columns.lay(column.size.height, slots, self.weights).items():
+                    if name in weighted:
+                        places[name].styles.height = n
 
-    def weighed(self, column: Widget, splitters: list, shown: list, weighted: list) -> tuple[int, list[float]]:
-        """A column's room to share (its rows less its splitters' and compact slots') and its
-        weighted slots' weights (columns.weights), the stylesheet's while none is kept."""
-        room = (column.size.height - sum(1 for s in splitters if s.display)
-                - sum(compact_rows(place) for place in shown if place.has_class("-compact")))
-        styled = columns.styled([styled_size(place) for place in weighted], room, column.size.height)
-        return room, columns.weights([s.name for s in weighted], self.weights, styled)
+    def column_slots(self, column: Widget) -> tuple[list[columns.Slot], dict[str, Widget]]:
+        """A column's slots as columns.py sees them (hidden: no rows of its own; compact: its
+        panes' least), and each slot's widget by name."""
+        places = {s.name: s for s in column.query(".slot")}
+        slots = [columns.Slot(name, least(place), None if place.display and not place.has_class("-compact")
+                              else compact_rows(place) if place.display else 0)
+                 for name, place in places.items()]
+        return slots, places
 
-    def column_heights(self, column_id: str) -> dict[str, int]:
-        """Each weighted slot's rows in a column now, as a drag there begins (SlotSplitter)."""
+    def drag_column(self, column_id: str, above: str, below: str, delta: int, kept: dict[str, float]) -> None:
+        """A splitter dragged `delta` rows from where it began, the weights then `kept`: those
+        two slots' weights set (columns.dragged), so the line follows the pointer."""
         column = self.screen_stack[0].query_one(f"#{column_id}")
-        return {s.name: s.outer_size.height for s in column.query(".slot") if s.display and not s.has_class("-compact")}
-
-    def drag_column(self, column_id: str, above: str, below: str, delta: int, heights: dict[str, int]) -> None:
-        """A splitter dragged `delta` rows from where it began: the column weighed by the rows
-        its slots have, those two alone moved (columns.dragged), so the line follows the pointer."""
-        column = self.screen_stack[0].query_one(f"#{column_id}")
-        slots = list(column.query(".slot"))
-        shown = [s for s in slots if s.display]
-        weighted = [s for s in shown if not s.has_class("-compact")]
-        splitters = [w for w in column.children if isinstance(w, SlotSplitter)]
-        _, now = self.weighed(column, splitters, shown, weighted)   # in DEFAULT's scale
-        to = columns.dragged(heights, above, below, delta, {s.name: least(s) for s in slots})
-        self.weights = {**self.weights, **columns.as_weights(to, sum(now))}
+        slots, _ = self.column_slots(column)
+        self.weights = columns.dragged(column.size.height, slots, kept, above, below, delta)
         self.lay_columns()
 
     @on(SlotSplitter.Weighed)

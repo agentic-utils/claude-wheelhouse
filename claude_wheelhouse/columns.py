@@ -1,25 +1,23 @@
 """How a column's slots share its rows (#111, .plan/modules.md): one rule for any column,
 without Textual.
 
-- Each visible slot that isn't compact has a weight; a compact one (a pane with nothing to
-  show, an empty Decisions) keeps its own rows; an empty slot is hidden. The weights share
-  what's left, each slot at least its minimum, to the row (`rows`).
-- A splitter joins each pair of neighbouring weighted slots (`pairs`), a compact or empty
-  slot between them or not: it sits just above the lower of the two, so it may lie beside a
-  compact one. Dragging it moves rows between those two alone (`dragged`), its line on the
-  pointer's row.
-- Weights are unitless, in one scale everywhere: DEFAULT's, each slot's share of its column.
-  Until the person drags, a column's weights are the stylesheet's sizes in rows (today's
-  layout, to the row), brought to that scale (`weights`). A drag sets the weighted slots'
-  weights to their rows, in that scale, keeping their total (`as_weights`): its two slots
-  trade rows, their sum kept, the others' rows unchanged, and a compact or hidden slot's
-  weight means what it did. Kept per slot
-  (`layout.weights`); a double-click puts the column's defaults back. A slot with none kept
-  weighs its DEFAULT share.
+- A slot is weighted (shown, sharing the column), compact (a pane with nothing to show, an
+  empty Decisions: it keeps its own few rows) or hidden (empty: none). Each has a weight,
+  kept per slot (`layout.weights`), else its DEFAULT; one unit everywhere, so a weight means
+  the same whichever other slots show.
+- The weighted slots share what the compact slots and the splitters leave in proportion to
+  their weights, each at least its least rows (`shares`), each line on the row nearest its
+  place (`rows`). Being compact or hidden is applied here and never written back: a slot
+  coming or going changes no weight, and the others keep their proportions.
+- A splitter joins each pair of neighbouring weighted slots, a compact or empty slot
+  between them or not (`pairs`): it sits just above the lower one. Dragging it sets those
+  two slots' weights alone (`dragged`), so their line lands on the pointer's row and every
+  other slot keeps its rows. A double-click drops the column's weights for DEFAULT's.
 """
 
 import json
 import math
+from typing import NamedTuple
 
 WEIGHTS_KEY = "weights"   # under layout.: {slot: weight}
 # each slot's share of its column as the stylesheet lays it out with every slot shown
@@ -29,34 +27,15 @@ DEFAULT = {"left.top": 0.4, "left.middle": 0.3, "left.bottom": 0.3,
 # the splitters' shares kept before weights, and the second round of #111's, never released:
 # deleted on start, each column starting from its defaults (a share dragged once is dragged again)
 OLD_KEYS = ("left-middle", "left-bottom", "middle-top", "middle-middle", "middle-bottom")
+EPS = 1e-6   # rows: a line a float's error under a half rounds as the half does, so it never flickers
 
 
-def rows(room: int, weights: list[float], minimums: list[int]) -> list[int]:
-    """`room` rows shared by `weights`, each at least its minimum, summing to `room` exactly
-    while the minimums fit (more than that: each its minimum). Largest remainder, the
-    earlier slot first on a tie, so the same weights always give the same rows."""
-    n = len(weights)
-    if not n:
-        return []
-    weights = [max(w, 0.0) if math.isfinite(w) else 0.0 for w in weights]
-    if sum(minimums) >= room:
-        return list(minimums)
-    fixed: dict[int, int] = {}
-    while True:   # a slot its share puts under its minimum takes the minimum, the rest share again
-        free = [i for i in range(n) if i not in fixed]
-        left = room - sum(fixed.values())
-        total = sum(weights[i] for i in free) or float(len(free))
-        share = {i: left * (weights[i] if sum(weights[i] for i in free) else 1.0) / total for i in free}
-        under = [i for i in free if share[i] < minimums[i]]
-        if not under:
-            break
-        for i in under:
-            fixed[i] = minimums[i]
-    out = {i: math.floor(share[i]) for i in share}
-    spare = left - sum(out.values())
-    for i in sorted(share, key=lambda i: (-(share[i] - out[i]), i))[:spare]:
-        out[i] += 1
-    return [fixed.get(i, out.get(i)) for i in range(n)]
+class Slot(NamedTuple):
+    """A slot as its column lays it out: its name, the fewest rows it keeps while weighted,
+    and the rows it keeps itself, if any (compact: its panes' least; hidden: 0)."""
+    name: str
+    least: int = 1
+    own: int | None = None   # None: weighted
 
 
 def pairs(slots: list[str], weighted: set[str]) -> list[tuple[str, str] | None]:
@@ -71,44 +50,97 @@ def pairs(slots: list[str], weighted: set[str]) -> list[tuple[str, str] | None]:
     return out
 
 
-def dragged(heights: dict[str, int], above: str, below: str, delta: int, minimums: dict[str, int]) -> dict[str, int]:
-    """The rows each weighted slot has once a splitter's line has moved `delta` rows down
-    (up, negative) from where the drag began, `heights`: those two slots alone change, and
-    neither goes under its minimum."""
-    a, b = heights[above], heights[below]
-    moved = max(minimums[above] - a, min(delta, b - minimums[below]))
-    return {**heights, above: a + moved, below: b - moved}
+def shares(room: int, weights: list[float], minimums: list[int]) -> tuple[list[float], float]:
+    """`room` rows shared by `weights`, unrounded: each max(its minimum, weight x scale), the
+    scale the one that sums them to `room`, and that scale (0 when the minimums don't fit,
+    each at its minimum). A slot its share puts under its minimum takes the minimum, and the
+    rest share what that leaves, until none is under."""
+    if sum(minimums) >= room or not weights:
+        return [float(m) for m in minimums], 0.0
+    fixed: set[int] = set()
+    while True:
+        free = [i for i in range(len(weights)) if i not in fixed]
+        scale = (room - sum(minimums[i] for i in fixed)) / sum(weights[i] for i in free)
+        under = {i for i in free if weights[i] * scale < minimums[i]}
+        if not under:
+            return [float(minimums[i]) if i in fixed else weights[i] * scale for i in range(len(weights))], scale
+        fixed |= under
 
 
-def styled(sizes: list[tuple[str, float]], room: int, height: int) -> list[float]:
-    """The weights the stylesheet's sizes come to, in rows, for a column `height` rows tall with
-    `room` to share: a percentage of the column as it is, and the fr slots what that leaves,
-    by their fr. The first slot shown always takes what's left (as the top one does), so a
-    pane in a slot below an empty top one isn't held to that slot's percentage."""
-    if sizes and sizes[0][0] != "fr":   # the first shown takes what the others leave, as a top slot does
-        sizes = [("fr", 1.0)] + sizes[1:]
-    fixed = sum(v * height / 100 for unit, v in sizes if unit == "%")
-    frs = sum(v for unit, v in sizes if unit == "fr") or 1.0
-    rest = max(room - fixed, 0.0)
-    return [v * height / 100 if unit == "%" else rest * v / frs for unit, v in sizes]
+def rows(room: int, weights: list[float], minimums: list[int]) -> list[int]:
+    """The rows each slot has: its share (`shares`) with each line between two slots on the
+    row nearest it, so the rows sum to `room` (while the minimums fit; past that, each its
+    minimum) and a line moves only when the slots either side of it change."""
+    real, scale = shares(room, weights, minimums)
+    if not scale:
+        return list(minimums)
+    lines = [0] + [line(at) for at in tops(real)[1:]] + [room]
+    return [b - a for a, b in zip(lines, lines[1:])]
 
 
-def weights(slots: list[str], kept: dict[str, float], styled_rows: list[float]) -> list[float]:
-    """The weights of a column's weighted `slots`, in order, in DEFAULT's scale: those kept,
-    and DEFAULT's for a slot with none. With none of them kept, the stylesheet's rows
-    (`styled_rows`), brought to that scale: the same rows, in the same unit as any kept."""
-    if any(s in kept for s in slots):
-        return [kept.get(s, DEFAULT[s]) for s in slots]
-    scale = sum(DEFAULT[s] for s in slots) / (sum(styled_rows) or 1.0)
-    return [r * scale for r in styled_rows]
+def tops(real: list[float]) -> list[float]:
+    """Where each slot starts, unrounded, as `rows` and `dragged` both add them up."""
+    out, at = [], 0.0
+    for r in real:
+        out.append(at)
+        at += r
+    return out
 
 
-def as_weights(rows: dict[str, int], total: float) -> dict[str, float]:
-    """Weighted slots' rows as weights summing to `total` (the weights they had, in DEFAULT's
-    scale): each in proportion to its rows, so `rows` gives back exactly these rows, and any
-    other slot's weight, compact or hidden, keeps its meaning beside them."""
-    count = sum(rows.values()) or 1
-    return {slot: n * total / count for slot, n in rows.items()}
+def line(at: float) -> int:
+    """The row a line `at` (unrounded) is drawn on: the nearest, a half rounding down the column."""
+    return math.floor(at + 0.5 + EPS)
+
+
+def weights(slots: list[Slot], kept: dict[str, float]) -> list[float]:
+    """The weighted slots' weights, in order: each its kept, else DEFAULT's."""
+    return [kept.get(s.name, DEFAULT[s.name]) for s in slots if s.own is None]
+
+
+def room(height: int, slots: list[Slot]) -> int:
+    """The rows a column `height` tall has for its weighted slots: less its splitters
+    shown and the rows its compact slots keep."""
+    shown = sum(1 for p in pairs([s.name for s in slots], {s.name for s in slots if s.own is None}) if p)
+    return height - shown - sum(s.own for s in slots if s.own is not None)
+
+
+def lay(height: int, slots: list[Slot], kept: dict[str, float]) -> dict[str, int]:
+    """Each slot's rows in a column `height` tall: a weighted one's by its weight (`rows`),
+    a compact or hidden one's its own."""
+    weighted = [s for s in slots if s.own is None]
+    got = dict(zip([s.name for s in weighted],
+                   rows(room(height, slots), weights(slots, kept), [s.least for s in weighted])))
+    return {s.name: s.own if s.own is not None else got[s.name] for s in slots}
+
+
+def dragged(height: int, slots: list[Slot], kept: dict[str, float], above: str, below: str,
+            delta: int) -> dict[str, float]:
+    """`kept` once the splitter between the weighted slots `above` and `below` has moved
+    `delta` rows down (up, negative) from where `kept` lays it: those two slots' weights
+    alone are set, their unrounded rows summing to what they did, so the scale and every
+    other slot's share are as they were. The line lands on the pointer's row, or where
+    one of the two reaches its least rows. A slot left at its least keeps the weight it
+    had, if that's less, so a drag never makes a slot bigger anywhere for being shrunk."""
+    weighted = [s for s in slots if s.own is None]
+    names = [s.name for s in weighted]
+    if above not in names or names.index(above) + 1 >= len(names) or names[names.index(above) + 1] != below:
+        return kept   # not neighbouring weighted slots (a slot came or went mid-drag): nothing to move
+    i = names.index(above)
+    ws, least = weights(slots, kept), [s.least for s in weighted]
+    real, scale = shares(room(height, slots), ws, least)
+    if not scale or not delta:
+        return kept
+    top = tops(real)[i]   # where `above` starts, unrounded
+    now = line(top + real[i])
+    pair = real[i] + real[i + 1]
+    a = min(max(now + delta - top, least[i]), pair - least[i + 1])
+    if line(top + a) == now:   # either slot at its least already: nothing moves, nothing kept
+        return kept
+
+    def weight(n: int, rows_: float) -> float:
+        return min(ws[n], least[n] / scale) if rows_ <= least[n] + EPS else rows_ / scale
+
+    return {**kept, above: weight(i, a), below: weight(i + 1, pair - a)}
 
 
 def kept(raw: str | None) -> dict[str, float]:
@@ -120,4 +152,4 @@ def kept(raw: str | None) -> dict[str, float]:
     if not isinstance(value, dict):
         return {}
     return {k: float(v) for k, v in value.items() if k in DEFAULT and isinstance(v, (int, float))
-            and not isinstance(v, bool) and math.isfinite(v) and v >= 0}
+            and not isinstance(v, bool) and math.isfinite(v) and v > 0}

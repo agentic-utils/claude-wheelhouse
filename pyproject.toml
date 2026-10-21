@@ -23,7 +23,7 @@ dependencies = [
 claude-wheelhouse = "claude_wheelhouse.cli:main"
 
 [dependency-groups]
-dev = ["httpx2>=2.13", "pytest>=8", "pytest-xdist>=3.8"]
+dev = ["httpx2>=2.13", "hypothesis>=6.170.5", "pytest>=8", "pytest-xdist>=3.8"]
 # the modules in this repo (modules/), a group each: installed unless left out, as make
 # install WITH="..." does (.plan/modules.md)
 design = ["claude-wheelhouse-design"]

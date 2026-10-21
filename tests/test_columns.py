@@ -1,28 +1,29 @@
-"""A column's slots share its rows by one rule (columns.py, #111 review 2): the pure parts by
-table, then the app's columns in each arrangement, after drags and at two terminal sizes."""
+"""A column's slots share its rows by one rule (columns.py, #111): the pure parts by table,
+the rule's invariants by property over random sequences of drags, slots compacting,
+expanding, hiding and showing, resizes, resets and reloads, then the app's columns in each
+arrangement, after drags and at two terminal sizes."""
 
 import json
 
 import pytest
+from hypothesis import given, settings, strategies as st
+from hypothesis.stateful import RuleBasedStateMachine, initialize, invariant, precondition, rule
 
 from claude_wheelhouse import api, columns
+from claude_wheelhouse.columns import Slot
 from claude_wheelhouse.tui import LAYOUT, SLOTS_KEY, WheelhouseApp
-
-pytest.importorskip("claude_wheelhouse_prs", reason="installed without the prs module")
-pytest.importorskip("claude_wheelhouse_design", reason="installed without the design module")
-from conftest import SHIPPED_LOAD  # noqa: E402
 
 
 # the rule, without Textual
 
 @pytest.mark.parametrize("room, weights, minimums, expected, desc", [
-    (35, [1, 1, 1], [3, 3, 3], [12, 12, 11], "equal weights: the spare row to the first"),
-    (35, [12.8, 11.1, 11.1], [3, 1, 12], [12, 11, 12], "the stylesheet's at 40 rows: a minimum taken first"),
-    (55, [20.8, 17.1, 17.1], [3, 1, 12], [21, 17, 17], "the stylesheet's at 60 rows"),
-    (10, [1, 0], [3, 3], [7, 3], "a weight of nothing: its minimum"),
+    (35, [1, 1, 1], [3, 3, 3], [12, 11, 12], "equal weights: each line on its nearest row"),
+    (35, [0.4, 0.3, 0.3], [5, 1, 12], [13, 10, 12], "the left column at 40 rows: session info at its least"),
+    (35, [0.4, 0.2, 0.4], [3, 3, 3], [14, 7, 14], "the middle column at 40 rows, every slot shown"),
+    (33, [0.4, 0.2], [3, 3], [22, 11], "an empty Decisions: its room shared in proportion"),
     (5, [1, 1], [3, 3], [3, 3], "minimums past the room: each its minimum"),
+    (6, [1, 1], [3, 3], [3, 3], "minimums the room exactly"),
     (20, [], [], [], "no slots"),
-    (9, [float("nan"), 1], [1, 1], [1, 8], "a weight that isn't a number: none"),
 ])
 def test_rows(room, weights, minimums, expected, desc):
     got = columns.rows(room, weights, minimums)
@@ -44,40 +45,216 @@ def test_pairs(weighted, expected, desc):
     assert columns.pairs([T, M, B], weighted) == expected, desc
 
 
-H = {T: 14, M: 7, B: 14}
-LEAST = {T: 3, M: 3, B: 3}
+def middle(top=None, mid=None, bottom=None) -> list[Slot]:
+    """The middle column, each slot weighted (None), compact at its rows, or hidden (0)."""
+    return [Slot(T, 3, top), Slot(M, 3, mid), Slot(B, 3, bottom)]
 
 
-@pytest.mark.parametrize("above, below, delta, expected, desc", [
-    (T, M, 2, {T: 16, M: 5, B: 14}, "down: the inbox gains what the PRs give"),
-    (T, M, -4, {T: 10, M: 11, B: 14}, "up"),
-    (M, B, 3, {T: 14, M: 10, B: 11}, "the lower splitter: the Decisions give, the inbox untouched"),
-    (T, M, 9, {T: 18, M: 3, B: 14}, "never under a minimum"),
-    (T, B, -20, {T: 3, M: 7, B: 25}, "across a hidden slot, to the inbox's minimum"),
+@pytest.mark.parametrize("slots, kept, expected, desc", [
+    (middle(), {}, {T: 14, M: 7, B: 14}, "every slot shown: DEFAULT's shares"),
+    (middle(bottom=3), {}, {T: 22, M: 11, B: 3}, "an empty Decisions at its note, its room shared 2:1"),
+    (middle(mid=0), {}, {T: 18, M: 0, B: 18}, "the PRs absent: halves, as before #111"),
+    (middle(mid=0, bottom=3), {}, {T: 34, M: 0, B: 3}, "the inbox alone beside an empty Decisions, no splitter"),
+    (middle(), {T: 0.6, M: 0.2, B: 0.2}, {T: 21, M: 7, B: 7}, "kept weights"),
 ])
-def test_dragged(above, below, delta, expected, desc):
-    assert columns.dragged(H, above, below, delta, LEAST) == expected, desc
+def test_lay(slots, kept, expected, desc):
+    assert columns.lay(37, slots, kept) == expected, desc
 
 
-@pytest.mark.parametrize("slots, kept, styled, expected, desc", [
-    ([T, B], {}, [17.5, 17.5], [0.4, 0.4], "none kept: the stylesheet's rows, in DEFAULT's scale"),
-    ([T, M, B], {}, [14, 7, 14], [0.4, 0.2, 0.4], "all three, none kept"),
-    ([T, B], {T: 0.6, B: 0.2}, [17.5, 17.5], [0.6, 0.2], "kept: as kept"),
-    ([T, M, B], {T: 0.5, M: 0.1}, [14, 7, 14], [0.5, 0.1, 0.4], "a slot with none kept: its DEFAULT, the same unit"),
+@pytest.mark.parametrize("slots, kept, above, below, delta, expected, desc", [
+    (middle(), {}, T, M, 2, {T: 16, M: 5, B: 14}, "down: the inbox gains what the PRs give"),
+    (middle(), {}, T, M, -4, {T: 10, M: 11, B: 14}, "up"),
+    (middle(), {}, M, B, 3, {T: 14, M: 10, B: 11}, "the lower splitter: the Decisions give, the inbox untouched"),
+    (middle(), {}, T, M, 9, {T: 18, M: 3, B: 14}, "never under a minimum"),
+    (middle(mid=4), {}, T, B, -20, {T: 3, M: 4, B: 29}, "across a compact slot, to the inbox's minimum"),
+    (middle(bottom=3), {}, T, M, -1, {T: 21, M: 12, B: 3}, "beside an empty Decisions (review 4)"),
 ])
-def test_weights(slots, kept, styled, expected, desc):
-    assert columns.weights(slots, kept, styled) == pytest.approx(expected), desc
+def test_dragged(slots, kept, above, below, delta, expected, desc):
+    to = columns.dragged(37, slots, kept, above, below, delta)
+    assert columns.lay(37, slots, to) == expected, desc
+    assert set(to) - set(kept) <= {above, below}, f"{desc}: only the pair's weights set"
 
 
-@pytest.mark.parametrize("rows_, total, expected, desc", [
-    ({T: 16, M: 5, B: 14}, 1.0, {T: 16 / 35, M: 5 / 35, B: 14 / 35}, "in proportion to the rows, the total kept"),
-    ({T: 26, M: 7}, 0.6, {T: 0.6 * 26 / 33, M: 0.6 * 7 / 33}, "two of three shown: their DEFAULT total"),
+@pytest.mark.parametrize("after, expected, desc", [
+    (middle(), {T: 13, M: 8, B: 14}, "the Decisions back: the PRs keep the row they were given, the inbox gives"),
+    (middle(mid=0), {T: 18, M: 0, B: 18}, "the PRs gone too: the inbox no bigger for giving them a row"),
 ])
-def test_as_weights(rows_, total, expected, desc):
-    got = columns.as_weights(rows_, total)
-    assert got == pytest.approx(expected) and sum(got.values()) == pytest.approx(total), desc
-    assert columns.rows(sum(rows_.values()), list(got.values()), [1] * len(got)) == list(rows_.values()), \
-        f"{desc}: the same rows back"
+def test_a_drag_beside_a_compact_slot_keeps_its_direction(after, expected, desc):
+    """Review 4's bug: at 160x40, the PRs dragged a row bigger while the Decisions were
+    empty, then decisions found: the PRs went to 5 rows (16/5/14), the way the drag hadn't."""
+    to = columns.dragged(37, middle(bottom=3), {}, T, M, -1)
+    assert columns.lay(37, after, to) == expected, desc
+
+
+@pytest.mark.parametrize("raw, expected, desc", [
+    ('{"middle.top": 0.5, "right": 1}', {T: 0.5, "right": 1.0}, "as kept"),
+    ('{"middle.top": 0, "middle.middle": -1, "x": 1, "left.top": true, "right": "1"}', {}, "nothing usable"),
+    ('{"middle.top": NaN}', {}, "not a number"),
+    ("[1]", {}, "not an object"),
+    ("junk", {}, "garbage"),
+    (None, {}, "none"),
+])
+def test_kept(raw, expected, desc):
+    assert columns.kept(raw) == expected, desc
+
+
+# the rule's invariants, over random sequences (hypothesis)
+
+COLUMNS = {"left": ["left.top", "left.middle", "left.bottom"], "middle": [T, M, B]}
+
+
+def reals(height: int, slots: list[Slot], kept: dict) -> dict[str, float]:
+    """The weighted slots' unrounded rows, by name."""
+    weighted = [s for s in slots if s.own is None]
+    real, _ = columns.shares(columns.room(height, slots), columns.weights(slots, kept), [s.least for s in weighted])
+    return dict(zip([s.name for s in weighted], real))
+
+
+def fits(height: int, slots: list[Slot]) -> bool:
+    return sum(s.least for s in slots if s.own is None) <= columns.room(height, slots)
+
+
+states = st.one_of(st.none(), st.just("compact"), st.just(0))   # weighted, compact, hidden
+
+
+class Column(RuleBasedStateMachine):
+    """A column under a person's hands: every step leaves it filled, each weighted slot at
+    its least rows at least, the weights in one scale and written only by a drag or a
+    reset; and each drag, compact and resize keeps the invariants of its own."""
+
+    @initialize(names=st.sampled_from(sorted(COLUMNS)), least=st.lists(st.integers(1, 12), min_size=3, max_size=3),
+                height=st.integers(4, 90))
+    def start(self, names, least, height):
+        self.names, self.least, self.height = COLUMNS[names], least, height
+        self.own: list[int | None] = [None, None, None]
+        self.kept: dict[str, float] = {}
+
+    def slots(self, own=None) -> list[Slot]:
+        own = self.own if own is None else own
+        return [Slot(n, m, o) for n, m, o in zip(self.names, self.least, own)]
+
+    def splitters(self) -> list[tuple[str, str]]:
+        slots = self.slots()
+        return [p for p in columns.pairs(self.names, {s.name for s in slots if s.own is None}) if p]
+
+    def other_states(self, data) -> tuple[int, list[Slot]]:
+        own = data.draw(st.lists(states, min_size=3, max_size=3), label="other state")
+        own = [m if o == "compact" else o for o, m in zip(own, self.least)]
+        return data.draw(st.integers(4, 90), label="other height"), self.slots(own)
+
+    @invariant()
+    def laid_out_by_the_rule(self):
+        if not hasattr(self, "kept"):
+            return
+        slots, before = self.slots(), dict(self.kept)
+        got = columns.lay(self.height, slots, self.kept)
+        assert self.kept == before, "laying out writes no weight"
+        assert all(n >= 0 for n in got.values()), f"no slot under no rows: {got}"
+        weighted = [s for s in slots if s.own is None]
+        if not weighted:
+            return
+        if fits(self.height, slots):
+            shown = len(self.splitters())
+            assert sum(got.values()) + shown == self.height, f"the column filled to the row: {got}"
+            assert all(got[s.name] >= s.least for s in weighted), f"each at its least at least: {got}"
+            real = reals(self.height, slots, self.kept)
+            ws = dict(zip([s.name for s in weighted], columns.weights(slots, self.kept)))
+            free = [n for n, r in real.items() if r > self.least[self.names.index(n)] + 1e-9]
+            scales = [real[n] / ws[n] for n in free]
+            assert max(scales, default=1) - min(scales, default=1) <= 1e-9 * max(scales, default=1), \
+                f"one unit: every free slot's rows its weight times one scale ({scales})"
+
+    @rule(data=st.data())
+    @precondition(lambda self: self.splitters())
+    def drag(self, data):
+        above, below = data.draw(st.sampled_from(self.splitters()), label="splitter")
+        delta = data.draw(st.integers(-40, 40), label="delta")
+        slots = self.slots()
+        before = columns.lay(self.height, slots, self.kept)
+        to = columns.dragged(self.height, slots, self.kept, above, below, delta)
+        after = columns.lay(self.height, slots, to)
+        assert {k: v for k, v in to.items() if k not in (above, below)} == \
+               {k: v for k, v in self.kept.items() if k not in (above, below)}, "only the pair's weights written"
+        assert {k: v for k, v in after.items() if k not in (above, below)} == \
+               {k: v for k, v in before.items() if k not in (above, below)}, "every other slot keeps its rows"
+        a, b = before[above], before[below]
+        least_a, least_b = (self.least[self.names.index(n)] for n in (above, below))
+        if fits(self.height, slots):
+            expected = min(max(a + delta, least_a), a + b - least_b)
+            assert after[above] == expected and after[below] == a + b - expected, \
+                f"the line on the pointer's row, or where one reaches its least ({a}+{delta} -> {after[above]})"
+        assert columns.dragged(self.height, slots, self.kept, above, below, 0) == self.kept, "back at the start: as it began"
+        grown, shrunk = (above, below) if after[above] > a else (below, above)
+        if after[above] != a:
+            for _ in range(3):   # never reversed, in any other state at any height
+                height, other = self.other_states(data)
+                old, new = reals(height, other, self.kept), reals(height, other, to)
+                if grown in new:
+                    assert new[grown] >= old[grown] - 1e-9, f"{grown} grown here, never smaller elsewhere"
+                if shrunk in new:
+                    assert new[shrunk] <= old[shrunk] + 1e-9, f"{shrunk} shrunk here, never bigger elsewhere"
+                was, now = columns.lay(height, other, self.kept), columns.lay(height, other, to)
+                assert now[grown] >= was[grown] - 1 and now[shrunk] <= was[shrunk] + 1, "nor by more than a row's rounding"
+        self.kept = to
+
+    @rule(data=st.data(), slot=st.integers(0, 2))
+    def compact_or_hide(self, data, slot):
+        """A slot compacting or hiding takes no room from another (the inbox never squeezed)."""
+        if self.own[slot] is not None or sum(o is None for o in self.own) < 2:
+            return
+        own = list(self.own)
+        own[slot] = data.draw(st.sampled_from([self.least[slot], 0]), label="compact or hidden")
+        before, after = self.slots(), self.slots(own)
+        old, new = reals(self.height, before, self.kept), reals(self.height, after, self.kept)
+        was, now = columns.lay(self.height, before, self.kept), columns.lay(self.height, after, self.kept)
+        for name in new:
+            assert new[name] >= old[name] - 1e-9 and now[name] >= was[name] - 1, f"{name} never squeezed"
+        self.own = own
+
+    @rule(slot=st.integers(0, 2))
+    def expand_or_show(self, slot):
+        self.own = [None if i == slot else o for i, o in enumerate(self.own)]
+
+    @rule(slot=st.integers(0, 2), weight=st.floats(0.01, 5))
+    def weighed_elsewhere(self, slot, weight):
+        """A weight kept by another run, at another size: any weight holds the rule."""
+        self.kept = {**self.kept, self.names[slot]: weight}
+
+    @rule(height=st.integers(4, 90))
+    def resize(self, height):
+        self.height = height
+
+    @rule()
+    def reset(self):
+        """A double-click: the column's weights dropped, DEFAULT's layout."""
+        self.kept = {k: v for k, v in self.kept.items() if k not in self.names}
+        assert columns.lay(self.height, self.slots(), self.kept) == \
+               columns.lay(self.height, self.slots(), {n: columns.DEFAULT[n] for n in self.names})
+
+    @rule()
+    def reload(self):
+        """Kept and read back on the next run: the same weights, the same rows."""
+        again = columns.kept(json.dumps(self.kept))
+        assert again == self.kept, "the weights round-trip"
+        assert columns.lay(self.height, self.slots(), again) == columns.lay(self.height, self.slots(), self.kept)
+        self.kept = again
+
+
+TestColumn = Column.TestCase
+TestColumn.settings = settings(max_examples=300, stateful_step_count=40, deadline=None)
+
+
+@settings(max_examples=500, deadline=None)
+@given(room=st.integers(0, 200), weights=st.lists(st.floats(0.001, 10), min_size=1, max_size=5), data=st.data())
+def test_rows_fill_the_room_and_keep_the_minimums(room, weights, data):
+    minimums = data.draw(st.lists(st.integers(0, 20), min_size=len(weights), max_size=len(weights)))
+    got = columns.rows(room, weights, minimums)
+    if sum(minimums) <= room:
+        assert sum(got) == room and all(n >= m for n, m in zip(got, minimums)), (got, minimums)
+        real, _ = columns.shares(room, weights, minimums)
+        assert all(abs(n - r) < 1 for n, r in zip(got, real)), f"each within a row of its share: {got} {real}"
+    else:
+        assert got == minimums
 
 
 # the app's columns
@@ -86,6 +263,10 @@ SIZES = [(160, 40), (80, 24)]
 
 
 def modules(names):
+    """The app's modules, those named: a test of the app's columns skips without them installed."""
+    pytest.importorskip("claude_wheelhouse_prs", reason="installed without the prs module")
+    pytest.importorskip("claude_wheelhouse_design", reason="installed without the design module")
+    from conftest import SHIPPED_LOAD
     return lambda entries=None: [m for m in SHIPPED_LOAD(entries) if m.name in names]
 
 
@@ -185,10 +366,13 @@ async def test_a_drag_moves_its_line_with_the_pointer(store, sid, tmp_path, monk
         # to the pointer, but neither slot under its least rows (columns.dragged)
         from claude_wheelhouse.tui import least
         moved = max(least(above) - before[above.name], min(dy, before[below.name] - least(below)))
-        assert moved, f"{desc} at {size}: room to move"
         await drag(pilot, key, 0, dy)
         await pilot.pause()
         after = {s.name: s.outer_size.height for s in app.query(f"#{column} > .slot") if s.display}
+        if not moved:   # one of the two at its least rows already (the PRs, at 80 by 24)
+            assert size != (160, 40), f"{desc} at {size}: room to move"
+            assert after == before and sp.region.y == at, f"{desc} at {size}: nothing moves"
+            return
         assert sp.region.y == at + moved, f"{desc} at {size}: the line follows the pointer"
         assert after[above.name] == before[above.name] + moved and after[below.name] == before[below.name] - moved, desc
         assert {k: v for k, v in after.items() if k not in (above.name, below.name)} == \
@@ -234,7 +418,11 @@ async def test_old_shares_are_dropped_for_the_defaults(store, sid, tmp_path, mon
         await opened(app, pilot)
         await adrs_found(app, pilot, False)
         got = middle_rows(app)
-        assert got[2] == 3 and got[0] > 3 * got[1] and filled(app), f"{desc}: the default, the inbox with the room ({got})"
+        column = app.query_one("#col-middle")
+        default = columns.lay(column.size.height, app.column_slots(column)[0], {})
+        assert got == [default[T], default[M], default[B]] and got[2] == 3 and filled(app), \
+            f"{desc}: the default ({got}, {default})"
+        assert got[0] > got[1], f"{desc}: the inbox with the room ({got})"
     assert all(store.setting(LAYOUT + key) is None for key in columns.OLD_KEYS), f"{desc}: the old keys gone"
     assert store.setting(LAYOUT + "weights") is None, f"{desc}: nothing kept in their place"
 
@@ -284,3 +472,47 @@ async def test_a_slot_out_of_a_drag_comes_back_at_its_default(store, sid, tmp_pa
         back = dict(zip(("items", "prs", "design"), middle_rows(app)))
         assert abs(back[later] - default[later]) <= 1, f"{desc}: {later} at {back[later]} rows, its default {default[later]}"
         assert filled(app), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("dy, desc", [
+    (-1, "the PRs a row bigger (review 4: 16/5/14, the PRs smaller than their default)"),
+    (3, "the PRs three rows smaller"),
+])
+async def test_a_drag_beside_an_empty_decisions_keeps_its_direction_once_they_fill(store, sid, tmp_path, monkeypatch,
+                                                                                    dy, desc):
+    """The PRs' line dragged while the Decisions are empty, then a decision found, in the same
+    run: the PRs keep the drag's direction against their default, the Decisions come back at
+    theirs, and the inbox gives or takes the difference."""
+    from test_tui import drag
+    from test_decisions_pane import settled
+    from claude_wheelhouse_design import pane
+    (tmp_path / ".git").mkdir()
+    adr = tmp_path / "docs" / "adr"
+    adr.mkdir(parents=True)
+    (adr / "0001-a.md").write_text("# 1. A\n\nStatus: accepted\n")
+    monkeypatch.setattr(api, "load", modules({"design", "prs", "stats"}))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await opened(app, pilot)
+        await adrs_found(app, pilot, True)
+        default = middle_rows(app)
+    (adr / "0001-a.md").unlink()
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await opened(app, pilot)
+        await adrs_found(app, pilot, False)
+        empty = middle_rows(app)
+        await drag(pilot, "middle-middle", 0, dy)
+        dragged_ = middle_rows(app)
+        assert dragged_[1] == empty[1] - dy and dragged_[2] == 3, f"{desc}: dragged ({empty} -> {dragged_})"
+        (adr / "0001-a.md").write_text("# 1. A\n\nStatus: accepted\n")
+        app.query_one("#design").asked_at -= pane.EVERY
+        await settled(app, pilot)
+        await opened(app, pilot)
+        back = middle_rows(app)
+        grew = dy < 0
+        assert (back[1] > default[1]) if grew else (back[1] < default[1]), \
+            f"{desc}: the PRs {back[1]} rows, their default {default[1]}"
+        assert (back[0] < default[0]) if grew else (back[0] > default[0]), f"{desc}: the inbox gives or takes ({back})"
+        assert back[2] == default[2] and filled(app), f"{desc}: the Decisions at their default ({back}, {default})"

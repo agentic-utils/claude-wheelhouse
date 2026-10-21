@@ -341,9 +341,9 @@ session.
   else `?`. PROPOSED and UNRESOLVED come first, then the rest, newest first; a column's
   header sorts by it, as the inbox's do. Moving the cursor shows the decision in Detail,
   rendered, with no answer box, and `Enter` opens it full screen. With no decisions found
-  the pane shrinks to a line saying where it looked, and the other pane in its column takes
-  the room. That happens only in a column of two panes, as in the default beside the inbox:
-  swapped into the left-hand column or onto Detail's, it keeps its size. A session
+  the pane shrinks to a line saying where it looked, and the other panes in its column share
+  the room, each in proportion to its size (the inbox twice the PRs', by default). That
+  happens in any column with another pane in it: swapped onto Detail's, alone, it keeps its size. A session
   in a git worktree lists its main repository's decisions, so each is listed once. The pane
   is the `design` module: `make install WITH="stats"` leaves it out.
 - **Sessions.** The left-hand column lists every session (parked ones dimmed, at the
@@ -539,8 +539,8 @@ under it, PRs and Decisions are in the middle, and Detail on the right. Sessions
 Inbox, Decisions, PRs and Detail are titled in their top border; the Stats panel's own border names the session it shows. The first two
 columns are 45 wide where there's room; on a narrower terminal they give way in proportion,
 each down to its minimum, so Detail keeps 40. Every boundary between areas can be
-dragged: the lines between the three columns, between the panes in the left column, and
-above the answer box. A line turns teal under the pointer and while you drag it, and no pane goes
+dragged: the lines between the three columns, between the panes in the left and middle
+columns, and above the answer box. A line turns teal under the pointer and while you drag it, and no pane goes
 below its minimum (the session column never gets too narrow for its buttons' captions).
 The sizes are kept in the wheelhouse's database, as shares of the space, so they follow a
 resized terminal; double-click a line to put its default back. A size that doesn't fit a
