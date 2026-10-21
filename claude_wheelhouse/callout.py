@@ -144,13 +144,37 @@ def rows(screen: Widget, sid: str | None = None, kinds: tuple[str, ...] = ()) ->
         bottom = min(region.bottom, starts[last + 1])
         return Region(region.x, y, region.width, bottom - y) if bottom > y else None
 
+    mine = needed(ordered, sid, kinds)
+    every = span(0, len(ordered) - 1, region.y) if ordered else None
+    return every, span(mine[0], mine[-1]) if mine else None
+
+
+def needed(ordered: list, sid: str | None, kinds: tuple[str, ...]) -> list[int]:
+    """The inbox rows (in `ordered`, the table's) of session `sid`'s whose refs are of `kinds`."""
+
     def kind(key: str) -> str | None:
         owner, _, ref = key.partition("|")
         return ref.rstrip("0123456789") if sid and owner == sid else None
 
-    mine = [i for i, row in enumerate(ordered) if kind(str(row.key.value)) in kinds]
-    every = span(0, len(ordered) - 1, region.y) if ordered else None
-    return every, span(mine[0], mine[-1]) if mine else None
+    return [i for i, row in enumerate(ordered) if kind(str(row.key.value)) in kinds]
+
+
+def bring(screen: Widget, sid: str | None, kinds: tuple[str, ...]) -> None:
+    """The inbox scrolled, if it must be, so the rows a step needs (`rows`) are in sight, as
+    many as fit from the first: a short inbox, or a long one, never hides them as the step
+    starts."""
+    found = screen.query("#items")
+    if not kinds or not found or not (table := found.first()).display or not table.region.area:
+        return
+    ordered = table.ordered_rows
+    if not (mine := needed(ordered, sid, kinds)):
+        return
+    first = sum(row.height for row in ordered[:mine[0]])
+    last = sum(row.height for row in ordered[:mine[-1] + 1])
+    seen = table.scrollable_content_region.height - (table.header_height if table.show_header else 0)
+    y = table.scroll_offset.y
+    if first < y or last > y + seen:   # from the first, or as far down as shows the last
+        table.scroll_to(y=first if first < y or last - first >= seen else last - seen, animate=False, immediate=True)
 
 
 def find(screen: Widget, pane: str) -> Widget | None:
@@ -204,6 +228,7 @@ class TourCallout(Vertical):
     def on_mount(self) -> None:
         self.screen.screen_layout_refresh_signal.subscribe(self, lambda _: self.place())
         self.app.screen_change_signal.subscribe(self, lambda _: self.cover(), immediate=True)
+        bring(self.screen, self.keep, self.kinds)   # the rows the step needs in sight as it starts
         self.place()
         found = self.query("#tour-next")   # none in one removed before it was composed
         if found and not isinstance(self.screen.focused, EDITABLE):   # never from a box being typed in

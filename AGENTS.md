@@ -111,7 +111,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   features their release (`.plan/tutorial-overhaul.md`).
 - `callout.py`: the tour's callout, a box painted beside the pane a tour dialog describes,
   highlighting it and following it through a resize or a swap (`place`, a pure function;
-  `PANES`, the one lookup from a tour pane id to its widget).
+  `PANES`, the one lookup from a tour pane id to its widget), the inbox scrolled to the rows
+  its step needs as it starts (`bring`).
 - `docblocks.py`: a doc rendered block by block, exactly as Rich renders it whole, with its
   map (`DocMap`: each block's source lines and rendered rows), for the viewer
   (`Transcript.line_at`, `Transcript.row_of`; `.plan/modules.md`, Q106), and its editor's

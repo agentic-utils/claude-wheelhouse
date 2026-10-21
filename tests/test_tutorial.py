@@ -334,6 +334,20 @@ async def test_a_callout_keeps_clear_of_what_its_step_needs(store, tut, every_mo
                 f"{where}: {box} clear of its pane {pane.region}"
 
 
+@pytest.mark.parametrize("stop, more", [("docs", 3), ("docs", 12), ("inbox", 12), ("decision", 12)])
+@pytest.mark.anyio
+async def test_a_step_scrolls_the_rows_it_needs_into_sight(store, tut, every_module, stop, more):
+    """Q152: the inbox shares an empty Decisions' room with the PRs, so at 80x24 it's short;
+    with more items than it shows, the step's rows (tour.ROWS) are scrolled into sight as it
+    starts, wherever they sort."""
+    fill_demo(store, tut, more)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        _, _, every, mine = await demo_at(app, pilot, store, tut, stop)
+        assert mine is not None and every.contains_region(mine), f"{stop} with {more} more: its rows in sight"
+
+
 @pytest.mark.parametrize("stop, size", [("answer", (160, 40)), ("stats", (100, 30)), ("reply", (80, 24)),
                                         ("send", (160, 40))])
 @pytest.mark.anyio
