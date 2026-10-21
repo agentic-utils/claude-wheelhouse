@@ -46,9 +46,9 @@ def wheelhouse_tool(fn):
 @wheelhouse_tool
 def post_item(kind: str, title: str, body: str = "", status: str | None = None, why: str = "",
               alternative: str = "", reverse: str = "", path: str = "", parent: str = "",
-              pinned: bool | None = None) -> str:
-    """Create a task, question, agent, decision or doc item in the wheelhouse. kind: task |
-    question | agent | decision | doc. Returns the item's ref (T1, Q1, A1, D1, M1...). Write
+              pinned: bool | None = None, url: str = "") -> str:
+    """Create a task, question, agent, decision, doc or pr item in the wheelhouse. kind: task |
+    question | agent | decision | doc | pr. Returns the item's ref (T1, Q1, A1, D1, M1, PR108...). Write
     the full detail in body, once. A decision (see the protocol) also needs why, one short
     line: the option passed over, the reason, how to undo it. It takes no status. The
     wheelhouse posts agent items for your subagents itself: don't post those. (alternative and
@@ -62,9 +62,20 @@ def post_item(kind: str, title: str, body: str = "", status: str | None = None, 
     pinned: kept out of reach of the person clearing their inbox. A doc is pinned unless you
     say pinned=false, for a scratch report not worth keeping once read; anything else is
     unpinned unless you say pinned=true. The person can pin or unpin any item, and a doc
-    posted again keeps the pin they set."""
+    posted again keeps the pin they set.
+    A pr is a pull request you made: the wheelhouse finds those made with `gh pr create` (or
+    the GitHub MCP server's create_pull_request) itself. Post one you made some other way (the
+    web, another tool) with its url, https://github.com/<owner>/<repo>/pull/<n>, and a title;
+    its ref is the PR's number. Post the same url again with parent, the ref of the task it was
+    made for, to file it there. It takes no status: GitHub's is shown."""
     if kind == "permission":   # the host posts these from Claude Code's own permission check
-        raise ValueError("kind must be task, question, agent, decision or doc")
+        raise ValueError("kind must be task, question, agent, decision, doc or pr")
+    if kind == "pr":
+        if body or status or why or alternative or reverse or path:
+            raise ValueError("a pr takes title, url, parent and pinned only: its status comes from GitHub")
+        return _store.post_pr(_sid, url, title, parent or None, bool(pinned))
+    if url:
+        raise ValueError("url: only a pr takes this")
     if kind == "doc":
         if body or status or why or alternative or reverse:
             raise ValueError("a doc takes title, path and parent only: the file is its content")

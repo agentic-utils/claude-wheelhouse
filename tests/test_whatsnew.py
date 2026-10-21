@@ -64,8 +64,8 @@ def test_registry_rules(features, expected, desc):
 
 def test_dialogs_are_the_tour_in_order():
     assert [d.id for d in DIALOGS] == ["invite", "principles", "create", "sessions", "inbox", "answer", "send",
-                                       "reply", "decision", "docs", "conversation", "stats", "decisions", "end", "notes"]
-    assert {d.pane for d in DIALOGS} == {None, "sessions", "items", "detail", "session-info", "stats", "design"}
+                                       "reply", "decision", "docs", "conversation", "stats", "decisions", "prs", "end", "notes"]
+    assert {d.pane for d in DIALOGS} == {None, "sessions", "items", "detail", "session-info", "stats", "design", "prs"}
 
 
 @pytest.mark.parametrize("version, features, ok, desc", [

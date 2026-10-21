@@ -58,13 +58,15 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, callout, docblocks, docroots, emoji, features, models, ordering, subagents, transcript, transcript_usage, tutorial, whatsnew
+from . import api, callout, columns, docblocks, docroots, emoji, features, models, ordering, prs, subagents, transcript, transcript_usage, tutorial, whatsnew
+from .rows import KIND_COLOUR, RowTips
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import AWAITING_NOTES, HOLD_EXPIRED, NUDGE_TOKENS, SHELL_OPENING
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
-from .splitter import Splitter, fit
+from .splitter import SlotSplitter, Splitter, fit
+from textual.css.scalar import Unit
 from .tour import NOTES, PAUSED, ROWS as tour_rows, TOPUP, TOUR, Tour, offered, opening
 from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mode, pinned, runner, spared, stamp, standing)
@@ -105,14 +107,15 @@ CLOSABLE = {"question": "answered", "decision": "seen"}   # what Delete closes, 
 
 
 def closable(item) -> bool:
-    """What Delete acts on: a question, decision or doc whatever its status, a task or subagent
-    once it has settled (store.SETTLED), dismissed or not."""
-    return item["kind"] in CLOSABLE or item["kind"] == "doc" or (
+    """What Delete acts on: a question, decision, doc or PR whatever its status (a PR only off
+    the inbox, never on GitHub), a task or subagent once it has settled (store.SETTLED),
+    dismissed or not."""
+    return item["kind"] in CLOSABLE or item["kind"] in ("doc", "pr") or (
         item["kind"] in DISMISSABLE and item["status"] in SETTLED[item["kind"]])
 
 
 def slot(name: str) -> "Slot":
-    """One of the six places a pane goes (api.SLOTS, .plan/modules.md), found by its name.
+    """One of the seven places a pane goes (api.SLOTS, .plan/modules.md), found by its name.
     Its splitters size it, not the pane in it. Empty, it collapses (WheelhouseApp.collapse)."""
     return Slot(name=name, id="slot-" + name.replace(".", "-"), classes="slot")
 
@@ -125,10 +128,12 @@ CORE_PANES = {"sessions": ("sessions-pane", "left.top"), "session-info": ("sessi
 PANE_OF = {widget: pane for pane, (widget, _) in CORE_PANES.items()}
 # the least room a pane needs, (columns, rows): its slot and column grow to it wherever it
 # goes (WheelhouseApp.fit_panes), every core pane its own. Every button its caption and a row
-# of description; the session list's header and two sessions; the inbox's header; the
-# detail pane's text beside its scrollbar. Small enough that any one column of them fits 80
-# by 24 (Session info's 12, Sessions' 5, the Inbox's 3 and two splitters in 22 rows)
-PANE_MINIMUM = {"session-info": (39, 12), "sessions": (12, 5), "items": (12, 3), "detail": (24, 3)}
+# of description; the session list's header and three sessions (#58: the stats give way
+# first, columns.py sharing only what the minimums leave); the inbox's header; the detail
+# pane's text beside its scrollbar. Small enough that any one column of them, as arranged by
+# default, fits 80 by 24 (the left: Session info's 12, Sessions' 6, the stats' row and two
+# splitters in 21 rows)
+PANE_MINIMUM = {"session-info": (39, 12), "sessions": (12, 6), "items": (12, 3), "detail": (24, 3)}
 
 
 def pane_of(widget: Widget) -> str:
@@ -164,6 +169,18 @@ def arrange(saved: dict[str, str], defaults: dict[str, str]) -> dict[str, str]:
             room = [s for s in empty if s not in held] or empty
             out[pane] = room[0] if room else home
     return out
+
+
+def least(place: Widget) -> int:
+    """The fewest rows a slot keeps: its min-height, the stylesheet's or its panes' (fit_panes)."""
+    scalar = place.styles.min_height
+    return int(scalar.value) if scalar is not None and scalar.unit == Unit.CELLS else 1
+
+
+def compact_rows(place: Widget) -> int:
+    """A compact slot's rows: its panes' least (fit_compact sets them)."""
+    height = place.styles.height
+    return int(height.value) if height is not None and height.unit == Unit.CELLS else place.outer_size.height
 
 
 def cells(scalar) -> float:
@@ -338,10 +355,40 @@ def item_rows(bands, names, collapsed=frozenset()) -> tuple[list[tuple], dict[st
     return rows, {key: len(cs) for key, cs in children.items()}
 
 
+def ref_text(item, child: bool = False, dim: bool = False) -> Text | str:
+    """An inbox row's ref, in its kind's colour (KIND_COLOUR), dimmed under a child's └ or on a
+    settled row; a kind with no colour (one newer code knows) as before."""
+    label = f"└ {item['ref']}" if child else item["ref"]
+    colour = KIND_COLOUR.get(item["kind"])
+    if colour is None:
+        return Text(label, style="dim") if child else label
+    return Text(label, style=" ".join(s for s in ("dim" if child or dim else "", colour) if s))
+
+
+def titled(item, style: str = "") -> Text | str:
+    """An inbox row's title: a PR's with its repo's short name before it, dimmed; plain
+    text, as ever, for any other with no style."""
+    repo = prs.repo_of(ordering.field(item, "body")) if item["kind"] == "pr" else ""
+    if not repo:
+        return Text(item["title"], style=style) if style else item["title"]
+    return Text.assemble(*([(f"{repo} · ", "dim")] if repo else []), (item["title"], style))
+
+
+def item_tip(item) -> str:
+    """An inbox row's hover text: its ref and full title, a PR's with its repo."""
+    repo = prs.repo_of(ordering.field(item, "body")) if item["kind"] == "pr" else ""
+    return f"{item['ref']}  {repo + ' · ' if repo else ''}{item['title']}"
+
+
 def still_open(item) -> bool:
     """Whether a child is still under way: a question unanswered, a task or subagent not settled."""
     return (item["kind"], item["status"]) in {("question", "open"), ("permission", "open")} or (
         item["kind"] in ("task", "agent") and item["status"] not in SETTLED[item["kind"]])
+
+
+def open_pr(item) -> bool:
+    """Whether a PR item is still open on GitHub (a draft or open): Delete asks first."""
+    return item["kind"] == "pr" and item["status"] in ("draft", "open")
 
 
 def unread(item) -> bool:
@@ -355,6 +402,7 @@ def family_prompt(parents: list, family: list, marked: int = 1, pin: bool = Fals
     gone, kept = [it for it in family if not spared(it)], sum(map(spared, family))
     n, under_way = len(gone), [it for it in gone if standing(it) != "finished"]
     said = [f"{k} {what}" for k, what in ((sum(map(still_open, under_way)), "still open"),
+                                          (sum(map(open_pr, under_way)), "still open on GitHub"),
                                           (sum(map(unread, under_way)), "unread")) if k]
     kids = f"{n} {'child' if n == 1 else 'children'}"
     if marked == 1:
@@ -403,6 +451,12 @@ def share(stored: str | None) -> float | None:
     return min(max(value, 0.0), 1.0) if math.isfinite(value) else None
 
 
+def pr_body(item) -> str:
+    """A PR item's detail: its repo and URL, a terminal link; its live state is the PRs pane's."""
+    owner, repo, n = prs.parse(item["body"]) or ("", "", 0)
+    return f"Pull request **{owner}/{repo}#{n}**: [{item['body']}]({item['body']})" if repo else item["body"]
+
+
 def thread_blocks(found, session_name: str = "") -> list[tuple[str, str]]:
     """An item's detail and conversation, oldest first, as (who, markdown) blocks, from the
     item and its messages (client.thread): the person's messages (queued ones marked, and
@@ -416,7 +470,7 @@ def thread_blocks(found, session_name: str = "") -> list[tuple[str, str]]:
     where = f"{session_name} · " if session_name else ""
     out = [("head", f"## {ref} · {item['title']}\n\n{where}`{item['kind']}` · **{item['status']}**"
                     f"{' · answer queued' if queued else ''} · updated {item['updated_at']}"),
-           ("claude", item["body"] or "_no detail_")]
+           ("claude", pr_body(item) if item["kind"] == "pr" else item["body"] or "_no detail_")]
     for m in msgs:
         if m["author"] == "person":
             out.append(("you", f"**you{' · queued' if m['draft'] else ' · sending' if not m['delivered_at'] else ''}** · "
@@ -813,7 +867,7 @@ class Sink:
             self.sunk = None
 
 
-class SinkList(DataTable):
+class SinkList(RowTips, DataTable):
     """A list a Sink lays. Every key that moves its cursor (Up, Down, PageUp, PageDown,
     Ctrl+Home, Ctrl+End, the item list's Shift+Up and Shift+Down) acts in its final order
     (final), never a moving frame's, so keys typed during a move act as they would after it;
@@ -1621,7 +1675,7 @@ class Columns(Horizontal):
 
 
 class Slot(Vertical):
-    """One of the six places a pane goes (slot()). A pane's title, its top border row, is its
+    """One of the seven places a pane goes (slot()). A pane's title, its top border row, is its
     drag handle (D116, .plan/modules.md): pressed (the pointer captured, as a splitter does) and dragged, the pane under the pointer
     lights up teal as the target, and the release swaps the two panes' slots
     (WheelhouseApp.swap). Esc during the drag (take_key), or a release on its own slot or
@@ -2469,7 +2523,8 @@ def hint(sends: str, dead: bool = False) -> str:
     by its mode, queue or send. dead: it isn't running, so Ctrl+S refuses (#62) and goes
     unmentioned."""
     ctrl_s = "" if dead else " · Ctrl+S sends its queue"
-    return (f"Ctrl+Enter to {sends}{ctrl_s} · Ctrl+T switches mode"
+    alt_s = " · Alt+S sends this one now" if sends == "queue" else ""
+    return (f"Ctrl+Enter to {sends}{alt_s}{ctrl_s} · Ctrl+T switches mode"
             " · Ctrl+R takes a queued answer back")
 
 
@@ -3073,6 +3128,53 @@ class LeaveEdits(Dialog):
         self.action_answer(event.button.id)
 
 
+class SessionMenu(Dialog):
+    """A right-click on a session in the session list (#125): its buttons as a menu at the
+    pointer, as the buttons under the list show them for it: captioned, greyed (off, or
+    busy) and shown as they are, repainted with them each refresh (paint). The answer is the
+    button's id, pressed there by the app (session_menu). Up and Down, as Tab and Shift+Tab,
+    go round the ones that apply; Esc or a click outside closes it (#81)."""
+    DEFAULT_CSS = """
+    SessionMenu { align: left top; }
+    SessionMenu #dialog { width: auto; min-width: 18; padding: 0 1; constrain: inside inside; }
+    SessionMenu #dialog Button { width: 100%; }
+    """
+    BINDINGS = [Binding("down", "app.focus_next", show=False), Binding("up", "app.focus_previous", show=False)]
+
+    def __init__(self, sid: str, title: str, buttons: list[tuple[str, str, bool, bool]], at: Offset) -> None:
+        super().__init__()
+        self.sid, self.heading, self.buttons, self.at = sid, title, buttons, at
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(Text(self.heading), classes="dialog-title")
+            for id_, caption, disabled, shown in self.buttons:
+                button = Button(caption, id=f"menu-{id_}", disabled=disabled, compact=True, tooltip=BUTTONS[id_])
+                button.display = shown
+                yield button
+
+    def on_mount(self) -> None:
+        self.query_one("#dialog").styles.offset = (self.at.x, self.at.y)   # before it's drawn: constrain keeps it on the screen
+        self.focus_first()
+
+    def focus_first(self) -> None:
+        """The first that applies focused, as the menu opens or the one focused goes off."""
+        if enabled := [b for b in self.query(Button) if b.display and not b.disabled]:
+            self.set_focus(enabled[0])
+
+    def paint(self, buttons: list[tuple[str, str, bool, bool]]) -> None:
+        """The session's buttons as they are now (lifecycle_buttons and controls)."""
+        self.buttons = buttons
+        for id_, caption, disabled, shown in buttons:
+            show_button(self, f"menu-{id_}", caption, disabled, shown)
+        if self.focused is None:
+            self.focus_first()
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        self.action_answer(event.button.id.removeprefix("menu-"))
+
+
 class Choice(Dialog):
     """A pending request: cancel it, force it, or leave it be."""
     BINDINGS = [Binding("c", "answer('cancel')", show=False), Binding("f", "answer('force')", show=False)]
@@ -3263,6 +3365,7 @@ def key_name(key: str) -> str:
 DESCRIBE = {
     "submit": "Submit what's typed: queued, or sent at once, by the session's mode",
     "app.submit": "Submit what's typed: queued, or sent at once, by the session's mode",
+    "submit(True)": "Send what's typed at once, whatever the mode, leaving the mode and the rest of the queue as they are",
     "send_session": "Send the current session's queue (a dead one's waits: Relaunch it first)",
     "toggle_mode": "Switch the session between Queued and Immediate",
     "recall": ("Take this item's latest queued answer back into the box; with none queued, in the item list, "
@@ -3400,7 +3503,8 @@ SEND_RULES = (
     "**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the "
     "session's queue as one message, so related answers arrive together; ✉ counts what's queued. "
     "A dead session's queue waits: Ctrl+S and Send all leave it until the session is relaunched. "
-    "**Immediate**: Ctrl+Enter sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
+    "Alt+S sends just the answer in the box at once, leaving the queue and the mode as they are. "
+    "**Immediate**: Ctrl+Enter (or Alt+S) sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
 MOUSE = ("Click selects a row; in the session list, a click on the selected session or the list's title "
          "past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
@@ -3410,7 +3514,8 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "right-hand end of its row: a click there hides them, and the + it becomes shows them again. "
          "A click on a doc opens its editor below it there, as a click on it moves it while it's open. "
          "A click on a row's first column pins it (📌) or clears its pin, as P does. "
-         "Double-click selects a word. Right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
+         "Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; "
+         "elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap "
          "the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back.")
@@ -3523,12 +3628,14 @@ class WheelhouseApp(App):
     #col-left {{ width: 45; min-width: 12; }}   /* names take the room the other columns leave (name_room) */
     #col-middle {{ width: 45; min-width: 12; }}
     #col-right {{ width: 1fr; min-width: 12; }}
-    /* the slots in a column: the top one takes what the others leave, about 12, 11 and 12
-       rows at 40 and 21, 17 and 17 at 60 (a chart under the gauges from about 50) */
+    /* the slots in a column, until lay_columns sizes them by their weights (columns.DEFAULT,
+       these shares with every slot shown): about 13, 10 and 12 rows at 40 and 22, 17 and 16
+       at 60 (a chart under the gauges from about 50) */
     #slot-left-top {{ height: 1fr; min-height: 3; }}   /* the sessions: 24 rows fit */
     #slot-left-middle {{ height: 30%; min-height: 1; }}   /* on a short terminal the stats give way first, to a row */
     #slot-left-bottom {{ height: 30%; min-height: 3; }}   /* session info */
-    #slot-middle-top, #slot-middle-bottom {{ height: 1fr; min-height: 3; }}
+    #slot-middle-top, #slot-middle-bottom {{ height: 1fr; min-height: 3; }}   /* the inbox and the Decisions, halves as before */
+    #slot-middle-middle {{ height: 20%; min-height: 3; }}   /* the PRs, between them (#111) */
     .panel {{ border-title-color: #05d9e8; }}   /* each pane's title, in its top border, its drag handle (Slot) */
     .slot.-swap-target > * {{ outline: round #05d9e8; }}   /* where a pane dragged by its title would go: teal */
     #items {{ height: 1fr; min-height: 3; }}
@@ -3621,6 +3728,9 @@ class WheelhouseApp(App):
     BINDINGS = [
         Binding("ctrl+enter", "submit", "Submit", key_display="Ctrl+Enter"),
         Binding("ctrl+j", "submit", "Submit", show=False),   # Ctrl+Enter, as most terminals send it
+        # Alt+S (#124): Ctrl+Shift+Enter can't be told from Ctrl+Enter in Windows Terminal. A terminal
+        # sends it as a printable s, but the app's binding takes it before the answer box types it
+        Binding("alt+s", "submit(True)", "Send now", show=False, key_display="Alt+S"),   # off the footer, as Ctrl+R is: Relaunch must fit at 100 columns
         Binding("ctrl+s", "send_session", "Send", key_display="Ctrl+S"),
         Binding("ctrl+t", "toggle_mode", "Mode", key_display="Ctrl+T"),
         Binding("ctrl+r", "recall", "Edit queued", show=False, key_display="Ctrl+R"),
@@ -3722,6 +3832,7 @@ class WheelhouseApp(App):
         self.ctx = api.Context(state_dir, self.module_sessions, self.stats_sid, usage=self.client.usage,
                                set_effort=self.set_effort)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
+        self.weights: dict[str, float] = {}   # each slot's weight in its column, as kept (columns.py)
         self.module_ids: dict[str, str] = {}   # each pane's widget id: the module that has it
         self.pane_homes: dict[str, str] = {}   # each module pane's default slot, as it declares it (hosted)
         self.box_target: tuple | None = None
@@ -3735,6 +3846,7 @@ class WheelhouseApp(App):
         self.client.listen(self.heard)
         self.tour: Tour | None = None   # the tour under way (tour.py), painted by show_tour
         self.tour_showing: tuple | None = None   # what show_tour last painted: (dialog id, text)
+        self.inbox_scroll: float | None = None   # the inbox's scroll before a tour step first moved it (callout.bring)
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="title-row"):
@@ -3746,9 +3858,9 @@ class WheelhouseApp(App):
                     with Vertical(id="sessions-pane", classes="panel") as pane:
                         pane.border_title = "Sessions"
                         yield SessionList(id="session-list", cursor_type="row", show_cursor=False)   # none selected (D20)
-                yield Splitter("left-middle", "#slot-left-middle", "#slot-left-top", "y")
+                yield SlotSplitter("left-middle", "col-left")
                 yield slot("left.middle")   # the stats module's
-                yield Splitter("left-bottom", "#slot-left-bottom", "#slot-left-top", "y")
+                yield SlotSplitter("left-bottom", "col-left")
                 with slot("left.bottom"):   # the highlighted session's description, and what can be done to it
                     with Vertical(id="session-info-pane", classes="panel") as pane:
                         pane.border_title = "Session info"
@@ -3768,7 +3880,10 @@ class WheelhouseApp(App):
                     with Vertical(id="items-pane", classes="panel") as pane:
                         pane.border_title = "Inbox"
                         yield ItemList(id="items", cursor_type="row")
-                yield Splitter("middle-top", "#slot-middle-top", "#slot-middle-bottom", "y")
+                # each splitter between the two slots it moves rows between (columns.pairs)
+                yield SlotSplitter("middle-middle", "col-middle")
+                yield slot("middle.middle")   # the PRs module's (#111): a slot of its own, nothing moved
+                yield SlotSplitter("middle-bottom", "col-middle")
                 yield slot("middle.bottom")
             yield Splitter("items-pane", "#col-middle", "#col-right", "x", default=self.column_width)
             with Vertical(id="col-right", classes="column"), slot("right"):
@@ -3815,7 +3930,7 @@ class WheelhouseApp(App):
         self.session_controls = list(self.query("#session-info-pane Grid, #session-info-pane Grid Button"))   # theirs and they
         # no Tab stops (tab_stops), nor taken by a click, which leaves the answer box where it was
         self.query_one("#session-info-scroll").can_focus = False
-        for key in RETIRED_LAYOUT:   # once: after that they're gone
+        for key in (*RETIRED_LAYOUT, *columns.OLD_KEYS):   # once: after that they're gone
             if self.client.setting(LAYOUT + key) is not None:
                 self.client.set_setting(LAYOUT + key, None)
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
@@ -3823,6 +3938,7 @@ class WheelhouseApp(App):
             # size a slot that has the column to itself
             if splitter.display and (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
                 splitter.apply(stored)
+        self.weights = columns.kept(self.client.setting(LAYOUT + columns.WEIGHTS_KEY))
         self.eye_col = self.session_list.add_columns(*SESSION_LABELS, "")[-1]
         self.item_sort = self.kept_sort("items")
         self.session_sort = self.kept_sort("sessions")
@@ -3879,6 +3995,7 @@ class WheelhouseApp(App):
         """The panes' sizes kept within the terminal: one kept from a wider one shrinks."""
         if self.screen_stack:
             fit(self.screen_stack[0].query(Splitter))
+            self.lay_columns()
 
     def refit(self) -> None:
         """Fit again once laid out: a pane's content changed height, not the terminal."""
@@ -3891,11 +4008,12 @@ class WheelhouseApp(App):
     # right-click, as in a terminal
 
     async def on_event(self, event: events.Event) -> None:
-        """Right-click copies the selection, or with none pastes. The press never reaches
+        """Right-click on a session in the session list opens its menu (session_menu);
+        elsewhere it copies the selection, or with none pastes. The press never reaches
         the widgets: an answer box would move its cursor and drop its selection, and the
         screen would take it for a click and clear its own."""
         if isinstance(event, (events.MouseDown, events.MouseUp)) and event.button == 3 and not event.is_forwarded:
-            if isinstance(event, events.MouseDown):
+            if isinstance(event, events.MouseDown) and not self.session_menu(event):
                 self.right_click(event)
             return
         if isinstance(event, events.Key) and not event.is_forwarded:
@@ -3962,6 +4080,56 @@ class WheelhouseApp(App):
     async def _on_key(self, event: events.Key) -> None:
         # a key the widgets let through: its bindings were tried as it arrived (take_key)
         event.prevent_default()
+
+    def session_menu(self, event: events.MouseDown) -> bool:
+        """A right-click on a session's row in the session list (#125): the session selected,
+        as a click selects it, and a menu of its buttons at the pointer (SessionMenu), the
+        one chosen pressed as a click on it would be. Only on the row itself, the topmost
+        widget there (not a tour callout over it, nor the list's scrollbar). Whether the
+        click was one."""
+        table = self.session_list
+        if self.screen is not self.screen_stack[0] or not table.display:
+            return False
+        try:
+            under, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
+        except Exception:
+            return False
+        if under is not table:   # a callout over it, or its scrollbar (a widget of its own)
+            return False
+        self.settle()   # the cursor where the keys before it left it, as a click finds it (SessionList._on_click)
+        top = table.content_region.y + (table.header_height if table.show_header else 0)   # the first row's line
+        row = event.screen_y - top + int(table.scroll_y)
+        if event.screen_y < top or not 0 <= row < table.row_count or table.blank(row):
+            return False
+        sid = table.keys()[row]
+        if (s := next((x for x in self.sessions if x["id"] == sid), None)) is None:   # gone as the list rebuilds
+            return False
+        if self.current_session() != sid or self.filter_sid != sid:
+            with table.prevent(DataTable.RowHighlighted):
+                table.move_cursor(row=row, animate=False)
+                table.show_cursor = True
+            self.follow(sid)
+        self.paint_session_info()
+
+        def chosen(button_id: str | None) -> None:
+            if button_id is None:
+                return
+            button = self.screen_stack[0].query_one(f"#{button_id}", Button)
+            if self.current_session() != sid or not showing(button):   # since the menu opened
+                self.notify(f"{button.label} no longer applies to this session", severity="warning")
+            elif button.disabled:
+                busy = button_id in self.busy_buttons(next((x for x in self.sessions if x["id"] == sid), s))
+                self.notify(f"{button.label}: " + ("still under way" if busy else "nothing to do"), severity="warning")
+            else:
+                button.press()
+        self.push_screen(SessionMenu(sid, self.display_name(s), self.session_menu_buttons(s),
+                                     Offset(event.screen_x, event.screen_y)), chosen)
+        return True
+
+    def session_menu_buttons(self, s) -> list[tuple[str, str, bool, bool]]:
+        """A session's buttons for its menu: (id, caption, disabled, shown), as under the list."""
+        return [(id_, str(caption), disabled, shown) for id_, caption, disabled, shown
+                in self.lifecycle_buttons(s) + self.controls(s)]
 
     def right_click(self, event: events.MouseDown) -> None:
         """Copies the selection in a pane, else in the box clicked (or focused); with none,
@@ -4272,6 +4440,10 @@ class WheelhouseApp(App):
         # of sight: it is cut to the room the others leave, at whatever width the pane is (#51)
         fits = table.name_room([cells for _, cells in rows])
         rows = [(k, (first, cut(name, fits), *rest)) for k, (first, name, *rest) in rows]
+        # the full name and the synopsis, on hover: a narrow pane cuts the name (#111)
+        table.tips = {s["id"]: "\n".join(t for t in (self.display_name(s), s["synopsis"] or "") if t)
+                      for s in self.sessions}
+        table.tip_again()
         names = table.ordered_columns[1]
         width = min(fits, max([cell_len(self.session_label(1)), *(cells[1].cell_len for _, cells in rows)]))
         label = self.session_label(1, width)   # a narrow pane cuts the name's header, not its marker
@@ -4318,7 +4490,7 @@ class WheelhouseApp(App):
         # goes falls to the neighbour it has once moves end, as typed slowly (SinkList)
         keep = table.final_row()
         before = [k for k in table.final() if k]   # the rows as they stood, for above_deleted
-        rows_out = []
+        rows_out, tips = [], {}
         names = self.session_names()
         found, processing, queued, awaiting = self.client.inbox(self.filter_sid)
         busy = queued | awaiting
@@ -4348,28 +4520,28 @@ class WheelhouseApp(App):
             status = it["status"] if where != "active" else "queued" if key in queued \
                 else "processing" if key in processing else it["status"]
             style = "dim" if where != "active" else "bold #05d9e8" if status == "queued" \
-                else "bold #ffd300" if status == "open" else DECISION if status in UNREAD \
+                else "bold #ffd300" if status == "open" and it["kind"] != "pr" else DECISION if status in UNREAD \
                 else "bold #ff2a6d" if status in ("blocked", "waiting") else MATRIX
             name = names.get(it["session_id"], "")[:14]
             if status == "processing" or key in awaiting and status != "queued":
                 # the person spoke last: the ball is in the session's court until it replies. A
                 # finished item keeps its status, with the hourglass
                 shown = Text(status if status == "processing" else f"⏳ {status}", style="dim")
-                title = Text(it["title"], style="dim")
+                title = titled(it, "dim")
             else:
-                shown, title = Text(status, style=style), Text(it["title"], style="dim") if where != "active" else it["title"]
+                shown, title = Text(status, style=style), titled(it, "dim" if where != "active" else "")
             if (fresh := ordering.field(it, "new_replies")) and status not in ("queued", "processing") \
                     and key not in awaiting:   # a doc's replies the person hasn't seen (store._said)
                 shown = Text(f"{fresh} new", style=DECISION)
             pin = Text(PIN) if pinned(it) else Text(UNPINNED, style="dim")
             if nested is None:
-                cells = (pin, name, it["ref"], shown, title)
+                cells = (pin, name, ref_text(it, dim=where != "active"), shown, title)
             elif nested == CHILD:   # under its parent, as a subagent is under its session's name
-                cells = (pin, "", Text(f"└ {it['ref']}", style="dim"), shown, Text(it["title"], style="dim"))
+                cells = (pin, "", ref_text(it, child=True), shown, titled(it, "dim"))
             else:   # a subagent, tucked under its session's name
-                cells = (pin, name if nested == 0 else "", Text(f"└ {it['ref']}", style="dim"),
-                         shown, Text(it["title"], style="dim"))
+                cells = (pin, name if nested == 0 else "", ref_text(it, child=True), shown, titled(it, "dim"))
             rows_out.append((key_of[id(it)], cells))
+            tips[key_of[id(it)]] = item_tip(it)
         if self.filter_sid:   # the session column goes: the inbox follows the one session
             rows_out = [(k, cells[:1] + cells[2:]) for k, cells in rows_out]
         cells = dict(rows_out)
@@ -4379,6 +4551,8 @@ class WheelhouseApp(App):
         arrow = table.cursor_key()
         pending = arrow != self.items_cursor   # the person's move, its highlight not yet handled
         rebuilt = fill(table, rows_out)
+        table.tips = tips
+        table.tip_again()
         pending = pending and arrow in table.rows
         # the cursor goes by key, rebuilt or not: items arriving above must not move it, and a
         # selection made without it (following the session already followed) takes it. Except
@@ -4643,6 +4817,18 @@ class WheelhouseApp(App):
         self.paint_sendbar()
         self.paint_detail()
 
+    def show_item(self, sid: str, ref: str) -> None:
+        """A module's pick of an item (api.Context.show_item, the PRs pane's row that is one):
+        shown in Detail with its thread and answer box, and highlighted in the inbox if listed there."""
+        self.shown_doc = None
+        key, table = f"{sid}|{ref}", self.items_table
+        if key in table.rows:
+            with table.prevent(DataTable.RowHighlighted):
+                table.move_cursor(row=table.get_row_index(key), animate=False)
+            self.items_cursor = key
+        self.select_row(key)
+        self.paint_sendbar()
+
     def open_doc(self, path: str, title: str) -> None:
         """A module's doc full screen (api.Context.open_doc), as Enter opens a doc item."""
         self.push_screen(DocView(file=(path, title)))
@@ -4650,7 +4836,8 @@ class WheelhouseApp(App):
     def module_ctx(self, mid: str) -> api.Context:
         """The context a module's pane is made with: the app's, with its own routes (call)."""
         return dataclasses.replace(self.ctx, call=functools.partial(self.client.call_module, mid),
-                                   show_doc=self.show_doc, open_doc=self.open_doc, relayout=self.fit_compact)
+                                   show_doc=self.show_doc, open_doc=self.open_doc, relayout=self.fit_compact,
+                                   show_item=self.show_item)
 
     def doc_sends_now(self, sid: str) -> bool:
         """Whether a doc item of this session's saves on Ctrl+Enter in its editor: its
@@ -4830,7 +5017,7 @@ class WheelhouseApp(App):
     # the panes' places (.plan/modules.md, "Swapping panes", D116)
 
     def slots(self) -> dict[str, Slot]:
-        """The six slots, by name, on the inbox's screen whichever screen is on top."""
+        """The seven slots, by name, on the inbox's screen whichever screen is on top."""
         return {s.name: s for s in self.screen_stack[0].query(Slot)}
 
     def default_slots(self) -> dict[str, str]:
@@ -4877,8 +5064,7 @@ class WheelhouseApp(App):
                 elif getattr(column, "filling", False):   # the rest no more: its own width again
                     column.filling = False
                     splitter.apply(splitter.fraction)
-            elif (panes := splitter.panes()) and all(p.has_class("slot") for p in panes):
-                splitter.display = all(p.display for p in panes)
+        self.lay_columns()
 
     def fit_panes(self) -> None:
         """Each slot and column at least as big as its panes need (PANE_MINIMUM), wherever
@@ -4934,9 +5120,9 @@ class WheelhouseApp(App):
     def fit_compact(self) -> None:
         """A slot whose panes are all compact (a module pane with nothing to show sets
         `compact`, api) keeps only their least rows (PANE_MINIMUM), and the other slot in its
-        column takes the room it gives up (Splitter.compact). Only in a column showing exactly
-        two slots, the other not compact too: alone in its column, or in a column of three,
-        it keeps its normal size and every splitter behaves as ever. A pane calls it through
+        column's other slots share the room it gives up (columns.py, lay_columns). Only in a
+        column showing two slots or more, not all of them compact: alone in its column, it
+        keeps its normal size. A pane calls it through
         Context.relayout when its `compact` changes."""
         screen = self.screen_stack[0]
 
@@ -4947,13 +5133,64 @@ class WheelhouseApp(App):
         for place in screen.query(".slot"):
             column = place.parent
             pair = [s for s in column.query(".slot") if s.display] if column.has_class("column") else [place]
-            compact = len(pair) == 2 and idle(place) and not all(idle(s) for s in pair)
+            compact = len(pair) >= 2 and idle(place) and not all(idle(s) for s in pair)
             place.set_class(compact, "-compact")
             place.styles.height = max(minimum(w)[1] for w in place.children if w.display) if compact else None
         for splitter in screen.query(Splitter):
-            if (panes := splitter.panes()) and all(p.has_class("slot") for p in panes):
+            if not isinstance(splitter, SlotSplitter) and (panes := splitter.panes()) and all(
+                    p.has_class("slot") for p in panes):
                 splitter.apply(splitter.fraction)
+        self.lay_columns()
         self.refit()
+
+    # a column's slots (columns.py, #111): one rule for any column
+
+    def lay_columns(self) -> None:
+        """Each column of slots laid out by columns.lay: an empty slot hidden, a compact one at
+        its own rows, and the rest sharing what's left by their weights. Each splitter joined to
+        the two weighted slots it moves rows between, or hidden."""
+        if not self.screen_stack:
+            return
+        for column in self.screen_stack[0].query(".column"):
+            splitters = [w for w in column.children if isinstance(w, SlotSplitter)]
+            if not splitters:
+                continue
+            slots, places = self.column_slots(column)
+            weighted = {s.name for s in slots if s.own is None}
+            for splitter, pair in zip(splitters, columns.pairs([s.name for s in slots], weighted)):   # each before its slot
+                splitter.pair = (places[pair[1]], places[pair[0]]) if pair else None
+                splitter.display = pair is not None
+            if weighted and columns.room(column.size.height, slots) > 0:
+                for name, n in columns.lay(column.size.height, slots, self.weights).items():
+                    if name in weighted:
+                        places[name].styles.height = n
+
+    def column_slots(self, column: Widget) -> tuple[list[columns.Slot], dict[str, Widget]]:
+        """A column's slots as columns.py sees them (hidden: no rows of its own; compact: its
+        panes' least), and each slot's widget by name."""
+        places = {s.name: s for s in column.query(".slot")}
+        slots = [columns.Slot(name, least(place), None if place.display and not place.has_class("-compact")
+                              else compact_rows(place) if place.display else 0)
+                 for name, place in places.items()]
+        return slots, places
+
+    def drag_column(self, column_id: str, above: str, below: str, delta: int, kept: dict[str, float]) -> None:
+        """A splitter dragged `delta` rows from where it began, the weights then `kept`: those
+        two slots' weights set (columns.dragged), so the line follows the pointer."""
+        column = self.screen_stack[0].query_one(f"#{column_id}")
+        slots, _ = self.column_slots(column)
+        self.weights = columns.dragged(column.size.height, slots, kept, above, below, delta)
+        self.lay_columns()
+
+    @on(SlotSplitter.Weighed)
+    def keep_weights(self, event: SlotSplitter.Weighed) -> None:
+        """A column's weights kept for next time; a double-click: its defaults back."""
+        if event.reset:
+            column = self.screen_stack[0].query_one(f"#{event.splitter.column}")
+            gone = {s.name for s in column.query(".slot")}
+            self.weights = {k: v for k, v in self.weights.items() if k not in gone}
+            self.lay_columns()
+        self.client.set_setting(LAYOUT + columns.WEIGHTS_KEY, json.dumps(self.weights) if self.weights else None)
 
     def action_reset_layout(self) -> None:
         """Reset layout, in the command palette: every pane in its default slot and every
@@ -4963,6 +5200,8 @@ class WheelhouseApp(App):
         for splitter in self.screen_stack[0].query(Splitter):
             splitter.apply(None)
             self.client.set_setting(LAYOUT + splitter.key, None)
+        self.weights = {}
+        self.client.set_setting(LAYOUT + columns.WEIGHTS_KEY, None)
         self.relaid()
         self.notify("Layout reset: every pane in its default place.")
 
@@ -5000,6 +5239,8 @@ class WheelhouseApp(App):
         saying so; the app and the other panes carry on. Textual's own Widget.animate is
         not the hook: a pane without one isn't called."""
         for widget in list(self.panes):
+            if widget.parent is None:   # not mounted yet (mount_panes) or gone: no hook, and no card to put in its place
+                continue
             try:
                 if getattr(type(widget), hook, None) not in (None, getattr(Widget, hook, None)):
                     getattr(widget, hook)(*args)
@@ -5328,6 +5569,7 @@ class WheelhouseApp(App):
         self.client.tour_at(tour.where())   # kept as it goes: a pause, or quitting, never loses it
         if stop is None:
             self.tour = None
+            self.restore_inbox()
             self.paint_badge()
             return
         if tour.kind == TOUR or stop.id == "notes":   # a top-up's dialog counts once passed (passed)
@@ -5338,7 +5580,21 @@ class WheelhouseApp(App):
             notes = whatsnew.since(tour.notes_seen) if tour.kind == TOPUP else whatsnew.this_release()
             self.push_screen(TourNotes(text, notes), self.tour_answered)
         else:
-            main.mount(TourCallout(stop.pane, text, next=nxt, keep=tour.sid or None, kinds=tour_rows.get(stop.id, ())))
+            main.mount(TourCallout(stop.pane, text, next=nxt, keep=tour.sid or None, kinds=tour_rows.get(stop.id, ()),
+                                   scrolled=self.tour_scrolled))
+
+    def tour_scrolled(self, was: float) -> None:
+        """A tour step scrolled the inbox to its rows: where it was before the first, kept to put
+        back as the tour ends (restore_inbox), the person's place and cursor in sight again."""
+        if self.inbox_scroll is None:
+            self.inbox_scroll = was
+
+    def restore_inbox(self) -> None:
+        """The tour over, finished or ended with Esc: the inbox back where it was before a step
+        scrolled it."""
+        was, self.inbox_scroll = self.inbox_scroll, None
+        if was is not None and (found := self.screen_stack[0].query("#items")):
+            found.first().scroll_to(y=was, animate=False, immediate=True)
 
     def passed(self) -> None:
         """Next on a top-up's dialog: its tips count as seen now, not as it showed, so one paused
@@ -5387,6 +5643,7 @@ class WheelhouseApp(App):
         if tour is None:
             return
         self.drop_callouts(list(self.screen_stack[0].query(TourCallout)))
+        self.restore_inbox()
         self.client.tour_at(None)
         main = self.screen_stack[0]   # what it would have shown (Tour.shown): an absent pane's features stay pending
         here = offered(whatsnew.pending((), self.client.sdk, tour.features), lambda pane: callout.find(main, pane) is not None)
@@ -5417,6 +5674,9 @@ class WheelhouseApp(App):
             grid.display = any(shown for *_, shown in buttons)   # none: no blank row for it either
         if [b.display for b in self.session_controls] != before:
             self.refit()   # rows of buttons more or less under the description
+        for menu in self.screen_stack:   # a session's menu open (#125): its buttons as they are now
+            if isinstance(menu, SessionMenu) and (m := next((x for x in self.sessions if x["id"] == menu.sid), None)):
+                menu.paint(self.session_menu_buttons(m))
 
     def describe_all(self) -> Text:
         """With no session selected: what the inbox shows, every session's items, in counts."""
@@ -5745,6 +6005,14 @@ class WheelhouseApp(App):
             self.push_screen(Confirm(family_prompt([item], family)),
                              lambda yes: yes and self.close_family(item, family))
             return
+        if open_pr(item):   # off the inbox only: say so before it goes
+            self.push_screen(Confirm(f"Delete {item['ref']} ({item['title']})? It stays open on GitHub."),
+                             lambda yes: yes and self.dismiss_now(item, verb))
+            return
+        self.dismiss_now(item, verb)
+
+    def dismiss_now(self, item, verb: str) -> None:
+        """Delete on an item with nothing to ask first: closed or dismissed now."""
         self.close(item, True)
         self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
         self.refresh_data()
@@ -5950,8 +6218,9 @@ class WheelhouseApp(App):
         return box, target, text
 
     @session_action
-    def action_submit(self) -> None:
-        """Ctrl+Enter: queued or sent at once, by the session's mode."""
+    def action_submit(self, now: bool = False) -> None:
+        """Ctrl+Enter: queued or sent at once, by the session's mode. Alt+S (now): sent at
+        once whatever the mode, the rest of the queue left queued (#124)."""
         self.settle()
         box, target = self.composing()
         if box is not None and target and self.nudged(target):
@@ -5961,7 +6230,7 @@ class WheelhouseApp(App):
         if not box:
             return
         quote = self.doc_quotes.get(target)   # Detail's box or a full-screen doc's: a doc's alone has one
-        done = self.told(self.client.submit(target, quoted(quote, text)))   # an open permission is denied, never queued (#53)
+        done = self.told(self.client.submit(target, quoted(quote, text), now))   # an open permission is denied, never queued (#53)
         if not done.ok:   # a permission answered meanwhile
             return
         if done.denied:   # an explicit act, as Delete is: selected, the item moves at once (ranked)

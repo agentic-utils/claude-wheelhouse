@@ -771,8 +771,9 @@ class RemoteClient:
             return Done(False)
         return self.done(f"/sessions/{sid}/rename", {"name": name})
 
-    def submit(self, target: tuple, text: str) -> Done:
-        return self.done(f"/sessions/{target[0]}/send", {"text": text, "ref": target[1]})
+    def submit(self, target: tuple, text: str, now: bool = False) -> Done:
+        action = "send-now" if now else "send"
+        return self.done(f"/sessions/{target[0]}/{action}", {"text": text, "ref": target[1]})
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> Done:
         return self.done(f"/items/{sid}/{ref}/permission", {"decision": decision, "message": message})

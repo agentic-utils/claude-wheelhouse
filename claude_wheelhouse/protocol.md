@@ -25,6 +25,12 @@ anything here seems to conflict with them, follow yours.
   `pinned=false`. The person can pin or unpin any item. The person may comment on a doc: a
   message on its ref, which may quote the line it's about. Reply on that ref with `reply`
   and no status; if the comment leads you to change the doc, post its path again.
+- A pull request you make with `gh pr create` (yours or a subagent's) shows in the
+  wheelhouse by itself, as `PR` and its number. Post one you made some other way (the web,
+  another tool) with `post_item(kind="pr", title, url)`, and post its url again with
+  `parent` to file it under the task it was made for. Its status is GitHub's: never set one.
+  The person may write on a PR ("fix the failing lint"): a message on its ref. Reply on that
+  ref with `reply` and no status.
 - Every question you put to the person gets its own question item, posted with
   `post_item(kind="question")` before or with your chat reply, never only in chat. That
   includes an "A or B?" choice inside a longer reply and a question tacked onto the end of

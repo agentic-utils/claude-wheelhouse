@@ -47,7 +47,7 @@ async def test_answer_reaches_the_session(store, sid, live):
         await pilot.pause()
         items = app.query_one("#items", DataTable)
         assert items.row_count == 2
-        assert items.get_row_at(0)[2] == q, "open question first"
+        assert str(items.get_row_at(0)[2]) == q, "open question first"
         items.move_cursor(row=0)
         await pilot.pause()
         assert app.selected == (sid, q)
@@ -61,6 +61,47 @@ async def test_answer_reaches_the_session(store, sid, live):
         await pilot.pause()
     assert [m["body"] for m in store.pending(sid)] == ["SQLite, it's local"]
     assert store.item(sid, q)["status"] == "open", "the session's reply says whether it's answered"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("send_mode, key, drafts, sent, desc", [
+    ("queued", "ctrl+enter", ["earlier", "this"], [], "queued: Ctrl+Enter holds it behind the earlier draft"),
+    ("queued", "ctrl+j", ["earlier", "this"], [], "queued: Ctrl+Enter as most terminals send it"),
+    ("queued", "alt+s", ["earlier"], ["this"], "queued: Alt+S sends this one now, the earlier draft left queued"),
+    ("immediate", "ctrl+enter", ["earlier"], ["this"], "immediate: Ctrl+Enter sends at once"),
+    ("immediate", "alt+s", ["earlier"], ["this"], "immediate: Alt+S does as Ctrl+Enter"),
+])
+async def test_alt_s_sends_one_answer_now(store, sid, live, clock, send_mode, key, drafts, sent, desc):
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
+    store.set_mode(sid, send_mode)
+    store.queue(sid, "earlier")
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#items", DataTable).move_cursor(row=0)
+        await pilot.pause()
+        box = app.query_one("#answer", TextArea)
+        box.focus()
+        box.text = "this"
+        if key == "alt+s":   # as a terminal sends it (ESC s): printable, so the box would type it
+            app.post_message(events.Key("alt+s", "s"))
+        else:
+            await pilot.press(key)
+        await pilot.pause()
+        assert box.text == "", f"{desc}: submitted, and no s typed into the box"
+    assert [m["body"] for m in store.drafts(sid)] == drafts, desc
+    assert [m["body"] for m in store.pending(sid)] == sent, desc
+    assert mode(store.session(sid)) == send_mode, f"{desc}: the session's mode left as it was"
+
+
+@pytest.mark.parametrize("sends, shown, desc", [
+    ("queue", True, "queued: the hint offers Alt+S"),
+    ("send", False, "immediate: Ctrl+Enter sends already, so no Alt+S"),
+])
+def test_the_hint_offers_alt_s_only_when_queued(sends, shown, desc):
+    assert ("Alt+S sends this one now" in hint(sends)) is shown, desc
 
 
 @pytest.mark.anyio
@@ -3129,7 +3170,7 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         items, sessions = app.items_table, app.query_one("#session-list", DataTable)
-        assert [items.get_row_at(i)[2] for i in range(items.row_count)] == [q, d], "the question ranks first"
+        assert [str(items.get_row_at(i)[2]) for i in range(items.row_count)] == [q, d], "the question ranks first"
         assert str(items.get_row_at(1)[3]) == "unseen"
         assert str(sessions.get_row_at(0)[4]) == "1", "the session list counts unseen decisions"
         assert store.item(sid, d)["status"] == "unseen", "not seen until the person looks"
@@ -3143,12 +3184,12 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
         assert str(sessions.get_row_at(0)[4]) == ""
         items.move_cursor(row=0)
         await refresh(pilot, sid)
-        assert [items.get_row_at(i)[2] for i in range(items.row_count)] == [q, d], "moving on leaves it there"
+        assert [str(items.get_row_at(i)[2]) for i in range(items.row_count)] == [q, d], "moving on leaves it there"
         items.move_cursor(row=1)
         await pilot.press("delete")
         await pilot.pause()
         assert store.item(sid, d)["status"] == "closed", "Delete closes it"
-        assert [items.get_row_at(i)[2] for i in range(items.row_count)] == [q], "then it's finished"
+        assert [str(items.get_row_at(i)[2]) for i in range(items.row_count)] == [q], "then it's finished"
 
 
 @pytest.mark.anyio
@@ -4996,6 +5037,105 @@ async def test_right_click_paste_is_exclusive(store, sid, monkeypatch, clicks, b
         assert app.answer.text == box, desc
 
 
+async def right_click_at(app, selector: str, offset: tuple[int, int]) -> None:
+    """A right-click at an offset in a widget, through the app's own event handling (right_click)."""
+    args = _get_mouse_message_arguments(app.screen.query_one(selector), offset, button=3)
+    for cls in (events.MouseDown, events.MouseUp):
+        await app.on_event(cls(**args))
+
+
+async def session_menu(app, pilot, sid, offset=None):
+    """A right-click on the session's row (or at offset in the list), the menu it opens if any,
+    and the real buttons' presses recorded rather than acted on."""
+    table = app.session_list
+    await right_click_at(app, "#session-list", offset or (3, table.header_height + table.keys().index(sid)))
+    await pilot.pause()
+    got = []
+    for id_, *_ in app.session_menu_buttons(next(x for x in app.sessions if x["id"] == sid)):
+        app.screen_stack[0].query_one(f"#{id_}", Button).press = functools.partial(got.append, id_)
+    return got
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("busy, during, keys, pressed, said, desc", [
+    (None, None, ["enter"], ["relaunch"], None, "Enter presses the first that applies, on the session clicked"),
+    (None, None, ["down", "enter"], ["park"], None, "Down moves to the next"),
+    ("relaunch", None, ["enter"], ["park"], None, "a busy button greyed, as under the list, and passed over"),
+    (None, "relaunch", ["enter"], ["park"], None, "a button going busy while it's open greys there at the next refresh"),
+    (None, "stale", [], [], "Relaunch: still under way", "a choice gone busy since: said, not pressed"),
+    (None, None, ["escape"], [], None, "Esc closes it, pressing nothing"),
+])
+async def test_right_click_on_a_session_opens_its_menu(store, sid, clock, busy, during, keys, pressed, said, desc):
+    """#125: a right-click on a session's row selects it and shows its buttons as a menu."""
+    other = store.create_session("/tmp", name="other")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        notes = []
+        app.notify = lambda message, **kw: notes.append(message)
+        if busy:
+            app.press(sid, busy)
+        app.follow(other)
+        clock.tick(app)
+        await pilot.pause()
+        got = await session_menu(app, pilot, sid)
+        menu = app.screen
+        assert isinstance(menu, tui.SessionMenu), desc
+        assert app.current_session() == sid and app.filter_sid == sid, f"{desc}: the session clicked selected"
+        assert menu.buttons == app.session_menu_buttons(next(x for x in app.sessions if x["id"] == sid)), \
+            f"{desc}: the buttons under the list, as they show"
+        if during:
+            app.press(sid, "relaunch")
+            clock.tick(app)
+            await pilot.pause()
+            assert menu.query_one("#menu-relaunch", Button).disabled, f"{desc}: greyed in the menu too"
+        if during == "stale":
+            menu.action_answer("relaunch")
+            await pilot.pause()
+        for key in keys:
+            await pilot.press(key)
+            await pilot.pause()
+        assert not isinstance(app.screen, tui.SessionMenu) and got == pressed, desc
+        assert (notes[-1] if notes else None) == said, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("where, desc", [
+    ("header", "the list's header"),
+    ("scrollbar", "the list's scrollbar column"),
+    ("callout", "a tour callout lying over the list"),
+])
+async def test_right_click_off_a_sessions_row_opens_no_menu(store, sid, clock, where, desc):
+    for i in range(30):   # rows enough for a scrollbar
+        store.create_session("/tmp", name=f"s{i}")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.session_list
+        row = (2, table.header_height + 1)
+        if where == "callout":
+            from claude_wheelhouse.callout import TourCallout
+            callout = TourCallout("sessions", "A callout.")
+            callout.place = lambda: None   # held over the rows, wherever it would go beside the pane
+            await app.screen.mount(callout)
+            await pilot.pause()
+            base = callout.region   # where it lays out at no offset: the offset moves it from there
+            callout.styles.offset = (table.region.x - base.x, table.region.y + table.header_height - base.y)
+            await pilot.pause()
+            x, y = callout.region.x + 2, callout.region.y + 1
+            assert table.content_region.contains(x, y) and y > table.content_region.y + table.header_height, \
+                f"{desc}: it lies over a session's row"
+            row = (x - table.region.x, y - table.region.y)
+        elif where == "scrollbar":
+            row = (table.region.width - 1, row[1])   # the list's last column
+            under = app.screen.get_widget_at(table.region.x + row[0], table.region.y + row[1])[0]
+            assert type(under).__name__ == "ScrollBar", f"{desc}: the scrollbar there"
+        else:
+            row = (2, 0)
+        await session_menu(app, pilot, sid, row)
+        assert app.screen is app.screen_stack[0], f"{desc}: copy or paste, as anywhere else"
+
+
 @pytest.mark.anyio
 async def test_the_session_list_and_stats_pane_share_a_reader(store, sid):
     """OBS 2 (#51): each transcript read once, not once for the context bar and again for the pane."""
@@ -5118,6 +5258,9 @@ def sized(app, key: str) -> int:
     return sp.extent(sp.panes()[0])
 
 
+SLOT_SPLITTERS = {"left-middle", "left-bottom", "middle-middle", "middle-bottom"}   # columns.py's
+
+
 async def drag(pilot, key: str, dx: int, dy: int) -> None:
     sp = splitter(pilot.app, key)
     x, y = sp.region.offset
@@ -5154,7 +5297,9 @@ async def test_dragging_a_splitter_resizes_and_is_kept(store, sid, key, dx, dy, 
         after = sized(app, key)
         assert after - before == change, desc
         assert not splitter(app, key).has_class("-dragging"), desc
-    assert store.setting("layout." + key) is not None, f"{desc}: kept"
+    kept = "layout." + ("weights" if key in SLOT_SPLITTERS else key)   # a column's slots: their weights (#111)
+    assert (store.setting(kept) is not None) is (bool(change) or key not in SLOT_SPLITTERS), \
+        f"{desc}: kept, unless a column's line didn't move (columns.dragged)"
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, rows)) as pilot:
         await pilot.pause()
@@ -5162,7 +5307,7 @@ async def test_dragging_a_splitter_resizes_and_is_kept(store, sid, key, dx, dy, 
         await pilot.double_click(splitter(app, key))
         await pilot.pause()
         assert sized(app, key) == before, f"{desc}: a double-click puts the default back"
-    assert store.setting("layout." + key) is None, desc
+    assert store.setting(kept) is None, desc
 
 
 @pytest.mark.anyio
@@ -5277,8 +5422,8 @@ async def test_detail_keeps_its_room_on_a_narrow_terminal(store, sid, width, sto
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("size, rows, desc", [
-    ((160, 40), (12, 11, 12), "40 rows: the session list keeps a share, the stats too small for a chart"),
-    ((200, 60), (21, 17, 17), "60 rows: the session list grows most"),
+    ((160, 40), (13, 10, 12), "40 rows: the session list keeps a share, the stats too small for a chart"),
+    ((200, 60), (22, 17, 16), "60 rows: the session list grows most (columns.DEFAULT's shares)"),
 ])
 async def test_the_left_column_rows(store, sid, size, rows, desc):
     """Review of #86: Sessions, Stats and Session info, top to bottom; the session list
@@ -5295,7 +5440,9 @@ async def test_the_left_column_rows(store, sid, size, rows, desc):
     ({"items": "0.5"}, {"items": None}, "the old items-over-stats share: deleted, and sizes nothing"),
     ({"detail-pane": "0.3"}, {"detail-pane": None}, "the old Detail column share: deleted"),
     ({"session-info": "0.7"}, {"session-info": None}, "the old description-in-sessions share: deleted"),
-    ({"middle-top": "0.5"}, {"middle-top": "0.5"}, "a share for the Inbox over an empty slot: kept, not applied"),
+    ({"middle-top": "0.3"}, {"middle-top": None, "weights": None},
+     "the old Inbox-over-Decisions share (#111): deleted, the defaults"),
+    ({"weights": '{"middle.bottom": 0.9}'}, {"weights": '{"middle.bottom": 0.9}'}, "a weight for an empty slot: kept, not applied"),
 ])
 async def test_the_inbox_fills_its_column_whatever_was_stored(store, sid, stored, kept, desc):
     """Review of #86: a share kept for a splitter beside a collapsed slot left half the Inbox
@@ -7717,6 +7864,9 @@ DEFAULT_LAYOUT = {"left.top": "sessions", "left.middle": "stats", "left.bottom":
                   "middle.top": "items", "right": "detail"}
 DEFAULT_LAYOUT_SLOT = {p: s.replace(".", "-") for s, p in DEFAULT_LAYOUT.items()}
 CORE_DEFAULTS = {pane: home for pane, (_, home) in tui.CORE_PANES.items()}
+SHIPPED_DEFAULTS = {**CORE_DEFAULTS, "design": "middle.bottom", "prs": "middle.middle", "stats": "left.middle"}
+SIX_KEPT = {"left.top": "sessions", "left.middle": "stats", "left.bottom": "session-info", "middle.top": "items",
+            "middle.bottom": "design", "right": "detail"}   # a layout kept before the seventh slot
 
 
 @pytest.mark.parametrize("saved, defaults, want, desc", [
@@ -7729,12 +7879,21 @@ CORE_DEFAULTS = {pane: home for pane, (_, home) in tui.CORE_PANES.items()}
      "a pane the layout doesn't name, its default taken: the first empty slot"),
     ({"left.top": "items", "left.middle": "gone", "middle.bottom": "gone2"}, CORE_DEFAULTS,
      {**CORE_DEFAULTS, "items": "left.top", "sessions": "middle.top"}, "a slot kept for an absent pane is passed over"),
-    ({"left.top": "items", "left.middle": "x", "middle.top": "y", "middle.bottom": "z"}, CORE_DEFAULTS,
+    ({"left.top": "items", "left.middle": "x", "middle.top": "y", "middle.middle": "w", "middle.bottom": "z"}, CORE_DEFAULTS,
      {**CORE_DEFAULTS, "items": "left.top", "sessions": "left.middle"}, "and taken once no other is empty"),
     ({"left.top": "items", "middle.top": "items", "nowhere": "sessions"}, CORE_DEFAULTS,
-     {**CORE_DEFAULTS, "items": "left.top", "sessions": "left.middle"}, "a pane named twice, or a slot not one of six: once, ignored"),
-    ({}, {**CORE_DEFAULTS, "a": "left.middle", "b": "left.middle"}, {**CORE_DEFAULTS, "a": "left.middle", "b": "middle.bottom"},
+     {**CORE_DEFAULTS, "items": "left.top", "sessions": "left.middle"}, "a pane named twice, or a slot not one of seven: once, ignored"),
+    ({}, {**CORE_DEFAULTS, "a": "left.middle", "b": "left.middle"}, {**CORE_DEFAULTS, "a": "left.middle", "b": "middle.middle"},
      "two panes for one slot: the second to the first empty one"),
+    # upgrading to seven slots (#111): a layout kept with six loads as it was, PRs in the new one
+    (SIX_KEPT, SHIPPED_DEFAULTS, {**SHIPPED_DEFAULTS}, "six kept as they were: PRs takes middle.middle"),
+    ({**SIX_KEPT, "left.middle": "design", "middle.bottom": "stats"}, SHIPPED_DEFAULTS,
+     {**SHIPPED_DEFAULTS, "design": "left.middle", "stats": "middle.bottom"}, "a kept swap stays; PRs still takes its own"),
+    ({**SIX_KEPT, "middle.middle": "design", "middle.bottom": "stats", "left.middle": "prs"}, SHIPPED_DEFAULTS,
+     {**SHIPPED_DEFAULTS, "design": "middle.middle", "stats": "middle.bottom", "prs": "left.middle"},
+     "swaps across the new slot are kept"),
+    (SIX_KEPT, {k: v for k, v in SHIPPED_DEFAULTS.items() if k != "prs"},
+     {k: v for k, v in SHIPPED_DEFAULTS.items() if k != "prs"}, "without the PRs module: as before, middle.middle empty"),
 ])
 def test_arrange(saved, defaults, want, desc):
     assert tui.arrange(saved, defaults) == want, desc

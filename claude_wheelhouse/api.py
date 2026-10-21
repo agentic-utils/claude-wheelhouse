@@ -23,8 +23,8 @@ A pane's widget may also name a section of the ? overlay for its BINDINGS: `KEYS
 Decisions pane's table) that sets `TAB_LIST = True` is a Tab stop after the inbox, before the
 answer box (tui.tab_stops, #77). A pane's widget may say the least room it needs, `PANE_MINIMUM = (columns,
 rows)`, which its slot and column keep wherever it is swapped, and while it has nothing to
-show set `compact = True` and call `Context.relayout`: in a column of two slots its slot
-shrinks to those rows, the other taking the rest; alone in its column or in one of three, it
+show set `compact = True` and call `Context.relayout`: in a column of two slots or more its
+slot shrinks to those rows, the others taking the rest (columns.py); alone in its column, it
 keeps its size.
 
 A module may also serve the daemon side (.plan/modules.md, "The module boundary"):
@@ -47,6 +47,9 @@ from .docroots import Outside, confine  # noqa: F401  (a path resolved, if a doc
 # what a module may use of the wheelhouse: a session's token use (transcript_usage.py), read
 # by the hub's shared followers, the account's usage, and the effort levels
 from .models import EFFORTS, name as model_label  # noqa: F401
+# a pull request's URL read (prs.py), and how the lists colour a kind and show a row's full text
+from .prs import STATES as PR_STATES, canonical as pr_url, parse as parse_pr, repo_of  # noqa: F401
+from .rows import KIND_COLOUR, RowTips  # noqa: F401
 from .plan_usage import EVERY as USAGE_EVERY, AccountUsage  # noqa: F401
 from .transcript_usage import (AMBER, BUCKET, CHARTS, DAY, HOT, HOUR, OK, PARTIAL, SERIES,  # noqa: F401
                                SPAN, WARN, WEEK, History, Snapshot, Turn, UsageFollower, clock,
@@ -59,8 +62,9 @@ GROUP = "claude_wheelhouse.modules"
 # longer has (stats, before it was its own distribution): its module fails to import
 STALE = "not found: the installed package is out of date. Reinstall it with make install"
 OWN = "claude_wheelhouse."         # where this package's own entry points pointed
-# the six places a pane goes, by column; an empty one collapses (.plan/modules.md)
-SLOTS = ("left.top", "left.middle", "left.bottom", "middle.top", "middle.bottom", "right")
+# the seven places a pane goes, by column (the middle's third, middle.middle, from #111); an empty one
+# collapses (.plan/modules.md)
+SLOTS = ("left.top", "left.middle", "left.bottom", "middle.top", "middle.middle", "middle.bottom", "right")
 CARDS = "left.middle"              # where a module that didn't load says why: it has no slot to say
 DISABLED = "modules.disabled"      # settings: the modules switched off, a JSON list of their names
 
@@ -150,6 +154,15 @@ class Context:
     open_doc: Callable[[str, str], None] | None = None
     # a pane's `compact` changed: its slot shrinks to its least rows, or takes its share again. None daemon side
     relayout: Callable[[], None] | None = None
+    # pull requests (#111): every PR item in the store, any session's, as
+    # {"url", "session_id", "ref", "status", "title"}. None TUI side
+    pr_items: Callable[[], list[dict]] | None = None
+    # GitHub's state for PRs, {url: one of PR_STATES}, written to their items. None TUI side
+    set_pr_states: Callable[[dict[str, str]], None] | None = None
+    # when a session last pushed, merged, readied or closed a PR (epoch seconds), else None. None TUI side
+    pr_activity: Callable[[], float | None] | None = None
+    # an item shown in the Detail pane, highlighted in the inbox: (session id, ref). None daemon side
+    show_item: Callable[[str, str], None] | None = None
 
 
 @dataclass
