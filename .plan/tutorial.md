@@ -158,8 +158,9 @@ their tokens per run.
   then marks the task done. It's told to touch no other file, run no commands, use no
   subagents, and to skip its own session-end routine (no memory or handoff notes) when ended. It asks for the decision outright, so the demo posts
   one even under `WHEELHOUSE_DECISIONS=0`, which only drops the protocol's decisions section.
-- Immediate mode has no step of its own: the hint under the answer box names the mode and
-  Ctrl+T, and `?` gives the send-mode rules.
+- Immediate mode has no step of its own: the tour's send step names Ctrl+T (Mode), the
+  line under the answer box says what each key does in the mode set, and `?` gives the
+  send-mode rules.
 - First run: with no sessions and no `tutorial_offer` setting (a new `settings` table), a
   one-line offer (wrapped on a narrow screen, so its command is never cut) sits at the top
   of the screen. Enter starts the tutorial, Esc dismisses it; either way the setting is written and it never comes back. `tutorial_offer = reset`
