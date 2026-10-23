@@ -50,7 +50,7 @@ ACTIONS = (("open", "Open", "Open the PR in the browser"),
            ("merge", "Merge", "Merge the PR, the way its repo allows: asked first"),
            ("review", "Request review", "Ask the session that made the PR to post a review request on Slack"),
            ("close", "Close", "Close the PR without merging it: asked first"))
-OVERRAN = 5                              # seconds a command runs before its answer is kept for result (the hub waits 10)
+OVERRAN = 0                              # seconds a command runs before its answer is kept for result: any, as the hub's 10 s wait counts from the queue, not the run
 KEEP_RESULTS = 50                        # commands' answers kept for the result route
 WAIT_BUSY = 60                           # seconds a bulk action waits on the module's command thread, a PR
 PAUSE = 1.0                              # seconds between its tries
@@ -88,9 +88,9 @@ def routes(ctx: api.Context) -> list[api.Route]:
         return fetcher.detail(call.query.get("url", ""), call.query.get("fresh") == "1")
 
     def done(act):
-        """A command's answer; one that took long enough to have run past the hub's wait
-        (504) kept too, under the token its caller sent with it, so that caller alone can
-        ask `result` what came of it, once (#156)."""
+        """A command's answer, kept too under the token its caller sent with it, so that
+        caller alone can ask `result` what came of it, once, should the hub's wait (504)
+        have run out while it queued or ran (#156)."""
         def handler(call: api.Call):
             url, token = url_of(call), (call.body or {}).get("token")
             began = time.monotonic()
@@ -98,7 +98,7 @@ def routes(ctx: api.Context) -> list[api.Route]:
             if isinstance(token, str) and token and time.monotonic() - began >= OVERRAN:
                 fetcher.results[token] = got
                 while len(fetcher.results) > KEEP_RESULTS:   # the oldest, never asked for, dropped
-                    fetcher.results.pop(next(iter(fetcher.results)))
+                    fetcher.results.pop(next(iter(fetcher.results), None), None)
             return got
         return handler
 
