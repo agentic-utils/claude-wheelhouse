@@ -6212,6 +6212,8 @@ class WheelhouseApp(App):
         self.settle()
         if isinstance(self.focused, (TextArea, Input)):
             return
+        if self.screen is self.screen_stack[0] and not self.items_table.show_cursor:
+            return   # the highlight hidden (#148): nothing in the inbox is picked, so nothing to close
         if self.items_table.marked and self.screen is self.screen_stack[0]:
             self.close_marked()
             return
