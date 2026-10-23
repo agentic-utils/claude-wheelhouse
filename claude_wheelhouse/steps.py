@@ -30,10 +30,13 @@ SDK_ONLY = frozenset({"before_compact", "after_compact"})
 # first-press dialog has been answered (CHOSEN)
 UNATTENDED = frozenset({"after_compact", "pr_merged", "session_start"})
 # "after" events: sent as soon as the event happens, never held behind the session's queued
-# answers. Not a switch: the dialogs say so (AFTER_NOTE)
+# answers. Not a switch: the dialogs say so (after_note)
 AFTER = frozenset({"on_resume", "after_compact", "pr_merged"})
-AFTER_NOTE = ("Messages after an event (resumed, compacted, PR merged) go to the session at once, "
-              "without waiting for its queued answers to be sent.")
+def after_note(sdk: bool) -> str:
+    """The dialogs' plain note on "after" messages: compaction named only in SDK mode."""
+    events = "resumed, compacted, PR merged" if sdk else "resumed, PR merged"
+    return (f"Messages after an event ({events}) go to the session at once, without waiting for its "
+            "queued answers to be sent.")
 CHOSEN = "step.chosen"   # set once the first-press dialog has been answered
 ALL_ADDONS_KEY = "STEP_ADDONS"
 STEP_FLAG = "--step"
@@ -176,7 +179,7 @@ def table(store: Store, sdk: bool) -> dict:
              "switches": [{"name": sw, "on": switch(store, e, sw), "fixed": got[1] if (got := fixed(e, sw)) else None}
                           for sw in switches(e)]}
             for e in EVENTS if enabled(e, sdk)]
-    return {"chosen": chosen(store), "events": rows, "note": AFTER_NOTE}
+    return {"chosen": chosen(store), "events": rows, "note": after_note(sdk)}
 
 
 def set_switch(store: Store, event: str, sw: str, on: bool | None) -> None:

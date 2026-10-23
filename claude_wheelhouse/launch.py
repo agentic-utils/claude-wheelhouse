@@ -234,7 +234,7 @@ def steps_listing(sdk: bool) -> str:
             lines.append(f"  announce: {steps.ANNOUNCE[event]}")
         for name, text in steps.ADDONS.get(event, {}).items():
             lines.append(f"  {name} ({'on' if steps.DEFAULTS[(event, name)] else 'off'}): {text}")
-    return "\n".join(lines) + f"\n\n{steps.AFTER_NOTE}"
+    return "\n".join(lines) + f"\n\n{steps.after_note(sdk)}"
 
 
 def injected(sdk: bool | None = None) -> str:

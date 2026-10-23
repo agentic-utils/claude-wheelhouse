@@ -3187,7 +3187,7 @@ class FirstSteps(Dialog):
                              "instructions (CLAUDE.md) can act. It can also do more:"), classes="dialog-prompt")
             for name, text, _ in steps.OFFERED:
                 yield Checkbox(Text(text), True, id=f"steps-{name}")
-            yield Label(Text(steps.AFTER_NOTE), classes="dialog-note")
+            yield Label(Text(steps.after_note(self.sdk)), classes="dialog-note")
             with Horizontal(classes="buttons"):
                 yield Button("OK", variant="primary", id="steps-ok")
                 yield Button("Cancel", id="steps-cancel")

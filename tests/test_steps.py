@@ -227,7 +227,7 @@ def test_table_lists_what_runs(store, sdk, compaction, desc):
     table = steps.table(store, sdk)
     events = [r["event"] for r in table["events"]]
     assert ("before_compact" in events and "after_compact" in events) is compaction, desc
-    assert table["note"] == steps.AFTER_NOTE and table["chosen"] is False, desc
+    assert table["note"] == steps.after_note(sdk) and ("compacted" in table["note"]) is compaction and table["chosen"] is False, desc
 
 
 def test_choose_sets_every_addon_its_tick_names(store):

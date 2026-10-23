@@ -893,7 +893,7 @@ NEW_ROUTES = [
     ("POST", "/settings", {"key": "layout.x", "value": "0.5"}, lambda store, sid, r: store.setting("layout.x") == "0.5",
      "a splitter's size kept"),
     ("GET", "/settings", None, lambda store, sid, r: r.json() == {}, "the kept sizes"),
-    ("GET", "/settings/steps", None, lambda store, sid, r: (r.json()["chosen"], r.json()["note"]) == (False, steps.AFTER_NOTE),
+    ("GET", "/settings/steps", None, lambda store, sid, r: (r.json()["chosen"], r.json()["note"]) == (False, steps.after_note(True)),
      "the session steps' switches"),
     ("POST", "/settings/steps/pr_merged", {"switch": "cleanup", "on": False},
      lambda store, sid, r: store.setting("step.pr_merged.cleanup") == "off", "a step's switch kept"),
