@@ -30,7 +30,7 @@ from typing import Callable
 from . import adopt, api, features, fork, launch, liveness, models, plan_usage, prs, subagents, transcript, transcript_usage, tutorial
 from .docroots import DOC_CAP
 from .host import AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, NO_NOTES, keepalive_body, waits_on_person
-from .store import COMPACT_QUESTION, DISMISSABLE, PRS_SINCE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
+from .store import COMPACT_QUESTION, DISMISSABLE, PRS_SINCE, STATUSES, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
 
 RUNNING = ("live", "stalled", "starting")
 # a hosted session's activity when nothing is under way: errored and stopped count as resting
@@ -100,11 +100,11 @@ def aimed(target) -> str:
 
 def still_queued(s, target, drafts) -> str:
     """After Alt+S (#124): what's still queued for the session, and how much of it the answer
-    just sent has overtaken, being for the same item (or, a general message, the session)."""
+    just sent has overtaken, being for the same item (or, a general message, general too)."""
     n, mine = len(drafts), sum(m["item_ref"] == target[1] for m in drafts)
     out = f"{n} answer{'' if n == 1 else 's'} still queued for {display_name(s)}"
     if mine:
-        out += f" ({mine} for {aimed(target)}, which this one has overtaken)"
+        out += f" ({mine} {f'for {target[1]}' if target[1] else 'general'}, which this one has overtaken)"
     return out + f": Ctrl+S or Send sends {'it' if n == 1 else 'them'}"
 
 
@@ -812,8 +812,7 @@ class Hub:
             done.say(f"denied {target[1]}, with your message")
         elif now or mode(s) == "immediate":
             self.store.send(target[0], text, target[1])
-            late = "" if self.running(target[0]) else " (not running: delivered when it's relaunched)"
-            done.say(f"sent to {aimed(target)}{late}")
+            done.say(f"sent to {aimed(target)}{self.late(target[0])}")
             if mode(s) == "queued" and (drafts := self.store.drafts(target[0])):
                 done.say(still_queued(s, target, drafts))
         # on the row as it is now: its old monitor would deliver a draft at once anyway
@@ -839,11 +838,14 @@ class Hub:
         """A queued answer taken back: its text, or None if it went meanwhile."""
         return self.store.unqueue(msg_id)
 
+    def late(self, sid: str) -> str:
+        """What a send to a session that isn't running adds: when it will be delivered."""
+        return "" if self.running(sid) else " (not running: delivered when it's relaunched)"
+
     def sent_note(self, sid: str, n: int) -> str:
         s = self.store.session(sid)
         name = (s["name"] or short(sid)) if s else short(sid)
-        late = "" if self.running(sid) else " (not running: delivered when it's relaunched)"
-        return f"{n} to {name}{late}"
+        return f"{n} to {name}{self.late(sid)}"
 
     def send_queue(self, sid: str) -> Done:
         """A session's queue, sent as one message; a dead one's stays queued (#62)."""
@@ -956,24 +958,26 @@ class Hub:
         """Whether an unseen decision became seen: a no-op for anything else."""
         return self.store.mark_seen(sid, ref)
 
-    def close(self, sid: str, ref: str, closed: bool) -> Done:
+    def close(self, sid: str, ref: str, closed: bool, status: str | None = None) -> Done:
         """Close a question or decision, or reopen it: a question as answered, a decision as
-        seen. Dismiss a settled task or subagent, or bring it back. One finished already has
-        nothing to close."""
+        seen, or as `status` (Ctrl+Z putting back the status it had). Dismiss a settled task or
+        subagent, or bring it back. One finished already has nothing to close."""
         item = self.store.item(sid, ref)
         if item is None:
             self.row(sid)   # SessionGone if that's why
             raise KeyError(f"no item {ref} in this session")
         if closed and standing(item) == "finished":
             return Done(False)
+        if status is not None and (item["kind"] not in ("question", "decision") or status not in STATUSES[item["kind"]]):
+            raise ValueError(f"{ref} can't be reopened as {status}")
         if not closed:   # Ctrl+R: one deleted with its parent comes back too
             self.store.undelete(sid, ref)
         if item["kind"] == "decision":
-            self.store.close_decision(sid, ref, closed)
+            self.store.close_decision(sid, ref, closed, status)
         elif item["kind"] in DISMISSABLE:
             self.store.dismiss(sid, ref, closed)
         else:
-            self.store.update_item(sid, ref, status="closed" if closed else "answered")
+            self.store.update_item(sid, ref, status="closed" if closed else status or "answered")
         return Done()
 
     def set_pinned(self, sid: str, ref: str, pinned: bool) -> Done:

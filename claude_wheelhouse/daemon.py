@@ -1050,7 +1050,7 @@ class Daemon:
             if want is not None and want == mode(hub.row(sid)):
                 return Done(False)   # last write wins: it's that already
             return hub.toggle_mode(sid)
-        if action in ("send", "send-now"):   # send-now (#124) ships under fingerprint.API 7, with #111
+        if action in ("send", "send-now"):
             return hub.submit((sid, text(body, "ref", False)), text(body, "text"), now=action == "send-now")
         if action == "rename":
             return hub.rename(sid, text(body, "name"))
@@ -1118,7 +1118,10 @@ class Daemon:
         closed = body.get("closed", True)
         if not isinstance(closed, bool):
             raise Refused(400, "closed must be true or false")
-        return self.hub.close(request.path_params["sid"], request.path_params["ref"], closed)
+        status = body.get("status")   # Ctrl+Z: the status it reopens as, the one it had
+        if status is not None and not isinstance(status, str):
+            raise Refused(400, "status must be a string")
+        return self.hub.close(request.path_params["sid"], request.path_params["ref"], closed, status)
 
     def pin(self, request: Request, body: dict) -> Done:
         pinned = body.get("pinned")

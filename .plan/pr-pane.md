@@ -232,6 +232,11 @@ the run as the Decisions sort is.
 - **All**: every open PR the person authored, in any repo, whether or not a session made it
   (Doug: "all PRs by me, including those that do not relate to any currently-open
   Wheelhouse sessions"). Up to 100, from the search.
+- As built (#149): either scope follows the session selected in the session list, as the
+  inbox does (Doug: "show items related to selected session, or show all if no session
+  selected"). With one selected, its PR items alone (`PRs · mine · <session>`); a PR no
+  session made relates to none, so shows only with no session selected, and Request review
+  is greyed on it.
 - A merged or closed PR leaves the pane at once, in both scopes (Doug: "drop closed PRs
   immediately"). Its inbox item still settles and dims, as in part 2.
 
@@ -264,6 +269,11 @@ The light, taking the first that applies:
 - Selecting a row that is a PR item shows it in Detail (its thread and answer box).
   Selecting any other shows a read-only card: title, URL, branch, checks, review. Enter
   opens the PR in the browser.
+- As built (#148): Detail shows the last pick in either list. The inbox and the pane each
+  highlight it if they list it, and otherwise hide their highlight (the core's
+  `Context.unselect` and the panes' `showing(sid, ref)` hook) until a click, Enter or a
+  moving key brings it back on its row. A PR that isn't an item leaves nothing selected,
+  Detail saying so, its card under the table as before.
 
 ## 4. Versions and schema
 

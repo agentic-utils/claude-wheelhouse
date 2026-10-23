@@ -156,14 +156,23 @@ FEATURES: tuple[Feature, ...] = (
             tip="A session's pull requests show as PR and their number, with GitHub's status."),
     Feature("prs-pane", UNRELEASED, "prs",
             note="The PRs pane lists the open PRs your sessions made, or with M every open PR you authored, each "
-                 "with a traffic light for checks, review and conflicts.",
-            tip="M switches between your sessions' PRs and all of yours; R fetches now."),
+                 "with a traffic light for checks, review and conflicts; with a session selected, its PRs alone.",
+            tip="It follows the session selected, as the inbox does. M: your sessions' PRs or all of yours."),
     Feature("session-menu", UNRELEASED, "sessions",
             note="Right-click a session in the session list for a menu of its buttons, acting on that session.",
             tip="Right-click a session for a menu of its buttons."),
     Feature("send-now", UNRELEASED, "send",
             note="Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits.",
             tip="Alt+S sends just this answer now, leaving the rest of the queue for Ctrl+S."),
+    Feature("pr-actions", UNRELEASED, "prs",
+            note="A PR in the PRs pane has Open, Merge and Request review buttons, and a right-click on its row gives "
+                 "them as a menu: Merge asks first and says what stood in its way, and Request review asks the "
+                 "session that made the PR to post the request on Slack.",
+            tip="Open, Merge and Request review act on the PR selected; right-click a PR for them as a menu."),
+    Feature("undo", UNRELEASED, "inbox",
+            note="Ctrl+Z in the inbox undoes the last delete, pin or reopen, an open question coming back open; "
+                 "Delete on an open question asks first.",
+            tip="Deleted something by mistake? Ctrl+Z brings it back as it was."),
 )
 
 

@@ -7,7 +7,8 @@ without Textual.
   the same whichever other slots show.
 - The weighted slots share what the compact slots and the splitters leave in proportion to
   their weights, each at least its least rows (`shares`), each line on the row nearest its
-  place (`rows`). Being compact or hidden is applied here and never written back: a slot
+  place (`rows`). A column too short for their least rows, a rearranged one at 80x24
+  (#132), takes the rows it lacks from the slots with the most above FLOOR (`squeezed`). Being compact or hidden is applied here and never written back: a slot
   coming or going changes no weight, and the others keep their proportions.
 - A splitter joins each pair of neighbouring weighted slots, a compact or empty slot
   between them or not (`pairs`): it sits just above the lower one. Dragging it sets those
@@ -27,6 +28,7 @@ DEFAULT = {"left.top": 0.4, "left.middle": 0.3, "left.bottom": 0.3,
 # the splitters' shares kept before weights, and the second round of #111's, never released:
 # deleted on start, each column starting from its defaults (a share dragged once is dragged again)
 OLD_KEYS = ("left-middle", "left-bottom", "middle-top", "middle-middle", "middle-bottom")
+FLOOR = 3   # rows: the least a squeezed slot keeps, a pane's border and a line (its own least, if less)
 EPS = 1e-6   # rows: a line a float's error under a half rounds as the half does, so it never flickers
 
 
@@ -69,13 +71,27 @@ def shares(room: int, weights: list[float], minimums: list[int]) -> tuple[list[f
 
 def rows(room: int, weights: list[float], minimums: list[int]) -> list[int]:
     """The rows each slot has: its share (`shares`) with each line between two slots on the
-    row nearest it, so the rows sum to `room` (while the minimums fit; past that, each its
-    minimum) and a line moves only when the slots either side of it change."""
+    row nearest it, so the rows sum to `room` (while the minimums fit; past that, `squeezed`)
+    and a line moves only when the slots either side of it change."""
     real, scale = shares(room, weights, minimums)
     if not scale:
-        return list(minimums)
+        return squeezed(room, minimums)
     lines = [0] + [line(at) for at in tops(real)[1:]] + [room]
     return [b - a for a, b in zip(lines, lines[1:])]
+
+
+def squeezed(room: int, minimums: list[int]) -> list[int]:
+    """The minimums, short of `room`: a row at a time from the slot with the most above its
+    floor (FLOOR, or its minimum if less), the lower on a tie, until they fit or each is at
+    its floor. Session info, with the tallest minimum, is usually the one that gives way first."""
+    out = list(minimums)
+    floors = [min(m, FLOOR) for m in minimums]
+    while out and sum(out) > room:
+        i = max(range(len(out)), key=lambda k: (out[k] - floors[k], k))
+        if out[i] <= floors[i]:
+            break
+        out[i] -= 1
+    return out
 
 
 def tops(real: list[float]) -> list[float]:

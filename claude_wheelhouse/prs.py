@@ -24,6 +24,9 @@ import shlex
 from datetime import datetime
 from pathlib import Path
 
+from rich.style import Style
+from rich.text import Text
+
 # a pull request's URL, as GitHub gives it: owner, repo, number
 PULL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/(\d+)")
 STATES = ("draft", "open", "merged", "closed")   # a PR item's statuses: GitHub's, never the session's
@@ -37,6 +40,13 @@ def parse(text: str | None) -> tuple[str, str, int] | None:
     """The first pull request URL in text: (owner, repo, number); None if there's none."""
     m = PULL.search(text or "")
     return (m[1], m[2], int(m[3])) if m else None
+
+
+def link(url: str) -> Text:
+    """A PR's URL as the panes show it (#139): without https://github.com/, and a click on any
+    of it opens the whole URL, on whichever line it wraps to: every segment carries it (the
+    app's open_url action), so none opens a fragment, as the terminal's own detection did."""
+    return Text(url.removeprefix("https://github.com/"), style=Style.from_meta({"@click": f"app.open_url({url!r})"}))
 
 
 def canonical(text: str | None) -> str | None:

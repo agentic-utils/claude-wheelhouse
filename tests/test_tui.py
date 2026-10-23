@@ -12,6 +12,7 @@ from unittest import mock
 
 import pytest
 from rich.color import Color
+from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
@@ -101,7 +102,7 @@ async def test_alt_s_sends_one_answer_now(store, sid, live, clock, send_mode, ke
     ("send", False, "immediate: Ctrl+Enter sends already, so no Alt+S"),
 ])
 def test_the_hint_offers_alt_s_only_when_queued(sends, shown, desc):
-    assert ("Alt+S sends this one now" in hint(sends)) is shown, desc
+    assert ("Alt+S: send" in hint(sends)) is shown, desc
 
 
 @pytest.mark.anyio
@@ -1254,6 +1255,9 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
             raw_keys(app, "down", *burst)
         for _ in range(3):
             await pilot.pause()
+        if isinstance(app.screen, Confirm):   # Delete on an open question asks first (#151): yes
+            await pilot.press("y")
+            await pilot.pause()
         desc = f"Down, {burst} from the {where} list, {'following A' if filtered else 'unfiltered'}"
         # the session acted on: following A, Down goes to B; unfiltered, the list's Down picks A
         ctx = sid if (where, filtered) in (("items", True), ("sessions", False)) else other
@@ -1660,8 +1664,8 @@ class Burst:
 @pytest.mark.parametrize("focus, at, burst, seen, want, desc", [
     ("answer", "qa", ("a", "b", "backspace", "ctrl+enter"), lambda b: (b.answer("qa"), b.status("qa"), b.focus()),
      (["a"], "open", "answer"), "review 14 (1): Backspace edits the box, then Ctrl+Enter sends it; the question stays open"),
-    ("items", "qa", ("delete", "down"), lambda b: (b.status("qa"), b.status("qb")), ("closed", "open"),
-     "review 14 (2): Delete closes the question it was on, not the next"),
+    ("items", "qa", ("delete", "y", "down"), lambda b: (b.status("qa"), b.status("qb")), ("closed", "open"),
+     "review 14 (2): Delete closes the question it was on, once confirmed (an open one), not the next"),
     ("items", "qa", ("ctrl+s", "down"), lambda b: (b.sent("alpha"), b.sent("bravo")), (1, 0),
      "review 14 (3): Ctrl+S sends the queue of the session it was on, not the next row's"),
     ("items", "qa", ("space", "down"), lambda b: b.marked(), {"qa"}, "review 14 (4): Space marks the row it was on"),
@@ -2230,6 +2234,45 @@ async def test_a_new_reply_in_a_long_thread(store, sid, up, own, desc):
         assert scroll.scroll_y == (y if up and not own else scroll.max_scroll_y), desc
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("up, own, desc", [
+    (False, False, "at the newest reply: a new one shows at the end"),
+    (True, False, "scrolled up to read: what shows stays put"),
+    (False, True, "your own answer, at the newest reply: it shows at the end"),
+    (True, True, "your own answer, scrolled up to read: what shows stays put"),
+])
+@pytest.mark.parametrize("size", [(160, 40), (100, 30)])
+async def test_a_new_reply_in_a_long_thread_in_detail(store, sid, up, own, desc, size):
+    """#147: an item's thread in the Detail pane follows its newest reply, as the conversation
+    does, unless scrolled more than a line up from its end. Selected, it shows from its top."""
+    ref = store.post_item(sid, "question", "q", body="\n\n".join(f"para {i}" for i in range(80)), status="open")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{ref}"))
+        await pilot.pause()
+        scroll = app.detail_scroll
+        assert app.selected == (sid, ref) and scroll.scroll_y == 0 < scroll.max_scroll_y, f"{desc}: shown from its top"
+        scroll.scroll_to(y=20 if up else scroll.max_scroll_y, animate=False, immediate=True)
+        await pilot.pause()
+        y = scroll.scroll_y
+        if own:
+            app.answer.text = "my answer"
+            app.answer.focus()
+            await pilot.press("ctrl+enter")
+        else:
+            store.reply(sid, ref, "a new reply", status="open")
+            app.refresh_data()
+        await pilot.wait_for_scheduled_animations()
+        await pilot.pause()
+        assert ("my answer" if own else "a new reply") in app._detail_text, f"{desc}: it shows in the thread"
+        assert scroll.max_scroll_y > y, f"{desc}: the reply made it longer"
+        if up:   # within a line: the answer box's own change may shift the view by one
+            assert abs(scroll.scroll_y - y) <= 1 < scroll.max_scroll_y - scroll.scroll_y, desc
+        else:
+            assert scroll.scroll_y == scroll.max_scroll_y, desc
+
+
 class OneTranscript(App):
     """A Transcript alone in its scroll: blocks laid out and changed, nothing else."""
     def compose(self) -> ComposeResult:
@@ -2728,6 +2771,9 @@ async def test_delete_closes_and_ctrl_r_reopens_questions(store, sid, key, kind,
             app.answer.focus()
         await pilot.press(key)
         await pilot.pause()
+        if isinstance(app.screen, Confirm):   # an open question asks first (#151)
+            await pilot.press("y")
+            await pilot.pause()
     assert store.item(sid, ref)["status"] == expected, desc
 
 
@@ -2890,6 +2936,8 @@ async def test_a_selected_item_moves_only_on_delete(store, sid, live, clock, sta
             assert app.selected == (sid, ref), desc
             if act in ("delete", "ctrl+r"):
                 await pilot.press(act)
+                if isinstance(app.screen, Confirm):   # Delete on an open question asks first (#151)
+                    await pilot.press("y")
             elif act.startswith("#"):
                 await pilot.click(act)
             else:
@@ -3247,7 +3295,7 @@ async def test_marking_rows(store, sid, steps, marked, desc):
             await pilot.pause()
         assert sorted(k.split("|")[1] for k in items.marked) == marked, desc
         shaded = [items.get_row_at(i)[2] for i in range(items.row_count)
-                  if isinstance(cell := items.get_row_at(i)[4], Text) and cell.style.bgcolor]
+                  if isinstance(cell := items.get_row_at(i)[4], Text) and (Style.parse(cell.style) if isinstance(cell.style, str) else cell.style).bgcolor]
         assert [str(r) for r in shaded] == marked, f"{desc}: marked rows are shaded"
 
 
@@ -3264,6 +3312,9 @@ async def five_questions(store, sid, pilot, steps) -> None:
             await pilot.click("#items", offset=(20, 1 + arg), control=how == "ctrl", shift=how == "shift",
                               meta=how == "alt")
         await pilot.pause()
+        if isinstance(app.screen, Confirm):   # Delete on an open question asks first (#151): yes
+            await pilot.press("y")
+            await pilot.pause()
 
 
 def post_five(store, sid) -> None:
@@ -3445,14 +3496,14 @@ async def test_ctrl_r_reopens_only_from_the_item_list(tmp_path, follow, focus, a
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("kinds, key, said, desc", [
-    (("question", "task"), "delete", "closed Q1; dismissed T1: F shows finished items",
+    (("question", "task"), "delete", "closed Q1; dismissed T1: F shows finished items, Ctrl+Z undoes it",
      "Delete on mixed marks says which it closed and which it dismissed"),
-    (("task", "agent"), "delete", "dismissed T1, A1: F shows finished items", "all dismissed: said so"),
+    (("task", "agent"), "delete", "dismissed T1, A1: F shows finished items, Ctrl+Z undoes it", "all dismissed: said so"),
     (("question", "task"), "ctrl+r", "reopened T1, Q1", "Ctrl+R brings either back"),
 ])
 async def test_the_word_after_acting_on_marks_names_each_act(store, sid, kinds, key, said, desc):
     with one_second():   # so the settled keep the order they're named in
-        refs = [store.post_item(sid, k, k, status={"question": "open", "task": "done", "agent": "done"}[k])
+        refs = [store.post_item(sid, k, k, status={"question": "answered", "task": "done", "agent": "done"}[k])
                 for k in kinds]
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -3500,7 +3551,7 @@ async def test_the_word_after_acting_on_marks_mid_sink_names_them_as_they_will_s
         app.notify = lambda text, **kw: notes.append(text)
         await pilot.press("delete")
         await pilot.pause()
-    assert notes == ["dismissed T1; closed Q1: F shows finished items"]
+    assert notes == ["dismissed T1; closed Q1: F shows finished items, Ctrl+Z undoes it"]
 
 
 @pytest.mark.anyio
@@ -3521,6 +3572,9 @@ async def test_delete_closes_the_marked_questions_and_ctrl_r_reopens_them(store,
         assert f"{sid}|{d}" in items.rows, "rebuilt"
         assert sorted(k.split("|")[1] for k in items.marked) == [q1, q3, t], "marks survive a refresh"
         await pilot.press("backspace")
+        await pilot.pause()
+        assert isinstance(app.screen, Confirm) and "2 are open questions" in app.screen.prompt, "asked once"
+        await pilot.press("y")
         await pilot.pause()
         assert [store.item(sid, r)["status"] for r in (q1, q2, q3, t)] == ["closed", "open", "closed", "running"]
         assert items.marked == set()
@@ -4701,9 +4755,9 @@ def test_hosted_busy(activity, busy, desc):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("mode, sends_now, expected, desc", [
-    (None, False, "Ctrl+Enter to queue", "a new session queues"),
-    ("immediate", False, "Ctrl+Enter to send", "immediate mode sends"),
-    (None, True, "Ctrl+Enter to send", "a session from before queued answers sends whatever its mode"),
+    (None, False, "Ctrl+Enter: queue", "a new session queues"),
+    ("immediate", False, "Ctrl+Enter: send", "immediate mode sends"),
+    (None, True, "Ctrl+Enter: send", "a session from before queued answers sends whatever its mode"),
 ])
 async def test_the_hint_says_what_ctrl_enter_does(store, sid, mode, sends_now, expected, desc, monkeypatch):
     if mode:
@@ -4738,7 +4792,7 @@ async def test_the_hint_follows_a_mode_switched_in_a_thread_at_once(store, sid, 
         await pilot.press("enter", "ctrl+t", "escape")
         await pilot.pause()
         assert not isinstance(app.screen, ThreadView)
-        assert str(app.screen.query_one(Hint).content).startswith("Ctrl+Enter to send · ")
+        assert str(app.screen.query_one(Hint).content).startswith("Ctrl+Enter: send · ")
 
 
 @pytest.mark.anyio
@@ -5137,6 +5191,85 @@ async def test_right_click_off_a_sessions_row_opens_no_menu(store, sid, clock, w
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("size, at, side, desc", [
+    ((80, 24), "row", "below", "a right-click on the first row at 80x24: under the row, at the pointer"),
+    ((160, 40), "last", "below", "a right-click on the last row in view at 160x40"),
+    ((80, 24), (3, 20), "above", "no room below at 80x24: over the row instead"),
+    ((160, 40), (3, 36), "above", "no room below at 160x40"),
+    ((80, 24), (75, 3), "below", "near the right edge at 80x24: kept on the screen across"),
+    ((160, 40), (155, 3), "below", "near the right edge at 160x40"),
+])
+async def test_a_sessions_menu_opens_at_its_row(store, sid, clock, size, at, side, desc):
+    """#137: the menu opens below the session's row, or above it without the room below; not mid-screen."""
+    for i in range(30):
+        store.create_session("/tmp", name=f"s{i}")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        table = app.session_list
+        if isinstance(at, tuple):   # a row there, as a tall list would put it
+            s = next(x for x in app.sessions if x["id"] == sid)
+            app.push_screen(tui.SessionMenu(sid, "name", app.session_menu_buttons(s), tui.Offset(*at)))
+            x, line = at
+        else:
+            row = 0 if at == "row" else table.content_region.height - table.header_height - 1
+            x, line = table.region.x + 3, table.region.y + table.header_height + row
+            await session_menu(app, pilot, table.keys()[row], (3, table.header_height + row))
+        await pilot.pause()
+        assert isinstance(app.screen, tui.SessionMenu), desc
+        box = app.screen.query_one("#dialog").region
+        width, height = size
+        assert (box.y == line + 1) if side == "below" else (box.bottom == line), f"{desc}: {box} for line {line}"
+        assert box.bottom <= height and box.y >= 0, f"{desc}: on the screen down"
+        assert box.x == min(x, width - box.width) and box.width < width // 2, f"{desc}: {box} at the pointer, on the screen"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("focus, change, expect, desc", [
+    (1, "disabled", 2, "the one focused greys: the next one below"),
+    (1, "hidden", 2, "the one focused hides: the next one below"),
+    (-1, "disabled", -2, "the last one greys: the one above"),
+])
+async def test_a_menu_button_going_off_moves_focus_to_a_neighbour(store, sid, clock, focus, change, expect, desc):
+    """#128: focus goes to a neighbour of the menu button that greys or hides, not the top."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await session_menu(app, pilot, sid)
+        menu = app.screen
+        usable = [b for b in menu.query(Button) if b.display and not b.disabled]
+        menu.set_focus(usable[focus])
+        await pilot.pause()
+        off = usable[focus].id.removeprefix("menu-")
+        menu.paint([(id_, caption, disabled or (id_ == off and change == "disabled"),
+                     shown and not (id_ == off and change == "hidden")) for id_, caption, disabled, shown in menu.buttons])
+        await pilot.pause()
+        assert menu.focused is usable[expect], f"{desc}: {menu.focused.id}, not {usable[expect].id}"
+
+
+@pytest.mark.anyio
+async def test_a_stale_menu_choice_is_named_by_its_own_caption(store, sid, clock):
+    """#128: a choice no longer applying, the selection moved to another session, says the
+    menu's caption, not the one under the list for the session selected now."""
+    other = store.create_session("/tmp", name="other")
+    store.set_parked(other, True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        notes = []
+        app.notify = lambda message, **kw: notes.append(message)
+        await session_menu(app, pilot, sid)
+        menu = app.screen
+        app.follow(other)
+        app.paint_session_info()
+        await pilot.pause()
+        assert str(app.screen_stack[0].query_one("#relaunch", Button).label) == "Unpark", "the other's caption under the list"
+        menu.action_answer("relaunch")
+        await pilot.pause()
+        assert notes[-1] == "Relaunch no longer applies to this session"
+
+
+@pytest.mark.anyio
 async def test_the_session_list_and_stats_pane_share_a_reader(store, sid):
     """OBS 2 (#51): each transcript read once, not once for the context bar and again for the pane."""
     app = WheelhouseApp(store)
@@ -5247,6 +5380,48 @@ async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, statu
         drawn = "".join(seg.text for seg in strips[app.screen.query_one(Footer).region.y])
         assert size[0] < 100 or all(f"{key} {label}" in drawn for key, label in (("N", "New"), ("A", "Adopt"), ("Shift+L", "Relaunch all"))), \
             f"{desc}: New, Adopt and Relaunch all in the footer (at 80 it scrolls), got {drawn!r}"
+
+
+@pytest.mark.anyio
+async def test_the_footer_fits_at_100_columns_whatever_has_focus(store, sid, tmp_path, monkeypatch, every_module):
+    """#135: at 100 columns New, Adopt and Relaunch all are drawn whole, never under the
+    palette's key, at every Tab stop: each pane's list, the answer box, every button, and
+    the inbox with a row selected, whose Del Close stays off the footer for it."""
+    from textual.widgets._footer import FooterKey
+    from claude_wheelhouse import liveness
+    prs = pytest.importorskip("claude_wheelhouse_prs.pane", reason="installed without the prs module")
+    pytest.importorskip("claude_wheelhouse_design", reason="installed without the design module")
+    pr = {"number": 7, "title": "Change 7", "url": "https://github.com/two-inc/wheelhouse/pull/7", "isDraft": False,
+          "state": "OPEN", "updatedAt": "2026-10-20T10:00:00Z", "headRefName": "doug/7", "reviewDecision": None,
+          "mergeable": "MERGEABLE", "repository": {"nameWithOwner": "two-inc/wheelhouse"}, "commits": {"nodes": []}}
+    monkeypatch.setattr(prs, "RUNNER", lambda argv: (0, json.dumps({"data": {"search": {"nodes": [pr]}}}), ""))
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "docs" / "adr").mkdir(parents=True)
+    (tmp_path / "docs" / "adr" / "0001-a.md").write_text("# 1. A\n\nStatus: accepted\n")
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(100, 30)) as pilot:
+        for _ in range(30):
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+        await pick(app, pilot, sid)
+        stops = [w for w, _ in tui.tab_stops(app.screen)]
+        assert {"session-list", "items", "pr-list", "decision-list", "answer"} <= {w.id for w in stops}, \
+            f"every pane's stop: {[w.id for w in stops]}"
+        for widget in stops:
+            widget.focus()
+            if widget.id == "items":
+                widget.move_cursor(row=0)
+            await pilot.pause()
+            await pilot.pause()
+            name = widget.id or type(widget).__name__
+            shown = {(k.key_display, k.description) for k in app.screen.query(FooterKey)}
+            drawn = "".join(seg.text for seg in app.screen._compositor.render_strips()[app.screen.query_one(Footer).region.y])
+            for key in (("N", "New"), ("A", "Adopt"), ("Shift+L", "Relaunch all")):
+                assert key not in shown or " ".join(key) in drawn, f"{name}: {' '.join(key)} drawn whole, got {drawn!r}"
+            assert widget.id not in ("session-list", "items") or ("Shift+L", "Relaunch all") in shown, \
+                f"{name}: Relaunch all in the footer"
 
 
 def splitter(app, key: str) -> Splitter:
@@ -7206,7 +7381,7 @@ async def test_delete_on_a_parent_leaves_its_running_children(store, sid, shape,
 
 @pytest.mark.anyio
 async def test_delete_on_an_item_with_no_children_asks_nothing(store, sid):
-    q = store.post_item(sid, "question", "which db?")
+    q = store.post_item(sid, "question", "which db?", status="answered")   # an open one asks for its own sake
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -8296,3 +8471,147 @@ async def test_a_disabled_button_is_dark_grey_with_black_text(store, sid, clock)
         for b in (app.screen.query_one("#send-all", Button), compact_now, app.session_buttons.query_one("#fork", Button)):
             assert b.disabled and b.region.height == 1, f"{b.id}: off, and one row still"
             assert drawn(b) == [f"bold #000000 on {tui.OFF}"], f"{b.id}: black on dark grey, got {drawn(b)}"
+
+
+MARKUP = "[@click=app.bell]ZQ[/] [bold]B[/bold]"   # its mark (ZQ) inside a 22-cell column
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("where, selector, desc", [
+    ("title", "#items", "an item's title in the inbox"),
+    ("title", "#detail", "an item's title in Detail"),
+    ("body", "#detail", "an item's body in Detail"),
+    ("synopsis", "#session-info-text", "a session's synopsis in its info"),
+])
+async def test_a_sessions_text_is_never_markup(store, sid, clock, where, selector, desc):
+    """#139: a session's text shows as written, and a [@click=...] in it runs nothing."""
+    ref = store.post_item(sid, "task", MARKUP if where == "title" else "t", MARKUP if where == "body" else "")
+    if where == "synopsis":
+        store.set_synopsis(sid, MARKUP)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        ran = []
+        app.action_bell = lambda: ran.append("bell")
+        app.follow(sid)
+        clock.tick(app)
+        await pilot.pause()
+        if selector == "#detail":
+            app.show_item(sid, ref)
+            await pilot.pause()
+        widget = app.query_one(selector)
+        lines = [strip.text for strip in widget.render_lines(widget.region.reset_offset)]
+        y = next((i for i, line in enumerate(lines) if "ZQ" in line), None)
+        assert y is not None, f"{desc}: shown, in {lines}"
+        assert "]ZQ" in lines[y], f"{desc}: its markup shows as written: {lines[y]!r}"
+        await pilot.click(widget, offset=(lines[y].index("ZQ") + 1, y))
+        await pilot.pause()
+        assert ran == [], f"{desc}: a click on it runs nothing"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("url, opens", [
+    ("https://github.com/o/r/pull/1", True),
+    ("http://localhost:8000/x", True),
+    ("file:///etc/passwd", False),
+    ("javascript:alert(1)", False),
+])
+async def test_open_url_opens_web_pages_alone(store, sid, url, opens):
+    """#139: whatever asks it, the app opens an http(s) page and nothing else."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        opened = []
+        app._driver.open_url = lambda u, new_tab=True: opened.append(u)
+        app.open_url(url)
+        assert opened == ([url] if opens else []), url
+
+
+def test_the_keys_overlay_describes_a_module_panes_keys():
+    """#154: the PRs pane's m and r aren't in core's DESCRIBE; ? raised KeyError 'scope'."""
+    from claude_wheelhouse.tui import keys_help
+    from claude_wheelhouse_prs.pane import Prs
+    text = keys_help(panes=[Prs])
+    assert "## The PRs pane" in text and "**M**: Mine or all" in text and "**R**: Fetch now" in text, text
+
+
+def undo_setup(store, sid, shape: str) -> list:
+    """The rows for test_ctrl_z_undoes_the_last_inbox_act, oldest first: the first is the one highlighted."""
+    with one_second():
+        if shape == "family":   # an open question with an open child question and a done child task
+            q = store.post_item(sid, "question", "which db?")
+            kids = [store.post_item(sid, "question", "which port?"), store.post_item(sid, "task", "t", status="done")]
+            for k in kids:
+                store.db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ?", (q, sid, k))
+            return [q, *kids]
+        if shape == "two open":
+            return [store.post_item(sid, "question", t) for t in "ab"]
+        kind, status = shape.removesuffix(" pinned").split()
+        extra = {"why": "local"} if kind == "decision" else {}
+        ref = store.post_item(sid, kind, "it", **extra)
+        if status != "open" or kind != "question":
+            store.db.execute("UPDATE items SET status = ? WHERE session_id = ? AND ref = ?", (status, sid, ref))
+        if shape.endswith("pinned"):
+            store.set_pinned(sid, ref, True)
+        return [ref]
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("shape, keys, want, said, desc", [
+    # want: each row's (status, finished, pinned) at the end; said: notices that must appear
+    ("question open", ["delete", "y", "ctrl+z"], [("open", False, False)],
+     ["closed Q1: Ctrl+Z undoes it", "undone: closed Q1"], "an open question deleted comes back open, not answered"),
+    ("question open", ["delete", "n", "ctrl+z"], [("open", False, False)], ["nothing to undo"],
+     "No deletes nothing, so there's nothing to undo"),
+    ("question answered", ["delete", "ctrl+z", "ctrl+z"], [("answered", False, False)],
+     ["undone: closed Q1", "nothing to undo"], "one step: a second Ctrl+Z has nothing left"),
+    ("decision unseen", ["delete", "ctrl+z"], [("unseen", False, False)], ["undone: closed D1"],
+     "a decision comes back unseen, as it was"),
+    ("task done", ["delete", "ctrl+z"], [("done", False, False)], ["undone: dismissed T1"], "a dismissed task comes back"),
+    ("question open", ["p", "ctrl+z"], [("open", False, False)], ["undone: pinned Q1"], "a pin undone"),
+    ("question open pinned", ["p", "ctrl+z"], [("open", False, True)], ["undone: unpinned Q1"], "an unpin undone"),
+    ("question answered pinned", ["delete", "y", "ctrl+z"], [("answered", False, True)], ["undone: closed Q1"],
+     "a pinned item deleted comes back pinned"),
+    ("question closed", ["ctrl+r", "ctrl+z"], [("closed", True, False)], ["undone: reopened Q1"],
+     "Ctrl+R undone: closed again"),
+    ("family", ["delete", "y", "ctrl+z"], [("open", False, False), ("open", False, False), ("done", False, False)],
+     ["undone: deleted Q1 and 2 children"], "a parent and its children all come back as they were"),
+    ("two open", ["space", "down", "space", "delete", "y", "ctrl+z"], [("open", False, False)] * 2,
+     ["undone: closed Q2, Q1"], "marked rows asked once, and undone together"),
+])
+async def test_ctrl_z_undoes_the_last_inbox_act(store, sid, shape, keys, want, said, desc):
+    refs = undo_setup(store, sid, shape)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("f")   # finished rows in sight, so Ctrl+R has one to reopen
+        app.items_table.focus()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{refs[-1] if shape == 'two open' else refs[0]}"))
+        await pilot.pause()
+        notes = []
+        app.notify = lambda text, **kw: notes.append(text)
+        for key in keys:
+            await pilot.press(key)
+            await pilot.pause()
+    got = [(it["status"], tui.standing(it) == "finished", tui.pinned(it)) for it in map(lambda r: store.item(sid, r), refs)]
+    assert got == want, desc
+    assert all(s in notes for s in said), f"{desc}: {notes}"
+
+
+@pytest.mark.anyio
+async def test_ctrl_z_in_the_answer_box_is_its_own_undo(store, sid):
+    q = store.post_item(sid, "question", "which db?", status="answered")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        await pilot.press("delete")
+        await pilot.pause()
+        app.answer.focus()
+        await pilot.press("a", "b")
+        await pilot.pause()
+        await pilot.press("ctrl+z")
+        await pilot.pause()
+        assert app.answer.text == "", "the box's own undo took the typing back"
+    assert store.item(sid, q)["status"] == "closed", "and the delete stays"

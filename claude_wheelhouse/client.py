@@ -804,8 +804,8 @@ class RemoteClient:
     def mark_seen(self, sid: str, ref: str) -> bool:
         return self.quietly(f"/items/{sid}/{ref}/seen", {})
 
-    def close(self, sid: str, ref: str, closed: bool) -> Done:
-        return self.done(f"/items/{sid}/{ref}/close", {"closed": closed})
+    def close(self, sid: str, ref: str, closed: bool, status: str | None = None) -> Done:
+        return self.done(f"/items/{sid}/{ref}/close", {"closed": closed} | ({"status": status} if status else {}))
 
     def delete_family(self, sid: str, ref: str) -> Done:
         return self.done(f"/items/{sid}/{ref}/delete-family", {})

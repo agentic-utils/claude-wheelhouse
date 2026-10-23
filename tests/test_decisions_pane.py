@@ -47,7 +47,7 @@ async def settled(app, pilot):
 
 def numbers(app) -> list[str]:
     table = app.query_one("#decision-list")
-    return [table.get_row_at(i)[0] for i in range(table.row_count)]
+    return [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
 
 
 @pytest.mark.anyio

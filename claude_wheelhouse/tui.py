@@ -33,11 +33,13 @@ from textual.message import Message
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
 from textual.errors import NoWidget
+from textual.content import Content
 from textual.geometry import Offset
 from textual.screen import ModalScreen, Screen
 from textual.scrollbar import ScrollBar
 from textual.selection import SELECT_ALL, Selection
 from textual.strip import Strip
+from textual.suggester import SuggestFromList
 from textual.widget import Widget
 from textual.widgets.text_area import Selection as Span
 from textual.worker import get_current_worker
@@ -59,7 +61,7 @@ from textual.widgets import (
 )
 
 from . import api, callout, columns, docblocks, docroots, emoji, features, models, ordering, prs, subagents, transcript, transcript_usage, tutorial, whatsnew
-from .rows import KIND_COLOUR, RowTips
+from .rows import KIND_COLOUR, RowTips, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import AWAITING_NOTES, HOLD_EXPIRED, NUDGE_TOKENS, SHELL_OPENING
@@ -68,7 +70,7 @@ from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
 from .tour import NOTES, PAUSED, ROWS as tour_rows, TOPUP, TOUR, Tour, offered, opening
-from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
+from .store import (DEFAULT_THEN, DELETED, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mode, pinned, runner, spared, stamp, standing)
 from .unsent import Unsent
 
@@ -97,7 +99,7 @@ DWELL = 1.0
 QUIET = 0.6
 NOTHING_SELECTED = "Select an item, or a session to follow its conversation."
 # the person's words in terminal green, Claude's in white as in the Claude app
-VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
+VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8"}
 # a doc block (doc_blocks) longer than this is rendered on a thread (Transcript._layout): a
 # 42 KB one takes Rich a second or two, which the loop would otherwise stall for
@@ -172,9 +174,12 @@ def arrange(saved: dict[str, str], defaults: dict[str, str]) -> dict[str, str]:
 
 
 def least(place: Widget) -> int:
-    """The fewest rows a slot keeps: its min-height, the stylesheet's or its panes' (fit_panes)."""
-    scalar = place.styles.min_height
-    return int(scalar.value) if scalar is not None and scalar.unit == Unit.CELLS else 1
+    """The fewest rows a slot keeps while its column has room: the stylesheet's min-height or
+    its panes' (PANE_MINIMUM, as fit_panes sets it), whichever is more. Not its min-height as it
+    stands, which lay_columns lowers in a column too short for them (#132)."""
+    scalar = place.styles.base.min_height
+    own = int(scalar.value) if scalar is not None and scalar.unit == Unit.CELLS else 1
+    return max([own] + [minimum(w)[1] for w in place.children])
 
 
 def compact_rows(place: Widget) -> int:
@@ -391,6 +396,25 @@ def open_pr(item) -> bool:
     return item["kind"] == "pr" and item["status"] in ("draft", "open")
 
 
+def open_question(item) -> bool:
+    """Whether Delete on an item asks first for its own sake: a question the person has still to answer."""
+    return item["kind"] == "question" and item["status"] == "open"
+
+
+def open_questions_said(refs: list) -> str:
+    """The open questions among the rows a Delete takes, said in its one dialog."""
+    if not refs:
+        return ""
+    return (f" {refs[0]} is an open question." if len(refs) == 1 else
+            f" {len(refs)} are open questions: {', '.join(refs)}.") + " Ctrl+Z undoes it."
+
+
+def deleted_hint(show_finished: bool, undoable: bool = True) -> str:
+    """What a delete's notice adds: where the finished go, and how to take it back."""
+    said = ([] if show_finished else ["F shows finished items"]) + (["Ctrl+Z undoes it"] if undoable else [])
+    return ": " + ", ".join(said) if said else ""
+
+
 def unread(item) -> bool:
     """Whether a child is something the person hasn't looked at yet: a decision unseen, a doc new or updated."""
     return (item["kind"], item["status"]) in {("decision", "unseen"), ("doc", "new"), ("doc", "updated")}
@@ -452,7 +476,7 @@ def share(stored: str | None) -> float | None:
 
 
 def pr_body(item) -> str:
-    """A PR item's detail: its repo and URL, a terminal link; its live state is the PRs pane's."""
+    """A PR item's detail: its repo and URL; its live state is the PRs pane's. Shown as pr_text."""
     owner, repo, n = prs.parse(item["body"]) or ("", "", 0)
     return f"Pull request **{owner}/{repo}#{n}**: [{item['body']}]({item['body']})" if repo else item["body"]
 
@@ -470,7 +494,7 @@ def thread_blocks(found, session_name: str = "") -> list[tuple[str, str]]:
     where = f"{session_name} · " if session_name else ""
     out = [("head", f"## {ref} · {item['title']}\n\n{where}`{item['kind']}` · **{item['status']}**"
                     f"{' · answer queued' if queued else ''} · updated {item['updated_at']}"),
-           ("claude", pr_body(item) if item["kind"] == "pr" else item["body"] or "_no detail_")]
+           ("pr", pr_body(item)) if item["kind"] == "pr" else ("claude", item["body"] or "_no detail_")]
     for m in msgs:
         if m["author"] == "person":
             out.append(("you", f"**you{' · queued' if m['draft'] else ' · sending' if not m['delivered_at'] else ''}** · "
@@ -494,8 +518,18 @@ def thread_markdown(store: Store, sid: str, ref: str, session_name: str = "") ->
 def _block_lines(who: str, md: str, width: int, console) -> list:
     """A block's rendered segments at one width: rendered once, though Textual measures a
     widget's height and then draws it, and a new turn leaves every older block as it was."""
-    r = Text(md.strip("`"), style=VOICE[who]) if who == "tool" else RichMarkdown(md, style=VOICE[who])
+    r = Text(md.strip("`"), style=VOICE[who]) if who == "tool" else pr_text(md) if who == "pr" \
+        else RichMarkdown(md, style=VOICE[who])
     return list(console.render(r, console.options.update_width(width)))
+
+
+def pr_text(md: str) -> Text | RichMarkdown:
+    """A PR item's detail (pr_body) as Detail shows it: its link without https://github.com/,
+    any line of it opening the whole URL (prs.link, #139), not left to the terminal's own
+    link detection, which opened the line clicked."""
+    if prs.parse(md) is None:
+        return RichMarkdown(md, style=VOICE["pr"])
+    return Text("Pull request: ", style=VOICE["pr"]).append_text(prs.link(prs.canonical(md)))
 
 
 class Blocks:
@@ -544,7 +578,9 @@ def fill(table: DataTable, rows: list[tuple[str, tuple]], rebuild: bool = False)
     new width shows only in a rebuilt table. Otherwise the table is rebuilt
     without posting RowHighlighted: clear() puts the cursor on row 0 and the first new row
     highlights it, which made every refresh look like the person picking row 0 and back.
-    Returns whether it rebuilt; the caller then puts the cursor back."""
+    Returns whether it rebuilt; the caller then puts the cursor back. A str cell shows as
+    itself, never as markup (plain): a session's text reaches these tables."""
+    rows = [(key, tuple(plain(c) for c in cells)) for key, cells in rows]
     if not rebuild and [r.key.value for r in table.ordered_rows] == [k for k, _ in rows]:
         columns = list(table.columns)
         for key, cells in rows:
@@ -1355,8 +1391,9 @@ class ItemList(SinkList):
     last one toggled; Space and Shift+Up/Down do the same from the keyboard, for terminals
     that keep Shift+click for their own text selection. Ctrl+A marks the finished rows."""
 
-    # here only, not the app's: in an answer box Backspace and Delete edit the text (#64)
-    BINDINGS = [Binding("delete", "app.close_question", "Close", key_display="Del"),
+    # here only, not the app's: in an answer box Backspace and Delete edit the text (#64). Off
+    # the footer, as Alt+S is: ahead of the app's keys it pushed Relaunch all off at 100 columns (#135)
+    BINDINGS = [Binding("delete", "app.close_question", "Close", show=False, key_display="Del"),
                 Binding("backspace", "app.close_question", "Close", show=False),
                 Binding("space", "toggle_mark", "Mark", show=False),
                 Binding("ctrl+a", "app.mark_finished", "Mark finished", show=False),
@@ -1433,6 +1470,12 @@ class ItemList(SinkList):
             if event.chain == 1:
                 self.app.toggle_pinned(key)
             return
+        if not self.show_cursor:   # hidden (a pick in another pane, #148): the click selects its row, opening nothing
+            event.prevent_default()
+            with self.prevent(DataTable.RowHighlighted):
+                self.move_cursor(row=meta["row"], animate=False)
+            self.app.pick_item(key)
+            return
         if event.ctrl or event.shift or event.meta:   # Alt (meta) for Shift, which Windows Terminal keeps
             event.prevent_default()   # not DataTable's: a click on the highlighted row opens it
             self.toggle(key) if event.ctrl else self.extend_to(key)
@@ -1441,14 +1484,23 @@ class ItemList(SinkList):
             self.set_marks(set(), key)
 
     async def action_select_cursor(self) -> None:
-        await select_now(self)
+        if self.show_cursor:
+            await select_now(self)
+        elif key := self.cursor_key():   # hidden: Enter brings it back where it was, as a moving key does
+            self.app.pick_item(key)
+
+    def go(self, where, page: int = 0) -> None:
+        if self.show_cursor:
+            super().go(where, page)
+        elif key := self.cursor_key():   # hidden (a pick in another pane, #148): back where it was, selected
+            self.app.pick_item(key)
 
     def _post_selected_message(self) -> None:
         # a double-click's selection, which opens the item, as the session list's click
         self.app.call_next(select_now, self)
 
     def action_toggle_mark(self) -> None:
-        if self.cursor_key():
+        if self.show_cursor and self.cursor_key():
             self.toggle(self.cursor_key())
 
     def action_extend(self, step: int) -> None:
@@ -1773,7 +1825,7 @@ class SendBar(Horizontal):
         label = getattr(self, "activity_label", None) or next(iter(self.query("#activity")), None)
         self.activity_label = label   # held once found: it lives as long as the bar
         if label is not None and str(label.content) != text:
-            label.update(text)
+            label.update(Text(text))   # plain: the session's own words, never markup
 
 
 class PermissionButtons(Horizontal):
@@ -2522,10 +2574,9 @@ def hint(sends: str, dead: bool = False) -> str:
     """The line under an answer box. sends: what Ctrl+Enter does for the session in context
     by its mode, queue or send. dead: it isn't running, so Ctrl+S refuses (#62) and goes
     unmentioned."""
-    ctrl_s = "" if dead else " · Ctrl+S sends its queue"
-    alt_s = " · Alt+S sends this one now" if sends == "queue" else ""
-    return (f"Ctrl+Enter to {sends}{alt_s}{ctrl_s} · Ctrl+T switches mode"
-            " · Ctrl+R takes a queued answer back")
+    ctrl_s = "" if dead else " · Ctrl+S: send queue"
+    alt_s = " · Alt+S: send" if sends == "queue" else ""
+    return f"Ctrl+Enter: {sends}{alt_s}{ctrl_s} · Ctrl+R: edit last queued"
 
 
 class TitleBar(Static):
@@ -2725,6 +2776,9 @@ class Folders(DirectoryTree):
     """Directories only. Hidden ones are left out, but for .worktrees, where a branch's
     worktree lives."""
 
+    def process_label(self, label):
+        return super().process_label(plain(label))   # a folder's name, never markup
+
     def filter_paths(self, paths):
         return [p for p in paths if self._safe_is_dir(p) and (not p.name.startswith(".") or p.name == ".worktrees")]
 
@@ -2745,7 +2799,7 @@ class PickDirectory(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label("WORKING DIRECTORY", classes="dialog-title")
-            yield Label(self.start, id="picked")
+            yield Label(self.start, id="picked", markup=False)   # a folder's name, never markup
             yield Folders(self.start, id="folders")
             yield Label("Enter opens · Backspace goes up · Ctrl+Enter chooses · Esc cancels",
                         classes="answer-hint")
@@ -2810,6 +2864,52 @@ class RenameSession(Dialog):
         self.action_answer(None)
 
 
+class Ask(Dialog):
+    """A line of text asked for a module (api.Context.ask): typed, or one of its suggestions,
+    most recent first, picked from the list under the box or completed in it (Right takes
+    the completion). Enter sends what's typed, Esc sends nothing; nothing typed sends nothing."""
+    ACTION = "ask-ok"
+
+    def __init__(self, prompt: str, suggestions: list[str]):
+        super().__init__()
+        self.prompt, self.suggestions = prompt, suggestions
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(self.prompt, classes="dialog-prompt", markup=False)
+            yield Input(id="ask-text", suggester=SuggestFromList(self.suggestions, case_sensitive=False))
+            yield OptionList(*self.suggestions, id="ask-suggestions", markup=False)
+            with Horizontal(classes="buttons"):
+                yield Button("Send", variant="success", id="ask-ok")
+                yield Button("Cancel", id="ask-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#ask-suggestions").display = bool(self.suggestions)
+        self.set_focus(self.query_one("#ask-text", Input))
+
+    @on(Input.Changed, "#ask-text")
+    def narrowed(self, event: Input.Changed) -> None:
+        """The list narrowed to the suggestions holding what's typed."""
+        typed = event.value.strip().casefold()
+        shown = [s for s in self.suggestions if typed in s.casefold()]
+        options = self.query_one("#ask-suggestions", OptionList)
+        options.clear_options()
+        options.add_options(shown)
+        options.display = bool(shown)
+
+    @on(OptionList.OptionSelected, "#ask-suggestions")
+    def picked(self, event: OptionList.OptionSelected) -> None:
+        self.action_answer(str(event.option.prompt))
+
+    @on(Input.Submitted, "#ask-text")
+    @on(Button.Pressed, "#ask-ok")
+    def ok(self) -> None:
+        self.action_answer(self.query_one("#ask-text", Input).value.strip() or None)
+
+    @on(Button.Pressed, "#ask-cancel")
+    def cancel(self) -> None:
+        self.action_answer(None)
+
 
 MODEL_WARNING = ("Changing model drops the prompt cache: the session's next request re-reads the whole "
                  "conversation at the full input price (a change made mid-turn applies inside the running "
@@ -2827,7 +2927,7 @@ class ChooseModel(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(f"MODEL · {self.name_}", classes="dialog-title")
+            yield Label(f"MODEL · {self.name_}", classes="dialog-title", markup=False)
             yield Label(MODEL_WARNING, classes="dialog-prompt", id="model-warning")
             yield OptionList(*[f"{m.name}{' (now)' if m.id == self.current else ''}" for m in models.MODELS],
                              id="models")
@@ -2881,7 +2981,7 @@ class AdoptSession(Dialog):
         table.add_columns("", "last active", "dir", "title")
         for c in self.candidates.values():
             table.add_row(Text("● running", style="bold #ffd300") if c.running_pid else "",
-                          ago(c.active), c.cwd, c.title or short(c.id), key=c.id)
+                          *map(plain, (ago(c.active), c.cwd, c.title or short(c.id))), key=c.id)
         if not self.candidates:
             self.query_one("#adopt-hint", Label).update("No recent sessions to adopt.")
         self.set_focus(table)
@@ -2932,7 +3032,7 @@ class ForkSession(Dialog):
     def compose(self) -> ComposeResult:
         plan = self.plan
         with Vertical(id="dialog", classes="wide"):
-            yield Label(f"FORK AS {plan.name}", classes="dialog-title")
+            yield Label(f"FORK AS {plan.name}", classes="dialog-title", markup=False)
             yield Label("A new session carrying on from this conversation so far; this one carries on too.",
                         classes="dialog-prompt")
             if plan.items:
@@ -2945,7 +3045,7 @@ class ForkSession(Dialog):
                 with RadioSet(id="fork-where"):
                     yield RadioButton("A new worktree, on a new branch from this one's last commit:", value=True,
                                       id="fork-new")
-                    yield RadioButton(f"This worktree, {plan.cwd}", id="fork-same")
+                    yield RadioButton(Text(f"This worktree, {plan.cwd}"), id="fork-same")
                 yield Input(value=plan.branch, placeholder="new branch", id="fork-branch")
                 if plan.tree.dirty:
                     yield Label("This worktree has uncommitted changes: a fork in a new worktree won't see them.",
@@ -2990,7 +3090,7 @@ class CompactSession(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(f"COMPACT {self.name_}", classes="dialog-title")
+            yield Label(f"COMPACT {self.name_}", classes="dialog-title", markup=False)
             yield Label("Instructions for the compaction (optional: leave it empty and the session is asked "
                         "what to keep):", classes="dialog-prompt")
             yield TextArea(id="compact-notes")
@@ -3024,7 +3124,7 @@ class ParkSession(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label(f"Park {self.name_}? It writes its handoff notes into its items, then stops.",
-                        classes="dialog-prompt")
+                        classes="dialog-prompt", markup=False)
             yield Checkbox("Compact first, while its prompt cache is " + ("warm" if self.warm else "cold, which saves nothing"),
                            self.warm, id="park-compact")
             with Horizontal(classes="buttons"):
@@ -3052,7 +3152,7 @@ class ForgetChoice(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(self.prompt, classes="dialog-prompt")
+            yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
                 yield Button(Text("[L]et it know"), variant="success", id="forget-tell")
                 yield Button(Text("[J]ust stop it"), variant="error", id="forget-stop")
@@ -3091,7 +3191,7 @@ class Confirm(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(self.prompt, classes="dialog-prompt")
+            yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
                 yield Button(Text("[Y]es"), variant="error", id="yes")
                 yield Button(Text("[N]o"), id="no")
@@ -3130,15 +3230,15 @@ class LeaveEdits(Dialog):
 
 class SessionMenu(Dialog):
     """A right-click on a session in the session list (#125): its buttons as a menu at the
-    pointer, as the buttons under the list show them for it: captioned, greyed (off, or
+    session's row, as the buttons under the list show them for it: captioned, greyed (off, or
     busy) and shown as they are, repainted with them each refresh (paint). The answer is the
     button's id, pressed there by the app (session_menu). Up and Down, as Tab and Shift+Tab,
-    go round the ones that apply; Esc or a click outside closes it (#81)."""
-    DEFAULT_CSS = """
-    SessionMenu { align: left top; }
-    SessionMenu #dialog { width: auto; min-width: 18; padding: 0 1; constrain: inside inside; }
-    SessionMenu #dialog Button { width: 100%; }
-    """
+    go round the ones that apply; Esc or a click outside closes it (#81).
+
+    It opens below the row, at the pointer's column, or above the row where there isn't the
+    room below (#137): at is the row's line, the menu's margin the line below it, and
+    constrain's inflect flips it about that, its bottom on the row's top. Its CSS is the app's
+    (SessionMenu in WheelhouseApp.CSS): a DEFAULT_CSS loses to the app's Dialog and #dialog."""
     BINDINGS = [Binding("down", "app.focus_next", show=False), Binding("up", "app.focus_previous", show=False)]
 
     def __init__(self, sid: str, title: str, buttons: list[tuple[str, str, bool, bool]], at: Offset) -> None:
@@ -3149,30 +3249,56 @@ class SessionMenu(Dialog):
         with Vertical(id="dialog"):
             yield Label(Text(self.heading), classes="dialog-title")
             for id_, caption, disabled, shown in self.buttons:
-                button = Button(caption, id=f"menu-{id_}", disabled=disabled, compact=True, tooltip=BUTTONS[id_])
+                button = Button(caption, id=f"menu-{id_}", disabled=disabled, compact=True, tooltip=self.tip(id_))
                 button.display = shown
                 yield button
 
     def on_mount(self) -> None:
-        self.query_one("#dialog").styles.offset = (self.at.x, self.at.y)   # before it's drawn: constrain keeps it on the screen
+        # before it's drawn: below the row (its margin), else above it (inflect), and across inside the screen
+        self.query_one("#dialog").styles.offset = (self.at.x, self.at.y)
         self.focus_first()
 
-    def focus_first(self) -> None:
-        """The first that applies focused, as the menu opens or the one focused goes off."""
-        if enabled := [b for b in self.query(Button) if b.display and not b.disabled]:
+    @staticmethod
+    def tip(id_: str) -> str:
+        return BUTTONS[id_]
+
+    def focus_first(self, at: int = 0) -> None:
+        """The first that applies from the at'th button on, else the last before it: the
+        first as the menu opens, a neighbour as the one focused goes off (#128), not the top."""
+        menu = list(self.query(Button))
+        after = [b for b in menu[at:] if b.display and not b.disabled]
+        if enabled := after or [b for b in reversed(menu[:at]) if b.display and not b.disabled]:
             self.set_focus(enabled[0])
 
     def paint(self, buttons: list[tuple[str, str, bool, bool]]) -> None:
         """The session's buttons as they are now (lifecycle_buttons and controls)."""
         self.buttons = buttons
+        menu, was = list(self.query(Button)), self.focused
         for id_, caption, disabled, shown in buttons:
             show_button(self, f"menu-{id_}", caption, disabled, shown)
-        if self.focused is None:
+        if was in menu and (was.disabled or not was.display):   # Textual's own refocus goes to the top
+            self.focus_first(menu.index(was))
+        elif self.focused is None:
             self.focus_first()
 
     @on(Button.Pressed)
     def pressed(self, event: Button.Pressed) -> None:
         self.action_answer(event.button.id.removeprefix("menu-"))
+
+
+class PaneMenu(SessionMenu):
+    """A right-click on a row of a module's pane (api.Menu, #138): its entries as a session's
+    menu shows its buttons, opening below the row, at the pointer's column, or above it where
+    there's no room below: at is the row's line, the menu's margin the line below it, and
+    constrain's inflect flips it about that (PaneMenu in WheelhouseApp.CSS, as #137 places a
+    session's). The answer is the entry's id."""
+
+    def __init__(self, menu: api.Menu, at: Offset) -> None:
+        super().__init__("", menu.title, [(id_, caption, disabled, True) for id_, caption, disabled, _ in menu.entries], at)
+        self.tips = {id_: tip for id_, _, _, tip in menu.entries}
+
+    def tip(self, id_: str) -> str:
+        return self.tips[id_]
 
 
 class Choice(Dialog):
@@ -3186,7 +3312,7 @@ class Choice(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(self.prompt, classes="dialog-prompt")
+            yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
                 yield Button(Text("[C]ancel request"), variant="success", id="cancel")
                 yield Button(Text("[F]orce"), variant="error", id="force")
@@ -3207,7 +3333,7 @@ class RelaunchChoice(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(self.prompt, classes="dialog-prompt")
+            yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
                 # ids of its own: the app's host buttons (#compact) answer a press that bubbles up
                 yield Button(Text("[C]ompact first"), variant="success", id="relaunch-compact")
@@ -3255,8 +3381,8 @@ class TourInvite(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog", classes="invite"):
             yield Label(INVITE.title, classes="dialog-title")
-            yield Label(self.text, classes="dialog-prompt", id="invite-text")
-            yield Label(self.hint, classes="dialog-prompt", id="invite-hint")
+            yield Label(self.text, classes="dialog-prompt", id="invite-text", markup=False)
+            yield Label(self.hint, classes="dialog-prompt", id="invite-hint", markup=False)
             with Horizontal(classes="buttons", id="invite-buttons"):
                 # ids of its own: the app's buttons answer a press that bubbles up
                 yield Button(Text("Start [Enter]"), variant="success", id="invite-start")
@@ -3297,7 +3423,7 @@ class TourStop(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog", classes="invite"):
-            yield Label(self.heading, classes="dialog-title")
+            yield Label(self.heading, classes="dialog-title", markup=False)
             yield Label(Text(self.text), classes="dialog-prompt", id="tour-stop-text")
             yield Label(ESC_ENDS, classes="dialog-prompt", id="tour-stop-esc")   # its own paragraph
             with Horizontal(classes="buttons"):
@@ -3337,7 +3463,7 @@ class TourNotes(Dialog):
             yield Label("RELEASE NOTES", classes="dialog-title")
             with VerticalScroll(id="tour-notes-scroll"):
                 yield Static(RichMarkdown(self.notes), id="tour-notes")
-            yield Label(self.text, classes="dialog-prompt", id="tour-notes-text")
+            yield Label(self.text, classes="dialog-prompt", id="tour-notes-text", markup=False)
             with Horizontal(classes="buttons"):
                 yield Button(Text("Close [Enter]"), variant="success", id="tour-notes-close")
 
@@ -3370,6 +3496,8 @@ DESCRIBE = {
     "toggle_mode": "Switch the session between Queued and Immediate",
     "recall": ("Take this item's latest queued answer back into the box; with none queued, in the item list, "
                "reopen the highlighted finished item (or every marked one)"),
+    "undo": ("Undo the last delete, pin or reopen in the inbox: the rows come back as they stood, an open question "
+             "open again (once; a running child Delete left at the top level stays there). In a text box, its own undo"),
     "new_session": "New session",
     "adopt": "Adopt: pick a Claude Code session that isn't in the wheelhouse yet, from those on disk",
     "relaunch_all": "Relaunch all: every Available session (not running, not parked)",
@@ -3377,9 +3505,9 @@ DESCRIBE = {
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
     "app.close_question": ("Close the highlighted question or decision, or dismiss a done task or subagent, or a doc "
-                           "(or every marked one but the pinned); it never reopens one: Ctrl+R does. On a pinned "
-                           "item it asks first; on an item with children it asks first, saying how many are still "
-                           "open or unread, then takes them all but the pinned"),
+                           "(or every marked one but the pinned); it never reopens one: Ctrl+R does, and Ctrl+Z "
+                           "undoes it. On an open question, a pinned item or one with children it asks first (once "
+                           "for marked rows), saying how many are still open or unread, then takes them all but the pinned"),
     "app.toggle_pinned": "Pin the highlighted item (📌), or clear its pin: Ctrl+A and Delete leave a pinned item",
     "help": "This list",
     "doc_layout": "With a doc shown: its thread under it (split), or Doc and Thread as tabs (tabbed); kept",
@@ -3510,7 +3638,7 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
          "keep Shift+click for itself: Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or "
          "Backspace closes them together, the highlight going to the row above the topmost one taken, "
-         "and Ctrl+R reopens the finished ones. An item with children (its subagents and docs, under it) has a - at the "
+         "and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the "
          "right-hand end of its row: a click there hides them, and the + it becomes shows them again. "
          "A click on a doc opens its editor below it there, as a click on it moves it while it's open. "
          "A click on a row's first column pins it (📌) or clears its pin, as P does. "
@@ -3570,6 +3698,8 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
                 ("A doc's editor", DocEditor.BINDINGS),
                 *[(w.KEYS_HELP[0], w.BINDINGS) for w in panes
                   if (keys := getattr(w, "KEYS_HELP", None)) and (sdk or not keys[1])]]
+    # a module's pane says what its own keys do: core's DESCRIBE can't know them (#154)
+    described = {**{b.action: b.description for w in panes for b in getattr(w, "BINDINGS", [])}, **DESCRIBE}
     out = ["# Keys"]
     for title, bindings in sections:
         out.append(f"## {title}")
@@ -3579,7 +3709,7 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
             if key_name(b.key) not in keys:   # Shift+L, bound as both L and shift+l
                 keys.append(key_name(b.key))
         # dict.fromkeys: one line for a key bound twice, as F is (its footer label changes)
-        out += dict.fromkeys(f"- **{' or '.join(keys)}**: {DESCRIBE[action]}" for action, keys in actions.items())
+        out += dict.fromkeys(f"- **{' or '.join(keys)}**: {described[action]}" for action, keys in actions.items())
     whose = WHOSE.format(sdk=SDK_WHOSE if sdk else HOSTED_WHOSE if offered & {"interrupt", "compact", "shell"}
                          else "; then Mode, and Send on one that isn't dead.")
     buttons = [text for id_, text in BUTTONS.items() if id_ not in SDK_BUTTONS or id_ in offered]
@@ -3613,6 +3743,16 @@ class WheelhouseApp(App):
     /* every dialog over the screen it was opened on, which shows through, and centred. After
        Screen, which matches a dialog too: its opaque background blanked the screen behind */
     Dialog {{ align: center middle; background: #0a0a12 60%; }}
+    /* a session's menu at its row (#137): below it, or flipped above it where it won't fit */
+    SessionMenu {{ align: left top; }}
+    SessionMenu #dialog {{ width: auto; min-width: 18; padding: 0 1; margin: 1 0 0 0;
+                          constrain: inside inflect; }}
+    SessionMenu #dialog Button {{ width: 100%; }}
+    /* a pane's menu at its row (#138): below it, or flipped above it where it won't fit */
+    PaneMenu {{ align: left top; }}
+    PaneMenu #dialog {{ width: auto; min-width: 18; padding: 0 1; margin: 1 0 0 0; constrain: inside inflect; }}
+    PaneMenu #dialog Button {{ width: 100%; }}
+    Ask #ask-suggestions {{ height: auto; max-height: 8; margin: 1 0 0 0; }}
     #title-row {{ height: 1; background: #12122a; }}
     #title {{ width: 1fr; height: 1; background: #12122a; content-align: center middle; }}
     #tour-badge {{ width: auto; height: 1; padding: 0 1; color: #ffd300; display: none; }}
@@ -3654,7 +3794,7 @@ class WheelhouseApp(App):
     #answer:focus, #thread-answer:focus, #docview-answer:focus {{ border: round #ff2a6d; }}
     /* the default cursor is a pale grey cell: a hot block reads as "type here" on black */
     Compose > .text-area--cursor {{ background: #ff2a6d; color: #000000; text-style: bold; }}
-    .answer-hint {{ color: #777777; height: 1; }}
+    .answer-hint {{ color: #777777; width: 100%; height: auto; }}   /* wraps in a narrow column: every key stays on show */
     #thread-scroll {{ height: 1fr; }}
     #session-list {{ height: 1fr; min-height: 5; }}   /* on a short terminal the description gives way first */
     #session-info {{ height: 1fr; min-height: 1; background: #000000; padding: 0 1; }}
@@ -3726,14 +3866,16 @@ class WheelhouseApp(App):
 
     # keys shown in upper case, the usual convention: F is the f key, not Shift+F
     BINDINGS = [
-        Binding("ctrl+enter", "submit", "Submit", key_display="Ctrl+Enter"),
+        # the answer-box keys are off the footer: the hint under the box gives them (hint)
+        Binding("ctrl+enter", "submit", "Submit", show=False, key_display="Ctrl+Enter"),
         Binding("ctrl+j", "submit", "Submit", show=False),   # Ctrl+Enter, as most terminals send it
         # Alt+S (#124): Ctrl+Shift+Enter can't be told from Ctrl+Enter in Windows Terminal. A terminal
         # sends it as a printable s, but the app's binding takes it before the answer box types it
-        Binding("alt+s", "submit(True)", "Send now", show=False, key_display="Alt+S"),   # off the footer, as Ctrl+R is: Relaunch must fit at 100 columns
-        Binding("ctrl+s", "send_session", "Send", key_display="Ctrl+S"),
+        Binding("alt+s", "submit(True)", "Send now", show=False, key_display="Alt+S"),
+        Binding("ctrl+s", "send_session", "Send", show=False, key_display="Ctrl+S"),
         Binding("ctrl+t", "toggle_mode", "Mode", key_display="Ctrl+T"),
         Binding("ctrl+r", "recall", "Edit queued", show=False, key_display="Ctrl+R"),
+        Binding("ctrl+z", "undo", "Undo", show=False, key_display="Ctrl+Z"),   # a text box's own Ctrl+Z first
         # New, Adopt and Relaunch all act on no one session, so they're here, not buttons (#62)
         Binding("n", "new_session", "New", key_display="N"),
         Binding("a", "adopt", "Adopt", key_display="A"),
@@ -3805,6 +3947,7 @@ class WheelhouseApp(App):
         self.repin: set[str] = set()
         # the rows Delete just took, children included: a highlight they took goes above them (above_deleted)
         self.deleted: set[str] = set()
+        self.undo: tuple[str, list] | None = None   # what Ctrl+Z undoes, said, and the rows as they stood (undoable)
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
         self.show_finished = False   # finished items (store.standing), after the rest
         self.collapsed: set[str] = set()   # the parent rows whose children are hidden, for this run alone
@@ -3821,6 +3964,7 @@ class WheelhouseApp(App):
         # the modules installed, those switched off (claude-wheelhouse modules disable) marked so
         self.modules = api.switch_off(api.load(), api.disabled(self.client.setting(api.DISABLED)))
         self.shown_doc: tuple[str, str] | None = None   # a module's doc in Detail (show_doc): (path, title)
+        self.detail_note: str | None = None   # why nothing is selected, if a module's pick said (unselect)
         self.doc_edits: dict[str, DocEdit] = {}   # each doc's unsaved edits, by its path (DocEditor.edits)
         # a doc item in Detail and full screen (.plan/docs-section.md): split or tabbed (Ctrl+L,
         # kept as DOC_LAYOUT; each place's tab is its DocPanes'), and each doc's quote, the first
@@ -3935,8 +4079,8 @@ class WheelhouseApp(App):
                 self.client.set_setting(LAYOUT + key, None)
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
             # one beside a collapsed slot keeps its stylesheet's size: a share there would
-            # size a slot that has the column to itself
-            if splitter.display and (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
+            # size a slot that has the column to itself; a column's weights size a SlotSplitter
+            if not isinstance(splitter, SlotSplitter) and splitter.display and (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
                 splitter.apply(stored)
         self.weights = columns.kept(self.client.setting(LAYOUT + columns.WEIGHTS_KEY))
         self.eye_col = self.session_list.add_columns(*SESSION_LABELS, "")[-1]
@@ -4013,7 +4157,7 @@ class WheelhouseApp(App):
         the widgets: an answer box would move its cursor and drop its selection, and the
         screen would take it for a click and clear its own."""
         if isinstance(event, (events.MouseDown, events.MouseUp)) and event.button == 3 and not event.is_forwarded:
-            if isinstance(event, events.MouseDown) and not self.session_menu(event):
+            if isinstance(event, events.MouseDown) and not (self.session_menu(event) or self.pane_menu(event)):
                 self.right_click(event)
             return
         if isinstance(event, events.Key) and not event.is_forwarded:
@@ -4083,7 +4227,7 @@ class WheelhouseApp(App):
 
     def session_menu(self, event: events.MouseDown) -> bool:
         """A right-click on a session's row in the session list (#125): the session selected,
-        as a click selects it, and a menu of its buttons at the pointer (SessionMenu), the
+        as a click selects it, and a menu of its buttons at its row (SessionMenu), the
         one chosen pressed as a click on it would be. Only on the row itself, the topmost
         widget there (not a tour callout over it, nor the list's scrollbar). Whether the
         click was one."""
@@ -4115,16 +4259,39 @@ class WheelhouseApp(App):
             if button_id is None:
                 return
             button = self.screen_stack[0].query_one(f"#{button_id}", Button)
+            # the menu's caption: the one under the list is the session selected now's (#128)
+            label = next(caption for id_, caption, *_ in menu.buttons if id_ == button_id)
             if self.current_session() != sid or not showing(button):   # since the menu opened
-                self.notify(f"{button.label} no longer applies to this session", severity="warning")
+                self.notify(f"{label} no longer applies to this session", severity="warning")
             elif button.disabled:
                 busy = button_id in self.busy_buttons(next((x for x in self.sessions if x["id"] == sid), s))
-                self.notify(f"{button.label}: " + ("still under way" if busy else "nothing to do"), severity="warning")
+                self.notify(f"{label}: " + ("still under way" if busy else "nothing to do"), severity="warning")
             else:
                 button.press()
-        self.push_screen(SessionMenu(sid, self.display_name(s), self.session_menu_buttons(s),
-                                     Offset(event.screen_x, event.screen_y)), chosen)
+        menu = SessionMenu(sid, self.display_name(s), self.session_menu_buttons(s),
+                           Offset(event.screen_x, event.screen_y))   # the row's line: the row clicked
+        self.push_screen(menu, chosen)
         return True
+
+    def pane_menu(self, event: events.MouseDown) -> bool:
+        """A right-click in a module's pane whose widget there, or an ancestor of it, gives a
+        menu for the point (api.Menu, #138): the menu at the row, the entry chosen handed
+        back. Only on the main screen, the topmost widget there. Whether it opened one."""
+        if self.screen is not self.screen_stack[0]:
+            return False
+        try:
+            under, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
+        except Exception:
+            return False
+        for node in under.ancestors_with_self:
+            if callable(menu_at := getattr(node, "menu_at", None)):
+                menu = menu_at(event.screen_x, event.screen_y)
+                if menu is None:
+                    return False
+                self.push_screen(PaneMenu(menu, Offset(event.screen_x, menu.line)),
+                                 lambda chosen: chosen is not None and menu.chosen(chosen))
+                return True
+        return False
 
     def session_menu_buttons(self, s) -> list[tuple[str, str, bool, bool]]:
         """A session's buttons for its menu: (id, caption, disabled, shown), as under the list."""
@@ -4819,15 +4986,40 @@ class WheelhouseApp(App):
 
     def show_item(self, sid: str, ref: str) -> None:
         """A module's pick of an item (api.Context.show_item, the PRs pane's row that is one):
-        shown in Detail with its thread and answer box, and highlighted in the inbox if listed there."""
+        shown in Detail with its thread and answer box, and highlighted in the inbox if listed
+        there; if not, the inbox's highlight hidden, not left on another item (#148)."""
         self.shown_doc = None
         key, table = f"{sid}|{ref}", self.items_table
         if key in table.rows:
             with table.prevent(DataTable.RowHighlighted):
                 table.move_cursor(row=table.get_row_index(key), animate=False)
             self.items_cursor = key
+        table.show_cursor = key in table.rows
         self.select_row(key)
         self.paint_sendbar()
+
+    def unselect(self, note: str) -> None:
+        """A module's pick of something that isn't an item (api.Context.unselect, a PR no
+        session made): nothing selected, the inbox's highlight hidden, and Detail saying why."""
+        self.shown_doc = None
+        self.items_table.show_cursor = False
+        if self.selected is not None:
+            self.selected = None
+            self.retarget()
+            self.each_pane("showing", None, None)
+        self.detail_note = note
+        self.paint_detail()
+        self.paint_sendbar()
+
+    def pick_item(self, key: str) -> None:
+        """The inbox's hidden highlight brought back on its row by the person (ItemList): that
+        row selected, as a move onto it would."""
+        table = self.items_table
+        table.show_cursor = True
+        self.items_cursor = key
+        self.select_row(key)
+        self.picked = self.selected
+        self.paint_items()
 
     def open_doc(self, path: str, title: str) -> None:
         """A module's doc full screen (api.Context.open_doc), as Enter opens a doc item."""
@@ -4837,7 +5029,18 @@ class WheelhouseApp(App):
         """The context a module's pane is made with: the app's, with its own routes (call)."""
         return dataclasses.replace(self.ctx, call=functools.partial(self.client.call_module, mid),
                                    show_doc=self.show_doc, open_doc=self.open_doc, relayout=self.fit_compact,
-                                   show_item=self.show_item)
+                                   show_item=self.show_item, unselect=self.unselect, send=self.module_send, setting=self.client.setting,
+                                   set_setting=self.client.set_setting,
+                                   confirm=lambda prompt, then: self.push_screen(Confirm(prompt), then),
+                                   ask=lambda prompt, offered, then: self.push_screen(Ask(prompt, offered), then))
+
+    def module_send(self, sid: str, ref: str | None, text: str) -> None:
+        """A module's text sent to a session (api.Context.send), as an answer goes: queued or
+        at once by its mode, and said as the send bar says it."""
+        try:
+            self.told(self.client.submit((sid, ref), text))
+        except (SessionGone, ValueError) as e:
+            self.notify(str(e), severity="warning")
 
     def doc_sends_now(self, sid: str) -> bool:
         """Whether a doc item of this session's saves on Ctrl+Enter in its editor: its
@@ -4878,8 +5081,9 @@ class WheelhouseApp(App):
         for box, target in boxes:
             quote = target and self.doc_quotes.get(target)
             title = f'> "{quote}"' if quote else None
-            if box.border_title != title:
-                box.border_title = title
+            if getattr(box, "quoted", None) != title:   # border_title reads back as markup
+                box.quoted = title
+                box.border_title = Content(title) if title else None   # plain: the doc's own text
 
     def paint_detail(self) -> None:
         agent, doc, shown = False, self.selected_doc(), self.shown_doc
@@ -4900,7 +5104,7 @@ class WheelhouseApp(App):
         elif self.selected:
             blocks, agent = self.item_blocks(*self.selected)
         else:   # what was shown has gone (a followed session ended, say): not left standing
-            blocks = [("note", NOTHING_SELECTED)]
+            blocks = [("note", self.detail_note or NOTHING_SELECTED)]
         if editor is not None:
             blocks = editor.shown_in(blocks, self.detail.doc_path, gone)
         if not agent and not isinstance(self.screen, ThreadView):   # which may follow one itself
@@ -4913,12 +5117,17 @@ class WheelhouseApp(App):
         (was, before), self._shown_turns = getattr(self, "_shown_turns", (None, set())), (self.viewing, turns)
         if self.viewing and was == self.viewing and turns - before and self.selected == self.picked:
             self.saw(self.viewing, None, "follow")
+        # an item's thread follows too once it's painted (#147): a new answer or reply shows at
+        # its end. Newly selected, it shows from its top, as before
+        thread = None if shown or self.viewing or doc else self.selected
+        same, self._detail_thread = thread is not None and thread == getattr(self, "_detail_thread", None), thread
         text = "\n\n".join(md for _, md in blocks)
         if text != getattr(self, "_detail_text", None):
-            following = self.detail_follows and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1
+            following = ((self.detail_follows or same)
+                         and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1)
             self._detail_text = text
             self.detail.update(render(blocks))   # a doc posted again: where it was scrolled to stays
-            if following:   # stay at the newest turn, unless the person has scrolled up to read
+            if following:   # stay at the newest turn or reply, unless the person has scrolled up to read
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
         if hasattr(self, "detail_panes"):
             self.paint_doc_thread(doc if not shown and not self.viewing else None)
@@ -5148,7 +5357,8 @@ class WheelhouseApp(App):
     def lay_columns(self) -> None:
         """Each column of slots laid out by columns.lay: an empty slot hidden, a compact one at
         its own rows, and the rest sharing what's left by their weights. Each splitter joined to
-        the two weighted slots it moves rows between, or hidden."""
+        the two weighted slots it moves rows between, or hidden. In a column too short for their
+        least rows a slot's min-height goes down to the rows it gets (columns.squeezed)."""
         if not self.screen_stack:
             return
         for column in self.screen_stack[0].query(".column"):
@@ -5161,9 +5371,11 @@ class WheelhouseApp(App):
                 splitter.pair = (places[pair[1]], places[pair[0]]) if pair else None
                 splitter.display = pair is not None
             if weighted and columns.room(column.size.height, slots) > 0:
+                least_ = {s.name: s.least for s in slots}
                 for name, n in columns.lay(column.size.height, slots, self.weights).items():
                     if name in weighted:
                         places[name].styles.height = n
+                        places[name].styles.min_height = min(n, least_[name])
 
     def column_slots(self, column: Widget) -> tuple[list[columns.Slot], dict[str, Widget]]:
         """A column's slots as columns.py sees them (hidden: no rows of its own; compact: its
@@ -5192,14 +5404,29 @@ class WheelhouseApp(App):
             self.lay_columns()
         self.client.set_setting(LAYOUT + columns.WEIGHTS_KEY, json.dumps(self.weights) if self.weights else None)
 
+    def action_open_url(self, url: str) -> None:
+        """A click on a PR's link (prs.link): the whole URL in the browser."""
+        self.open_url(url)
+
+    def open_url(self, url: str, *, new_tab: bool = True) -> None:
+        """A web page in the browser, and nothing else: no file:, no other scheme (#139)."""
+        if url.startswith(("https://", "http://")):
+            super().open_url(url, new_tab=new_tab)
+
+    def notify(self, message: str, *, markup: bool = False, **kwargs) -> None:
+        """A toast, plain unless asked: its message often holds a session's text, which as
+        markup could hold an [@click=...] (#139)."""
+        super().notify(message, markup=markup, **kwargs)
+
     def action_reset_layout(self) -> None:
         """Reset layout, in the command palette: every pane in its default slot and every
         splitter at the stylesheet's size, with nothing kept for either."""
         self.client.set_setting(SLOTS_KEY, None)
         self.place_panes({})
-        for splitter in self.screen_stack[0].query(Splitter):
-            splitter.apply(None)
-            self.client.set_setting(LAYOUT + splitter.key, None)
+        for splitter in self.screen_stack[0].query(Splitter):   # the weights below hold a SlotSplitter's
+            if not isinstance(splitter, SlotSplitter):
+                splitter.apply(None)
+                self.client.set_setting(LAYOUT + splitter.key, None)
         self.weights = {}
         self.client.set_setting(LAYOUT + columns.WEIGHTS_KEY, None)
         self.relaid()
@@ -5665,7 +5892,7 @@ class WheelhouseApp(App):
         activity = self.activity_line(s) if s else ""
         if activity != getattr(self, "_activity_text", None):
             self._activity_text = activity
-            self.session_activity.update(activity)
+            self.session_activity.update(Text(activity))   # plain: the session's own words, never markup
         before = [b.display for b in self.session_controls]
         for grid, buttons in ((self.session_buttons, self.lifecycle_buttons(s)),
                               (self.conversation_buttons, self.controls(s))):
@@ -5675,7 +5902,7 @@ class WheelhouseApp(App):
         if [b.display for b in self.session_controls] != before:
             self.refit()   # rows of buttons more or less under the description
         for menu in self.screen_stack:   # a session's menu open (#125): its buttons as they are now
-            if isinstance(menu, SessionMenu) and (m := next((x for x in self.sessions if x["id"] == menu.sid), None)):
+            if type(menu) is SessionMenu and (m := next((x for x in self.sessions if x["id"] == menu.sid), None)):
                 menu.paint(self.session_menu_buttons(m))
 
     def describe_all(self) -> Text:
@@ -5828,6 +6055,9 @@ class WheelhouseApp(App):
         self.filter_sid = self.followed = sid
         self.selected = (sid, None)
         self.picked = self.selected   # the person's own: a turn arriving in it moves the tour on (paint_detail)
+        self.items_table.show_cursor = True   # hidden by a pick elsewhere (unselect): its row is the conversation's
+        self.detail_note = None
+        self.each_pane("showing", sid, None)
         table = self.session_list
         if not table.show_cursor:
             with table.prevent(DataTable.RowHighlighted):   # the app's move, as highlight_session's
@@ -5880,9 +6110,11 @@ class WheelhouseApp(App):
         sid, ref = key.split("|")
         if self.selected != (sid, ref or None):
             self.selected = (sid, ref or None)   # an unseen decision is seen once looked at (dwelt)
+            self.detail_note = None
             self.retarget()
             self.paint_detail()
             self.each_pane("tick")
+            self.each_pane("showing", sid, ref or None)   # the PRs pane's highlight on it, or hidden (#148)
             if self.detail_follows:
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 
@@ -5980,6 +6212,8 @@ class WheelhouseApp(App):
         self.settle()
         if isinstance(self.focused, (TextArea, Input)):
             return
+        if self.screen is self.screen_stack[0] and not self.items_table.show_cursor:
+            return   # the highlight hidden (#148): nothing in the inbox is picked, so nothing to close
         if self.items_table.marked and self.screen is self.screen_stack[0]:
             self.close_marked()
             return
@@ -5995,15 +6229,19 @@ class WheelhouseApp(App):
         if standing(item) == "finished" and (self.show_finished or pinned(item)):   # a pinned one shows anyway
             self.notify(f"{item['ref']} is {verb} already: Ctrl+R reopens it")
             return
-        family = self.family(item)
+        family, opened = self.family(item), [item["ref"]] if open_question(item) else []
         if pinned(item):   # kept out of reach of clearing the inbox: deleted only once the person says so (No the default)
             awaiting = (item["session_id"], item["ref"]) in self.client.inbox(item["session_id"]).awaiting
-            self.push_screen(Confirm(pinned_prompt(item, awaiting, family)),
+            self.push_screen(Confirm(pinned_prompt(item, awaiting, family) + open_questions_said(opened)),
                              lambda yes: yes and self.close_pinned(item, family))
             return
         if family:   # it goes with its children, finished or not, a running one orphaned, once the person says so
-            self.push_screen(Confirm(family_prompt([item], family)),
+            self.push_screen(Confirm(family_prompt([item], family) + open_questions_said(opened)),
                              lambda yes: yes and self.close_family(item, family))
+            return
+        if open_question(item):   # the person's still to answer it: asked first, as a family is
+            self.push_screen(Confirm(f"Delete open question {item['ref']} ({item['title']})? Ctrl+Z undoes it."),
+                             lambda yes: yes and self.dismiss_now(item, verb))
             return
         if open_pr(item):   # off the inbox only: say so before it goes
             self.push_screen(Confirm(f"Delete {item['ref']} ({item['title']})? It stays open on GitHub."),
@@ -6012,9 +6250,11 @@ class WheelhouseApp(App):
         self.dismiss_now(item, verb)
 
     def dismiss_now(self, item, verb: str) -> None:
-        """Delete on an item with nothing to ask first: closed or dismissed now."""
-        self.close(item, True)
-        self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
+        """Delete on an item with nothing to ask first (or asked): closed or dismissed now."""
+        acted = self.close(item, True).ok   # not one finished already, only let go of
+        if acted:
+            self.undoable(f"{verb} {item['ref']}", [item])
+        self.notify(f"{verb} {item['ref']}" + deleted_hint(self.show_finished, acted))
         self.refresh_data()
 
     def close_pinned(self, item, family: list) -> None:
@@ -6028,9 +6268,10 @@ class WheelhouseApp(App):
         if family:
             self.close_family(item, family)
             return
-        self.close(item, True)
         verb = "closed" if item["kind"] in CLOSABLE else "dismissed"
-        self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
+        self.close(item, True)
+        self.undoable(f"{verb} {item['ref']}", [item])   # its pin back too (restore)
+        self.notify(f"{verb} {item['ref']}" + deleted_hint(self.show_finished))
         self.refresh_data()
 
     def toggle_pinned(self, key: str) -> None:
@@ -6044,12 +6285,14 @@ class WheelhouseApp(App):
         except (SessionGone, KeyError) as e:
             self.notify(str(e), severity="warning")
             return
+        self.undoable(f"{'unpinned' if pinned(item) else 'pinned'} {ref}", [item])
         self.notify(f"{'unpinned' if pinned(item) else 'pinned'} {ref}")
         self.refresh_data()
 
     def action_toggle_pinned(self) -> None:
         self.settle()
-        if not isinstance(self.focused, (TextArea, Input)) and (key := self.items_table.cursor_key()):
+        if not isinstance(self.focused, (TextArea, Input)) and self.items_table.show_cursor \
+                and (key := self.items_table.cursor_key()):
             self.toggle_pinned(key)
 
     def family(self, item) -> list:
@@ -6072,9 +6315,9 @@ class WheelhouseApp(App):
             self.notify(str(e), severity="warning")
             return
         n, kept = sum(not spared(it) for it in family), sum(map(spared, family))
-        self.notify(f"deleted {item['ref']}" + (f" and {n} {'child' if n == 1 else 'children'}" if n else "")
-                    + (f"; {kept} running kept at the top level" if kept else "")
-                    + ("" if self.show_finished else ": F shows finished items"))
+        said = f"deleted {item['ref']}" + (f" and {n} {'child' if n == 1 else 'children'}" if n else "")
+        self.undoable(said, [item, *family])
+        self.notify(said + (f"; {kept} running kept at the top level" if kept else "") + deleted_hint(self.show_finished))
         self.refresh_data()
 
     def toggle_children(self, key: str) -> None:
@@ -6088,16 +6331,57 @@ class WheelhouseApp(App):
                 self.select_row(key)
         self.paint_items()
 
-    def close(self, item, closed: bool) -> Done:
+    def close(self, item, closed: bool, status: str | None = None) -> Done:
         """Close a question or decision (Delete), or reopen it (Ctrl+R): a question as answered,
-        a decision as seen. Dismiss a settled task or subagent, or bring it back. At once: no
+        a decision as seen, or as `status` (Ctrl+Z, restore). Dismiss a settled task or subagent, or bring it back. At once: no
         sinking, and selected, it moves (D33), the one change that moves a selected item
         (ranked). One finished already only goes, from where it was held while selected."""
         self.item_sink.jump()
         self.repin.add(item_key(item))
         if closed:
             self.deleted.add(item_key(item))
-        return self.told(self.client.close(item["session_id"], item["ref"], closed))
+        return self.told(self.client.close(item["session_id"], item["ref"], closed, status))
+
+    def undoable(self, said: str, rows: list) -> None:
+        """The person's last act on the inbox, for Ctrl+Z: what it did, said, and each row it
+        changed as it stood before (restore). One step: the next act replaces it."""
+        self.undo = (said, rows)
+
+    def restore(self, item) -> None:
+        """Ctrl+Z: an item put back as it stood, from its row read before the act. Undeleted,
+        reopened as the status it had (a question open again, not answered), finished again if
+        it was, its pin as it was. A running child Delete orphaned stays at the top level."""
+        sid, ref = item["session_id"], item["ref"]
+        now = self.client.item(sid, ref)
+        if now is None:
+            return
+        was = standing(item) == "finished"
+        if standing(now) == "finished" and item["dismissed"] != DELETED:   # one deleted before stays so
+            self.close(item, False, item["status"] if item["kind"] in CLOSABLE else None)
+            if was:
+                self.close(item, True)
+        elif was:   # Ctrl+R undone
+            self.close(item, True)
+        if pinned(now) != pinned(item):
+            self.told(self.client.set_pinned(sid, ref, pinned(item)))
+
+    def action_undo(self) -> None:
+        """Ctrl+Z: the last delete, pin or reopen in the inbox undone, once. A text box's own
+        Ctrl+Z (TextArea's undo) comes first, and a dialog in front has its own keys."""
+        self.settle()
+        if isinstance(self.focused, (TextArea, Input)) or self.screen is not self.screen_stack[0]:
+            return
+        if self.undo is None:
+            self.notify("nothing to undo")
+            return
+        (said, rows), self.undo = self.undo, None
+        for item in rows:
+            try:
+                self.restore(item)
+            except (SessionGone, KeyError) as e:   # ended or gone meanwhile: the rest still come back
+                self.notify(str(e), severity="warning")
+        self.notify(f"undone: {said}")
+        self.refresh_data()
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's Allow, Always or Deny: an explicit act, as Delete is, so selected, the
@@ -6119,10 +6403,12 @@ class WheelhouseApp(App):
         picked = [it for it in picked if not closed or not pinned(it)]
         kept = f"{kept} pinned kept" if kept else ""
         families = {item_key(it): self.family(it) for it in filter(acts, picked)} if closed else {}
-        if any(families.values()):   # the children go with their parents, once the person says so
+        opened = [it["ref"] for it in filter(acts, picked) if open_question(it)] if closed else []
+        if any(families.values()) or opened:   # the children go with their parents, once the person says so
             kids = [c for f in families.values() for c in f]
             parents = [it for it in filter(acts, picked) if families[item_key(it)]]
-            self.push_screen(Confirm(family_prompt(parents, kids, len(families))),
+            asked = family_prompt(parents or list(filter(acts, picked)), kids, len(families))
+            self.push_screen(Confirm(asked + open_questions_said(opened)),   # one dialog, however many
                              lambda yes: yes and self.close_picked(list(filter(acts, picked)), families, kept=kept))
             return
         if not picked or not any(acts(it) for it in picked):
@@ -6169,8 +6455,11 @@ class WheelhouseApp(App):
             verb = ("deleted with its children" if families.get(item_key(it)) else
                     "closed" if it["kind"] in CLOSABLE else "dismissed") if closed else "reopened"
             said.setdefault(verb, []).append(it["ref"])
-        self.notify("; ".join([f"{verb} {', '.join(refs)}" for verb, refs in said.items()] + ([kept] if kept else []))
-                    + ("" if not closed or self.show_finished else ": F shows finished items"))
+        told = "; ".join(f"{verb} {', '.join(refs)}" for verb, refs in said.items())
+        if done:
+            self.undoable(told, [r for it in done for r in [it, *families.get(item_key(it), [])]])
+        self.notify("; ".join(([told] if told else []) + ([kept] if kept else []))
+                    + (deleted_hint(self.show_finished) if closed and done else ""))
         self.refresh_data()
 
     def action_help(self) -> None:
@@ -6261,6 +6550,7 @@ class WheelhouseApp(App):
             item = target[1] and self.client.item(*target)
             if item and closable(item) and standing(item) == "finished":
                 self.close(item, False)
+                self.undoable(f"reopened {item['ref']}", [item])
                 self.notify(f"reopened {item['ref']} as {CLOSABLE.get(item['kind'], item['status'])}")
                 self.refresh_data()
                 return

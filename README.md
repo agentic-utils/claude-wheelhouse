@@ -153,8 +153,8 @@ session.
   screen as a conversation, with the session's replies. Ctrl+Enter submits an answer, and
   each session has a send mode: in Queued mode (where every session starts) answers wait
   and go out together, Ctrl+S sending the session's as one message; in Immediate mode each
-  goes as you submit it. The line under the answer box says which: "Ctrl+Enter to queue"
-  or "Ctrl+Enter to send". Alt+S sends just the answer in the box at once, whatever the
+  goes as you submit it. The line under the answer box says which: "Ctrl+Enter: queue"
+  or "Ctrl+Enter: send". Alt+S sends just the answer in the box at once, whatever the
   mode, leaving the mode and the rest of the queue as they are. Ctrl+T switches the
   session's mode. Under the session list, Mode and Send (n) do the same, for the
   same session, and a bar above the footer
@@ -325,7 +325,9 @@ session.
   size the same way, as a one-cell bar in the same colours, filled in eighths on a
   linear scale: an eighth for each 125k begun, so the cell is full past 875k.
 - **The PRs pane.** Under the inbox, the open pull requests your sessions made (`PRs ·
-  mine`), or with `m` every open PR you authored in any repo (`PRs · all`). Each row is its
+  mine`), or with `m` every open PR you authored in any repo (`PRs · all`). As the inbox
+  does, it follows the session selected: its PRs alone (`PRs · mine · <session>`), or every
+  one with none selected (`Esc`). Each row is its
   `PR` number, repo (when there's more than one), title and a light: red for a failed
   check, changes requested or a conflict with its base; orange, flashing, while checks
   run; yellow while a review is awaited; green when it's ready to merge; grey for a draft.
@@ -333,7 +335,18 @@ session.
   every 5 minutes, when the pane is shown, 20 seconds after a session pushes or merges,
   and on `r`; every app shares it, and a merged or closed PR leaves the pane at once.
   Highlighting a session's PR shows it in Detail with its thread; `Enter` opens it in the
-  browser. Without `gh`, or not logged in, the pane says so.
+  browser. Detail always shows what you picked last, in the inbox or here: the other list
+  highlights it too if it lists it, and otherwise hides its highlight until you click, press
+  `Enter` or move in it again. A PR no session made isn't an item, so picking it leaves
+  nothing selected and Detail says so. Without `gh`, or not logged in, the pane says so. Under the table, the PR
+  selected has three buttons, which a right-click on its row gives as a menu too: **Open**
+  (the browser); **Merge**, asked first, with `gh pr merge` the way the repo allows (a
+  merge commit where it can, else squash, else rebase), saying under the table what
+  stood in its way if it didn't (a review required, conflicts, failing checks, as `gh`
+  says); and **Request review**, which asks for a Slack channel or name (`#channel`,
+  `@name`, past ones offered most recent first) and sends the session that made the PR a
+  message asking it to post the request on Slack. For a PR no session made (`PRs · all`,
+  with no session selected) it is greyed: there is no session to ask.
 - **The Decisions pane.** Under the inbox, the design decisions (ADRs) of every repo a session works
   in: each `NNNN-*.md` file in the repo's `docs/adr`, or in the directories a session there
   named with `set_doc_dirs` instead (`.plan/`, say, only if named), read again every 10
@@ -475,11 +488,12 @@ along with the launch command.
 
 Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first), `N` new session, `A` adopt, `Shift+L` relaunch all, `K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
+highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `N` new session, `A` adopt, `Shift+L` relaunch all, `K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode), `Alt+S` send this one answer now (the queue and mode left as they are),
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
-as answered, a decision as seen), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
+as answered, a decision as seen), `Ctrl+Z` undo the last delete, pin or reopen in the inbox (the rows back as they
+stood, an open question open again; in a text box, its own undo), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
 Every dialog opens centred over the screen, which stays in sight behind it. `Esc`, or a click outside the box, cancels it (on the tutorial's invite, that is Later, never Never), though not a click outside in the moment a dialog opens (a double-click's second). `Enter` presses the focused button; with focus on a one-line box or a checkbox it takes the dialog's one action (Launch, Rename, Fork, Park and the like), while in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices (Stop & Forget's, Relaunch's) answers `Enter` only on the focused button. `Tab` and `Shift+Tab` go round its boxes and buttons. A dialog asking yes or no takes `Y` or `N` (`Esc` is no, and so is `Enter`, as No has the focus). The `?` list closes on `Esc`, `Enter`, `?` or a click outside.
 
 `Tab` goes round the session list, the items, the Decisions list, the answer box, the tour's Next while a tour box
@@ -489,7 +503,9 @@ answer box, where `PgUp` and `PgDn` scroll the conversation, and `Ctrl+Enter` le
 a button leaves focus where it was. A focused button that is disabled or hidden (Send, once it has sent)
 gives focus to the answer box. Send (its button or `Ctrl+S`) from the answer box or a button leaves focus in
 the box; from the session list or the items, focus stays there. An item opened full screen goes the same way: its
-answer box, then its buttons, and a click in its thread puts focus in the box. A doc shown in Detail
+answer box, then its buttons, and a click in its thread puts focus in the box. A conversation or an item's thread,
+in Detail or full screen, follows what's new to its end (your own answer, a reply) unless you've scrolled more than a
+line up from the end; an item just selected shows from its top. A doc shown in Detail
 is a stop after the answer box (in its place when the box doesn't show), and focused, the arrows,
 `PgUp`, `PgDn`, `Home` and `End` scroll it. Keys typed ahead of the screen end as if typed slowly: each acts once the one
 before it has done all it does, so the ones behind a key that opens a thread or a dialog go to it, and the ones behind a
@@ -523,14 +539,15 @@ and `Shift`+click or `Alt`+click marks the range from the last one marked (Windo
 marks or unmarks the highlighted row, `Shift+Up`/`Shift+Down` extend the range, and `Ctrl+A`
 marks every finished (dimmed) row shown, never a pinned one. A `Ctrl`+, `Shift`+ or `Alt`+click never starts a drag. `Delete` or `Backspace` then closes the marked
 questions and decisions and dismisses the done tasks and subagents, leaving any pinned one among them, `Ctrl+R` brings back the finished ones, `Esc` clears the marks, and a plain click
-starts afresh. Once `Delete` has taken the highlighted row (one row, or several marked), the
+starts afresh. Marked rows that include an open question ask once first, naming them. Once `Delete` has taken the highlighted row (one row, or several marked), the
 highlight goes to the row immediately above the topmost row it took, or to the new first row
 if that was the first.
 
 Text: drag the mouse over the conversation or a thread to select part of it (shown black
 on white), double-click to select a word, `Ctrl+A` in the answer box selects its text (in the item list it marks the finished rows; in a doc opened
 full screen it selects the whole doc), and `Ctrl+C` copies the selection (through the terminal, which Windows Terminal supports). Right-click on a session in the session list selects it and opens a menu of
-its buttons (greyed as they are under the list; Esc or a click outside closes it). Elsewhere right-click does as a
+its buttons (greyed as they are under the list; Esc or a click outside closes it); on a PR in the PRs pane, a menu of its
+actions. Elsewhere right-click does as a
 terminal's does: it copies the selection, or with nothing selected pastes the clipboard
 into the answer box under the pointer (or the focused one). Under WSL the paste reads the
 Windows clipboard through PowerShell, so it takes most of a second; elsewhere it pastes the
@@ -547,7 +564,9 @@ columns, and above the answer box. A line turns teal under the pointer and while
 below its minimum (the session column never gets too narrow for its buttons' captions).
 The sizes are kept in the wheelhouse's database, as shares of the space, so they follow a
 resized terminal; double-click a line to put its default back. A size that doesn't fit a
-smaller terminal shrinks there, and comes back when there's room again. The three columns
+smaller terminal shrinks there, and comes back when there's room again. A column too short
+for its panes' minimums (some rearrangements on an 80x24 terminal) takes the rows it lacks
+from the pane with the most to spare, Session info first, whose description scrolls. The three columns
 fit an 80-column terminal.
 
 To try another layout, drag a pane by its title (its top border) onto another pane: the

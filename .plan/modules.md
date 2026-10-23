@@ -65,7 +65,9 @@ panes, so a swap keeps each slot's size. Default panes:
   empty slot.
 - Each pane keeps its own minimum size (the session buttons need 39 columns). A swap that
   puts a wide pane in a narrow slot lets the slot grow to that minimum; the splitter's
-  `fit()` already shrinks the others.
+  `fit()` already shrinks the others. A column too short for its slots' minimums (#132: session
+  info, sessions and a third pane in one column at 80x24) takes the rows it lacks a row at a time
+  from the slot with the most above a border and a line (`columns.squeezed`).
 - Implementation: the slots are fixed containers in `compose`; a swap moves the two pane
   widgets between them (`Widget.move_child` cannot cross parents, so remove and mount,
   keeping the widget instances so their state survives). The app's `query_one("#items")`

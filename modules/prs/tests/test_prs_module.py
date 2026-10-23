@@ -169,7 +169,7 @@ def test_a_partial_answer_still_counts(tmp_path):
 def test_the_route_refuses_an_unknown_scope(tmp_path, monkeypatch):
     f = Fake(tmp_path)
     monkeypatch.setattr(pane, "RUNNER", f.run)
-    (route,) = pane.routes(f.ctx)
+    route = next(r for r in pane.routes(f.ctx) if r.path == "list")
     assert route.handler(api.Call({}, {"scope": "all"}))["prs"] == []
     with pytest.raises(api.Refused):
         route.handler(api.Call({}, {"scope": "everyone"}))
@@ -185,3 +185,93 @@ def test_the_route_refuses_an_unknown_scope(tmp_path, monkeypatch):
 ])
 def test_next_sort(spec, column, want, desc):
     assert pane.next_sort(spec, column) == want, desc
+
+
+def merger(allowed=None, view=(0, ""), merge=(0, ""), raises=None):
+    """gh for a merge (#138): repo view answers the methods allowed, pr merge (code, stderr)."""
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        if raises:
+            raise raises
+        if argv[1:3] == ["repo", "view"]:
+            return view[0], json.dumps(allowed) if allowed is not None else "", view[1]
+        return merge[0], "", merge[1]
+    return run, calls
+
+
+@pytest.mark.parametrize("allowed, want, desc", [
+    ({"mergeCommitAllowed": True, "squashMergeAllowed": True, "rebaseMergeAllowed": True}, "merge", "a merge commit first"),
+    ({"mergeCommitAllowed": False, "squashMergeAllowed": True, "rebaseMergeAllowed": True}, "squash", "else squash"),
+    ({"mergeCommitAllowed": False, "squashMergeAllowed": False, "rebaseMergeAllowed": True}, "rebase", "else rebase"),
+])
+def test_a_merge_takes_the_method_the_repo_allows(tmp_path, allowed, want, desc):
+    f = Fake(tmp_path, [item(1)])
+    run, calls = merger(allowed)
+    got = fetch.Fetcher(f.ctx, run, lambda: f.now).merge(URL.format(1))
+    assert got == {"method": want}, desc
+    assert calls[0][:3] == ["gh", "repo", "view"] and calls[0][-2:] == ["--", "two-inc/wheelhouse"], "GitHub asked, not assumed"
+    assert calls[1] == ["gh", "pr", "merge", f"--{want}", "--", URL.format(1)] and "--admin" not in calls[1], desc
+    assert f.states == {URL.format(1): "merged"}, "its item marked merged"
+
+
+ALL = {"mergeCommitAllowed": True}
+
+
+@pytest.mark.parametrize("allowed, view, merge, raises, want, desc", [
+    (ALL, (0, ""), (1, "X Pull request #1 is not mergeable: the base branch policy prohibits the merge."), None,
+     "the base branch policy prohibits the merge", "gh's refusal, its last line"),
+    ({"mergeCommitAllowed": False}, (0, ""), (0, ""), None, "allows no merge method", "no method allowed"),
+    (None, (1, "HTTP 404: Not Found"), (0, ""), None, "HTTP 404", "the repo can't be read"),
+    (None, (4, "please run:  gh auth login"), (0, ""), None, "gh auth login", "not logged in"),
+    (None, (0, ""), (0, ""), fetch.Unavailable("gh isn't installed"), "isn't installed", "no gh"),
+])
+def test_a_merge_that_fails_says_why(tmp_path, allowed, view, merge, raises, want, desc):
+    f = Fake(tmp_path, [item(1)])
+    run, _ = merger(allowed, view, merge, raises)
+    got = fetch.Fetcher(f.ctx, run, lambda: f.now).merge(URL.format(1))
+    assert want in got.get("error", ""), f"{desc}: {got}"
+    assert f.states == {}, f"{desc}: its item left as it was"
+
+
+def test_a_merged_pr_leaves_the_list_and_the_others_stay(tmp_path):
+    f = Fake(tmp_path, [item(1), item(2)], {"data": {"p0": {"pullRequest": node(1)}, "p1": {"pullRequest": node(2)},
+                                                      "search": {"nodes": [node(1), node(2)]}}})
+    fetcher = f.fetcher()
+    assert sorted(r["number"] for r in fetcher.answer("mine", False)["prs"]) == [1, 2]
+    fetcher.runner, _ = merger(ALL)
+    fetcher.merge(URL.format(1))
+    assert [r["number"] for r in fetcher.answer("mine", False)["prs"]] == [2], \
+        "the merged one gone before the next fetch, the others still there"
+
+
+def test_the_merge_route_takes_a_pr_url(tmp_path, monkeypatch):
+    f = Fake(tmp_path)
+    run, calls = merger(ALL)
+    monkeypatch.setattr(pane, "RUNNER", run)
+    route = next(r for r in pane.routes(f.ctx) if r.path == "merge")
+    assert route.method == "POST"
+    assert route.handler(api.Call({}, {}, {"url": URL.format(3)})) == {"method": "merge"}
+    for body in ({}, {"url": "https://example.com/x"}, {"url": "--body=https://github.com/a/b/pull/1"},
+                 {"url": URL.format(3) + "/files"}, {"url": " " + URL.format(3)}, {"url": 7}):
+        with pytest.raises(api.Refused):
+            route.handler(api.Call({}, {}, body))
+    assert len(calls) == 2, "nothing run for a body without a PR"
+
+
+@pytest.mark.parametrize("past, target, want, desc", [
+    ([], "#eng", ["#eng"], "the first"),
+    (["#eng", "@sam"], "@sam", ["@sam", "#eng"], "used again: first, once"),
+    ([f"#c{i}" for i in range(pane.KEEP)], "#new", ["#new", *(f"#c{i}" for i in range(pane.KEEP - 1))], "no more than KEEP"),
+])
+def test_review_targets_are_remembered_most_recent_first(past, target, want, desc):
+    assert pane.remembered(past, target) == want, desc
+
+
+@pytest.mark.parametrize("raw, want, desc", [
+    (None, [], "none kept"), ("junk", [], "junk"), ('{"a": 1}', [], "not a list"),
+    ('["#eng", 3, "@sam"]', ["#eng", "@sam"], "only the strings"),
+])
+def test_review_targets_as_kept(raw, want, desc):
+    assert pane.targets(raw) == want, desc
