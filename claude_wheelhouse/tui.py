@@ -5823,7 +5823,7 @@ class WheelhouseApp(App):
         if [b.display for b in self.session_controls] != before:
             self.refit()   # rows of buttons more or less under the description
         for menu in self.screen_stack:   # a session's menu open (#125): its buttons as they are now
-            if isinstance(menu, SessionMenu) and (m := next((x for x in self.sessions if x["id"] == menu.sid), None)):
+            if type(menu) is SessionMenu and (m := next((x for x in self.sessions if x["id"] == menu.sid), None)):
                 menu.paint(self.session_menu_buttons(m))
 
     def describe_all(self) -> Text:
