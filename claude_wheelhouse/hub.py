@@ -416,9 +416,9 @@ class Hub:
     def compact_first(self, sid: str) -> bool:
         """Whether Relaunch should offer to compact first: a running host whose context, as
         it last recorded it, is past COMPACT_FIRST_TOKENS, whose restart would write all of
-        that to the prompt cache again."""
+        that to the prompt cache again. Never outside SDK mode, where there's no compacting."""
         s = self.listed(sid)
-        return (runner(s) == "sdk" and not s["shell"] and self.running(sid)
+        return (self.sdk and runner(s) == "sdk" and not s["shell"] and self.running(sid)
                 and (s["context_tokens"] or 0) > COMPACT_FIRST_TOKENS)
 
     def warm(self, sid: str) -> bool:

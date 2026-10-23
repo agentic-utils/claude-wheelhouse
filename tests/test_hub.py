@@ -610,7 +610,7 @@ def test_model_state(hub, store, tmp_path, monkeypatch, runner, status, shell, c
     ("sdk", None, "dead", 160_000, False, "dead: Relaunch is Restore, no host to compact"),
     ("tab", None, "live", 160_000, False, "a tab: no Compact command"),
 ])
-def test_compact_first_is_offered(hub, store, sid, monkeypatch, runner_, shell, status, tokens, offered, desc):
+def test_compact_first_is_offered(sdk_on, hub, store, sid, monkeypatch, runner_, shell, status, tokens, offered, desc):
     monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
     store.set_runner(sid, runner_)
     store.set_shell(sid, shell)

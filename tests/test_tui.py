@@ -6896,7 +6896,7 @@ async def test_a_click_on_a_level_sets_it(store, tmp_path, monkeypatch, level):
     (200_000, ("click:#relaunch-cancel",), "RelaunchChoice", None, "Cancel clicked"),
 ])
 @pytest.mark.both
-async def test_relaunch_offers_to_compact_a_big_session_first(store, sid, monkeypatch, tokens, keys, dialog,
+async def test_relaunch_offers_to_compact_a_big_session_first(sdk_on, store, sid, monkeypatch, tokens, keys, dialog,
                                                               stopped, desc):
     from claude_wheelhouse import hub as hub_mod, liveness
     store.set_runner(sid, "sdk")
