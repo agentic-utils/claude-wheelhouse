@@ -563,7 +563,9 @@ columns, and above the answer box. A line turns teal under the pointer and while
 below its minimum (the session column never gets too narrow for its buttons' captions).
 The sizes are kept in the wheelhouse's database, as shares of the space, so they follow a
 resized terminal; double-click a line to put its default back. A size that doesn't fit a
-smaller terminal shrinks there, and comes back when there's room again. The three columns
+smaller terminal shrinks there, and comes back when there's room again. A column too short
+for its panes' minimums (some rearrangements on an 80x24 terminal) takes the rows it lacks
+from the pane with the most to spare, Session info first, whose description scrolls. The three columns
 fit an 80-column terminal.
 
 To try another layout, drag a pane by its title (its top border) onto another pane: the

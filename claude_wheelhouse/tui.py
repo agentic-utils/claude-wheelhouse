@@ -174,9 +174,12 @@ def arrange(saved: dict[str, str], defaults: dict[str, str]) -> dict[str, str]:
 
 
 def least(place: Widget) -> int:
-    """The fewest rows a slot keeps: its min-height, the stylesheet's or its panes' (fit_panes)."""
-    scalar = place.styles.min_height
-    return int(scalar.value) if scalar is not None and scalar.unit == Unit.CELLS else 1
+    """The fewest rows a slot keeps while its column has room: the stylesheet's min-height or
+    its panes' (PANE_MINIMUM, as fit_panes sets it), whichever is more. Not its min-height as it
+    stands, which lay_columns lowers in a column too short for them (#132)."""
+    scalar = place.styles.base.min_height
+    own = int(scalar.value) if scalar is not None and scalar.unit == Unit.CELLS else 1
+    return max([own] + [minimum(w)[1] for w in place.children])
 
 
 def compact_rows(place: Widget) -> int:
@@ -5328,7 +5331,8 @@ class WheelhouseApp(App):
     def lay_columns(self) -> None:
         """Each column of slots laid out by columns.lay: an empty slot hidden, a compact one at
         its own rows, and the rest sharing what's left by their weights. Each splitter joined to
-        the two weighted slots it moves rows between, or hidden."""
+        the two weighted slots it moves rows between, or hidden. In a column too short for their
+        least rows a slot's min-height goes down to the rows it gets (columns.squeezed)."""
         if not self.screen_stack:
             return
         for column in self.screen_stack[0].query(".column"):
@@ -5341,9 +5345,11 @@ class WheelhouseApp(App):
                 splitter.pair = (places[pair[1]], places[pair[0]]) if pair else None
                 splitter.display = pair is not None
             if weighted and columns.room(column.size.height, slots) > 0:
+                least_ = {s.name: s.least for s in slots}
                 for name, n in columns.lay(column.size.height, slots, self.weights).items():
                     if name in weighted:
                         places[name].styles.height = n
+                        places[name].styles.min_height = min(n, least_[name])
 
     def column_slots(self, column: Widget) -> tuple[list[columns.Slot], dict[str, Widget]]:
         """A column's slots as columns.py sees them (hidden: no rows of its own; compact: its

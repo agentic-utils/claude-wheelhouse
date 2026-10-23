@@ -23,12 +23,16 @@ from claude_wheelhouse.tui import LAYOUT, SLOTS_KEY, WheelhouseApp
     (33, [0.4, 0.2], [3, 3], [22, 11], "an empty Decisions: its room shared in proportion"),
     (5, [1, 1], [3, 3], [3, 3], "minimums past the room: each its minimum"),
     (6, [1, 1], [3, 3], [3, 3], "minimums the room exactly"),
+    (19, [0.4, 0.2, 0.4], [6, 12, 3], [6, 10, 3], "minimums past the room: session info gives way first (#132)"),
+    (11, [1, 1, 1], [6, 6, 3], [4, 4, 3], "past the room: the most above FLOOR give way, the lower on a tie"),
+    (4, [1, 1], [1, 6], [1, 3], "past the room: a least under FLOOR is its floor"),
     (20, [], [], [], "no slots"),
 ])
 def test_rows(room, weights, minimums, expected, desc):
     got = columns.rows(room, weights, minimums)
     assert got == expected, desc
-    assert not weights or sum(got) == room or sum(minimums) >= room, f"{desc}: the column filled"
+    assert not weights or sum(got) == room or sum(min(m, columns.FLOOR) for m in minimums) >= room, \
+        f"{desc}: the column filled"
 
 
 T, M, B = "middle.top", "middle.middle", "middle.bottom"
@@ -243,6 +247,8 @@ class Column(RuleBasedStateMachine):
         own = list(self.own)
         own[slot] = data.draw(st.integers(0, self.least[slot]), label="compact (its panes' least) or hidden (0)")
         before, after = self.slots(), self.slots(own)
+        if not fits(self.height, before):   # past the room the weighted slots are squeezed, its own rows not (#132)
+            return
         old, new = reals(self.height, before, self.kept), reals(self.height, after, self.kept)
         was, now = columns.lay(self.height, before, self.kept), columns.lay(self.height, after, self.kept)
         for name in new:
@@ -298,8 +304,10 @@ def test_rows_fill_the_room_and_keep_the_minimums(room, weights, data):
         assert sum(got) == room and all(n >= m for n, m in zip(got, minimums)), (got, minimums)
         real, _ = columns.shares(room, weights, minimums)
         assert all(abs(n - r) < 1 for n, r in zip(got, real)), f"each within a row of its share: {got} {real}"
-    else:
-        assert got == minimums
+    else:   # squeezed (#132): each between its floor and its minimum, the column filled while the floors fit
+        floors = [min(m, columns.FLOOR) for m in minimums]
+        assert all(f <= n <= m for f, n, m in zip(floors, got, minimums)), (got, minimums)
+        assert sum(got) == max(room, sum(floors)), f"filled, or each at its floor: {got} {minimums}"
 
 
 # the app's columns
@@ -372,6 +380,41 @@ async def test_arrangements_fill_their_columns(store, sid, tmp_path, monkeypatch
         assert filled(app), f"{desc} at {size}: no gaps"
         inbox = app.query_one("#items-pane").region.height
         assert inbox >= min(12, app.query_one("#col-middle").size.height // 3), f"{desc} at {size}: the inbox never squeezed ({inbox})"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("saved, squeezed, desc", [
+    ({}, set(), "the default: nothing squeezed"),
+    ({"middle.top": "sessions", "middle.middle": "session-info", "middle.bottom": "items"}, {"middle.middle"},
+     "the review's: session info gives way"),
+    ({"middle.top": "items", "middle.middle": "sessions", "middle.bottom": "session-info"}, {"middle.bottom"},
+     "the same three, the other way up"),
+    ({"middle.top": "session-info", "middle.middle": "detail", "middle.bottom": "sessions"}, {"middle.top"},
+     "the detail between them"),
+    ({"left.top": "session-info", "left.middle": "sessions", "left.bottom": "prs"}, {"left.top"},
+     "in the left column, with the PRs"),
+])
+async def test_any_arrangement_fits_80_by_24(store, sid, tmp_path, monkeypatch, saved, squeezed, desc):
+    """A column whose panes' least rows are more than it has (#132) takes the rows it lacks
+    from the slot with the most to spare: every pane on screen within its slot, the columns
+    filled, and the default as it was."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "docs" / "adr").mkdir(parents=True)
+    (tmp_path / "docs" / "adr" / "0001-a.md").write_text("# 1. A\n\nStatus: accepted\n")
+    monkeypatch.setattr(api, "load", modules({"design", "prs", "stats"}))
+    store.set_setting(SLOTS_KEY, json.dumps(saved))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await opened(app, pilot)
+        await adrs_found(app, pilot, True)
+        assert filled(app), f"{desc}: every column filled to the row"
+        for place in app.query(".slot"):
+            for pane in (w for w in place.children if w.display):
+                assert place.region.contains_region(pane.region), f"{desc}: {pane.id} within its slot"
+                assert pane.region.bottom <= 24, f"{desc}: {pane.id} on screen"
+        short = {s.name for c in app.query(".column") for s in app.column_slots(c)[0]
+                 if s.own is None and app.column_slots(c)[1][s.name].outer_size.height < s.least}
+        assert short == squeezed, f"{desc}: squeezed {short}"
 
 
 @pytest.mark.anyio
