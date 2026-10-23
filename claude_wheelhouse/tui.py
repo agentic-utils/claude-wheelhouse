@@ -3771,7 +3771,7 @@ class WheelhouseApp(App):
     #answer:focus, #thread-answer:focus, #docview-answer:focus {{ border: round #ff2a6d; }}
     /* the default cursor is a pale grey cell: a hot block reads as "type here" on black */
     Compose > .text-area--cursor {{ background: #ff2a6d; color: #000000; text-style: bold; }}
-    .answer-hint {{ color: #777777; height: 1; }}
+    .answer-hint {{ color: #777777; width: 100%; height: auto; }}   /* wraps in a narrow column: every key stays on show */
     #thread-scroll {{ height: 1fr; }}
     #session-list {{ height: 1fr; min-height: 5; }}   /* on a short terminal the description gives way first */
     #session-info {{ height: 1fr; min-height: 1; background: #000000; padding: 0 1; }}
