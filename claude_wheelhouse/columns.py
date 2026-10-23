@@ -83,7 +83,7 @@ def rows(room: int, weights: list[float], minimums: list[int]) -> list[int]:
 def squeezed(room: int, minimums: list[int]) -> list[int]:
     """The minimums, short of `room`: a row at a time from the slot with the most above its
     floor (FLOOR, or its minimum if less), the lower on a tie, until they fit or each is at
-    its floor. A slot with rows to spare (session info, its description) gives way first."""
+    its floor. Session info, with the tallest minimum, is usually the one that gives way first."""
     out = list(minimums)
     floors = [min(m, FLOOR) for m in minimums]
     while out and sum(out) > room:

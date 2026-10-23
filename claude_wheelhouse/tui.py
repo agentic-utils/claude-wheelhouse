@@ -2555,10 +2555,9 @@ def hint(sends: str, dead: bool = False) -> str:
     """The line under an answer box. sends: what Ctrl+Enter does for the session in context
     by its mode, queue or send. dead: it isn't running, so Ctrl+S refuses (#62) and goes
     unmentioned."""
-    ctrl_s = "" if dead else " · Ctrl+S sends its queue"
-    alt_s = " · Alt+S sends this one now" if sends == "queue" else ""
-    return (f"Ctrl+Enter to {sends}{alt_s}{ctrl_s} · Ctrl+T switches mode"
-            " · Ctrl+R takes a queued answer back")
+    ctrl_s = "" if dead else " · Ctrl+S: send queue"
+    alt_s = " · Alt+S: send" if sends == "queue" else ""
+    return f"Ctrl+Enter: {sends}{alt_s}{ctrl_s} · Ctrl+R: edit last queued"
 
 
 class TitleBar(Static):
@@ -3844,12 +3843,13 @@ class WheelhouseApp(App):
 
     # keys shown in upper case, the usual convention: F is the f key, not Shift+F
     BINDINGS = [
-        Binding("ctrl+enter", "submit", "Submit", key_display="Ctrl+Enter"),
+        # the answer-box keys are off the footer: the hint under the box gives them (hint)
+        Binding("ctrl+enter", "submit", "Submit", show=False, key_display="Ctrl+Enter"),
         Binding("ctrl+j", "submit", "Submit", show=False),   # Ctrl+Enter, as most terminals send it
         # Alt+S (#124): Ctrl+Shift+Enter can't be told from Ctrl+Enter in Windows Terminal. A terminal
         # sends it as a printable s, but the app's binding takes it before the answer box types it
-        Binding("alt+s", "submit(True)", "Send now", show=False, key_display="Alt+S"),   # off the footer, as Ctrl+R is: Relaunch must fit at 100 columns
-        Binding("ctrl+s", "send_session", "Send", key_display="Ctrl+S"),
+        Binding("alt+s", "submit(True)", "Send now", show=False, key_display="Alt+S"),
+        Binding("ctrl+s", "send_session", "Send", show=False, key_display="Ctrl+S"),
         Binding("ctrl+t", "toggle_mode", "Mode", key_display="Ctrl+T"),
         Binding("ctrl+r", "recall", "Edit queued", show=False, key_display="Ctrl+R"),
         # New, Adopt and Relaunch all act on no one session, so they're here, not buttons (#62)

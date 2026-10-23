@@ -153,8 +153,8 @@ session.
   screen as a conversation, with the session's replies. Ctrl+Enter submits an answer, and
   each session has a send mode: in Queued mode (where every session starts) answers wait
   and go out together, Ctrl+S sending the session's as one message; in Immediate mode each
-  goes as you submit it. The line under the answer box says which: "Ctrl+Enter to queue"
-  or "Ctrl+Enter to send". Alt+S sends just the answer in the box at once, whatever the
+  goes as you submit it. The line under the answer box says which: "Ctrl+Enter: queue"
+  or "Ctrl+Enter: send". Alt+S sends just the answer in the box at once, whatever the
   mode, leaving the mode and the rest of the queue as they are. Ctrl+T switches the
   session's mode. Under the session list, Mode and Send (n) do the same, for the
   same session, and a bar above the footer

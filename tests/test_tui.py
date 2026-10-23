@@ -101,7 +101,7 @@ async def test_alt_s_sends_one_answer_now(store, sid, live, clock, send_mode, ke
     ("send", False, "immediate: Ctrl+Enter sends already, so no Alt+S"),
 ])
 def test_the_hint_offers_alt_s_only_when_queued(sends, shown, desc):
-    assert ("Alt+S sends this one now" in hint(sends)) is shown, desc
+    assert ("Alt+S: send" in hint(sends)) is shown, desc
 
 
 @pytest.mark.anyio
@@ -4740,9 +4740,9 @@ def test_hosted_busy(activity, busy, desc):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("mode, sends_now, expected, desc", [
-    (None, False, "Ctrl+Enter to queue", "a new session queues"),
-    ("immediate", False, "Ctrl+Enter to send", "immediate mode sends"),
-    (None, True, "Ctrl+Enter to send", "a session from before queued answers sends whatever its mode"),
+    (None, False, "Ctrl+Enter: queue", "a new session queues"),
+    ("immediate", False, "Ctrl+Enter: send", "immediate mode sends"),
+    (None, True, "Ctrl+Enter: send", "a session from before queued answers sends whatever its mode"),
 ])
 async def test_the_hint_says_what_ctrl_enter_does(store, sid, mode, sends_now, expected, desc, monkeypatch):
     if mode:
@@ -4777,7 +4777,7 @@ async def test_the_hint_follows_a_mode_switched_in_a_thread_at_once(store, sid, 
         await pilot.press("enter", "ctrl+t", "escape")
         await pilot.pause()
         assert not isinstance(app.screen, ThreadView)
-        assert str(app.screen.query_one(Hint).content).startswith("Ctrl+Enter to send · ")
+        assert str(app.screen.query_one(Hint).content).startswith("Ctrl+Enter: send · ")
 
 
 @pytest.mark.anyio
