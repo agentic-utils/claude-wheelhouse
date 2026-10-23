@@ -232,6 +232,11 @@ the run as the Decisions sort is.
 - **All**: every open PR the person authored, in any repo, whether or not a session made it
   (Doug: "all PRs by me, including those that do not relate to any currently-open
   Wheelhouse sessions"). Up to 100, from the search.
+- As built (#149): either scope follows the session selected in the session list, as the
+  inbox does (Doug: "show items related to selected session, or show all if no session
+  selected"). With one selected, its PR items alone (`PRs · mine · <session>`); a PR no
+  session made relates to none, so shows only with no session selected, and Request review
+  is greyed on it.
 - A merged or closed PR leaves the pane at once, in both scopes (Doug: "drop closed PRs
   immediately"). Its inbox item still settles and dims, as in part 2.
 

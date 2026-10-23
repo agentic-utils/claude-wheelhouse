@@ -325,7 +325,9 @@ session.
   size the same way, as a one-cell bar in the same colours, filled in eighths on a
   linear scale: an eighth for each 125k begun, so the cell is full past 875k.
 - **The PRs pane.** Under the inbox, the open pull requests your sessions made (`PRs ·
-  mine`), or with `m` every open PR you authored in any repo (`PRs · all`). Each row is its
+  mine`), or with `m` every open PR you authored in any repo (`PRs · all`). As the inbox
+  does, it follows the session selected: its PRs alone (`PRs · mine · <session>`), or every
+  one with none selected (`Esc`). Each row is its
   `PR` number, repo (when there's more than one), title and a light: red for a failed
   check, changes requested or a conflict with its base; orange, flashing, while checks
   run; yellow while a review is awaited; green when it's ready to merge; grey for a draft.
@@ -343,8 +345,8 @@ session.
   stood in its way if it didn't (a review required, conflicts, failing checks, as `gh`
   says); and **Request review**, which asks for a Slack channel or name (`#channel`,
   `@name`, past ones offered most recent first) and sends the session that made the PR a
-  message asking it to post the request on Slack. For a PR no session made (`PRs · all`)
-  it asks the session selected in the session list, and is greyed with none selected.
+  message asking it to post the request on Slack. For a PR no session made (`PRs · all`,
+  with no session selected) it is greyed: there is no session to ask.
 - **The Decisions pane.** Under the inbox, the design decisions (ADRs) of every repo a session works
   in: each `NNNN-*.md` file in the repo's `docs/adr`, or in the directories a session there
   named with `set_doc_dirs` instead (`.plan/`, say, only if named), read again every 10

@@ -384,9 +384,11 @@ async def test_request_review_asks_the_session_that_made_the_pr_and_remembers_th
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("selected, desc", [(True, "the selected session asked"), (False, "no session: off")])
+@pytest.mark.parametrize("selected, desc", [(True, "a session selected: not listed (#149), so not asked"),
+                                            (False, "no session: off")])
 async def test_request_review_of_a_pr_no_session_made(store, sid, github, monkeypatch, selected, desc):
-    """In All, a PR no session made: the session selected in the session list, else none."""
+    """In All, a PR no session made: listed only with no session selected (#149), when Request
+    review has no session to ask."""
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
@@ -394,6 +396,11 @@ async def test_request_review_of_a_pr_no_session_made(store, sid, github, monkey
         monkeypatch.setattr(app.client, "submit", lambda target, text, now=False: sent.append(target) or tui.Done())
         app.follow(sid) if selected else app.clear_filter()
         await pilot.pause()
+        if selected:
+            app.query_one("#prs").action_scope()
+            await settled(app, pilot)
+            assert "https://github.com/doug/mizpah/pull/7" not in app.query_one("#pr-list").rows, desc
+            return
         p = await on_pr(app, pilot, "https://github.com/doug/mizpah/pull/7", scope="all")
         assert app.query_one("#pr-review", Button).disabled is not selected, desc
         p.review(p.selected())
@@ -546,3 +553,36 @@ async def test_a_pick_in_one_pane_clears_the_others_highlight(store, sid, github
             assert not table.show_cursor, f"{desc}: the PRs pane's hidden in turn"
             assert isinstance(app.screen, tui.Screen) and not isinstance(app.screen, tui.ThreadView), \
                 f"{desc}: the click selects, opening nothing"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size", [(160, 40), (100, 30)])
+@pytest.mark.parametrize("follow, scope, listed, title, desc", [
+    (None, "mine", ["PR108", "PR109", "PR5"], "PRs · mine", "none selected: every session's"),
+    (None, "all", ["PR108", "PR7", "PR109", "PR5"], "PRs · all", "none selected, all: the search's too"),
+    ("sid", "mine", ["PR108", "PR109"], "PRs · mine · demo", "a session selected: its PRs alone"),
+    ("sid", "all", ["PR108", "PR109"], "PRs · all · demo", "a session selected, all: still its PRs alone"),
+    ("other", "mine", ["PR5"], "PRs · mine · other", "another session: its PR alone"),
+])
+async def test_the_pane_follows_the_selected_session(store, sid, github, size, follow, scope, listed, title, desc):
+    """#149: as the inbox, the selected session's PRs, or every one with none selected."""
+    store.rename(sid, "demo")
+    other = store.create_session("/tmp", name="other")
+    store.post_pr(other, URL.format(5), "Change 5")
+    github.tracked.append(node(5))
+    github.found.append(node(5))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await settled(app, pilot)
+        p = app.query_one("#prs")
+        if scope != p.scope:
+            p.action_scope()
+            await settled(app, pilot)
+        if follow:
+            app.follow(sid if follow == "sid" else other)
+            await pilot.pause()
+        assert cells(app) == listed and p.border_title == title, desc
+        app.unfilter() if follow else None
+        await pilot.pause()
+        every = ["PR108", "PR109", "PR5"] if scope == "mine" else ["PR108", "PR7", "PR109", "PR5"]
+        assert cells(app) == every, f"{desc}: none selected again, every one"

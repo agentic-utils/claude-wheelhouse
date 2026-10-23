@@ -156,8 +156,8 @@ FEATURES: tuple[Feature, ...] = (
             tip="A session's pull requests show as PR and their number, with GitHub's status."),
     Feature("prs-pane", UNRELEASED, "prs",
             note="The PRs pane lists the open PRs your sessions made, or with M every open PR you authored, each "
-                 "with a traffic light for checks, review and conflicts.",
-            tip="M switches between your sessions' PRs and all of yours; R fetches now."),
+                 "with a traffic light for checks, review and conflicts; with a session selected, its PRs alone.",
+            tip="It follows the session selected, as the inbox does. M: your sessions' PRs or all of yours."),
     Feature("session-menu", UNRELEASED, "sessions",
             note="Right-click a session in the session list for a menu of its buttons, acting on that session.",
             tip="Right-click a session for a menu of its buttons."),

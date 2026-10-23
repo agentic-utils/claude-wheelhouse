@@ -238,7 +238,22 @@ class Prs(Vertical):
         self.show_scope()
 
     def show_scope(self) -> None:
-        self.border_title = f"PRs · {self.scope}"
+        name = self.session_name()
+        self.border_title = f"PRs · {self.scope}" + (f" · {name}" if name else "")
+
+    def session(self) -> str | None:
+        """The session selected in the session list (Context.focus), as the inbox follows it (#149)."""
+        return self.ctx.focus() if self.ctx.focus else None
+
+    def session_name(self) -> str | None:
+        sid = self.session()
+        return next((s["name"] for s in self.ctx.sessions() if s["id"] == sid), sid) if sid else None
+
+    def listed(self) -> list[dict]:
+        """The rows shown: with a session selected, its PRs alone, as the inbox shows its items;
+        with none, every one the scope gives (#149)."""
+        sid = self.session()
+        return [r for r in self.rows if r["item"] is not None and r["item"]["session_id"] == sid] if sid else self.rows
 
     def compose(self):
         yield PrTable(id="pr-list", cursor_type="row", zebra_stripes=False, show_cursor=False)   # until a PR is picked
@@ -257,7 +272,10 @@ class Prs(Vertical):
         self.ask(fresh=True)
 
     def tick(self) -> None:
-        if self.is_mounted and time.monotonic() - self.asked_at >= EVERY:
+        if not self.is_mounted:
+            return
+        self.paint()   # the session selected may have changed: nothing is drawn again if not
+        if time.monotonic() - self.asked_at >= EVERY:
             self.ask()
 
     def animate(self, frame: int) -> None:
@@ -323,9 +341,10 @@ class Prs(Vertical):
         """The table built again only if what it shows, its order or its width has changed;
         the cursor kept on the row it was on."""
         table = self.query_one(PrTable)
+        self.show_scope()
         self.paint_note()
         table.display = self.error is None
-        rows = sorted_by(self.rows, self.sort)
+        rows = sorted_by(self.listed(), self.sort)
         width = self.content_size.width
         drawn = (tuple(tuple(sorted((k, str(v)) for k, v in r.items())) for r in rows), self.sort, width)
         if drawn == self.drawn:
@@ -362,7 +381,9 @@ class Prs(Vertical):
             return f"Couldn't list PRs: {self.error}"
         if self.warning:
             return f"The last fetch failed ({self.warning}): showing what was fetched before."
-        if not self.rows:
+        if not self.listed():
+            if self.session():
+                return f"No open PRs from {self.session_name()}: Esc in the inbox shows every session's."
             return "No open PRs from the sessions: m shows all of yours." if self.scope == "mine" \
                 else "No open PRs of yours."
         return ""
@@ -409,17 +430,18 @@ class Prs(Vertical):
 
     def entries(self, r: dict) -> list[tuple[str, bool, str]]:
         """Each action for a PR: (id, disabled, caption). Merge is off while its merge is
-        under way; Request review without a session to ask (none made it, none selected)."""
+        under way; Request review without a session to ask (none made it)."""
         merging = r["url"] in self.merging
         return [("open", False, "Open"), ("merge", merging, "Merging…" if merging else "Merge"),
                 ("review", self.asked(r)[0] is None, "Request review")]
 
     def asked(self, r: dict) -> tuple[str | None, str | None]:
         """Who Request review asks, and about which item: the session that made the PR and
-        its item, else the session selected in the session list, else no one."""
+        its item, else no one. A PR no session made is listed only with no session selected
+        (#149), so there's none to ask."""
         if r["item"] is not None:
             return r["item"]["session_id"], r["item"]["ref"]
-        return (self.ctx.focus() if self.ctx.focus else None), None
+        return None, None
 
     def selected(self) -> dict | None:
         return self.row(self.key_at(self.query_one(PrTable)))
