@@ -195,6 +195,22 @@ def opening_prompt(session) -> str:
     return f"Brief:\n{prompt}" if prompt.startswith("-") else prompt
 
 
+def steps_listing(sdk: bool) -> str:
+    """Every session step's announce and add-on text, by event, for `claude-wheelhouse
+    protocol`: what a session can be told, read before switching anything on."""
+    from . import steps
+    lines = []
+    for event in steps.EVENTS:
+        if not steps.enabled(event, sdk):
+            continue
+        lines.append(f"{steps.TITLES[event]}:")
+        if event in steps.ANNOUNCE:
+            lines.append(f"  announce: {steps.ANNOUNCE[event]}")
+        for name, text in steps.ADDONS.get(event, {}).items():
+            lines.append(f"  {name} ({'on' if steps.DEFAULTS[(event, name)] else 'off'}): {text}")
+    return "\n".join(lines) + f"\n\n{steps.AFTER_NOTE}"
+
+
 def injected(sdk: bool | None = None) -> str:
     """Everything a launched session receives, for `claude-wheelhouse protocol`: read it
     before letting the wheelhouse put standing instructions into your sessions. With SDK
@@ -225,6 +241,7 @@ def injected(sdk: bool | None = None) -> str:
         f"== /wheelhouse skill ({PLUGIN_DIR / 'skills/wheelhouse/SKILL.md'}) ==\n\n{skill}",
         f"== MCP server \"wheelhouse\" ==\n\n{mcp_server.server.instructions}\n\n{tools}",
         f"== Notifications from the wheelhouse monitor ==\n\n{notices}",
+        f"== Session steps (steps.py; each part as switched in Session steps) ==\n\n{steps_listing(sdk)}",
         "== Launch command (new session; Restore, Adopt and Fork use --resume, and Adopt and Fork add "
         "--system-prompt-snapshot off) ==\n\n"
         + "".join(f" \\\n    {a}" if a.startswith("-") else f" {shlex.quote(a)}" for a in argv).lstrip(),

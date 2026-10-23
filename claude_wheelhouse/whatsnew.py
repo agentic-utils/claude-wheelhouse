@@ -181,6 +181,11 @@ FEATURES: tuple[Feature, ...] = (
             note="Mark PRs in the PRs pane as in the inbox (Ctrl+click, Shift+click, Space, Shift+Up/Down) and act "
                  "on them all; Close closes a PR unmerged, asked first, as Merge is.",
             tip="Ctrl+click or Space marks PRs: the buttons then act on them all."),
+    Feature("keepalive-50", UNRELEASED, ADVANCED,
+            note="The keepalive comes every 50 minutes, ahead of Claude Code's idle compaction at about 54."),
+    Feature("handoff-tool", UNRELEASED, ADVANCED,
+            note="Sessions keep a handoff with the write_handoff tool, shown as their handoff doc; Stop & Forget "
+                 "and Compact ask for one."),
 )
 
 

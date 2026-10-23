@@ -22,5 +22,5 @@ to a session: launch.protocol_file drops it. -->
   `end_session`. Either stops this session once it returns: call it last. If a later
   message says the request was cancelled, carry on as before.
 - While the person is away, the wheelhouse may send a `[wheelhouse] Keepalive` or
-  `[wheelhouse] Check:` turn about every 55 minutes to keep your prompt cache warm. Do as
+  `[wheelhouse] Check:` turn about every 50 minutes to keep your prompt cache warm. Do as
   it says and nothing more.

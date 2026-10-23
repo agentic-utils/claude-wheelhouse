@@ -54,7 +54,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import api, auth, docroots, features, fingerprint, liveness, models, served, transcript_usage, tutorial
+from . import api, auth, docroots, features, fingerprint, liveness, models, served, steps, transcript_usage, tutorial
 from .hub import Done, Event, Hub, host_context
 from .store import COMPACT_QUESTION, NOTES_SEEN, THEN, TOUR_AT, SessionGone, Store, inbox_rank, mode, runner, standing
 
@@ -389,6 +389,9 @@ class Daemon:
         fingerprint.code()   # the code as loaded, for /hello: asked before anything can change it
         # sdk: SDK mode (features.py), else features.sdk_enabled(): it gates every session the hub creates
         self.hub = Hub(store, sdk=sdk, **({} if inline else {"spawn": self.spawn, "post": self.post}))
+        if gone := steps.prune_handoffs():   # said once, in the daemon's log
+            print(f"wheelhouse daemon: removed {gone} handoff(s) untouched for {steps.HANDOFF_DAYS} days",
+                  file=sys.stderr, flush=True)
         self.store, self.allowed = store, allowed
         self.token = token   # the shared secret every request must carry (auth.py)
         self.stop = None   # how /shutdown stops it: the server's, once serving

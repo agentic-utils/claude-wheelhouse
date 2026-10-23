@@ -48,6 +48,12 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   window, `window_name`), the `claude` command line, and the protocol text injected into
   a session. Every launch passes `clean_env()`, which drops a parent Claude Code
   session's `CLAUDE*` variables: a claude started with them writes no transcript.
+- `steps.py`: session steps (`.plan/session-steps.md`): what a session is told at a lifecycle
+  event (Before Compact, Before Forget, On resume, After Compact, PR merged, Session start),
+  an announce and add-ons, each a switch resolved as `features.given` does, then the
+  `settings` table (`step.<event>.<switch>`), then `DEFAULTS`; and the handoff files
+  (`handoffs/<session id>.md` beside the database) that `write_handoff` writes. Compaction's
+  steps are SDK only (`SDK_ONLY`). Never imports Textual.
 - `mcp_server.py`: the per-session `wheelhouse` MCP server. Each tool's docstring is its
   description to Claude, so it is user-facing text.
 - `monitor.py` and `plugin/`: the tab session's plugin monitor and `/wheelhouse` skill.

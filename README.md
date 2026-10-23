@@ -491,6 +491,12 @@ how to work.
   on joining, the notes a fork and its parent get ([`fork.py`](claude_wheelhouse/fork.py)), and the keepalive and check messages, as `[wheelhouse]` notifications.
 - [The plugin's hook](claude_wheelhouse/plugin/hooks/hooks.json): after a compaction,
   the session's open tasks and questions.
+- [Session steps](claude_wheelhouse/steps.py): what a session is told at Compact (in the
+  wheelhouse only) and Stop & Forget. It is told the event is coming, so your own
+  instructions can act, and asked for a handoff (what was done, decisions, open threads,
+  next step), which it writes with the `write_handoff` tool. The handoff shows as the
+  session's `handoff` doc, kept in `handoffs/` beside the database; one untouched for 30
+  days is removed when the daemon starts.
 
 `claude-wheelhouse protocol` prints all of it in one go, exactly as a session receives it,
 along with the launch command.
@@ -684,7 +690,7 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   question, the tool's reply lists what is in doubt, as `Still open: T1 waiting, Q2 reply
   owed`. Nothing is added when nothing is in doubt.
 - While you're away, a session over 150k tokens of context that waits on you or has an
-  item in doubt gets a `[wheelhouse]` message 55 minutes after its last turn, and every 55
+  item in doubt gets a `[wheelhouse]` message 50 minutes after its last turn, and every 50
   minutes after that. It keeps the session's prompt cache warm (a cold one is written again
   whole), and with an item in doubt it is the check, `Check: T1 running, Q2 reply owed`,
   which the session answers by correcting what's finished. It stops once the session has

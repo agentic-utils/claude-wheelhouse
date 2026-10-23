@@ -10,10 +10,10 @@ from types import SimpleNamespace
 import pytest
 
 from claude_wheelhouse import features, host as host_mod, launch
-from claude_wheelhouse.host import (AWAITING_NOTES, CANCELLED, COMPACT_ASK, HOST_QUESTION, NO_NOTES, Host, format_turn,
+from claude_wheelhouse.host import (AWAITING_NOTES, CANCELLED, compact_ask, HOST_QUESTION, NO_NOTES, Host, format_turn,
                                     keep_notes, question_answers, question_item, tool_summary)
 from claude_wheelhouse.store import COMPACT_QUESTION, COMPACT_QUESTION_DONE, SessionGone
-from claude_wheelhouse.monitor import REQUEST_TEXT
+from claude_wheelhouse.monitor import REQUEST_TEXT, request_text
 
 pytestmark = pytest.mark.usefixtures("sdk_on")   # hosts are SDK mode's
 
@@ -139,9 +139,9 @@ def test_question_item_lists_options():
 @pytest.mark.parametrize("setup, expected, desc", [
     (lambda s, sid: s.send(sid, "yes", "Q1"), ["[wheelhouse] from doug on Q1:\nyes"], "a sent answer is a turn"),
     (lambda s, sid: s.queue(sid, "later", "Q1"), [], "a queued draft waits for Send"),
-    (lambda s, sid: s.request_end(sid), [REQUEST_TEXT["end"]], "End is passed on as a turn"),
+    (lambda s, sid: s.request_end(sid), [lambda h: request_text(h.store, "end")], "End is passed on as a turn"),
     (lambda s, sid: s.notice(sid, "hello"), ["[wheelhouse] hello"], "a notice"),
-    (lambda s, sid: s.command(sid, "compact"), [lambda h: COMPACT_ASK.format(nonce=h.compact_nonce)],
+    (lambda s, sid: s.command(sid, "compact"), [lambda h: compact_ask(h.store, h.compact_nonce)],
      "Compact asks for the notes first, under its own id"),
 ])
 def test_poll_turns(host, store, sid, setup, expected, desc):
@@ -597,7 +597,7 @@ def test_a_host_carrying_back_at_start_stops_when_it_should_and_says_why(store, 
             await asyncio.sleep(0.1)
             assert not task.done() and h.client is None, f"{desc}: still waiting, not launched"
             locked["on"] = False
-            await asyncio.wait_for(until(lambda: h.client and REQUEST_TEXT[what] in h.client.queries), 5)
+            await asyncio.wait_for(until(lambda: h.client and request_text(h.store, what) in h.client.queries), 5)
             h.stopping = True
         await asyncio.wait_for(task, 5)
     run(go())
@@ -900,7 +900,7 @@ def test_compact_by_id(streamed, store, sid, stream, sent, activity, desc):
     assert h.client.queries[1:] == sent, desc
     assert (h.compact_nonce is None) == bool(sent), desc
     assert store.session(sid)["activity"] == activity, desc
-    assert nonce and h.client.queries[0] == COMPACT_ASK.format(nonce=nonce), desc
+    assert nonce and h.client.queries[0] == compact_ask(h.store, nonce), desc
 
 
 async def feed(h, *msgs):
@@ -1663,7 +1663,7 @@ def test_stop_and_forget_wins_over_parking(host, store, sid, how, desc):
     finish_at(host, 40_000, compacted=True)
     assert run(host.poll()), desc
     row = store.session(sid)
-    assert host.client.queries == [REQUEST_TEXT["end"]], f"{desc}: the end request alone, no reminder"
+    assert host.client.queries == [request_text(store, "end")], f"{desc}: the end request alone, no reminder"
     assert not row["parked"] and not row["park_compact"], desc
 
 
@@ -1673,7 +1673,7 @@ def test_stop_and_forget_after_a_parking_compaction_parked_it_still_wins(host, s
     finish_at(host, 40_000, compacted=True)
     store.request(sid, "end")
     assert run(host.poll()), "not stopped: unparked to be told"
-    assert host.client.queries == [REQUEST_TEXT["end"]] and not store.session(sid)["parked"]
+    assert host.client.queries == [request_text(store, "end")] and not store.session(sid)["parked"]
 
 
 @pytest.mark.parametrize("how, desc", [
@@ -1738,7 +1738,7 @@ H = 3600
     ({}, True, "big, quiet, waiting on an open question and 55 minutes on: keep it warm"),
     ({"tokens": 150_000}, False, "at the line, not past it: not worth it"),
     ({"tokens": None}, False, "no turn has ended under this host: its cache may be cold already"),
-    ({"last": 54 * 60}, False, "not 55 minutes since the last turn"),
+    ({"last": 49 * 60}, False, "not 50 minutes since the last turn"),
     ({"pending": 1}, False, "a turn is running (or waits on a permission)"),
     ({"compact_nonce": "ab12"}, False, "Compact is under way"),
     ({"quiet": None}, False, "a turn Claude Code started itself is running"),
@@ -1806,7 +1806,7 @@ def test_no_keepalive_after_a_compaction(host, store, sid):
 
 
 def test_keepalive_turn(host, store, sid, monkeypatch):
-    """Sent once, as a keepalive: its end restarts the 55 minutes but not the quiet time,
+    """Sent once, as a keepalive: its end restarts the 50 minutes but not the quiet time,
     so the 8 hours run out; a real turn starts them both again."""
     store.post_item(sid, "question", "which?")
     finish_at(host, 200_000)

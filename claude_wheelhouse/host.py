@@ -33,7 +33,8 @@ from dataclasses import dataclass
 
 from . import features, liveness, models, plan_usage, transcript, transcript_usage
 from .launch import PROTOCOL_SDK, after_compaction, opening_prompt, transcript_exists
-from .monitor import REQUEST_TEXT
+from . import steps
+from .monitor import REQUEST_TEXT, request_text
 from .store import CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, SessionGone, Store, db_path, now, runner
 
 POLL_SECONDS = 1.0
@@ -41,13 +42,17 @@ SHELL_POLL_SECONDS = 2.0
 CONFIRM_TRIES = (0.1, 0.5, 2.0)   # waits between tries to mark sent messages delivered
 STEADY_TRIES = (0.1, 0.5, 2.0, 5.0)   # waits between tries of a write the shell hand-over can't skip
 COMPACT_TIMEOUT = 600   # seconds Compact waits for its notes once nothing is running
-# asked of a session when the person presses Compact; the notes in its reply, inside the
-# block carrying this request's id, become /compact's instructions
-COMPACT_ASK = ("[wheelhouse] The person pressed Compact in the wheelhouse. If your own instructions say to "
-               "do anything before compaction (save a transcript or handoff note, say), do it now. Then "
-               "reply with the notes you want carried through compaction (open threads, decisions, file "
-               "paths, refs and next steps, as a terse list), with the line <keep id=\"{nonce}\"> before "
-               "them and the line </keep> after them, each tag on a line of its own.")
+# asked of a session when it's to be compacted, after the Before Compact step (steps.py); the
+# notes in its reply, inside the block carrying this request's id, become /compact's instructions
+KEEP_ASK = ("Then reply with the notes you want carried through compaction (open threads, decisions, file "
+            "paths, refs and next steps, as a terse list), with the line <keep id=\"{nonce}\"> before "
+            "them and the line </keep> after them, each tag on a line of its own.")
+PRESSED_COMPACT = "The person pressed Compact in the wheelhouse."
+
+
+def compact_ask(store: Store, nonce: str, why: str = PRESSED_COMPACT) -> str:
+    """The Before Compact step, as switched, then the keep ask."""
+    return steps.message(store, "before_compact", KEEP_ASK.format(nonce=nonce), why=why)
 CLOSED_UNANSWERED = "The person closed this in the wheelhouse without answering."
 LOST_ON_RESTART = "The wheelhouse host restarted while this was waiting: Claude Code will ask again if it still needs it."
 # Claude Code withdrew the call it was asking about (an interrupt, or the host letting go for a shell tab)
@@ -73,7 +78,7 @@ PARK_COMPACT_WITHIN = 3600
 # doesn't pay for ever. With an item in doubt the turn is the check (CHECK_BODY), which asks
 # the session about it. The hub keeps tab sessions warm the same way (Hub.keep_warm)
 KEEPALIVE_TOKENS = 150_000
-KEEPALIVE_AFTER = 55 * 60
+KEEPALIVE_AFTER = 50 * 60   # before Claude Code idle-compacts a tab at about 54 minutes
 KEEPALIVE_BODY = ("Keepalive: the person is away, and this turn only keeps your prompt cache "
                   "warm. Reply with the one word ok and do nothing else: no tools, no wheelhouse calls.")
 KEEPALIVE_TEXT = f"[wheelhouse] {KEEPALIVE_BODY}"
@@ -599,7 +604,7 @@ class Host:
                 self.store.set_activity(self.sid, "compacting")
             else:
                 nonce = secrets.token_hex(4)
-                await self.turn(COMPACT_ASK.format(nonce=nonce))
+                await self.turn(compact_ask(self.store, nonce))
                 self.compact_nonce, self.compact_notes = nonce, None
                 self.store.set_activity(self.sid, "compacting: collecting notes")
         elif command == "shell":
@@ -646,10 +651,10 @@ class Host:
                 self.store.release(turn)
                 raise
             await self.confirm(turn)
-        for what, text in () if hold else REQUEST_TEXT.items():
+        for what in () if hold else REQUEST_TEXT:
             asked = session[f"{what}_requested_at"]
             if asked and session[f"{what}_told_at"] != asked and self.store.tell_request(self.sid, what, asked):
-                await self.turn(text)
+                await self.turn(request_text(self.store, what))
                 if what == "park":
                     self.park_told = time.monotonic()
 

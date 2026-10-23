@@ -77,7 +77,9 @@ DECISION_FIELDS = (("why", "Why"),)
 # 16: post_item's pinned (items.pinned): a doc is pinned unless the session says it's a scratch report.
 # 17: PR items (kind pr, its ref the PR's number), which post_item(kind="pr", url=...) posts and
 # the protocol asks a session to reply on when the person writes on one: an older one knows no pr.
-PROTOCOL_VERSION = 17
+# 18: session steps (steps.py): write_handoff, the tool a session keeps its handoff with, which the
+# wheelhouse's messages at compaction, Stop & Forget and resume now ask for: an older one has none.
+PROTOCOL_VERSION = 18
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.

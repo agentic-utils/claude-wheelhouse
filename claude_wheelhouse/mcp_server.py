@@ -12,7 +12,7 @@ import time
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import docroots, liveness
+from . import docroots, liveness, steps
 from .store import GONE_TEXT, SessionGone, Store, runner
 
 HEARTBEAT_SECONDS = 30
@@ -141,6 +141,19 @@ def set_synopsis(text: str) -> str:
     description of the session. Set it early; update it when the session's focus shifts."""
     _store.set_synopsis(_sid, text)
     return "synopsis set"
+
+
+@wheelhouse_tool
+def write_handoff(text: str) -> str:
+    """Write this session's handoff: a short markdown note of what was done, decisions and
+    why, open threads, and the next step, terse enough to read at a glance (16 KB at most).
+    Each call replaces the last. The wheelhouse keeps it, shows it to the person as this
+    session's handoff doc, and gives it back to you on resume and after compaction. Write it
+    with this tool, never as a file. Call it when a wheelhouse message asks you to, and
+    whenever your own instructions say to keep a handoff."""
+    path = steps.write_handoff(_store, _sid, text)
+    ref = _store.post_doc(_sid, "handoff", str(path), None, True)
+    return f"handoff written ({ref})"
 
 
 @wheelhouse_tool
