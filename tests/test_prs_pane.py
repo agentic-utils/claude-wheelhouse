@@ -467,3 +467,23 @@ async def test_a_merge_the_hub_refuses_says_so_not_gh(store, sid, github, status
         await asyncio.to_thread(p.merged, p.selected())   # off the app's thread, as the pane's worker
         await pilot.pause()
         assert p.outcome == said and "gh says" not in p.outcome, desc
+
+
+@pytest.mark.anyio
+async def test_request_review_shows_a_title_and_past_targets_as_text_not_markup(store, sid, github):
+    """As #141 escapes them: a PR title or a Slack target holding markup shows as written."""
+    store.set_setting(pane.TARGETS, json.dumps(["[b]#eng[/b]"]))
+    github.tracked[1] = {**github.tracked[1], "title": "[@click=app.quit]Change[/]"}
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p = await on_pr(app, pilot, URL.format(109))
+        p.review(p.selected())
+        await pilot.pause()
+        ask = app.screen
+        prompt = ask.query_one(".dialog-prompt")
+        shown = "".join(s.text for s in prompt.render_lines(prompt.region.reset_offset))
+        assert "[@click=app.quit]Change[/]" in shown, f"the title as written: {shown!r}"
+        options = ask.query_one(OptionList)
+        listed = "".join(s.text for s in options.render_lines(options.region.reset_offset))
+        assert "[b]#eng[/b]" in listed, f"the past target as written: {listed!r}"

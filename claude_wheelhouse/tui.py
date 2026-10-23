@@ -2839,9 +2839,9 @@ class Ask(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(self.prompt, classes="dialog-prompt")
+            yield Label(self.prompt, classes="dialog-prompt", markup=False)
             yield Input(id="ask-text", suggester=SuggestFromList(self.suggestions, case_sensitive=False))
-            yield OptionList(*self.suggestions, id="ask-suggestions")
+            yield OptionList(*self.suggestions, id="ask-suggestions", markup=False)
             with Horizontal(classes="buttons"):
                 yield Button("Send", variant="success", id="ask-ok")
                 yield Button("Cancel", id="ask-cancel")
