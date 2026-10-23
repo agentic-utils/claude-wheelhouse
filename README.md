@@ -497,7 +497,9 @@ answer box, where `PgUp` and `PgDn` scroll the conversation, and `Ctrl+Enter` le
 a button leaves focus where it was. A focused button that is disabled or hidden (Send, once it has sent)
 gives focus to the answer box. Send (its button or `Ctrl+S`) from the answer box or a button leaves focus in
 the box; from the session list or the items, focus stays there. An item opened full screen goes the same way: its
-answer box, then its buttons, and a click in its thread puts focus in the box. A doc shown in Detail
+answer box, then its buttons, and a click in its thread puts focus in the box. A conversation or an item's thread,
+in Detail or full screen, follows what's new to its end (your own answer, a reply) unless you've scrolled more than a
+line up from the end; an item just selected shows from its top. A doc shown in Detail
 is a stop after the answer box (in its place when the box doesn't show), and focused, the arrows,
 `PgUp`, `PgDn`, `Home` and `End` scroll it. Keys typed ahead of the screen end as if typed slowly: each acts once the one
 before it has done all it does, so the ones behind a key that opens a thread or a dialog go to it, and the ones behind a

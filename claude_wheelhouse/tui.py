@@ -5047,12 +5047,17 @@ class WheelhouseApp(App):
         (was, before), self._shown_turns = getattr(self, "_shown_turns", (None, set())), (self.viewing, turns)
         if self.viewing and was == self.viewing and turns - before and self.selected == self.picked:
             self.saw(self.viewing, None, "follow")
+        # an item's thread follows too once it's painted (#147): a new answer or reply shows at
+        # its end. Newly selected, it shows from its top, as before
+        thread = None if shown or self.viewing or doc else self.selected
+        same, self._detail_thread = thread is not None and thread == getattr(self, "_detail_thread", None), thread
         text = "\n\n".join(md for _, md in blocks)
         if text != getattr(self, "_detail_text", None):
-            following = self.detail_follows and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1
+            following = ((self.detail_follows or same)
+                         and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1)
             self._detail_text = text
             self.detail.update(render(blocks))   # a doc posted again: where it was scrolled to stays
-            if following:   # stay at the newest turn, unless the person has scrolled up to read
+            if following:   # stay at the newest turn or reply, unless the person has scrolled up to read
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
         if hasattr(self, "detail_panes"):
             self.paint_doc_thread(doc if not shown and not self.viewing else None)
