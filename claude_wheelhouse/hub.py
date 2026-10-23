@@ -30,7 +30,7 @@ from typing import Callable
 from . import adopt, api, features, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
 from .docroots import DOC_CAP
 from .host import AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, NO_NOTES, keepalive_body, waits_on_person
-from .store import COMPACT_QUESTION, DISMISSABLE, PRS_SINCE, STATUSES, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
+from .store import COMPACT_QUESTION, DISMISSABLE, compacting_now, PRS_SINCE, STATUSES, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
 
 RUNNING = ("live", "stalled", "starting")
 # a hosted session's activity when nothing is under way: errored and stopped count as resting
@@ -170,18 +170,6 @@ class Warmth:
     seen: float
     sent: float | None = None
 
-
-
-def compacting_now(s) -> bool:
-    """Whether a session run in the wheelhouse is being compacted, as its host records it in
-    the store: from Compact asked (host_command compact, written as Compact, the question's
-    Compact now or Relaunch's compact first is pressed), through the turn collecting its notes
-    and the /compact turn (an activity line starting "compacting"), until that turn ends and
-    its host says so (COMPACTED, NO_NOTES, interrupted). Not while it sits idle waiting for
-    notes that didn't come (AWAITING_NOTES): the session is free then. Not liveness: a host
-    that died mid-way leaves its line, so a surface asks whether it's running too."""
-    activity = s["activity"] or ""
-    return runner(s) == "sdk" and (s["host_command"] == "compact" or activity.startswith("compacting"))
 
 class Hub:
     """The wheelhouse's service over the store. Its state lives as long as it does."""

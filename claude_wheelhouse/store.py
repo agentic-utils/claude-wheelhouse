@@ -79,7 +79,12 @@ DECISION_FIELDS = (("why", "Why"),)
 # the protocol asks a session to reply on when the person writes on one: an older one knows no pr.
 # 18: session steps (steps.py): write_handoff, the tool a session keeps its handoff with, which the
 # wheelhouse's messages at compaction, Stop & Forget and resume now ask for: an older one has none.
-PROTOCOL_VERSION = 18
+# 19: request_compact, the tool a session run in the wheelhouse asks to be compacted with once
+# its turn ends (sessions.compact_request): an older one has no such tool.
+PROTOCOL_VERSION = 19
+# the least time between two compactions a session asks for itself (request_compact), so a
+# confused one can't loop: seconds since its last accepted request
+MODEL_COMPACT_GAP = 30 * 60
 # a compaction's cut-off (Store.compact_cut), in settings by session id, and the activity lines
 # that end one: the host's idle and interrupted lines, and its errors and stops
 COMPACT_CUTOFF = "compact.cutoff."
@@ -268,7 +273,10 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "doc_dirs", "TEXT"),
                  # kept out of reach of clearing the inbox (pinned): a doc by default, anything once the person pins it.
                  # No default: a row older code inserts takes its kind's (items_pinned_by_kind)
-                 ("items", "pinned", "INTEGER")]
+                 ("items", "pinned", "INTEGER"),
+                 # a compaction the session asked for itself (request_compact): its keep text while
+                 # pending, and when it last asked, for MODEL_COMPACT_GAP
+                 ("sessions", "compact_request", "TEXT"), ("sessions", "compact_requested_at", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -326,6 +334,18 @@ def mode(session) -> str:
 def runner(session) -> str:
     """How the session runs: sdk (a wheelhouse host) or tab (interactive Claude Code)."""
     return (session["runner"] if "runner" in session.keys() else None) or "tab"
+
+
+def compacting_now(s) -> bool:
+    """Whether a session run in the wheelhouse is being compacted, as its host records it in
+    the store: from Compact asked (host_command compact, written as Compact, the question's
+    Compact now or Relaunch's compact first is pressed), through the turn collecting its notes
+    and the /compact turn (an activity line starting "compacting"), until that turn ends and
+    its host says so (COMPACTED, NO_NOTES, interrupted). Not while it sits idle waiting for
+    notes that didn't come (AWAITING_NOTES): the session is free then. Not liveness: a host
+    that died mid-way leaves its line, so a surface asks whether it's running too."""
+    activity = s["activity"] or ""
+    return runner(s) == "sdk" and (s["host_command"] == "compact" or activity.startswith("compacting"))
 
 
 def default_runner(sdk: bool | None = None) -> str:
@@ -604,6 +624,45 @@ class Store:
                 db.execute("UPDATE sessions SET compact_plan = NULL WHERE id = ?", (sid,))
         plan = json.loads(row[0]) if row and row[0] else {}
         return plan.get("notes"), plan.get("then")
+
+    def request_compact(self, sid: str, keep: str, gap: float = MODEL_COMPACT_GAP) -> None:
+        """The session asks to be compacted, with keep as /compact's instructions: held here
+        until its host's turn ends (promote_compact_request). Refused (ValueError, the reason)
+        while one is pending or a compaction is under way, or within `gap` seconds of its last
+        accepted request."""
+        with self.tx() as db:
+            s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if s is None:
+                raise SessionGone(sid)
+            if s["compact_request"] is not None:
+                raise ValueError("a compaction you asked for is already pending: it runs once this turn ends")
+            if compacting_now(s):
+                raise ValueError("this session is being compacted already")
+            last = s["compact_requested_at"]
+            ago = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() if last else None
+            if ago is not None and ago < gap:
+                raise ValueError(f"you asked for a compaction {int(ago // 60)} minutes ago: ask again no sooner "
+                                 f"than {int(gap // 60)} minutes after the last")
+            db.execute("UPDATE sessions SET compact_request = ?, compact_requested_at = ? WHERE id = ?",
+                       (keep, stamp(), sid))
+
+    def promote_compact_request(self, sid: str) -> bool:
+        """The host, between turns: a pending request_compact becomes the Compact command,
+        with its keep text as the instructions and then compact, as if the person had pressed
+        Compact with them. Left alone while another command waits for the host. Whether it did."""
+        with self.tx() as db:
+            row = db.execute("SELECT compact_request, host_command FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if not row or row[0] is None or row[1] is not None:
+                return False
+            db.execute("UPDATE sessions SET compact_request = NULL, host_command = 'compact', compact_plan = ? "
+                       "WHERE id = ?", (json.dumps({"notes": row[0], "then": "compact"}), sid))
+            self.compact_cut(db, sid, fresh=True)
+        return True
+
+    def drop_compact_request(self, sid: str) -> None:
+        """A request_compact still pending goes: the person's own command came first."""
+        with self.tx() as db:
+            db.execute("UPDATE sessions SET compact_request = NULL WHERE id = ?", (sid,))
 
     def take_command(self, sid: str, only: str | None = None) -> str | None:
         """The host takes the pending command, once. With `only`, it is taken only if it is
