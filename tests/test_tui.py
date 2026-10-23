@@ -1058,6 +1058,9 @@ async def step(app, pilot, how, sid, other):
     elif how == "delete":
         app.items_table.focus()
         await pilot.press("delete")
+        await pilot.pause()
+        if app.screen is not app.screen_stack[0]:   # an open question asks first (#151)
+            await pilot.press("y")
     elif how in ("up", "down"):
         app.session_list.focus()
         await pilot.press(how)
@@ -1094,6 +1097,9 @@ async def step(app, pilot, how, sid, other):
         await pilot.pause()
         app.items_table.focus()
         await pilot.press("delete")
+        await pilot.pause()
+        if app.screen is not app.screen_stack[0]:   # open questions among them: asked once (#151)
+            await pilot.press("y")
     elif how == "thread":   # the highlighted item's thread, full screen
         app.items_table.focus()
         await pilot.press("enter")
