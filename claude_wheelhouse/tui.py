@@ -3674,6 +3674,8 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
                 ("A doc's editor", DocEditor.BINDINGS),
                 *[(w.KEYS_HELP[0], w.BINDINGS) for w in panes
                   if (keys := getattr(w, "KEYS_HELP", None)) and (sdk or not keys[1])]]
+    # a module's pane says what its own keys do: core's DESCRIBE can't know them (#154)
+    described = {**{b.action: b.description for w in panes for b in getattr(w, "BINDINGS", [])}, **DESCRIBE}
     out = ["# Keys"]
     for title, bindings in sections:
         out.append(f"## {title}")
@@ -3683,7 +3685,7 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
             if key_name(b.key) not in keys:   # Shift+L, bound as both L and shift+l
                 keys.append(key_name(b.key))
         # dict.fromkeys: one line for a key bound twice, as F is (its footer label changes)
-        out += dict.fromkeys(f"- **{' or '.join(keys)}**: {DESCRIBE[action]}" for action, keys in actions.items())
+        out += dict.fromkeys(f"- **{' or '.join(keys)}**: {described[action]}" for action, keys in actions.items())
     whose = WHOSE.format(sdk=SDK_WHOSE if sdk else HOSTED_WHOSE if offered & {"interrupt", "compact", "shell"}
                          else "; then Mode, and Send on one that isn't dead.")
     buttons = [text for id_, text in BUTTONS.items() if id_ not in SDK_BUTTONS or id_ in offered]

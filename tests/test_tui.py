@@ -8468,3 +8468,11 @@ async def test_open_url_opens_web_pages_alone(store, sid, url, opens):
         app._driver.open_url = lambda u, new_tab=True: opened.append(u)
         app.open_url(url)
         assert opened == ([url] if opens else []), url
+
+
+def test_the_keys_overlay_describes_a_module_panes_keys():
+    """#154: the PRs pane's m and r aren't in core's DESCRIBE; ? raised KeyError 'scope'."""
+    from claude_wheelhouse.tui import keys_help
+    from claude_wheelhouse_prs.pane import Prs
+    text = keys_help(panes=[Prs])
+    assert "## The PRs pane" in text and "**M**: Mine or all" in text and "**R**: Fetch now" in text, text
