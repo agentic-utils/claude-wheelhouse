@@ -726,7 +726,8 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   wheelhouse compacts it once its turn ends, never during it, as if you had pressed Compact
   with those instructions (then just compact). One request at a time, none within 30
   minutes of its last, and only in a session run in the wheelhouse; a Compact or Interrupt
-  you press first drops a request still waiting. Permission items are answered with buttons: Allow and Always at once, while Deny opens a
+  you press first, Park, Stop & Forget or a move to a tab drops a request still waiting, and
+  lifts its 30 minutes. Permission items are answered with buttons: Allow and Always at once, while Deny opens a
   one-line box for an optional reason (the session reads it as why, so it can try something
   else); Enter denies, empty or not, and Esc, wherever focus is, goes back to the buttons. The plugin's `SessionStart` hook does it
   ([`hooks.json`](claude_wheelhouse/plugin/hooks/hooks.json)): it runs

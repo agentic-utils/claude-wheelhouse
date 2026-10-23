@@ -568,6 +568,8 @@ class Store:
         with self.tx() as db:
             self._require(db, sid)
             db.execute("UPDATE sessions SET runner = ? WHERE id = ?", (runner, sid))
+            if runner != "sdk":
+                self.unrequest_compact(db, sid)
 
     # a session's SDK host
 
@@ -662,7 +664,15 @@ class Store:
     def drop_compact_request(self, sid: str) -> None:
         """A request_compact still pending goes: the person's own command came first."""
         with self.tx() as db:
-            db.execute("UPDATE sessions SET compact_request = NULL WHERE id = ?", (sid,))
+            self.unrequest_compact(db, sid)
+
+    @staticmethod
+    def unrequest_compact(db, sid: str) -> None:
+        """A pending request_compact goes, and its gap with it: one that never ran locks the
+        session out of none. Also on Park, Stop & Forget asked, a tab or a shell tab: stale keep
+        text mustn't compact a later SDK start. A host restarted keeps it."""
+        db.execute("UPDATE sessions SET compact_request = NULL, compact_requested_at = NULL "
+                   "WHERE id = ? AND compact_request IS NOT NULL", (sid,))
 
     def take_command(self, sid: str, only: str | None = None) -> str | None:
         """The host takes the pending command, once. With `only`, it is taken only if it is
@@ -691,6 +701,8 @@ class Store:
         """tab: the host has handed the session to an interactive tab and waits for it to exit."""
         with self.tx() as db:
             db.execute("UPDATE sessions SET shell = ? WHERE id = ?", (state, sid))
+            if state is not None:
+                self.unrequest_compact(db, sid)
 
     def set_relaunch(self, sid: str, host: tuple | None, deadline: float = 0.0, asked: float | None = None,
                      may_tab: bool = True) -> None:
@@ -823,6 +835,7 @@ class Store:
             self._require(db, sid)
             db.execute(f"UPDATE sessions SET {what}_requested_at = coalesce({what}_requested_at, ?) "
                        "WHERE id = ?", (stamp(), sid))
+            self.unrequest_compact(db, sid)
             if what == "park":
                 db.execute("UPDATE sessions SET park_compact = ? WHERE id = ?", (int(compact), sid))
 
@@ -886,6 +899,8 @@ class Store:
             self._require(db, sid)
             db.execute("UPDATE sessions SET parked = ?, park_requested_at = NULL, park_told_at = NULL, "
                        "park_compact = park_compact * ? WHERE id = ?", (int(parked), int(parked), sid))
+            if parked:
+                self.unrequest_compact(db, sid)
 
     def end(self, sid: str) -> None:
         with self.tx() as db:
