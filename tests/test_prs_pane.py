@@ -804,8 +804,13 @@ async def test_a_bulk_action_tries_every_pr_and_says_what_each_came_to(store, si
         monkeypatch.setattr(pane, "PAUSE", 0)
         said = {"busy": 2, "pending": 1}
 
+        asked, sent_tokens = [], []
+
         def hub(path, body):
+            if body is not None:
+                sent_tokens.append(body["token"])
             if path.startswith("result"):
+                asked.append(path)
                 if said["pending"]:
                     said["pending"] -= 1
                     return {"pending": True}
@@ -822,6 +827,30 @@ async def test_a_bulk_action_tries_every_pr_and_says_what_each_came_to(store, si
         assert p.outcome.splitlines() == ["Merged PR108 (squash).",
                                           "Couldn't merge PR109: gh says: X Pull request #109 is not mergeable"], p.outcome
         assert said == {"busy": 0, "pending": 0}, "sent again while busy; asked again while pending"
+        tokens = {path.partition("token=")[2] for path in asked}
+        assert tokens == {sent_tokens[0]} and len(set(sent_tokens)) == 2, \
+            "the result asked by the 504's own token, each command its own"
+
+
+@pytest.mark.anyio
+async def test_a_hub_without_the_result_route_says_the_outcome_is_unknown_at_once(store, sid, github, monkeypatch):
+    """Review of #156: a hub without `result` (404) was polled WAIT_BUSY seconds."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p = await on_pr(app, pilot, URL.format(109))
+        monkeypatch.setattr(pane, "PAUSE", 0)
+        asked = []
+
+        def hub(path, body):
+            if body is None:
+                asked.append(path)
+                raise api.Refused(404, "no route GET /m/prs/result")
+            raise api.Refused(504, "the module took longer than 10 s and carries on")
+        p.ctx = dataclasses.replace(p.ctx, call=hub)
+        await asyncio.to_thread(p.done_each, "close", [p.row(URL.format(109))])
+        await pilot.pause()
+        assert len(asked) == 1 and "outcome is unknown" in p.outcome and "GitHub" in p.outcome, p.outcome
 
 
 @pytest.mark.anyio

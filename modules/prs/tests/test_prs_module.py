@@ -452,16 +452,24 @@ def test_captions_fit_the_bar(room, want, layout, desc):
     assert pane.captions(entries, room) == (want, layout), desc
 
 
-def test_a_commands_answer_is_kept_for_the_result_route(tmp_path, monkeypatch):
-    """Review of #156: a close past the hub's wait still says what came of it."""
+@pytest.mark.parametrize("slow, token, ask, want, desc", [
+    (True, "t1", "t1", {"closed": True}, "past OVERRAN: kept, for its own token"),
+    (True, "t1", "t2", {"pending": True}, "another token reads nothing"),
+    (False, "t1", "t1", {"pending": True}, "answered in time: nothing kept"),
+    (True, None, "", {"pending": True}, "no token: nothing kept, nothing read"),
+])
+def test_a_commands_answer_is_kept_for_its_caller_alone(tmp_path, monkeypatch, slow, token, ask, want, desc):
+    """Review of #156: a result kept by URL was read by a later command on the same PR, and
+    by anyone; now by the token its caller sent, only when it ran long, read once."""
     f = Fake(tmp_path)
     monkeypatch.setattr(pane, "RUNNER", lambda argv: (0, "", ""))
+    monkeypatch.setattr(pane, "OVERRAN", -1 if slow else 3600)
     routes = {r.path: r for r in pane.routes(f.ctx)}
-    ask = api.Call({}, {"url": URL.format(3)})
-    assert routes["result"].handler(ask) == {"pending": True}, "nothing yet"
-    routes["close"].handler(api.Call({}, {}, {"url": URL.format(3)}))
-    assert routes["result"].handler(ask) == {"closed": True} and routes["result"].handler(ask) == {"pending": True}, \
-        "said once"
+    body = {"url": URL.format(3), **({"token": token} if token else {})}
+    assert routes["close"].handler(api.Call({}, {}, body)) == {"closed": True}
+    read = api.Call({}, {"token": ask})
+    assert routes["result"].handler(read) == want, desc
+    assert routes["result"].handler(read) == {"pending": True}, f"{desc}: said once at most"
 
 
 def test_a_detail_is_only_for_a_listed_pr_and_kept_no_longer_than_needed(tmp_path):

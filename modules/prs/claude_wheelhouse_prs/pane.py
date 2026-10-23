@@ -15,6 +15,7 @@ import json
 import importlib.metadata
 import re
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Callable
 from urllib.parse import quote
@@ -49,6 +50,7 @@ ACTIONS = (("open", "Open", "Open the PR in the browser"),
            ("merge", "Merge", "Merge the PR, the way its repo allows: asked first"),
            ("review", "Request review", "Ask the session that made the PR to post a review request on Slack"),
            ("close", "Close", "Close the PR without merging it: asked first"))
+OVERRAN = 5                              # seconds a command runs before its answer is kept for result (the hub waits 10)
 KEEP_RESULTS = 50                        # commands' answers kept for the result route
 WAIT_BUSY = 60                           # seconds a bulk action waits on the module's command thread, a PR
 PAUSE = 1.0                              # seconds between its tries
@@ -86,18 +88,23 @@ def routes(ctx: api.Context) -> list[api.Route]:
         return fetcher.detail(call.query.get("url", ""), call.query.get("fresh") == "1")
 
     def done(act):
-        """A command's answer, kept for `result` too: one that ran past the hub's wait
-        (504) still says what came of it once it ends (#156)."""
+        """A command's answer; one that took long enough to have run past the hub's wait
+        (504) kept too, under the token its caller sent with it, so that caller alone can
+        ask `result` what came of it, once (#156)."""
         def handler(call: api.Call):
-            url = url_of(call)
-            fetcher.results[url] = got = act(url)
-            while len(fetcher.results) > KEEP_RESULTS:   # the oldest, never asked for, dropped
-                fetcher.results.pop(next(iter(fetcher.results)))
+            url, token = url_of(call), (call.body or {}).get("token")
+            began = time.monotonic()
+            got = act(url)
+            if isinstance(token, str) and token and time.monotonic() - began >= OVERRAN:
+                fetcher.results[token] = got
+                while len(fetcher.results) > KEEP_RESULTS:   # the oldest, never asked for, dropped
+                    fetcher.results.pop(next(iter(fetcher.results)))
             return got
         return handler
 
     def result(call: api.Call):
-        return fetcher.results.pop(call.query.get("url", ""), None) or {"pending": True}
+        token = call.query.get("token", "")
+        return (fetcher.results.pop(token, None) if token else None) or {"pending": True}
     return [api.Route("list", listed), api.Route("detail", detailed), api.Route("result", result),
             api.Route("merge", done(fetcher.merge), method="POST"),
             api.Route("close", done(fetcher.close), method="POST")]
@@ -810,17 +817,18 @@ class Prs(Vertical):
         to (the result route) once it ends, all within WAIT_BUSY seconds (#156)."""
         results = []
         for r in rows:
-            got = self.command(action, r["url"])
+            token = uuid.uuid4().hex   # this call's own: its result is asked for by it, not the URL
+            got = self.command(action, r["url"], token)
             if got.get("status") == 504:
-                got = self.waited(r["url"], got)
+                got = self.waited(token, got)
             results.append((r, got))
         self.app.call_from_thread(self.acted, action, results)
 
-    def command(self, action: str, url: str) -> dict:
+    def command(self, action: str, url: str, token: str) -> dict:
         until = time.monotonic() + WAIT_BUSY
         while True:
             try:
-                return self.ctx.call(action, {"url": url})
+                return self.ctx.call(action, {"url": url, "token": token})
             except api.Refused as e:   # the hub's, not gh's
                 if e.status == 503 and BUSY in e.error and time.monotonic() < until:
                     time.sleep(PAUSE)
@@ -830,13 +838,18 @@ class Prs(Vertical):
             except Exception as e:   # never left busy
                 return {"failed": f"{type(e).__name__}: {e}"}
 
-    def waited(self, url: str, got: dict) -> dict:
-        """What a command that ran past the hub's wait came to, once it has: else got."""
+    def waited(self, token: str, got: dict) -> dict:
+        """What a command that ran past the hub's wait came to, once it has: else got. A hub
+        without the result route (404) can't say: unknown at once, not waited on."""
         until = time.monotonic() + WAIT_BUSY
         while time.monotonic() < until:
             time.sleep(PAUSE)
             try:
-                said = self.ctx.call(f"result?url={quote(url, safe='')}", None)
+                said = self.ctx.call(f"result?token={token}", None)
+            except api.Refused as e:
+                if e.status == 404:
+                    return {"failed": "its outcome is unknown (the hub can't say): check the PR on GitHub"}
+                continue
             except Exception:
                 continue
             if isinstance(said, dict) and not said.get("pending"):
