@@ -822,3 +822,16 @@ async def test_a_bulk_action_tries_every_pr_and_says_what_each_came_to(store, si
         assert p.outcome.splitlines() == ["Merged PR108 (squash).",
                                           "Couldn't merge PR109: gh says: X Pull request #109 is not mergeable"], p.outcome
         assert said == {"busy": 0, "pending": 0}, "sent again while busy; asked again while pending"
+
+
+@pytest.mark.anyio
+async def test_actions_on_different_prs_at_once_keep_each_outcome(store, sid, github):
+    """Review of #156: a close landing after a merge wrote over the merge's line."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p = await on_pr(app, pilot, URL.format(109))
+        a, b = p.row(URL.format(108)), p.row(URL.format(109))
+        p.acted("merge", [(a, {"method": "squash"})])
+        p.acted("close", [(b, {"closed": True})])
+        assert p.outcome == "Merged PR108 (squash).\nClosed PR109.", p.outcome

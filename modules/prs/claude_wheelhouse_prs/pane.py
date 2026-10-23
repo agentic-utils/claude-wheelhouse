@@ -492,7 +492,9 @@ class Prs(Vertical):
         self.shown: str | None = None        # the URL last shown from here
         self.drawn: tuple | None = None      # what the table was last built from
         self.busy: dict[str, str] = {}       # the PRs an action is under way on, by URL: "merge" or "close"
-        self.outcome: str | None = None      # what the last action came to: until the next action, m or r
+        # what the last actions came to, a line a PR by URL (#156: actions on different PRs
+        # at once each keep theirs), until the next action, m or r
+        self.outcomes: dict[str, str] = {}
         # Detail's PR (#145): ("item", sid, ref) as Detail shows it, or ("url", url) for a PR no
         # session made, picked here; and each PR's detail as fetched, when asked, and for what
         self.in_detail: tuple | None = None
@@ -505,6 +507,14 @@ class Prs(Vertical):
                                     id="pr-detail-actions")
         self.detail_body = PrDetail(id="pr-detail")
         self.show_scope()
+
+    @property
+    def outcome(self) -> str | None:
+        return "\n".join(self.outcomes.values()) or None
+
+    @outcome.setter
+    def outcome(self, value: None) -> None:   # None alone: every line dropped
+        self.outcomes.clear()
 
     def show_scope(self) -> None:
         name = self.session_name()
@@ -787,7 +797,7 @@ class Prs(Vertical):
         """An action the route does (merge, close), on each PR in turn, on a worker thread."""
         for r in rows:
             self.busy[r["url"]] = action
-        self.outcome = None
+            self.outcomes.pop(r["url"], None)
         self.paint_note()
         self.paint_card()
         self.paint_detail()
@@ -838,14 +848,15 @@ class Prs(Vertical):
         A toast too when the table hasn't the focus (the action came from Detail, say)."""
         for r, _ in results:
             self.busy.pop(r["url"], None)
-        self.outcome = "\n".join(said(action, r, got) for r, got in results)
+        lines = {r["url"]: said(action, r, got) for r, got in results}
+        self.outcomes.update(lines)
         if any("failed" not in got and "error" not in got for _, got in results):
             self.ask()
         self.paint_note()
         self.paint_card()
         self.paint_detail()
         if not self.query_one(PrTable).has_focus:
-            self.app.notify(self.outcome, severity="information" if all(
+            self.app.notify("\n".join(lines.values()), severity="information" if all(
                 "failed" not in got and "error" not in got for _, got in results) else "warning")
 
     def review(self, rows: list[dict]) -> None:
@@ -867,7 +878,7 @@ class Prs(Vertical):
                 self.ctx.send(sid, ref, request(r, target))
             skipped = [f"PR{r['number']}" for r, sid, _ in asked if sid is None]
             if skipped:
-                self.outcome = f"Not asked for {', '.join(skipped)}: no session made it."
+                self.outcomes["review"] = f"Not asked for {', '.join(skipped)}: no session made it."
                 self.paint_note()
         what = f"PR{rows[0]['number']} ({rows[0]['title']})" if len(rows) == 1 \
             else f"{len(asking)} PRs ({', '.join('PR' + str(r['number']) for r, _, _ in asking)})"
