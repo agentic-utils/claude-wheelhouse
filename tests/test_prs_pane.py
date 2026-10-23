@@ -547,7 +547,14 @@ async def test_a_pick_in_one_pane_clears_the_others_highlight(store, sid, github
                 {"PR7": "/7"}.get(pick, pick[-3:])), f"{desc}: on the PR shown"
         if shown is None:
             assert "PR7 in mizpah isn't an item" in app._detail_text, f"{desc}: Detail says why"
-        if not inbox_lit:   # a click on the inbox brings its highlight back, where clicked, and shows that row
+        if not inbox_lit:   # Delete in the inbox closes nothing: no row there is picked
+            before = [(i["ref"], i["status"]) for i in store.items(sid)]
+            app.items_table.focus()
+            await pilot.press("delete")
+            await pilot.pause()
+            assert [(i["ref"], i["status"]) for i in store.items(sid)] == before, f"{desc}: Delete closes nothing"
+            assert app.screen is app.screen_stack[0], f"{desc}: and asks nothing"
+            # a click on the inbox brings its highlight back, where clicked, and shows that row
             await pilot.click("#items", offset=(4, 1 + app.items_table.get_row_index(f"{sid}|{q}")))
             await pilot.pause()
             assert app.items_table.show_cursor and app.selected == (sid, q), f"{desc}: clicked back"
