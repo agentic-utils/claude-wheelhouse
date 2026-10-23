@@ -398,7 +398,7 @@ class Prs(Vertical):
         dict(open=self.open_pr, merge=self.merge, review=self.review)[action](r)
 
     def open_pr(self, r: dict) -> None:
-        self.app.open_url(r["url"])
+        self.app.action_open_url(r["url"])   # the app's opener, as a click on a PR's link
 
     def merge(self, r: dict) -> None:
         """Asked first, No focused; then merged on the daemon (the route), off the UI thread."""
