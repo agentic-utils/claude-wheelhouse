@@ -8296,3 +8296,57 @@ async def test_a_disabled_button_is_dark_grey_with_black_text(store, sid, clock)
         for b in (app.screen.query_one("#send-all", Button), compact_now, app.session_buttons.query_one("#fork", Button)):
             assert b.disabled and b.region.height == 1, f"{b.id}: off, and one row still"
             assert drawn(b) == [f"bold #000000 on {tui.OFF}"], f"{b.id}: black on dark grey, got {drawn(b)}"
+
+
+MARKUP = "[@click=app.bell]ZQ[/] [bold]B[/bold]"   # its mark (ZQ) inside a 22-cell column
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("where, selector, desc", [
+    ("title", "#items", "an item's title in the inbox"),
+    ("title", "#detail", "an item's title in Detail"),
+    ("body", "#detail", "an item's body in Detail"),
+    ("synopsis", "#session-info-text", "a session's synopsis in its info"),
+])
+async def test_a_sessions_text_is_never_markup(store, sid, clock, where, selector, desc):
+    """#139: a session's text shows as written, and a [@click=...] in it runs nothing."""
+    ref = store.post_item(sid, "task", MARKUP if where == "title" else "t", MARKUP if where == "body" else "")
+    if where == "synopsis":
+        store.set_synopsis(sid, MARKUP)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        ran = []
+        app.action_bell = lambda: ran.append("bell")
+        app.follow(sid)
+        clock.tick(app)
+        await pilot.pause()
+        if selector == "#detail":
+            app.show_item(sid, ref)
+            await pilot.pause()
+        widget = app.query_one(selector)
+        lines = [strip.text for strip in widget.render_lines(widget.region.reset_offset)]
+        y = next((i for i, line in enumerate(lines) if "ZQ" in line), None)
+        assert y is not None, f"{desc}: shown, in {lines}"
+        assert "]ZQ" in lines[y], f"{desc}: its markup shows as written: {lines[y]!r}"
+        await pilot.click(widget, offset=(lines[y].index("ZQ") + 1, y))
+        await pilot.pause()
+        assert ran == [], f"{desc}: a click on it runs nothing"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("url, opens", [
+    ("https://github.com/o/r/pull/1", True),
+    ("http://localhost:8000/x", True),
+    ("file:///etc/passwd", False),
+    ("javascript:alert(1)", False),
+])
+async def test_open_url_opens_web_pages_alone(store, sid, url, opens):
+    """#139: whatever asks it, the app opens an http(s) page and nothing else."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        opened = []
+        app._driver.open_url = lambda u, new_tab=True: opened.append(u)
+        app.open_url(url)
+        assert opened == ([url] if opens else []), url

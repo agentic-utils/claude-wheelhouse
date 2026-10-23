@@ -145,7 +145,7 @@ class Prs(Vertical):
 
     def compose(self):
         yield PrTable(id="pr-list", cursor_type="row", zebra_stripes=False)
-        yield Static(id="prs-note")
+        yield Static(id="prs-note", markup=False)
         yield PrCard(id="prs-card")
 
     def on_mount(self) -> None:
@@ -245,7 +245,7 @@ class Prs(Vertical):
         for r in rows:
             cells = {"pr": Text(f"PR{r['number']}", style=api.KIND_COLOUR["pr"]), "repo": short(r),
                      "title": r["title"], "light": self.dot(r)}
-            table.add_row(*(cells[k] for k, _ in columns), key=r["url"])
+            table.add_row(*(api.plain(cells[k]) for k, _ in columns), key=r["url"])   # a title as itself, never markup
         if at is not None and at in table.rows:
             table.move_cursor(row=table.get_row_index(at), animate=False)
         table.tip_again()

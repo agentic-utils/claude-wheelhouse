@@ -49,7 +49,7 @@ from .docroots import Outside, confine  # noqa: F401  (a path resolved, if a doc
 from .models import EFFORTS, name as model_label  # noqa: F401
 # a pull request's URL read (prs.py), and how the lists colour a kind and show a row's full text
 from .prs import STATES as PR_STATES, canonical as pr_url, link as pr_link, parse as parse_pr, repo_of  # noqa: F401
-from .rows import KIND_COLOUR, RowTips  # noqa: F401
+from .rows import KIND_COLOUR, RowTips, plain  # noqa: F401
 from .plan_usage import EVERY as USAGE_EVERY, AccountUsage  # noqa: F401
 from .transcript_usage import (AMBER, BUCKET, CHARTS, DAY, HOT, HOUR, OK, PARTIAL, SERIES,  # noqa: F401
                                SPAN, WARN, WEEK, History, Snapshot, Turn, UsageFollower, clock,

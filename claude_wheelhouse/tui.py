@@ -33,6 +33,7 @@ from textual.message import Message
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
 from textual.errors import NoWidget
+from textual.content import Content
 from textual.geometry import Offset
 from textual.screen import ModalScreen, Screen
 from textual.scrollbar import ScrollBar
@@ -59,7 +60,7 @@ from textual.widgets import (
 )
 
 from . import api, callout, columns, docblocks, docroots, emoji, features, models, ordering, prs, subagents, transcript, transcript_usage, tutorial, whatsnew
-from .rows import KIND_COLOUR, RowTips
+from .rows import KIND_COLOUR, RowTips, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import AWAITING_NOTES, HOLD_EXPIRED, NUDGE_TOKENS, SHELL_OPENING
@@ -554,7 +555,9 @@ def fill(table: DataTable, rows: list[tuple[str, tuple]], rebuild: bool = False)
     new width shows only in a rebuilt table. Otherwise the table is rebuilt
     without posting RowHighlighted: clear() puts the cursor on row 0 and the first new row
     highlights it, which made every refresh look like the person picking row 0 and back.
-    Returns whether it rebuilt; the caller then puts the cursor back."""
+    Returns whether it rebuilt; the caller then puts the cursor back. A str cell shows as
+    itself, never as markup (plain): a session's text reaches these tables."""
+    rows = [(key, tuple(plain(c) for c in cells)) for key, cells in rows]
     if not rebuild and [r.key.value for r in table.ordered_rows] == [k for k, _ in rows]:
         columns = list(table.columns)
         for key, cells in rows:
@@ -1783,7 +1786,7 @@ class SendBar(Horizontal):
         label = getattr(self, "activity_label", None) or next(iter(self.query("#activity")), None)
         self.activity_label = label   # held once found: it lives as long as the bar
         if label is not None and str(label.content) != text:
-            label.update(text)
+            label.update(Text(text))   # plain: the session's own words, never markup
 
 
 class PermissionButtons(Horizontal):
@@ -2735,6 +2738,9 @@ class Folders(DirectoryTree):
     """Directories only. Hidden ones are left out, but for .worktrees, where a branch's
     worktree lives."""
 
+    def process_label(self, label):
+        return super().process_label(plain(label))   # a folder's name, never markup
+
     def filter_paths(self, paths):
         return [p for p in paths if self._safe_is_dir(p) and (not p.name.startswith(".") or p.name == ".worktrees")]
 
@@ -2755,7 +2761,7 @@ class PickDirectory(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label("WORKING DIRECTORY", classes="dialog-title")
-            yield Label(self.start, id="picked")
+            yield Label(self.start, id="picked", markup=False)   # a folder's name, never markup
             yield Folders(self.start, id="folders")
             yield Label("Enter opens · Backspace goes up · Ctrl+Enter chooses · Esc cancels",
                         classes="answer-hint")
@@ -2837,7 +2843,7 @@ class ChooseModel(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(f"MODEL · {self.name_}", classes="dialog-title")
+            yield Label(f"MODEL · {self.name_}", classes="dialog-title", markup=False)
             yield Label(MODEL_WARNING, classes="dialog-prompt", id="model-warning")
             yield OptionList(*[f"{m.name}{' (now)' if m.id == self.current else ''}" for m in models.MODELS],
                              id="models")
@@ -2891,7 +2897,7 @@ class AdoptSession(Dialog):
         table.add_columns("", "last active", "dir", "title")
         for c in self.candidates.values():
             table.add_row(Text("● running", style="bold #ffd300") if c.running_pid else "",
-                          ago(c.active), c.cwd, c.title or short(c.id), key=c.id)
+                          *map(plain, (ago(c.active), c.cwd, c.title or short(c.id))), key=c.id)
         if not self.candidates:
             self.query_one("#adopt-hint", Label).update("No recent sessions to adopt.")
         self.set_focus(table)
@@ -2942,7 +2948,7 @@ class ForkSession(Dialog):
     def compose(self) -> ComposeResult:
         plan = self.plan
         with Vertical(id="dialog", classes="wide"):
-            yield Label(f"FORK AS {plan.name}", classes="dialog-title")
+            yield Label(f"FORK AS {plan.name}", classes="dialog-title", markup=False)
             yield Label("A new session carrying on from this conversation so far; this one carries on too.",
                         classes="dialog-prompt")
             if plan.items:
@@ -2955,7 +2961,7 @@ class ForkSession(Dialog):
                 with RadioSet(id="fork-where"):
                     yield RadioButton("A new worktree, on a new branch from this one's last commit:", value=True,
                                       id="fork-new")
-                    yield RadioButton(f"This worktree, {plan.cwd}", id="fork-same")
+                    yield RadioButton(Text(f"This worktree, {plan.cwd}"), id="fork-same")
                 yield Input(value=plan.branch, placeholder="new branch", id="fork-branch")
                 if plan.tree.dirty:
                     yield Label("This worktree has uncommitted changes: a fork in a new worktree won't see them.",
@@ -3000,7 +3006,7 @@ class CompactSession(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(f"COMPACT {self.name_}", classes="dialog-title")
+            yield Label(f"COMPACT {self.name_}", classes="dialog-title", markup=False)
             yield Label("Instructions for the compaction (optional: leave it empty and the session is asked "
                         "what to keep):", classes="dialog-prompt")
             yield TextArea(id="compact-notes")
@@ -3034,7 +3040,7 @@ class ParkSession(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label(f"Park {self.name_}? It writes its handoff notes into its items, then stops.",
-                        classes="dialog-prompt")
+                        classes="dialog-prompt", markup=False)
             yield Checkbox("Compact first, while its prompt cache is " + ("warm" if self.warm else "cold, which saves nothing"),
                            self.warm, id="park-compact")
             with Horizontal(classes="buttons"):
@@ -3062,7 +3068,7 @@ class ForgetChoice(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(self.prompt, classes="dialog-prompt")
+            yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
                 yield Button(Text("[L]et it know"), variant="success", id="forget-tell")
                 yield Button(Text("[J]ust stop it"), variant="error", id="forget-stop")
@@ -3101,7 +3107,7 @@ class Confirm(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(self.prompt, classes="dialog-prompt")
+            yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
                 yield Button(Text("[Y]es"), variant="error", id="yes")
                 yield Button(Text("[N]o"), id="no")
@@ -3196,7 +3202,7 @@ class Choice(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(self.prompt, classes="dialog-prompt")
+            yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
                 yield Button(Text("[C]ancel request"), variant="success", id="cancel")
                 yield Button(Text("[F]orce"), variant="error", id="force")
@@ -3217,7 +3223,7 @@ class RelaunchChoice(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(self.prompt, classes="dialog-prompt")
+            yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
                 # ids of its own: the app's host buttons (#compact) answer a press that bubbles up
                 yield Button(Text("[C]ompact first"), variant="success", id="relaunch-compact")
@@ -3265,8 +3271,8 @@ class TourInvite(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog", classes="invite"):
             yield Label(INVITE.title, classes="dialog-title")
-            yield Label(self.text, classes="dialog-prompt", id="invite-text")
-            yield Label(self.hint, classes="dialog-prompt", id="invite-hint")
+            yield Label(self.text, classes="dialog-prompt", id="invite-text", markup=False)
+            yield Label(self.hint, classes="dialog-prompt", id="invite-hint", markup=False)
             with Horizontal(classes="buttons", id="invite-buttons"):
                 # ids of its own: the app's buttons answer a press that bubbles up
                 yield Button(Text("Start [Enter]"), variant="success", id="invite-start")
@@ -3307,7 +3313,7 @@ class TourStop(Dialog):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog", classes="invite"):
-            yield Label(self.heading, classes="dialog-title")
+            yield Label(self.heading, classes="dialog-title", markup=False)
             yield Label(Text(self.text), classes="dialog-prompt", id="tour-stop-text")
             yield Label(ESC_ENDS, classes="dialog-prompt", id="tour-stop-esc")   # its own paragraph
             with Horizontal(classes="buttons"):
@@ -3347,7 +3353,7 @@ class TourNotes(Dialog):
             yield Label("RELEASE NOTES", classes="dialog-title")
             with VerticalScroll(id="tour-notes-scroll"):
                 yield Static(RichMarkdown(self.notes), id="tour-notes")
-            yield Label(self.text, classes="dialog-prompt", id="tour-notes-text")
+            yield Label(self.text, classes="dialog-prompt", id="tour-notes-text", markup=False)
             with Horizontal(classes="buttons"):
                 yield Button(Text("Close [Enter]"), variant="success", id="tour-notes-close")
 
@@ -4888,8 +4894,9 @@ class WheelhouseApp(App):
         for box, target in boxes:
             quote = target and self.doc_quotes.get(target)
             title = f'> "{quote}"' if quote else None
-            if box.border_title != title:
-                box.border_title = title
+            if getattr(box, "quoted", None) != title:   # border_title reads back as markup
+                box.quoted = title
+                box.border_title = Content(title) if title else None   # plain: the doc's own text
 
     def paint_detail(self) -> None:
         agent, doc, shown = False, self.selected_doc(), self.shown_doc
@@ -5205,6 +5212,16 @@ class WheelhouseApp(App):
     def action_open_url(self, url: str) -> None:
         """A click on a PR's link (prs.link): the whole URL in the browser."""
         self.open_url(url)
+
+    def open_url(self, url: str, *, new_tab: bool = True) -> None:
+        """A web page in the browser, and nothing else: no file:, no other scheme (#139)."""
+        if url.startswith(("https://", "http://")):
+            super().open_url(url, new_tab=new_tab)
+
+    def notify(self, message: str, *, markup: bool = False, **kwargs) -> None:
+        """A toast, plain unless asked: its message often holds a session's text, which as
+        markup could hold an [@click=...] (#139)."""
+        super().notify(message, markup=markup, **kwargs)
 
     def action_reset_layout(self) -> None:
         """Reset layout, in the command palette: every pane in its default slot and every
@@ -5679,7 +5696,7 @@ class WheelhouseApp(App):
         activity = self.activity_line(s) if s else ""
         if activity != getattr(self, "_activity_text", None):
             self._activity_text = activity
-            self.session_activity.update(activity)
+            self.session_activity.update(Text(activity))   # plain: the session's own words, never markup
         before = [b.display for b in self.session_controls]
         for grid, buttons in ((self.session_buttons, self.lifecycle_buttons(s)),
                               (self.conversation_buttons, self.controls(s))):
