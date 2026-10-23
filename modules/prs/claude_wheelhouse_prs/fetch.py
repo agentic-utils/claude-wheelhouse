@@ -369,14 +369,21 @@ class Fetcher:
             self.cache.update({**rows[url], "state": state})
         if self.ctx.set_pr_states is not None and url in self.items():
             self.ctx.set_pr_states({url: state.lower()})
+        self.details.pop(url, None)   # gone from the pane: its detail with it
 
     def detail(self, url: str, fresh: bool) -> dict:
         """A PR's detail for the Detail pane (#145): its description, history, checks and
         comments, from one `gh api graphql` call, kept DETAIL_EVERY seconds (fresh: once
-        DETAIL_GAP old). On a failure, {"error"}, with what was fetched before if any."""
+        DETAIL_GAP old). On a failure, {"error"}, with what was fetched before if any. Only
+        for a PR the pane lists (an open one in the cache); the others' kept past
+        DETAIL_EVERY are dropped, so the kept details stay few (#156)."""
         if not isinstance(url, str) or api.pr_url(url) != url:
             raise api.Refused(400, f"not a pull request URL: {url!r}")
+        if not any(r["url"] == url and status(r) not in ("merged", "closed") for r in self.cache.rows()):
+            raise api.Refused(404, f"not a pull request the PRs pane lists: {url}")
         now = self.clock()
+        for old in [u for u, (at, _) in self.details.items() if u != url and now - at >= DETAIL_EVERY]:
+            del self.details[old]
         at, kept = self.details.get(url, (None, None))
         if at is not None and now - at < (DETAIL_GAP if fresh else DETAIL_EVERY):
             return kept

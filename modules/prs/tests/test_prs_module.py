@@ -365,15 +365,24 @@ def test_the_detail_keeps_comments_that_say_something_and_orders_checks_failing_
         fetch.detail({"repository": {"pullRequest": None}})
 
 
+def listing(tmp_path, *ns):
+    """A fetcher whose cache lists PRs ns, open, as the pane's list fetched them."""
+    f = Fake(tmp_path, [item(n) for n in ns], {"data": {**{f"p{i}": {"pullRequest": node(n)} for i, n in enumerate(ns)},
+                                                        "search": {"nodes": []}}})
+    fetcher = f.fetcher()
+    fetcher.answer("mine", False)
+    return f, fetcher
+
+
 def test_a_prs_detail_is_kept_and_fetched_again_when_due(tmp_path):
-    f = Fake(tmp_path)
+    f, fetcher = listing(tmp_path, 1)
     calls = []
     answer = {"data": {"repository": {"pullRequest": {"body": "b"}}}}
 
     def run(argv):
         calls.append(argv)
         return 0, json.dumps(answer), ""
-    fetcher = fetch.Fetcher(f.ctx, run, lambda: f.now)
+    fetcher.runner = run
     assert fetcher.detail(URL.format(1), False)["body"] == "b"
     assert calls[0][-3:] == ["name=wheelhouse", "-F", "number=1"] and "-f" in calls[0], "the PR's as variables, not in the query"
     for step, fresh, n, desc in ((5, True, 1, "r within DETAIL_GAP: kept"), (fetch.DETAIL_GAP, True, 2, "r past it: fetched"),
@@ -443,3 +452,25 @@ def test_a_commands_answer_is_kept_for_the_result_route(tmp_path, monkeypatch):
     routes["close"].handler(api.Call({}, {}, {"url": URL.format(3)}))
     assert routes["result"].handler(ask) == {"closed": True} and routes["result"].handler(ask) == {"pending": True}, \
         "said once"
+
+
+def test_a_detail_is_only_for_a_listed_pr_and_kept_no_longer_than_needed(tmp_path):
+    """Review of #156: any PR URL was fetched, and details were kept for ever."""
+    f, fetcher = listing(tmp_path, 1, 2)
+    fetcher.runner = lambda argv: (0, json.dumps({"data": {"repository": {"pullRequest": {"body": "b"}}}}), "")
+    with pytest.raises(api.Refused) as no:
+        fetcher.detail(URL.format(3), False)
+    assert no.value.status == 404, "a PR the pane doesn't list"
+    fetcher.detail(URL.format(1), False)
+    fetcher.detail(URL.format(2), False)
+    fetcher.ended(URL.format(2), "CLOSED")
+    assert set(fetcher.details) == {URL.format(1)}, "a PR closed from here: its detail dropped"
+    with pytest.raises(api.Refused):
+        fetcher.detail(URL.format(2), False)
+    f.now += fetch.DETAIL_EVERY
+    f.answer = {"data": {"p0": {"pullRequest": node(1)}, "search": {"nodes": [node(4)]}}}
+    detailed, fetcher.runner = fetcher.runner, f.run
+    fetcher.answer("all", True)
+    fetcher.runner = detailed
+    fetcher.detail(URL.format(4), False)
+    assert set(fetcher.details) == {URL.format(4)}, "one kept past DETAIL_EVERY dropped"
