@@ -2230,6 +2230,45 @@ async def test_a_new_reply_in_a_long_thread(store, sid, up, own, desc):
         assert scroll.scroll_y == (y if up and not own else scroll.max_scroll_y), desc
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("up, own, desc", [
+    (False, False, "at the newest reply: a new one shows at the end"),
+    (True, False, "scrolled up to read: what shows stays put"),
+    (False, True, "your own answer, at the newest reply: it shows at the end"),
+    (True, True, "your own answer, scrolled up to read: what shows stays put"),
+])
+@pytest.mark.parametrize("size", [(160, 40), (100, 30)])
+async def test_a_new_reply_in_a_long_thread_in_detail(store, sid, up, own, desc, size):
+    """#147: an item's thread in the Detail pane follows its newest reply, as the conversation
+    does, unless scrolled more than a line up from its end. Selected, it shows from its top."""
+    ref = store.post_item(sid, "question", "q", body="\n\n".join(f"para {i}" for i in range(80)), status="open")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{ref}"))
+        await pilot.pause()
+        scroll = app.detail_scroll
+        assert app.selected == (sid, ref) and scroll.scroll_y == 0 < scroll.max_scroll_y, f"{desc}: shown from its top"
+        scroll.scroll_to(y=20 if up else scroll.max_scroll_y, animate=False, immediate=True)
+        await pilot.pause()
+        y = scroll.scroll_y
+        if own:
+            app.answer.text = "my answer"
+            app.answer.focus()
+            await pilot.press("ctrl+enter")
+        else:
+            store.reply(sid, ref, "a new reply", status="open")
+            app.refresh_data()
+        await pilot.wait_for_scheduled_animations()
+        await pilot.pause()
+        assert ("my answer" if own else "a new reply") in app._detail_text, f"{desc}: it shows in the thread"
+        assert scroll.max_scroll_y > y, f"{desc}: the reply made it longer"
+        if up:   # within a line: the answer box's own change may shift the view by one
+            assert abs(scroll.scroll_y - y) <= 1 < scroll.max_scroll_y - scroll.scroll_y, desc
+        else:
+            assert scroll.scroll_y == scroll.max_scroll_y, desc
+
+
 class OneTranscript(App):
     """A Transcript alone in its scroll: blocks laid out and changed, nothing else."""
     def compose(self) -> ComposeResult:

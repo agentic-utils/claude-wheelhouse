@@ -15,6 +15,9 @@ methods on it:
 - `tick()`: once a second, and as soon as the session in context changes.
 - `animate(frame)`: five times a second, except while the person types in an answer box,
   when animation rests.
+- `showing(sid, ref)`: the item Detail shows has changed, picked in the inbox or another pane
+  (ref None for a session's conversation, both None for nothing): a pane listing it can
+  highlight it, and one that doesn't can hide its highlight (#148).
 - `landed(sid)`: the hub's own read of a session's transcript has brought something (its
   transcript followers are shared, `follower`): a pane showing that session can repaint.
 
@@ -165,6 +168,9 @@ class Context:
     pr_activity: Callable[[], float | None] | None = None
     # an item shown in the Detail pane, highlighted in the inbox: (session id, ref). None daemon side
     show_item: Callable[[str, str], None] | None = None
+    # nothing selected in the inbox, its highlight hidden, and Detail saying why: (note). For a
+    # pick that isn't an item (a PR no session made, #148). None daemon side
+    unselect: Callable[[str], None] | None = None
     # text sent to a session as the person's answer would be, queued or at once by its mode:
     # (session id, the item it answers or None, text). None daemon side
     send: Callable[[str, str | None, str], None] | None = None

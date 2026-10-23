@@ -325,7 +325,9 @@ session.
   size the same way, as a one-cell bar in the same colours, filled in eighths on a
   linear scale: an eighth for each 125k begun, so the cell is full past 875k.
 - **The PRs pane.** Under the inbox, the open pull requests your sessions made (`PRs ·
-  mine`), or with `m` every open PR you authored in any repo (`PRs · all`). Each row is its
+  mine`), or with `m` every open PR you authored in any repo (`PRs · all`). As the inbox
+  does, it follows the session selected: its PRs alone (`PRs · mine · <session>`), or every
+  one with none selected (`Esc`). Each row is its
   `PR` number, repo (when there's more than one), title and a light: red for a failed
   check, changes requested or a conflict with its base; orange, flashing, while checks
   run; yellow while a review is awaited; green when it's ready to merge; grey for a draft.
@@ -333,15 +335,18 @@ session.
   every 5 minutes, when the pane is shown, 20 seconds after a session pushes or merges,
   and on `r`; every app shares it, and a merged or closed PR leaves the pane at once.
   Highlighting a session's PR shows it in Detail with its thread; `Enter` opens it in the
-  browser. Without `gh`, or not logged in, the pane says so. Under the table, the PR
+  browser. Detail always shows what you picked last, in the inbox or here: the other list
+  highlights it too if it lists it, and otherwise hides its highlight until you click, press
+  `Enter` or move in it again. A PR no session made isn't an item, so picking it leaves
+  nothing selected and Detail says so. Without `gh`, or not logged in, the pane says so. Under the table, the PR
   selected has three buttons, which a right-click on its row gives as a menu too: **Open**
   (the browser); **Merge**, asked first, with `gh pr merge` the way the repo allows (a
   merge commit where it can, else squash, else rebase), saying under the table what
   stood in its way if it didn't (a review required, conflicts, failing checks, as `gh`
   says); and **Request review**, which asks for a Slack channel or name (`#channel`,
   `@name`, past ones offered most recent first) and sends the session that made the PR a
-  message asking it to post the request on Slack. For a PR no session made (`PRs · all`)
-  it asks the session selected in the session list, and is greyed with none selected.
+  message asking it to post the request on Slack. For a PR no session made (`PRs · all`,
+  with no session selected) it is greyed: there is no session to ask.
 - **The Decisions pane.** Under the inbox, the design decisions (ADRs) of every repo a session works
   in: each `NNNN-*.md` file in the repo's `docs/adr`, or in the directories a session there
   named with `set_doc_dirs` instead (`.plan/`, say, only if named), read again every 10
@@ -497,7 +502,9 @@ answer box, where `PgUp` and `PgDn` scroll the conversation, and `Ctrl+Enter` le
 a button leaves focus where it was. A focused button that is disabled or hidden (Send, once it has sent)
 gives focus to the answer box. Send (its button or `Ctrl+S`) from the answer box or a button leaves focus in
 the box; from the session list or the items, focus stays there. An item opened full screen goes the same way: its
-answer box, then its buttons, and a click in its thread puts focus in the box. A doc shown in Detail
+answer box, then its buttons, and a click in its thread puts focus in the box. A conversation or an item's thread,
+in Detail or full screen, follows what's new to its end (your own answer, a reply) unless you've scrolled more than a
+line up from the end; an item just selected shows from its top. A doc shown in Detail
 is a stop after the answer box (in its place when the box doesn't show), and focused, the arrows,
 `PgUp`, `PgDn`, `Home` and `End` scroll it. Keys typed ahead of the screen end as if typed slowly: each acts once the one
 before it has done all it does, so the ones behind a key that opens a thread or a dialog go to it, and the ones behind a
