@@ -18,6 +18,10 @@ methods on it:
 - `showing(sid, ref)`: the item Detail shows has changed, picked in the inbox or another pane
   (ref None for a session's conversation, both None for nothing): a pane listing it can
   highlight it, and one that doesn't can hide its highlight (#148).
+- `detail_parts()`: once, after the panes mount: widgets of the pane's own for the Detail pane,
+  {"body": one scrolling under the thread shown, "bar": one fixed under that}, either left
+  out. The pane shows and hides them (on `showing`, say); Detail hides both while it shows
+  a doc or a session's conversation. The PRs pane's are a PR's buttons and details (#145).
 - `landed(sid)`: the hub's own read of a session's transcript has brought something (its
   transcript followers are shared, `follower`): a pane showing that session can repaint.
 
@@ -54,7 +58,7 @@ from .docroots import Outside, confine  # noqa: F401  (a path resolved, if a doc
 from .models import EFFORTS, name as model_label  # noqa: F401
 # a pull request's URL read (prs.py), and how the lists colour a kind and show a row's full text
 from .prs import STATES as PR_STATES, canonical as pr_url, link as pr_link, parse as parse_pr, repo_of  # noqa: F401
-from .rows import KIND_COLOUR, RowTips, plain  # noqa: F401
+from .rows import KIND_COLOUR, RowTips, marked, plain  # noqa: F401
 from .plan_usage import EVERY as USAGE_EVERY, AccountUsage  # noqa: F401
 from .transcript_usage import (AMBER, BUCKET, CHARTS, DAY, HOT, HOUR, OK, PARTIAL, SERIES,  # noqa: F401
                                SPAN, WARN, WEEK, History, Snapshot, Turn, UsageFollower, clock,

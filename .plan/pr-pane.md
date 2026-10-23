@@ -275,6 +275,36 @@ The light, taking the first that applies:
   moving key brings it back on its row. A PR that isn't an item leaves nothing selected,
   Detail saying so, its card under the table as before.
 
+### PR actions in Detail, marks and Close (#145, #146)
+
+As built. Doug: "(a) is a good shout (and we should add more to that detail pane for the
+PR: description, history, what's currently failing, comments) but I also want b, and I
+want to be able to multiselect PRs and invoke an action for all selected. Also need an
+action for Close which should be subject to a confirmation dialog."
+
+- **Detail's parts.** A pane may give the Detail pane widgets of its own (`detail_parts()`,
+  api.py): a "body" that scrolls under the thread and a "bar" fixed under that. The PRs
+  pane's are the action buttons and the PR's detail, shown while Detail shows a PR it
+  lists: a PR item (from `showing`), or a PR no session made, picked in the pane (Detail
+  says it isn't an item, and shows its link with the detail). Detail hides them while it
+  shows a doc or a session's conversation. No API bump: an older hub never asks.
+- **The detail.** One `gh api graphql` call a PR, the route `GET detail?url=`: the
+  description, the last 40 timeline entries (commits, comments, reviews, review requests,
+  ready, draft, force-push, closed, reopened, merged) and the head commit's checks. The
+  daemon keeps it 2 minutes (`DETAIL_EVERY`), `r` fetches again past 10 s (`DETAIL_GAP`);
+  the pane asks again when the PR's row changes (pushed, reviewed, checks finished). Shown
+  as plain text, control codes stripped, the description cut at 1,500 characters and each
+  comment at 600; a failing check is a link only to an http(s) page.
+- **Marks.** The inbox's keys and clicks, by URL so they survive a fetch; the pane's
+  bottom border counts them. The buttons and a marked row's menu act on every PR marked;
+  an unmarked row's menu on that row alone.
+- **Close.** `gh pr close -- <url>` through `POST close`, as merge goes: asked first,
+  naming each PR. Merge of several asks the same way and merges them one after another.
+  Each PR's outcome is a line under the table, and a toast when the table hasn't the
+  focus (the action came from Detail).
+- **Narrow bars.** Buttons go in a row, then in a row with short captions, then two to a
+  line, then one to a line.
+
 ## 4. Versions and schema
 
 - `PROTOCOL_VERSION`: 17 (#110 took 16). The

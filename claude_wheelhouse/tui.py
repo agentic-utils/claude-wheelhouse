@@ -61,7 +61,7 @@ from textual.widgets import (
 )
 
 from . import api, callout, columns, docblocks, docroots, emoji, features, models, ordering, prs, subagents, transcript, transcript_usage, tutorial, whatsnew
-from .rows import KIND_COLOUR, RowTips, plain
+from .rows import KIND_COLOUR, RowTips, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import AWAITING_NOTES, HOLD_EXPIRED, NUDGE_TOKENS, SHELL_OPENING
@@ -77,7 +77,6 @@ from .unsent import Unsent
 MATRIX = "#00ff41"
 OFF = "#666666"   # a disabled button's dark grey, under black text (#107)
 SHIMMER = ["#ff2a6d", "#ff7b00", "#ffd300", "#05d9e8", "#7b61ff", "#d300c5"]
-MARKED = Style(bgcolor="#3a1060")   # rows picked to close together
 DECISION = "bold #b967ff"   # an unseen decision: noticeable, not urgent
 UNREAD = ("unseen", "new", "updated")   # a decision or doc the person hasn't looked at yet, in DECISION
 STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "#05d9e8",
@@ -1510,14 +1509,6 @@ class ItemList(SinkList):
             self.anchor = self.cursor_key()
         self.go(lambda i, n: i + step)
         self.extend_to(self.cursor_key())
-
-
-def marked(cells: tuple) -> tuple:
-    """A marked row's cells, on a background distinct from the cursor's."""
-    out = tuple(c.copy() if isinstance(c, Text) else Text(str(c)) for c in cells)
-    for c in out:   # the base style, which the table also pads the cell with
-        c.style = (Style.parse(c.style) if isinstance(c.style, str) else c.style) + MARKED
-    return out
 
 
 class Compose(TextArea):
@@ -3780,6 +3771,7 @@ class WheelhouseApp(App):
     .slot.-swap-target > * {{ outline: round #05d9e8; }}   /* where a pane dragged by its title would go: teal */
     #items {{ height: 1fr; min-height: 3; }}
     #detail-scroll {{ height: 1fr; min-height: 3; scrollbar-gutter: stable; }}   /* its width the same, scrolling or not */
+    #detail-more, #detail-bar {{ height: auto; }}
     #docview-scroll {{ height: 1fr; scrollbar-gutter: stable; }}
     /* a doc's thread under it in Detail (split), its share kept as layout.doc-thread; its tabs (tabbed) */
     #detail-thread-scroll, #docview-thread-scroll {{ height: 35%; min-height: 3; }}
@@ -4036,6 +4028,8 @@ class WheelhouseApp(App):
                     yield hidden(DocTabs(id="detail-tabs"))   # a doc's, tabbed (DocPanes)
                     with ConversationScroll(id="detail-scroll"):
                         yield Transcript(NOTHING_SELECTED, id="detail")
+                        yield Vertical(id="detail-more")   # a module's part, scrolling with the thread (detail_parts)
+                    yield Vertical(id="detail-bar")   # a module's part, under it: its buttons (detail_parts)
                     yield hidden(Splitter("editor", "#detail-editor", "#detail-scroll", "y", label="editing"))
                     yield DocEditor("#detail", "#detail-pane", self.detail_doc_sends_now, self.paint_detail,
                                     id="detail-editor")
@@ -5107,6 +5101,8 @@ class WheelhouseApp(App):
             blocks = [("note", self.detail_note or NOTHING_SELECTED)]
         if editor is not None:
             blocks = editor.shown_in(blocks, self.detail.doc_path, gone)
+        for part in self.query("#detail-more, #detail-bar"):   # a pane's parts go with an item, or a note: not a doc's
+            part.display = not (shown or self.viewing or doc)
         if not agent and not isinstance(self.screen, ThreadView):   # which may follow one itself
             self.client.unfollow_agent()
         # a conversation, the session's or a subagent's, shows its newest turn, and follows it
@@ -5219,9 +5215,25 @@ class WheelhouseApp(App):
         taken = {w.id for w in self.screen.query("*") if w.id}
         for place in self.query(".slot"):
             await place.mount_all(list(self.hosted(place.name, taken)))
+        await self.mount_detail_parts()
         self.place_panes(kept_slots(self.client.setting(SLOTS_KEY)))
         self.collapse()
         self.fit_panes()
+
+    async def mount_detail_parts(self) -> None:
+        """Each pane's parts of the Detail pane (api, `detail_parts`): a "body" scrolling under
+        the thread, a "bar" under that. The pane shows and hides them; Detail hides them all
+        while it shows a doc or a conversation (paint_detail). One that raises gets a toast."""
+        for widget in list(self.panes):
+            if not callable(parts := getattr(widget, "detail_parts", None)):
+                continue
+            try:
+                got = parts() or {}
+                for where in ("body", "bar"):
+                    if (part := got.get(where)) is not None:
+                        await self.query_one("#detail-more" if where == "body" else "#detail-bar").mount(part)
+            except Exception as e:
+                self.notify(f"{widget.id}: its Detail parts: {type(e).__name__}: {e}", severity="error")
 
     # the panes' places (.plan/modules.md, "Swapping panes", D116)
 

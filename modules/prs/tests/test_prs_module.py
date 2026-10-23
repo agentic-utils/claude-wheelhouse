@@ -275,3 +275,159 @@ def test_review_targets_are_remembered_most_recent_first(past, target, want, des
 ])
 def test_review_targets_as_kept(raw, want, desc):
     assert pane.targets(raw) == want, desc
+
+
+# #146: Close
+
+@pytest.mark.parametrize("answer, want, states, desc", [
+    ((0, ""), {"closed": True}, {URL.format(1): "closed"}, "closed: its item marked closed"),
+    ((1, "X Could not close the pull request: not allowed"), {"error": "X Could not close the pull request: not allowed"},
+     {}, "gh's refusal, its last line, the item left as it was"),
+])
+def test_close_runs_gh_pr_close_on_the_url(tmp_path, answer, want, states, desc):
+    f = Fake(tmp_path, [item(1)])
+    calls = []
+    got = fetch.Fetcher(f.ctx, lambda argv: calls.append(argv) or (answer[0], "", answer[1]), lambda: f.now).close(URL.format(1))
+    assert got == want and f.states == states, desc
+    assert calls == [["gh", "pr", "close", "--", URL.format(1)]], f"{desc}: the URL after --"
+
+
+def test_the_close_route_takes_a_pr_url_only(tmp_path, monkeypatch):
+    f = Fake(tmp_path)
+    calls = []
+    monkeypatch.setattr(pane, "RUNNER", lambda argv: calls.append(argv) or (0, "", ""))
+    route = next(r for r in pane.routes(f.ctx) if r.path == "close")
+    assert route.method == "POST" and route.handler(api.Call({}, {}, {"url": URL.format(3)})) == {"closed": True}
+    for body in ({}, {"url": "--delete-branch"}, {"url": URL.format(3) + "/files"}, {"url": 7}):
+        with pytest.raises(api.Refused):
+            route.handler(api.Call({}, {}, body))
+    assert len(calls) == 1, "nothing run for a body without a PR"
+
+
+# #145: a PR's detail
+
+def commit(oid, at="2026-10-22T10:00:00Z"):
+    return {"__typename": "PullRequestCommit", "commit": {"abbreviatedOid": oid, "messageHeadline": f"change {oid}",
+                                                          "committedDate": at}}
+
+
+@pytest.mark.parametrize("node_, want, desc", [
+    ({"__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "https://x/1",
+      "checkSuite": {"workflowRun": {"workflow": {"name": "CI"}}}}, {"name": "CI / test", "url": "https://x/1", "state": "failing"},
+     "a failed run, named with its workflow"),
+    ({"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "TIMED_OUT"},
+     {"name": "lint", "url": "", "state": "failing"}, "timed out counts as failing"),
+    ({"__typename": "CheckRun", "name": "e2e", "status": "IN_PROGRESS", "conclusion": None},
+     {"name": "e2e", "url": "", "state": "running"}, "in progress"),
+    ({"__typename": "CheckRun", "name": "docs", "status": "COMPLETED", "conclusion": "SKIPPED"},
+     {"name": "docs", "url": "", "state": "passed"}, "skipped counts as passed"),
+    ({"__typename": "StatusContext", "context": "ci/circle", "state": "ERROR", "targetUrl": "https://c/2"},
+     {"name": "ci/circle", "url": "https://c/2", "state": "failing"}, "a status in error"),
+    ({"__typename": "StatusContext", "context": "deploy", "state": "PENDING"},
+     {"name": "deploy", "url": "", "state": "running"}, "a pending status"),
+    ({"__typename": "Other"}, None, "anything else: none"),
+])
+def test_a_check_as_the_detail_reads_it(node_, want, desc):
+    assert fetch.check(node_) == want, desc
+
+
+@pytest.mark.parametrize("node_, want, desc", [
+    ({"__typename": "PullRequestReview", "author": {"login": "sam"}, "submittedAt": "t", "state": "APPROVED"},
+     {"at": "t", "what": "sam approved"}, "an approval"),
+    ({"__typename": "PullRequestReview", "author": None, "submittedAt": "t", "state": "CHANGES_REQUESTED"},
+     {"at": "t", "what": "someone asked for changes"}, "a deleted user's review"),
+    ({"__typename": "ReviewRequestedEvent", "createdAt": "t", "actor": {"login": "doug"}, "requestedReviewer": {"name": "eng"}},
+     {"at": "t", "what": "doug asked eng for a review"}, "a team asked"),
+    ({"__typename": "HeadRefForcePushedEvent", "createdAt": "t", "actor": {"login": "doug"}},
+     {"at": "t", "what": "doug force-pushed"}, "a force-push"),
+    ({"__typename": "IssueComment", "createdAt": "t", "author": {"login": "sam"}, "body": "x"},
+     {"at": "t", "what": "sam commented"}, "a comment, a line in the history"),
+    ({"__typename": "LabeledEvent", "createdAt": "t"}, None, "one it doesn't show"),
+])
+def test_a_timeline_entry_as_the_history_reads_it(node_, want, desc):
+    assert fetch.event(node_) == want, desc
+
+
+def test_the_detail_keeps_comments_that_say_something_and_orders_checks_failing_first():
+    said = [{"__typename": "IssueComment", "author": {"login": f"u{i}"}, "createdAt": "t", "body": f"c{i}", "url": "u"}
+            for i in range(fetch.COMMENTS + 2)]
+    data = {"repository": {"pullRequest": {"body": None, "timelineItems": {"nodes": [
+        commit("a"), {"__typename": "PullRequestReview", "author": {"login": "sam"}, "submittedAt": "t",
+                      "state": "APPROVED", "body": "  "}, *said]},
+        "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": [
+            {"__typename": "StatusContext", "context": "ok", "state": "SUCCESS"},
+            {"__typename": "StatusContext", "context": "bad", "state": "FAILURE"}]}}}}]}}}}
+    got = fetch.detail(data)
+    assert got["body"] == "" and [c["name"] for c in got["checks"]] == ["bad", "ok"], "failing first"
+    assert [c["body"] for c in got["comments"]] == [f"c{i}" for i in range(2, fetch.COMMENTS + 2)], \
+        "the newest COMMENTS, an empty review left out"
+    with pytest.raises(RuntimeError):
+        fetch.detail({"repository": {"pullRequest": None}})
+
+
+def test_a_prs_detail_is_kept_and_fetched_again_when_due(tmp_path):
+    f = Fake(tmp_path)
+    calls = []
+    answer = {"data": {"repository": {"pullRequest": {"body": "b"}}}}
+
+    def run(argv):
+        calls.append(argv)
+        return 0, json.dumps(answer), ""
+    fetcher = fetch.Fetcher(f.ctx, run, lambda: f.now)
+    assert fetcher.detail(URL.format(1), False)["body"] == "b"
+    assert calls[0][-3:] == ["name=wheelhouse", "-F", "number=1"] and "-f" in calls[0], "the PR's as variables, not in the query"
+    for step, fresh, n, desc in ((5, True, 1, "r within DETAIL_GAP: kept"), (fetch.DETAIL_GAP, True, 2, "r past it: fetched"),
+                                 (60, False, 2, "a pick within DETAIL_EVERY: kept"),
+                                 (fetch.DETAIL_EVERY, False, 3, "past it: fetched")):
+        f.now += step
+        fetcher.detail(URL.format(1), fresh)
+        assert len(calls) == n, desc
+    fetcher.runner = lambda argv: (1, "", "error connecting to api.github.com")
+    f.now += fetch.DETAIL_EVERY
+    got = fetcher.detail(URL.format(1), True)
+    assert got["error"] == "error connecting to api.github.com" and got["body"] == "b", "a failure keeps what was fetched"
+    with pytest.raises(api.Refused):
+        fetcher.detail("--paginate", False)
+
+
+@pytest.mark.parametrize("events, want, desc", [
+    ([commit("a"), commit("b"), commit("c")], [("2026-10-22T10:00:00Z", "3 commits, the last c change c")], "a run, one line"),
+    ([commit("a"), {"at": "t", "what": "sam approved"}, commit("b")],
+     [("2026-10-22T10:00:00Z", "a change a"), ("t", "sam approved"), ("2026-10-22T10:00:00Z", "b change b")], "split by an event"),
+])
+def test_history_folds_a_run_of_commits(events, want, desc):
+    events = [fetch.event(e) if "__typename" in e else e for e in events]
+    assert pane.history(events) == want, desc
+
+
+@pytest.mark.parametrize("d, has, lacks, desc", [
+    (None, ["Fetching its checks"], ["Description"], "not fetched yet"),
+    ({"body": "[@click=app.quit]x[/] \x1b[31mred", "checks": [], "history": [], "comments": []},
+     ["[@click=app.quit]x[/] [31mred", "Checks: none", "Nothing yet."], ["\x1b"], "markup as written, no escape codes"),
+    ({"error": "gh isn't logged in"}, ["Couldn't fetch its detail: gh isn't logged in"], ["Description"], "a failure, nothing before"),
+    ({"body": "", "checks": [{"name": "CI / test", "url": "javascript:x", "state": "failing"},
+                             {"name": "lint", "url": "", "state": "passed"}], "history": [],
+      "comments": [{"author": "sam", "at": "2026-10-22T14:03:00Z", "body": "x" * (pane.COMMENT + 50), "url": ""}]},
+     ["Checks: 1 failing, 1 passed", "✗ CI / test", "No description.", "sam · 22 Oct 14:03Z", "x…"], ["lint"],
+     "failing checks by name, a long comment cut"),
+])
+def test_the_detail_text(d, has, lacks, desc):
+    r = fetch.row(node(1))
+    text = pane.detail_text(r, d, linked=False)
+    for s in has:
+        assert s in text.plain, f"{desc}: {s!r} in {text.plain!r}"
+    for s in lacks:
+        assert s not in text.plain, f"{desc}: {s!r} not in {text.plain!r}"
+    links = [span.style.meta.get("@click") for span in text.spans if hasattr(span.style, "meta") and span.style.meta]
+    assert not any("javascript" in (lnk or "") for lnk in links), f"{desc}: a link only to a web page"
+
+
+@pytest.mark.parametrize("room, want, layout, desc", [
+    (62, ["Open", "Merge", "Request review", "Close"], "", "room: their own captions"),
+    (40, ["Open", "Merge", "Review", "Close"], "", "a cell short of their own: the short ones"),
+    (17, ["Open", "Merge", "Review", "Close"], "grid", "too narrow for a row: two to a line, short"),
+    (16, ["Open", "Merge", "Review", "Close"], "stacked", "too narrow for two: one to a line"),
+])
+def test_captions_fit_the_bar(room, want, layout, desc):
+    entries = [(i, False, c) for i, c, _ in pane.ACTIONS]
+    assert pane.captions(entries, room) == (want, layout), desc

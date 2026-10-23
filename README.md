@@ -338,15 +338,26 @@ session.
   browser. Detail always shows what you picked last, in the inbox or here: the other list
   highlights it too if it lists it, and otherwise hides its highlight until you click, press
   `Enter` or move in it again. A PR no session made isn't an item, so picking it leaves
-  nothing selected and Detail says so. Without `gh`, or not logged in, the pane says so. Under the table, the PR
-  selected has three buttons, which a right-click on its row gives as a menu too: **Open**
-  (the browser); **Merge**, asked first, with `gh pr merge` the way the repo allows (a
-  merge commit where it can, else squash, else rebase), saying under the table what
-  stood in its way if it didn't (a review required, conflicts, failing checks, as `gh`
-  says); and **Request review**, which asks for a Slack channel or name (`#channel`,
-  `@name`, past ones offered most recent first) and sends the session that made the PR a
-  message asking it to post the request on Slack. For a PR no session made (`PRs · all`,
-  with no session selected) it is greyed: there is no session to ask.
+  nothing selected and Detail says why. Without `gh`, or not logged in, the pane says so.
+  Mark PRs to act on several at once, as in the inbox: `Ctrl+click` toggles one,
+  `Shift+click` (or `Alt+click`) takes the range, `Space` and `Shift+Up`/`Shift+Down` do
+  the same from the keyboard, and a plain click or `Esc` drops the marks; the pane's
+  bottom border counts them. Under the table, the PRs marked (or else the one selected)
+  have four buttons, which a right-click on a row gives as a menu too (for every PR marked
+  if the row is one of them, else for that row alone): **Open** (the browser); **Merge**,
+  asked first, with `gh pr merge` the way the repo allows (a merge commit where it can,
+  else squash, else rebase); **Request review**, which asks once for a Slack channel or
+  name (`#channel`, `@name`, past ones offered most recent first) and sends each PR's
+  session a message asking it to post the request on Slack (greyed, or the PR skipped and
+  said so, where no session made it); and **Close**, asked first, with `gh pr close`. Merge
+  and Close name every PR in their question, and say under the table what came of each:
+  done, or what stood in its way (a review required, conflicts, failing checks, as `gh`
+  says). While Detail shows a PR the pane lists (a session's PR item, or one no session
+  made, picked here), it has the same buttons for that PR, and under its thread the PR's
+  checks (each failing one by name, a link to its run), description, history (commits,
+  a run of them on one line, reviews and events) and comments, all as plain text. That
+  detail is fetched in the background and kept for two minutes, fetched again sooner when
+  the PR changes, and on `r` in the PRs pane.
 - **The Decisions pane.** Under the inbox, the design decisions (ADRs) of every repo a session works
   in: each `NNNN-*.md` file in the repo's `docs/adr`, or in the directories a session there
   named with `set_doc_dirs` instead (`.plan/`, say, only if named), read again every 10
@@ -547,7 +558,7 @@ Text: drag the mouse over the conversation or a thread to select part of it (sho
 on white), double-click to select a word, `Ctrl+A` in the answer box selects its text (in the item list it marks the finished rows; in a doc opened
 full screen it selects the whole doc), and `Ctrl+C` copies the selection (through the terminal, which Windows Terminal supports). Right-click on a session in the session list selects it and opens a menu of
 its buttons (greyed as they are under the list; Esc or a click outside closes it); on a PR in the PRs pane, a menu of its
-actions. Elsewhere right-click does as a
+actions (of every PR marked, if it is one). Elsewhere right-click does as a
 terminal's does: it copies the selection, or with nothing selected pastes the clipboard
 into the answer box under the pointer (or the focused one). Under WSL the paste reads the
 Windows clipboard through PowerShell, so it takes most of a second; elsewhere it pastes the
