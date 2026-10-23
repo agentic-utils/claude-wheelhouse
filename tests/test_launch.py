@@ -269,7 +269,8 @@ def test_every_launch_scrubs_a_parent_sessions_environment(path, desc, store, si
     for key, value in PARENT.items():
         monkeypatch.setenv(key, value)
     env = launched_env(path, store, sid, monkeypatch, tmp_path)
-    assert not [k for k in env if k.startswith("CLAUDE") and k != "CLAUDE_CONFIG_DIR"], desc
+    assert not [k for k in env if k.startswith("CLAUDE") and k not in ("CLAUDE_CONFIG_DIR", "CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS")], desc
+    assert env.get("CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS", "150000") == "150000", f"{desc}: a tab idle-compacts at the keepalive's line"
     assert env["CLAUDE_CONFIG_DIR"] == "/home/u/.claude-alt" and env["PATH"] == "/usr/bin", desc
 
 

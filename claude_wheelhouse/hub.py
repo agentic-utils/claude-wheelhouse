@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import adopt, api, features, fork, launch, liveness, models, plan_usage, prs, subagents, transcript, transcript_usage, tutorial
+from . import adopt, api, features, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
 from .docroots import DOC_CAP
 from .host import AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, NO_NOTES, keepalive_body, waits_on_person
 from .store import COMPACT_QUESTION, DISMISSABLE, PRS_SINCE, STATUSES, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
@@ -1053,6 +1053,31 @@ class Hub:
         s = self.store.session(follower.sid)
         if s is not None and (runner(s) == "tab" or s["shell"]):
             transcript_usage.carry(self.store, follower.sid, follower.snap)
+
+    def set_pr_states(self, states: dict[str, str]) -> int:
+        """GitHub's states from the PRs pane's fetch (Store.set_pr_states), and the PR merged
+        step for each item that has just turned merged. Returns the items changed."""
+        before = {(i["session_id"], i["ref"]): i["status"] for i in self.store.pr_items()}
+        changed = self.store.set_pr_states(states)
+        if changed:
+            for i in self.store.pr_items():
+                if i["status"] == "merged" and before.get((i["session_id"], i["ref"]), "merged") != "merged":
+                    self.pr_merged(i["session_id"], i["ref"], i["url"])
+        return changed
+
+    def pr_merged(self, sid: str, ref: str, url: str) -> None:
+        """A session's PR has merged: told at once while it runs (a notice, never held behind
+        its queued answers), else held for its On resume message, never a cold start for a
+        notice (steps.hold)."""
+        s = self.store.session(sid)
+        if s is None:
+            return
+        pr = steps.pr_label(url, ref)
+        if self.running(sid) and not s["parked"]:
+            if text := steps.message(self.store, "pr_merged", mark=False, pr=pr, ref=ref):
+                self.store.notice(sid, text)
+        else:
+            steps.hold(self.store, sid, pr, ref)
 
     def keep_warm(self, at: float | None = None) -> None:
         """Each tab session's keepalive, as an SDK host sends its own (host.keepalive_due),

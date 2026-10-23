@@ -125,7 +125,8 @@ the Session steps dialog and the first-press dialog say so plainly instead.
 **PR merged and a parked session.** Telling a parked or stopped session means starting it,
 which writes its whole context to the cache cold: a 300k session costs about a full cold
 read for the one notice. So a parked session isn't started for it. The announcement waits,
-kept on the session, and joins its On resume message ("while you were away, PR108 merged").
+kept in the settings table as `step.held.<session id>` (no schema change), and joins its
+resume message ("while you were away, PR108 merged").
 A live session is told at once, by notice or the host's turn. The worktree add-on asks the
 session to remove the PR's worktree and delete its branch if both are its own and nothing
 in them is uncommitted, and to say so on the PR item. It's on by default, per Doug: the

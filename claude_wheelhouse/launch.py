@@ -22,9 +22,10 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
-from . import features, fork, liveness, models
+from . import features, fork, liveness, models, steps
 from .transcript import NO_BRIEF
 from .store import Store, db_path, default_runner, now, runner
 
@@ -81,6 +82,11 @@ JOINED_TEXT = ("You have just been opened in the wheelhouse, mid-conversation. C
                "already waiting on the person for and the tasks you have running (skip any already "
                "there), and set your synopsis. Then stop: don't resume other work because of this message.")
 
+
+# A tab idle-compacts past this many tokens after about 54 quiet minutes (Claude Code's own):
+# host.KEEPALIVE_TOKENS, so the 50 minute keepalive holds it off while the window lasts, and
+# once the window ends it compacts with its cache still warm (.plan/session-steps.md)
+IDLE_COMPACT_TOKENS = 150_000
 
 CMD_META = set('&|<>^%"')
 
@@ -158,7 +164,20 @@ def transcript_exists(sid: str, projects: Path = Path.home() / ".claude/projects
     return any(projects.glob(f"*/{sid}.jsonl"))
 
 
-def claude_argv(session, *, python: str, resume: bool) -> list[str]:
+def away_seconds(sid: str, projects: Path = Path.home() / ".claude/projects") -> float | None:
+    """How long since the session's transcript was last written: its last turn. None
+    without one."""
+    stamps = [p.stat().st_mtime for p in projects.glob(f"*/{sid}.jsonl")]
+    return time.time() - max(stamps) if stamps else None
+
+
+def joined_text(store: Store, session) -> str:
+    """What a resumed session is told: JOINED_TEXT, with On resume after an hour or more
+    away (or parked) and any PR merged meanwhile (steps.resumed)."""
+    return steps.resumed(store, session["id"], away_seconds(session["id"]), bool(session["parked"]), JOINED_TEXT)
+
+
+def claude_argv(session, *, python: str, resume: bool, store: Store | None = None) -> list[str]:
     mcp = {"mcpServers": {"wheelhouse": {
         "command": python, "args": ["-m", "claude_wheelhouse", "mcp"],
         "env": {"WHEELHOUSE_SESSION_ID": session["id"], "WHEELHOUSE_DB": str(db_path())},
@@ -181,15 +200,22 @@ def claude_argv(session, *, python: str, resume: bool) -> list[str]:
     if session["name"]:
         argv += ["-n", session["name"]]
     if not resume:
-        argv.append(opening_prompt(session))
+        argv.append(opening_prompt(session, store))
     return argv
 
 
-def opening_prompt(session) -> str:
+def opening_prompt(session, store: Store | None = None) -> str:
+    """A new session's first prompt: its ticket and brief, then, with store, the Session
+    start step (the last handoff left in its directory, if that add-on is on)."""
     lines = []
     if session["ticket"]:
         lines.append(f"Ticket: {session['ticket']}")
     lines.append(session["brief"] or NO_BRIEF)
+    if store is not None and steps.switch(store, "session_start", "handoff"):
+        live = {s["id"] for s in store.sessions()}
+        if last := steps.message(store, "session_start", mark=False,
+                                 last=steps.last_handoff(session["cwd"], skip=session["id"], live=live)):
+            lines.append(last)
     prompt = "\n\n".join(lines)
     # claude reads a leading "-" as an option ("unknown option"), e.g. a pasted bullet list
     return f"Brief:\n{prompt}" if prompt.startswith("-") else prompt
@@ -329,7 +355,7 @@ def open_host(store: Store, sid: str, notice: bool = True) -> None:
                        cwd=session["cwd"], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                        env=clean_env(WHEELHOUSE_DB=str(store.path)), check=True)
     if notice and resuming:
-        store.notice(sid, JOINED_TEXT)
+        store.notice(sid, joined_text(store, session))
 
 
 def open_tab(store: Store, sid: str, notice: bool = True) -> None:
@@ -352,7 +378,7 @@ def open_tab(store: Store, sid: str, notice: bool = True) -> None:
         subprocess.Popen(argv, cwd=None if mac else "/mnt/c", stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                          start_new_session=True, env=clean_env())
     if notice and transcript_exists(sid):   # resuming: the session takes seconds to start, the notice waits
-        store.notice(sid, JOINED_TEXT)
+        store.notice(sid, joined_text(store, session))
 
 
 def run(sid: str) -> None:
@@ -361,10 +387,11 @@ def run(sid: str) -> None:
     session = store.session(sid)
     if session is None:
         sys.exit(f"claude-wheelhouse: no session {sid} (ended?)")
-    env = clean_env(WHEELHOUSE_SESSION_ID=sid, WHEELHOUSE_DB=str(store.path), WHEELHOUSE_PYTHON=sys.executable)
+    env = clean_env(WHEELHOUSE_SESSION_ID=sid, WHEELHOUSE_DB=str(store.path), WHEELHOUSE_PYTHON=sys.executable,
+                    CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS=str(IDLE_COMPACT_TOKENS))
     os.chdir(session["cwd"])
     resume = transcript_exists(sid)
-    argv = claude_argv(session, python=sys.executable, resume=resume)
+    argv = claude_argv(session, python=sys.executable, resume=resume, store=store)
     with open(store.path.parent / "launch.log", "a") as log:   # a tab that dies on start leaves this behind
         print(now(), sid, "resume" if resume else "new", session["cwd"], file=log)
     # exec keeps this pid, so it is Claude's: registering now leaves no window (trust prompt,

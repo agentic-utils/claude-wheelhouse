@@ -10,6 +10,7 @@ made in the app (the settings table, step.<event>.<switch>); then the default. S
 turns every add-on off at once. Never imports Textual.
 """
 
+import json
 import os
 import time
 from pathlib import Path
@@ -75,6 +76,7 @@ OFFERED = (("handoff", "keep a handoff for each session (what was done, decision
            ("cleanup", "when its PR merges, remove the PR's worktree and branch if they're its own and clean",
             (("pr_merged", "cleanup"),)))
 
+RESUME_AFTER = 3600   # seconds away before a resume runs On resume: a quick relaunch costs no turn
 HANDOFF_CAP = 16 * 1024   # bytes: write_handoff refuses more
 HANDOFF_DAYS = 30   # a handoff untouched this long is removed when the hub starts
 
@@ -159,11 +161,13 @@ def enabled(event: str, sdk: bool) -> bool:
     return sdk or event not in SDK_ONLY
 
 
-def message(store: Store, event: str, mechanics: str = "", sep: str = "\n\n", **fields: str) -> str:
+def message(store: Store, event: str, mechanics: str = "", sep: str = "\n\n", mark: bool = True,
+            **fields: str) -> str:
     """The step's message: the announce (if on), then each add-on that's on, then the
     mechanics the event needs (the keep ask, end_session). An add-on whose field is empty (no
     handoff to show) is left out. Starts [wheelhouse], complete on its own; empty if there's
-    nothing to say. sep: between the parts (a tab's monitor prints one line)."""
+    nothing to say. sep: between the parts (a tab's monitor prints one line). mark=False
+    leaves [wheelhouse] off, for a notice, which gets it as it's delivered."""
     parts = []
     if event in ANNOUNCE and switch(store, event, "announce"):
         parts.append(ANNOUNCE[event].format(**fields))
@@ -175,13 +179,56 @@ def message(store: Store, event: str, mechanics: str = "", sep: str = "\n\n", **
     if mechanics:
         parts.append(mechanics)
     body = sep.join(p.strip() for p in parts if p.strip())
-    return f"[wheelhouse] {body}" if body else ""
+    return f"[wheelhouse] {body}" if body and mark else body
 
 
 def wants_handoff(store: Store, event: str) -> bool:
     """Whether the step asks for a handoff to be written (checked afterwards: write_handoff
     called since it was sent)."""
     return event in ("before_compact", "before_forget") and switch(store, event, "handoff")
+
+
+# PR merged on a session that isn't running: held, never a cold start for a notice, and
+# joined to its On resume message. Kept in the settings table, so no schema change
+
+
+def held_key(sid: str) -> str:
+    return f"step.held.{sid}"
+
+
+def hold(store: Store, sid: str, pr: str, ref: str) -> None:
+    """A PR merged while the session wasn't running, kept for its resume."""
+    held = json.loads(store.setting(held_key(sid)) or "[]")
+    if [pr, ref] not in held:
+        store.set_setting(held_key(sid), json.dumps([*held, [pr, ref]]))
+
+
+def take_held(store: Store, sid: str) -> list[tuple[str, str]]:
+    """The PRs held for a session, as (pr, ref), once: taken, they're gone."""
+    if (raw := store.setting(held_key(sid))) is None:
+        return []
+    store.clear_setting(held_key(sid))
+    return [tuple(p) for p in json.loads(raw)]
+
+
+def pr_label(url: str, ref: str) -> str:
+    """How a PR is named to its session: repo#number (ref), or the ref alone."""
+    from .prs import parse
+    got = parse(url)
+    return f"{got[1]}#{got[2]} ({ref})" if got else ref
+
+
+def resumed(store: Store, sid: str, away_seconds: float | None, parked: bool, joined: str) -> str:
+    """What a resumed session is told, without the [wheelhouse] mark: joined (JOINED_TEXT),
+    then On resume after RESUME_AFTER or more away (or parked), then each PR merged while it
+    was away. joined alone otherwise."""
+    parts = [joined]
+    if parked or (away_seconds is not None and away_seconds >= RESUME_AFTER):
+        parts.append(message(store, "on_resume", mark=False, away=away(away_seconds or 0),
+                             handoff=handoff_field(sid)))
+    for pr, ref in take_held(store, sid):
+        parts.append(message(store, "pr_merged", mark=False, pr=pr, ref=ref))
+    return "\n\n".join(p for p in parts if p)
 
 
 # the handoff file

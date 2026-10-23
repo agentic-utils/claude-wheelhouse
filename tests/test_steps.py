@@ -162,3 +162,55 @@ def test_prune_handoffs(store, sid):
     assert steps.prune_handoffs(now) == 0 and path.is_file(), "a fresh one stays"
     os.utime(path, (now - 31 * 86400, now - 31 * 86400))
     assert steps.prune_handoffs(now) == 1 and not path.exists(), "untouched 30 days: removed"
+
+
+@pytest.mark.parametrize("away, parked, held, has, lacks, desc", [
+    (2 * 3600, False, [], ["JOINED", "away 2 hours"], ["has merged"], "two hours away: On resume"),
+    (600, False, [], ["JOINED"], ["away"], "a quick relaunch: no extra turn"),
+    (600, True, [], ["JOINED", "away 10 minutes"], [], "parked: On resume whatever the time"),
+    (600, False, [("repo#5 (PR5)", "PR5")], ["JOINED", "repo#5 (PR5) has merged"], ["away"], "a held PR joins it"),
+])
+def test_resumed(store, sid, away, parked, held, has, lacks, desc):
+    store.set_setting(steps.CHOSEN, "1")
+    for pr, ref in held:
+        steps.hold(store, sid, pr, ref)
+    text = steps.resumed(store, sid, away, parked, "JOINED")
+    assert all(h in text for h in has) and not any(x in text for x in lacks), f"{desc}: {text!r}"
+    assert steps.take_held(store, sid) == [], f"{desc}: held PRs are told once"
+
+
+@pytest.mark.parametrize("running, parked, told, desc", [
+    (True, False, True, "running: told at once, as a notice"),
+    (False, False, False, "not running: held for its resume"),
+    (True, True, False, "parked: held, never a cold start"),
+])
+def test_pr_merged_is_told_or_held(store, sid, running, parked, told, desc):
+    from claude_wheelhouse.hub import Hub
+    hub = Hub(store)
+    url = "https://github.com/o/repo/pull/5"
+    store.post_pr(sid, url, "fix it", None, False)
+    hub.statuses[sid] = "live" if running else "available"
+    if parked:
+        store.set_parked(sid, True)
+    hub.set_pr_states({url: "open"})
+    hub.set_pr_states({url: "merged"})
+    notices = [m["body"] for m in store.pending(sid) if m["kind"] == "notice"]
+    assert bool([n for n in notices if "repo#5 (PR5) has merged" in n]) is told, desc
+    assert (steps.take_held(store, sid) == [("repo#5 (PR5)", "PR5")]) is not told, desc
+    hub.set_pr_states({url: "merged"})
+    assert len(notices) <= 1 and steps.take_held(store, sid) == [], f"{desc}: once, not at every fetch"
+
+
+@pytest.mark.parametrize("on, has_last, desc", [
+    (False, False, "off by default: the brief alone"),
+    (True, True, "on: the last handoff in this directory follows the brief"),
+])
+def test_session_start(store, sid, tmp_path, on, has_last, desc):
+    from claude_wheelhouse import launch
+    gone = store.create_session(str(tmp_path), name="before")
+    steps.write_handoff(store, gone, "where I left it")
+    store.end(gone)
+    if on:
+        store.set_setting(steps.setting_key("session_start", "handoff"), "on")
+    prompt = launch.opening_prompt(store.session(sid), store)
+    assert prompt.startswith("Ticket: #7") and ("where I left it" in prompt) is has_last, desc

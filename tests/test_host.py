@@ -2168,7 +2168,7 @@ def test_the_keepalive_text(host, store, sid, monkeypatch, doubted, text, desc):
 
 
 @pytest.mark.parametrize("items, told, desc", [
-    ([], None, "nothing open: nothing said"),
+    ([], None, "nothing open: only that it was automatic"),
     ([("task", "running", "build it"), ("task", "done", "old"), ("question", "open", "which db?"),
       ("agent", "running", "explore")],
      "these items are still open in the wheelhouse. Keep them current with update_item; correct any that's "
@@ -2181,4 +2181,43 @@ def test_a_compaction_is_followed_by_the_open_items_once(host, store, sid, items
     finish_at(host, 60_000, compacted=True)
     finish_at(host, 60_000)
     notices = [m["body"] for m in store.pending(sid) if m["kind"] == "notice"]
-    assert notices == ([f"After the compaction, {told}"] if told else []), desc
+    auto = "This compaction was automatic."   # not the host's /compact, and no transcript in the test
+    assert notices == ([f"{auto}\n\nAfter the compaction, {told}"] if told else [auto]), desc
+
+
+@pytest.mark.parametrize("state, due, desc", [
+    ({}, True, "quiet 8 hours, warm, big and waiting on an open question: compact it"),
+    ({"quiet": 7 * H}, False, "still within the keepalive's window"),
+    ({"last": 61 * 60}, False, "no turn within the hour: its cache is cold, compacting saves nothing"),
+    ({"tokens": 100_000}, False, "too small to have been kept warm"),
+    ({"waits": False}, False, "waiting on nobody: never kept warm, left as it was"),
+    ({"done": True}, False, "already compacted for this quiet"),
+    ({"compacted": True}, False, "just compacted"),
+])
+def test_cold_due(host, store, sid, state, due, desc):
+    at = 100 * H
+    if state.get("waits", True):
+        store.post_item(sid, "question", "which?")
+    host.keepalive_for = 8 * H
+    host.tokens = state.get("tokens", 200_000)
+    host.last_turn = at - state.get("last", 50 * 60)
+    host.quiet_since = at - state.get("quiet", 8 * H)
+    host.cold_for = host.quiet_since if state.get("done") else None
+    host.compacted_last = state.get("compacted", False)
+    assert host.cold_due(at) is due, desc
+
+
+def test_the_8_hour_mark_asks_then_compacts_bare_without_notes(host, store, sid, monkeypatch):
+    """The Before Compact step with the 8 hours as its reason; no notes in COMPACT_TIMEOUT,
+    a bare /compact, since the alternative is a cold cache."""
+    store.post_item(sid, "question", "which?")
+    host.keepalive_for = 8 * H
+    host.tokens = 200_000
+    t = time.monotonic()
+    host.last_turn, host.quiet_since = t - 50 * 60, t - 8 * H
+    run(host.poll())
+    assert "quiet 8 hours" in host.client.queries[-1] and host.compact_nonce, "asked, the 8 hours its reason"
+    finish_at(host, 200_000)   # its turn ends with no keep block
+    host.compact_idle = time.monotonic() - host_mod.COMPACT_TIMEOUT - 1
+    run(host.poll())
+    assert host.client.queries[-1] == "/compact", "no notes: compacted bare"
