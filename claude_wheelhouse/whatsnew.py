@@ -205,6 +205,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("model-compact", UNRELEASED, ADVANCED, when="sdk",
             note="A session run in the wheelhouse can ask to be compacted itself, with the request_compact tool "
                  "and what it wants kept: it is compacted once its turn ends, as Compact would."),
+    Feature("model-park", UNRELEASED, ADVANCED, when="sdk",
+            note="A session run in the wheelhouse parks itself once its useful work is done, compacted first "
+                 "as Park with Compact would; one that skips the compaction says why, as a decision."),
 )
 
 

@@ -28,3 +28,10 @@ to a session: launch.protocol_file drops it. -->
   `request_compact(keep)`, `keep` being what to carry through (open threads, decisions,
   files, the next step). The wheelhouse compacts you once your turn ends, never during it,
   so end your turn soon after. One request at a time, and not again within 30 minutes.
+- Once you have come to the end of the useful work and are only waiting on the person, park
+  yourself, unasked, rather than keep the session alive: write your handoff notes into your
+  items, then call `park_session(keep=...)`. The wheelhouse compacts you once your turn ends,
+  with `keep` as what to carry through, and the session stops until the person unparks it.
+  If compacting is undesirable (for example, you expect the person to Stop & Forget the
+  session rather than carry on), call `park_session(compact=false, reason=...)` instead: the
+  person sees your reason as a decision.
