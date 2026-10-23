@@ -5213,9 +5213,11 @@ class WheelhouseApp(App):
                 box.border_title = Content(title) if title else None   # plain: the doc's own text
 
     def paint_compacting(self) -> None:
-        """Detail dimmed while it shows an item or the conversation of a session being compacted (#150)."""
-        sid = self.viewing or (self.selected[0] if self.selected else None)
-        self.detail.set_class(not self.shown_doc and sid in self.compacting(), "compacting")
+        """Detail dimmed while it shows a locked row's item or conversation (#150): not a new
+        item its session posted while compacting."""
+        key = f"{self.viewing}|" if self.viewing else "|".join((self.selected[0], self.selected[1] or "")) \
+            if self.selected else None
+        self.detail.set_class(not self.shown_doc and key in self.items_table.locked, "compacting")
 
     def paint_detail(self) -> None:
         self.paint_compacting()
