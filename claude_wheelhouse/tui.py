@@ -1372,8 +1372,9 @@ class ItemList(SinkList):
     last one toggled; Space and Shift+Up/Down do the same from the keyboard, for terminals
     that keep Shift+click for their own text selection. Ctrl+A marks the finished rows."""
 
-    # here only, not the app's: in an answer box Backspace and Delete edit the text (#64)
-    BINDINGS = [Binding("delete", "app.close_question", "Close", key_display="Del"),
+    # here only, not the app's: in an answer box Backspace and Delete edit the text (#64). Off
+    # the footer, as Alt+S is: ahead of the app's keys it pushed Relaunch all off at 100 columns (#135)
+    BINDINGS = [Binding("delete", "app.close_question", "Close", show=False, key_display="Del"),
                 Binding("backspace", "app.close_question", "Close", show=False),
                 Binding("space", "toggle_mark", "Mark", show=False),
                 Binding("ctrl+a", "app.mark_finished", "Mark finished", show=False),

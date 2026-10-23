@@ -5367,6 +5367,48 @@ async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, statu
             f"{desc}: New, Adopt and Relaunch all in the footer (at 80 it scrolls), got {drawn!r}"
 
 
+@pytest.mark.anyio
+async def test_the_footer_fits_at_100_columns_whatever_has_focus(store, sid, tmp_path, monkeypatch, every_module):
+    """#135: at 100 columns New, Adopt and Relaunch all are drawn whole, never under the
+    palette's key, at every Tab stop: each pane's list, the answer box, every button, and
+    the inbox with a row selected, whose Del Close stays off the footer for it."""
+    from textual.widgets._footer import FooterKey
+    from claude_wheelhouse import liveness
+    prs = pytest.importorskip("claude_wheelhouse_prs.pane", reason="installed without the prs module")
+    pytest.importorskip("claude_wheelhouse_design", reason="installed without the design module")
+    pr = {"number": 7, "title": "Change 7", "url": "https://github.com/two-inc/wheelhouse/pull/7", "isDraft": False,
+          "state": "OPEN", "updatedAt": "2026-10-20T10:00:00Z", "headRefName": "doug/7", "reviewDecision": None,
+          "mergeable": "MERGEABLE", "repository": {"nameWithOwner": "two-inc/wheelhouse"}, "commits": {"nodes": []}}
+    monkeypatch.setattr(prs, "RUNNER", lambda argv: (0, json.dumps({"data": {"search": {"nodes": [pr]}}}), ""))
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "docs" / "adr").mkdir(parents=True)
+    (tmp_path / "docs" / "adr" / "0001-a.md").write_text("# 1. A\n\nStatus: accepted\n")
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(100, 30)) as pilot:
+        for _ in range(30):
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+        await pick(app, pilot, sid)
+        stops = [w for w, _ in tui.tab_stops(app.screen)]
+        assert {"session-list", "items", "pr-list", "decision-list", "answer"} <= {w.id for w in stops}, \
+            f"every pane's stop: {[w.id for w in stops]}"
+        for widget in stops:
+            widget.focus()
+            if widget.id == "items":
+                widget.move_cursor(row=0)
+            await pilot.pause()
+            await pilot.pause()
+            name = widget.id or type(widget).__name__
+            shown = {(k.key_display, k.description) for k in app.screen.query(FooterKey)}
+            drawn = "".join(seg.text for seg in app.screen._compositor.render_strips()[app.screen.query_one(Footer).region.y])
+            for key in (("N", "New"), ("A", "Adopt"), ("Shift+L", "Relaunch all")):
+                assert key not in shown or " ".join(key) in drawn, f"{name}: {' '.join(key)} drawn whole, got {drawn!r}"
+            assert widget.id not in ("session-list", "items") or ("Shift+L", "Relaunch all") in shown, \
+                f"{name}: Relaunch all in the footer"
+
+
 def splitter(app, key: str) -> Splitter:
     return next(s for s in app.query(Splitter) if s.key == key)
 
