@@ -979,7 +979,12 @@ class Host:
         store remembers it (COMPACT_QUESTION), so a host started again, or the person leaving
         it, never brings a second. It closes, saying so, once the session is compacted or back
         under NUDGE_TOKENS; only back under does the next crossing ask again, so a compaction
-        that leaves it past NUDGE_TOKENS brings no new question until it has been under."""
+        that leaves it past NUDGE_TOKENS brings no new question until it has been under.
+        No SDK mode check here: a host runs only because SDK mode started it, and is never
+        told the mode (open_host passes no flag; features.sdk_enabled() here would read only
+        the environment and .env, so a mode switched on by --enable-sdk would read as off).
+        SDK mode switched off later can't reach a running host; the app hides the question's
+        Compact button then (SDK_BUTTONS), and the host goes at its next relaunch."""
         asked = [i for i in self.store.items(self.sid) if i["answer"] == COMPACT_QUESTION]
         under = tokens < NUDGE_TOKENS
         if not (asked or under or compacted):
