@@ -3,11 +3,12 @@ traffic light (.plan/pr-pane.md, part 3), plugged in through the module protocol
 (claude_wheelhouse.api) like any other module. Its daemon side, the route the pane asks, is
 fetch.py's: one `gh api graphql` call, cached in `<state dir>/prs.db`. The pane shows a PR
 item in the Detail pane (Context.show_item), any other PR as a card of its own, and opens a
-PR in the browser on Enter."""
+PR in the browser on Enter or a click on its card's link."""
 
 import importlib.metadata
 import time
 
+from rich.style import Style
 from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -73,11 +74,25 @@ def tip(r: dict) -> str:
     return f"{r['repo']} #{r['number']}: {r['title']}"
 
 
+def link(url: str) -> Text:
+    """A PR's URL as the card shows it (#139): without https://github.com/, and a click on any
+    of it opens the whole URL, on whichever line the card wraps it to: every segment carries
+    it (PrCard.action_open_pr), so none opens a fragment, as the terminal's own detection did."""
+    return Text(url.removeprefix("https://github.com/"), style=Style.from_meta({"@click": f"open_pr({url!r})"}))
+
+
+class PrCard(Static):
+    """The card under the table: a click on its link opens the PR (link)."""
+
+    def action_open_pr(self, url: str) -> None:
+        self.app.open_url(url)
+
+
 def card(r: dict) -> Text:
     """A PR that isn't an item, as the pane shows it: title, URL, branch, checks, review."""
     out = Text()
     out.append(r["title"] or f"PR {r['number']}", style="bold")
-    for label, value in (("URL", r["url"]), ("Branch", r["branch"] or "?"),
+    for label, value in (("URL", link(r["url"])), ("Branch", r["branch"] or "?"),
                          ("Checks", (r["checks"] or "none").lower()),
                          ("Review", (r["review"] or "none required").lower().replace("_", " ")),
                          ("Mergeable", (r["mergeable"] or "unknown").lower())):
@@ -135,7 +150,7 @@ class Prs(Vertical):
     def compose(self):
         yield PrTable(id="pr-list", cursor_type="row", zebra_stripes=False)
         yield Static(id="prs-note")
-        yield Static(id="prs-card")
+        yield PrCard(id="prs-card")
 
     def on_mount(self) -> None:
         self.query_one("#prs-card").display = False

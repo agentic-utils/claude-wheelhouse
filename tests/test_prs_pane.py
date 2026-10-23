@@ -189,3 +189,45 @@ async def test_an_empty_decisions_pane_leaves_the_inbox_its_room(store, sid, tmp
         assert inbox.region.height >= 2 * prs_pane.region.height, "the inbox has the room"
         column = app.query_one("#col-middle")
         assert sum(w.outer_size.height for w in column.children if w.display) == column.size.height, "no gap"
+
+
+LONG = "doug/a-repository-with-a-name-long-enough-to-wrap-in-any-card-the-pane-shows"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size, room", [
+    ((80, 24), True),    # the pane is 12x7 there by default: its card, at most half of it, shows no link
+    ((160, 40), False),
+])
+async def test_a_click_on_any_line_of_a_wrapped_link_opens_the_whole_url(store, sid, github, monkeypatch, size, room):
+    """#139: the card's URL shows without https://github.com/, and a click on its second line,
+    where the card wraps it, opens the whole URL, not the line's fragment."""
+    github.found.append(node(7000, repo=LONG, updated="2026-10-21T12:00:00Z"))
+    url = f"https://github.com/{LONG}/pull/7000"
+    if room:
+        store.set_setting("layout.weights", '{"middle.middle": 0.9}')   # the PRs pane's slot, most of its column
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await settled(app, pilot)
+        opened = []
+        monkeypatch.setattr(app, "open_url", lambda url, **kw: opened.append(url))
+        p = app.query_one("#prs")
+        p.action_scope()
+        await settled(app, pilot)
+        table = app.query_one("#pr-list")
+        table.focus()
+        await pilot.pause()
+        table.move_cursor(row=table.get_row_index(url))
+        await pilot.pause()
+        card = app.query_one("#prs-card")
+        assert card.display and "https://" not in str(card.render()) and f"{LONG}/pull/7000" in str(card.render()), \
+            "the card, its URL without https://github.com/"
+        at = [(x, y) for y in range(card.region.y, card.region.bottom) for x in range(card.region.x, card.region.right)
+              if "@click" in app.screen.get_style_at(x, y).meta]
+        lines = sorted({y for _, y in at})
+        assert len(lines) >= 2, f"{size}: the link wraps, onto lines {lines}"
+        x, y = next((x, y) for x, y in at if y == lines[1])
+        await pilot.click(card, offset=(x - card.region.x + 1, y - card.region.y))
+        await pilot.pause()
+        assert opened == [url], f"{size}: the whole URL from its second line, not {opened}"
+        assert card.display, "the card stays, the table keeping the focus"
