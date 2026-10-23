@@ -1050,7 +1050,7 @@ class Daemon:
             if want is not None and want == mode(hub.row(sid)):
                 return Done(False)   # last write wins: it's that already
             return hub.toggle_mode(sid)
-        if action in ("send", "send-now"):   # send-now (#124) ships under fingerprint.API 7, with #111
+        if action in ("send", "send-now"):
             return hub.submit((sid, text(body, "ref", False)), text(body, "text"), now=action == "send-now")
         if action == "rename":
             return hub.rename(sid, text(body, "name"))

@@ -235,10 +235,13 @@ def queues(store, sid):
 
 
 @pytest.mark.parametrize("kind, mode, status, now, queued, sent, said, desc", [
-    ("question", "queued", "live", False, ["yes"], [], "queued for Q1: Ctrl+S", "queued, by default"),
-    ("question", "queued", "dead", False, ["yes"], [], "but the session isn't running", "a dead session's queue waits"),
+    ("question", "queued", "live", False, ["yes"], [], "queued for Q1: Ctrl+S or Send sends the session's queue",
+     "queued, by default"),
+    ("question", "queued", "dead", False, ["yes"], [], "queued for Q1, but the session isn't running: Relaunch it, "
+     "then Ctrl+S or Send sends its queue", "a dead session's queue waits"),
     ("question", "immediate", "live", False, [], ["yes"], "sent to Q1", "immediate mode sends at once"),
-    (None, "queued", "live", False, ["yes"], [], "queued for the session", "a general message, to the session"),
+    (None, "queued", "live", False, ["yes"], [], "queued for the session: Ctrl+S or Send sends the session's queue",
+     "a general message, to the session"),
     ("permission", "queued", "live", False, [], [], "denied P1, with your message", "a permission is denied, never queued"),
     ("question", "queued", "live", True, [], ["yes"], "sent to Q1", "Alt+S sends at once in queued mode (#124)"),
     ("question", "queued", "dead", True, [], ["yes"], "sent to Q1 (not running: delivered when it's relaunched)",
@@ -259,26 +262,28 @@ def test_submit_queues_or_sends_by_the_sessions_mode(hub, store, sid, heard, mon
     assert done.ok, desc
     assert [m["body"] for m in store.drafts(sid)] == queued, desc
     assert [m["body"] for m in store.pending(sid)] == sent, desc
-    assert any(said in text for text, _ in told(done)), f"{desc}: {told(done)}"
+    assert [text for text, _ in told(done)] == [said], desc
     assert heard == [], f"{desc}: said to the surface that gave it, not broadcast"
     assert done.denied == (kind == "permission"), desc
     assert kind != "permission" or store.item(sid, ref)["status"] == "denied", desc
 
 
-# (mode, the earlier drafts' targets: "Q" the question Alt+S answers, "T" another item, None
-# the session; what's said after "sent to Q1", desc)
-@pytest.mark.parametrize("mode, earlier, said, desc", [
-    ("queued", ["T"], ["1 answer still queued for demo: Ctrl+S or Send sends it"],
+# (mode, what Alt+S answers and the earlier drafts' targets: "Q" a question, "T" another item,
+# None the session; what's said after "sent to ...", desc)
+@pytest.mark.parametrize("mode, to, earlier, said, desc", [
+    ("queued", "Q", ["T"], ["1 answer still queued for demo: Ctrl+S or Send sends it"],
      "queued: another item's draft stays, said in the singular"),
-    ("queued", ["T", None], ["2 answers still queued for demo: Ctrl+S or Send sends them"],
+    ("queued", "Q", ["T", None], ["2 answers still queued for demo: Ctrl+S or Send sends them"],
      "queued: two drafts, in the plural"),
-    ("queued", ["Q", "T"], ["2 answers still queued for demo (1 for Q1, which this one has overtaken): "
-                            "Ctrl+S or Send sends them"], "queued: a draft for the same item is overtaken, and said"),
-    ("queued", [], [], "queued: nothing else queued, nothing more to say"),
-    ("immediate", ["T"], [], "immediate: as Ctrl+Enter, nothing more to say"),
+    ("queued", "Q", ["Q", "T"], ["2 answers still queued for demo (1 for Q1, which this one has overtaken): "
+                                 "Ctrl+S or Send sends them"], "queued: a draft for the same item is overtaken, and said"),
+    ("queued", None, [None, "T"], ["2 answers still queued for demo (1 general, which this one has overtaken): "
+                                   "Ctrl+S or Send sends them"], "queued: a general message overtakes a general draft"),
+    ("queued", "Q", [], [], "queued: nothing else queued, nothing more to say"),
+    ("immediate", "Q", ["T"], [], "immediate: as Ctrl+Enter, nothing more to say"),
 ])
-def test_send_now_leaves_the_mode_and_the_rest_of_the_queue(hub, store, sid, heard, monkeypatch, mode, earlier, said,
-                                                           desc):
+def test_send_now_leaves_the_mode_and_the_rest_of_the_queue(hub, store, sid, heard, monkeypatch, mode, to, earlier,
+                                                           said, desc):
     queues(store, sid)
     store.set_mode(sid, mode)
     monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
@@ -286,11 +291,11 @@ def test_send_now_leaves_the_mode_and_the_rest_of_the_queue(hub, store, sid, hea
     hub.refresh()
     for i, at in enumerate(earlier):
         store.queue(sid, f"earlier {i}", refs[at])
-    done = hub.submit((sid, refs["Q"]), "now", now=True)
+    done = hub.submit((sid, refs[to]), "now", now=True)
     assert [m["body"] for m in store.drafts(sid)] == [f"earlier {i}" for i in range(len(earlier))], desc
     assert [m["body"] for m in store.pending(sid)] == ["now"], desc
     assert store_mode(store.session(sid)) == mode, desc
-    assert [text for text, _ in told(done)] == ["sent to Q1", *said], desc
+    assert [text for text, _ in told(done)] == [f"sent to {refs[to] or 'the session'}", *said], desc
 
 
 def test_a_permission_answered_meanwhile_is_not_submitted(hub, store, sid, heard):

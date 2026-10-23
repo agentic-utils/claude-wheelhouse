@@ -100,11 +100,11 @@ def aimed(target) -> str:
 
 def still_queued(s, target, drafts) -> str:
     """After Alt+S (#124): what's still queued for the session, and how much of it the answer
-    just sent has overtaken, being for the same item (or, a general message, the session)."""
+    just sent has overtaken, being for the same item (or, a general message, general too)."""
     n, mine = len(drafts), sum(m["item_ref"] == target[1] for m in drafts)
     out = f"{n} answer{'' if n == 1 else 's'} still queued for {display_name(s)}"
     if mine:
-        out += f" ({mine} for {aimed(target)}, which this one has overtaken)"
+        out += f" ({mine} {f'for {target[1]}' if target[1] else 'general'}, which this one has overtaken)"
     return out + f": Ctrl+S or Send sends {'it' if n == 1 else 'them'}"
 
 
@@ -812,8 +812,7 @@ class Hub:
             done.say(f"denied {target[1]}, with your message")
         elif now or mode(s) == "immediate":
             self.store.send(target[0], text, target[1])
-            late = "" if self.running(target[0]) else " (not running: delivered when it's relaunched)"
-            done.say(f"sent to {aimed(target)}{late}")
+            done.say(f"sent to {aimed(target)}{self.late(target[0])}")
             if mode(s) == "queued" and (drafts := self.store.drafts(target[0])):
                 done.say(still_queued(s, target, drafts))
         # on the row as it is now: its old monitor would deliver a draft at once anyway
@@ -839,11 +838,14 @@ class Hub:
         """A queued answer taken back: its text, or None if it went meanwhile."""
         return self.store.unqueue(msg_id)
 
+    def late(self, sid: str) -> str:
+        """What a send to a session that isn't running adds: when it will be delivered."""
+        return "" if self.running(sid) else " (not running: delivered when it's relaunched)"
+
     def sent_note(self, sid: str, n: int) -> str:
         s = self.store.session(sid)
         name = (s["name"] or short(sid)) if s else short(sid)
-        late = "" if self.running(sid) else " (not running: delivered when it's relaunched)"
-        return f"{n} to {name}{late}"
+        return f"{n} to {name}{self.late(sid)}"
 
     def send_queue(self, sid: str) -> Done:
         """A session's queue, sent as one message; a dead one's stays queued (#62)."""

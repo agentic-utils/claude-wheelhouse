@@ -12,6 +12,7 @@ from unittest import mock
 
 import pytest
 from rich.color import Color
+from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
@@ -101,7 +102,7 @@ async def test_alt_s_sends_one_answer_now(store, sid, live, clock, send_mode, ke
     ("send", False, "immediate: Ctrl+Enter sends already, so no Alt+S"),
 ])
 def test_the_hint_offers_alt_s_only_when_queued(sends, shown, desc):
-    assert ("Alt+S sends this one now" in hint(sends)) is shown, desc
+    assert ("Alt+S: send" in hint(sends)) is shown, desc
 
 
 @pytest.mark.anyio
@@ -3286,7 +3287,7 @@ async def test_marking_rows(store, sid, steps, marked, desc):
             await pilot.pause()
         assert sorted(k.split("|")[1] for k in items.marked) == marked, desc
         shaded = [items.get_row_at(i)[2] for i in range(items.row_count)
-                  if isinstance(cell := items.get_row_at(i)[4], Text) and cell.style.bgcolor]
+                  if isinstance(cell := items.get_row_at(i)[4], Text) and (Style.parse(cell.style) if isinstance(cell.style, str) else cell.style).bgcolor]
         assert [str(r) for r in shaded] == marked, f"{desc}: marked rows are shaded"
 
 
@@ -4740,9 +4741,9 @@ def test_hosted_busy(activity, busy, desc):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("mode, sends_now, expected, desc", [
-    (None, False, "Ctrl+Enter to queue", "a new session queues"),
-    ("immediate", False, "Ctrl+Enter to send", "immediate mode sends"),
-    (None, True, "Ctrl+Enter to send", "a session from before queued answers sends whatever its mode"),
+    (None, False, "Ctrl+Enter: queue", "a new session queues"),
+    ("immediate", False, "Ctrl+Enter: send", "immediate mode sends"),
+    (None, True, "Ctrl+Enter: send", "a session from before queued answers sends whatever its mode"),
 ])
 async def test_the_hint_says_what_ctrl_enter_does(store, sid, mode, sends_now, expected, desc, monkeypatch):
     if mode:
@@ -4777,7 +4778,7 @@ async def test_the_hint_follows_a_mode_switched_in_a_thread_at_once(store, sid, 
         await pilot.press("enter", "ctrl+t", "escape")
         await pilot.pause()
         assert not isinstance(app.screen, ThreadView)
-        assert str(app.screen.query_one(Hint).content).startswith("Ctrl+Enter to send · ")
+        assert str(app.screen.query_one(Hint).content).startswith("Ctrl+Enter: send · ")
 
 
 @pytest.mark.anyio
@@ -5365,6 +5366,48 @@ async def test_the_session_buttons_fit(store, tmp_path, monkeypatch, size, statu
         drawn = "".join(seg.text for seg in strips[app.screen.query_one(Footer).region.y])
         assert size[0] < 100 or all(f"{key} {label}" in drawn for key, label in (("N", "New"), ("A", "Adopt"), ("Shift+L", "Relaunch all"))), \
             f"{desc}: New, Adopt and Relaunch all in the footer (at 80 it scrolls), got {drawn!r}"
+
+
+@pytest.mark.anyio
+async def test_the_footer_fits_at_100_columns_whatever_has_focus(store, sid, tmp_path, monkeypatch, every_module):
+    """#135: at 100 columns New, Adopt and Relaunch all are drawn whole, never under the
+    palette's key, at every Tab stop: each pane's list, the answer box, every button, and
+    the inbox with a row selected, whose Del Close stays off the footer for it."""
+    from textual.widgets._footer import FooterKey
+    from claude_wheelhouse import liveness
+    prs = pytest.importorskip("claude_wheelhouse_prs.pane", reason="installed without the prs module")
+    pytest.importorskip("claude_wheelhouse_design", reason="installed without the design module")
+    pr = {"number": 7, "title": "Change 7", "url": "https://github.com/two-inc/wheelhouse/pull/7", "isDraft": False,
+          "state": "OPEN", "updatedAt": "2026-10-20T10:00:00Z", "headRefName": "doug/7", "reviewDecision": None,
+          "mergeable": "MERGEABLE", "repository": {"nameWithOwner": "two-inc/wheelhouse"}, "commits": {"nodes": []}}
+    monkeypatch.setattr(prs, "RUNNER", lambda argv: (0, json.dumps({"data": {"search": {"nodes": [pr]}}}), ""))
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "docs" / "adr").mkdir(parents=True)
+    (tmp_path / "docs" / "adr" / "0001-a.md").write_text("# 1. A\n\nStatus: accepted\n")
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(100, 30)) as pilot:
+        for _ in range(30):
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+        await pick(app, pilot, sid)
+        stops = [w for w, _ in tui.tab_stops(app.screen)]
+        assert {"session-list", "items", "pr-list", "decision-list", "answer"} <= {w.id for w in stops}, \
+            f"every pane's stop: {[w.id for w in stops]}"
+        for widget in stops:
+            widget.focus()
+            if widget.id == "items":
+                widget.move_cursor(row=0)
+            await pilot.pause()
+            await pilot.pause()
+            name = widget.id or type(widget).__name__
+            shown = {(k.key_display, k.description) for k in app.screen.query(FooterKey)}
+            drawn = "".join(seg.text for seg in app.screen._compositor.render_strips()[app.screen.query_one(Footer).region.y])
+            for key in (("N", "New"), ("A", "Adopt"), ("Shift+L", "Relaunch all")):
+                assert key not in shown or " ".join(key) in drawn, f"{name}: {' '.join(key)} drawn whole, got {drawn!r}"
+            assert widget.id not in ("session-list", "items") or ("Shift+L", "Relaunch all") in shown, \
+                f"{name}: Relaunch all in the footer"
 
 
 def splitter(app, key: str) -> Splitter:

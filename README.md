@@ -153,8 +153,8 @@ session.
   screen as a conversation, with the session's replies. Ctrl+Enter submits an answer, and
   each session has a send mode: in Queued mode (where every session starts) answers wait
   and go out together, Ctrl+S sending the session's as one message; in Immediate mode each
-  goes as you submit it. The line under the answer box says which: "Ctrl+Enter to queue"
-  or "Ctrl+Enter to send". Alt+S sends just the answer in the box at once, whatever the
+  goes as you submit it. The line under the answer box says which: "Ctrl+Enter: queue"
+  or "Ctrl+Enter: send". Alt+S sends just the answer in the box at once, whatever the
   mode, leaving the mode and the rest of the queue as they are. Ctrl+T switches the
   session's mode. Under the session list, Mode and Send (n) do the same, for the
   same session, and a bar above the footer
@@ -563,7 +563,9 @@ columns, and above the answer box. A line turns teal under the pointer and while
 below its minimum (the session column never gets too narrow for its buttons' captions).
 The sizes are kept in the wheelhouse's database, as shares of the space, so they follow a
 resized terminal; double-click a line to put its default back. A size that doesn't fit a
-smaller terminal shrinks there, and comes back when there's room again. The three columns
+smaller terminal shrinks there, and comes back when there's room again. A column too short
+for its panes' minimums (some rearrangements on an 80x24 terminal) takes the rows it lacks
+from the pane with the most to spare, Session info first, whose description scrolls. The three columns
 fit an 80-column terminal.
 
 To try another layout, drag a pane by its title (its top border) onto another pane: the

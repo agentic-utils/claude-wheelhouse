@@ -174,9 +174,12 @@ def arrange(saved: dict[str, str], defaults: dict[str, str]) -> dict[str, str]:
 
 
 def least(place: Widget) -> int:
-    """The fewest rows a slot keeps: its min-height, the stylesheet's or its panes' (fit_panes)."""
-    scalar = place.styles.min_height
-    return int(scalar.value) if scalar is not None and scalar.unit == Unit.CELLS else 1
+    """The fewest rows a slot keeps while its column has room: the stylesheet's min-height or
+    its panes' (PANE_MINIMUM, as fit_panes sets it), whichever is more. Not its min-height as it
+    stands, which lay_columns lowers in a column too short for them (#132)."""
+    scalar = place.styles.base.min_height
+    own = int(scalar.value) if scalar is not None and scalar.unit == Unit.CELLS else 1
+    return max([own] + [minimum(w)[1] for w in place.children])
 
 
 def compact_rows(place: Widget) -> int:
@@ -1369,8 +1372,9 @@ class ItemList(SinkList):
     last one toggled; Space and Shift+Up/Down do the same from the keyboard, for terminals
     that keep Shift+click for their own text selection. Ctrl+A marks the finished rows."""
 
-    # here only, not the app's: in an answer box Backspace and Delete edit the text (#64)
-    BINDINGS = [Binding("delete", "app.close_question", "Close", key_display="Del"),
+    # here only, not the app's: in an answer box Backspace and Delete edit the text (#64). Off
+    # the footer, as Alt+S is: ahead of the app's keys it pushed Relaunch all off at 100 columns (#135)
+    BINDINGS = [Binding("delete", "app.close_question", "Close", show=False, key_display="Del"),
                 Binding("backspace", "app.close_question", "Close", show=False),
                 Binding("space", "toggle_mark", "Mark", show=False),
                 Binding("ctrl+a", "app.mark_finished", "Mark finished", show=False),
@@ -2551,10 +2555,9 @@ def hint(sends: str, dead: bool = False) -> str:
     """The line under an answer box. sends: what Ctrl+Enter does for the session in context
     by its mode, queue or send. dead: it isn't running, so Ctrl+S refuses (#62) and goes
     unmentioned."""
-    ctrl_s = "" if dead else " · Ctrl+S sends its queue"
-    alt_s = " · Alt+S sends this one now" if sends == "queue" else ""
-    return (f"Ctrl+Enter to {sends}{alt_s}{ctrl_s} · Ctrl+T switches mode"
-            " · Ctrl+R takes a queued answer back")
+    ctrl_s = "" if dead else " · Ctrl+S: send queue"
+    alt_s = " · Alt+S: send" if sends == "queue" else ""
+    return f"Ctrl+Enter: {sends}{alt_s}{ctrl_s} · Ctrl+R: edit last queued"
 
 
 class TitleBar(Static):
@@ -3768,7 +3771,7 @@ class WheelhouseApp(App):
     #answer:focus, #thread-answer:focus, #docview-answer:focus {{ border: round #ff2a6d; }}
     /* the default cursor is a pale grey cell: a hot block reads as "type here" on black */
     Compose > .text-area--cursor {{ background: #ff2a6d; color: #000000; text-style: bold; }}
-    .answer-hint {{ color: #777777; height: 1; }}
+    .answer-hint {{ color: #777777; width: 100%; height: auto; }}   /* wraps in a narrow column: every key stays on show */
     #thread-scroll {{ height: 1fr; }}
     #session-list {{ height: 1fr; min-height: 5; }}   /* on a short terminal the description gives way first */
     #session-info {{ height: 1fr; min-height: 1; background: #000000; padding: 0 1; }}
@@ -3840,12 +3843,13 @@ class WheelhouseApp(App):
 
     # keys shown in upper case, the usual convention: F is the f key, not Shift+F
     BINDINGS = [
-        Binding("ctrl+enter", "submit", "Submit", key_display="Ctrl+Enter"),
+        # the answer-box keys are off the footer: the hint under the box gives them (hint)
+        Binding("ctrl+enter", "submit", "Submit", show=False, key_display="Ctrl+Enter"),
         Binding("ctrl+j", "submit", "Submit", show=False),   # Ctrl+Enter, as most terminals send it
         # Alt+S (#124): Ctrl+Shift+Enter can't be told from Ctrl+Enter in Windows Terminal. A terminal
         # sends it as a printable s, but the app's binding takes it before the answer box types it
-        Binding("alt+s", "submit(True)", "Send now", show=False, key_display="Alt+S"),   # off the footer, as Ctrl+R is: Relaunch must fit at 100 columns
-        Binding("ctrl+s", "send_session", "Send", key_display="Ctrl+S"),
+        Binding("alt+s", "submit(True)", "Send now", show=False, key_display="Alt+S"),
+        Binding("ctrl+s", "send_session", "Send", show=False, key_display="Ctrl+S"),
         Binding("ctrl+t", "toggle_mode", "Mode", key_display="Ctrl+T"),
         Binding("ctrl+r", "recall", "Edit queued", show=False, key_display="Ctrl+R"),
         # New, Adopt and Relaunch all act on no one session, so they're here, not buttons (#62)
@@ -4050,8 +4054,8 @@ class WheelhouseApp(App):
                 self.client.set_setting(LAYOUT + key, None)
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
             # one beside a collapsed slot keeps its stylesheet's size: a share there would
-            # size a slot that has the column to itself
-            if splitter.display and (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
+            # size a slot that has the column to itself; a column's weights size a SlotSplitter
+            if not isinstance(splitter, SlotSplitter) and splitter.display and (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
                 splitter.apply(stored)
         self.weights = columns.kept(self.client.setting(LAYOUT + columns.WEIGHTS_KEY))
         self.eye_col = self.session_list.add_columns(*SESSION_LABELS, "")[-1]
@@ -5328,7 +5332,8 @@ class WheelhouseApp(App):
     def lay_columns(self) -> None:
         """Each column of slots laid out by columns.lay: an empty slot hidden, a compact one at
         its own rows, and the rest sharing what's left by their weights. Each splitter joined to
-        the two weighted slots it moves rows between, or hidden."""
+        the two weighted slots it moves rows between, or hidden. In a column too short for their
+        least rows a slot's min-height goes down to the rows it gets (columns.squeezed)."""
         if not self.screen_stack:
             return
         for column in self.screen_stack[0].query(".column"):
@@ -5341,9 +5346,11 @@ class WheelhouseApp(App):
                 splitter.pair = (places[pair[1]], places[pair[0]]) if pair else None
                 splitter.display = pair is not None
             if weighted and columns.room(column.size.height, slots) > 0:
+                least_ = {s.name: s.least for s in slots}
                 for name, n in columns.lay(column.size.height, slots, self.weights).items():
                     if name in weighted:
                         places[name].styles.height = n
+                        places[name].styles.min_height = min(n, least_[name])
 
     def column_slots(self, column: Widget) -> tuple[list[columns.Slot], dict[str, Widget]]:
         """A column's slots as columns.py sees them (hidden: no rows of its own; compact: its
@@ -5391,9 +5398,10 @@ class WheelhouseApp(App):
         splitter at the stylesheet's size, with nothing kept for either."""
         self.client.set_setting(SLOTS_KEY, None)
         self.place_panes({})
-        for splitter in self.screen_stack[0].query(Splitter):
-            splitter.apply(None)
-            self.client.set_setting(LAYOUT + splitter.key, None)
+        for splitter in self.screen_stack[0].query(Splitter):   # the weights below hold a SlotSplitter's
+            if not isinstance(splitter, SlotSplitter):
+                splitter.apply(None)
+                self.client.set_setting(LAYOUT + splitter.key, None)
         self.weights = {}
         self.client.set_setting(LAYOUT + columns.WEIGHTS_KEY, None)
         self.relaid()
