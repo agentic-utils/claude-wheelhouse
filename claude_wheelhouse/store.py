@@ -1262,12 +1262,12 @@ class Store:
             db.execute("UPDATE items SET dismissed = NULL WHERE session_id = ? AND ref = ? AND dismissed = ?",
                        (sid, ref, DELETED))
 
-    def close_decision(self, sid: str, ref: str, closed: bool = True) -> None:
-        """The person closes a decision (or reopens it, as seen)."""
+    def close_decision(self, sid: str, ref: str, closed: bool = True, status: str | None = None) -> None:
+        """The person closes a decision (or reopens it, as seen, or as `status`: Ctrl+Z)."""
         with self.tx() as db:
             self._require(db, sid)
             done = db.execute("UPDATE items SET status = ?, updated_at = ? WHERE session_id = ? AND ref = ? "
-                              "AND kind = 'decision'", ("closed" if closed else "seen", now(), sid, ref)).rowcount
+                              "AND kind = 'decision'", ("closed" if closed else status or "seen", now(), sid, ref)).rowcount
         if not done:
             raise KeyError(f"no decision {ref} in this session")
 

@@ -70,7 +70,7 @@ from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
 from .tour import NOTES, PAUSED, ROWS as tour_rows, TOPUP, TOUR, Tour, offered, opening
-from .store import (DEFAULT_THEN, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
+from .store import (DEFAULT_THEN, DELETED, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mode, pinned, runner, spared, stamp, standing)
 from .unsent import Unsent
 
@@ -394,6 +394,25 @@ def still_open(item) -> bool:
 def open_pr(item) -> bool:
     """Whether a PR item is still open on GitHub (a draft or open): Delete asks first."""
     return item["kind"] == "pr" and item["status"] in ("draft", "open")
+
+
+def open_question(item) -> bool:
+    """Whether Delete on an item asks first for its own sake: a question the person has still to answer."""
+    return item["kind"] == "question" and item["status"] == "open"
+
+
+def open_questions_said(refs: list) -> str:
+    """The open questions among the rows a Delete takes, said in its one dialog."""
+    if not refs:
+        return ""
+    return (f" {refs[0]} is an open question." if len(refs) == 1 else
+            f" {len(refs)} are open questions: {', '.join(refs)}.") + " Ctrl+Z undoes it."
+
+
+def deleted_hint(show_finished: bool, undoable: bool = True) -> str:
+    """What a delete's notice adds: where the finished go, and how to take it back."""
+    said = ([] if show_finished else ["F shows finished items"]) + (["Ctrl+Z undoes it"] if undoable else [])
+    return ": " + ", ".join(said) if said else ""
 
 
 def unread(item) -> bool:
@@ -3477,6 +3496,8 @@ DESCRIBE = {
     "toggle_mode": "Switch the session between Queued and Immediate",
     "recall": ("Take this item's latest queued answer back into the box; with none queued, in the item list, "
                "reopen the highlighted finished item (or every marked one)"),
+    "undo": ("Undo the last delete, pin or reopen in the inbox: the rows come back as they stood, an open question "
+             "open again (once; a running child Delete left at the top level stays there). In a text box, its own undo"),
     "new_session": "New session",
     "adopt": "Adopt: pick a Claude Code session that isn't in the wheelhouse yet, from those on disk",
     "relaunch_all": "Relaunch all: every Available session (not running, not parked)",
@@ -3484,9 +3505,9 @@ DESCRIBE = {
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
     "app.close_question": ("Close the highlighted question or decision, or dismiss a done task or subagent, or a doc "
-                           "(or every marked one but the pinned); it never reopens one: Ctrl+R does. On a pinned "
-                           "item it asks first; on an item with children it asks first, saying how many are still "
-                           "open or unread, then takes them all but the pinned"),
+                           "(or every marked one but the pinned); it never reopens one: Ctrl+R does, and Ctrl+Z "
+                           "undoes it. On an open question, a pinned item or one with children it asks first (once "
+                           "for marked rows), saying how many are still open or unread, then takes them all but the pinned"),
     "app.toggle_pinned": "Pin the highlighted item (📌), or clear its pin: Ctrl+A and Delete leave a pinned item",
     "help": "This list",
     "doc_layout": "With a doc shown: its thread under it (split), or Doc and Thread as tabs (tabbed); kept",
@@ -3617,7 +3638,7 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
          "keep Shift+click for itself: Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or "
          "Backspace closes them together, the highlight going to the row above the topmost one taken, "
-         "and Ctrl+R reopens the finished ones. An item with children (its subagents and docs, under it) has a - at the "
+         "and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the "
          "right-hand end of its row: a click there hides them, and the + it becomes shows them again. "
          "A click on a doc opens its editor below it there, as a click on it moves it while it's open. "
          "A click on a row's first column pins it (📌) or clears its pin, as P does. "
@@ -3854,6 +3875,7 @@ class WheelhouseApp(App):
         Binding("ctrl+s", "send_session", "Send", show=False, key_display="Ctrl+S"),
         Binding("ctrl+t", "toggle_mode", "Mode", key_display="Ctrl+T"),
         Binding("ctrl+r", "recall", "Edit queued", show=False, key_display="Ctrl+R"),
+        Binding("ctrl+z", "undo", "Undo", show=False, key_display="Ctrl+Z"),   # a text box's own Ctrl+Z first
         # New, Adopt and Relaunch all act on no one session, so they're here, not buttons (#62)
         Binding("n", "new_session", "New", key_display="N"),
         Binding("a", "adopt", "Adopt", key_display="A"),
@@ -3925,6 +3947,7 @@ class WheelhouseApp(App):
         self.repin: set[str] = set()
         # the rows Delete just took, children included: a highlight they took goes above them (above_deleted)
         self.deleted: set[str] = set()
+        self.undo: tuple[str, list] | None = None   # what Ctrl+Z undoes, said, and the rows as they stood (undoable)
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
         self.show_finished = False   # finished items (store.standing), after the rest
         self.collapsed: set[str] = set()   # the parent rows whose children are hidden, for this run alone
@@ -6204,15 +6227,19 @@ class WheelhouseApp(App):
         if standing(item) == "finished" and (self.show_finished or pinned(item)):   # a pinned one shows anyway
             self.notify(f"{item['ref']} is {verb} already: Ctrl+R reopens it")
             return
-        family = self.family(item)
+        family, opened = self.family(item), [item["ref"]] if open_question(item) else []
         if pinned(item):   # kept out of reach of clearing the inbox: deleted only once the person says so (No the default)
             awaiting = (item["session_id"], item["ref"]) in self.client.inbox(item["session_id"]).awaiting
-            self.push_screen(Confirm(pinned_prompt(item, awaiting, family)),
+            self.push_screen(Confirm(pinned_prompt(item, awaiting, family) + open_questions_said(opened)),
                              lambda yes: yes and self.close_pinned(item, family))
             return
         if family:   # it goes with its children, finished or not, a running one orphaned, once the person says so
-            self.push_screen(Confirm(family_prompt([item], family)),
+            self.push_screen(Confirm(family_prompt([item], family) + open_questions_said(opened)),
                              lambda yes: yes and self.close_family(item, family))
+            return
+        if open_question(item):   # the person's still to answer it: asked first, as a family is
+            self.push_screen(Confirm(f"Delete open question {item['ref']} ({item['title']})? Ctrl+Z undoes it."),
+                             lambda yes: yes and self.dismiss_now(item, verb))
             return
         if open_pr(item):   # off the inbox only: say so before it goes
             self.push_screen(Confirm(f"Delete {item['ref']} ({item['title']})? It stays open on GitHub."),
@@ -6221,9 +6248,11 @@ class WheelhouseApp(App):
         self.dismiss_now(item, verb)
 
     def dismiss_now(self, item, verb: str) -> None:
-        """Delete on an item with nothing to ask first: closed or dismissed now."""
-        self.close(item, True)
-        self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
+        """Delete on an item with nothing to ask first (or asked): closed or dismissed now."""
+        acted = self.close(item, True).ok   # not one finished already, only let go of
+        if acted:
+            self.undoable(f"{verb} {item['ref']}", [item])
+        self.notify(f"{verb} {item['ref']}" + deleted_hint(self.show_finished, acted))
         self.refresh_data()
 
     def close_pinned(self, item, family: list) -> None:
@@ -6237,9 +6266,10 @@ class WheelhouseApp(App):
         if family:
             self.close_family(item, family)
             return
-        self.close(item, True)
         verb = "closed" if item["kind"] in CLOSABLE else "dismissed"
-        self.notify(f"{verb} {item['ref']}" + ("" if self.show_finished else ": F shows finished items"))
+        self.close(item, True)
+        self.undoable(f"{verb} {item['ref']}", [item])   # its pin back too (restore)
+        self.notify(f"{verb} {item['ref']}" + deleted_hint(self.show_finished))
         self.refresh_data()
 
     def toggle_pinned(self, key: str) -> None:
@@ -6253,6 +6283,7 @@ class WheelhouseApp(App):
         except (SessionGone, KeyError) as e:
             self.notify(str(e), severity="warning")
             return
+        self.undoable(f"{'unpinned' if pinned(item) else 'pinned'} {ref}", [item])
         self.notify(f"{'unpinned' if pinned(item) else 'pinned'} {ref}")
         self.refresh_data()
 
@@ -6282,9 +6313,9 @@ class WheelhouseApp(App):
             self.notify(str(e), severity="warning")
             return
         n, kept = sum(not spared(it) for it in family), sum(map(spared, family))
-        self.notify(f"deleted {item['ref']}" + (f" and {n} {'child' if n == 1 else 'children'}" if n else "")
-                    + (f"; {kept} running kept at the top level" if kept else "")
-                    + ("" if self.show_finished else ": F shows finished items"))
+        said = f"deleted {item['ref']}" + (f" and {n} {'child' if n == 1 else 'children'}" if n else "")
+        self.undoable(said, [item, *family])
+        self.notify(said + (f"; {kept} running kept at the top level" if kept else "") + deleted_hint(self.show_finished))
         self.refresh_data()
 
     def toggle_children(self, key: str) -> None:
@@ -6298,16 +6329,57 @@ class WheelhouseApp(App):
                 self.select_row(key)
         self.paint_items()
 
-    def close(self, item, closed: bool) -> Done:
+    def close(self, item, closed: bool, status: str | None = None) -> Done:
         """Close a question or decision (Delete), or reopen it (Ctrl+R): a question as answered,
-        a decision as seen. Dismiss a settled task or subagent, or bring it back. At once: no
+        a decision as seen, or as `status` (Ctrl+Z, restore). Dismiss a settled task or subagent, or bring it back. At once: no
         sinking, and selected, it moves (D33), the one change that moves a selected item
         (ranked). One finished already only goes, from where it was held while selected."""
         self.item_sink.jump()
         self.repin.add(item_key(item))
         if closed:
             self.deleted.add(item_key(item))
-        return self.told(self.client.close(item["session_id"], item["ref"], closed))
+        return self.told(self.client.close(item["session_id"], item["ref"], closed, status))
+
+    def undoable(self, said: str, rows: list) -> None:
+        """The person's last act on the inbox, for Ctrl+Z: what it did, said, and each row it
+        changed as it stood before (restore). One step: the next act replaces it."""
+        self.undo = (said, rows)
+
+    def restore(self, item) -> None:
+        """Ctrl+Z: an item put back as it stood, from its row read before the act. Undeleted,
+        reopened as the status it had (a question open again, not answered), finished again if
+        it was, its pin as it was. A running child Delete orphaned stays at the top level."""
+        sid, ref = item["session_id"], item["ref"]
+        now = self.client.item(sid, ref)
+        if now is None:
+            return
+        was = standing(item) == "finished"
+        if standing(now) == "finished" and item["dismissed"] != DELETED:   # one deleted before stays so
+            self.close(item, False, item["status"] if item["kind"] in CLOSABLE else None)
+            if was:
+                self.close(item, True)
+        elif was:   # Ctrl+R undone
+            self.close(item, True)
+        if pinned(now) != pinned(item):
+            self.told(self.client.set_pinned(sid, ref, pinned(item)))
+
+    def action_undo(self) -> None:
+        """Ctrl+Z: the last delete, pin or reopen in the inbox undone, once. A text box's own
+        Ctrl+Z (TextArea's undo) comes first, and a dialog in front has its own keys."""
+        self.settle()
+        if isinstance(self.focused, (TextArea, Input)) or self.screen is not self.screen_stack[0]:
+            return
+        if self.undo is None:
+            self.notify("nothing to undo")
+            return
+        (said, rows), self.undo = self.undo, None
+        for item in rows:
+            try:
+                self.restore(item)
+            except (SessionGone, KeyError) as e:   # ended or gone meanwhile: the rest still come back
+                self.notify(str(e), severity="warning")
+        self.notify(f"undone: {said}")
+        self.refresh_data()
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's Allow, Always or Deny: an explicit act, as Delete is, so selected, the
@@ -6329,10 +6401,12 @@ class WheelhouseApp(App):
         picked = [it for it in picked if not closed or not pinned(it)]
         kept = f"{kept} pinned kept" if kept else ""
         families = {item_key(it): self.family(it) for it in filter(acts, picked)} if closed else {}
-        if any(families.values()):   # the children go with their parents, once the person says so
+        opened = [it["ref"] for it in filter(acts, picked) if open_question(it)] if closed else []
+        if any(families.values()) or opened:   # the children go with their parents, once the person says so
             kids = [c for f in families.values() for c in f]
             parents = [it for it in filter(acts, picked) if families[item_key(it)]]
-            self.push_screen(Confirm(family_prompt(parents, kids, len(families))),
+            asked = family_prompt(parents or list(filter(acts, picked)), kids, len(families))
+            self.push_screen(Confirm(asked + open_questions_said(opened)),   # one dialog, however many
                              lambda yes: yes and self.close_picked(list(filter(acts, picked)), families, kept=kept))
             return
         if not picked or not any(acts(it) for it in picked):
@@ -6379,8 +6453,11 @@ class WheelhouseApp(App):
             verb = ("deleted with its children" if families.get(item_key(it)) else
                     "closed" if it["kind"] in CLOSABLE else "dismissed") if closed else "reopened"
             said.setdefault(verb, []).append(it["ref"])
-        self.notify("; ".join([f"{verb} {', '.join(refs)}" for verb, refs in said.items()] + ([kept] if kept else []))
-                    + ("" if not closed or self.show_finished else ": F shows finished items"))
+        told = "; ".join(f"{verb} {', '.join(refs)}" for verb, refs in said.items())
+        if done:
+            self.undoable(told, [r for it in done for r in [it, *families.get(item_key(it), [])]])
+        self.notify("; ".join(([told] if told else []) + ([kept] if kept else []))
+                    + (deleted_hint(self.show_finished) if closed and done else ""))
         self.refresh_data()
 
     def action_help(self) -> None:
@@ -6471,6 +6548,7 @@ class WheelhouseApp(App):
             item = target[1] and self.client.item(*target)
             if item and closable(item) and standing(item) == "finished":
                 self.close(item, False)
+                self.undoable(f"reopened {item['ref']}", [item])
                 self.notify(f"reopened {item['ref']} as {CLOSABLE.get(item['kind'], item['status'])}")
                 self.refresh_data()
                 return

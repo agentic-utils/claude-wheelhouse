@@ -1118,7 +1118,10 @@ class Daemon:
         closed = body.get("closed", True)
         if not isinstance(closed, bool):
             raise Refused(400, "closed must be true or false")
-        return self.hub.close(request.path_params["sid"], request.path_params["ref"], closed)
+        status = body.get("status")   # Ctrl+Z: the status it reopens as, the one it had
+        if status is not None and not isinstance(status, str):
+            raise Refused(400, "status must be a string")
+        return self.hub.close(request.path_params["sid"], request.path_params["ref"], closed, status)
 
     def pin(self, request: Request, body: dict) -> Done:
         pinned = body.get("pinned")

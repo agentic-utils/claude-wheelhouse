@@ -30,7 +30,7 @@ from typing import Callable
 from . import adopt, api, features, fork, launch, liveness, models, plan_usage, prs, subagents, transcript, transcript_usage, tutorial
 from .docroots import DOC_CAP
 from .host import AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, NO_NOTES, keepalive_body, waits_on_person
-from .store import COMPACT_QUESTION, DISMISSABLE, PRS_SINCE, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
+from .store import COMPACT_QUESTION, DISMISSABLE, PRS_SINCE, STATUSES, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
 
 RUNNING = ("live", "stalled", "starting")
 # a hosted session's activity when nothing is under way: errored and stopped count as resting
@@ -958,24 +958,26 @@ class Hub:
         """Whether an unseen decision became seen: a no-op for anything else."""
         return self.store.mark_seen(sid, ref)
 
-    def close(self, sid: str, ref: str, closed: bool) -> Done:
+    def close(self, sid: str, ref: str, closed: bool, status: str | None = None) -> Done:
         """Close a question or decision, or reopen it: a question as answered, a decision as
-        seen. Dismiss a settled task or subagent, or bring it back. One finished already has
-        nothing to close."""
+        seen, or as `status` (Ctrl+Z putting back the status it had). Dismiss a settled task or
+        subagent, or bring it back. One finished already has nothing to close."""
         item = self.store.item(sid, ref)
         if item is None:
             self.row(sid)   # SessionGone if that's why
             raise KeyError(f"no item {ref} in this session")
         if closed and standing(item) == "finished":
             return Done(False)
+        if status is not None and (item["kind"] not in ("question", "decision") or status not in STATUSES[item["kind"]]):
+            raise ValueError(f"{ref} can't be reopened as {status}")
         if not closed:   # Ctrl+R: one deleted with its parent comes back too
             self.store.undelete(sid, ref)
         if item["kind"] == "decision":
-            self.store.close_decision(sid, ref, closed)
+            self.store.close_decision(sid, ref, closed, status)
         elif item["kind"] in DISMISSABLE:
             self.store.dismiss(sid, ref, closed)
         else:
-            self.store.update_item(sid, ref, status="closed" if closed else "answered")
+            self.store.update_item(sid, ref, status="closed" if closed else status or "answered")
         return Done()
 
     def set_pinned(self, sid: str, ref: str, pinned: bool) -> Done:
