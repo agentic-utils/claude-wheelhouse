@@ -9,7 +9,11 @@ import time
 import pytest
 
 from claude_wheelhouse import api
+from claude_wheelhouse import tui
 from claude_wheelhouse.tui import WheelhouseApp, tab_stops
+from textual import events
+from textual.widgets import Button, Input, OptionList
+from textual.pilot import _get_mouse_message_arguments
 
 prs = pytest.importorskip("claude_wheelhouse_prs", reason="installed without the prs module")
 from claude_wheelhouse_prs import fetch, pane  # noqa: E402
@@ -29,8 +33,14 @@ class Gh:
 
     def __init__(self, tracked, found, fail=None):
         self.tracked, self.found, self.fail, self.calls = tracked, found, fail, 0
+        self.merges, self.merged = [], (0, "")   # gh pr merge's calls, and what it answers (code, stderr)
 
     def __call__(self, argv):
+        if argv[1:3] == ["repo", "view"]:
+            return 0, json.dumps({"mergeCommitAllowed": False, "squashMergeAllowed": True}), ""
+        if argv[1:3] == ["pr", "merge"]:
+            self.merges.append(argv[3:])
+            return *self.merged[:1], "", self.merged[1]
         self.calls += 1
         if self.fail:
             raise self.fail
@@ -285,3 +295,132 @@ async def test_a_short_panes_card_scrolls_to_its_last_line(store, sid, github):
         drawn = "".join(strip.text.strip() for strip in text.render_lines(text.region.reset_offset))
         assert 0 < card.scroll_y == card.max_scroll_y and drawn.endswith("mergeable"), "scrolled to its end, Mergeable"
         assert table.has_focus and card.display, "the table keeps the focus, and the card shows"
+
+
+async def on_pr(app, pilot, url, scope="mine"):
+    """The PRs table focused, its cursor on url (after m, for all)."""
+    p = app.query_one("#prs")
+    if scope != p.scope:
+        p.action_scope()
+        await settled(app, pilot)
+    table = app.query_one("#pr-list")
+    table.focus()
+    await pilot.pause()
+    table.move_cursor(row=table.get_row_index(url))
+    await pilot.pause()
+    return p
+
+
+@pytest.mark.anyio
+async def test_the_selected_pr_has_its_actions_and_open_opens_it(store, sid, github, monkeypatch):
+    """#138: Open, Merge and Request review under the table, for the PR the cursor is on."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        opened = []
+        monkeypatch.setattr(app, "open_url", lambda url, **kw: opened.append(url))
+        assert not app.query_one("#prs-actions").display, "no PR selected: no buttons"
+        await on_pr(app, pilot, URL.format(109))
+        bar = app.query_one("#prs-actions")
+        assert bar.display and [str(b.label) for b in bar.query(Button)] == ["Open", "Merge", "Request review"]
+        await pilot.click("#pr-open")
+        await pilot.pause()
+        assert opened == [URL.format(109)], "the full URL, the app's opener"
+        assert app.query_one("#pr-list").has_focus and bar.display, "the table keeps the focus, and the buttons"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("n, answer, merged, said, desc", [
+    (109, "n", None, None, "No: nothing merged"),
+    (109, "y", (0, ""), "Merged PR109 (squash).", "Yes: merged the way the repo allows, gone from the list"),
+    (108, "y", (1, "X Pull request #108 is not mergeable: the base branch policy prohibits the merge."),
+     "Couldn't merge PR108: checks are failing. gh says: X Pull request #108 is not mergeable", "a failure says why"),
+])
+async def test_merge_asks_first_and_says_what_came_of_it(store, sid, github, n, answer, merged, said, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        github.merged = merged or (0, "")
+        p = await on_pr(app, pilot, URL.format(n))
+        await pilot.click("#pr-merge")
+        await pilot.pause()
+        assert isinstance(app.screen, tui.Confirm) and app.screen.focused.id == "no", f"{desc}: asked, No focused"
+        await pilot.press(answer)
+        await settled(app, pilot)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        await settled(app, pilot)
+        assert github.merges == ([[URL.format(n), "--squash"]] if merged else []), desc
+        note = str(app.query_one("#prs-note").render())
+        assert (said in note) if said else not p.outcome, f"{desc}: {note!r}"
+        if merged == (0, ""):
+            assert URL.format(n) not in app.query_one("#pr-list").rows, f"{desc}: gone from the list"
+
+
+@pytest.mark.anyio
+async def test_request_review_asks_the_session_that_made_the_pr_and_remembers_the_target(store, sid, github, monkeypatch):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        sent = []
+        monkeypatch.setattr(app.client, "submit", lambda target, text, now=False: sent.append((target, text)) or tui.Done())
+        store.set_setting(pane.TARGETS, json.dumps(["@sam"]))
+        await on_pr(app, pilot, URL.format(109))
+        await pilot.click("#pr-review")
+        await pilot.pause()
+        assert isinstance(app.screen, tui.Ask), "a target asked for"
+        assert [str(o.prompt) for o in app.screen.query_one(OptionList).options] == ["@sam"], "past targets offered"
+        app.screen.query_one(Input).value = "#eng-reviews"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert sent == [((sid, "PR109"), f"Post a review request for {URL.format(109)} (Change 109) to #eng-reviews "
+                                         "on Slack, following my Slack etiquette.")], "the session that made it, on its item"
+        assert json.loads(store.setting(pane.TARGETS)) == ["#eng-reviews", "@sam"], "most recent first"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("selected, desc", [(True, "the selected session asked"), (False, "no session: off")])
+async def test_request_review_of_a_pr_no_session_made(store, sid, github, monkeypatch, selected, desc):
+    """In All, a PR no session made: the session selected in the session list, else none."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        sent = []
+        monkeypatch.setattr(app.client, "submit", lambda target, text, now=False: sent.append(target) or tui.Done())
+        app.follow(sid) if selected else app.clear_filter()
+        await pilot.pause()
+        p = await on_pr(app, pilot, "https://github.com/doug/mizpah/pull/7", scope="all")
+        assert app.query_one("#pr-review", Button).disabled is not selected, desc
+        p.review(p.selected())
+        await pilot.pause()
+        if selected:
+            app.screen.query_one(Input).value = "#mizpah"
+            await pilot.press("enter")
+            await pilot.pause()
+        assert sent == ([(sid, None)] if selected else []), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size", [(160, 40), (80, 24)])
+async def test_a_right_click_on_a_pr_opens_its_actions_below_the_row(store, sid, github, monkeypatch, size):
+    """#138: a PR row's menu, below the row as a session's (#137), Open acting on the row clicked."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await settled(app, pilot)
+        opened = []
+        monkeypatch.setattr(app, "open_url", lambda url, **kw: opened.append(url))
+        table = app.query_one("#pr-list")
+        row = table.get_row_index(URL.format(109))
+        args = _get_mouse_message_arguments(table, (3, table.header_height + row), button=3)
+        for cls in (events.MouseDown, events.MouseUp):
+            await app.on_event(cls(**args))
+        await pilot.pause()
+        assert isinstance(app.screen, tui.PaneMenu), f"{size}: a menu"
+        menu = app.screen
+        line = table.region.y + table.header_height + row
+        box = menu.query_one("#dialog").region
+        assert box.y == line + 1 or box.bottom == line, f"{size}: {box} below or above line {line}"
+        assert [str(b.label) for b in menu.query(Button)] == ["Open", "Merge", "Request review"]
+        await pilot.press("enter")
+        await pilot.pause()
+        assert opened == [URL.format(109)], f"{size}: Open, on the row clicked"

@@ -333,7 +333,15 @@ session.
   every 5 minutes, when the pane is shown, 20 seconds after a session pushes or merges,
   and on `r`; every app shares it, and a merged or closed PR leaves the pane at once.
   Highlighting a session's PR shows it in Detail with its thread; `Enter` opens it in the
-  browser. Without `gh`, or not logged in, the pane says so.
+  browser. Without `gh`, or not logged in, the pane says so. Under the table, the PR
+  selected has three buttons, which a right-click on its row gives as a menu too: **Open**
+  (the browser); **Merge**, asked first, with `gh pr merge` the way the repo allows (a
+  merge commit where it can, else squash, else rebase), saying under the table what
+  stood in its way if it didn't (a review required, conflicts, failing checks, as `gh`
+  says); and **Request review**, which asks for a Slack channel or name (`#channel`,
+  `@name`, past ones offered most recent first) and sends the session that made the PR a
+  message asking it to post the request on Slack. For a PR no session made (`PRs · all`)
+  it asks the session selected in the session list, and is greyed with none selected.
 - **The Decisions pane.** Under the inbox, the design decisions (ADRs) of every repo a session works
   in: each `NNNN-*.md` file in the repo's `docs/adr`, or in the directories a session there
   named with `set_doc_dirs` instead (`.plan/`, say, only if named), read again every 10
@@ -530,7 +538,8 @@ if that was the first.
 Text: drag the mouse over the conversation or a thread to select part of it (shown black
 on white), double-click to select a word, `Ctrl+A` in the answer box selects its text (in the item list it marks the finished rows; in a doc opened
 full screen it selects the whole doc), and `Ctrl+C` copies the selection (through the terminal, which Windows Terminal supports). Right-click on a session in the session list selects it and opens a menu of
-its buttons (greyed as they are under the list; Esc or a click outside closes it). Elsewhere right-click does as a
+its buttons (greyed as they are under the list; Esc or a click outside closes it); on a PR in the PRs pane, a menu of its
+actions. Elsewhere right-click does as a
 terminal's does: it copies the selection, or with nothing selected pastes the clipboard
 into the answer box under the pointer (or the focused one). Under WSL the paste reads the
 Windows clipboard through PowerShell, so it takes most of a second; elsewhere it pastes the

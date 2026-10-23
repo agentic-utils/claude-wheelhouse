@@ -138,7 +138,13 @@ the PRs pane, its route and its cache of GitHub's state (`prs.db`), with its tes
 `modules/prs/tests` and `tests/test_prs_pane.py`. Core never imports a module: the app
 finds them by entry point, and must run with none installed (`test_api.py`). A module's
 list that sets `TAB_LIST` is a Tab stop after the inbox (`tui.tab_stops`), and
-`Context.open_doc` opens a doc full screen (`DocView(file=...)`).
+`Context.open_doc` opens a doc full screen (`DocView(file=...)`). A pane's widget, or an
+ancestor of the one under the pointer, with `menu_at(x, y)` returning an `api.Menu` gets a
+right-click menu at that row (`tui.PaneMenu`, after the session list's `session_menu`), and
+`Context.send`, `setting`/`set_setting`, `confirm` and `ask` give a module the answer send
+path, settings keyed `<id>.<name>`, the Yes/No dialog and a text prompt with suggestions
+(`tui.Ask`). The PRs module's actions (#138) use them, merging on the daemon through
+`POST /m/prs/merge`.
 
 `tests/` mirrors the modules (`test_<module>.py`); `conftest.py` holds the shared fixtures,
 and `transcripts.py` the transcripts the core's and the stats module's tests write.

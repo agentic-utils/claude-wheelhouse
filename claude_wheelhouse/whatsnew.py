@@ -164,6 +164,11 @@ FEATURES: tuple[Feature, ...] = (
     Feature("send-now", UNRELEASED, "send",
             note="Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits.",
             tip="Alt+S sends just this answer now, leaving the rest of the queue for Ctrl+S."),
+    Feature("pr-actions", UNRELEASED, "prs",
+            note="A PR in the PRs pane has Open, Merge and Request review buttons, and a right-click on its row gives "
+                 "them as a menu: Merge asks first and says what stood in its way, and Request review asks the "
+                 "session that made the PR to post the request on Slack.",
+            tip="Open, Merge and Request review act on the PR selected; right-click a PR for them as a menu."),
 )
 
 

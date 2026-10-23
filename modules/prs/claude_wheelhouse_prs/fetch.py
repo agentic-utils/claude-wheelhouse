@@ -222,3 +222,50 @@ class Fetcher:
                 continue
             out.append({**r, "light": light(r), "item": {"session_id": it["session_id"], "ref": it["ref"]} if it else None})
         return {"prs": ordered(out), "fetched_at": self.last, "warning": self.warning}
+
+    def merge(self, url: str) -> dict:
+        """A PR merged by `gh pr merge` (#138), the way its repo allows: {"method"}, its row
+        marked merged so the pane drops it; {"error"} with why not, as gh says it."""
+        found = api.parse_pr(url)
+        if found is None:
+            raise api.Refused(400, f"not a pull request URL: {url!r}")
+        try:
+            how = method(f"{found[0]}/{found[1]}", self.runner)
+            code, out, err = self.runner(["gh", "pr", "merge", url, f"--{how}"])
+        except Unavailable as e:
+            return {"error": str(e)}
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            return {"error": str(e) or type(e).__name__}
+        if code != 0:
+            return {"error": last_line(err or out) or f"gh exited {code}"}
+        rows = {r["url"]: r for r in self.cache.rows()}
+        if url in rows:
+            self.cache.replace([{**rows[url], "state": "MERGED"}], self.last or self.clock())
+        if self.ctx.set_pr_states is not None and url in self.items():
+            self.ctx.set_pr_states({url: "merged"})
+        return {"method": how}
+
+
+METHODS = (("mergeCommitAllowed", "merge"), ("squashMergeAllowed", "squash"), ("rebaseMergeAllowed", "rebase"))
+
+
+def method(repo: str, runner: Runner) -> str:
+    """How a repo lets its PRs merge, asked of GitHub: a merge commit where it's allowed,
+    else squash, else rebase. RuntimeError if it can't say."""
+    code, out, err = runner(["gh", "repo", "view", repo, "--json", ",".join(k for k, _ in METHODS)])
+    if code == 4 or "gh auth login" in err:
+        raise Unavailable("gh isn't logged in: run gh auth login")
+    try:
+        allowed = json.loads(out) if code == 0 else None
+    except ValueError:
+        allowed = None
+    if not isinstance(allowed, dict):
+        raise RuntimeError(last_line(err or out) or f"gh exited {code}")
+    how = next((m for key, m in METHODS if allowed.get(key)), None)
+    if how is None:
+        raise RuntimeError(f"{repo} allows no merge method")
+    return how
+
+
+def last_line(text: str) -> str:
+    return text.strip().splitlines()[-1].strip() if text.strip() else ""

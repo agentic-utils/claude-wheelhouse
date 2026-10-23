@@ -39,6 +39,7 @@ from textual.screen import ModalScreen, Screen
 from textual.scrollbar import ScrollBar
 from textual.selection import SELECT_ALL, Selection
 from textual.strip import Strip
+from textual.suggester import SuggestFromList
 from textual.widget import Widget
 from textual.widgets.text_area import Selection as Span
 from textual.worker import get_current_worker
@@ -2826,6 +2827,52 @@ class RenameSession(Dialog):
         self.action_answer(None)
 
 
+class Ask(Dialog):
+    """A line of text asked for a module (api.Context.ask): typed, or one of its suggestions,
+    most recent first, picked from the list under the box or completed in it (Right takes
+    the completion). Enter sends what's typed, Esc sends nothing; nothing typed sends nothing."""
+    ACTION = "ask-ok"
+
+    def __init__(self, prompt: str, suggestions: list[str]):
+        super().__init__()
+        self.prompt, self.suggestions = prompt, suggestions
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(self.prompt, classes="dialog-prompt")
+            yield Input(id="ask-text", suggester=SuggestFromList(self.suggestions, case_sensitive=False))
+            yield OptionList(*self.suggestions, id="ask-suggestions")
+            with Horizontal(classes="buttons"):
+                yield Button("Send", variant="success", id="ask-ok")
+                yield Button("Cancel", id="ask-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#ask-suggestions").display = bool(self.suggestions)
+        self.set_focus(self.query_one("#ask-text", Input))
+
+    @on(Input.Changed, "#ask-text")
+    def narrowed(self, event: Input.Changed) -> None:
+        """The list narrowed to the suggestions holding what's typed."""
+        typed = event.value.strip().casefold()
+        shown = [s for s in self.suggestions if typed in s.casefold()]
+        options = self.query_one("#ask-suggestions", OptionList)
+        options.clear_options()
+        options.add_options(shown)
+        options.display = bool(shown)
+
+    @on(OptionList.OptionSelected, "#ask-suggestions")
+    def picked(self, event: OptionList.OptionSelected) -> None:
+        self.action_answer(str(event.option.prompt))
+
+    @on(Input.Submitted, "#ask-text")
+    @on(Button.Pressed, "#ask-ok")
+    def ok(self) -> None:
+        self.action_answer(self.query_one("#ask-text", Input).value.strip() or None)
+
+    @on(Button.Pressed, "#ask-cancel")
+    def cancel(self) -> None:
+        self.action_answer(None)
+
 
 MODEL_WARNING = ("Changing model drops the prompt cache: the session's next request re-reads the whole "
                  "conversation at the full input price (a change made mid-turn applies inside the running "
@@ -3165,7 +3212,7 @@ class SessionMenu(Dialog):
         with Vertical(id="dialog"):
             yield Label(Text(self.heading), classes="dialog-title")
             for id_, caption, disabled, shown in self.buttons:
-                button = Button(caption, id=f"menu-{id_}", disabled=disabled, compact=True, tooltip=BUTTONS[id_])
+                button = Button(caption, id=f"menu-{id_}", disabled=disabled, compact=True, tooltip=self.tip(id_))
                 button.display = shown
                 yield button
 
@@ -3173,6 +3220,10 @@ class SessionMenu(Dialog):
         # before it's drawn: below the row (its margin), else above it (inflect), and across inside the screen
         self.query_one("#dialog").styles.offset = (self.at.x, self.at.y)
         self.focus_first()
+
+    @staticmethod
+    def tip(id_: str) -> str:
+        return BUTTONS[id_]
 
     def focus_first(self, at: int = 0) -> None:
         """The first that applies from the at'th button on, else the last before it: the
@@ -3196,6 +3247,21 @@ class SessionMenu(Dialog):
     @on(Button.Pressed)
     def pressed(self, event: Button.Pressed) -> None:
         self.action_answer(event.button.id.removeprefix("menu-"))
+
+
+class PaneMenu(SessionMenu):
+    """A right-click on a row of a module's pane (api.Menu, #138): its entries as a session's
+    menu shows its buttons, opening below the row, at the pointer's column, or above it where
+    there's no room below: at is the row's line, the menu's margin the line below it, and
+    constrain's inflect flips it about that (PaneMenu in WheelhouseApp.CSS, as #137 places a
+    session's). The answer is the entry's id."""
+
+    def __init__(self, menu: api.Menu, at: Offset) -> None:
+        super().__init__("", menu.title, [(id_, caption, disabled, True) for id_, caption, disabled, _ in menu.entries], at)
+        self.tips = {id_: tip for id_, _, _, tip in menu.entries}
+
+    def tip(self, id_: str) -> str:
+        return self.tips[id_]
 
 
 class Choice(Dialog):
@@ -3641,6 +3707,11 @@ class WheelhouseApp(App):
     SessionMenu #dialog {{ width: auto; min-width: 18; padding: 0 1; margin: 1 0 0 0;
                           constrain: inside inflect; }}
     SessionMenu #dialog Button {{ width: 100%; }}
+    /* a pane's menu at its row (#138): below it, or flipped above it where it won't fit */
+    PaneMenu {{ align: left top; }}
+    PaneMenu #dialog {{ width: auto; min-width: 18; padding: 0 1; margin: 1 0 0 0; constrain: inside inflect; }}
+    PaneMenu #dialog Button {{ width: 100%; }}
+    Ask #ask-suggestions {{ height: auto; max-height: 8; margin: 1 0 0 0; }}
     #title-row {{ height: 1; background: #12122a; }}
     #title {{ width: 1fr; height: 1; background: #12122a; content-align: center middle; }}
     #tour-badge {{ width: auto; height: 1; padding: 0 1; color: #ffd300; display: none; }}
@@ -4041,7 +4112,7 @@ class WheelhouseApp(App):
         the widgets: an answer box would move its cursor and drop its selection, and the
         screen would take it for a click and clear its own."""
         if isinstance(event, (events.MouseDown, events.MouseUp)) and event.button == 3 and not event.is_forwarded:
-            if isinstance(event, events.MouseDown) and not self.session_menu(event):
+            if isinstance(event, events.MouseDown) and not (self.session_menu(event) or self.pane_menu(event)):
                 self.right_click(event)
             return
         if isinstance(event, events.Key) and not event.is_forwarded:
@@ -4156,6 +4227,26 @@ class WheelhouseApp(App):
                            Offset(event.screen_x, event.screen_y))   # the row's line: the row clicked
         self.push_screen(menu, chosen)
         return True
+
+    def pane_menu(self, event: events.MouseDown) -> bool:
+        """A right-click in a module's pane whose widget there, or an ancestor of it, gives a
+        menu for the point (api.Menu, #138): the menu at the row, the entry chosen handed
+        back. Only on the main screen, the topmost widget there. Whether it opened one."""
+        if self.screen is not self.screen_stack[0]:
+            return False
+        try:
+            under, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
+        except Exception:
+            return False
+        for node in under.ancestors_with_self:
+            if callable(menu_at := getattr(node, "menu_at", None)):
+                menu = menu_at(event.screen_x, event.screen_y)
+                if menu is None:
+                    return False
+                self.push_screen(PaneMenu(menu, Offset(event.screen_x, menu.line)),
+                                 lambda chosen: chosen is not None and menu.chosen(chosen))
+                return True
+        return False
 
     def session_menu_buttons(self, s) -> list[tuple[str, str, bool, bool]]:
         """A session's buttons for its menu: (id, caption, disabled, shown), as under the list."""
@@ -4868,7 +4959,18 @@ class WheelhouseApp(App):
         """The context a module's pane is made with: the app's, with its own routes (call)."""
         return dataclasses.replace(self.ctx, call=functools.partial(self.client.call_module, mid),
                                    show_doc=self.show_doc, open_doc=self.open_doc, relayout=self.fit_compact,
-                                   show_item=self.show_item)
+                                   show_item=self.show_item, send=self.module_send, setting=self.client.setting,
+                                   set_setting=self.client.set_setting,
+                                   confirm=lambda prompt, then: self.push_screen(Confirm(prompt), then),
+                                   ask=lambda prompt, offered, then: self.push_screen(Ask(prompt, offered), then))
+
+    def module_send(self, sid: str, ref: str | None, text: str) -> None:
+        """A module's text sent to a session (api.Context.send), as an answer goes: queued or
+        at once by its mode, and said as the send bar says it."""
+        try:
+            self.told(self.client.submit((sid, ref), text))
+        except (SessionGone, ValueError) as e:
+            self.notify(str(e), severity="warning")
 
     def doc_sends_now(self, sid: str) -> bool:
         """Whether a doc item of this session's saves on Ctrl+Enter in its editor: its
