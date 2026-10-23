@@ -109,6 +109,6 @@ def serve(hub) -> Served:
     served for a hub: the daemon's, or the app's own with --local."""
     loaded = api.switch_off(api.load(), api.disabled(hub.store.setting(api.DISABLED)))
     ctx = api.Context(hub.store.path.parent, lambda: facts(hub), lambda: None, usage=hub.usage,
-                      pr_items=hub.store.pr_items, set_pr_states=hub.store.set_pr_states,
+                      pr_items=hub.store.pr_items, set_pr_states=hub.set_pr_states,
                       pr_activity=lambda: hub.pr_activity_at)
     return Served(loaded, ctx)

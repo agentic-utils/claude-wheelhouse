@@ -54,7 +54,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import api, auth, docroots, features, fingerprint, liveness, models, served, transcript_usage, tutorial
+from . import api, auth, docroots, features, fingerprint, liveness, models, served, steps, transcript_usage, tutorial
 from .hub import Done, Event, Hub, host_context
 from .store import COMPACT_QUESTION, NOTES_SEEN, THEN, TOUR_AT, SessionGone, Store, inbox_rank, mode, runner, standing
 
@@ -389,6 +389,9 @@ class Daemon:
         fingerprint.code()   # the code as loaded, for /hello: asked before anything can change it
         # sdk: SDK mode (features.py), else features.sdk_enabled(): it gates every session the hub creates
         self.hub = Hub(store, sdk=sdk, **({} if inline else {"spawn": self.spawn, "post": self.post}))
+        if gone := steps.prune_handoffs():   # said once, in the daemon's log
+            print(f"wheelhouse daemon: removed {gone} handoff(s) untouched for {steps.HANDOFF_DAYS} days",
+                  file=sys.stderr, flush=True)
         self.store, self.allowed = store, allowed
         self.token = token   # the shared secret every request must carry (auth.py)
         self.stop = None   # how /shutdown stops it: the server's, once serving
@@ -439,6 +442,9 @@ class Daemon:
             Route("/usage", self.query(self.usage, run=None)),
             Route("/settings", self.query(self.settings)),
             Route("/settings", self.command(self.set_setting), methods=["POST"]),
+            Route("/settings/steps", self.query(lambda request: self.hub.steps_table())),
+            Route("/settings/steps/choose", self.command(self.choose_steps), methods=["POST"]),
+            Route("/settings/steps/{event}", self.command(self.set_step), methods=["POST"]),
             Route("/adoptable", self.query(lambda request: [vars(c) for c in self.hub.adoptable()])),
             Route("/adoptable/{id}/running", self.query(
                 lambda request: {"pid": liveness.running_pid(request.path_params["id"])})),
@@ -927,6 +933,23 @@ class Daemon:
         else:
             self.store.set_setting(key, value)
         return Done()
+
+    def set_step(self, request: Request, body: dict) -> Done:
+        """A session step's switch, {"switch", "on": true, false or null for its default}."""
+        on = body.get("on")
+        if on is not None and not isinstance(on, bool):
+            raise Refused(400, "on must be true, false or null")
+        try:
+            return self.hub.set_step(request.path_params["event"], text(body, "switch"), on)
+        except ValueError as e:
+            raise Refused(400, str(e)) from None
+
+    def choose_steps(self, request: Request, body: dict) -> Done:
+        """The first-press dialog's ticks, {"ticks": {name: bool}}."""
+        ticks = body.get("ticks")
+        if not isinstance(ticks, dict) or not all(isinstance(v, bool) for v in ticks.values()):
+            raise Refused(400, "ticks must map each offered name to true or false")
+        return self.hub.choose_steps(ticks)
 
     def no_remote_tab(self, request: Request, runner: str) -> None:
         """A tab opens on this machine's screen, where nobody on another machine sees it: so

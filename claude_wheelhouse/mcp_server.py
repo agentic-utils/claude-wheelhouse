@@ -12,7 +12,7 @@ import time
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import docroots, liveness
+from . import docroots, liveness, steps
 from .store import GONE_TEXT, SessionGone, Store, runner
 
 HEARTBEAT_SECONDS = 30
@@ -144,6 +144,19 @@ def set_synopsis(text: str) -> str:
 
 
 @wheelhouse_tool
+def write_handoff(text: str) -> str:
+    """Write this session's handoff: a short markdown note of what was done, decisions and
+    why, open threads, and the next step, terse enough to read at a glance (16 KB at most).
+    Each call replaces the last. The wheelhouse keeps it, shows it to the person as this
+    session's handoff doc, and gives it back to you on resume and after compaction. Write it
+    with this tool, never as a file. Call it when a wheelhouse message asks you to, and
+    whenever your own instructions say to keep a handoff."""
+    path = steps.write_handoff(_store, _sid, text)
+    ref = _store.post_doc(_sid, "handoff", str(path), None, True)
+    return f"handoff written ({ref})"
+
+
+@wheelhouse_tool
 def set_doc_dirs(paths: list[str]) -> str:
     """Where this repo keeps its design decisions (ADRs), when that isn't docs/adr: directories
     relative to the git root of your working directory, such as ["docs/decisions"]. The
@@ -169,6 +182,23 @@ def hosted_here(s) -> bool:
     Anthropic's terms are confirmed."""
     session = s.session(_sid)
     return session is not None and runner(session) == "sdk" and not session["shell"]
+
+
+@wheelhouse_tool
+def request_compact(keep: str) -> str:
+    """Ask the wheelhouse to compact this session once your current turn ends, never during
+    it, with `keep` as the compaction's instructions: what to carry through (open threads,
+    decisions, files, the next step). For long autonomous runs whose context has grown large.
+    Write your handoff first if your instructions keep one, then end your turn soon. Only in
+    a session run inside the wheelhouse (SDK mode), not a terminal tab; one request at a time,
+    and not again within 30 minutes of the last."""
+    if not keep.strip():
+        raise ValueError("keep must say what to carry through the compaction")
+    if not hosted_here(_store):
+        raise ValueError("request_compact works only in a session run inside the wheelhouse (SDK mode); "
+                         "this one runs in a terminal tab, where the person can type /compact")
+    _store.request_compact(_sid, keep.strip())
+    return "compaction requested: it runs once this turn ends, with your keep text as its instructions"
 
 
 @wheelhouse_tool

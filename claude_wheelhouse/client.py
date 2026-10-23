@@ -684,6 +684,15 @@ class RemoteClient:
         self.layout[key] = value
         self.quietly("/settings", {"key": key, "value": value})
 
+    def steps_table(self) -> dict:
+        return self.get("/settings/steps")
+
+    def set_step(self, event: str, switch: str, on: bool | None) -> Done:
+        return self.done(f"/settings/steps/{event}", {"switch": switch, "on": on})
+
+    def choose_steps(self, ticks: dict[str, bool]) -> Done:
+        return self.done("/settings/steps/choose", {"ticks": ticks})
+
     def tutorial(self) -> dict | None:
         return self.tutorial_state.get("facts")
 

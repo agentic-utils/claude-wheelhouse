@@ -22,5 +22,9 @@ to a session: launch.protocol_file drops it. -->
   `end_session`. Either stops this session once it returns: call it last. If a later
   message says the request was cancelled, carry on as before.
 - While the person is away, the wheelhouse may send a `[wheelhouse] Keepalive` or
-  `[wheelhouse] Check:` turn about every 55 minutes to keep your prompt cache warm. Do as
+  `[wheelhouse] Check:` turn about every 50 minutes to keep your prompt cache warm. Do as
   it says and nothing more.
+- On a long run whose context has grown large, you can ask to be compacted yourself with
+  `request_compact(keep)`, `keep` being what to carry through (open threads, decisions,
+  files, the next step). The wheelhouse compacts you once your turn ends, never during it,
+  so end your turn soon after. One request at a time, and not again within 30 minutes.

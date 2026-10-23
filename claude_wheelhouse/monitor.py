@@ -9,6 +9,7 @@ import sqlite3
 import sys
 import time
 
+from . import steps
 from .store import GONE_TEXT, Store
 
 POLL_SECONDS = 2
@@ -91,6 +92,16 @@ REQUEST_TEXT = {
             "wheelhouse items, then call park_session: this session stops once it returns.",
 }
 
+END_MECHANICS = "Then call end_session: this session stops once it returns."
+
+
+def request_text(store: Store, what: str, sep: str = "\n\n") -> str:
+    """A request as the session is told it. End is the Before Forget step (steps.py): its
+    announce and add-ons as switched, then end_session; Park keeps its own text."""
+    if what != "end":
+        return REQUEST_TEXT[what]
+    return steps.message(store, "before_forget", END_MECHANICS, sep=sep)
+
 
 def retry(fn, attempts: int = 5, pause: float = 0.2):
     """Retry a write that hit "database is locked". Used for confirm: the messages have
@@ -126,11 +137,11 @@ def poll_once(store: Store, sid: str, out=sys.stdout) -> int | None:
             retry(lambda: store.confirm(msgs[:shown]))
         finally:
             store.release(msgs[shown:])
-    for what, text in REQUEST_TEXT.items():
+    for what in REQUEST_TEXT:
         asked = session[f"{what}_requested_at"]
         if asked and session[f"{what}_told_at"] != asked and store.tell_request(sid, what, asked):
             try:
-                print(text, file=out, flush=True)
+                print(request_text(store, what, sep=" "), file=out, flush=True)
             except BaseException:
                 store.untell_request(sid, what)
                 raise

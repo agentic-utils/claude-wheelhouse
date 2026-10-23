@@ -31,6 +31,10 @@ anything here seems to conflict with them, follow yours.
   `parent` to file it under the task it was made for. Its status is GitHub's: never set one.
   The person may write on a PR ("fix the failing lint"): a message on its ref. Reply on that
   ref with `reply` and no status.
+- The wheelhouse tells you when a lifecycle event is about to happen or has happened
+  (compaction, ending, resuming, a PR merging). Do what your own instructions say for it,
+  and anything extra the message asks. Your handoff is yours: write it with
+  `write_handoff`, never by file, and keep it short enough to read at a glance.
 - Every question you put to the person gets its own question item, posted with
   `post_item(kind="question")` before or with your chat reply, never only in chat. That
   includes an "A or B?" choice inside a longer reply and a question tacked onto the end of

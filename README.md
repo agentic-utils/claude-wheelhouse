@@ -338,15 +338,26 @@ session.
   browser. Detail always shows what you picked last, in the inbox or here: the other list
   highlights it too if it lists it, and otherwise hides its highlight until you click, press
   `Enter` or move in it again. A PR no session made isn't an item, so picking it leaves
-  nothing selected and Detail says so. Without `gh`, or not logged in, the pane says so. Under the table, the PR
-  selected has three buttons, which a right-click on its row gives as a menu too: **Open**
-  (the browser); **Merge**, asked first, with `gh pr merge` the way the repo allows (a
-  merge commit where it can, else squash, else rebase), saying under the table what
-  stood in its way if it didn't (a review required, conflicts, failing checks, as `gh`
-  says); and **Request review**, which asks for a Slack channel or name (`#channel`,
-  `@name`, past ones offered most recent first) and sends the session that made the PR a
-  message asking it to post the request on Slack. For a PR no session made (`PRs · all`,
-  with no session selected) it is greyed: there is no session to ask.
+  nothing selected and Detail says why. Without `gh`, or not logged in, the pane says so.
+  Mark PRs to act on several at once, as in the inbox: `Ctrl+click` toggles one,
+  `Shift+click` (or `Alt+click`) takes the range, `Space` and `Shift+Up`/`Shift+Down` do
+  the same from the keyboard, and a plain click or `Esc` drops the marks; the pane's
+  bottom border counts them. Under the table, the PRs marked (or else the one selected)
+  have four buttons, which a right-click on a row gives as a menu too (for every PR marked
+  if the row is one of them, else for that row alone): **Open** (the browser); **Merge**,
+  asked first, with `gh pr merge` the way the repo allows (a merge commit where it can,
+  else squash, else rebase); **Request review**, which asks once for a Slack channel or
+  name (`#channel`, `@name`, past ones offered most recent first) and sends each PR's
+  session a message asking it to post the request on Slack (greyed, or the PR skipped and
+  said so, where no session made it); and **Close**, asked first, with `gh pr close`. Merge
+  and Close name every PR in their question, and say under the table what came of each:
+  done, or what stood in its way (a review required, conflicts, failing checks, as `gh`
+  says). While Detail shows a PR the pane lists (a session's PR item, or one no session
+  made, picked here), it has the same buttons for that PR, and under its thread the PR's
+  checks (each failing one by name, a link to its run), description, history (commits,
+  a run of them on one line, reviews and events) and comments, all as plain text. That
+  detail is fetched in the background and kept for two minutes, fetched again sooner when
+  the PR changes, and on `r` in the PRs pane.
 - **The Decisions pane.** Under the inbox, the design decisions (ADRs) of every repo a session works
   in: each `NNNN-*.md` file in the repo's `docs/adr`, or in the directories a session there
   named with `set_doc_dirs` instead (`.plan/`, say, only if named), read again every 10
@@ -480,6 +491,22 @@ how to work.
   on joining, the notes a fork and its parent get ([`fork.py`](claude_wheelhouse/fork.py)), and the keepalive and check messages, as `[wheelhouse]` notifications.
 - [The plugin's hook](claude_wheelhouse/plugin/hooks/hooks.json): after a compaction,
   the session's open tasks and questions.
+- [Session steps](claude_wheelhouse/steps.py): what a session is told at Compact and after
+  it (in the wheelhouse only), at Stop & Forget, when it resumes after an hour or more away
+  (or parked), and when one of its PRs merges. It is told the event is coming or has
+  happened, so your own instructions can act, and asked for a handoff (what was done,
+  decisions, open threads, next step), which it writes with the `write_handoff` tool. Its
+  handoff is read back to it on resume and after compaction. A PR that merges while the
+  session isn't running is told when it resumes, never by starting it. Messages after an
+  event go at once, without waiting for the session's queued answers to be sent. The first
+  press of Compact, Stop & Forget or Relaunch asks once which add-ons you want; **Session
+  steps**, in the command palette (`Ctrl+P`), has every switch, one row per event. Each is
+  also a setting: `WHEELHOUSE_STEP_<EVENT>_<SWITCH>=on|off` or `STEP_<EVENT>_<SWITCH>=` in a
+  `.env` (such as `STEP_PR_MERGED_CLEANUP=off`), and `STEP_ADDONS=off` turns every add-on
+  off, for instructions of your own that cover it all. Before and After Compact exist only
+  in SDK mode. The handoff shows as the
+  session's `handoff` doc, kept in `handoffs/` beside the database; one untouched for 30
+  days is removed when the daemon starts.
 
 `claude-wheelhouse protocol` prints all of it in one go, exactly as a session receives it,
 along with the launch command.
@@ -547,7 +574,7 @@ Text: drag the mouse over the conversation or a thread to select part of it (sho
 on white), double-click to select a word, `Ctrl+A` in the answer box selects its text (in the item list it marks the finished rows; in a doc opened
 full screen it selects the whole doc), and `Ctrl+C` copies the selection (through the terminal, which Windows Terminal supports). Right-click on a session in the session list selects it and opens a menu of
 its buttons (greyed as they are under the list; Esc or a click outside closes it); on a PR in the PRs pane, a menu of its
-actions. Elsewhere right-click does as a
+actions (of every PR marked, if it is one). Elsewhere right-click does as a
 terminal's does: it copies the selection, or with nothing selected pastes the clipboard
 into the answer box under the pointer (or the focused one). Under WSL the paste reads the
 Windows clipboard through PowerShell, so it takes most of a second; elsewhere it pastes the
@@ -673,11 +700,14 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   question, the tool's reply lists what is in doubt, as `Still open: T1 waiting, Q2 reply
   owed`. Nothing is added when nothing is in doubt.
 - While you're away, a session over 150k tokens of context that waits on you or has an
-  item in doubt gets a `[wheelhouse]` message 55 minutes after its last turn, and every 55
+  item in doubt gets a `[wheelhouse]` message 50 minutes after its last turn, and every 50
   minutes after that. It keeps the session's prompt cache warm (a cold one is written again
   whole), and with an item in doubt it is the check, `Check: T1 running, Q2 reply owed`,
   which the session answers by correcting what's finished. It stops once the session has
-  been quiet 8 hours. `--keepalive-hours N` (on the app or `claude-wheelhouse daemon`), or
+  been quiet 8 hours. Then a session run in the wheelhouse is compacted while its cache is
+  still warm (asked first, as Compact asks, and compacted without notes if none come back
+  in 10 minutes), and a tab idle-compacts by itself about 54 minutes later (the wheelhouse
+  launches tabs to do so past 150k tokens). `--keepalive-hours N` (on the app or `claude-wheelhouse daemon`), or
   `WHEELHOUSE_KEEPALIVE_HOURS=N`, or `KEEPALIVE_HOURS=N` in a `.env` (see
   [Settings](#settings)), sets another limit; fractions are allowed and 0
   turns it off. Each message costs one request, which reads the cached context: for a
@@ -688,7 +718,16 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   instructions for the compaction (none: the session is asked what to keep) and what follows
   it: just compact, send its queued answers in the same one prompt as that reminder (the
   default), or park it at once, sending nothing more, so nothing writes the compacted context
-  to the cache until it is unparked. Permission items are answered with buttons: Allow and Always at once, while Deny opens a
+  to the cache until it is unparked. While a compaction is under way, from Compact pressed
+  until the host says it's compacted (or got no notes, or was interrupted), Compact is off,
+  the session's inbox items and Detail dim and ignore clicks, and its eye in the session
+  list sweeps blue instead of red. The session can also ask for a compaction itself, with
+  the `request_compact` tool and the notes it wants kept, for long autonomous runs: the
+  wheelhouse compacts it once its turn ends, never during it, as if you had pressed Compact
+  with those instructions (then just compact). One request at a time, none within 30
+  minutes of its last, and only in a session run in the wheelhouse; a Compact or Interrupt
+  you press first, Park, Stop & Forget or a move to a tab drops a request still waiting, and
+  lifts its 30 minutes. Permission items are answered with buttons: Allow and Always at once, while Deny opens a
   one-line box for an optional reason (the session reads it as why, so it can try something
   else); Enter denies, empty or not, and Esc, wherever focus is, goes back to the buttons. The plugin's `SessionStart` hook does it
   ([`hooks.json`](claude_wheelhouse/plugin/hooks/hooks.json)): it runs

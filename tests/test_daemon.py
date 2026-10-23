@@ -15,7 +15,7 @@ import httpx2
 import pytest
 from sse_starlette.sse import AppStatus
 
-from claude_wheelhouse import daemon as daemon_mod, fingerprint, hub as hub_mod, launch, liveness, store as store_mod, transcript
+from claude_wheelhouse import daemon as daemon_mod, fingerprint, hub as hub_mod, launch, liveness, steps, store as store_mod, transcript
 from claude_wheelhouse.daemon import AlreadyRunning, Daemon, Feed, PortTaken, checked_address, hosts, listener, take_lock
 from claude_wheelhouse.hub import Event
 from claude_wheelhouse.store import COMPACT_QUESTION, SessionGone, Store
@@ -814,7 +814,7 @@ async def test_a_tab_session_only_from_this_machine(daemon, store, tmp_path, add
 def every_route(daemon):
     """(method, path) for each route the daemon serves, its parameters filled in."""
     params = {"sid": "nosuch", "ref": "T1", "action": "rename", "id": "1", "id:int": "1", "mid": "probe",
-              "rest:path": "echo/x"}
+              "rest:path": "echo/x", "event": "pr_merged"}
     out = []
     for route in daemon.app.routes:
         path = route.path
@@ -826,7 +826,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 37 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 40 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 
@@ -893,6 +893,17 @@ NEW_ROUTES = [
     ("POST", "/settings", {"key": "layout.x", "value": "0.5"}, lambda store, sid, r: store.setting("layout.x") == "0.5",
      "a splitter's size kept"),
     ("GET", "/settings", None, lambda store, sid, r: r.json() == {}, "the kept sizes"),
+    ("GET", "/settings/steps", None, lambda store, sid, r: (r.json()["chosen"], r.json()["note"]) == (False, steps.after_note(True)),
+     "the session steps' switches"),
+    ("POST", "/settings/steps/pr_merged", {"switch": "cleanup", "on": False},
+     lambda store, sid, r: store.setting("step.pr_merged.cleanup") == "off", "a step's switch kept"),
+    ("POST", "/settings/steps/pr_merged", {"switch": "announce", "on": "yes"},
+     lambda store, sid, r: r.status_code == 400, "on is true, false or null"),
+    ("POST", "/settings/steps/session_start", {"switch": "announce", "on": True},
+     lambda store, sid, r: r.status_code == 400, "no such switch"),
+    ("POST", "/settings/steps/choose", {"ticks": {"handoff": False}},
+     lambda store, sid, r: store.setting(steps.CHOSEN) and store.setting("step.on_resume.handoff") == "off",
+     "the first-press dialog's ticks"),
     ("POST", "/settings", {"key": "agents_since", "value": "x"}, lambda store, sid, r: r.status_code == 400,
      "no other setting"),
     ("GET", "/adoptable", None, lambda store, sid, r: isinstance(r.json(), list), "what Adopt offers"),

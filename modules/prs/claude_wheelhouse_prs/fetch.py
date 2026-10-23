@@ -32,6 +32,100 @@ FIELDS = """fragment F on PullRequest {
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 }"""
 
+# a PR's detail (#145): its description, the newest of its timeline (commits, comments, reviews
+# and what happened to it), and its head commit's checks, one by one
+DETAIL_EVERY = 120   # seconds a PR's detail is kept before a pick fetches it again
+DETAIL_GAP = 10      # seconds: r fetches it again, but not within this of the last
+HISTORY = 40         # timeline entries asked for
+EVENTS = ("PULL_REQUEST_COMMIT", "ISSUE_COMMENT", "PULL_REQUEST_REVIEW", "REVIEW_REQUESTED_EVENT", "READY_FOR_REVIEW_EVENT",
+          "CONVERT_TO_DRAFT_EVENT", "HEAD_REF_FORCE_PUSHED_EVENT", "CLOSED_EVENT", "REOPENED_EVENT", "MERGED_EVENT")
+DETAIL = ("query($owner: String!, $name: String!, $number: Int!) {\n"
+          "  repository(owner: $owner, name: $name) { pullRequest(number: $number) {\n"
+          f"    body\n    timelineItems(last: {HISTORY}, itemTypes: [{', '.join(EVENTS)}]) {{ nodes {{ __typename\n"
+          "      ... on PullRequestCommit { commit { abbreviatedOid messageHeadline committedDate } }\n"
+          "      ... on IssueComment { author { login } createdAt body url }\n"
+          "      ... on PullRequestReview { author { login } submittedAt state body url }\n"
+          "      ... on ReviewRequestedEvent { createdAt actor { login } requestedReviewer { ... on User { login } ... on Team { name } } }\n"
+          + "".join(f"      ... on {t} {{ createdAt actor {{ login }} }}\n" for t in
+                    ("ReadyForReviewEvent", "ConvertToDraftEvent", "HeadRefForcePushedEvent", "ClosedEvent",
+                     "ReopenedEvent", "MergedEvent"))
+          + "    } }\n"
+          "    commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { __typename\n"
+          "      ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } }\n"
+          "      ... on StatusContext { context state targetUrl } } } } } } }\n"
+          "  } }\n}\n")
+BAD = ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE")   # a check failed
+DONE = ("SUCCESS", "NEUTRAL", "SKIPPED")                                                    # a check passed
+SAID = {"PullRequestReview": {"APPROVED": "approved", "CHANGES_REQUESTED": "asked for changes",
+                              "COMMENTED": "reviewed", "DISMISSED": "review dismissed"},
+        "ReadyForReviewEvent": "marked it ready", "ConvertToDraftEvent": "made it a draft",
+        "HeadRefForcePushedEvent": "force-pushed", "ClosedEvent": "closed it", "ReopenedEvent": "reopened it",
+        "MergedEvent": "merged it", "IssueComment": "commented"}
+COMMENTS = 10        # the newest comments shown
+
+
+def login(node: dict | None, key: str = "author") -> str:
+    return ((node or {}).get(key) or {}).get("login") or "someone"
+
+
+def check(node: dict) -> dict | None:
+    """A check of the head commit's: {"name", "url", "state"}, state one of failing,
+    running or passed; None for none."""
+    if node.get("__typename") == "StatusContext":
+        state = node.get("state") or ""
+        return {"name": node.get("context") or "?", "url": node.get("targetUrl") or "",
+                "state": "failing" if state in BAD else "passed" if state in DONE else "running"}
+    if node.get("__typename") == "CheckRun":
+        flow = ((((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")) or {}).get("name")
+        name = node.get("name") or "?"
+        conclusion = node.get("conclusion") or ""
+        return {"name": f"{flow} / {name}" if flow else name, "url": node.get("detailsUrl") or "",
+                "state": "failing" if conclusion in BAD else "passed" if conclusion in DONE
+                else "running" if node.get("status") != "COMPLETED" or not conclusion else "passed"}
+    return None
+
+
+def event(node: dict) -> dict | None:
+    """A timeline entry as the history shows it: {"at", "what"} (a commit's also "commit");
+    None for one it doesn't."""
+    kind = node.get("__typename")
+    if kind == "PullRequestCommit":
+        c = node.get("commit") or {}
+        return {"at": c.get("committedDate") or "", "commit": c.get("abbreviatedOid") or "",
+                "what": c.get("messageHeadline") or ""}
+    if kind == "PullRequestReview":
+        return {"at": node.get("submittedAt") or "", "what": f"{login(node)} "
+                + SAID[kind].get(node.get("state"), (node.get("state") or "reviewed").lower())}
+    if kind == "IssueComment":
+        return {"at": node.get("createdAt") or "", "what": f"{login(node)} commented"}
+    if kind == "ReviewRequestedEvent":
+        who = node.get("requestedReviewer") or {}
+        return {"at": node.get("createdAt") or "",
+                "what": f"{login(node, 'actor')} asked {who.get('login') or who.get('name') or 'someone'} for a review"}
+    if kind in SAID:
+        return {"at": node.get("createdAt") or "", "what": f"{login(node, 'actor')} {SAID[kind]}"}
+    return None
+
+
+def detail(data: dict) -> dict:
+    """The detail query's data as the pane shows it: {"body", "checks": every check, failing
+    first, "history": the timeline, oldest first, "comments": the newest COMMENTS comments and
+    reviews that say something, oldest first}."""
+    pr = (data.get("repository") or {}).get("pullRequest")
+    if not isinstance(pr, dict):
+        raise RuntimeError("GitHub has no such pull request")
+    nodes = [n for n in ((pr.get("timelineItems") or {}).get("nodes") or []) if isinstance(n, dict)]
+    commits = (pr.get("commits") or {}).get("nodes") or []
+    rollup = (((commits[0] or {}).get("commit") or {}).get("statusCheckRollup") or {}) if commits else {}
+    checks = [c for n in ((rollup.get("contexts") or {}).get("nodes") or []) if isinstance(n, dict) and (c := check(n))]
+    said = [{"author": login(n), "at": n.get("createdAt") or n.get("submittedAt") or "", "body": n.get("body") or "",
+             "url": n.get("url") or ""}
+            for n in nodes if n.get("__typename") in ("IssueComment", "PullRequestReview") and (n.get("body") or "").strip()]
+    order = ("failing", "running", "passed")
+    return {"body": pr.get("body") or "", "checks": sorted(checks, key=lambda c: order.index(c["state"])),
+            "history": [e for n in nodes if (e := event(n))], "comments": said[-COMMENTS:]}
+
+
 Runner = Callable[[list[str]], tuple[int, str, str]]   # argv -> (exit code, stdout, stderr)
 
 
@@ -119,7 +213,11 @@ def gh(argv: list[str]) -> tuple[int, str, str]:
 def run(q: str, runner: Runner) -> dict:
     """The query sent through `gh api graphql`: its data. A partial answer (one alias GitHub
     couldn't resolve) still counts. Unavailable when not logged in; RuntimeError otherwise."""
-    code, out, err = runner(["gh", "api", "graphql", "-f", f"query={q}"])
+    return answer(*runner(["gh", "api", "graphql", "-f", f"query={q}"]))
+
+
+def answer(code: int, out: str, err: str) -> dict:
+    """`gh api graphql`'s answer: its data, as run reads it."""
     try:
         data = json.loads(out).get("data") if out.strip() else None
     except (ValueError, AttributeError):
@@ -173,6 +271,8 @@ class Fetcher:
         self.cache = Cache(Path(ctx.state_dir) / "prs.db")
         self.last = self.cache.fetched_at()   # a restart keeps the GAP
         self.lock = threading.Lock()
+        self.details: dict[str, tuple[float, dict]] = {}   # each PR's detail as last fetched (detail), and when
+        self.results: dict[str, dict] = {}   # what each merge or close came to, until asked (pane's result route)
         self.error: str | None = None     # gh unavailable: shown in place of the table
         self.warning: str | None = None   # the last fetch failed otherwise: the cache shown, and why
 
@@ -243,12 +343,62 @@ class Fetcher:
             return {"error": str(e) or type(e).__name__}
         if code != 0:
             return {"error": last_line(err or out) or f"gh exited {code}"}
+        self.ended(url, "MERGED")
+        return {"method": how}
+
+    def close(self, url: str) -> dict:
+        """A PR closed unmerged by `gh pr close` (#146): {"closed": True}, its row marked
+        closed so the pane drops it; {"error"} with why not, as gh says it."""
+        if not isinstance(url, str) or api.pr_url(url) != url:   # the whole of it, nothing gh could take as a flag
+            raise api.Refused(400, f"not a pull request URL: {url!r}")
+        try:
+            code, out, err = self.runner(["gh", "pr", "close", "--", url])
+        except Unavailable as e:
+            return {"error": str(e)}
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            return {"error": str(e) or type(e).__name__}
+        if code != 0:
+            return {"error": last_line(err or out) or f"gh exited {code}"}
+        self.ended(url, "CLOSED")
+        return {"closed": True}
+
+    def ended(self, url: str, state: str) -> None:
+        """A PR merged or closed from here: its row so marked, and its item's status with it."""
         rows = {r["url"]: r for r in self.cache.rows()}
         if url in rows:
-            self.cache.update({**rows[url], "state": "MERGED"})
+            self.cache.update({**rows[url], "state": state})
         if self.ctx.set_pr_states is not None and url in self.items():
-            self.ctx.set_pr_states({url: "merged"})
-        return {"method": how}
+            self.ctx.set_pr_states({url: state.lower()})
+        self.details.pop(url, None)   # gone from the pane: its detail with it
+
+    def detail(self, url: str, fresh: bool) -> dict:
+        """A PR's detail for the Detail pane (#145): its description, history, checks and
+        comments, from one `gh api graphql` call, kept DETAIL_EVERY seconds (fresh: once
+        DETAIL_GAP old). On a failure, {"error"}, with what was fetched before if any. Only
+        for a PR the pane lists (an open one in the cache); the others' kept past
+        DETAIL_EVERY are dropped, so the kept details stay few (#156)."""
+        if not isinstance(url, str) or api.pr_url(url) != url:
+            raise api.Refused(400, f"not a pull request URL: {url!r}")
+        if not any(r["url"] == url and status(r) not in ("merged", "closed") for r in self.cache.rows()):
+            raise api.Refused(404, f"not a pull request the PRs pane lists: {url}")
+        now = self.clock()
+        for old in [u for u, (at, _) in self.details.items() if u != url and now - at >= DETAIL_EVERY]:
+            del self.details[old]
+        at, kept = self.details.get(url, (None, None))
+        if at is not None and now - at < (DETAIL_GAP if fresh else DETAIL_EVERY):
+            return kept
+        owner, repo, n = api.parse_pr(url)
+        try:
+            code, out, err = self.runner(["gh", "api", "graphql", "-f", f"query={DETAIL}",
+                                          "-f", f"owner={owner}", "-f", f"name={repo}", "-F", f"number={n}"])
+            got = detail(answer(code, out, err))
+        except Unavailable as e:
+            return {**(kept or {}), "error": str(e)}
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            return {**(kept or {}), "error": str(e) or type(e).__name__}
+        got["fetched_at"] = now
+        self.details[url] = (now, got)
+        return got
 
 
 METHODS = (("mergeCommitAllowed", "merge"), ("squashMergeAllowed", "squash"), ("rebaseMergeAllowed", "rebase"))
