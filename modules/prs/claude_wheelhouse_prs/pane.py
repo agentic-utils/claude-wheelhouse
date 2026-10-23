@@ -131,7 +131,7 @@ def short(r: dict) -> str:
 
 
 def tip(r: dict) -> str:
-    return f"{r['repo']} #{r['number']}: {r['title']}"
+    return f"{r['repo']} #{r['number']}: {clean(r['title'])}"
 
 
 def link(url: str) -> Text:
@@ -741,7 +741,7 @@ class Prs(Vertical):
     def entries(self, rows: list[dict]) -> list[tuple[str, bool, str]]:
         """Each action for some PRs: (id, disabled, caption). Merge and Close are off while an
         action is under way on any of them; Request review without a session to ask (none
-        made any of them). How many they act on, the note says (listing_note)."""
+        made any of them). How many they act on, the pane's bottom border says (show_scope)."""
         doing = {self.busy[r["url"]] for r in rows if r["url"] in self.busy}
         return [("open", False, "Open"), ("merge", bool(doing), "Merging…" if "merge" in doing else "Merge"),
                 ("review", not any(self.asked(r)[0] for r in rows), "Request review"),
@@ -880,7 +880,7 @@ class Prs(Vertical):
             if skipped:
                 self.outcomes["review"] = f"Not asked for {', '.join(skipped)}: no session made it."
                 self.paint_note()
-        what = f"PR{rows[0]['number']} ({rows[0]['title']})" if len(rows) == 1 \
+        what = f"PR{rows[0]['number']} ({clean(rows[0]['title'])})" if len(rows) == 1 \
             else f"{len(asking)} PRs ({', '.join('PR' + str(r['number']) for r, _, _ in asking)})"
         self.ctx.ask(f"Request a review of {what} on Slack, from: a channel or a name, such as #channel or @name",
                      past, then)
@@ -1064,7 +1064,7 @@ def version(r: dict) -> tuple:
 
 
 def name(r: dict) -> str:
-    return f"PR{r['number']} ({r['title']}) in {short(r)}"
+    return f"PR{r['number']} ({clean(r['title'])}) in {short(r)}"
 
 
 def said(action: str, r: dict, got: dict) -> str:

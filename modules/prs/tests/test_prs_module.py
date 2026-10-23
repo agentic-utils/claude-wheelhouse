@@ -431,6 +431,16 @@ def test_the_detail_text(d, has, lacks, desc):
     assert not any("javascript" in (lnk or "") for lnk in links), f"{desc}: a link only to a web page"
 
 
+def test_a_failing_checks_web_link_opens_it():
+    d = {"body": "", "history": [], "comments": [],
+         "checks": [{"name": "CI / test", "url": "https://github.com/x/y/actions/runs/1", "state": "failing"}]}
+    text = pane.detail_text(fetch.row(node(1)), d, linked=False)
+    at = text.plain.index("CI / test")
+    links = [span.style.meta.get("@click") for span in text.spans
+             if span.start <= at < span.end and hasattr(span.style, "meta") and span.style.meta]
+    assert links == ["app.open_url('https://github.com/x/y/actions/runs/1')"], links
+
+
 @pytest.mark.parametrize("room, want, layout, desc", [
     (62, ["Open", "Merge", "Request review", "Close"], "", "room: their own captions"),
     (40, ["Open", "Merge", "Review", "Close"], "", "a cell short of their own: the short ones"),
