@@ -1414,6 +1414,19 @@ class ItemList(SinkList):
         self.toggles: dict[str, bool] = {}   # each parent row's key: whether its children are hidden
         self.locked: set[str] = set()   # rows of a session being compacted: clicks on them do nothing (#150)
 
+    def unlocked_from(self, key: str, came: str | None) -> str | None:
+        """The row an arrow onto locked key goes to instead: the next unlocked one on the way
+        it was going (from came), else came again if it's still here; None if there's neither."""
+        keys = self.keys()
+        at = keys.index(key)
+        step = -1 if came in keys and keys.index(came) > at else 1
+        i = at + step
+        while 0 <= i < len(keys):
+            if keys[i] and keys[i] not in self.locked:
+                return keys[i]
+            i += step
+        return came if came in keys else None
+
     def locked_at(self, event) -> bool:
         row = event.style.meta.get("row", -1)
         return 0 <= row < self.row_count and self.keys()[row] in self.locked
@@ -6289,6 +6302,12 @@ class WheelhouseApp(App):
                 self.follow(sid)
             self.paint_session_info()
         key = self.items_table.cursor_key()
+        if key is not None and key != self.items_cursor and key in self.items_table.locked:
+            # a compacting session's row: the arrow goes on past it, or back (#150)
+            if (key := self.items_table.unlocked_from(key, self.items_cursor)) is None:
+                return
+            with self.items_table.prevent(DataTable.RowHighlighted):
+                self.items_table.move_cursor(row=self.items_table.get_row_index(key), animate=False)
         if key is not None and key != self.items_cursor:
             self.items_cursor = key
             self.select_row(key)
@@ -6312,6 +6331,9 @@ class WheelhouseApp(App):
     @on(DataTable.RowSelected, "#items")
     def open_thread(self, event: DataTable.RowSelected) -> None:
         self.settle()
+        if event.row_key.value in self.items_table.locked:   # its session is being compacted (#150)
+            self.notify("That session is compacting: its items open once it's done", severity="warning")
+            return
         sid, ref = event.row_key.value.split("|")
         self.saw(sid, ref or None)
         if ref:

@@ -8325,6 +8325,7 @@ class Presses:
 
     def __init__(self, row: dict, status: str):
         self.pressed, self.toasts, self.question, self.forking, self.fork_from = {}, [], True, {}, {}
+        self.compact_seen = {}
         self.sessions, self.statuses, self.relaunching = [row], {row["id"]: status}, set()
         self.client = SimpleNamespace(compact_question=lambda target: {} if self.question else None)
 
@@ -8631,46 +8632,71 @@ async def test_ctrl_z_in_the_answer_box_is_its_own_undo(store, sid):
 @pytest.mark.parametrize("size", [(160, 40), (100, 30)])
 async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size):
     """#150: while its host records a compaction (the question's Compact now, say), Compact is
-    off, the session's inbox rows dim and ignore clicks, Detail dims on one of them, and its
-    eye in the session list is blue; all back once the host says it's compacted."""
-    from claude_wheelhouse import liveness
+    off, the session's inbox rows dim and ignore clicks and keys, Detail dims on one of them,
+    and its eye in the session list is blue; an item it posts meanwhile is never locked; all
+    back once the host says it's compacted, and never while it only waits for notes."""
+    from claude_wheelhouse import host as host_mod, liveness
     from claude_wheelhouse.tui import EYE_BLUE, ItemList, SessionList
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
     store.post_item(sid, "task", "work")
     store.post_item(sid, "question", "which?")
     app = WheelhouseApp(store)
+
+    async def click(key):
+        await pilot.click(table, offset=(table.region.width // 2, table.get_row_index(key) + 1))
+        await pilot.pause()
+
+    async def again():
+        app.refresh_data()
+        await pilot.pause()
+
     async with app.run_test(size=size) as pilot:
         await pick(app, pilot, sid)
         table = app.query_one(ItemList)
-        t1 = next(k for k in table.keys() if k and k.endswith("T1"))
-        q1 = next(k for k in table.keys() if k and k.endswith("Q1"))
-        await pilot.click(table, offset=(table.region.width // 2, table.get_row_index(t1) + 1))
-        await pilot.pause()
+        t1, q1 = (next(k for k in table.keys() if k and k.endswith(r)) for r in ("T1", "Q1"))
+        await click(t1)
         assert app.selected == (sid, "T1"), f"{size}: picked by a click"
 
         store.set_activity(sid, "compacting: collecting notes")   # as the host writes it
-        app.refresh_data()
-        await pilot.pause()
+        await again()
         compact = app.query_one("#compact", Button)
         assert compact.disabled, f"{size}: Compact off while compacting"
         assert {t1, q1} <= table.locked, f"{size}: the session's rows locked"
-        assert "dim" in str(table.get_row(q1)[-1].spans or table.get_row(q1)[-1].style), f"{size}: dimmed"
-        await pilot.click(table, offset=(table.region.width // 2, table.get_row_index(q1) + 1))
-        await pilot.pause()
+        assert "dim" in str(table.get_row(q1)[-1].spans), f"{size}: dimmed"
+        await click(q1)
         assert app.selected == (sid, "T1"), f"{size}: a click on a locked row does nothing"
+        table.focus()
+        for key in ("up", "up", "down"):
+            await pilot.press(key)
+            await pilot.pause()
+            assert app.selected == (sid, "T1") and table.cursor_key() == t1, f"{size}: {key} never lands on a locked row"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen is app.screen_stack[0], f"{size}: Enter opens nothing locked"
         assert app.detail.has_class("compacting"), f"{size}: Detail dims on the session's item"
         sessions = app.query_one(SessionList)
         assert sid in sessions.eyes and sid in sessions.blue, f"{size}: its eye sweeps, blue"
         assert any(EYE_BLUE[0] in str(sp.style) for sp in tui.cylon(0, colours=EYE_BLUE).spans), size
 
+        store.post_item(sid, "question", "asked meanwhile")
+        await again()
+        q2 = next(k for k in table.keys() if k and k.endswith("Q2"))
+        assert q2 not in table.locked, f"{size}: an item posted while compacting is never locked"
+        await click(q2)
+        assert app.selected == (sid, "Q2"), f"{size}: and can be picked"
+
+        store.set_activity(sid, host_mod.AWAITING_NOTES)   # its notes' turn ended without them
+        await again()
+        assert not table.locked and sid not in sessions.blue, f"{size}: waiting for notes isn't compacting"
+
+        store.set_activity(sid, "compacting")
+        await again()
         store.set_activity(sid, "idle · compacted")
-        app.refresh_data()
-        await pilot.pause()
+        await again()
         assert not compact.disabled and not table.locked, f"{size}: Compact and the rows back"
         assert not app.detail.has_class("compacting") and sid not in sessions.blue, f"{size}: all back to normal"
-        await pilot.click(table, offset=(table.region.width // 2, table.get_row_index(q1) + 1))
-        await pilot.pause()
+        await click(q1)
         assert app.selected == (sid, "Q1"), f"{size}: clicks work again"
 
 
