@@ -605,7 +605,12 @@ class Host:
             await self.turn(compact_ask(self.store, nonce, why=QUIET_COMPACT.format(hours=hours)))
             self.compact_nonce, self.compact_notes = nonce, None
             self.store.set_activity(self.sid, f"compacting after {hours} quiet hours: collecting notes")
+        if not self.pending and self.compact_nonce is None and self.compact_then is None and self.compact_key is None:
+            # the session's own request_compact, held until its turn has ended: never sent into one
+            self.store.promote_compact_request(self.sid)
         command = self.store.take_command(self.sid)
+        if command is not None:   # the person's command first: a request still pending goes
+            self.store.drop_compact_request(self.sid)
         if command == "interrupt":
             await self.client.interrupt()
             self.end_compact()

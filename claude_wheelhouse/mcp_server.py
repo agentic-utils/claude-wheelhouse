@@ -185,6 +185,23 @@ def hosted_here(s) -> bool:
 
 
 @wheelhouse_tool
+def request_compact(keep: str) -> str:
+    """Ask the wheelhouse to compact this session once your current turn ends, never during
+    it, with `keep` as the compaction's instructions: what to carry through (open threads,
+    decisions, files, the next step). For long autonomous runs whose context has grown large.
+    Write your handoff first if your instructions keep one, then end your turn soon. Only in
+    a session run inside the wheelhouse (SDK mode), not a terminal tab; one request at a time,
+    and not again within 30 minutes of the last."""
+    if not keep.strip():
+        raise ValueError("keep must say what to carry through the compaction")
+    if not hosted_here(_store):
+        raise ValueError("request_compact works only in a session run inside the wheelhouse (SDK mode); "
+                         "this one runs in a terminal tab, where the person can type /compact")
+    _store.request_compact(_sid, keep.strip())
+    return "compaction requested: it runs once this turn ends, with your keep text as its instructions"
+
+
+@wheelhouse_tool
 def get_input(ref: str | None = None, message_id: int | None = None) -> str:
     """Without arguments: the person's undelivered messages (marked delivered).
     With ref: that item's full body and thread (its messages count as delivered).
