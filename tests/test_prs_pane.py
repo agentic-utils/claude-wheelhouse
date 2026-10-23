@@ -2,6 +2,7 @@
 for the app's fixtures (conftest.py). gh is never run: the route's runner is a stub.
 Skipped when the module isn't installed."""
 
+import asyncio
 import dataclasses
 import json
 import time
@@ -350,11 +351,11 @@ async def test_merge_asks_first_and_says_what_came_of_it(store, sid, github, n, 
         await app.workers.wait_for_complete()
         await pilot.pause()
         await settled(app, pilot)
-        assert github.merges == ([[URL.format(n), "--squash"]] if merged else []), desc
+        assert github.merges == ([["--squash", "--", URL.format(n)]] if merged else []), desc
         note = str(app.query_one("#prs-note").render())
         assert (said in note) if said else not p.outcome, f"{desc}: {note!r}"
         if merged == (0, ""):
-            assert URL.format(n) not in app.query_one("#pr-list").rows, f"{desc}: gone from the list"
+            assert cells(app) == ["PR108"], f"{desc}: gone from the list, the others still in it"
 
 
 @pytest.mark.anyio
@@ -373,8 +374,9 @@ async def test_request_review_asks_the_session_that_made_the_pr_and_remembers_th
         app.screen.query_one(Input).value = "#eng-reviews"
         await pilot.press("enter")
         await pilot.pause()
-        assert sent == [((sid, "PR109"), f"Post a review request for {URL.format(109)} (Change 109) to #eng-reviews "
-                                         "on Slack, following my Slack etiquette.")], "the session that made it, on its item"
+        assert sent == [((sid, "PR109"), pane.request({"url": URL.format(109), "title": "Change 109"}, "#eng-reviews"))], \
+            "the session that made it, on its item"
+        assert sent[0][1].endswith(f'PR: {URL.format(109)}\nTitle: "Change 109"\nTo: "#eng-reviews"'), "the values quoted, last"
         assert json.loads(store.setting(pane.TARGETS)) == ["#eng-reviews", "@sam"], "most recent first"
 
 
@@ -424,3 +426,44 @@ async def test_a_right_click_on_a_pr_opens_its_actions_below_the_row(store, sid,
         await pilot.press("enter")
         await pilot.pause()
         assert opened == [URL.format(109)], f"{size}: Open, on the row clicked"
+        assert table.has_focus and app.query_one("#prs-actions").display, f"{size}: the table focused, its buttons shown"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size", [(100, 30), (80, 24), (160, 40)])
+async def test_the_buttons_fit_the_pane_and_each_click_acts(store, sid, github, monkeypatch, size):
+    """Review of #143: in a narrow pane the buttons stack rather than fall outside it."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await settled(app, pilot)
+        acted = []
+        p = await on_pr(app, pilot, URL.format(109))
+        monkeypatch.setattr(p, "act", lambda action, r: acted.append((action, r["number"])))
+        pane_box = p.content_region
+        for b in app.query_one("#prs-actions").query(Button):
+            assert pane_box.contains_region(b.region) and b.region.width >= len(str(b.label)), \
+                f"{size}: {b.id} {b.region} {str(b.label)!r} inside {pane_box}"
+            await pilot.click(f"#{b.id}")
+            await pilot.pause()
+        assert acted == [("open", 109), ("merge", 109), ("review", 109)], f"{size}: every click acts"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status, error, said, desc", [
+    (404, "no route POST /m/prs/merge", "Couldn't merge PR109: the hub is older: update it", "an older hub"),
+    (503, "the daemon couldn't be reached", "Couldn't merge PR109: the daemon couldn't be reached", "no hub: not gh's"),
+])
+async def test_a_merge_the_hub_refuses_says_so_not_gh(store, sid, github, status, error, said, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p = await on_pr(app, pilot, URL.format(109))
+
+        def refuse(path, body):
+            if body is None:
+                return {"prs": []}
+            raise api.Refused(status, error)
+        p.ctx = dataclasses.replace(p.ctx, call=refuse)
+        await asyncio.to_thread(p.merged, p.selected())   # off the app's thread, as the pane's worker
+        await pilot.pause()
+        assert p.outcome == said and "gh says" not in p.outcome, desc
