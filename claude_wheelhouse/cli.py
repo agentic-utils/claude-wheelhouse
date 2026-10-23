@@ -6,7 +6,7 @@ import os
 import sys
 import textwrap
 
-from . import features
+from . import features, steps
 
 
 def truecolour(environ=os.environ) -> None:
@@ -178,6 +178,9 @@ def parser() -> argparse.ArgumentParser:
     keep.add_argument(features.KEEPALIVE_FLAG, dest="keepalive_hours", metavar="N", default=argparse.SUPPRESS,
                       help=f"keep a quiet session's prompt cache warm for up to N hours (default "
                       f"{features.KEEPALIVE_HOURS:g}, or WHEELHOUSE_KEEPALIVE_HOURS, or KEEPALIVE_HOURS= in a .env; 0 turns it off)")
+    keep.add_argument(steps.STEP_FLAG, dest="step", metavar="EVENT.SWITCH=on|off", action="append", default=None,
+                      help="a session step's switch (steps.py), repeatable, such as pr_merged.cleanup=off; or "
+                      "WHEELHOUSE_STEP_<EVENT>_<SWITCH>, or STEP_<EVENT>_<SWITCH>= in a .env")
     # --animation-fps: the app's animation frame rate (features.animation_fps), before or after tui
     fps = argparse.ArgumentParser(add_help=False)
     fps.add_argument(features.ANIMATION_FLAG, dest="animation_fps", metavar="N", default=argparse.SUPPRESS,
@@ -239,7 +242,9 @@ def main() -> None:
         host = argparse.ArgumentParser(prog="claude-wheelhouse host")
         host.add_argument("session_id")
         host.add_argument(features.KEEPALIVE_FLAG, dest="keepalive_hours", default=None)
+        host.add_argument(steps.STEP_FLAG, dest="step", action="append", default=None)
         hosted = host.parse_args(rest[1:])
+        steps.set_flags(hosted.step)
         if hosted.keepalive_hours is not None:
             features.set_keepalive_hours(hosted.keepalive_hours)
         from .host import main as host_main
@@ -257,6 +262,8 @@ def main() -> None:
         features.set_port(args.port)
     if getattr(args, "keepalive_hours", None) is not None:
         features.set_keepalive_hours(args.keepalive_hours)
+    for bad in steps.set_flags(getattr(args, "step", None)):   # said, then ignored
+        print(f"claude-wheelhouse: {bad}", file=sys.stderr)
     if getattr(args, "animation_fps", None) is not None:
         features.set_animation_fps(args.animation_fps)
 

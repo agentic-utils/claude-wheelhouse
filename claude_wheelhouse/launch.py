@@ -351,7 +351,7 @@ def open_host(store: Store, sid: str, notice: bool = True) -> None:
         # rather than left a zombie of the TUI that still looks alive. It runs in the
         # session's directory, without the app's flags: told how long to keep it warm
         subprocess.run([*liveness.DETACH, sys.executable, "-m", "claude_wheelhouse", "host", sid,
-                        features.KEEPALIVE_FLAG, f"{features.keepalive_hours():g}"],
+                        features.KEEPALIVE_FLAG, f"{features.keepalive_hours():g}", *steps.flag_args()],
                        cwd=session["cwd"], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                        env=clean_env(WHEELHOUSE_DB=str(store.path)), check=True)
     if notice and resuming:

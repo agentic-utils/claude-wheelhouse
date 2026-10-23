@@ -104,6 +104,11 @@ def set_flags(values: list[str] | None) -> list[str]:
     return bad
 
 
+def flag_args() -> list[str]:
+    """The --step values given, as arguments again: for a daemon or host this process starts."""
+    return [a for (event, sw), v in _flags.items() for a in (STEP_FLAG, f"{event}.{sw}={v}")]
+
+
 def env_key(event: str, sw: str) -> str:
     return f"STEP_{event.upper()}_{sw.upper()}"
 
@@ -154,6 +159,38 @@ def switch(store: Store, event: str, sw: str) -> bool:
     if sw != "announce" and event in UNATTENDED and not chosen(store):
         return False
     return DEFAULTS[(event, sw)]
+
+
+def table(store: Store, sdk: bool) -> dict:
+    """The Session steps dialog's rows: each event that runs (enabled), its switches, each
+    on or off and, if given outside the app, where from; whether the first-press dialog has
+    been answered; and the plain note on "after" messages."""
+    rows = [{"event": e, "title": TITLES[e],
+             "switches": [{"name": sw, "on": switch(store, e, sw), "fixed": got[1] if (got := fixed(e, sw)) else None}
+                          for sw in switches(e)]}
+            for e in EVENTS if enabled(e, sdk)]
+    return {"chosen": chosen(store), "events": rows, "note": AFTER_NOTE}
+
+
+def set_switch(store: Store, event: str, sw: str, on: bool | None) -> None:
+    """A switch as chosen in the app; None puts its default back. Refused for a switch the
+    event doesn't have."""
+    if event not in EVENTS or sw not in switches(event):
+        raise ValueError(f"{event}.{sw} is not a session step's switch")
+    if on is None:
+        store.clear_setting(setting_key(event, sw))
+    else:
+        store.set_setting(setting_key(event, sw), "on" if on else "off")
+
+
+def choose(store: Store, ticks: dict[str, bool]) -> None:
+    """The first-press dialog answered: each offered tick (OFFERED) on or off for every
+    add-on it names, and the dialog never shown again."""
+    for name, _, pairs in OFFERED:
+        if name in ticks:
+            for event, sw in pairs:
+                set_switch(store, event, sw, bool(ticks[name]))
+    store.set_setting(CHOSEN, "1")
 
 
 def enabled(event: str, sdk: bool) -> bool:

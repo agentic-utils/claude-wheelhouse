@@ -214,3 +214,32 @@ def test_session_start(store, sid, tmp_path, on, has_last, desc):
         store.set_setting(steps.setting_key("session_start", "handoff"), "on")
     prompt = launch.opening_prompt(store.session(sid), store)
     assert prompt.startswith("Ticket: #7") and ("where I left it" in prompt) is has_last, desc
+
+
+@pytest.mark.parametrize("sdk, compaction, desc", [
+    (True, True, "SDK mode: compaction's rows listed"),
+    (False, False, "outside it: no Before or After Compact rows"),
+])
+def test_table_lists_what_runs(store, sdk, compaction, desc):
+    table = steps.table(store, sdk)
+    events = [r["event"] for r in table["events"]]
+    assert ("before_compact" in events and "after_compact" in events) is compaction, desc
+    assert table["note"] == steps.AFTER_NOTE and table["chosen"] is False, desc
+
+
+def test_choose_sets_every_addon_its_tick_names(store):
+    steps.choose(store, {"handoff": False, "cleanup": True})
+    assert steps.chosen(store), "answered: never shown again"
+    assert not any(steps.switch(store, e, "handoff") for e in ("before_compact", "before_forget", "on_resume")), \
+        "handoff unticked: off at every event"
+    assert steps.switch(store, "pr_merged", "cleanup") and steps.switch(store, "before_forget", "items"), \
+        "ticked, or not offered here: on"
+
+
+def test_a_fixed_switch_shows_where_from(store, monkeypatch):
+    monkeypatch.setenv("WHEELHOUSE_STEP_BEFORE_FORGET_ITEMS", "off")
+    row = next(r for r in steps.table(store, False)["events"] if r["event"] == "before_forget")
+    items = next(sw for sw in row["switches"] if sw["name"] == "items")
+    assert items == {"name": "items", "on": False, "fixed": "WHEELHOUSE_STEP_BEFORE_FORGET_ITEMS"}
+    with pytest.raises(ValueError):
+        steps.set_switch(store, "session_start", "announce", True)

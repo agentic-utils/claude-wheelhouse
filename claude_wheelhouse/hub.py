@@ -1065,6 +1065,20 @@ class Hub:
         if s is not None and (runner(s) == "tab" or s["shell"]):
             transcript_usage.carry(self.store, follower.sid, follower.snap)
 
+    def steps_table(self) -> dict:
+        """The session steps' switches, for the dialogs (steps.table)."""
+        return steps.table(self.store, self.sdk)
+
+    def set_step(self, event: str, switch: str, on: bool | None) -> Done:
+        """A step's switch as chosen in Session steps; None, its default."""
+        steps.set_switch(self.store, event, switch, on)
+        return Done()
+
+    def choose_steps(self, ticks: dict[str, bool]) -> Done:
+        """The first-press dialog's ticks (steps.choose)."""
+        steps.choose(self.store, ticks)
+        return Done()
+
     def set_pr_states(self, states: dict[str, str]) -> int:
         """GitHub's states from the PRs pane's fetch (Store.set_pr_states), and the PR merged
         step for each item that has just turned merged. Returns the items changed."""

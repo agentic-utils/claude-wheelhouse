@@ -60,7 +60,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, callout, columns, docblocks, docroots, emoji, features, models, ordering, prs, subagents, transcript, transcript_usage, tutorial, whatsnew
+from . import api, callout, columns, docblocks, docroots, emoji, features, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .rows import KIND_COLOUR, RowTips, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
@@ -3156,6 +3156,81 @@ class ParkSession(Dialog):
                            if event.button.id == "park-go" else None)
 
 
+class FirstSteps(Dialog):
+    """The first press of anything that fires a session step with add-ons (Compact, Stop &
+    Forget, Relaunch or Unpark), before any choice was made: what the wheelhouse tells a
+    session, and the add-ons offered (steps.OFFERED), ticked. OK answers {name: ticked};
+    Esc cancels the press, asked again next time. sdk: compaction is named only in SDK mode."""
+    ACTION = "steps-ok"
+
+    def __init__(self, sdk: bool):
+        super().__init__()
+        self.sdk = sdk
+
+    def compose(self) -> ComposeResult:
+        events = "compacts, ends or resumes" if self.sdk else "ends or resumes"
+        with Vertical(id="dialog"):
+            yield Label(Text(f"When the wheelhouse {events} a session, it tells the session first, so your own "
+                             "instructions (CLAUDE.md) can act. It can also do more:"), classes="dialog-prompt")
+            for name, text, _ in steps.OFFERED:
+                yield Checkbox(Text(text), True, id=f"steps-{name}")
+            yield Label(Text(steps.AFTER_NOTE), classes="dialog-note")
+            with Horizontal(classes="buttons"):
+                yield Button("OK", variant="primary", id="steps-ok")
+                yield Button("Cancel", id="steps-cancel")
+            yield Label(Text("Session steps, in the command palette (Ctrl+P), has every switch."), classes="dialog-note")
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        event.stop()   # answered here: not the press it stands in front of
+        self.action_answer({name: self.query_one(f"#steps-{name}", Checkbox).value for name, _, _ in steps.OFFERED}
+                           if event.button.id == "steps-ok" else None)
+
+
+class SessionSteps(Dialog):
+    """Session steps, from the command palette: each event's announce and add-ons
+    (steps.table), one checkbox each; one given by flag or .env shows as fixed, with where
+    from, and can't be changed here. Compaction's rows only in SDK mode. Answers the
+    switches changed, {(event, switch): on}, or None."""
+    ACTION = "session-steps-ok"
+
+    def __init__(self, table: dict):
+        super().__init__()
+        self.table = table
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(Text("Session steps: what the wheelhouse tells a session at each event. Announce lets "
+                             "your own instructions act; the rest ask for more."), classes="dialog-prompt")
+            with VerticalScroll(id="session-steps-rows"):
+                for row in self.table["events"]:
+                    yield Label(Text(row["title"], style="bold"))
+                    for sw in row["switches"]:
+                        caption = sw["name"] + (f" (fixed by {sw['fixed']})" if sw["fixed"] else "")
+                        yield Checkbox(Text(caption), sw["on"], id=f"step-{row['event']}-{sw['name']}",
+                                       disabled=bool(sw["fixed"]))
+            yield Label(Text(self.table["note"]), classes="dialog-note")
+            with Horizontal(classes="buttons"):
+                yield Button("OK", variant="primary", id="session-steps-ok")
+                yield Button("Cancel", id="session-steps-cancel")
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id != "session-steps-ok":
+            self.action_answer(None)
+            return
+        changed = {}
+        for row in self.table["events"]:
+            for sw in row["switches"]:
+                box = self.query_one(f"#step-{row['event']}-{sw['name']}", Checkbox)
+                # before any choice, every switch as shown: the choice is made here, so none
+                # turns to its default afterwards (an unattended add-on shows off until then)
+                if not sw["fixed"] and (box.value != sw["on"] or not self.table["chosen"]):
+                    changed[(row["event"], sw["name"])] = box.value
+        self.action_answer(changed)
+
+
 class ForgetChoice(Dialog):
     """Stop & Forget on a running session: Let it know (the end request, its end steps as
     any session's) or Just stop it (stopped now and its row deleted, nothing sent to it).
@@ -3664,7 +3739,8 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap "
-         "the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back.")
+         "the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; "
+         "Session steps there has what the wheelhouse tells a session at each event.")
 TOUR_HELP = ("Esc ends the tour at any time, from any of its boxes or the New session it opens. While the title bar "
              "shows a badge, L, or a click on it, resumes a tour the wheelhouse quit in the middle of, or offers "
              "what's new since you last looked: a top-up showing only the new tips, pane by pane, with no demo session, "
@@ -3842,6 +3918,7 @@ class WheelhouseApp(App):
     Button.-style-default:disabled {{ border-top: tall {OFF}; border-bottom: tall {OFF}; }}
     Button.-style-default.-textual-compact:disabled {{ border: none; }}
     #detail.compacting {{ opacity: 50%; }}
+    #session-steps-rows {{ height: auto; max-height: 60vh; }}
     #conversation-buttons #mode, #session-buttons Button.wide {{ column-span: 2; }}
     #dialog {{ width: 80; max-width: 100%; height: auto; max-height: 100%; overflow-y: auto; padding: 1 2;
                background: #000000; color: {MATRIX}; border: thick #ff2a6d; }}
@@ -3934,6 +4011,7 @@ class WheelhouseApp(App):
         self.started = 0.0   # when the animation's time starts (animate)
         self.half_frame = 0   # the frame // 2 the eyes and panes last moved on (animate)
         self.blink = False   # whether the busy dots were last dimmed (animate, dot_dimmed)
+        self.steps_chosen = False   # the first-press dialog answered, here or before (first_press)
         self.animating = True   # whether it runs: paused while unfocused with nothing busy (pace)
         self.filter_sid: str | None = None
         self.followed: str | None = None   # the session last followed, which a key picks again (SessionList.reveal)
@@ -5492,6 +5570,40 @@ class WheelhouseApp(App):
         yield from super().get_system_commands(screen)
         yield SystemCommand("Reset layout", "Put every pane back in its default place, and the dividers at their default sizes",
                             self.action_reset_layout)
+        yield SystemCommand("Session steps", "What the wheelhouse tells a session when it compacts, ends, resumes or "
+                            "its PR merges, and the handoff it keeps", self.action_session_steps)
+
+    def action_session_steps(self) -> None:
+        """Session steps, from the command palette: each switch changed is kept."""
+        def chosen(changed: dict | None) -> None:
+            for (event, switch), on in (changed or {}).items():
+                self.told(self.client.set_step(event, switch, on))
+            if changed is not None and not self.steps_chosen:   # answered: the first-press dialog has nothing left to offer
+                self.steps_chosen = self.told(self.client.choose_steps({})).ok
+        self.push_screen(SessionSteps(self.client.steps_table()), chosen)
+
+    def first_press(self, button: Button) -> bool:
+        """Before the first press of anything that fires a step with add-ons, the
+        first-press dialog (FirstSteps): its answer kept, then the same button pressed again;
+        Esc cancels the press. True while it shows: the press waits for it."""
+        if self.steps_chosen:
+            return False
+        try:
+            table = self.client.steps_table()
+        except Exception:   # a daemon on older code, or unreachable: the press goes on as before
+            return False
+        if table.get("chosen"):
+            self.steps_chosen = True
+            return False
+
+        def answered(ticks: dict | None) -> None:
+            if ticks is None:
+                return
+            if self.told(self.client.choose_steps(ticks)).ok:
+                self.steps_chosen = True
+                self.post_message(Button.Pressed(button))
+        self.push_screen(FirstSteps(self.client.sdk), answered)
+        return True
 
     def hosted(self, slot: str, taken: set[str]):
         """The widgets for a slot: each module's pane, or a card saying why it isn't running
@@ -6049,10 +6161,11 @@ class WheelhouseApp(App):
         """Relaunch (Unpark on a parked session), in one press: one that isn't running comes
         back where it left off, unparked; a running one is stopped, a host or a tab's Claude
         Code, then started again on the conversation, asked first only if it's mid-turn
-        (that turn is lost), or offered Compact first if its context is large."""
+        (that turn is lost), or offered Compact first if its context is large. The
+        first-press dialog first, until answered (first_press)."""
         self.settle()
         sid = self.current_session()
-        if not sid:
+        if not sid or self.first_press(self.query_one("#relaunch", Button)):
             return
         s = self.row(sid)
         host = (s["claude_pid"], s["claude_start"])
@@ -6747,6 +6860,8 @@ class WheelhouseApp(App):
         what = event.button.id
         if what == "interrupt":
             self.host_command(sid, what)
+        elif what == "compact" and self.first_press(event.button):
+            return
         elif what == "compact":
             self.push_screen(CompactSession(self.label(sid)), lambda plan: plan and self.host_command(sid, what, **plan))
         else:
@@ -6770,6 +6885,8 @@ class WheelhouseApp(App):
         if event.button.id == "leave-it":
             self.told(self.client.close(*target, True))
             self.refresh_data()
+        elif self.first_press(event.button):
+            return
         else:
             self.compact_now(target)
 
@@ -7032,8 +7149,8 @@ class WheelhouseApp(App):
             self.told(self.client.unpark(sid))
             self.follow(sid)
             self.refresh_data()
-        elif runner(s) == "sdk" and not s["shell"] and self.running(sid) and self.pending(sid) is None:
-            # a host's session: it may be compacted once parked, offered while its cache is warm
+        elif self.client.sdk and runner(s) == "sdk" and not s["shell"] and self.running(sid) and self.pending(sid) is None:
+            # a host's session in SDK mode: it may be compacted once parked, offered while its cache is warm
             self.push_screen(ParkSession(self.label(sid), self.client.warm(sid)),
                              lambda form: form and self.ask(sid, "park", form["compact"]))
         else:
@@ -7080,8 +7197,11 @@ class WheelhouseApp(App):
     @session_action
     def end_pressed(self) -> None:
         """Forget. Stop & Forget on an Active session not yet asked offers ForgetChoice: let
-        it know (it does its end steps) or just stop it, by its cache's warmth."""
+        it know (it does its end steps) or just stop it, by its cache's warmth. The
+        first-press dialog first, until answered (first_press)."""
         self.settle()
+        if self.first_press(self.query_one("#end", Button)):
+            return
         sid = self.current_session()
         if not sid:
             return

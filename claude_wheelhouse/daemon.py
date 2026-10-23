@@ -442,6 +442,9 @@ class Daemon:
             Route("/usage", self.query(self.usage, run=None)),
             Route("/settings", self.query(self.settings)),
             Route("/settings", self.command(self.set_setting), methods=["POST"]),
+            Route("/settings/steps", self.query(lambda request: self.hub.steps_table())),
+            Route("/settings/steps/choose", self.command(self.choose_steps), methods=["POST"]),
+            Route("/settings/steps/{event}", self.command(self.set_step), methods=["POST"]),
             Route("/adoptable", self.query(lambda request: [vars(c) for c in self.hub.adoptable()])),
             Route("/adoptable/{id}/running", self.query(
                 lambda request: {"pid": liveness.running_pid(request.path_params["id"])})),
@@ -930,6 +933,23 @@ class Daemon:
         else:
             self.store.set_setting(key, value)
         return Done()
+
+    def set_step(self, request: Request, body: dict) -> Done:
+        """A session step's switch, {"switch", "on": true, false or null for its default}."""
+        on = body.get("on")
+        if on is not None and not isinstance(on, bool):
+            raise Refused(400, "on must be true, false or null")
+        try:
+            return self.hub.set_step(request.path_params["event"], text(body, "switch"), on)
+        except ValueError as e:
+            raise Refused(400, str(e)) from None
+
+    def choose_steps(self, request: Request, body: dict) -> Done:
+        """The first-press dialog's ticks, {"ticks": {name: bool}}."""
+        ticks = body.get("ticks")
+        if not isinstance(ticks, dict) or not all(isinstance(v, bool) for v in ticks.values()):
+            raise Refused(400, "ticks must map each offered name to true or false")
+        return self.hub.choose_steps(ticks)
 
     def no_remote_tab(self, request: Request, runner: str) -> None:
         """A tab opens on this machine's screen, where nobody on another machine sees it: so

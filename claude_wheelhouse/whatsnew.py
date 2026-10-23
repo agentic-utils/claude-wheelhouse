@@ -181,6 +181,11 @@ FEATURES: tuple[Feature, ...] = (
             note="Mark PRs in the PRs pane as in the inbox (Ctrl+click, Shift+click, Space, Shift+Up/Down) and act "
                  "on them all; Close closes a PR unmerged, asked first, as Merge is.",
             tip="Ctrl+click or Space marks PRs: the buttons then act on them all."),
+    Feature("session-steps", UNRELEASED, "sessions",
+            note="The wheelhouse tells a session before it ends or resumes (and, in SDK mode, compacts), so its own "
+                 "instructions can act, and can keep a handoff doc for it. Session steps, in the command palette, "
+                 "has every switch; the first press asks once.",
+            tip="Sessions are told before they end or resume, and keep a handoff doc. Switches: Session steps (Ctrl+P)."),
     Feature("compacting-shown", UNRELEASED, "sessions", when="sdk",
             note="While a session is compacting, its Compact button is off, its inbox items and its Detail dim and "
                  "ignore clicks, and its busy eye in the session list turns blue.",

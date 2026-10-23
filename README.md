@@ -498,7 +498,13 @@ how to work.
   decisions, open threads, next step), which it writes with the `write_handoff` tool. Its
   handoff is read back to it on resume and after compaction. A PR that merges while the
   session isn't running is told when it resumes, never by starting it. Messages after an
-  event go at once, without waiting for the session's queued answers to be sent. The handoff shows as the
+  event go at once, without waiting for the session's queued answers to be sent. The first
+  press of Compact, Stop & Forget or Relaunch asks once which add-ons you want; **Session
+  steps**, in the command palette (`Ctrl+P`), has every switch, one row per event. Each is
+  also a setting: `WHEELHOUSE_STEP_<EVENT>_<SWITCH>=on|off` or `STEP_<EVENT>_<SWITCH>=` in a
+  `.env` (such as `STEP_PR_MERGED_CLEANUP=off`), and `STEP_ADDONS=off` turns every add-on
+  off, for instructions of your own that cover it all. Before and After Compact exist only
+  in SDK mode. The handoff shows as the
   session's `handoff` doc, kept in `handoffs/` beside the database; one untouched for 30
   days is removed when the daemon starts.
 

@@ -274,8 +274,10 @@ Changing it later: a command palette entry, "Session steps", opens a dialog with
 event, its announce switch and its add-ons, showing a value given by flag or .env as fixed,
 with where from. Outside SDK mode it has no Before or After Compact rows. Below the rows, the
 same plain note: messages after an event go at once, without waiting for the queue. The ?
-overlay lists the palette entry. Through the daemon: `GET /settings/steps` and `PUT
-/settings/steps/{event}`.
+overlay lists the palette entry. Through the daemon: `GET /settings/steps`, `POST
+/settings/steps/{event}` and `POST /settings/steps/choose` (the first-press dialog's ticks;
+POST, as every command is, for its idempotency key). Answering Session steps before the
+first-press dialog counts as the choice, and keeps every switch as it was shown.
 
 ## Protocol and versions
 

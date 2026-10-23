@@ -8668,3 +8668,52 @@ async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size)
         await pilot.click(table, offset=(table.region.width // 2, table.get_row_index(q1) + 1))
         await pilot.pause()
         assert app.selected == (sid, "Q1"), f"{size}: clicks work again"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("answer, chosen, desc", [
+    ("#steps-ok", True, "OK: the ticks kept, and the press goes on"),
+    ("escape", False, "Esc: the press cancelled, asked again next time"),
+])
+async def test_the_first_press_offers_the_steps(store, sid, live, first_press, answer, chosen, desc):
+    from claude_wheelhouse import steps
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pick(app, pilot, sid)
+        await pilot.click("#end")
+        await pilot.pause()
+        assert isinstance(app.screen, tui.FirstSteps), desc
+        if answer == "escape":
+            await pilot.press("escape")
+        else:
+            app.screen.query_one("#steps-cleanup", Checkbox).value = False
+            await pilot.click(answer)
+        await pilot.pause()
+        await pilot.pause()
+        assert bool(store.setting(steps.CHOSEN)) is chosen, desc
+        assert not isinstance(app.screen, tui.FirstSteps), desc
+        assert (app.screen is not app.screen_stack[0]) is chosen, f"{desc}: Forget's own dialog next, or nothing"
+    if chosen:
+        assert store.setting(steps.setting_key("pr_merged", "cleanup")) == "off", f"{desc}: unticked kept"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+async def test_session_steps_keeps_what_changed(store, sid):
+    from claude_wheelhouse import steps
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        app.action_session_steps()
+        await pilot.pause()
+        assert isinstance(app.screen, tui.SessionSteps)
+        assert not app.screen.query("#step-before_compact-announce"), "no compaction rows outside SDK mode"
+        box = app.screen.query_one("#step-pr_merged-cleanup", Checkbox)
+        assert not box.value, "unattended add-ons off until a choice is made"
+        box.value = True
+        box.value = False
+        await pilot.click("#session-steps-ok")
+        await pilot.pause()
+    assert store.setting(steps.setting_key("pr_merged", "cleanup")) == "off"
+    assert store.setting(steps.CHOSEN), "answered here: the first-press dialog isn't shown"
+    assert store.setting(steps.setting_key("before_forget", "items")) == "on", "before any choice, all kept as shown"
