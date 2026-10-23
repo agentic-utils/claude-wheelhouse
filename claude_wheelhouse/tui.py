@@ -65,7 +65,7 @@ from .rows import KIND_COLOUR, RowTips, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import AWAITING_NOTES, HOLD_EXPIRED, NUDGE_TOKENS, SHELL_OPENING
-from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
+from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, compacting_now, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
@@ -249,14 +249,17 @@ def dimmed(style: Style) -> Style:
     return style + Style(color=Color.from_rgb(r * DIM, g * DIM, b * DIM))
 
 
-def cylon(frame: int, width: int = 8) -> Text:
-    """A red eye sweeping back and forth with a fading tail."""
+EYE_RED = ("#ff0000", "#aa0000", "#550000")   # a busy session's eye: its head, then its tail
+EYE_BLUE = ("#2f8cff", "#1f5daa", "#102e55")   # a compacting one's (#150)
+
+
+def cylon(frame: int, width: int = 8, colours: tuple = EYE_RED) -> Text:
+    """An eye sweeping back and forth with a fading tail: red, or blue while compacting."""
     pos = eye_at(frame, width)
     t = Text()
     for i in range(width):
         d = abs(i - pos)
-        t.append("█" if d == 0 else "▓" if d == 1 else "░" if d == 2 else " ",
-                 style="#ff0000" if d == 0 else "#aa0000" if d == 1 else "#550000")
+        t.append("█" if d == 0 else "▓" if d == 1 else "░" if d == 2 else " ", style=colours[min(d, 2)])
     return t
 
 
@@ -1238,6 +1241,7 @@ class SessionList(SinkList):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.eyes: set[str] = set()   # the busy sessions' rows, whose eye cell paint_sessions leaves blank
+        self.blue: set[str] = set()   # of those, the compacting ones' rows: their eye is blue (#150)
         self.eye_frame = 0
         self.swept: tuple | None = None   # the busy rows and the eye's place as last drawn again (sweep)
         self.blinked = False   # whether the busy rows' dots were last drawn dimmed (sweep)
@@ -1258,7 +1262,7 @@ class SessionList(SinkList):
         Not if the eyes are where they were last drawn, on the same rows: a frame can leave them there.
         Their dots flash the same way (dot_dimmed): with the eyes still, only the dots' cells drawn again."""
         self.eye_frame = frame
-        swept = (frozenset(self.eyes), eye_at(frame, self.EYE))   # a row the table draws anew, it draws as it is
+        swept = (frozenset(self.eyes), frozenset(self.blue), eye_at(frame, self.EYE))   # a row the table draws anew, it draws as it is
         blinked = dot_dimmed(frame)
         if swept == self.swept and blinked == self.blinked:
             return
@@ -1296,7 +1300,7 @@ class SessionList(SinkList):
             self.cursor_background_priority == "css")
         under = next(iter(strip.crop(lo, lo + 1)), None)
         base = under.style if under is not None and under.style else Style()
-        eye = Strip([Segment(seg.text, base + seg.style + post) for seg in cylon(self.eye_frame).render(self.app.console)])
+        eye = Strip([Segment(seg.text, base + seg.style + post) for seg in cylon(self.eye_frame, colours=EYE_BLUE if row_key.value in self.blue else EYE_RED).render(self.app.console)])
         return Strip.join([strip.crop(0, lo), eye.crop(lo - x, hi - x), strip.crop(hi)])
 
     def dim_dot(self, strip: Strip, x1: int) -> Strip:
@@ -1408,6 +1412,17 @@ class ItemList(SinkList):
         self.marked: set[str] = set()
         self.anchor: str | None = None
         self.toggles: dict[str, bool] = {}   # each parent row's key: whether its children are hidden
+        self.locked: set[str] = set()   # rows of a session being compacted: clicks on them do nothing (#150)
+
+    def locked_at(self, event) -> bool:
+        row = event.style.meta.get("row", -1)
+        return 0 <= row < self.row_count and self.keys()[row] in self.locked
+
+    def _on_mouse_down(self, event) -> None:
+        if self.locked_at(event):
+            self.press = None
+            return
+        super()._on_mouse_down(event)
 
     def _render_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
         """The row's line, and on a parent's its + / - (TOGGLE) in the line's last cell, a
@@ -1447,6 +1462,10 @@ class ItemList(SinkList):
 
     async def _on_click(self, event) -> None:
         if self.swallowed(event):
+            return
+        if self.locked_at(event):   # its session is being compacted: nothing to pick (#150)
+            event.prevent_default()
+            event.stop()
             return
         meta = event.style.meta
         if "toggle" in meta:   # a parent's + / -: its children shown or hidden, the row not selected
@@ -1509,6 +1528,14 @@ class ItemList(SinkList):
             self.anchor = self.cursor_key()
         self.go(lambda i, n: i + step)
         self.extend_to(self.cursor_key())
+
+
+def faded(cells: tuple) -> tuple:
+    """A row's cells dimmed, whatever their own colours: its session is being compacted (#150)."""
+    out = tuple(c.copy() if isinstance(c, Text) else Text(str(c)) for c in cells)
+    for c in out:
+        c.stylize("dim")
+    return out
 
 
 class Compose(TextArea):
@@ -3814,6 +3841,7 @@ class WheelhouseApp(App):
         text-opacity: 100%; opacity: 100%; }}
     Button.-style-default:disabled {{ border-top: tall {OFF}; border-bottom: tall {OFF}; }}
     Button.-style-default.-textual-compact:disabled {{ border: none; }}
+    #detail.compacting {{ opacity: 50%; }}
     #conversation-buttons #mode, #session-buttons Button.wide {{ column-span: 2; }}
     #dialog {{ width: 80; max-width: 100%; height: auto; max-height: 100%; overflow-y: auto; padding: 1 2;
                background: #000000; color: {MATRIX}; border: thick #ff2a6d; }}
@@ -4386,6 +4414,7 @@ class WheelhouseApp(App):
         self.client.background()   # in process, the hub's reading: the daemon's hub does its own
         self.paint_sessions()
         self.paint_items()
+        self.paint_compacting()
         self.each_pane("tick")
         self.client.finish_relaunches()
         self.paint_session_info()
@@ -4582,7 +4611,9 @@ class WheelhouseApp(App):
         table = self.session_list
         keep, key = table.final_row(), self.current_session()   # in the final order, as the items' (paint_items)
         pending = key != self.sessions_cursor   # the person's move, not yet settled
-        rows, table.eyes = [], {s["id"] for s in self.sessions if self.busy(s["id"])}
+        compacting = self.compacting()
+        rows, table.eyes = [], {s["id"] for s in self.sessions if self.busy(s["id"]) or s["id"] in compacting}
+        table.blue = compacting
         self.pace()   # a session busy, or none now: the animation runs, or may rest
         keyed = self.pinned_session_keys()
         for s in sorted(self.sessions, key=lambda s: keyed[s["id"]][0]):
@@ -4655,7 +4686,9 @@ class WheelhouseApp(App):
         names = self.session_names()
         found, processing, queued, awaiting = self.client.inbox(self.filter_sid)
         busy = queued | awaiting
+        compacting = self.compacting()
         keyed = self.ranked_keyed(found, processing, busy, names)
+        table.locked = {key for key, it in keyed if it["session_id"] in compacting}
         key_of = {id(it): key for key, it in keyed}   # each item's row key, made once
         active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
         for key, it in keyed:
@@ -4673,6 +4706,9 @@ class WheelhouseApp(App):
             rows_out.append((f"{self.filter_sid}|", ("", names.get(self.filter_sid, "")[:14], Text("💬"),
                              Text("queued", style="bold #05d9e8") if general else "",
                              Text("Conversation", style="bold"))))
+            if self.filter_sid in compacting:
+                rows_out[-1] = (rows_out[-1][0], faded(rows_out[-1][1]))
+                table.locked.add(rows_out[-1][0])
         for it, nested, _ in rows:
             # an unfinished item of any kind with an answer waiting to be sent shows as queued, and one
             # whose answer went with no reply since as processing (D28); neither is stored
@@ -4701,6 +4737,8 @@ class WheelhouseApp(App):
                 cells = (pin, "", ref_text(it, child=True), shown, titled(it, "dim"))
             else:   # a subagent, tucked under its session's name
                 cells = (pin, name if nested == 0 else "", ref_text(it, child=True), shown, titled(it, "dim"))
+            if it["session_id"] in compacting:   # dimmed, and clicks ignored, until it's compacted (#150)
+                cells = faded(cells)
             rows_out.append((key_of[id(it)], cells))
             tips[key_of[id(it)]] = item_tip(it)
         if self.filter_sid:   # the session column goes: the inbox follows the one session
@@ -5079,7 +5117,13 @@ class WheelhouseApp(App):
                 box.quoted = title
                 box.border_title = Content(title) if title else None   # plain: the doc's own text
 
+    def paint_compacting(self) -> None:
+        """Detail dimmed while it shows an item or the conversation of a session being compacted (#150)."""
+        sid = self.viewing or (self.selected[0] if self.selected else None)
+        self.detail.set_class(not self.shown_doc and sid in self.compacting(), "compacting")
+
     def paint_detail(self) -> None:
+        self.paint_compacting()
         agent, doc, shown = False, self.selected_doc(), self.shown_doc
         self.detail.doc_key = ("file", shown[0]) if shown else None if self.viewing or not doc else self.selected
         self.detail.doc_path, gone = None, ""
@@ -5567,7 +5611,13 @@ class WheelhouseApp(App):
         in its row (under_way), hasn't landed, for at most BUSY_FOR (follow_presses). Compact on
         the question suggesting it, with Compact's own: the same command."""
         busy = {b for (sid, b), press in self.pressed.items() if sid == s["id"] and not press.expired}
+        if s["id"] in self.compacting():   # under way, however it was asked for (#150)
+            busy |= {"compact"}
         return busy | {"compact-now"} if "compact" in busy else busy
+
+    def compacting(self) -> set[str]:
+        """The running sessions being compacted (hub.compacting_now, from the store)."""
+        return {s["id"] for s in self.sessions if compacting_now(s) and self.running(s["id"])}
 
     def press(self, sid: str, button: str, ref: str | None = None) -> None:
         """A busy button's action sent: the button off from now (busy_buttons)."""

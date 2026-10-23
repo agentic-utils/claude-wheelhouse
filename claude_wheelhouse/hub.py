@@ -171,6 +171,18 @@ class Warmth:
     sent: float | None = None
 
 
+
+def compacting_now(s) -> bool:
+    """Whether a session run in the wheelhouse is being compacted, as its host records it in
+    the store: from Compact asked (host_command compact, written as Compact, the question's
+    Compact now or Relaunch's compact first is pressed), through the notes asked for
+    (AWAITING_NOTES, or an activity line starting "compacting"), until the compaction's turn
+    ends and its host says so (COMPACTED, NO_NOTES, interrupted). Not liveness: a host that
+    died mid-way leaves its line, so a surface asks whether it's running too."""
+    activity = s["activity"] or ""
+    return runner(s) == "sdk" and (s["host_command"] == "compact" or activity.startswith("compacting")
+                                   or activity == AWAITING_NOTES)
+
 class Hub:
     """The wheelhouse's service over the store. Its state lives as long as it does."""
 
@@ -444,8 +456,7 @@ class Hub:
         if (s["claude_pid"], s["claude_start"]) != host:
             return Done(False).say(f"{display_name(s)} started again meanwhile: Relaunch again to stop this host",
                                    "warning")
-        activity = s["activity"] or ""
-        if not (s["host_command"] == "compact" or activity.startswith("compacting") or activity == AWAITING_NOTES):
+        if not compacting_now(s):
             self.store.command(sid, "compact")
         self.relaunch_under_way(sid, host, asked=time.time(), may_tab=may_tab)
         return Done().say(f"relaunching {display_name(s)}: compacting first (it's asked what to keep)")

@@ -8621,3 +8621,50 @@ async def test_ctrl_z_in_the_answer_box_is_its_own_undo(store, sid):
         await pilot.pause()
         assert app.answer.text == "", "the box's own undo took the typing back"
     assert store.item(sid, q)["status"] == "closed", "and the delete stays"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size", [(160, 40), (100, 30)])
+async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size):
+    """#150: while its host records a compaction (the question's Compact now, say), Compact is
+    off, the session's inbox rows dim and ignore clicks, Detail dims on one of them, and its
+    eye in the session list is blue; all back once the host says it's compacted."""
+    from claude_wheelhouse import liveness
+    from claude_wheelhouse.tui import EYE_BLUE, ItemList, SessionList
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.post_item(sid, "task", "work")
+    store.post_item(sid, "question", "which?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pick(app, pilot, sid)
+        table = app.query_one(ItemList)
+        t1 = next(k for k in table.keys() if k and k.endswith("T1"))
+        q1 = next(k for k in table.keys() if k and k.endswith("Q1"))
+        await pilot.click(table, offset=(table.region.width // 2, table.get_row_index(t1) + 1))
+        await pilot.pause()
+        assert app.selected == (sid, "T1"), f"{size}: picked by a click"
+
+        store.set_activity(sid, "compacting: collecting notes")   # as the host writes it
+        app.refresh_data()
+        await pilot.pause()
+        compact = app.query_one("#compact", Button)
+        assert compact.disabled, f"{size}: Compact off while compacting"
+        assert {t1, q1} <= table.locked, f"{size}: the session's rows locked"
+        assert "dim" in str(table.get_row(q1)[-1].spans or table.get_row(q1)[-1].style), f"{size}: dimmed"
+        await pilot.click(table, offset=(table.region.width // 2, table.get_row_index(q1) + 1))
+        await pilot.pause()
+        assert app.selected == (sid, "T1"), f"{size}: a click on a locked row does nothing"
+        assert app.detail.has_class("compacting"), f"{size}: Detail dims on the session's item"
+        sessions = app.query_one(SessionList)
+        assert sid in sessions.eyes and sid in sessions.blue, f"{size}: its eye sweeps, blue"
+        assert any(EYE_BLUE[0] in str(sp.style) for sp in tui.cylon(0, colours=EYE_BLUE).spans), size
+
+        store.set_activity(sid, "idle · compacted")
+        app.refresh_data()
+        await pilot.pause()
+        assert not compact.disabled and not table.locked, f"{size}: Compact and the rows back"
+        assert not app.detail.has_class("compacting") and sid not in sessions.blue, f"{size}: all back to normal"
+        await pilot.click(table, offset=(table.region.width // 2, table.get_row_index(q1) + 1))
+        await pilot.pause()
+        assert app.selected == (sid, "Q1"), f"{size}: clicks work again"
