@@ -808,6 +808,8 @@ class Store:
     def end(self, sid: str) -> None:
         with self.tx() as db:
             db.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+            # its PR merges held for a resume that won't come (steps.held_key)
+            db.execute("DELETE FROM settings WHERE key = ?", (f"step.held.{sid}",))
 
     # items
 

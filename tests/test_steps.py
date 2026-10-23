@@ -1,7 +1,6 @@
 """Session steps (steps.py): their texts per event and switch, how a switch resolves, and the
 handoff file."""
 
-import json
 import os
 import time
 
@@ -175,9 +174,34 @@ def test_resumed(store, sid, away, parked, held, has, lacks, desc):
     store.set_setting(steps.CHOSEN, "1")
     for pr, ref in held:
         steps.hold(store, sid, pr, ref)
-    text = steps.resumed(store, sid, away, parked, "JOINED")
+    text, told = steps.resumed(store, sid, away, parked, "JOINED")
     assert all(h in text for h in has) and not any(x in text for x in lacks), f"{desc}: {text!r}"
-    assert steps.take_held(store, sid) == [], f"{desc}: held PRs are told once"
+    assert steps.held(store, sid) == told == held, f"{desc}: held until the message is written"
+    steps.hold(store, sid, "repo#6 (PR6)", "PR6")   # merged as it was being written
+    steps.clear_held(store, sid, told)
+    assert steps.held(store, sid) == [("repo#6 (PR6)", "PR6")], f"{desc}: only those told let go"
+
+
+@pytest.mark.parametrize("fails, kept, desc", [
+    (False, [], "written: let go"),
+    (True, [("repo#5 (PR5)", "PR5")], "the notice not written: still held for the next resume"),
+])
+def test_tell_joined_lets_held_prs_go_once_written(store, sid, monkeypatch, fails, kept, desc):
+    from claude_wheelhouse import launch
+    steps.hold(store, sid, "repo#5 (PR5)", "PR5")
+    if fails:
+        monkeypatch.setattr(store, "notice", lambda *a: (_ for _ in ()).throw(RuntimeError("locked")))
+    try:
+        launch.tell_joined(store, store.session(sid))
+    except RuntimeError:
+        pass
+    assert steps.held(store, sid) == kept, desc
+
+
+def test_forgetting_a_session_lets_its_held_prs_go(store, sid):
+    steps.hold(store, sid, "repo#5 (PR5)", "PR5")
+    store.end(sid)
+    assert store.setting(steps.held_key(sid)) is None
 
 
 @pytest.mark.parametrize("running, parked, told, desc", [
@@ -195,7 +219,7 @@ def test_pr_merged_is_told_or_held(store, sid, running, parked, told, desc):
         store.set_parked(sid, True)
     def said():   # the merge told, and held, as the store has them now
         told_ = [m["body"] for m in store.pending(sid) if m["kind"] == "notice" and "repo#5 (PR5) has merged" in m["body"]]
-        return len(told_), json.loads(store.setting(steps.held_key(sid)) or "[]")
+        return len(told_), [list(p) for p in steps.held(store, sid)]
     hub.set_pr_states({url: "open"})
     hub.set_pr_states({url: "merged"})
     first = said()

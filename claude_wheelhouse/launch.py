@@ -171,10 +171,13 @@ def away_seconds(sid: str, projects: Path = Path.home() / ".claude/projects") ->
     return time.time() - max(stamps) if stamps else None
 
 
-def joined_text(store: Store, session) -> str:
-    """What a resumed session is told: JOINED_TEXT, with On resume after an hour or more
-    away (or parked) and any PR merged meanwhile (steps.resumed)."""
-    return steps.resumed(store, session["id"], away_seconds(session["id"]), bool(session["parked"]), JOINED_TEXT)
+def tell_joined(store: Store, session) -> None:
+    """A resumed session told JOINED_TEXT, with On resume after an hour or more away (or
+    parked) and any PR merged meanwhile (steps.resumed): held PRs let go only once written."""
+    text, told = steps.resumed(store, session["id"], away_seconds(session["id"]), bool(session["parked"]),
+                               JOINED_TEXT)
+    store.notice(session["id"], text)
+    steps.clear_held(store, session["id"], told)
 
 
 def claude_argv(session, *, python: str, resume: bool, store: Store | None = None) -> list[str]:
@@ -355,7 +358,7 @@ def open_host(store: Store, sid: str, notice: bool = True) -> None:
                        cwd=session["cwd"], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                        env=clean_env(WHEELHOUSE_DB=str(store.path)), check=True)
     if notice and resuming:
-        store.notice(sid, joined_text(store, session))
+        tell_joined(store, session)
 
 
 def open_tab(store: Store, sid: str, notice: bool = True) -> None:
@@ -378,7 +381,7 @@ def open_tab(store: Store, sid: str, notice: bool = True) -> None:
         subprocess.Popen(argv, cwd=None if mac else "/mnt/c", stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                          start_new_session=True, env=clean_env())
     if notice and transcript_exists(sid):   # resuming: the session takes seconds to start, the notice waits
-        store.notice(sid, joined_text(store, session))
+        tell_joined(store, session)
 
 
 def run(sid: str) -> None:

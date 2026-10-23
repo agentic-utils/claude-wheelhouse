@@ -250,12 +250,19 @@ def hold(store: Store, sid: str, pr: str, ref: str) -> None:
         store.set_setting(held_key(sid), json.dumps([*held, [pr, ref]]))
 
 
-def take_held(store: Store, sid: str) -> list[tuple[str, str]]:
-    """The PRs held for a session, as (pr, ref), once: taken, they're gone."""
-    if (raw := store.setting(held_key(sid))) is None:
-        return []
-    store.clear_setting(held_key(sid))
-    return [tuple(p) for p in json.loads(raw)]
+def held(store: Store, sid: str) -> list[tuple[str, str]]:
+    """The PRs held for a session, as (pr, ref)."""
+    return [tuple(p) for p in json.loads(store.setting(held_key(sid)) or "[]")]
+
+
+def clear_held(store: Store, sid: str, told: list[tuple[str, str]]) -> None:
+    """Those told let go, once the message telling them is written: a merge held meanwhile
+    stays for the next resume."""
+    left = [list(p) for p in held(store, sid) if p not in told]
+    if left:
+        store.set_setting(held_key(sid), json.dumps(left))
+    else:
+        store.clear_setting(held_key(sid))
 
 
 def pr_label(url: str, ref: str) -> str:
@@ -265,17 +272,19 @@ def pr_label(url: str, ref: str) -> str:
     return f"{got[1]}#{got[2]} ({ref})" if got else ref
 
 
-def resumed(store: Store, sid: str, away_seconds: float | None, parked: bool, joined: str) -> str:
+def resumed(store: Store, sid: str, away_seconds: float | None, parked: bool,
+            joined: str) -> tuple[str, list[tuple[str, str]]]:
     """What a resumed session is told, without the [wheelhouse] mark: joined (JOINED_TEXT),
     then On resume after RESUME_AFTER or more away (or parked), then each PR merged while it
-    was away. joined alone otherwise."""
+    was away; and those PRs, for clear_held once it's written. joined alone otherwise."""
     parts = [joined]
     if parked or (away_seconds is not None and away_seconds >= RESUME_AFTER):
         parts.append(message(store, "on_resume", mark=False, away=away(away_seconds or 0),
                              handoff=handoff_field(sid)))
-    for pr, ref in take_held(store, sid):
+    told = held(store, sid)
+    for pr, ref in told:
         parts.append(message(store, "pr_merged", mark=False, pr=pr, ref=ref))
-    return "\n\n".join(p for p in parts if p)
+    return "\n\n".join(p for p in parts if p), told
 
 
 # the handoff file
