@@ -36,6 +36,9 @@ class Gh:
     def __init__(self, tracked, found, fail=None):
         self.tracked, self.found, self.fail, self.calls = tracked, found, fail, 0
         self.merges, self.merged = [], (0, "")   # gh pr merge's calls, and what it answers (code, stderr)
+        self.closes, self.closed = [], {}        # gh pr close's calls, and what it answers for a URL (code, stderr)
+        self.details = []                        # the detail query's calls, by number (#145)
+        self.detail = {"body": "Why: [b]bold[/b] isn't markup", "timelineItems": {"nodes": []}, "commits": {"nodes": []}}
 
     def __call__(self, argv):
         if argv[1:3] == ["repo", "view"]:
@@ -43,6 +46,13 @@ class Gh:
         if argv[1:3] == ["pr", "merge"]:
             self.merges.append(argv[3:])
             return *self.merged[:1], "", self.merged[1]
+        if argv[1:3] == ["pr", "close"]:
+            self.closes.append(argv[3:])
+            code, err = self.closed.get(argv[-1], (0, ""))
+            return code, "", err
+        if any(a.startswith("number=") for a in argv):
+            self.details.append(int(argv[-1].removeprefix("number=")))
+            return 0, json.dumps({"data": {"repository": {"pullRequest": self.detail}}}), ""
         self.calls += 1
         if self.fail:
             raise self.fail
@@ -60,6 +70,7 @@ def github(store, sid, monkeypatch):
     gh = Gh([node(108, checks="FAILURE"), node(109)],
             [node(108, checks="FAILURE"), node(109), node(7, repo="doug/mizpah", updated="2026-10-20T12:00:00Z")])
     monkeypatch.setattr(pane, "RUNNER", gh)
+    monkeypatch.setattr(pane, "SETTLE", 0.05)   # the highlight rests this long before a PR's detail is fetched
     monkeypatch.setattr(api, "load", lambda: [api.Loaded("prs", prs.module)])
     return gh
 
@@ -327,7 +338,7 @@ async def test_the_selected_pr_has_its_actions_and_open_opens_it(store, sid, git
         assert not app.query_one("#prs-actions").display, "no PR selected: no buttons"
         await on_pr(app, pilot, URL.format(109))
         bar = app.query_one("#prs-actions")
-        assert bar.display and [str(b.label) for b in bar.query(Button)] == ["Open", "Merge", "Request review"]
+        assert bar.display and [str(b.label) for b in bar.query(Button)] == ["Open", "Merge", "Request review", "Close"]
         await pilot.click("#pr-open")
         await pilot.pause()
         assert opened == [URL.format(109)], "the full URL, the app's opener"
@@ -404,7 +415,7 @@ async def test_request_review_of_a_pr_no_session_made(store, sid, github, monkey
             return
         p = await on_pr(app, pilot, "https://github.com/doug/mizpah/pull/7", scope="all")
         assert app.query_one("#pr-review", Button).disabled is not selected, desc
-        p.review(p.selected())
+        p.review([p.selected()])
         await pilot.pause()
         if selected:
             app.screen.query_one(Input).value = "#mizpah"
@@ -433,30 +444,38 @@ async def test_a_right_click_on_a_pr_opens_its_actions_below_the_row(store, sid,
         line = table.region.y + table.header_height + row
         box = menu.query_one("#dialog").region
         assert box.y == line + 1 or box.bottom == line, f"{size}: {box} below or above line {line}"
-        assert [str(b.label) for b in menu.query(Button)] == ["Open", "Merge", "Request review"]
+        assert [str(b.label) for b in menu.query(Button)] == ["Open", "Merge", "Request review", "Close"]
         await pilot.press("enter")
         await pilot.pause()
         assert opened == [URL.format(109)], f"{size}: Open, on the row clicked"
-        assert table.has_focus and app.query_one("#prs-actions").display, f"{size}: the table focused, its buttons shown"
+        assert table.has_focus and app.query_one("#prs-actions").display is (size != (80, 24)), \
+            f"{size}: the table focused, its buttons shown where they leave it its rows"
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("size", [(100, 30), (80, 24), (160, 40)])
-async def test_the_buttons_fit_the_pane_and_each_click_acts(store, sid, github, monkeypatch, size):
-    """Review of #143: in a narrow pane the buttons stack rather than fall outside it."""
+@pytest.mark.parametrize("size, shown", [((100, 30), True), ((80, 24), False), ((160, 40), True)])
+async def test_the_buttons_fit_the_pane_and_each_click_acts(store, sid, github, monkeypatch, size, shown):
+    """Review of #143: in a narrow pane the buttons stack rather than fall outside it; review
+    of #156: in one too short for them and its rows, they hide, the table's rows kept, and
+    Detail's buttons act instead."""
     app = WheelhouseApp(store)
     async with app.run_test(size=size) as pilot:
         await settled(app, pilot)
         acted = []
         p = await on_pr(app, pilot, URL.format(109))
-        monkeypatch.setattr(p, "act", lambda action, r: acted.append((action, r["number"])))
-        pane_box = p.content_region
-        for b in app.query_one("#prs-actions").query(Button):
+        monkeypatch.setattr(p, "act", lambda action, rows: acted.append((action, [r["number"] for r in rows])))
+        table, bar = app.query_one("#pr-list"), app.query_one("#prs-actions")
+        assert table.region.height - table.header_height >= 2, f"{size}: both PRs' rows show, {table.region}"
+        assert bar.display is shown and app.query_one("#pr-detail-actions").display, f"{size}: Detail's buttons whatever"
+        if not shown:
+            bar = app.query_one("#pr-detail-actions")
+        pane_box = bar.parent.content_region
+        for b in bar.query(Button):
             assert pane_box.contains_region(b.region) and b.region.width >= len(str(b.label)), \
                 f"{size}: {b.id} {b.region} {str(b.label)!r} inside {pane_box}"
             await pilot.click(f"#{b.id}")
             await pilot.pause()
-        assert acted == [("open", 109), ("merge", 109), ("review", 109)], f"{size}: every click acts"
+        assert acted == [(a, [109]) for a in ("open", "merge", "review", "close")], f"{size}: every click acts"
 
 
 @pytest.mark.anyio
@@ -475,7 +494,7 @@ async def test_a_merge_the_hub_refuses_says_so_not_gh(store, sid, github, status
                 return {"prs": []}
             raise api.Refused(status, error)
         p.ctx = dataclasses.replace(p.ctx, call=refuse)
-        await asyncio.to_thread(p.merged, p.selected())   # off the app's thread, as the pane's worker
+        await asyncio.to_thread(p.done_each, "merge", [p.selected()])   # off the app's thread, as the pane's worker
         await pilot.pause()
         assert p.outcome == said and "gh says" not in p.outcome, desc
 
@@ -489,7 +508,7 @@ async def test_request_review_shows_a_title_and_past_targets_as_text_not_markup(
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         p = await on_pr(app, pilot, URL.format(109))
-        p.review(p.selected())
+        p.review([p.selected()])
         await pilot.pause()
         ask = app.screen
         prompt = ask.query_one(".dialog-prompt")
@@ -594,3 +613,254 @@ async def test_the_pane_follows_the_selected_session(store, sid, github, size, f
         await pilot.pause()
         every = ["PR108", "PR109", "PR5"] if scope == "mine" else ["PR108", "PR7", "PR109", "PR5"]
         assert cells(app) == every, f"{desc}: none selected again, every one"
+
+
+# #145: the PR's actions and detail in Detail
+
+async def landed(app, pilot):
+    await pilot.pause(pane.SETTLE * 2)   # the highlight rested: its detail asked for
+    for _ in range(3):
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size", [(160, 40), (100, 30), (80, 24)])
+async def test_detail_shows_a_prs_buttons_and_detail_as_text(store, sid, github, monkeypatch, size):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await settled(app, pilot)
+        bar, body = app.query_one("#pr-detail-actions"), app.query_one("#pr-detail")
+        app.follow(sid)   # Detail on the session's conversation
+        await pilot.pause()
+        assert not bar.display and not body.display, f"{size}: no PR in Detail, no parts"
+        await on_pr(app, pilot, URL.format(109))
+        await landed(app, pilot)
+        assert app.selected == (sid, "PR109") and bar.display and body.display, f"{size}: Detail's PR, its parts"
+        assert github.details.count(109) == 1, f"{size}: its detail fetched once: {github.details}"
+        assert "Why: [b]bold[/b] isn't markup" in body.render().plain, f"{size}: the description as written"
+        detail = app.query_one("#detail-pane").content_region
+        for b in bar.query(Button):
+            assert detail.contains_region(b.region), f"{size}: {b.id} {b.region} inside Detail {detail}"
+        acted = []
+        monkeypatch.setattr(app.query_one("#prs"), "act", lambda action, rows: acted.append((action, [r["number"] for r in rows])))
+        await pilot.click("#prd-close")
+        assert acted == [("close", [109])], f"{size}: Detail's buttons act on its PR"
+        monkeypatch.setattr(pane, "CLOCK", lambda: time.time() + fetch.DETAIL_GAP)
+        await pilot.press("r")   # the table still focused
+        await landed(app, pilot)
+        await settled(app, pilot)
+        assert github.details.count(109) == 2, f"{size}: r fetches it again"
+        app.follow(sid)
+        await pilot.pause()
+        assert not bar.display and not body.display, f"{size}: the conversation, not a PR: no parts"
+
+
+@pytest.mark.anyio
+async def test_a_pr_no_session_made_shows_its_detail_and_link_in_detail(store, sid, github):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        await on_pr(app, pilot, "https://github.com/doug/mizpah/pull/7", scope="all")
+        await landed(app, pilot)
+        text = app.query_one("#pr-detail").render().plain
+        assert app.selected is None and text.startswith("doug/mizpah/pull/7\nChange 7"), text
+        assert app.query_one("#prd-review", Button).disabled, "no session to ask"
+
+
+# #146: marks, and actions on every PR marked
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("keys, clicks, want, desc", [
+    (["space", "down", "space"], [], {108, 109}, "Space marks the highlighted row, then another"),
+    (["shift+down"], [], {108, 109}, "Shift+Down takes the range"),
+    (["space", "down", "space", "escape"], [], set(), "Esc unmarks"),
+    ([], [(109, {"control": True})], {108, 109}, "Ctrl+click: the highlighted row and the one clicked"),
+    ([], [(109, {"shift": True})], {108, 109}, "Shift+click: the range"),
+    ([], [(109, {"control": True}), (109, {"control": True})], {108}, "a second Ctrl+click unmarks"),
+    ([], [(109, {"control": True}), (108, {})], set(), "a plain click starts afresh"),
+])
+async def test_prs_are_marked_as_the_inbox_marks(store, sid, github, keys, clicks, want, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p = await on_pr(app, pilot, URL.format(108))
+        table = app.query_one("#pr-list")
+        for key in keys:
+            await pilot.press(key)
+        for n, mods in clicks:
+            await pilot.click("#pr-list", offset=(3, table.header_height + table.get_row_index(URL.format(n))), **mods)
+        await pilot.pause()
+        assert table.marked == {URL.format(n) for n in want}, desc
+        assert p.border_subtitle == (f"{len(want)} marked" if want else ""), f"{desc}: its border counts them"
+        assert all(("#3a1060" in str(table.get_row(URL.format(n))[0].style)) is (n in want) for n in (108, 109)), \
+            f"{desc}: the marked rows' background"
+        assert [r["number"] for r in p.targets()] == (sorted(want) or [p.selected()["number"]]), f"{desc}: the marked, else the cursor's"
+
+
+async def marked_both(app, pilot):
+    p = await on_pr(app, pilot, URL.format(108))
+    await pilot.press("shift+down")
+    await pilot.pause()
+    return p
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("answer, closed, said, desc", [
+    ("n", {}, None, "No: nothing closed"),
+    ("y", {}, "Closed PR108.\nClosed PR109.", "Yes: each closed, each said"),
+    ("y", {URL.format(109): (1, "X Could not close: not allowed")},
+     "Closed PR108.\nCouldn't close PR109: gh says: X Could not close: not allowed", "one refused: said, the other closed"),
+])
+async def test_close_asks_naming_every_pr_marked_and_says_what_came_of_each(store, sid, github, answer, closed, said, desc):
+    github.closed = closed
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p = await marked_both(app, pilot)
+        await pilot.click("#pr-close")
+        await pilot.pause()
+        assert isinstance(app.screen, tui.Confirm) and app.screen.focused.id == "no", f"{desc}: asked, No focused"
+        assert all(f"PR{n} (Change {n}) in wheelhouse" in app.screen.prompt for n in (108, 109)), app.screen.prompt
+        await pilot.press(answer)
+        await landed(app, pilot)
+        await settled(app, pilot)
+        assert github.closes == ([["--", URL.format(n)] for n in (108, 109)] if answer == "y" else []), desc
+        assert (p.outcome == said) if said else not p.outcome, f"{desc}: {p.outcome!r}"
+
+
+@pytest.mark.anyio
+async def test_merge_and_the_menu_act_on_every_pr_marked(store, sid, github):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        await marked_both(app, pilot)
+        table = app.query_one("#pr-list")
+        args = _get_mouse_message_arguments(table, (3, table.header_height + table.get_row_index(URL.format(108))), button=3)
+        for cls in (events.MouseDown, events.MouseUp):
+            await app.on_event(cls(**args))
+        await pilot.pause()
+        menu = app.screen
+        assert isinstance(menu, tui.PaneMenu) and menu.heading == "2 marked PRs", \
+            "a marked row's menu: for them all"
+        await pilot.click(f"#{next(b.id for b in menu.query(Button) if str(b.label) == 'Merge')}")
+        await pilot.pause()
+        assert isinstance(app.screen, tui.Confirm) and "Merge these 2 PRs" in app.screen.prompt, "asked first"
+        await pilot.press("y")
+        await landed(app, pilot)
+        await settled(app, pilot)
+        assert github.merges == [["--squash", "--", URL.format(n)] for n in (108, 109)], "each merged in turn"
+
+
+@pytest.mark.anyio
+async def test_arrowing_past_prs_fetches_only_the_one_it_rests_on_and_a_failure_is_tried_again(store, sid, github, monkeypatch):
+    """Review of #156: a detail asked on every highlight ran the route out of queries
+    (daemon.MODULE_GETS), the list's ask with them; and a failure was kept as fetched."""
+    for n in range(1, 7):
+        store.post_pr(sid, URL.format(n), f"Change {n}")
+        github.tracked.append(node(n))
+        github.found.append(node(n))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        await landed(app, pilot)
+        p = await on_pr(app, pilot, URL.format(108))
+        github.details.clear()
+        monkeypatch.setattr(pane, "SETTLE", 1.0)   # longer than six key presses take here
+        out, real = [], p.ctx.call
+        monkeypatch.setattr(p, "ctx", dataclasses.replace(p.ctx, call=lambda path, body: out.append(path) or real(path, body)))
+        for _ in range(6):
+            await pilot.press("down")
+        await landed(app, pilot)
+        at = p.detail_row()["number"]
+        assert github.details == [at] and at != 108, f"the PR it rested on alone: {github.details}"
+        assert sum(path.startswith("detail") for path in out) == 1, "one detail asked"
+
+        def refuse(path, body):
+            if path.startswith("detail"):
+                raise api.Refused(503, "module prs is busy")
+            return real(path, body)
+        p.ctx = dataclasses.replace(p.ctx, call=refuse)
+        p.detail_asked.clear()   # none fetched yet
+        await pilot.press("down")
+        await landed(app, pilot)
+        url = p.detail_row()["url"]
+        assert url not in p.detail_asked and "busy" in p.details[url]["error"], "a failure isn't counted as fetched"
+        p.ctx = dataclasses.replace(p.ctx, call=real)
+        monkeypatch.setattr(pane, "RETRY", 0)
+        p.want_detail()
+        await landed(app, pilot)
+        assert url in p.detail_asked and "error" not in p.details[url], "tried again, and kept"
+
+
+@pytest.mark.anyio
+async def test_a_bulk_action_tries_every_pr_and_says_what_each_came_to(store, sid, github, monkeypatch):
+    """Review of #156: a merge past the hub's wait (504) left every PR after it refused busy
+    (503). Now each is sent again until taken, and the one past the wait asked what it came to."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p = await on_pr(app, pilot, URL.format(109))
+        monkeypatch.setattr(pane, "PAUSE", 0)
+        said = {"busy": 2, "pending": 1}
+
+        asked, sent_tokens = [], []
+
+        def hub(path, body):
+            if body is not None:
+                sent_tokens.append(body["token"])
+            if path.startswith("result"):
+                asked.append(path)
+                if said["pending"]:
+                    said["pending"] -= 1
+                    return {"pending": True}
+                return {"method": "squash"}
+            if body["url"] == URL.format(108):
+                raise api.Refused(504, "the module took longer than 10 s and carries on")
+            if said["busy"]:
+                said["busy"] -= 1
+                raise api.Refused(503, "module prs is busy: a command is still under way. Try again shortly")
+            return {"error": "X Pull request #109 is not mergeable"}
+        p.ctx = dataclasses.replace(p.ctx, call=hub)
+        await asyncio.to_thread(p.done_each, "merge", [p.row(URL.format(108)), p.row(URL.format(109))])
+        await pilot.pause()
+        assert p.outcome.splitlines() == ["Merged PR108 (squash).",
+                                          "Couldn't merge PR109: gh says: X Pull request #109 is not mergeable"], p.outcome
+        assert said == {"busy": 0, "pending": 0}, "sent again while busy; asked again while pending"
+        tokens = {path.partition("token=")[2] for path in asked}
+        assert tokens == {sent_tokens[0]} and len(set(sent_tokens)) == 2, \
+            "the result asked by the 504's own token, each command its own"
+
+
+@pytest.mark.anyio
+async def test_a_hub_without_the_result_route_says_the_outcome_is_unknown_at_once(store, sid, github, monkeypatch):
+    """Review of #156: a hub without `result` (404) was polled WAIT_BUSY seconds."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p = await on_pr(app, pilot, URL.format(109))
+        monkeypatch.setattr(pane, "PAUSE", 0)
+        asked = []
+
+        def hub(path, body):
+            if body is None:
+                asked.append(path)
+                raise api.Refused(404, "no route GET /m/prs/result")
+            raise api.Refused(504, "the module took longer than 10 s and carries on")
+        p.ctx = dataclasses.replace(p.ctx, call=hub)
+        await asyncio.to_thread(p.done_each, "close", [p.row(URL.format(109))])
+        await pilot.pause()
+        assert len(asked) == 1 and "outcome is unknown" in p.outcome and "GitHub" in p.outcome, p.outcome
+
+
+@pytest.mark.anyio
+async def test_actions_on_different_prs_at_once_keep_each_outcome(store, sid, github):
+    """Review of #156: a close landing after a merge wrote over the merge's line."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p = await on_pr(app, pilot, URL.format(109))
+        a, b = p.row(URL.format(108)), p.row(URL.format(109))
+        p.acted("merge", [(a, {"method": "squash"})])
+        p.acted("close", [(b, {"closed": True})])
+        assert p.outcome == "Merged PR108 (squash).\nClosed PR109.", p.outcome

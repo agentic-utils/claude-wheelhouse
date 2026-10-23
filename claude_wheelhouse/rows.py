@@ -3,6 +3,7 @@ api.py's re-exports): each item kind's colour, and a row's full text on hover (#
 .plan/pr-pane.md part 1). Imports no Textual, so the daemon's api import stays light.
 """
 
+from rich.style import Style
 from rich.text import Text
 
 # each kind's ref colour in the inbox (and the PRs pane's PR column): the ref cell is its only
@@ -18,6 +19,17 @@ KIND_COLOUR = {
     "agent": "grey58",
     "permission": "dark_orange",
 }
+
+
+MARKED = Style(bgcolor="#3a1060")   # rows picked to act on together: the inbox's to close, the PRs pane's (#146)
+
+
+def marked(cells: tuple) -> tuple:
+    """A marked row's cells, on a background distinct from the cursor's."""
+    out = tuple(c.copy() if isinstance(c, Text) else Text(str(c)) for c in cells)
+    for c in out:   # the base style, which the table also pads the cell with
+        c.style = (Style.parse(c.style) if isinstance(c.style, str) else c.style) + MARKED
+    return out
 
 
 def plain(cell):

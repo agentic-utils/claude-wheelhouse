@@ -173,6 +173,14 @@ FEATURES: tuple[Feature, ...] = (
             note="Ctrl+Z in the inbox undoes the last delete, pin or reopen, an open question coming back open; "
                  "Delete on an open question asks first.",
             tip="Deleted something by mistake? Ctrl+Z brings it back as it was."),
+    Feature("pr-detail", UNRELEASED, "prs",
+            note="Detail, showing a PR, has its Open, Merge, Request review and Close buttons, and its failing "
+                 "checks, description, history and comments.",
+            tip="Pick a PR to read its failing checks, description, history and comments in Detail."),
+    Feature("pr-marks", UNRELEASED, "prs",
+            note="Mark PRs in the PRs pane as in the inbox (Ctrl+click, Shift+click, Space, Shift+Up/Down) and act "
+                 "on them all; Close closes a PR unmerged, asked first, as Merge is.",
+            tip="Ctrl+click or Space marks PRs: the buttons then act on them all."),
 )
 
 
