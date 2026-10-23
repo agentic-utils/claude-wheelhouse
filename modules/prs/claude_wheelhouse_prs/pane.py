@@ -8,7 +8,6 @@ PR in the browser on Enter or a click on its card's link."""
 import importlib.metadata
 import time
 
-from rich.style import Style
 from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -75,24 +74,21 @@ def tip(r: dict) -> str:
 
 
 def link(url: str) -> Text:
-    """A PR's URL as the card shows it (#139): without https://github.com/, and a click on any
-    of it opens the whole URL, on whichever line the card wraps it to: every segment carries
-    it (PrCard.action_open_pr), so none opens a fragment, as the terminal's own detection did."""
-    return Text(url.removeprefix("https://github.com/"), style=Style.from_meta({"@click": f"open_pr({url!r})"}))
+    """A PR's URL as the card shows it, any line of it opening the whole URL (api.pr_link, #139)."""
+    return api.pr_link(url)
 
 
 class PrCard(Static):
-    """The card under the table: a click on its link opens the PR (link)."""
-
-    def action_open_pr(self, url: str) -> None:
-        self.app.open_url(url)
+    """The card under the table (card): it scrolls, where the pane is too short for all of it."""
 
 
 def card(r: dict) -> Text:
-    """A PR that isn't an item, as the pane shows it: title, URL, branch, checks, review."""
-    out = Text()
+    """A PR that isn't an item, as the pane shows it: its link first, the one line a short pane's
+    card has room for (#139), then title, branch, checks, review."""
+    out = Text().append_text(link(r["url"]))   # a span: the link's line alone opens it
+    out.append("\n")
     out.append(r["title"] or f"PR {r['number']}", style="bold")
-    for label, value in (("URL", link(r["url"])), ("Branch", r["branch"] or "?"),
+    for label, value in (("Branch", r["branch"] or "?"),
                          ("Checks", (r["checks"] or "none").lower()),
                          ("Review", (r["review"] or "none required").lower().replace("_", " ")),
                          ("Mergeable", (r["mergeable"] or "unknown").lower())):
@@ -121,7 +117,7 @@ class Prs(Vertical):
     Prs { height: 1fr; }
     Prs > PrTable { height: 1fr; }
     Prs > #prs-note { color: #777777; padding: 0 1; height: auto; }
-    Prs > #prs-card { padding: 0 1; height: auto; max-height: 50%; border-top: solid #444444; }
+    Prs > #prs-card { padding: 0 1; height: auto; max-height: 50%; overflow-y: auto; border-top: solid #444444; }
     """
     PANE_MINIMUM = (12, 3)
     KEYS_HELP = ("The PRs pane", False)

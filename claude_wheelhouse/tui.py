@@ -97,7 +97,7 @@ DWELL = 1.0
 QUIET = 0.6
 NOTHING_SELECTED = "Select an item, or a session to follow its conversation."
 # the person's words in terminal green, Claude's in white as in the Claude app
-VOICE = {"you": MATRIX, "claude": "#e8e8e8", "head": "#05d9e8",
+VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8"}
 # a doc block (doc_blocks) longer than this is rendered on a thread (Transcript._layout): a
 # 42 KB one takes Rich a second or two, which the loop would otherwise stall for
@@ -452,7 +452,7 @@ def share(stored: str | None) -> float | None:
 
 
 def pr_body(item) -> str:
-    """A PR item's detail: its repo and URL, a terminal link; its live state is the PRs pane's."""
+    """A PR item's detail: its repo and URL; its live state is the PRs pane's. Shown as pr_text."""
     owner, repo, n = prs.parse(item["body"]) or ("", "", 0)
     return f"Pull request **{owner}/{repo}#{n}**: [{item['body']}]({item['body']})" if repo else item["body"]
 
@@ -470,7 +470,7 @@ def thread_blocks(found, session_name: str = "") -> list[tuple[str, str]]:
     where = f"{session_name} · " if session_name else ""
     out = [("head", f"## {ref} · {item['title']}\n\n{where}`{item['kind']}` · **{item['status']}**"
                     f"{' · answer queued' if queued else ''} · updated {item['updated_at']}"),
-           ("claude", pr_body(item) if item["kind"] == "pr" else item["body"] or "_no detail_")]
+           ("pr", pr_body(item)) if item["kind"] == "pr" else ("claude", item["body"] or "_no detail_")]
     for m in msgs:
         if m["author"] == "person":
             out.append(("you", f"**you{' · queued' if m['draft'] else ' · sending' if not m['delivered_at'] else ''}** · "
@@ -494,8 +494,18 @@ def thread_markdown(store: Store, sid: str, ref: str, session_name: str = "") ->
 def _block_lines(who: str, md: str, width: int, console) -> list:
     """A block's rendered segments at one width: rendered once, though Textual measures a
     widget's height and then draws it, and a new turn leaves every older block as it was."""
-    r = Text(md.strip("`"), style=VOICE[who]) if who == "tool" else RichMarkdown(md, style=VOICE[who])
+    r = Text(md.strip("`"), style=VOICE[who]) if who == "tool" else pr_text(md) if who == "pr" \
+        else RichMarkdown(md, style=VOICE[who])
     return list(console.render(r, console.options.update_width(width)))
+
+
+def pr_text(md: str) -> Text | RichMarkdown:
+    """A PR item's detail (pr_body) as Detail shows it: its link without https://github.com/,
+    any line of it opening the whole URL (prs.link, #139), not left to the terminal's own
+    link detection, which opened the line clicked."""
+    if prs.parse(md) is None:
+        return RichMarkdown(md, style=VOICE["pr"])
+    return Text("Pull request: ", style=VOICE["pr"]).append_text(prs.link(prs.canonical(md)))
 
 
 class Blocks:
@@ -5191,6 +5201,10 @@ class WheelhouseApp(App):
             self.weights = {k: v for k, v in self.weights.items() if k not in gone}
             self.lay_columns()
         self.client.set_setting(LAYOUT + columns.WEIGHTS_KEY, json.dumps(self.weights) if self.weights else None)
+
+    def action_open_url(self, url: str) -> None:
+        """A click on a PR's link (prs.link): the whole URL in the browser."""
+        self.open_url(url)
 
     def action_reset_layout(self) -> None:
         """Reset layout, in the command palette: every pane in its default slot and every
