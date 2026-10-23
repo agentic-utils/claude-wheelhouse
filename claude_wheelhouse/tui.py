@@ -3130,15 +3130,15 @@ class LeaveEdits(Dialog):
 
 class SessionMenu(Dialog):
     """A right-click on a session in the session list (#125): its buttons as a menu at the
-    pointer, as the buttons under the list show them for it: captioned, greyed (off, or
+    session's row, as the buttons under the list show them for it: captioned, greyed (off, or
     busy) and shown as they are, repainted with them each refresh (paint). The answer is the
     button's id, pressed there by the app (session_menu). Up and Down, as Tab and Shift+Tab,
-    go round the ones that apply; Esc or a click outside closes it (#81)."""
-    DEFAULT_CSS = """
-    SessionMenu { align: left top; }
-    SessionMenu #dialog { width: auto; min-width: 18; padding: 0 1; constrain: inside inside; }
-    SessionMenu #dialog Button { width: 100%; }
-    """
+    go round the ones that apply; Esc or a click outside closes it (#81).
+
+    It opens below the row, at the pointer's column, or above the row where there isn't the
+    room below (#137): at is the row's line, the menu's margin the line below it, and
+    constrain's inflect flips it about that, its bottom on the row's top. Its CSS is the app's
+    (SessionMenu in WheelhouseApp.CSS): a DEFAULT_CSS loses to the app's Dialog and #dialog."""
     BINDINGS = [Binding("down", "app.focus_next", show=False), Binding("up", "app.focus_previous", show=False)]
 
     def __init__(self, sid: str, title: str, buttons: list[tuple[str, str, bool, bool]], at: Offset) -> None:
@@ -3154,20 +3154,27 @@ class SessionMenu(Dialog):
                 yield button
 
     def on_mount(self) -> None:
-        self.query_one("#dialog").styles.offset = (self.at.x, self.at.y)   # before it's drawn: constrain keeps it on the screen
+        # before it's drawn: below the row (its margin), else above it (inflect), and across inside the screen
+        self.query_one("#dialog").styles.offset = (self.at.x, self.at.y)
         self.focus_first()
 
-    def focus_first(self) -> None:
-        """The first that applies focused, as the menu opens or the one focused goes off."""
-        if enabled := [b for b in self.query(Button) if b.display and not b.disabled]:
+    def focus_first(self, at: int = 0) -> None:
+        """The first that applies from the at'th button on, else the last before it: the
+        first as the menu opens, a neighbour as the one focused goes off (#128), not the top."""
+        menu = list(self.query(Button))
+        after = [b for b in menu[at:] if b.display and not b.disabled]
+        if enabled := after or [b for b in reversed(menu[:at]) if b.display and not b.disabled]:
             self.set_focus(enabled[0])
 
     def paint(self, buttons: list[tuple[str, str, bool, bool]]) -> None:
         """The session's buttons as they are now (lifecycle_buttons and controls)."""
         self.buttons = buttons
+        menu, was = list(self.query(Button)), self.focused
         for id_, caption, disabled, shown in buttons:
             show_button(self, f"menu-{id_}", caption, disabled, shown)
-        if self.focused is None:
+        if was in menu and (was.disabled or not was.display):   # Textual's own refocus goes to the top
+            self.focus_first(menu.index(was))
+        elif self.focused is None:
             self.focus_first()
 
     @on(Button.Pressed)
@@ -3613,6 +3620,11 @@ class WheelhouseApp(App):
     /* every dialog over the screen it was opened on, which shows through, and centred. After
        Screen, which matches a dialog too: its opaque background blanked the screen behind */
     Dialog {{ align: center middle; background: #0a0a12 60%; }}
+    /* a session's menu at its row (#137): below it, or flipped above it where it won't fit */
+    SessionMenu {{ align: left top; }}
+    SessionMenu #dialog {{ width: auto; min-width: 18; padding: 0 1; margin: 1 0 0 0;
+                          constrain: inside inflect; }}
+    SessionMenu #dialog Button {{ width: 100%; }}
     #title-row {{ height: 1; background: #12122a; }}
     #title {{ width: 1fr; height: 1; background: #12122a; content-align: center middle; }}
     #tour-badge {{ width: auto; height: 1; padding: 0 1; color: #ffd300; display: none; }}
@@ -4083,7 +4095,7 @@ class WheelhouseApp(App):
 
     def session_menu(self, event: events.MouseDown) -> bool:
         """A right-click on a session's row in the session list (#125): the session selected,
-        as a click selects it, and a menu of its buttons at the pointer (SessionMenu), the
+        as a click selects it, and a menu of its buttons at its row (SessionMenu), the
         one chosen pressed as a click on it would be. Only on the row itself, the topmost
         widget there (not a tour callout over it, nor the list's scrollbar). Whether the
         click was one."""
@@ -4115,15 +4127,18 @@ class WheelhouseApp(App):
             if button_id is None:
                 return
             button = self.screen_stack[0].query_one(f"#{button_id}", Button)
+            # the menu's caption: the one under the list is the session selected now's (#128)
+            label = next(caption for id_, caption, *_ in menu.buttons if id_ == button_id)
             if self.current_session() != sid or not showing(button):   # since the menu opened
-                self.notify(f"{button.label} no longer applies to this session", severity="warning")
+                self.notify(f"{label} no longer applies to this session", severity="warning")
             elif button.disabled:
                 busy = button_id in self.busy_buttons(next((x for x in self.sessions if x["id"] == sid), s))
-                self.notify(f"{button.label}: " + ("still under way" if busy else "nothing to do"), severity="warning")
+                self.notify(f"{label}: " + ("still under way" if busy else "nothing to do"), severity="warning")
             else:
                 button.press()
-        self.push_screen(SessionMenu(sid, self.display_name(s), self.session_menu_buttons(s),
-                                     Offset(event.screen_x, event.screen_y)), chosen)
+        menu = SessionMenu(sid, self.display_name(s), self.session_menu_buttons(s),
+                           Offset(event.screen_x, event.screen_y))   # the row's line: the row clicked
+        self.push_screen(menu, chosen)
         return True
 
     def session_menu_buttons(self, s) -> list[tuple[str, str, bool, bool]]:
