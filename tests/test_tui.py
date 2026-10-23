@@ -4757,6 +4757,9 @@ async def test_the_hint_says_what_ctrl_enter_does(store, sid, mode, sends_now, e
         await refresh(pilot, sid)
         assert str(app.screen.query_one(Hint).content).startswith(expected + " · "), desc
         app.items_table.focus()
+        await pilot.pause()
+        assert expected.split()[-1] in footer_labels(app) and \
+            {"queue", "send"} - {expected.split()[-1]} - set(footer_labels(app)), f"{desc}: the footer says it too"
         await pilot.press("enter")   # the item full screen has its own box and hint
         await pilot.pause()
         assert isinstance(app.screen, ThreadView)

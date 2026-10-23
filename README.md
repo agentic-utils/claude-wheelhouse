@@ -396,6 +396,7 @@ session.
   and says so. New (`N`), Adopt (`A`, a list of the sessions on disk you can adopt) and
   Relaunch all (`Shift+L`) act on no one session, so they're keys in the footer. Ctrl+S, Ctrl+T and the
   hint under the answer box act on or describe the same session (with none selected, the highlighted item's).
+  The footer's Ctrl+Enter says what it does there, `queue` in Queued mode or `send` in Immediate.
   An item opened full screen has Mode, Send and the rest in its bar, for its own session. New session (directory, optional name, optional ticket, opening brief,
   model and effort) opens Claude in a Windows Terminal tab. The new session is selected in the session list
   as soon as its row appears, unless you have picked another session or are typing in the answer box by then;
