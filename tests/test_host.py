@@ -2221,3 +2221,25 @@ def test_the_8_hour_mark_asks_then_compacts_bare_without_notes(host, store, sid,
     host.compact_idle = time.monotonic() - host_mod.COMPACT_TIMEOUT - 1
     run(host.poll())
     assert host.client.queries[-1] == "/compact", "no notes: compacted bare"
+
+
+@pytest.mark.parametrize("spoke, compacted, desc", [
+    (False, True, "nobody came back: compacted bare once the notes' wait runs out"),
+    (True, False, "the person wrote meanwhile: called off, never a /compact on a session in use"),
+])
+def test_the_8_hour_mark_is_called_off_when_the_person_is_back(host, store, sid, spoke, compacted, desc):
+    store.post_item(sid, "question", "which?")
+    host.keepalive_for = 8 * H
+    host.tokens = 200_000
+    t = time.monotonic()
+    host.last_turn, host.quiet_since = t - 50 * 60, t - 8 * H
+    run(host.poll())
+    finish_at(host, 200_000)   # the step's turn ends with no keep block
+    if spoke:
+        store.send(sid, "back now")
+        run(host.poll())
+        finish_at(host, 200_000)
+    host.compact_idle = time.monotonic() - host_mod.COMPACT_TIMEOUT - 1
+    run(host.poll())
+    assert ("/compact" in host.client.queries) is compacted, desc
+    assert host.compact_nonce is None, f"{desc}: nothing left waiting for notes"

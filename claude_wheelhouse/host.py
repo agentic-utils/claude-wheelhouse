@@ -646,6 +646,7 @@ class Host:
             elif ref in self.waiting and not self.waiting[ref].done():
                 self.handed[ref] = m
                 self.waiting[ref].set_result(m["body"])
+                self.person_back(m)
             elif ref in self.asking and ref not in self.handed and self.denied_with(ref, m):
                 self.handed[ref] = m
             else:
@@ -669,6 +670,8 @@ class Host:
                 self.store.release(turn)
                 raise
             await self.confirm(turn)
+            for m in turn:
+                self.person_back(m)
         for what in () if hold else REQUEST_TEXT:
             asked = session[f"{what}_requested_at"]
             if asked and session[f"{what}_told_at"] != asked and self.store.tell_request(self.sid, what, asked):
@@ -754,6 +757,16 @@ class Host:
         session = self.store.session(self.sid)
         return (session is not None and not session["parked"]
                 and (self.waits_on_person() or bool(self.store.in_doubt(self.sid))))
+
+    def person_back(self, m) -> None:
+        """A message delivered: one of the person's (not a notice) calls off the 8 h mark's
+        compaction while it waits for notes, so its bare /compact never lands on a session
+        in use. A Compact the person pressed is theirs, and stays."""
+        if "kind" in m.keys() and m["kind"] == "notice":
+            return
+        if self.cold_nonce is not None and self.compact_nonce == self.cold_nonce:
+            self.end_compact()
+        self.cold_nonce = None
 
     def cold_due(self, at: float) -> bool:
         """Whether the keepalive's window has just ended on a session it was keeping warm:
