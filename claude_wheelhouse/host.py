@@ -710,7 +710,8 @@ class Host:
             self.store.set_activity(self.sid, HOLD_EXPIRED)
 
     async def compact_parked(self, session) -> bool:
-        """The session has parked. Parked with Compact first (Store.request), it is compacted
+        """The session has parked. Parked with Compact first (Store.request, or Store.park
+        when it parks itself, with its keep text as the instructions), it is compacted
         once its park's turn has ended, and nothing is sent after: the host stops once that
         ends. Whether the host carries on meanwhile."""
         if self.store.take_command(self.sid, only="interrupt"):   # its turn or its compaction: stopped, not compacted
@@ -725,13 +726,16 @@ class Host:
             return False
         if self.pending:   # the park's own turn still running
             return True
-        # only a park this host asked for, lately: a request left unanswered, then a park of
-        # the session's own (or after a restart), never compacts
-        asked = self.park_told is not None and time.monotonic() - self.park_told <= PARK_COMPACT_WITHIN
+        # only a park this host asked for, lately, or one the session asked to compact itself
+        # (park_session, park_keep): a request left unanswered, then a park of the session's
+        # own that didn't ask (or the person's, after a restart, answered with no keep), never compacts
+        keep = session["park_keep"]
+        asked = keep is not None or (self.park_told is not None
+                                     and time.monotonic() - self.park_told <= PARK_COMPACT_WITHIN)
         if not (self.store.take_park_compact(self.sid) and asked):
             return False
         self.compact_then = "park"
-        self.compact_key = await self.turn("/compact")
+        self.compact_key = await self.turn(f"/compact {keep}" if keep else "/compact")
         self.compact_sent = time.monotonic()
         self.store.set_activity(self.sid, "compacting before it stops")
         return True

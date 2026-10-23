@@ -257,14 +257,34 @@ def stop_soon(s) -> bool:
     return True
 
 
+PARKED_UNCOMPACTED = "Parked without compacting"   # the decision a session's reason is posted as
+
+
 @wheelhouse_tool
-def park_session() -> str:
-    """Park this session: it stops a moment after this returns, and shows dimmed at the
-    foot of the wheelhouse's list until the person unparks it. Write your handoff notes into
-    your items first: this is the last thing you do."""
+def park_session(compact: bool = True, keep: str = "", reason: str = "") -> str:
+    """Park this session: it stops once parked, and shows dimmed at the foot of the
+    wheelhouse's list until the person unparks it. Write your handoff notes into your items
+    (and write_handoff, if your instructions keep one) first: this is the last thing you do.
+    Call it when the wheelhouse asks you to park, or unasked, once you have come to the end
+    of the useful work and are only waiting on the person.
+    In a session run inside the wheelhouse (SDK mode), parking unasked compacts it first,
+    once this turn ends, with `keep` as the compaction's instructions (what to carry through).
+    compact=false parks it as it is, and needs `reason`, shown to the person: why compacting
+    is undesirable (for example, you expect them to Stop & Forget it rather than carry on).
+    Answering the wheelhouse's park request, the person's choice decides, and these are
+    ignored but for `keep`. In a terminal tab nothing compacts, and these are ignored."""
     s = _store.session(_sid)
-    _store.set_parked(_sid, True)
-    return "parked; this session stops in a moment" if stop_soon(s) else "parked"
+    if not hosted_here(_store):
+        _store.park(_sid)
+        return "parked; this session stops in a moment" if stop_soon(s) else "parked"
+    if not compact and not s["park_requested_at"]:
+        if not reason.strip():
+            raise ValueError("compact=false needs a reason, shown to the person: why compacting is undesirable")
+        _store.post_item(_sid, "decision", PARKED_UNCOMPACTED, why=reason.strip())
+    asked = s["park_requested_at"]
+    if _store.park(_sid, (keep.strip() or None) if asked else keep.strip() if compact else None):
+        return "parked; it is compacted once this turn ends, then stops: end your turn now"
+    return "parked; this session stops in a moment"
 
 
 @wheelhouse_tool

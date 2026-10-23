@@ -81,7 +81,10 @@ DECISION_FIELDS = (("why", "Why"),)
 # wheelhouse's messages at compaction, Stop & Forget and resume now ask for: an older one has none.
 # 19: request_compact, the tool a session run in the wheelhouse asks to be compacted with once
 # its turn ends (sessions.compact_request): an older one has no such tool.
-PROTOCOL_VERSION = 19
+# 20: park_session's compact, keep and reason, with which a session run in the wheelhouse parks
+# itself unasked, compacted first unless it says why not (sessions.park_keep): an older one's
+# park_session takes no arguments.
+PROTOCOL_VERSION = 20
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
@@ -276,7 +279,10 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("items", "pinned", "INTEGER"),
                  # a compaction the session asked for itself (request_compact): its keep text while
                  # pending, and when it last asked, for MODEL_COMPACT_GAP
-                 ("sessions", "compact_request", "TEXT"), ("sessions", "compact_requested_at", "TEXT")]
+                 ("sessions", "compact_request", "TEXT"), ("sessions", "compact_requested_at", "TEXT"),
+                 # a park the session asked to be compacted first itself (park_session): /compact's
+                 # instructions, '' for none; NULL when it didn't ask
+                 ("sessions", "park_keep", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -837,14 +843,15 @@ class Store:
                        "WHERE id = ?", (stamp(), sid))
             self.unrequest_compact(db, sid)
             if what == "park":
-                db.execute("UPDATE sessions SET park_compact = ? WHERE id = ?", (int(compact), sid))
+                db.execute("UPDATE sessions SET park_compact = ?, park_keep = NULL WHERE id = ?",
+                           (int(compact), sid))
 
     def take_park_compact(self, sid: str) -> bool:
-        """The host takes the Park's Compact first (request), once: to compact, or to drop it
-        (the park not done in time)."""
+        """The host takes the Park's Compact first (request, or park), once: to compact, or to
+        drop it (the park not done in time). Its keep text goes with it."""
         with self.tx() as db:
-            return db.execute("UPDATE sessions SET park_compact = 0 WHERE id = ? AND park_compact = 1",
-                              (sid,)).rowcount == 1
+            return db.execute("UPDATE sessions SET park_compact = 0, park_keep = NULL "
+                              "WHERE id = ? AND park_compact = 1", (sid,)).rowcount == 1
 
     def tell_request(self, sid: str, what: str, asked: str) -> bool:
         """The monitor is about to pass a request on: record that, only if it is still the
@@ -867,7 +874,7 @@ class Store:
             db.execute(f"UPDATE sessions SET {what}_requested_at = NULL, {what}_told_at = NULL "
                        "WHERE id = ?", (sid,))
             if what == "park":
-                db.execute("UPDATE sessions SET park_compact = 0 WHERE id = ?", (sid,))
+                db.execute("UPDATE sessions SET park_compact = 0, park_keep = NULL WHERE id = ?", (sid,))
             if told:
                 db.execute(
                     "INSERT INTO messages (session_id, author, body, created_at) VALUES (?, 'person', ?, ?)",
@@ -898,9 +905,25 @@ class Store:
         with self.tx() as db:
             self._require(db, sid)
             db.execute("UPDATE sessions SET parked = ?, park_requested_at = NULL, park_told_at = NULL, "
-                       "park_compact = park_compact * ? WHERE id = ?", (int(parked), int(parked), sid))
+                       "park_compact = park_compact * ?, park_keep = CASE WHEN ? THEN park_keep END "
+                       "WHERE id = ?", (int(parked), int(parked), int(parked), sid))
             if parked:
                 self.unrequest_compact(db, sid)
+
+    def park(self, sid: str, keep: str | None = None) -> bool:
+        """The session parks itself (park_session). Answering the person's Park, their choice
+        of Compact first stands, with keep, if given, as its instructions. Unasked, it is
+        compacted first only if it asks (keep not None; '' for a bare /compact): its host does
+        that once the park's turn has ended, as for the person's Park. Whether it compacts."""
+        with self.tx() as db:
+            s = db.execute("SELECT park_requested_at, park_compact FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if s is None:
+                raise SessionGone(sid)
+            compact = bool(s["park_compact"]) if s["park_requested_at"] else keep is not None
+            db.execute("UPDATE sessions SET parked = 1, park_requested_at = NULL, park_told_at = NULL, "
+                       "park_compact = ?, park_keep = ? WHERE id = ?", (int(compact), keep if compact else None, sid))
+            self.unrequest_compact(db, sid)
+        return compact
 
     def end(self, sid: str) -> None:
         with self.tx() as db:
