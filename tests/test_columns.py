@@ -469,6 +469,24 @@ async def test_old_shares_are_dropped_for_the_defaults(store, sid, tmp_path, mon
 
 
 @pytest.mark.anyio
+async def test_slot_splitters_cost_no_settings_round_trips(store, sid, monkeypatch):
+    """A column's weights size its SlotSplitters (#134): start reads their old keys only to
+    delete them, and Reset layout neither reads nor writes them."""
+    calls = []
+    for name in ("setting", "set_setting"):
+        monkeypatch.setattr(store, name, lambda key, *a, f=getattr(store, name): calls.append(key) or f(key, *a))
+    slot_keys = {LAYOUT + key for key in columns.OLD_KEYS}
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await opened(app, pilot)
+        assert sorted(k for k in calls if k in slot_keys) == sorted(slot_keys), "start: each read once, to delete"
+        calls.clear()
+        app.action_reset_layout()
+        await pilot.pause()
+        assert not [k for k in calls if k in slot_keys], "reset: none"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("absent, later, desc", [
     ("design-empty", "design", "the Decisions compact during the drag, then decisions appear (review 3 repro 1)"),
     ("prs", "prs", "the PRs absent during the drag, then loaded (review 3 repro 2)"),

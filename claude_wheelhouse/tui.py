@@ -4050,8 +4050,8 @@ class WheelhouseApp(App):
                 self.client.set_setting(LAYOUT + key, None)
         for splitter in self.query(Splitter):   # the sizes the person dragged to, last time
             # one beside a collapsed slot keeps its stylesheet's size: a share there would
-            # size a slot that has the column to itself
-            if splitter.display and (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
+            # size a slot that has the column to itself; a column's weights size a SlotSplitter
+            if not isinstance(splitter, SlotSplitter) and splitter.display and (stored := share(self.client.setting(LAYOUT + splitter.key))) is not None:
                 splitter.apply(stored)
         self.weights = columns.kept(self.client.setting(LAYOUT + columns.WEIGHTS_KEY))
         self.eye_col = self.session_list.add_columns(*SESSION_LABELS, "")[-1]
@@ -5391,9 +5391,10 @@ class WheelhouseApp(App):
         splitter at the stylesheet's size, with nothing kept for either."""
         self.client.set_setting(SLOTS_KEY, None)
         self.place_panes({})
-        for splitter in self.screen_stack[0].query(Splitter):
-            splitter.apply(None)
-            self.client.set_setting(LAYOUT + splitter.key, None)
+        for splitter in self.screen_stack[0].query(Splitter):   # the weights below hold a SlotSplitter's
+            if not isinstance(splitter, SlotSplitter):
+                splitter.apply(None)
+                self.client.set_setting(LAYOUT + splitter.key, None)
         self.weights = {}
         self.client.set_setting(LAYOUT + columns.WEIGHTS_KEY, None)
         self.relaid()
