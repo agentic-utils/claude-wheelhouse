@@ -49,6 +49,10 @@ ACTIONS = (("open", "Open", "Open the PR in the browser"),
            ("merge", "Merge", "Merge the PR, the way its repo allows: asked first"),
            ("review", "Request review", "Ask the session that made the PR to post a review request on Slack"),
            ("close", "Close", "Close the PR without merging it: asked first"))
+KEEP_RESULTS = 50                        # commands' answers kept for the result route
+WAIT_BUSY = 60                           # seconds a bulk action waits on the module's command thread, a PR
+PAUSE = 1.0                              # seconds between its tries
+BUSY = "is busy"                         # in a 503 the hub gives while a command runs past its wait (daemon.BUSY)
 SETTLE = 0.4                             # seconds the highlight rests on a PR before its detail is fetched
 RETRY = 10                               # seconds before a detail fetch that failed is tried again
 TABLE_ROWS = 3                           # the PRs' rows kept, under the header, before the buttons under them hide
@@ -80,9 +84,23 @@ def routes(ctx: api.Context) -> list[api.Route]:
 
     def detailed(call: api.Call):
         return fetcher.detail(call.query.get("url", ""), call.query.get("fresh") == "1")
-    return [api.Route("list", listed), api.Route("detail", detailed),
-            api.Route("merge", lambda call: fetcher.merge(url_of(call)), method="POST"),
-            api.Route("close", lambda call: fetcher.close(url_of(call)), method="POST")]
+
+    def done(act):
+        """A command's answer, kept for `result` too: one that ran past the hub's wait
+        (504) still says what came of it once it ends (#156)."""
+        def handler(call: api.Call):
+            url = url_of(call)
+            fetcher.results[url] = got = act(url)
+            while len(fetcher.results) > KEEP_RESULTS:   # the oldest, never asked for, dropped
+                fetcher.results.pop(next(iter(fetcher.results)))
+            return got
+        return handler
+
+    def result(call: api.Call):
+        return fetcher.results.pop(call.query.get("url", ""), None) or {"pending": True}
+    return [api.Route("list", listed), api.Route("detail", detailed), api.Route("result", result),
+            api.Route("merge", done(fetcher.merge), method="POST"),
+            api.Route("close", done(fetcher.close), method="POST")]
 
 
 # the order a header click gives (as the inbox's: ordering.next_item_sort)
@@ -776,17 +794,44 @@ class Prs(Vertical):
         self.run_worker(lambda: self.done_each(action, rows), thread=True, group="prs-act", exit_on_error=False)
 
     def done_each(self, action: str, rows: list[dict]) -> None:
+        """Each PR tried in turn, whatever the others came to. The module's commands run one
+        at a time: while one runs past the hub's wait (504), the next is refused busy (503),
+        so it's sent again until it's taken; and the one that ran past is asked what it came
+        to (the result route) once it ends, all within WAIT_BUSY seconds (#156)."""
         results = []
         for r in rows:
-            try:
-                got = self.ctx.call(action, {"url": r["url"]})
-            except api.Refused as e:   # the hub's, not gh's
-                got = {"failed": {404: "the hub is older: update it", 504: "still under way: r fetches again shortly"}
-                       .get(e.status, e.error)}
-            except Exception as e:   # never left busy
-                got = {"failed": f"{type(e).__name__}: {e}"}
+            got = self.command(action, r["url"])
+            if got.get("status") == 504:
+                got = self.waited(r["url"], got)
             results.append((r, got))
         self.app.call_from_thread(self.acted, action, results)
+
+    def command(self, action: str, url: str) -> dict:
+        until = time.monotonic() + WAIT_BUSY
+        while True:
+            try:
+                return self.ctx.call(action, {"url": url})
+            except api.Refused as e:   # the hub's, not gh's
+                if e.status == 503 and BUSY in e.error and time.monotonic() < until:
+                    time.sleep(PAUSE)
+                    continue
+                return {"status": e.status, "failed": {404: "the hub is older: update it",
+                                                       504: "still under way: r fetches again shortly"}.get(e.status, e.error)}
+            except Exception as e:   # never left busy
+                return {"failed": f"{type(e).__name__}: {e}"}
+
+    def waited(self, url: str, got: dict) -> dict:
+        """What a command that ran past the hub's wait came to, once it has: else got."""
+        until = time.monotonic() + WAIT_BUSY
+        while time.monotonic() < until:
+            time.sleep(PAUSE)
+            try:
+                said = self.ctx.call(f"result?url={quote(url, safe='')}", None)
+            except Exception:
+                continue
+            if isinstance(said, dict) and not said.get("pending"):
+                return said
+        return got
 
     def acted(self, action: str, results: list[tuple[dict, dict]]) -> None:
         """What each came to, a line a PR under the table: done, or what stood in its way.

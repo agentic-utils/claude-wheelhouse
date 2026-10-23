@@ -431,3 +431,15 @@ def test_the_detail_text(d, has, lacks, desc):
 def test_captions_fit_the_bar(room, want, layout, desc):
     entries = [(i, False, c) for i, c, _ in pane.ACTIONS]
     assert pane.captions(entries, room) == (want, layout), desc
+
+
+def test_a_commands_answer_is_kept_for_the_result_route(tmp_path, monkeypatch):
+    """Review of #156: a close past the hub's wait still says what came of it."""
+    f = Fake(tmp_path)
+    monkeypatch.setattr(pane, "RUNNER", lambda argv: (0, "", ""))
+    routes = {r.path: r for r in pane.routes(f.ctx)}
+    ask = api.Call({}, {"url": URL.format(3)})
+    assert routes["result"].handler(ask) == {"pending": True}, "nothing yet"
+    routes["close"].handler(api.Call({}, {}, {"url": URL.format(3)}))
+    assert routes["result"].handler(ask) == {"closed": True} and routes["result"].handler(ask) == {"pending": True}, \
+        "said once"

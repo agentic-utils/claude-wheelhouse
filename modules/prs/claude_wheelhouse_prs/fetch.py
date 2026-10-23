@@ -272,6 +272,7 @@ class Fetcher:
         self.last = self.cache.fetched_at()   # a restart keeps the GAP
         self.lock = threading.Lock()
         self.details: dict[str, tuple[float, dict]] = {}   # each PR's detail as last fetched (detail), and when
+        self.results: dict[str, dict] = {}   # what each merge or close came to, until asked (pane's result route)
         self.error: str | None = None     # gh unavailable: shown in place of the table
         self.warning: str | None = None   # the last fetch failed otherwise: the cache shown, and why
 

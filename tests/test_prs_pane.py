@@ -791,3 +791,34 @@ async def test_arrowing_past_prs_fetches_only_the_one_it_rests_on_and_a_failure_
         p.want_detail()
         await landed(app, pilot)
         assert url in p.detail_asked and "error" not in p.details[url], "tried again, and kept"
+
+
+@pytest.mark.anyio
+async def test_a_bulk_action_tries_every_pr_and_says_what_each_came_to(store, sid, github, monkeypatch):
+    """Review of #156: a merge past the hub's wait (504) left every PR after it refused busy
+    (503). Now each is sent again until taken, and the one past the wait asked what it came to."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p = await on_pr(app, pilot, URL.format(109))
+        monkeypatch.setattr(pane, "PAUSE", 0)
+        said = {"busy": 2, "pending": 1}
+
+        def hub(path, body):
+            if path.startswith("result"):
+                if said["pending"]:
+                    said["pending"] -= 1
+                    return {"pending": True}
+                return {"method": "squash"}
+            if body["url"] == URL.format(108):
+                raise api.Refused(504, "the module took longer than 10 s and carries on")
+            if said["busy"]:
+                said["busy"] -= 1
+                raise api.Refused(503, "module prs is busy: a command is still under way. Try again shortly")
+            return {"error": "X Pull request #109 is not mergeable"}
+        p.ctx = dataclasses.replace(p.ctx, call=hub)
+        await asyncio.to_thread(p.done_each, "merge", [p.row(URL.format(108)), p.row(URL.format(109))])
+        await pilot.pause()
+        assert p.outcome.splitlines() == ["Merged PR108 (squash).",
+                                          "Couldn't merge PR109: gh says: X Pull request #109 is not mergeable"], p.outcome
+        assert said == {"busy": 0, "pending": 0}, "sent again while busy; asked again while pending"
