@@ -5137,6 +5137,85 @@ async def test_right_click_off_a_sessions_row_opens_no_menu(store, sid, clock, w
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("size, at, side, desc", [
+    ((80, 24), "row", "below", "a right-click on the first row at 80x24: under the row, at the pointer"),
+    ((160, 40), "last", "below", "a right-click on the last row in view at 160x40"),
+    ((80, 24), (3, 20), "above", "no room below at 80x24: over the row instead"),
+    ((160, 40), (3, 36), "above", "no room below at 160x40"),
+    ((80, 24), (75, 3), "below", "near the right edge at 80x24: kept on the screen across"),
+    ((160, 40), (155, 3), "below", "near the right edge at 160x40"),
+])
+async def test_a_sessions_menu_opens_at_its_row(store, sid, clock, size, at, side, desc):
+    """#137: the menu opens below the session's row, or above it without the room below; not mid-screen."""
+    for i in range(30):
+        store.create_session("/tmp", name=f"s{i}")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        table = app.session_list
+        if isinstance(at, tuple):   # a row there, as a tall list would put it
+            s = next(x for x in app.sessions if x["id"] == sid)
+            app.push_screen(tui.SessionMenu(sid, "name", app.session_menu_buttons(s), tui.Offset(*at)))
+            x, line = at
+        else:
+            row = 0 if at == "row" else table.content_region.height - table.header_height - 1
+            x, line = table.region.x + 3, table.region.y + table.header_height + row
+            await session_menu(app, pilot, table.keys()[row], (3, table.header_height + row))
+        await pilot.pause()
+        assert isinstance(app.screen, tui.SessionMenu), desc
+        box = app.screen.query_one("#dialog").region
+        width, height = size
+        assert (box.y == line + 1) if side == "below" else (box.bottom == line), f"{desc}: {box} for line {line}"
+        assert box.bottom <= height and box.y >= 0, f"{desc}: on the screen down"
+        assert box.x == min(x, width - box.width) and box.width < width // 2, f"{desc}: {box} at the pointer, on the screen"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("focus, change, expect, desc", [
+    (1, "disabled", 2, "the one focused greys: the next one below"),
+    (1, "hidden", 2, "the one focused hides: the next one below"),
+    (-1, "disabled", -2, "the last one greys: the one above"),
+])
+async def test_a_menu_button_going_off_moves_focus_to_a_neighbour(store, sid, clock, focus, change, expect, desc):
+    """#128: focus goes to a neighbour of the menu button that greys or hides, not the top."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await session_menu(app, pilot, sid)
+        menu = app.screen
+        usable = [b for b in menu.query(Button) if b.display and not b.disabled]
+        menu.set_focus(usable[focus])
+        await pilot.pause()
+        off = usable[focus].id.removeprefix("menu-")
+        menu.paint([(id_, caption, disabled or (id_ == off and change == "disabled"),
+                     shown and not (id_ == off and change == "hidden")) for id_, caption, disabled, shown in menu.buttons])
+        await pilot.pause()
+        assert menu.focused is usable[expect], f"{desc}: {menu.focused.id}, not {usable[expect].id}"
+
+
+@pytest.mark.anyio
+async def test_a_stale_menu_choice_is_named_by_its_own_caption(store, sid, clock):
+    """#128: a choice no longer applying, the selection moved to another session, says the
+    menu's caption, not the one under the list for the session selected now."""
+    other = store.create_session("/tmp", name="other")
+    store.set_parked(other, True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        notes = []
+        app.notify = lambda message, **kw: notes.append(message)
+        await session_menu(app, pilot, sid)
+        menu = app.screen
+        app.follow(other)
+        app.paint_session_info()
+        await pilot.pause()
+        assert str(app.screen_stack[0].query_one("#relaunch", Button).label) == "Unpark", "the other's caption under the list"
+        menu.action_answer("relaunch")
+        await pilot.pause()
+        assert notes[-1] == "Relaunch no longer applies to this session"
+
+
+@pytest.mark.anyio
 async def test_the_session_list_and_stats_pane_share_a_reader(store, sid):
     """OBS 2 (#51): each transcript read once, not once for the context bar and again for the pane."""
     app = WheelhouseApp(store)
