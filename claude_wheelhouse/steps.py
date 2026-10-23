@@ -109,6 +109,13 @@ def flag_args() -> list[str]:
     return [a for (event, sw), v in _flags.items() for a in (STEP_FLAG, f"{event}.{sw}={v}")]
 
 
+def flag_env() -> dict[str, str]:
+    """The --step values given, as the environment variables a process this one starts reads
+    (WHEELHOUSE_STEP_*): for a tab's Claude Code, whose monitor and MCP server take no flags
+    of ours."""
+    return {f"WHEELHOUSE_{env_key(event, sw)}": v for (event, sw), v in _flags.items()}
+
+
 def env_key(event: str, sw: str) -> str:
     return f"STEP_{event.upper()}_{sw.upper()}"
 

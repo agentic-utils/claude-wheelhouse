@@ -204,6 +204,7 @@ def parser() -> argparse.ArgumentParser:
     again.add_argument("--yes", "-y", action="store_true", help="don't ask first")
     run = sub.add_parser("run", help="inside a launched tab: exec Claude for a session")
     run.add_argument("session_id")
+    run.add_argument(steps.STEP_FLAG, dest="step", action="append", default=None, help=argparse.SUPPRESS)
     sub.add_parser("mcp", help="the per-session MCP server (stdio)")
     sub.add_parser("monitor", help="the per-session plugin monitor")
     sub.add_parser("open-items", help="inside a launched tab: print the session's open items (the plugin's "

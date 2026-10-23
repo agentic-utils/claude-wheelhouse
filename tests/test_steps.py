@@ -243,3 +243,17 @@ def test_a_fixed_switch_shows_where_from(store, monkeypatch):
     assert items == {"name": "items", "on": False, "fixed": "WHEELHOUSE_STEP_BEFORE_FORGET_ITEMS"}
     with pytest.raises(ValueError):
         steps.set_switch(store, "session_start", "announce", True)
+
+
+def test_step_flags_reach_a_tab(store, sid, monkeypatch):
+    """A tab's monitor and MCP server take no flags of ours: --step rides on its run line,
+    and run hands it to Claude Code as WHEELHOUSE_STEP_*, which they read."""
+    from claude_wheelhouse import launch
+    assert steps.set_flags(["before_forget.items=off"]) == []
+    line = launch.run_line(store.session(sid), "py")
+    assert "--step before_forget.items=off" in line, "on the tab's run line"
+    env = steps.flag_env()
+    assert env == {"WHEELHOUSE_STEP_BEFORE_FORGET_ITEMS": "off"}, "as the tab's Claude Code gets it"
+    steps.set_flags([])   # the tab's monitor: no flag, the environment only
+    monkeypatch.setenv(*next(iter(env.items())))
+    assert "Close each open item" not in monitor.request_text(store, "end"), "Before Forget follows it"

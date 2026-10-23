@@ -136,7 +136,7 @@ def wt_argv(session, *, python: str, distro: str, user: str, shell: str) -> list
 
 
 def run_line(session, python: str) -> str:
-    return (f"{shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id']])}; "
+    return (f"{shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id'], *steps.flag_args()])}; "
             "rc=$?; if [ $rc -eq 143 -o $rc -eq 137 ]; then exit 0; fi; exit $rc")
 
 
@@ -388,7 +388,7 @@ def run(sid: str) -> None:
     if session is None:
         sys.exit(f"claude-wheelhouse: no session {sid} (ended?)")
     env = clean_env(WHEELHOUSE_SESSION_ID=sid, WHEELHOUSE_DB=str(store.path), WHEELHOUSE_PYTHON=sys.executable,
-                    CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS=str(IDLE_COMPACT_TOKENS))
+                    CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS=str(IDLE_COMPACT_TOKENS), **steps.flag_env())
     os.chdir(session["cwd"])
     resume = transcript_exists(sid)
     argv = claude_argv(session, python=sys.executable, resume=resume, store=store)
