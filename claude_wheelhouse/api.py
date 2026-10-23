@@ -25,7 +25,9 @@ answer box (tui.tab_stops, #77). A pane's widget may say the least room it needs
 rows)`, which its slot and column keep wherever it is swapped, and while it has nothing to
 show set `compact = True` and call `Context.relayout`: in a column of two slots or more its
 slot shrinks to those rows, the others taking the rest (columns.py); alone in its column, it
-keeps its size.
+keeps its size. A right-click in a pane asks its widget, or the nearest of its ancestors
+that has one, `menu_at(x, y)` (screen cells): a `Menu` opens there, None leaves the
+right-click to copy and paste as anywhere else.
 
 A module may also serve the daemon side (.plan/modules.md, "The module boundary"):
 `routes(ctx)`, its `Route`s, mounted under /m/<id>/ (and called in process with --local),
@@ -163,6 +165,27 @@ class Context:
     pr_activity: Callable[[], float | None] | None = None
     # an item shown in the Detail pane, highlighted in the inbox: (session id, ref). None daemon side
     show_item: Callable[[str, str], None] | None = None
+    # text sent to a session as the person's answer would be, queued or at once by its mode:
+    # (session id, the item it answers or None, text). None daemon side
+    send: Callable[[str, str | None, str], None] | None = None
+    # the wheelhouse's settings, which a module keys under its own id ("<id>.<name>"). None daemon side
+    setting: Callable[[str], str | None] | None = None
+    set_setting: Callable[[str, str | None], None] | None = None
+    # the app's Yes/No dialog, No focused: (question, called with the answer). None daemon side
+    confirm: Callable[[str, Callable[[bool], None]], None] | None = None
+    # a line of text asked for: (question, suggestions, called with it, or None if cancelled). None daemon side
+    ask: Callable[[str, list[str], Callable[[str | None], None]], None] | None = None
+
+
+@dataclass
+class Menu:
+    """What a pane's `menu_at(x, y)` gives for a right-click on one of its rows: the menu's
+    title, its entries (id, caption, disabled, tooltip), the screen line of the row it opens
+    under (above it where there's no room below), and what's called with the entry chosen."""
+    title: str
+    entries: list[tuple[str, str, bool, str]]
+    line: int
+    chosen: Callable[[str], None]
 
 
 @dataclass

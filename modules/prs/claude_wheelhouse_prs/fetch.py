@@ -150,6 +150,11 @@ class Cache:
             db.executemany("INSERT OR REPLACE INTO prs VALUES (?, ?, ?)",
                            [(r["url"], json.dumps(r), at) for r in rows])
 
+    def update(self, row: dict) -> None:
+        """One row written again, as fetched when it was: the others left as they are."""
+        with self.db() as db:
+            db.execute("UPDATE prs SET json = ? WHERE url = ?", (json.dumps(row), row["url"]))
+
     def rows(self) -> list[dict]:
         with self.db() as db:
             return [json.loads(j) for (j,) in db.execute("SELECT json FROM prs")]
@@ -222,3 +227,50 @@ class Fetcher:
                 continue
             out.append({**r, "light": light(r), "item": {"session_id": it["session_id"], "ref": it["ref"]} if it else None})
         return {"prs": ordered(out), "fetched_at": self.last, "warning": self.warning}
+
+    def merge(self, url: str) -> dict:
+        """A PR merged by `gh pr merge` (#138), the way its repo allows: {"method"}, its row
+        marked merged so the pane drops it; {"error"} with why not, as gh says it."""
+        if not isinstance(url, str) or api.pr_url(url) != url:   # the whole of it, nothing gh could take as a flag
+            raise api.Refused(400, f"not a pull request URL: {url!r}")
+        owner, repo, _ = api.parse_pr(url)
+        try:
+            how = method(f"{owner}/{repo}", self.runner)
+            code, out, err = self.runner(["gh", "pr", "merge", f"--{how}", "--", url])
+        except Unavailable as e:
+            return {"error": str(e)}
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            return {"error": str(e) or type(e).__name__}
+        if code != 0:
+            return {"error": last_line(err or out) or f"gh exited {code}"}
+        rows = {r["url"]: r for r in self.cache.rows()}
+        if url in rows:
+            self.cache.update({**rows[url], "state": "MERGED"})
+        if self.ctx.set_pr_states is not None and url in self.items():
+            self.ctx.set_pr_states({url: "merged"})
+        return {"method": how}
+
+
+METHODS = (("mergeCommitAllowed", "merge"), ("squashMergeAllowed", "squash"), ("rebaseMergeAllowed", "rebase"))
+
+
+def method(repo: str, runner: Runner) -> str:
+    """How a repo lets its PRs merge, asked of GitHub: a merge commit where it's allowed,
+    else squash, else rebase. RuntimeError if it can't say."""
+    code, out, err = runner(["gh", "repo", "view", "--json", ",".join(k for k, _ in METHODS), "--", repo])
+    if code == 4 or "gh auth login" in err:
+        raise Unavailable("gh isn't logged in: run gh auth login")
+    try:
+        allowed = json.loads(out) if code == 0 else None
+    except ValueError:
+        allowed = None
+    if not isinstance(allowed, dict):
+        raise RuntimeError(last_line(err or out) or f"gh exited {code}")
+    how = next((m for key, m in METHODS if allowed.get(key)), None)
+    if how is None:
+        raise RuntimeError(f"{repo} allows no merge method")
+    return how
+
+
+def last_line(text: str) -> str:
+    return text.strip().splitlines()[-1].strip() if text.strip() else ""
