@@ -16,6 +16,7 @@ import time
 from rich.text import Text
 from textual.binding import Binding
 from textual import on
+from textual.content import Content
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, DataTable, Static
 
@@ -239,7 +240,8 @@ class Prs(Vertical):
 
     def show_scope(self) -> None:
         name = self.session_name()
-        self.border_title = f"PRs · {self.scope}" + (f" · {name}" if name else "")
+        # Content: plain, as a str border title is parsed as markup and a session names itself (#141)
+        self.border_title = Content(f"PRs · {self.scope}" + (f" · {name}" if name else ""))
 
     def session(self) -> str | None:
         """The session selected in the session list (Context.focus), as the inbox follows it (#149)."""

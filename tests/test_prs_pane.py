@@ -12,6 +12,7 @@ import pytest
 from claude_wheelhouse import api
 from claude_wheelhouse import tui
 from claude_wheelhouse.tui import WheelhouseApp, tab_stops
+from textual.content import Content
 from textual import events
 from textual.widgets import Button, Input, OptionList
 from textual.pilot import _get_mouse_message_arguments
@@ -86,7 +87,7 @@ async def test_the_pane_lists_the_sessions_prs_then_all(store, sid, github):
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         p = app.query_one("#prs")
-        assert p.parent.id == "slot-middle-middle" and p.border_title == "PRs · mine", "its slot, mine first"
+        assert p.parent.id == "slot-middle-middle" and str(p.border_title) == "PRs · mine", "its slot, mine first"
         assert cells(app) == ["PR108", "PR109"], "red before green"
         assert len(app.query_one("#pr-list").columns) == 3, "one repo: no Repo column"
         assert github.calls == 1, "fresh as it's shown, once"
@@ -96,7 +97,7 @@ async def test_the_pane_lists_the_sessions_prs_then_all(store, sid, github):
         await pilot.pause()
         await pilot.press("m")
         await settled(app, pilot)
-        assert p.border_title == "PRs · all" and cells(app) == ["PR108", "PR7", "PR109"], "all: the search's too, newest first within a light"
+        assert str(p.border_title) == "PRs · all" and cells(app) == ["PR108", "PR7", "PR109"], "all: the search's too, newest first within a light"
         assert cells(app, 1) == ["wheelhouse", "mizpah", "wheelhouse"], "two repos: the Repo column"
         assert github.calls == 1, "the scope switched within the gap: from the cache"
 
@@ -562,12 +563,12 @@ async def test_a_pick_in_one_pane_clears_the_others_highlight(store, sid, github
     (None, "all", ["PR108", "PR7", "PR109", "PR5"], "PRs · all", "none selected, all: the search's too"),
     ("sid", "mine", ["PR108", "PR109"], "PRs · mine · demo", "a session selected: its PRs alone"),
     ("sid", "all", ["PR108", "PR109"], "PRs · all · demo", "a session selected, all: still its PRs alone"),
-    ("other", "mine", ["PR5"], "PRs · mine · other", "another session: its PR alone"),
+    ("other", "mine", ["PR5"], "PRs · mine · fix [/] it [b]x[/b]", "another session: its PR alone, its name as written"),
 ])
 async def test_the_pane_follows_the_selected_session(store, sid, github, size, follow, scope, listed, title, desc):
     """#149: as the inbox, the selected session's PRs, or every one with none selected."""
     store.rename(sid, "demo")
-    other = store.create_session("/tmp", name="other")
+    other = store.create_session("/tmp", name="fix [/] it [b]x[/b]")   # markup in a name raised MarkupError
     store.post_pr(other, URL.format(5), "Change 5")
     github.tracked.append(node(5))
     github.found.append(node(5))
@@ -581,7 +582,7 @@ async def test_the_pane_follows_the_selected_session(store, sid, github, size, f
         if follow:
             app.follow(sid if follow == "sid" else other)
             await pilot.pause()
-        assert cells(app) == listed and p.border_title == title, desc
+        assert cells(app) == listed and p.border_title == Content(title).markup, desc   # read back as markup, escaped
         app.unfilter() if follow else None
         await pilot.pause()
         every = ["PR108", "PR109", "PR5"] if scope == "mine" else ["PR108", "PR7", "PR109", "PR5"]
