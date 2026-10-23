@@ -181,8 +181,10 @@ async def test_the_tour(store, monkeypatch, fake_claude, with_prs, sdk, runner_,
         await pilot.pause()
         assert app.tour is None and not isinstance(app.screen, TourNotes), f"{desc}: the tour over"
     # every feature seen but the design module's, left out here (conftest.with_prs): its
-    # dialog passed over for want of its pane; the PRs module's shown
-    assert store.tour_seen() == {f.id: "shown" for f in whatsnew.FEATURES if PANE.get(f.where) != "design"}, \
+    # dialog passed over for want of its pane; the PRs module's shown. An SDK mode feature
+    # waits, unseen, while SDK mode is off (whatsnew.pending)
+    assert store.tour_seen() == {f.id: "shown" for f in whatsnew.FEATURES
+                                 if PANE.get(f.where) != "design" and (sdk or f.when != "sdk")}, \
         f"{desc}: every feature seen"
     assert store.setting(NOTES_SEEN) == whatsnew.running_version(), desc
 
