@@ -488,11 +488,12 @@ along with the launch command.
 
 Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first), `N` new session, `A` adopt, `Shift+L` relaunch all, `K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
+highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `N` new session, `A` adopt, `Shift+L` relaunch all, `K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode), `Alt+S` send this one answer now (the queue and mode left as they are),
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
-as answered, a decision as seen), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
+as answered, a decision as seen), `Ctrl+Z` undo the last delete, pin or reopen in the inbox (the rows back as they
+stood, an open question open again; in a text box, its own undo), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
 Every dialog opens centred over the screen, which stays in sight behind it. `Esc`, or a click outside the box, cancels it (on the tutorial's invite, that is Later, never Never), though not a click outside in the moment a dialog opens (a double-click's second). `Enter` presses the focused button; with focus on a one-line box or a checkbox it takes the dialog's one action (Launch, Rename, Fork, Park and the like), while in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices (Stop & Forget's, Relaunch's) answers `Enter` only on the focused button. `Tab` and `Shift+Tab` go round its boxes and buttons. A dialog asking yes or no takes `Y` or `N` (`Esc` is no, and so is `Enter`, as No has the focus). The `?` list closes on `Esc`, `Enter`, `?` or a click outside.
 
 `Tab` goes round the session list, the items, the Decisions list, the answer box, the tour's Next while a tour box
@@ -538,7 +539,7 @@ and `Shift`+click or `Alt`+click marks the range from the last one marked (Windo
 marks or unmarks the highlighted row, `Shift+Up`/`Shift+Down` extend the range, and `Ctrl+A`
 marks every finished (dimmed) row shown, never a pinned one. A `Ctrl`+, `Shift`+ or `Alt`+click never starts a drag. `Delete` or `Backspace` then closes the marked
 questions and decisions and dismisses the done tasks and subagents, leaving any pinned one among them, `Ctrl+R` brings back the finished ones, `Esc` clears the marks, and a plain click
-starts afresh. Once `Delete` has taken the highlighted row (one row, or several marked), the
+starts afresh. Marked rows that include an open question ask once first, naming them. Once `Delete` has taken the highlighted row (one row, or several marked), the
 highlight goes to the row immediately above the topmost row it took, or to the new first row
 if that was the first.
 

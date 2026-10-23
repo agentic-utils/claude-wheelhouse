@@ -1255,6 +1255,9 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
             raw_keys(app, "down", *burst)
         for _ in range(3):
             await pilot.pause()
+        if isinstance(app.screen, Confirm):   # Delete on an open question asks first (#151): yes
+            await pilot.press("y")
+            await pilot.pause()
         desc = f"Down, {burst} from the {where} list, {'following A' if filtered else 'unfiltered'}"
         # the session acted on: following A, Down goes to B; unfiltered, the list's Down picks A
         ctx = sid if (where, filtered) in (("items", True), ("sessions", False)) else other
@@ -1661,8 +1664,8 @@ class Burst:
 @pytest.mark.parametrize("focus, at, burst, seen, want, desc", [
     ("answer", "qa", ("a", "b", "backspace", "ctrl+enter"), lambda b: (b.answer("qa"), b.status("qa"), b.focus()),
      (["a"], "open", "answer"), "review 14 (1): Backspace edits the box, then Ctrl+Enter sends it; the question stays open"),
-    ("items", "qa", ("delete", "down"), lambda b: (b.status("qa"), b.status("qb")), ("closed", "open"),
-     "review 14 (2): Delete closes the question it was on, not the next"),
+    ("items", "qa", ("delete", "y", "down"), lambda b: (b.status("qa"), b.status("qb")), ("closed", "open"),
+     "review 14 (2): Delete closes the question it was on, once confirmed (an open one), not the next"),
     ("items", "qa", ("ctrl+s", "down"), lambda b: (b.sent("alpha"), b.sent("bravo")), (1, 0),
      "review 14 (3): Ctrl+S sends the queue of the session it was on, not the next row's"),
     ("items", "qa", ("space", "down"), lambda b: b.marked(), {"qa"}, "review 14 (4): Space marks the row it was on"),
@@ -2768,6 +2771,9 @@ async def test_delete_closes_and_ctrl_r_reopens_questions(store, sid, key, kind,
             app.answer.focus()
         await pilot.press(key)
         await pilot.pause()
+        if isinstance(app.screen, Confirm):   # an open question asks first (#151)
+            await pilot.press("y")
+            await pilot.pause()
     assert store.item(sid, ref)["status"] == expected, desc
 
 
@@ -2930,6 +2936,8 @@ async def test_a_selected_item_moves_only_on_delete(store, sid, live, clock, sta
             assert app.selected == (sid, ref), desc
             if act in ("delete", "ctrl+r"):
                 await pilot.press(act)
+                if isinstance(app.screen, Confirm):   # Delete on an open question asks first (#151)
+                    await pilot.press("y")
             elif act.startswith("#"):
                 await pilot.click(act)
             else:
@@ -3304,6 +3312,9 @@ async def five_questions(store, sid, pilot, steps) -> None:
             await pilot.click("#items", offset=(20, 1 + arg), control=how == "ctrl", shift=how == "shift",
                               meta=how == "alt")
         await pilot.pause()
+        if isinstance(app.screen, Confirm):   # Delete on an open question asks first (#151): yes
+            await pilot.press("y")
+            await pilot.pause()
 
 
 def post_five(store, sid) -> None:
@@ -3485,14 +3496,14 @@ async def test_ctrl_r_reopens_only_from_the_item_list(tmp_path, follow, focus, a
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("kinds, key, said, desc", [
-    (("question", "task"), "delete", "closed Q1; dismissed T1: F shows finished items",
+    (("question", "task"), "delete", "closed Q1; dismissed T1: F shows finished items, Ctrl+Z undoes it",
      "Delete on mixed marks says which it closed and which it dismissed"),
-    (("task", "agent"), "delete", "dismissed T1, A1: F shows finished items", "all dismissed: said so"),
+    (("task", "agent"), "delete", "dismissed T1, A1: F shows finished items, Ctrl+Z undoes it", "all dismissed: said so"),
     (("question", "task"), "ctrl+r", "reopened T1, Q1", "Ctrl+R brings either back"),
 ])
 async def test_the_word_after_acting_on_marks_names_each_act(store, sid, kinds, key, said, desc):
     with one_second():   # so the settled keep the order they're named in
-        refs = [store.post_item(sid, k, k, status={"question": "open", "task": "done", "agent": "done"}[k])
+        refs = [store.post_item(sid, k, k, status={"question": "answered", "task": "done", "agent": "done"}[k])
                 for k in kinds]
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -3540,7 +3551,7 @@ async def test_the_word_after_acting_on_marks_mid_sink_names_them_as_they_will_s
         app.notify = lambda text, **kw: notes.append(text)
         await pilot.press("delete")
         await pilot.pause()
-    assert notes == ["dismissed T1; closed Q1: F shows finished items"]
+    assert notes == ["dismissed T1; closed Q1: F shows finished items, Ctrl+Z undoes it"]
 
 
 @pytest.mark.anyio
@@ -3561,6 +3572,9 @@ async def test_delete_closes_the_marked_questions_and_ctrl_r_reopens_them(store,
         assert f"{sid}|{d}" in items.rows, "rebuilt"
         assert sorted(k.split("|")[1] for k in items.marked) == [q1, q3, t], "marks survive a refresh"
         await pilot.press("backspace")
+        await pilot.pause()
+        assert isinstance(app.screen, Confirm) and "2 are open questions" in app.screen.prompt, "asked once"
+        await pilot.press("y")
         await pilot.pause()
         assert [store.item(sid, r)["status"] for r in (q1, q2, q3, t)] == ["closed", "open", "closed", "running"]
         assert items.marked == set()
@@ -7367,7 +7381,7 @@ async def test_delete_on_a_parent_leaves_its_running_children(store, sid, shape,
 
 @pytest.mark.anyio
 async def test_delete_on_an_item_with_no_children_asks_nothing(store, sid):
-    q = store.post_item(sid, "question", "which db?")
+    q = store.post_item(sid, "question", "which db?", status="answered")   # an open one asks for its own sake
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -8519,3 +8533,85 @@ def test_the_keys_overlay_describes_a_module_panes_keys():
     from claude_wheelhouse_prs.pane import Prs
     text = keys_help(panes=[Prs])
     assert "## The PRs pane" in text and "**M**: Mine or all" in text and "**R**: Fetch now" in text, text
+
+
+def undo_setup(store, sid, shape: str) -> list:
+    """The rows for test_ctrl_z_undoes_the_last_inbox_act, oldest first: the first is the one highlighted."""
+    with one_second():
+        if shape == "family":   # an open question with an open child question and a done child task
+            q = store.post_item(sid, "question", "which db?")
+            kids = [store.post_item(sid, "question", "which port?"), store.post_item(sid, "task", "t", status="done")]
+            for k in kids:
+                store.db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ?", (q, sid, k))
+            return [q, *kids]
+        if shape == "two open":
+            return [store.post_item(sid, "question", t) for t in "ab"]
+        kind, status = shape.removesuffix(" pinned").split()
+        extra = {"why": "local"} if kind == "decision" else {}
+        ref = store.post_item(sid, kind, "it", **extra)
+        if status != "open" or kind != "question":
+            store.db.execute("UPDATE items SET status = ? WHERE session_id = ? AND ref = ?", (status, sid, ref))
+        if shape.endswith("pinned"):
+            store.set_pinned(sid, ref, True)
+        return [ref]
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("shape, keys, want, said, desc", [
+    # want: each row's (status, finished, pinned) at the end; said: notices that must appear
+    ("question open", ["delete", "y", "ctrl+z"], [("open", False, False)],
+     ["closed Q1: Ctrl+Z undoes it", "undone: closed Q1"], "an open question deleted comes back open, not answered"),
+    ("question open", ["delete", "n", "ctrl+z"], [("open", False, False)], ["nothing to undo"],
+     "No deletes nothing, so there's nothing to undo"),
+    ("question answered", ["delete", "ctrl+z", "ctrl+z"], [("answered", False, False)],
+     ["undone: closed Q1", "nothing to undo"], "one step: a second Ctrl+Z has nothing left"),
+    ("decision unseen", ["delete", "ctrl+z"], [("unseen", False, False)], ["undone: closed D1"],
+     "a decision comes back unseen, as it was"),
+    ("task done", ["delete", "ctrl+z"], [("done", False, False)], ["undone: dismissed T1"], "a dismissed task comes back"),
+    ("question open", ["p", "ctrl+z"], [("open", False, False)], ["undone: pinned Q1"], "a pin undone"),
+    ("question open pinned", ["p", "ctrl+z"], [("open", False, True)], ["undone: unpinned Q1"], "an unpin undone"),
+    ("question answered pinned", ["delete", "y", "ctrl+z"], [("answered", False, True)], ["undone: closed Q1"],
+     "a pinned item deleted comes back pinned"),
+    ("question closed", ["ctrl+r", "ctrl+z"], [("closed", True, False)], ["undone: reopened Q1"],
+     "Ctrl+R undone: closed again"),
+    ("family", ["delete", "y", "ctrl+z"], [("open", False, False), ("open", False, False), ("done", False, False)],
+     ["undone: deleted Q1 and 2 children"], "a parent and its children all come back as they were"),
+    ("two open", ["space", "down", "space", "delete", "y", "ctrl+z"], [("open", False, False)] * 2,
+     ["undone: closed Q2, Q1"], "marked rows asked once, and undone together"),
+])
+async def test_ctrl_z_undoes_the_last_inbox_act(store, sid, shape, keys, want, said, desc):
+    refs = undo_setup(store, sid, shape)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("f")   # finished rows in sight, so Ctrl+R has one to reopen
+        app.items_table.focus()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{refs[-1] if shape == 'two open' else refs[0]}"))
+        await pilot.pause()
+        notes = []
+        app.notify = lambda text, **kw: notes.append(text)
+        for key in keys:
+            await pilot.press(key)
+            await pilot.pause()
+    got = [(it["status"], tui.standing(it) == "finished", tui.pinned(it)) for it in map(lambda r: store.item(sid, r), refs)]
+    assert got == want, desc
+    assert all(s in notes for s in said), f"{desc}: {notes}"
+
+
+@pytest.mark.anyio
+async def test_ctrl_z_in_the_answer_box_is_its_own_undo(store, sid):
+    q = store.post_item(sid, "question", "which db?", status="answered")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        await pilot.press("delete")
+        await pilot.pause()
+        app.answer.focus()
+        await pilot.press("a", "b")
+        await pilot.pause()
+        await pilot.press("ctrl+z")
+        await pilot.pause()
+        assert app.answer.text == "", "the box's own undo took the typing back"
+    assert store.item(sid, q)["status"] == "closed", "and the delete stays"

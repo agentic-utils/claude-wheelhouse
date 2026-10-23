@@ -169,6 +169,10 @@ FEATURES: tuple[Feature, ...] = (
                  "them as a menu: Merge asks first and says what stood in its way, and Request review asks the "
                  "session that made the PR to post the request on Slack.",
             tip="Open, Merge and Request review act on the PR selected; right-click a PR for them as a menu."),
+    Feature("undo", UNRELEASED, "inbox",
+            note="Ctrl+Z in the inbox undoes the last delete, pin or reopen, an open question coming back open; "
+                 "Delete on an open question asks first.",
+            tip="Deleted something by mistake? Ctrl+Z brings it back as it was."),
 )
 
 
