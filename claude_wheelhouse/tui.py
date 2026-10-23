@@ -1447,6 +1447,12 @@ class ItemList(SinkList):
             if event.chain == 1:
                 self.app.toggle_pinned(key)
             return
+        if not self.show_cursor:   # hidden (a pick in another pane, #148): the click selects its row, opening nothing
+            event.prevent_default()
+            with self.prevent(DataTable.RowHighlighted):
+                self.move_cursor(row=meta["row"], animate=False)
+            self.app.pick_item(key)
+            return
         if event.ctrl or event.shift or event.meta:   # Alt (meta) for Shift, which Windows Terminal keeps
             event.prevent_default()   # not DataTable's: a click on the highlighted row opens it
             self.toggle(key) if event.ctrl else self.extend_to(key)
@@ -1455,14 +1461,23 @@ class ItemList(SinkList):
             self.set_marks(set(), key)
 
     async def action_select_cursor(self) -> None:
-        await select_now(self)
+        if self.show_cursor:
+            await select_now(self)
+        elif key := self.cursor_key():   # hidden: Enter brings it back where it was, as a moving key does
+            self.app.pick_item(key)
+
+    def go(self, where, page: int = 0) -> None:
+        if self.show_cursor:
+            super().go(where, page)
+        elif key := self.cursor_key():   # hidden (a pick in another pane, #148): back where it was, selected
+            self.app.pick_item(key)
 
     def _post_selected_message(self) -> None:
         # a double-click's selection, which opens the item, as the session list's click
         self.app.call_next(select_now, self)
 
     def action_toggle_mark(self) -> None:
-        if self.cursor_key():
+        if self.show_cursor and self.cursor_key():
             self.toggle(self.cursor_key())
 
     def action_extend(self, step: int) -> None:
@@ -3920,6 +3935,7 @@ class WheelhouseApp(App):
         # the modules installed, those switched off (claude-wheelhouse modules disable) marked so
         self.modules = api.switch_off(api.load(), api.disabled(self.client.setting(api.DISABLED)))
         self.shown_doc: tuple[str, str] | None = None   # a module's doc in Detail (show_doc): (path, title)
+        self.detail_note: str | None = None   # why nothing is selected, if a module's pick said (unselect)
         self.doc_edits: dict[str, DocEdit] = {}   # each doc's unsaved edits, by its path (DocEditor.edits)
         # a doc item in Detail and full screen (.plan/docs-section.md): split or tabbed (Ctrl+L,
         # kept as DOC_LAYOUT; each place's tab is its DocPanes'), and each doc's quote, the first
@@ -4941,15 +4957,40 @@ class WheelhouseApp(App):
 
     def show_item(self, sid: str, ref: str) -> None:
         """A module's pick of an item (api.Context.show_item, the PRs pane's row that is one):
-        shown in Detail with its thread and answer box, and highlighted in the inbox if listed there."""
+        shown in Detail with its thread and answer box, and highlighted in the inbox if listed
+        there; if not, the inbox's highlight hidden, not left on another item (#148)."""
         self.shown_doc = None
         key, table = f"{sid}|{ref}", self.items_table
         if key in table.rows:
             with table.prevent(DataTable.RowHighlighted):
                 table.move_cursor(row=table.get_row_index(key), animate=False)
             self.items_cursor = key
+        table.show_cursor = key in table.rows
         self.select_row(key)
         self.paint_sendbar()
+
+    def unselect(self, note: str) -> None:
+        """A module's pick of something that isn't an item (api.Context.unselect, a PR no
+        session made): nothing selected, the inbox's highlight hidden, and Detail saying why."""
+        self.shown_doc = None
+        self.items_table.show_cursor = False
+        if self.selected is not None:
+            self.selected = None
+            self.retarget()
+            self.each_pane("showing", None, None)
+        self.detail_note = note
+        self.paint_detail()
+        self.paint_sendbar()
+
+    def pick_item(self, key: str) -> None:
+        """The inbox's hidden highlight brought back on its row by the person (ItemList): that
+        row selected, as a move onto it would."""
+        table = self.items_table
+        table.show_cursor = True
+        self.items_cursor = key
+        self.select_row(key)
+        self.picked = self.selected
+        self.paint_items()
 
     def open_doc(self, path: str, title: str) -> None:
         """A module's doc full screen (api.Context.open_doc), as Enter opens a doc item."""
@@ -4959,7 +5000,7 @@ class WheelhouseApp(App):
         """The context a module's pane is made with: the app's, with its own routes (call)."""
         return dataclasses.replace(self.ctx, call=functools.partial(self.client.call_module, mid),
                                    show_doc=self.show_doc, open_doc=self.open_doc, relayout=self.fit_compact,
-                                   show_item=self.show_item, send=self.module_send, setting=self.client.setting,
+                                   show_item=self.show_item, unselect=self.unselect, send=self.module_send, setting=self.client.setting,
                                    set_setting=self.client.set_setting,
                                    confirm=lambda prompt, then: self.push_screen(Confirm(prompt), then),
                                    ask=lambda prompt, offered, then: self.push_screen(Ask(prompt, offered), then))
@@ -5034,7 +5075,7 @@ class WheelhouseApp(App):
         elif self.selected:
             blocks, agent = self.item_blocks(*self.selected)
         else:   # what was shown has gone (a followed session ended, say): not left standing
-            blocks = [("note", NOTHING_SELECTED)]
+            blocks = [("note", self.detail_note or NOTHING_SELECTED)]
         if editor is not None:
             blocks = editor.shown_in(blocks, self.detail.doc_path, gone)
         if not agent and not isinstance(self.screen, ThreadView):   # which may follow one itself
@@ -5981,6 +6022,9 @@ class WheelhouseApp(App):
         self.filter_sid = self.followed = sid
         self.selected = (sid, None)
         self.picked = self.selected   # the person's own: a turn arriving in it moves the tour on (paint_detail)
+        self.items_table.show_cursor = True   # hidden by a pick elsewhere (unselect): its row is the conversation's
+        self.detail_note = None
+        self.each_pane("showing", sid, None)
         table = self.session_list
         if not table.show_cursor:
             with table.prevent(DataTable.RowHighlighted):   # the app's move, as highlight_session's
@@ -6033,9 +6077,11 @@ class WheelhouseApp(App):
         sid, ref = key.split("|")
         if self.selected != (sid, ref or None):
             self.selected = (sid, ref or None)   # an unseen decision is seen once looked at (dwelt)
+            self.detail_note = None
             self.retarget()
             self.paint_detail()
             self.each_pane("tick")
+            self.each_pane("showing", sid, ref or None)   # the PRs pane's highlight on it, or hidden (#148)
             if self.detail_follows:
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
 
@@ -6202,7 +6248,8 @@ class WheelhouseApp(App):
 
     def action_toggle_pinned(self) -> None:
         self.settle()
-        if not isinstance(self.focused, (TextArea, Input)) and (key := self.items_table.cursor_key()):
+        if not isinstance(self.focused, (TextArea, Input)) and self.items_table.show_cursor \
+                and (key := self.items_table.cursor_key()):
             self.toggle_pinned(key)
 
     def family(self, item) -> list:

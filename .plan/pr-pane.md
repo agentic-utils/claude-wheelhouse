@@ -264,6 +264,11 @@ The light, taking the first that applies:
 - Selecting a row that is a PR item shows it in Detail (its thread and answer box).
   Selecting any other shows a read-only card: title, URL, branch, checks, review. Enter
   opens the PR in the browser.
+- As built (#148): Detail shows the last pick in either list. The inbox and the pane each
+  highlight it if they list it, and otherwise hide their highlight (the core's
+  `Context.unselect` and the panes' `showing(sid, ref)` hook) until a click, Enter or a
+  moving key brings it back on its row. A PR that isn't an item leaves nothing selected,
+  Detail saying so, its card under the table as before.
 
 ## 4. Versions and schema
 

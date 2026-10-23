@@ -161,12 +161,40 @@ def blockers(r: dict) -> list[str]:
 
 
 class PrTable(api.RowTips, DataTable):
-    """The PRs, a row each, the full title on hover. A list, so a Tab stop after the inbox's."""
+    """The PRs, a row each, the full title on hover. A list, so a Tab stop after the inbox's.
+    Its highlight is hidden while Detail shows an item it doesn't list (Prs.showing, #148),
+    until a click, Enter or a moving key brings it back, that row shown."""
     TAB_LIST = True
 
     def row_tip(self, row: int) -> str | None:
         r = self.parent.row(self.coordinate_to_cell_key((row, 0)).row_key.value)
         return tip(r) if r else None
+
+    def reveal(self, row: int | None = None) -> None:
+        """The hidden highlight back, on row (else where it was), and its PR shown. Shown
+        or moved, the table posts no highlight of its own: the PR is picked here."""
+        with self.prevent(DataTable.RowHighlighted):
+            self.show_cursor = True
+            if row is not None:
+                self.move_cursor(row=row, animate=False)
+        row = self.cursor_row if row is None else row   # the move may land after a refresh
+        self.parent.pick(self.coordinate_to_cell_key((row, 0)).row_key.value)
+
+    async def _on_click(self, event) -> None:
+        # DataTable's runs after this one, and with the highlight hidden does nothing
+        row = event.style.meta.get("row", -1)
+        if not self.show_cursor and 0 <= row < self.row_count:
+            event.prevent_default()   # not DataTable's, which would open a click on the cursor's row
+            self.reveal(row)
+
+    def action_cursor_down(self) -> None:
+        self.reveal() if not self.show_cursor else super().action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        self.reveal() if not self.show_cursor else super().action_cursor_up()
+
+    def action_select_cursor(self) -> None:
+        self.reveal() if not self.show_cursor else super().action_select_cursor()
 
 
 class Prs(Vertical):
@@ -213,7 +241,7 @@ class Prs(Vertical):
         self.border_title = f"PRs · {self.scope}"
 
     def compose(self):
-        yield PrTable(id="pr-list", cursor_type="row", zebra_stripes=False)
+        yield PrTable(id="pr-list", cursor_type="row", zebra_stripes=False, show_cursor=False)   # until a PR is picked
         yield Static(id="prs-note", markup=False)
         yield PrCard(id="prs-card")
         with Horizontal(id="prs-actions"):
@@ -355,7 +383,7 @@ class Prs(Vertical):
         """The card under the table: the PR the cursor is on, while the table has the focus
         and it isn't an item (an item shows in Detail)."""
         table = self.query_one(PrTable)
-        r = self.row(self.key_at(table)) if table.has_focus else None
+        r = self.row(self.key_at(table)) if table.has_focus and table.show_cursor else None
         shown = r is not None and r["item"] is None and self.error is None
         box = self.query_one("#prs-card", PrCard)
         if shown:
@@ -477,7 +505,7 @@ class Prs(Vertical):
         row = y - top + int(table.scroll_y)
         if not table.display or not table.content_region.contains(x, y) or y < top or not 0 <= row < table.row_count:
             return None
-        table.move_cursor(row=row, animate=False)
+        table.move_cursor(row=row, animate=False) if table.show_cursor else table.reveal(row)
         table.focus()   # as a click would: the buttons show for it once the menu closes
         if (r := self.row(self.key_at(table))) is None:
             return None
@@ -500,13 +528,39 @@ class Prs(Vertical):
         """The cursor moved by the person (the table has focus): a PR item in Detail, any
         other PR as a card. Not when the table is built again with the cursor where it was."""
         event.stop()
-        url = event.row_key.value
-        if not event.data_table.has_focus or url == self.shown or (r := self.row(url)) is None:
+        if event.data_table.has_focus and event.row_key.value != self.shown:
+            self.pick(event.row_key.value)
+
+    def pick(self, url: str | None) -> None:
+        """A PR picked by the person: an item in Detail, any other PR as a card, with Detail
+        saying so and nothing selected in the inbox (#148)."""
+        if (r := self.row(url)) is None:
             return
+        table = self.query_one(PrTable)
+        with table.prevent(DataTable.RowHighlighted):
+            table.show_cursor = True
         self.shown = url
         self.paint_card()
         if r["item"] is not None and self.ctx.show_item is not None:
             self.ctx.show_item(r["item"]["session_id"], r["item"]["ref"])
+        elif r["item"] is None and self.ctx.unselect is not None:
+            self.ctx.unselect(f"PR{r['number']} in {short(r)} isn't an item: no session made it. "
+                              "It shows under the PRs table.")
+
+    def showing(self, sid: str | None, ref: str | None) -> None:
+        """Detail shows another item (api's showing hook): highlighted here if it's a PR
+        listed, else the highlight hidden, not left on a PR Detail no longer shows (#148).
+        Not while the person moves the highlight here, which is what showed it."""
+        table = self.query_one(PrTable)
+        if table.has_focus and table.show_cursor:
+            return
+        url = next((r["url"] for r in self.rows if r["item"] is not None
+                    and (r["item"]["session_id"], r["item"]["ref"]) == (sid, ref)), None)
+        with table.prevent(DataTable.RowHighlighted):
+            if url is not None and url in table.rows:
+                table.move_cursor(row=table.get_row_index(url), animate=False)
+            table.show_cursor = url is not None and url in table.rows
+        self.shown = url if table.show_cursor else None
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Enter, or a click on the cursor's row: the PR in the browser."""

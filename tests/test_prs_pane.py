@@ -115,18 +115,21 @@ async def test_selecting_shows_an_item_or_a_card_and_enter_opens(store, sid, git
         table = app.query_one("#pr-list")
         table.focus()
         await pilot.pause()
+        await pilot.press("down")   # none picked here yet: the first key brings the highlight back where it is
+        await pilot.pause()
+        assert table.show_cursor and shown == [(sid, "PR108")], "the first key: the first row picked"
         await pilot.press("down")
         await pilot.pause()
         card = app.query_one("#prs-card")
         text = str(app.query_one("#prs-card-text").render())
         assert card.display and "doug/7" in text and "success" in text, \
             "a PR that isn't an item: a card with its branch and checks"
-        assert shown == [], "nothing in Detail"
+        assert shown == [(sid, "PR108")], "nothing more in Detail"
         await pilot.press("enter")
         await pilot.pause()
         await pilot.press("down")
         await pilot.pause()
-        assert shown == [(sid, "PR109")], "an item: shown in Detail"
+        assert shown == [(sid, "PR108"), (sid, "PR109")], "an item: shown in Detail"
         assert not app.query_one("#prs-card").display, "no card for an item"
         assert opened == ["https://github.com/doug/mizpah/pull/7"], "Enter: the browser"
 
@@ -307,7 +310,7 @@ async def on_pr(app, pilot, url, scope="mine"):
     table = app.query_one("#pr-list")
     table.focus()
     await pilot.pause()
-    table.move_cursor(row=table.get_row_index(url))
+    table.reveal(table.get_row_index(url)) if not table.show_cursor else table.move_cursor(row=table.get_row_index(url))
     await pilot.pause()
     return p
 
@@ -487,3 +490,59 @@ async def test_request_review_shows_a_title_and_past_targets_as_text_not_markup(
         options = ask.query_one(OptionList)
         listed = "".join(s.text for s in options.render_lines(options.region.reset_offset))
         assert "[b]#eng[/b]" in listed, f"the past target as written: {listed!r}"
+
+
+async def pick_in_inbox(app, pilot, key):
+    """A click on the inbox's row for key (under its header)."""
+    await pilot.click("#items", offset=(4, 1 + app.items_table.get_row_index(key)))
+    await pilot.pause()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size", [(160, 40), (100, 30)])
+@pytest.mark.parametrize("pick, inbox_lit, prs_lit, shown, desc", [
+    ("question", True, False, "question", "an inbox item the PRs pane doesn't list: its highlight hidden"),
+    ("PR109", True, True, "PR109", "a PR item in both: both highlight it"),
+    ("hidden PR108", False, True, "PR108", "a PR item the inbox doesn't list (its parent shut): the inbox's hidden"),
+    ("PR7", False, True, None, "a PR no session made: nothing selected, the inbox's hidden, Detail says why"),
+])
+async def test_a_pick_in_one_pane_clears_the_others_highlight(store, sid, github, size, pick, inbox_lit, prs_lit,
+                                                               shown, desc):
+    """#148: Detail shows what was picked last, and a list that doesn't have it highlights nothing."""
+    q = store.post_item(sid, "question", "Which way?", status="open")
+    task = store.post_item(sid, "task", "Ship it", status="running")
+    store.post_pr(sid, URL.format(108), "Change 108", parent=task)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await settled(app, pilot)
+        app.toggle_children(f"{sid}|{task}")   # PR108 out of the inbox, under its shut parent
+        await pilot.pause()
+        if pick == "question":
+            await on_pr(app, pilot, URL.format(108))
+            await pick_in_inbox(app, pilot, f"{sid}|{q}")
+        elif pick == "PR109":
+            await pick_in_inbox(app, pilot, f"{sid}|{q}")
+            await on_pr(app, pilot, URL.format(109))
+        else:
+            await pick_in_inbox(app, pilot, f"{sid}|{q}")
+            await on_pr(app, pilot, URL.format(108) if pick == "hidden PR108" else "https://github.com/doug/mizpah/pull/7",
+                        scope="mine" if pick == "hidden PR108" else "all")
+        await pilot.pause()
+        table = app.query_one("#pr-list")
+        assert app.selected == ((sid, {"question": q}.get(pick, shown)) if shown else None), desc
+        assert app.items_table.show_cursor is inbox_lit, f"{desc}: the inbox's highlight"
+        assert table.show_cursor is prs_lit, f"{desc}: the PRs pane's highlight"
+        if inbox_lit:
+            assert app.items_table.cursor_key() == f"{sid}|{app.selected[1]}", f"{desc}: on the item shown"
+        if prs_lit:
+            assert table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value.endswith(
+                {"PR7": "/7"}.get(pick, pick[-3:])), f"{desc}: on the PR shown"
+        if shown is None:
+            assert "PR7 in mizpah isn't an item" in app._detail_text, f"{desc}: Detail says why"
+        if not inbox_lit:   # a click on the inbox brings its highlight back, where clicked, and shows that row
+            await pilot.click("#items", offset=(4, 1 + app.items_table.get_row_index(f"{sid}|{q}")))
+            await pilot.pause()
+            assert app.items_table.show_cursor and app.selected == (sid, q), f"{desc}: clicked back"
+            assert not table.show_cursor, f"{desc}: the PRs pane's hidden in turn"
+            assert isinstance(app.screen, tui.Screen) and not isinstance(app.screen, tui.ThreadView), \
+                f"{desc}: the click selects, opening nothing"

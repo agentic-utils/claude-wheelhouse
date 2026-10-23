@@ -333,7 +333,10 @@ session.
   every 5 minutes, when the pane is shown, 20 seconds after a session pushes or merges,
   and on `r`; every app shares it, and a merged or closed PR leaves the pane at once.
   Highlighting a session's PR shows it in Detail with its thread; `Enter` opens it in the
-  browser. Without `gh`, or not logged in, the pane says so. Under the table, the PR
+  browser. Detail always shows what you picked last, in the inbox or here: the other list
+  highlights it too if it lists it, and otherwise hides its highlight until you click, press
+  `Enter` or move in it again. A PR no session made isn't an item, so picking it leaves
+  nothing selected and Detail says so. Without `gh`, or not logged in, the pane says so. Under the table, the PR
   selected has three buttons, which a right-click on its row gives as a menu too: **Open**
   (the browser); **Merge**, asked first, with `gh pr merge` the way the repo allows (a
   merge commit where it can, else squash, else rebase), saying under the table what
