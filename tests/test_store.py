@@ -1091,3 +1091,28 @@ def test_promote_compact_request(store, sid, waiting, promoted, plan, desc):
     assert (s["host_command"], store.compact_plan(sid)) == ("compact" if promoted else waiting, plan), desc
     assert (s["compact_request"] is None) is promoted, f"{desc}: taken only when promoted"
     assert store.promote_compact_request(sid) is False, f"{desc}: once"
+
+
+@pytest.mark.parametrize("act, dropped, desc", [
+    (lambda st, sid: st.drop_compact_request(sid), True, "the person's command first"),
+    (lambda st, sid: st.request(sid, "park"), True, "Park asked"),
+    (lambda st, sid: st.request(sid, "end"), True, "Stop & Forget asked"),
+    (lambda st, sid: st.set_parked(sid, True), True, "parked"),
+    (lambda st, sid: st.set_runner(sid, "tab"), True, "relaunched as a tab"),
+    (lambda st, sid: st.set_shell(sid, "tab"), True, "handed to a shell tab"),
+    (lambda st, sid: st.set_runner(sid, "sdk"), False, "still SDK (a host restarted): kept"),
+])
+def test_a_pending_compact_request_dropped(store, sid, act, dropped, desc):
+    """Dropped with its gap, so the session isn't locked out by a request that never ran."""
+    store.set_runner(sid, "sdk")
+    store.request_compact(sid, "keep the plan")
+    act(store, sid)
+    s = store.session(sid)
+    assert (s["compact_request"], s["compact_requested_at"] is None) == \
+        ((None, True) if dropped else ("keep the plan", False)), desc
+    if dropped:
+        store.set_runner(sid, "sdk")
+        store.set_shell(sid, None)
+        store.set_parked(sid, False)
+        store.request_compact(sid, "again")   # no gap left to refuse it
+        assert store.session(sid)["compact_request"] == "again", f"{desc}: asked again at once"

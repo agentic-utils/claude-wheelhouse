@@ -422,6 +422,8 @@ def test_set_doc_dirs(store, sid, tmp_path, given, kept, said, desc):
 @pytest.mark.parametrize("runner, before, keep, said, desc", [
     ("sdk", None, "keep the plan", "compaction requested", "in SDK mode: held for the turn's end"),
     ("tab", None, "keep the plan", "only in a session run inside the wheelhouse", "a tab: refused, nothing held"),
+    ("shell", None, "keep the plan", "only in a session run inside the wheelhouse",
+     "an SDK session handed to a shell tab: refused"),
     ("sdk", None, "  ", "keep must say", "nothing to keep: refused"),
     ("sdk", "pending", "again", "already pending", "one pending at a time"),
     ("sdk", "compacting", "keep", "being compacted already", "a compaction under way: refused"),
@@ -434,7 +436,9 @@ def test_request_compact(store, sid, runner, before, keep, said, desc):
     from datetime import datetime, timedelta, timezone
     from claude_wheelhouse import mcp_server
     mcp_server._store, mcp_server._sid = store, sid
-    store.set_runner(sid, runner)
+    store.set_runner(sid, "sdk" if runner == "shell" else runner)
+    if runner == "shell":
+        store.set_shell(sid, "tab")
     if before in ("recent", "long ago", "pending"):
         ago = timedelta(minutes=5 if before != "long ago" else 31)
         with store.tx() as db:

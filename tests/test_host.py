@@ -1567,6 +1567,20 @@ def test_a_compaction_the_session_asked_for(host, store, sid, busy, command, hel
     assert store.session(sid)["compact_request"] is None, f"{desc}: nothing left pending"
 
 
+@pytest.mark.parametrize("attr, value, desc", [
+    ("compact_nonce", "ab12", "the person's Compact waiting for its notes: theirs, not overridden"),
+    ("compact_then", "park", "a parking compaction under way"),
+    ("compact_key", "k1", "the wheelhouse's own /compact turn not yet ended"),
+])
+def test_a_compaction_the_session_asked_for_waits_for_one_under_way(host, store, sid, attr, value, desc):
+    store.set_runner(sid, "sdk")
+    store.request_compact(sid, "keep the plan")
+    setattr(host, attr, value)
+    run(host.poll())
+    assert "/compact keep the plan" not in host.client.queries, desc
+    assert store.session(sid)["compact_request"] == "keep the plan", f"{desc}: still pending"
+
+
 @pytest.mark.parametrize("compact, sent, desc", [
     (True, ["/compact"], "Compact first: once the park's turn has ended, compacted, then nothing more"),
     (False, [], "without: the host stops once parked"),
