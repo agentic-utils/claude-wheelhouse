@@ -3,6 +3,8 @@ api.py's re-exports): each item kind's colour, and a row's full text on hover (#
 .plan/pr-pane.md part 1). Imports no Textual, so the daemon's api import stays light.
 """
 
+from rich.text import Text
+
 # each kind's ref colour in the inbox (and the PRs pane's PR column): the ref cell is its only
 # reader. A kind not here (one newer code knows) draws as before. A doc takes the theme's
 # foreground, the default, so it reads on a light theme too; the rest are fixed colours that
@@ -16,6 +18,12 @@ KIND_COLOUR = {
     "agent": "grey58",
     "permission": "dark_orange",
 }
+
+
+def plain(cell):
+    """A cell as its own text, never markup: a DataTable parses a str cell as markup, so a
+    session's title or name holding [@click=...] ran an action when clicked (#139)."""
+    return Text(cell) if isinstance(cell, str) else cell
 
 
 class RowTips:
@@ -41,4 +49,4 @@ class RowTips:
             text = self.row_tip(row) if 0 <= row < self.row_count else None
         except (IndexError, KeyError):
             text = None
-        self.tooltip = text or None
+        self.tooltip = Text(text) if text else None   # plain: a str tooltip is markup (plain)

@@ -106,7 +106,7 @@ class Decisions(Vertical):
 
     def compose(self):
         yield DecisionTable(id="decision-list", cursor_type="row", zebra_stripes=False)
-        yield Static(id="decisions-note")
+        yield Static(id="decisions-note", markup=False)
 
     def on_mount(self) -> None:
         self.paint()
@@ -199,7 +199,7 @@ class Decisions(Vertical):
             table.add_column(f"{label} {mark}" if mark else label, key=key, width=w)
         for r in rows:
             cells = [r["number"], Text(r["status"], style=LOOKS.get(r["status"], "")), r["title"], r["repo"]]
-            table.add_row(*cells[:len(columns)], key=r["path"])
+            table.add_row(*map(api.plain, cells[:len(columns)]), key=r["path"])   # a title as itself, never markup
         if at is not None and at in table.rows:
             table.move_cursor(row=table.get_row_index(at), animate=False)
 

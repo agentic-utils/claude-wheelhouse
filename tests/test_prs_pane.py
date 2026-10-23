@@ -107,7 +107,8 @@ async def test_selecting_shows_an_item_or_a_card_and_enter_opens(store, sid, git
         await pilot.press("down")
         await pilot.pause()
         card = app.query_one("#prs-card")
-        assert card.display and "doug/7" in str(card.render()) and "success" in str(card.render()), \
+        text = str(app.query_one("#prs-card-text").render())
+        assert card.display and "doug/7" in text and "success" in text, \
             "a PR that isn't an item: a card with its branch and checks"
         assert shown == [], "nothing in Detail"
         await pilot.press("enter")
@@ -189,3 +190,98 @@ async def test_an_empty_decisions_pane_leaves_the_inbox_its_room(store, sid, tmp
         assert inbox.region.height >= 2 * prs_pane.region.height, "the inbox has the room"
         column = app.query_one("#col-middle")
         assert sum(w.outer_size.height for w in column.children if w.display) == column.size.height, "no gap"
+
+
+LONG = "doug/a-repository-with-a-name-long-enough-to-wrap-in-any-card-the-pane-shows"
+LONG_URL = f"https://github.com/{LONG}/pull/7000"
+
+
+async def click_link(app, pilot, widget, line: int) -> list[str]:
+    """A click on the line'th line of the link in widget, as the screen draws it: the URLs opened."""
+    opened = []
+    app.open_url = lambda url, **kw: opened.append(url)
+    at = [(x, y) for y in range(widget.region.y, widget.region.bottom)
+          for x in range(widget.region.x, widget.region.right) if "@click" in app.screen.get_style_at(x, y).meta]
+    lines = sorted({y for _, y in at})
+    assert len(lines) > line, f"the link on lines {lines}"
+    x, y = next((x, y) for x, y in at if y == lines[line])
+    await pilot.click(widget, offset=(x - widget.region.x, y - widget.region.y))
+    await pilot.pause()
+    return opened
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size, weights, line, desc", [
+    ((80, 24), None, 0, "a 12x7 pane: its card has room for the link's first line alone, still the whole URL"),
+    ((80, 24), '{"middle.middle": 0.9}', 1, "the pane taller at 80x24: the link's second line"),
+    ((160, 40), None, 1, "the link's second line at 160x40"),
+])
+async def test_a_click_on_any_line_of_a_wrapped_link_opens_the_whole_url(store, sid, github, size, weights, line, desc):
+    """#139: the card's URL shows first, without https://github.com/, and a click on any line
+    of it where the card wraps it opens the whole URL, not the line's fragment."""
+    github.found.append(node(7000, repo=LONG, updated="2026-10-21T12:00:00Z"))
+    if weights:
+        store.set_setting("layout.weights", weights)   # the PRs pane's slot, most of its column
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await settled(app, pilot)
+        app.query_one("#prs").action_scope()
+        await settled(app, pilot)
+        table = app.query_one("#pr-list")
+        table.focus()
+        await pilot.pause()
+        table.move_cursor(row=table.get_row_index(LONG_URL))
+        await pilot.pause()
+        card = app.query_one("#prs-card")
+        assert card.display and str(app.query_one("#prs-card-text").render()).startswith(f"{LONG}/pull/7000"), \
+            f"{desc}: the card, its URL first and without https://github.com/"
+        assert await click_link(app, pilot, card, line) == [LONG_URL], desc
+        text = pane.card(app.query_one("#prs").row(LONG_URL))
+        assert not text.style and [(sp.start, sp.end) for sp in text.spans if getattr(sp.style, "meta", None)] == \
+            [(0, len(f"{LONG}/pull/7000"))], f"{desc}: the link alone opens it, not the title or branch"
+        assert card.display, f"{desc}: the card stays, the table keeping the focus"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size", [(80, 24), (160, 40)])
+async def test_a_click_on_a_pr_items_wrapped_link_in_detail_opens_the_whole_url(store, sid, github, size):
+    """#139: a PR item in Detail shows its URL without https://github.com/, and a click on its
+    second line opens the whole URL."""
+    store.post_pr(sid, LONG_URL, "Change 7000")
+    ref = next(i["ref"] for i in store.pr_items() if i["url"] == LONG_URL)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await settled(app, pilot)
+        app.show_item(sid, ref)
+        await settled(app, pilot)
+        app.query_one("#detail-scroll").scroll_end(animate=False)   # the link below the head, at 80x24
+        await pilot.pause()
+        thread = app.query_one("#detail")
+        shown = "\n".join(strip.text for strip in thread.render_lines(thread.region.reset_offset))
+        assert "https://github.com" not in shown and "/pull/" in shown, f"{size}: without https://github.com/"
+        assert await click_link(app, pilot, thread, 1) == [LONG_URL], f"{size}: the whole URL from its second line"
+
+
+@pytest.mark.anyio
+async def test_a_short_panes_card_scrolls_to_its_last_line(store, sid, github):
+    """#139: at 80x24 the card has room for a line or two: it scrolls, down to Mergeable."""
+    github.found.append(node(7000, repo=LONG, updated="2026-10-21T12:00:00Z"))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        app.query_one("#prs").action_scope()
+        await settled(app, pilot)
+        table = app.query_one("#pr-list")
+        table.focus()
+        await pilot.pause()
+        table.move_cursor(row=table.get_row_index(LONG_URL))
+        await pilot.pause()
+        card = app.query_one("#prs-card")
+        await pilot.pause()   # its text laid out at its width: its height is the wrapped one
+        assert card.virtual_size.height > card.scrollable_content_region.height, "more card than room"
+        card.scroll_end(animate=False, immediate=True)
+        await pilot.pause()
+        text = app.query_one("#prs-card-text")
+        drawn = "".join(strip.text.strip() for strip in text.render_lines(text.region.reset_offset))
+        assert 0 < card.scroll_y == card.max_scroll_y and drawn.endswith("mergeable"), "scrolled to its end, Mergeable"
+        assert table.has_focus and card.display, "the table keeps the focus, and the card shows"

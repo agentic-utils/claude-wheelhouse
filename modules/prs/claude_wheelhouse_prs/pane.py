@@ -3,14 +3,14 @@ traffic light (.plan/pr-pane.md, part 3), plugged in through the module protocol
 (claude_wheelhouse.api) like any other module. Its daemon side, the route the pane asks, is
 fetch.py's: one `gh api graphql` call, cached in `<state dir>/prs.db`. The pane shows a PR
 item in the Detail pane (Context.show_item), any other PR as a card of its own, and opens a
-PR in the browser on Enter."""
+PR in the browser on Enter or a click on its card's link."""
 
 import importlib.metadata
 import time
 
 from rich.text import Text
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import DataTable, Static
 
 from claude_wheelhouse import api
@@ -73,11 +73,30 @@ def tip(r: dict) -> str:
     return f"{r['repo']} #{r['number']}: {r['title']}"
 
 
+def link(url: str) -> Text:
+    """A PR's URL as the card shows it, any line of it opening the whole URL (api.pr_link, #139)."""
+    return api.pr_link(url)
+
+
+class PrCard(VerticalScroll, can_focus=False):
+    """The card under the table (card), its text in a Static of its own (#prs-card-text): it
+    scrolls, with the wheel, where the pane is too short for all of it. Never focused: a
+    click on it leaves the focus on the table, whose focus shows it."""
+
+    def compose(self):
+        yield Static(id="prs-card-text", markup=False)
+
+    def update(self, text: Text) -> None:
+        self.query_one("#prs-card-text", Static).update(text)
+
+
 def card(r: dict) -> Text:
-    """A PR that isn't an item, as the pane shows it: title, URL, branch, checks, review."""
-    out = Text()
+    """A PR that isn't an item, as the pane shows it: its link first, the one line a short pane's
+    card has room for (#139), then title, branch, checks, review."""
+    out = Text().append_text(link(r["url"]))   # a span: the link's line alone opens it
+    out.append("\n")
     out.append(r["title"] or f"PR {r['number']}", style="bold")
-    for label, value in (("URL", r["url"]), ("Branch", r["branch"] or "?"),
+    for label, value in (("Branch", r["branch"] or "?"),
                          ("Checks", (r["checks"] or "none").lower()),
                          ("Review", (r["review"] or "none required").lower().replace("_", " ")),
                          ("Mergeable", (r["mergeable"] or "unknown").lower())):
@@ -134,8 +153,8 @@ class Prs(Vertical):
 
     def compose(self):
         yield PrTable(id="pr-list", cursor_type="row", zebra_stripes=False)
-        yield Static(id="prs-note")
-        yield Static(id="prs-card")
+        yield Static(id="prs-note", markup=False)
+        yield PrCard(id="prs-card")
 
     def on_mount(self) -> None:
         self.query_one("#prs-card").display = False
@@ -234,7 +253,7 @@ class Prs(Vertical):
         for r in rows:
             cells = {"pr": Text(f"PR{r['number']}", style=api.KIND_COLOUR["pr"]), "repo": short(r),
                      "title": r["title"], "light": self.dot(r)}
-            table.add_row(*(cells[k] for k, _ in columns), key=r["url"])
+            table.add_row(*(api.plain(cells[k]) for k, _ in columns), key=r["url"])   # a title as itself, never markup
         if at is not None and at in table.rows:
             table.move_cursor(row=table.get_row_index(at), animate=False)
         table.tip_again()
@@ -268,7 +287,7 @@ class Prs(Vertical):
         table = self.query_one(PrTable)
         r = self.row(self.key_at(table)) if table.has_focus else None
         shown = r is not None and r["item"] is None and self.error is None
-        box = self.query_one("#prs-card", Static)
+        box = self.query_one("#prs-card", PrCard)
         if shown:
             box.update(card(r))
         box.display = shown
