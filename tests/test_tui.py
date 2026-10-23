@@ -8724,6 +8724,10 @@ async def test_the_first_press_offers_the_steps(store, sid, live, first_press, a
         assert bool(store.setting(steps.CHOSEN)) is chosen, desc
         assert not isinstance(app.screen, tui.FirstSteps), desc
         assert (app.screen is not app.screen_stack[0]) is chosen, f"{desc}: Forget's own dialog next, or nothing"
+        if not chosen:
+            await pilot.click("#end")
+            await pilot.pause()
+            assert isinstance(app.screen, tui.FirstSteps), f"{desc}: asked again at the next press"
     if chosen:
         assert store.setting(steps.setting_key("pr_merged", "cleanup")) == "off", f"{desc}: unticked kept"
 
