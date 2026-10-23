@@ -4025,7 +4025,6 @@ class WheelhouseApp(App):
         self.half_frame = 0   # the frame // 2 the eyes and panes last moved on (animate)
         self.blink = False   # whether the busy dots were last dimmed (animate, dot_dimmed)
         self.steps_chosen = False   # the first-press dialog answered, here or before (first_press)
-        self.compact_seen: dict[str, int] = {}   # sessions compacting: their newest item id as first seen so (locks)
         self.animating = True   # whether it runs: paused while unfocused with nothing busy (pace)
         self.filter_sid: str | None = None
         self.followed: str | None = None   # the session last followed, which a key picks again (SessionList.reveal)
@@ -4780,10 +4779,8 @@ class WheelhouseApp(App):
         busy = queued | awaiting
         compacting = self.compacting()
         keyed = self.ranked_keyed(found, processing, busy, names)
-        for sid in compacting - set(self.compact_seen):   # the items it had as this app first saw it compacting
-            if ids := [it["id"] for _, it in keyed if it["session_id"] == sid]:
-                self.compact_seen[sid] = max(ids)
-        table.locked = {key for key, it in keyed if it["session_id"] in compacting and self.locks(it)}
+        cuts = self.cutoffs()
+        table.locked = {key for key, it in keyed if self.locks(it, cuts)}
         key_of = {id(it): key for key, it in keyed}   # each item's row key, made once
         active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
         for key, it in keyed:
@@ -5747,20 +5744,23 @@ class WheelhouseApp(App):
         return busy | {"compact-now"} if "compact" in busy else busy
 
     def compacting(self) -> set[str]:
-        """The running sessions being compacted (hub.compacting_now, from the store), each
-        kept with when this app first saw it so (compact_seen): an item posted since is never
-        locked (locks)."""
-        now_ = {s["id"] for s in self.sessions if compacting_now(s) and self.running(s["id"])}
-        for sid in set(self.compact_seen) - now_:
-            del self.compact_seen[sid]
-        return now_
+        """The running sessions being compacted (hub.compacting_now, from the store)."""
+        return {s["id"] for s in self.sessions if compacting_now(s) and self.running(s["id"])}
 
-    def locks(self, it) -> bool:
-        """Whether an item is locked: its session is being compacted, and the item was there
-        when this app first showed it so (compact_seen: the newest item id then, set by
-        paint_items). A session asking something meanwhile is never locked out."""
-        seen = self.compact_seen.get(it["session_id"])
-        return seen is not None and it["id"] <= seen
+    def cutoffs(self) -> dict[str, int | None]:
+        """Each compacting session's cut-off, from its listed row (Store.sessions serves it as
+        compact_cutoff): the newest item id it had as the compaction started (Store.compact_cut),
+        the same for every app."""
+        return {s["id"]: int(c) if (c := s["compact_cutoff"] if "compact_cutoff" in s.keys() else None) is not None
+                else None for s in self.sessions if s["id"] in self.compacting()}
+
+    @staticmethod
+    def locks(it, cuts: dict) -> bool:
+        """Whether an item of a compacting session (cuts) is locked: at or below its cut-off.
+        One posted since is never locked; without a cut-off, all are."""
+        if it["session_id"] not in cuts:
+            return False
+        return cuts[it["session_id"]] is None or it["id"] <= cuts[it["session_id"]]
 
     def press(self, sid: str, button: str, ref: str | None = None) -> None:
         """A busy button's action sent: the button off from now (busy_buttons)."""

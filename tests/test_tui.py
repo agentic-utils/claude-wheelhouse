@@ -8325,7 +8325,6 @@ class Presses:
 
     def __init__(self, row: dict, status: str):
         self.pressed, self.toasts, self.question, self.forking, self.fork_from = {}, [], True, {}, {}
-        self.compact_seen = {}
         self.sessions, self.statuses, self.relaunching = [row], {row["id"]: status}, set()
         self.client = SimpleNamespace(compact_question=lambda target: {} if self.question else None)
 
@@ -8751,3 +8750,53 @@ async def test_session_steps_keeps_what_changed(store, sid):
     assert store.setting(steps.setting_key("pr_merged", "cleanup")) == "off"
     assert store.setting(steps.CHOSEN), "answered here: the first-press dialog isn't shown"
     assert store.setting(steps.setting_key("before_forget", "items")) == "on", "before any choice, all kept as shown"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("scenario", ["follow another", "restart", "two apps"])
+async def test_a_compactions_cut_off_is_the_stores_for_every_app(store, tmp_path, monkeypatch, scenario):
+    """#150: which items a compaction locks is set once, where it starts (Store.compact_cut),
+    never by what an app happened to show: following another session meanwhile, restarting
+    the app, or a second app on the same store all lock the items there before it started,
+    and never one posted since. Detail dims on a locked item only."""
+    from claude_wheelhouse import liveness
+    from claude_wheelhouse.tui import ItemList
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    a = store.create_session(str(tmp_path), name="alpha", runner="sdk")
+    b = store.create_session(str(tmp_path), name="bravo", runner="sdk")
+    store.post_item(a, "task", "work")
+    store.post_item(b, "task", "other")
+
+    async def locked_refs(app, pilot):
+        await pick(app, pilot, a)
+        app.refresh_data()
+        await pilot.pause()
+        table = app.query_one(ItemList)
+        refs = {k.split("|")[1] for k in table.locked}
+        dims = {}
+        for ref in ("T1", "Q1"):
+            app.selected = (a, ref)
+            app.paint_detail()
+            dims[ref] = app.detail.has_class("compacting")
+        return refs, dims
+
+    seen = []
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pick(app, pilot, b if scenario == "follow another" else a)
+        store.command(a, "compact")   # pressed: the cut-off is the newest item then
+        store.set_activity(a, "compacting: collecting notes")
+        app.refresh_data()
+        await pilot.pause()
+        store.post_item(a, "question", "asked meanwhile")   # after the cut-off
+        if scenario != "restart":
+            seen.append(await locked_refs(app, pilot))
+    if scenario != "follow another":
+        again = WheelhouseApp(store)
+        async with again.run_test(size=(160, 40)) as pilot:
+            seen.append(await locked_refs(again, pilot))
+    for refs, dims in seen:
+        assert refs == {"", "T1"}, f"{scenario}: the conversation and T1 locked, never Q1 posted since: {refs}"
+        assert dims == {"T1": True, "Q1": False}, f"{scenario}: Detail dims on a locked item only: {dims}"
+    assert len({frozenset(r) for r, _ in seen}) == 1, f"{scenario}: every app agrees"
