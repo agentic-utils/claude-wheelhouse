@@ -98,7 +98,9 @@ reading its reply, closing the decision, opening the story it writes as a doc (r
 watching it work in its conversation, Stats, the Decisions pane's ADRs (architecture
 decision records, from each repo's `docs/adr`) while the design module is loaded, and ending
 it. A box beside Detail never covers the demo's rows in the inbox: it sits below every row, or
-below the demo's, or at the foot of the screen.
+below the demo's, or at the foot of the screen. On a small screen, where a box at its usual
+width would cover them or be cut short, it widens to nearly the screen's width, which makes
+it shorter.
 The last dialog shows this release's notes. `Esc` ends the tour at any time, from any of its
 boxes or the New session it opens, for good: the demo keeps running until you Stop & Forget
 it, and `claude-wheelhouse tutorial` offers the tour again from the start. Quitting mid-tour
