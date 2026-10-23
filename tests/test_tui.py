@@ -1690,7 +1690,8 @@ class Burst:
     ("items", "qa", ("h", "down"), lambda b: b.asked(), "alpha", "H opens a shell on the session of the item it was on"),
 ])
 @pytest.mark.both
-async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch, focus, at, burst, seen, want, desc):
+async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch, sdk_on, focus, at, burst, seen, want,
+                                                   desc):
     """Review 14: each key acts as it arrives, on what has focus then, so no key overtakes
     the one typed before it: a later key that moves the focus or a cursor never changes what
     an earlier one acts on."""
@@ -4531,7 +4532,8 @@ async def test_the_compact_button_asks_how(store, tmp_path, monkeypatch, typed, 
     (False, False, False, "a cold one: unticked, as compacting saves nothing"),
     (True, True, False, "unticked by hand: parked without compacting"),
 ])
-async def test_park_offers_to_compact_first_by_cache_warmth(store, tmp_path, monkeypatch, warm, untick, compact, desc):
+async def test_park_offers_to_compact_first_by_cache_warmth(store, tmp_path, monkeypatch, sdk_on, warm, untick, compact,
+                                                         desc):
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
@@ -8315,7 +8317,9 @@ class Presses:
     follow_presses = WheelhouseApp.follow_presses
     under_way = WheelhouseApp.under_way
     busy_buttons = WheelhouseApp.busy_buttons
+    compacting = WheelhouseApp.compacting
     press = WheelhouseApp.press
+    running = lambda self, sid: self.statuses.get(sid) in ("live", "stalled", "starting")   # as Hub.running
     heard = WheelhouseApp.heard
     display_name = staticmethod(lambda s: s["name"])
 
