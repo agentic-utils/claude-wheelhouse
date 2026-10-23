@@ -12,6 +12,7 @@ from unittest import mock
 
 import pytest
 from rich.color import Color
+from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
@@ -3286,7 +3287,7 @@ async def test_marking_rows(store, sid, steps, marked, desc):
             await pilot.pause()
         assert sorted(k.split("|")[1] for k in items.marked) == marked, desc
         shaded = [items.get_row_at(i)[2] for i in range(items.row_count)
-                  if isinstance(cell := items.get_row_at(i)[4], Text) and cell.style.bgcolor]
+                  if isinstance(cell := items.get_row_at(i)[4], Text) and (Style.parse(cell.style) if isinstance(cell.style, str) else cell.style).bgcolor]
         assert [str(r) for r in shaded] == marked, f"{desc}: marked rows are shaded"
 
 
