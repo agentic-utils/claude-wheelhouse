@@ -148,6 +148,7 @@ ARGS_LISTED = [
     ("--usage-mode {oneshot,persistent}", "USAGE_MODE", "the plan usage mode"),
     ("--port PORT", "PORT", "the daemon's port"),
     ("--keepalive-hours N", "KEEPALIVE_HOURS", "the keepalive"),
+    ("--step EVENT.SWITCH=on|off", None, "a session step's switch"),
     ("--animation-fps N", "ANIMATION_FPS", "the animation rate"),
     ("--local", None, "the hub in process"),
     ("--connect HOST:PORT", None, "another machine's daemon"),
