@@ -451,17 +451,24 @@ async def test_a_right_click_on_a_pr_opens_its_actions_below_the_row(store, sid,
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("size", [(100, 30), (80, 24), (160, 40)])
-async def test_the_buttons_fit_the_pane_and_each_click_acts(store, sid, github, monkeypatch, size):
-    """Review of #143: in a narrow pane the buttons stack rather than fall outside it."""
+@pytest.mark.parametrize("size, shown", [((100, 30), True), ((80, 24), False), ((160, 40), True)])
+async def test_the_buttons_fit_the_pane_and_each_click_acts(store, sid, github, monkeypatch, size, shown):
+    """Review of #143: in a narrow pane the buttons stack rather than fall outside it; review
+    of #156: in one too short for them and its rows, they hide, the table's rows kept, and
+    Detail's buttons act instead."""
     app = WheelhouseApp(store)
     async with app.run_test(size=size) as pilot:
         await settled(app, pilot)
         acted = []
         p = await on_pr(app, pilot, URL.format(109))
         monkeypatch.setattr(p, "act", lambda action, rows: acted.append((action, [r["number"] for r in rows])))
-        pane_box = p.content_region
-        for b in app.query_one("#prs-actions").query(Button):
+        table, bar = app.query_one("#pr-list"), app.query_one("#prs-actions")
+        assert table.region.height - table.header_height >= 2, f"{size}: both PRs' rows show, {table.region}"
+        assert bar.display is shown and app.query_one("#pr-detail-actions").display, f"{size}: Detail's buttons whatever"
+        if not shown:
+            bar = app.query_one("#pr-detail-actions")
+        pane_box = bar.parent.content_region
+        for b in bar.query(Button):
             assert pane_box.contains_region(b.region) and b.region.width >= len(str(b.label)), \
                 f"{size}: {b.id} {b.region} {str(b.label)!r} inside {pane_box}"
             await pilot.click(f"#{b.id}")

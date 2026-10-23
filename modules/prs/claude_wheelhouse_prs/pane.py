@@ -49,6 +49,8 @@ ACTIONS = (("open", "Open", "Open the PR in the browser"),
            ("merge", "Merge", "Merge the PR, the way its repo allows: asked first"),
            ("review", "Request review", "Ask the session that made the PR to post a review request on Slack"),
            ("close", "Close", "Close the PR without merging it: asked first"))
+TABLE_ROWS = 3                           # the PRs' rows kept, under the header, before the buttons under them hide
+BAR_ROWS = {"": 1, "grid": 2, "stacked": 4}   # the buttons' rows, as captions lays them out
 # Detail's part for a PR (#145): how much of it shows
 HISTORY_SHOWN = 12                       # timeline lines, a run of commits one line
 DESCRIPTION = 1500                       # characters of the description
@@ -679,11 +681,18 @@ class Prs(Vertical):
 
     def paint_actions(self, rows: list[dict]) -> None:
         """The buttons under the table, for the PRs marked or the one the cursor is on, while
-        the table has focus."""
+        the table has focus and keeps TABLE_ROWS rows beside them: in a pane too short for
+        both, the table wins, and Detail's buttons and the row's menu still act."""
         bar = self.query_one("#prs-actions", ActionBar)
-        bar.display = bool(rows)
-        if rows:
+        bar.display = bool(rows) and self.bar_fits(rows)
+        if bar.display:
             bar.paint(self.entries(rows))
+
+    def bar_fits(self, rows: list[dict]) -> bool:
+        """Whether the buttons leave the table TABLE_ROWS rows under its header."""
+        _, layout = captions(self.entries(rows), self.content_size.width)
+        taken = sum(w.outer_size.height for w in (self.query_one("#prs-note"), self.query_one("#prs-card")) if w.display)
+        return self.content_size.height - taken - 1 - BAR_ROWS[layout] >= TABLE_ROWS
 
     def targets(self) -> list[dict]:
         """What the buttons under the table act on: the PRs marked, in the table's order, else
