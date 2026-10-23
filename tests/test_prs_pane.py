@@ -70,6 +70,7 @@ def github(store, sid, monkeypatch):
     gh = Gh([node(108, checks="FAILURE"), node(109)],
             [node(108, checks="FAILURE"), node(109), node(7, repo="doug/mizpah", updated="2026-10-20T12:00:00Z")])
     monkeypatch.setattr(pane, "RUNNER", gh)
+    monkeypatch.setattr(pane, "SETTLE", 0.05)   # the highlight rests this long before a PR's detail is fetched
     monkeypatch.setattr(api, "load", lambda: [api.Loaded("prs", prs.module)])
     return gh
 
@@ -447,7 +448,8 @@ async def test_a_right_click_on_a_pr_opens_its_actions_below_the_row(store, sid,
         await pilot.press("enter")
         await pilot.pause()
         assert opened == [URL.format(109)], f"{size}: Open, on the row clicked"
-        assert table.has_focus and app.query_one("#prs-actions").display, f"{size}: the table focused, its buttons shown"
+        assert table.has_focus and app.query_one("#prs-actions").display is (size != (80, 24)), \
+            f"{size}: the table focused, its buttons shown where they leave it its rows"
 
 
 @pytest.mark.anyio
@@ -616,6 +618,7 @@ async def test_the_pane_follows_the_selected_session(store, sid, github, size, f
 # #145: the PR's actions and detail in Detail
 
 async def landed(app, pilot):
+    await pilot.pause(pane.SETTLE * 2)   # the highlight rested: its detail asked for
     for _ in range(3):
         await app.workers.wait_for_complete()
         await pilot.pause()
@@ -747,3 +750,44 @@ async def test_merge_and_the_menu_act_on_every_pr_marked(store, sid, github):
         await landed(app, pilot)
         await settled(app, pilot)
         assert github.merges == [["--squash", "--", URL.format(n)] for n in (108, 109)], "each merged in turn"
+
+
+@pytest.mark.anyio
+async def test_arrowing_past_prs_fetches_only_the_one_it_rests_on_and_a_failure_is_tried_again(store, sid, github, monkeypatch):
+    """Review of #156: a detail asked on every highlight ran the route out of queries
+    (daemon.MODULE_GETS), the list's ask with them; and a failure was kept as fetched."""
+    for n in range(1, 7):
+        store.post_pr(sid, URL.format(n), f"Change {n}")
+        github.tracked.append(node(n))
+        github.found.append(node(n))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        await landed(app, pilot)
+        p = await on_pr(app, pilot, URL.format(108))
+        github.details.clear()
+        monkeypatch.setattr(pane, "SETTLE", 1.0)   # longer than six key presses take here
+        out, real = [], p.ctx.call
+        monkeypatch.setattr(p, "ctx", dataclasses.replace(p.ctx, call=lambda path, body: out.append(path) or real(path, body)))
+        for _ in range(6):
+            await pilot.press("down")
+        await landed(app, pilot)
+        at = p.detail_row()["number"]
+        assert github.details == [at] and at != 108, f"the PR it rested on alone: {github.details}"
+        assert sum(path.startswith("detail") for path in out) == 1, "one detail asked"
+
+        def refuse(path, body):
+            if path.startswith("detail"):
+                raise api.Refused(503, "module prs is busy")
+            return real(path, body)
+        p.ctx = dataclasses.replace(p.ctx, call=refuse)
+        p.detail_asked.clear()   # none fetched yet
+        await pilot.press("down")
+        await landed(app, pilot)
+        url = p.detail_row()["url"]
+        assert url not in p.detail_asked and "busy" in p.details[url]["error"], "a failure isn't counted as fetched"
+        p.ctx = dataclasses.replace(p.ctx, call=real)
+        monkeypatch.setattr(pane, "RETRY", 0)
+        p.want_detail()
+        await landed(app, pilot)
+        assert url in p.detail_asked and "error" not in p.details[url], "tried again, and kept"

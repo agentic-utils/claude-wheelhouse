@@ -49,6 +49,8 @@ ACTIONS = (("open", "Open", "Open the PR in the browser"),
            ("merge", "Merge", "Merge the PR, the way its repo allows: asked first"),
            ("review", "Request review", "Ask the session that made the PR to post a review request on Slack"),
            ("close", "Close", "Close the PR without merging it: asked first"))
+SETTLE = 0.4                             # seconds the highlight rests on a PR before its detail is fetched
+RETRY = 10                               # seconds before a detail fetch that failed is tried again
 TABLE_ROWS = 3                           # the PRs' rows kept, under the header, before the buttons under them hide
 BAR_ROWS = {"": 1, "grid": 2, "stacked": 4}   # the buttons' rows, as captions lays them out
 # Detail's part for a PR (#145): how much of it shows
@@ -478,7 +480,9 @@ class Prs(Vertical):
         self.in_detail: tuple | None = None
         self.details: dict[str, dict] = {}
         self.detail_asked: dict[str, tuple[float, tuple]] = {}   # url: (time.monotonic(), the row's version)
-        self.detail_asking: set[str] = set()
+        self.detail_asking: set[str] = set()                     # the one under way, if any
+        self.detail_failed: dict[str, float] = {}                # url: time.monotonic() of a fetch that failed
+        self.detail_timer: tuple | None = None                   # (url, Timer): waiting on the highlight to rest
         self.detail_bar = ActionBar("prd", lambda action: self.act(action, [r] if (r := self.detail_row()) else []),
                                     id="pr-detail-actions")
         self.detail_body = PrDetail(id="pr-detail")
@@ -556,7 +560,9 @@ class Prs(Vertical):
         self.outcome = None
         self.ask(fresh=True)
         if (r := self.detail_row()) is not None:
-            self.ask_detail(r, fresh=True)
+            self.detail_failed.pop(r["url"], None)
+            self.detail_asked[r["url"]] = (0.0, None)   # due, and fresh: as if fetched for another row
+            self.want_detail()
 
     def ask(self, fresh: bool = False) -> None:
         """The route asked again, on a worker thread (a fetch takes seconds); while an ask is
@@ -916,42 +922,71 @@ class Prs(Vertical):
         self.detail_body.update(detail_text(r, self.details.get(r["url"]), linked=r["item"] is None))
         self.want_detail()
 
-    def want_detail(self) -> None:
-        """Detail's PR's detail asked for when it has none, its row has changed since it was
-        asked (a push, a check finishing), or it's DETAIL_EVERY old."""
+    def due_detail(self) -> tuple[dict, bool] | None:
+        """Detail's PR and whether to fetch it fresh, if its detail is due: it has none, its
+        row has changed since it was fetched (a push, a check finishing), or it's
+        DETAIL_EVERY old; not within RETRY of a fetch that failed."""
         if (r := self.detail_row()) is None:
-            return
+            return None
+        if time.monotonic() - self.detail_failed.get(r["url"], -RETRY) < RETRY:
+            return None
         at, seen = self.detail_asked.get(r["url"], (None, None))
         if at is None:
-            self.ask_detail(r, fresh=False)
-        elif seen != version(r) or time.monotonic() - at >= fetch.DETAIL_EVERY:
-            self.ask_detail(r, fresh=True)
+            return r, False
+        if seen != version(r) or time.monotonic() - at >= fetch.DETAIL_EVERY:
+            return r, True
+        return None
 
-    def ask_detail(self, r: dict, fresh: bool) -> None:
-        url = r["url"]
-        if url in self.detail_asking or self.ctx.call is None:
+    def want_detail(self) -> None:
+        """Detail's PR's detail asked for once the highlight has rested SETTLE seconds on
+        it, so arrowing past PRs fetches none of them (#156): a route's queries are few
+        (daemon.MODULE_GETS), and the list's own ask needs one."""
+        if (due := self.due_detail()) is None:
             return
-        self.detail_asking.add(url)
-        self.detail_asked[url] = (time.monotonic(), version(r))
-        path = f"detail?url={quote(url, safe='')}&fresh={int(fresh)}"
-        self.run_worker(lambda: self.fetch_detail(url, path), thread=True, group="prs-detail", exit_on_error=False)
+        url = due[0]["url"]
+        if self.detail_timer is not None:
+            if self.detail_timer[0] == url:
+                return   # already waiting on it
+            self.detail_timer[1].stop()
+        self.detail_timer = (url, self.set_timer(SETTLE, self.ask_detail))
 
-    def fetch_detail(self, url: str, path: str) -> None:
+    def ask_detail(self) -> None:
+        """Detail's PR's detail fetched, if still due, and none other is under way: one at a
+        time, the one that lands asks for the next (got_detail)."""
+        self.detail_timer = None
+        if self.detail_asking or self.ctx.call is None or (due := self.due_detail()) is None:
+            return
+        r, fresh = due
+        url, seen = r["url"], version(r)
+        self.detail_asking.add(url)
+        path = f"detail?url={quote(url, safe='')}&fresh={int(fresh)}"
+        self.run_worker(lambda: self.fetch_detail(url, seen, path), thread=True, group="prs-detail",
+                        exit_on_error=False)
+
+    def fetch_detail(self, url: str, seen: tuple, path: str) -> None:
         try:
             got = self.ctx.call(path, None)
         except api.Refused as e:
             got = {"error": "the hub is older: update it" if e.status == 404 else e.error}
         except Exception as e:   # never left asking
             got = {"error": f"{type(e).__name__}: {e}"}
-        self.app.call_from_thread(self.got_detail, url, got)
+        self.app.call_from_thread(self.got_detail, url, seen, got)
 
-    def got_detail(self, url: str, got: dict) -> None:
-        """A PR's detail landed: kept, a failure keeping what was fetched before."""
+    def got_detail(self, url: str, seen: tuple, got: dict) -> None:
+        """A PR's detail landed: kept, and when for what row; a failure keeping what was
+        fetched before, and not counted as fetched, so it's asked again RETRY on."""
         self.detail_asking.discard(url)
         before = {k: v for k, v in self.details.get(url, {}).items() if k != "error"}
-        self.details[url] = {**before, **got} if "error" in got else got
+        if "error" in got:
+            self.details[url] = {**before, **got}
+            self.detail_failed[url] = time.monotonic()
+        else:
+            self.details[url] = got
+            self.detail_asked[url] = (time.monotonic(), seen)
+            self.detail_failed.pop(url, None)
         if (r := self.detail_row()) is not None and r["url"] == url:
             self.paint_detail()
+        self.want_detail()   # the PR Detail shows now, if it moved on meanwhile
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Enter, or a click on the cursor's row: the PR in the browser."""
