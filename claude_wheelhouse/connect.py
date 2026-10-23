@@ -18,7 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import auth, features, fingerprint, liveness
+from . import auth, features, fingerprint, liveness, steps
 from .client import RemoteClient
 
 START_WAIT = 10   # seconds a daemon started has to take its lock and answer
@@ -96,7 +96,7 @@ def start(state_dir: Path, port: int) -> int:
             argv = [*liveness.DETACH, sys.executable, "-m", "claude_wheelhouse", "daemon", "--port", str(port),
                     "--start-pipe", str(held)]
             argv += [features.USAGE_FLAG, features.usage_mode(), features.KEEPALIVE_FLAG,
-                     f"{features.keepalive_hours():g}"] + ([features.FLAG] if features.sdk_enabled() else [])
+                     f"{features.keepalive_hours():g}", *steps.flag_args()] + ([features.FLAG] if features.sdk_enabled() else [])
             subprocess.run(argv, cwd=state_dir,
                            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                            env=dict(env, PYTHONSAFEPATH="1", PYTHONPATH=path), pass_fds=(held,), check=True)

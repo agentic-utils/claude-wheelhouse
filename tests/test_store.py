@@ -1046,3 +1046,32 @@ def test_a_docs_new_replies(store, sid, tmp_path, kind, replies, seen, left, des
     if seen:
         assert store.mark_seen(sid, ref), f"{desc}: seeing them is a change"
     assert store.item(sid, ref)["new_replies"] == left, desc
+
+
+@pytest.mark.parametrize("steps_, cut, desc", [
+    ([("command",), ("post",)], "1", "Compact pressed: the newest item then, not one posted since"),
+    ([("activity", "compacting after 8 quiet hours: collecting notes"), ("post",)], "1",
+     "the host's own compaction: its first line marks it"),
+    ([("command",), ("post",), ("activity", "compacting: collecting notes"), ("activity", "compacting")], "1",
+     "kept through the compaction's lines"),
+    ([("command",), ("post",), ("command",)], "2", "pressed again: from then"),
+    ([("command",), ("activity", "idle · compacted")], None, "compacted: let go"),
+    ([("command",), ("activity", "interrupted")], None, "interrupted: let go"),
+    ([("command",), ("activity", "thinking")], "1", "its notes' turn starting: kept"),
+    ([("command",), ("end",)], None, "forgotten: let go"),
+])
+def test_a_compactions_cut_off(store, sid, steps_, cut, desc):
+    from claude_wheelhouse.store import COMPACT_CUTOFF
+    store.post_item(sid, "task", "there before")
+    for step in steps_:
+        if step[0] == "command":
+            store.command(sid, "compact")
+        elif step[0] == "post":
+            store.post_item(sid, "question", "since")
+        elif step[0] == "activity":
+            store.set_activity(sid, step[1])
+        else:
+            store.end(sid)
+    assert store.setting(COMPACT_CUTOFF + sid) == cut, desc
+    if cut is not None:
+        assert next(s for s in store.sessions() if s["id"] == sid)["compact_cutoff"] == cut, f"{desc}: on its row"

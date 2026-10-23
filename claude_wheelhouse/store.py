@@ -77,7 +77,13 @@ DECISION_FIELDS = (("why", "Why"),)
 # 16: post_item's pinned (items.pinned): a doc is pinned unless the session says it's a scratch report.
 # 17: PR items (kind pr, its ref the PR's number), which post_item(kind="pr", url=...) posts and
 # the protocol asks a session to reply on when the person writes on one: an older one knows no pr.
-PROTOCOL_VERSION = 17
+# 18: session steps (steps.py): write_handoff, the tool a session keeps its handoff with, which the
+# wheelhouse's messages at compaction, Stop & Forget and resume now ask for: an older one has none.
+PROTOCOL_VERSION = 18
+# a compaction's cut-off (Store.compact_cut), in settings by session id, and the activity lines
+# that end one: the host's idle and interrupted lines, and its errors and stops
+COMPACT_CUTOFF = "compact.cutoff."
+COMPACT_ENDS = ("idle", "interrupted", "error", "stopped")
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
 # "immediate" sends each as it's submitted. Stored per session; NULL means this default.
@@ -546,9 +552,25 @@ class Store:
     # a session's SDK host
 
     def set_activity(self, sid: str, text: str) -> None:
-        """What the host's session is doing now, one line: idle, thinking, running Bash..."""
+        """What the host's session is doing now, one line: idle, thinking, running Bash...
+        A compaction's first line ("compacting...") marks its cut-off, if Compact pressed
+        hasn't already; a line that ends one (COMPACT_ENDS) lets it go (compact_cut)."""
         with self.tx() as db:
             db.execute("UPDATE sessions SET activity = ? WHERE id = ?", (text, sid))
+            if text.startswith("compacting"):
+                self.compact_cut(db, sid, fresh=False)
+            elif text.startswith(COMPACT_ENDS):
+                db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
+
+    @staticmethod
+    def compact_cut(db, sid: str, fresh: bool) -> None:
+        """Where a compaction starts, once for every app: the newest item id the session has
+        then (settings, COMPACT_CUTOFF), served on its row as compact_cutoff. Items at or
+        below it are locked while it compacts (#150); one posted after never is. fresh: a
+        Compact pressed, over any left behind."""
+        db.execute(f"""INSERT INTO settings (key, value) SELECT ?, coalesce(max(id), 0) FROM items
+                       WHERE session_id = ? ON CONFLICT (key) DO {"UPDATE SET value = excluded.value" if fresh else "NOTHING"}""",
+                   (COMPACT_CUTOFF + sid, sid))
 
     def set_context(self, sid: str, tokens: int, max_tokens: int) -> None:
         """The context size the host's Claude Code reports, and when: the stats read it after
@@ -570,6 +592,8 @@ class Store:
         with self.tx() as db:
             self._require(db, sid)
             db.execute("UPDATE sessions SET host_command = ?, compact_plan = ? WHERE id = ?", (what, plan, sid))
+            if what == "compact":
+                self.compact_cut(db, sid, fresh=True)
 
     def compact_plan(self, sid: str, take: bool = False) -> tuple[str | None, str | None]:
         """The Compact command's instructions and what follows it (command), as last pressed;
@@ -656,6 +680,7 @@ class Store:
     def sessions(self) -> list[sqlite3.Row]:
         return self._all(
             f"""SELECT s.*,
+                 (SELECT value FROM settings WHERE key = '{COMPACT_CUTOFF}' || s.id) AS compact_cutoff,
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id
                     AND i.kind = 'question' AND i.status = 'open' AND NOT {PROCESSING}) AS open_questions,
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id
@@ -806,6 +831,8 @@ class Store:
     def end(self, sid: str) -> None:
         with self.tx() as db:
             db.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+            # its PR merges held for a resume that won't come (steps.held_key), its compaction's cut-off
+            db.execute("DELETE FROM settings WHERE key IN (?, ?)", (f"step.held.{sid}", COMPACT_CUTOFF + sid))
 
     # items
 

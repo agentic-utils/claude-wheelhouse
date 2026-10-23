@@ -144,6 +144,19 @@ def no_tutorial_offer(monkeypatch):
     monkeypatch.setattr(tutorial, "state", lambda store: {**real(store), "seen": [f.id for f in whatsnew.FEATURES]})
 
 
+@pytest.fixture
+def first_press():
+    """Opts a test into the first-press dialog (tui.FirstSteps), which steps_answered skips."""
+
+
+@pytest.fixture(autouse=True)
+def steps_answered(request, monkeypatch):
+    """The session steps' first-press dialog as answered, so a press of Compact, Forget or
+    Relaunch goes straight on; a test of the dialog takes first_press."""
+    if "first_press" not in request.fixturenames:
+        monkeypatch.setattr(tui.WheelhouseApp, "first_press", lambda self, button: False)
+
+
 @pytest.fixture(autouse=True)
 def no_dwell_timer(monkeypatch):
     """The dwell (tui.DWELL) never lapses on its own in a test, wherever a slow run puts its

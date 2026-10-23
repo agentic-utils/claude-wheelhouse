@@ -491,6 +491,22 @@ how to work.
   on joining, the notes a fork and its parent get ([`fork.py`](claude_wheelhouse/fork.py)), and the keepalive and check messages, as `[wheelhouse]` notifications.
 - [The plugin's hook](claude_wheelhouse/plugin/hooks/hooks.json): after a compaction,
   the session's open tasks and questions.
+- [Session steps](claude_wheelhouse/steps.py): what a session is told at Compact and after
+  it (in the wheelhouse only), at Stop & Forget, when it resumes after an hour or more away
+  (or parked), and when one of its PRs merges. It is told the event is coming or has
+  happened, so your own instructions can act, and asked for a handoff (what was done,
+  decisions, open threads, next step), which it writes with the `write_handoff` tool. Its
+  handoff is read back to it on resume and after compaction. A PR that merges while the
+  session isn't running is told when it resumes, never by starting it. Messages after an
+  event go at once, without waiting for the session's queued answers to be sent. The first
+  press of Compact, Stop & Forget or Relaunch asks once which add-ons you want; **Session
+  steps**, in the command palette (`Ctrl+P`), has every switch, one row per event. Each is
+  also a setting: `WHEELHOUSE_STEP_<EVENT>_<SWITCH>=on|off` or `STEP_<EVENT>_<SWITCH>=` in a
+  `.env` (such as `STEP_PR_MERGED_CLEANUP=off`), and `STEP_ADDONS=off` turns every add-on
+  off, for instructions of your own that cover it all. Before and After Compact exist only
+  in SDK mode. The handoff shows as the
+  session's `handoff` doc, kept in `handoffs/` beside the database; one untouched for 30
+  days is removed when the daemon starts.
 
 `claude-wheelhouse protocol` prints all of it in one go, exactly as a session receives it,
 along with the launch command.
@@ -684,11 +700,14 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   question, the tool's reply lists what is in doubt, as `Still open: T1 waiting, Q2 reply
   owed`. Nothing is added when nothing is in doubt.
 - While you're away, a session over 150k tokens of context that waits on you or has an
-  item in doubt gets a `[wheelhouse]` message 55 minutes after its last turn, and every 55
+  item in doubt gets a `[wheelhouse]` message 50 minutes after its last turn, and every 50
   minutes after that. It keeps the session's prompt cache warm (a cold one is written again
   whole), and with an item in doubt it is the check, `Check: T1 running, Q2 reply owed`,
   which the session answers by correcting what's finished. It stops once the session has
-  been quiet 8 hours. `--keepalive-hours N` (on the app or `claude-wheelhouse daemon`), or
+  been quiet 8 hours. Then a session run in the wheelhouse is compacted while its cache is
+  still warm (asked first, as Compact asks, and compacted without notes if none come back
+  in 10 minutes), and a tab idle-compacts by itself about 54 minutes later (the wheelhouse
+  launches tabs to do so past 150k tokens). `--keepalive-hours N` (on the app or `claude-wheelhouse daemon`), or
   `WHEELHOUSE_KEEPALIVE_HOURS=N`, or `KEEPALIVE_HOURS=N` in a `.env` (see
   [Settings](#settings)), sets another limit; fractions are allowed and 0
   turns it off. Each message costs one request, which reads the cached context: for a
@@ -699,7 +718,10 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   instructions for the compaction (none: the session is asked what to keep) and what follows
   it: just compact, send its queued answers in the same one prompt as that reminder (the
   default), or park it at once, sending nothing more, so nothing writes the compacted context
-  to the cache until it is unparked. Permission items are answered with buttons: Allow and Always at once, while Deny opens a
+  to the cache until it is unparked. While a compaction is under way, from Compact pressed
+  until the host says it's compacted (or got no notes, or was interrupted), Compact is off,
+  the session's inbox items and Detail dim and ignore clicks, and its eye in the session
+  list sweeps blue instead of red. Permission items are answered with buttons: Allow and Always at once, while Deny opens a
   one-line box for an optional reason (the session reads it as why, so it can try something
   else); Enter denies, empty or not, and Esc, wherever focus is, goes back to the buttons. The plugin's `SessionStart` hook does it
   ([`hooks.json`](claude_wheelhouse/plugin/hooks/hooks.json)): it runs

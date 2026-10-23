@@ -60,12 +60,12 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, callout, columns, docblocks, docroots, emoji, features, models, ordering, prs, subagents, transcript, transcript_usage, tutorial, whatsnew
+from . import api, callout, columns, docblocks, docroots, emoji, features, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .rows import KIND_COLOUR, RowTips, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import AWAITING_NOTES, HOLD_EXPIRED, NUDGE_TOKENS, SHELL_OPENING
-from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, state as hub_state, Event, aimed, display_name, host_context, short
+from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, compacting_now, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
@@ -249,14 +249,17 @@ def dimmed(style: Style) -> Style:
     return style + Style(color=Color.from_rgb(r * DIM, g * DIM, b * DIM))
 
 
-def cylon(frame: int, width: int = 8) -> Text:
-    """A red eye sweeping back and forth with a fading tail."""
+EYE_RED = ("#ff0000", "#aa0000", "#550000")   # a busy session's eye: its head, then its tail
+EYE_BLUE = ("#2f8cff", "#1f5daa", "#102e55")   # a compacting one's (#150)
+
+
+def cylon(frame: int, width: int = 8, colours: tuple = EYE_RED) -> Text:
+    """An eye sweeping back and forth with a fading tail: red, or blue while compacting."""
     pos = eye_at(frame, width)
     t = Text()
     for i in range(width):
         d = abs(i - pos)
-        t.append("█" if d == 0 else "▓" if d == 1 else "░" if d == 2 else " ",
-                 style="#ff0000" if d == 0 else "#aa0000" if d == 1 else "#550000")
+        t.append("█" if d == 0 else "▓" if d == 1 else "░" if d == 2 else " ", style=colours[min(d, 2)])
     return t
 
 
@@ -1238,6 +1241,7 @@ class SessionList(SinkList):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.eyes: set[str] = set()   # the busy sessions' rows, whose eye cell paint_sessions leaves blank
+        self.blue: set[str] = set()   # of those, the compacting ones' rows: their eye is blue (#150)
         self.eye_frame = 0
         self.swept: tuple | None = None   # the busy rows and the eye's place as last drawn again (sweep)
         self.blinked = False   # whether the busy rows' dots were last drawn dimmed (sweep)
@@ -1258,7 +1262,7 @@ class SessionList(SinkList):
         Not if the eyes are where they were last drawn, on the same rows: a frame can leave them there.
         Their dots flash the same way (dot_dimmed): with the eyes still, only the dots' cells drawn again."""
         self.eye_frame = frame
-        swept = (frozenset(self.eyes), eye_at(frame, self.EYE))   # a row the table draws anew, it draws as it is
+        swept = (frozenset(self.eyes), frozenset(self.blue), eye_at(frame, self.EYE))   # a row the table draws anew, it draws as it is
         blinked = dot_dimmed(frame)
         if swept == self.swept and blinked == self.blinked:
             return
@@ -1296,7 +1300,7 @@ class SessionList(SinkList):
             self.cursor_background_priority == "css")
         under = next(iter(strip.crop(lo, lo + 1)), None)
         base = under.style if under is not None and under.style else Style()
-        eye = Strip([Segment(seg.text, base + seg.style + post) for seg in cylon(self.eye_frame).render(self.app.console)])
+        eye = Strip([Segment(seg.text, base + seg.style + post) for seg in cylon(self.eye_frame, colours=EYE_BLUE if row_key.value in self.blue else EYE_RED).render(self.app.console)])
         return Strip.join([strip.crop(0, lo), eye.crop(lo - x, hi - x), strip.crop(hi)])
 
     def dim_dot(self, strip: Strip, x1: int) -> Strip:
@@ -1408,6 +1412,30 @@ class ItemList(SinkList):
         self.marked: set[str] = set()
         self.anchor: str | None = None
         self.toggles: dict[str, bool] = {}   # each parent row's key: whether its children are hidden
+        self.locked: set[str] = set()   # rows of a session being compacted: clicks on them do nothing (#150)
+
+    def unlocked_from(self, key: str, came: str | None) -> str | None:
+        """The row an arrow onto locked key goes to instead: the next unlocked one on the way
+        it was going (from came), else came again if it's still here; None if there's neither."""
+        keys = self.keys()
+        at = keys.index(key)
+        step = -1 if came in keys and keys.index(came) > at else 1
+        i = at + step
+        while 0 <= i < len(keys):
+            if keys[i] and keys[i] not in self.locked:
+                return keys[i]
+            i += step
+        return came if came in keys else None
+
+    def locked_at(self, event) -> bool:
+        row = event.style.meta.get("row", -1)
+        return 0 <= row < self.row_count and self.keys()[row] in self.locked
+
+    def _on_mouse_down(self, event) -> None:
+        if self.locked_at(event):
+            self.press = None
+            return
+        super()._on_mouse_down(event)
 
     def _render_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
         """The row's line, and on a parent's its + / - (TOGGLE) in the line's last cell, a
@@ -1447,6 +1475,10 @@ class ItemList(SinkList):
 
     async def _on_click(self, event) -> None:
         if self.swallowed(event):
+            return
+        if self.locked_at(event):   # its session is being compacted: nothing to pick (#150)
+            event.prevent_default()
+            event.stop()
             return
         meta = event.style.meta
         if "toggle" in meta:   # a parent's + / -: its children shown or hidden, the row not selected
@@ -1509,6 +1541,14 @@ class ItemList(SinkList):
             self.anchor = self.cursor_key()
         self.go(lambda i, n: i + step)
         self.extend_to(self.cursor_key())
+
+
+def faded(cells: tuple) -> tuple:
+    """A row's cells dimmed, whatever their own colours: its session is being compacted (#150)."""
+    out = tuple(c.copy() if isinstance(c, Text) else Text(str(c)) for c in cells)
+    for c in out:
+        c.stylize("dim")
+    return out
 
 
 class Compose(TextArea):
@@ -3129,6 +3169,81 @@ class ParkSession(Dialog):
                            if event.button.id == "park-go" else None)
 
 
+class FirstSteps(Dialog):
+    """The first press of anything that fires a session step with add-ons (Compact, Stop &
+    Forget, Relaunch or Unpark), before any choice was made: what the wheelhouse tells a
+    session, and the add-ons offered (steps.OFFERED), ticked. OK answers {name: ticked};
+    Esc cancels the press, asked again next time. sdk: compaction is named only in SDK mode."""
+    ACTION = "steps-ok"
+
+    def __init__(self, sdk: bool):
+        super().__init__()
+        self.sdk = sdk
+
+    def compose(self) -> ComposeResult:
+        events = "compacts, ends or resumes" if self.sdk else "ends or resumes"
+        with Vertical(id="dialog"):
+            yield Label(Text(f"When the wheelhouse {events} a session, it tells the session first, so your own "
+                             "instructions (CLAUDE.md) can act. It can also do more:"), classes="dialog-prompt")
+            for name, text, _ in steps.OFFERED:
+                yield Checkbox(Text(text), True, id=f"steps-{name}")
+            yield Label(Text(steps.after_note(self.sdk)), classes="dialog-note")
+            with Horizontal(classes="buttons"):
+                yield Button("OK", variant="primary", id="steps-ok")
+                yield Button("Cancel", id="steps-cancel")
+            yield Label(Text("Session steps, in the command palette (Ctrl+P), has every switch."), classes="dialog-note")
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        event.stop()   # answered here: not the press it stands in front of
+        self.action_answer({name: self.query_one(f"#steps-{name}", Checkbox).value for name, _, _ in steps.OFFERED}
+                           if event.button.id == "steps-ok" else None)
+
+
+class SessionSteps(Dialog):
+    """Session steps, from the command palette: each event's announce and add-ons
+    (steps.table), one checkbox each; one given by flag or .env shows as fixed, with where
+    from, and can't be changed here. Compaction's rows only in SDK mode. Answers the
+    switches changed, {(event, switch): on}, or None."""
+    ACTION = "session-steps-ok"
+
+    def __init__(self, table: dict):
+        super().__init__()
+        self.table = table
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(Text("Session steps: what the wheelhouse tells a session at each event. Announce lets "
+                             "your own instructions act; the rest ask for more."), classes="dialog-prompt")
+            with VerticalScroll(id="session-steps-rows"):
+                for row in self.table["events"]:
+                    yield Label(Text(row["title"], style="bold"))
+                    for sw in row["switches"]:
+                        caption = sw["name"] + (f" (fixed by {sw['fixed']})" if sw["fixed"] else "")
+                        yield Checkbox(Text(caption), sw["on"], id=f"step-{row['event']}-{sw['name']}",
+                                       disabled=bool(sw["fixed"]))
+            yield Label(Text(self.table["note"]), classes="dialog-note")
+            with Horizontal(classes="buttons"):
+                yield Button("OK", variant="primary", id="session-steps-ok")
+                yield Button("Cancel", id="session-steps-cancel")
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id != "session-steps-ok":
+            self.action_answer(None)
+            return
+        changed = {}
+        for row in self.table["events"]:
+            for sw in row["switches"]:
+                box = self.query_one(f"#step-{row['event']}-{sw['name']}", Checkbox)
+                # before any choice, every switch as shown: the choice is made here, so none
+                # turns to its default afterwards (an unattended add-on shows off until then)
+                if not sw["fixed"] and (box.value != sw["on"] or not self.table["chosen"]):
+                    changed[(row["event"], sw["name"])] = box.value
+        self.action_answer(changed)
+
+
 class ForgetChoice(Dialog):
     """Stop & Forget on a running session: Let it know (the end request, its end steps as
     any session's) or Just stop it (stopped now and its row deleted, nothing sent to it).
@@ -3637,7 +3752,8 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap "
-         "the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back.")
+         "the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; "
+         "Session steps there has what the wheelhouse tells a session at each event.")
 TOUR_HELP = ("Esc ends the tour at any time, from any of its boxes or the New session it opens. While the title bar "
              "shows a badge, L, or a click on it, resumes a tour the wheelhouse quit in the middle of, or offers "
              "what's new since you last looked: a top-up showing only the new tips, pane by pane, with no demo session, "
@@ -3814,6 +3930,8 @@ class WheelhouseApp(App):
         text-opacity: 100%; opacity: 100%; }}
     Button.-style-default:disabled {{ border-top: tall {OFF}; border-bottom: tall {OFF}; }}
     Button.-style-default.-textual-compact:disabled {{ border: none; }}
+    #detail.compacting {{ opacity: 50%; }}
+    #session-steps-rows {{ height: auto; max-height: 60vh; }}
     #conversation-buttons #mode, #session-buttons Button.wide {{ column-span: 2; }}
     #dialog {{ width: 80; max-width: 100%; height: auto; max-height: 100%; overflow-y: auto; padding: 1 2;
                background: #000000; color: {MATRIX}; border: thick #ff2a6d; }}
@@ -3906,6 +4024,7 @@ class WheelhouseApp(App):
         self.started = 0.0   # when the animation's time starts (animate)
         self.half_frame = 0   # the frame // 2 the eyes and panes last moved on (animate)
         self.blink = False   # whether the busy dots were last dimmed (animate, dot_dimmed)
+        self.steps_chosen = False   # the first-press dialog answered, here or before (first_press)
         self.animating = True   # whether it runs: paused while unfocused with nothing busy (pace)
         self.filter_sid: str | None = None
         self.followed: str | None = None   # the session last followed, which a key picks again (SessionList.reveal)
@@ -4386,6 +4505,7 @@ class WheelhouseApp(App):
         self.client.background()   # in process, the hub's reading: the daemon's hub does its own
         self.paint_sessions()
         self.paint_items()
+        self.paint_compacting()
         self.each_pane("tick")
         self.client.finish_relaunches()
         self.paint_session_info()
@@ -4582,7 +4702,9 @@ class WheelhouseApp(App):
         table = self.session_list
         keep, key = table.final_row(), self.current_session()   # in the final order, as the items' (paint_items)
         pending = key != self.sessions_cursor   # the person's move, not yet settled
-        rows, table.eyes = [], {s["id"] for s in self.sessions if self.busy(s["id"])}
+        compacting = self.compacting()
+        rows, table.eyes = [], {s["id"] for s in self.sessions if self.busy(s["id"]) or s["id"] in compacting}
+        table.blue = compacting
         self.pace()   # a session busy, or none now: the animation runs, or may rest
         keyed = self.pinned_session_keys()
         for s in sorted(self.sessions, key=lambda s: keyed[s["id"]][0]):
@@ -4655,7 +4777,10 @@ class WheelhouseApp(App):
         names = self.session_names()
         found, processing, queued, awaiting = self.client.inbox(self.filter_sid)
         busy = queued | awaiting
+        compacting = self.compacting()
         keyed = self.ranked_keyed(found, processing, busy, names)
+        cuts = self.cutoffs()
+        table.locked = {key for key, it in keyed if self.locks(it, cuts)}
         key_of = {id(it): key for key, it in keyed}   # each item's row key, made once
         active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
         for key, it in keyed:
@@ -4673,6 +4798,9 @@ class WheelhouseApp(App):
             rows_out.append((f"{self.filter_sid}|", ("", names.get(self.filter_sid, "")[:14], Text("💬"),
                              Text("queued", style="bold #05d9e8") if general else "",
                              Text("Conversation", style="bold"))))
+            if self.filter_sid in compacting:
+                rows_out[-1] = (rows_out[-1][0], faded(rows_out[-1][1]))
+                table.locked.add(rows_out[-1][0])
         for it, nested, _ in rows:
             # an unfinished item of any kind with an answer waiting to be sent shows as queued, and one
             # whose answer went with no reply since as processing (D28); neither is stored
@@ -4701,6 +4829,8 @@ class WheelhouseApp(App):
                 cells = (pin, "", ref_text(it, child=True), shown, titled(it, "dim"))
             else:   # a subagent, tucked under its session's name
                 cells = (pin, name if nested == 0 else "", ref_text(it, child=True), shown, titled(it, "dim"))
+            if key_of[id(it)] in table.locked:   # dimmed, clicks and keys ignored, until it's compacted (#150)
+                cells = faded(cells)
             rows_out.append((key_of[id(it)], cells))
             tips[key_of[id(it)]] = item_tip(it)
         if self.filter_sid:   # the session column goes: the inbox follows the one session
@@ -5079,7 +5209,15 @@ class WheelhouseApp(App):
                 box.quoted = title
                 box.border_title = Content(title) if title else None   # plain: the doc's own text
 
+    def paint_compacting(self) -> None:
+        """Detail dimmed while it shows a locked row's item or conversation (#150): not a new
+        item its session posted while compacting."""
+        key = f"{self.viewing}|" if self.viewing else "|".join((self.selected[0], self.selected[1] or "")) \
+            if self.selected else None
+        self.detail.set_class(not self.shown_doc and key in self.items_table.locked, "compacting")
+
     def paint_detail(self) -> None:
+        self.paint_compacting()
         agent, doc, shown = False, self.selected_doc(), self.shown_doc
         self.detail.doc_key = ("file", shown[0]) if shown else None if self.viewing or not doc else self.selected
         self.detail.doc_path, gone = None, ""
@@ -5448,6 +5586,40 @@ class WheelhouseApp(App):
         yield from super().get_system_commands(screen)
         yield SystemCommand("Reset layout", "Put every pane back in its default place, and the dividers at their default sizes",
                             self.action_reset_layout)
+        yield SystemCommand("Session steps", "What the wheelhouse tells a session when it compacts, ends, resumes or "
+                            "its PR merges, and the handoff it keeps", self.action_session_steps)
+
+    def action_session_steps(self) -> None:
+        """Session steps, from the command palette: each switch changed is kept."""
+        def chosen(changed: dict | None) -> None:
+            for (event, switch), on in (changed or {}).items():
+                self.told(self.client.set_step(event, switch, on))
+            if changed is not None and not self.steps_chosen:   # answered: the first-press dialog has nothing left to offer
+                self.steps_chosen = self.told(self.client.choose_steps({})).ok
+        self.push_screen(SessionSteps(self.client.steps_table()), chosen)
+
+    def first_press(self, button: Button) -> bool:
+        """Before the first press of anything that fires a step with add-ons, the
+        first-press dialog (FirstSteps): its answer kept, then the same button pressed again;
+        Esc cancels the press. True while it shows: the press waits for it."""
+        if self.steps_chosen:
+            return False
+        try:
+            table = self.client.steps_table()
+        except Exception:   # a daemon on older code, or unreachable: the press goes on as before
+            return False
+        if table.get("chosen"):
+            self.steps_chosen = True
+            return False
+
+        def answered(ticks: dict | None) -> None:
+            if ticks is None:
+                return
+            if self.told(self.client.choose_steps(ticks)).ok:
+                self.steps_chosen = True
+                self.post_message(Button.Pressed(button))
+        self.push_screen(FirstSteps(self.client.sdk), answered)
+        return True
 
     def hosted(self, slot: str, taken: set[str]):
         """The widgets for a slot: each module's pane, or a card saying why it isn't running
@@ -5567,7 +5739,28 @@ class WheelhouseApp(App):
         in its row (under_way), hasn't landed, for at most BUSY_FOR (follow_presses). Compact on
         the question suggesting it, with Compact's own: the same command."""
         busy = {b for (sid, b), press in self.pressed.items() if sid == s["id"] and not press.expired}
+        if s["id"] in self.compacting():   # under way, however it was asked for (#150)
+            busy |= {"compact"}
         return busy | {"compact-now"} if "compact" in busy else busy
+
+    def compacting(self) -> set[str]:
+        """The running sessions being compacted (hub.compacting_now, from the store)."""
+        return {s["id"] for s in self.sessions if compacting_now(s) and self.running(s["id"])}
+
+    def cutoffs(self) -> dict[str, int | None]:
+        """Each compacting session's cut-off, from its listed row (Store.sessions serves it as
+        compact_cutoff): the newest item id it had as the compaction started (Store.compact_cut),
+        the same for every app."""
+        return {s["id"]: int(c) if (c := s["compact_cutoff"] if "compact_cutoff" in s.keys() else None) is not None
+                else None for s in self.sessions if s["id"] in self.compacting()}
+
+    @staticmethod
+    def locks(it, cuts: dict) -> bool:
+        """Whether an item of a compacting session (cuts) is locked: at or below its cut-off.
+        One posted since is never locked; without a cut-off, all are."""
+        if it["session_id"] not in cuts:
+            return False
+        return cuts[it["session_id"]] is None or it["id"] <= cuts[it["session_id"]]
 
     def press(self, sid: str, button: str, ref: str | None = None) -> None:
         """A busy button's action sent: the button off from now (busy_buttons)."""
@@ -5999,10 +6192,11 @@ class WheelhouseApp(App):
         """Relaunch (Unpark on a parked session), in one press: one that isn't running comes
         back where it left off, unparked; a running one is stopped, a host or a tab's Claude
         Code, then started again on the conversation, asked first only if it's mid-turn
-        (that turn is lost), or offered Compact first if its context is large."""
+        (that turn is lost), or offered Compact first if its context is large. The
+        first-press dialog first, until answered (first_press)."""
         self.settle()
         sid = self.current_session()
-        if not sid:
+        if not sid or self.first_press(self.query_one("#relaunch", Button)):
             return
         s = self.row(sid)
         host = (s["claude_pid"], s["claude_start"])
@@ -6110,6 +6304,12 @@ class WheelhouseApp(App):
                 self.follow(sid)
             self.paint_session_info()
         key = self.items_table.cursor_key()
+        if key is not None and key != self.items_cursor and key in self.items_table.locked:
+            # a compacting session's row: the arrow goes on past it, or back (#150)
+            if (key := self.items_table.unlocked_from(key, self.items_cursor)) is None:
+                return
+            with self.items_table.prevent(DataTable.RowHighlighted):
+                self.items_table.move_cursor(row=self.items_table.get_row_index(key), animate=False)
         if key is not None and key != self.items_cursor:
             self.items_cursor = key
             self.select_row(key)
@@ -6133,6 +6333,9 @@ class WheelhouseApp(App):
     @on(DataTable.RowSelected, "#items")
     def open_thread(self, event: DataTable.RowSelected) -> None:
         self.settle()
+        if event.row_key.value in self.items_table.locked:   # its session is being compacted (#150)
+            self.notify("That session is compacting: its items open once it's done", severity="warning")
+            return
         sid, ref = event.row_key.value.split("|")
         self.saw(sid, ref or None)
         if ref:
@@ -6697,6 +6900,8 @@ class WheelhouseApp(App):
         what = event.button.id
         if what == "interrupt":
             self.host_command(sid, what)
+        elif what == "compact" and self.first_press(event.button):
+            return
         elif what == "compact":
             self.push_screen(CompactSession(self.label(sid)), lambda plan: plan and self.host_command(sid, what, **plan))
         else:
@@ -6720,6 +6925,8 @@ class WheelhouseApp(App):
         if event.button.id == "leave-it":
             self.told(self.client.close(*target, True))
             self.refresh_data()
+        elif self.first_press(event.button):
+            return
         else:
             self.compact_now(target)
 
@@ -6982,8 +7189,8 @@ class WheelhouseApp(App):
             self.told(self.client.unpark(sid))
             self.follow(sid)
             self.refresh_data()
-        elif runner(s) == "sdk" and not s["shell"] and self.running(sid) and self.pending(sid) is None:
-            # a host's session: it may be compacted once parked, offered while its cache is warm
+        elif self.client.sdk and runner(s) == "sdk" and not s["shell"] and self.running(sid) and self.pending(sid) is None:
+            # a host's session in SDK mode: it may be compacted once parked, offered while its cache is warm
             self.push_screen(ParkSession(self.label(sid), self.client.warm(sid)),
                              lambda form: form and self.ask(sid, "park", form["compact"]))
         else:
@@ -7030,8 +7237,11 @@ class WheelhouseApp(App):
     @session_action
     def end_pressed(self) -> None:
         """Forget. Stop & Forget on an Active session not yet asked offers ForgetChoice: let
-        it know (it does its end steps) or just stop it, by its cache's warmth."""
+        it know (it does its end steps) or just stop it, by its cache's warmth. The
+        first-press dialog first, until answered (first_press)."""
         self.settle()
+        if self.first_press(self.query_one("#end", Button)):
+            return
         sid = self.current_session()
         if not sid:
             return

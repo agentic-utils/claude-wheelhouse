@@ -156,19 +156,21 @@ def test_two_runs_racing_exec_claude_once(store, sid, tmp_path, monkeypatch):
 
 
 def test_protocol_shows_everything_a_session_receives(db_file):
-    from claude_wheelhouse import mcp_server, monitor
-    text = launch.injected()
+    from claude_wheelhouse import mcp_server, monitor, steps
+    text = launch.injected(sdk=True)
     skill = (launch.PLUGIN_DIR / "skills/wheelhouse/SKILL.md").read_text()
     parts = [(launch.PROTOCOL, "protocol.md verbatim"), (skill, "the skill verbatim"),
              (mcp_server.server.instructions, "MCP server instructions"),
              *((t.__doc__.strip(), f"tool {t.__name__}") for t in mcp_server.TOOLS),
              *((t, "monitor request notice") for t in monitor.REQUEST_TEXT.values()),
+             *((t, "a session step's announce") for t in steps.ANNOUNCE.values()),
+             *((t, "a session step's add-on") for a in steps.ADDONS.values() for t in a.values()),
              ("--append-system-prompt", "launch flags"), ("--plugin-dir", "launch flags"),
              ("--mcp-config", "launch flags")]
     for part, desc in parts:
         assert part in text, desc
     assert {t.__name__ for t in mcp_server.TOOLS} == {
-        "post_item", "update_item", "reply", "set_synopsis", "set_doc_dirs", "get_input", "list_items", "park_session", "end_session"}
+        "post_item", "update_item", "reply", "set_synopsis", "set_doc_dirs", "get_input", "list_items", "park_session", "end_session", "write_handoff"}
 
 
 @pytest.mark.parametrize("env_shell, pw_shell, expected, desc", [
@@ -267,7 +269,8 @@ def test_every_launch_scrubs_a_parent_sessions_environment(path, desc, store, si
     for key, value in PARENT.items():
         monkeypatch.setenv(key, value)
     env = launched_env(path, store, sid, monkeypatch, tmp_path)
-    assert not [k for k in env if k.startswith("CLAUDE") and k != "CLAUDE_CONFIG_DIR"], desc
+    assert not [k for k in env if k.startswith("CLAUDE") and k not in ("CLAUDE_CONFIG_DIR", "CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS")], desc
+    assert env.get("CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS", "150000") == "150000", f"{desc}: a tab idle-compacts at the keepalive's line"
     assert env["CLAUDE_CONFIG_DIR"] == "/home/u/.claude-alt" and env["PATH"] == "/usr/bin", desc
 
 

@@ -1690,7 +1690,8 @@ class Burst:
     ("items", "qa", ("h", "down"), lambda b: b.asked(), "alpha", "H opens a shell on the session of the item it was on"),
 ])
 @pytest.mark.both
-async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch, focus, at, burst, seen, want, desc):
+async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch, sdk_on, focus, at, burst, seen, want,
+                                                   desc):
     """Review 14: each key acts as it arrives, on what has focus then, so no key overtakes
     the one typed before it: a later key that moves the focus or a cursor never changes what
     an earlier one acts on."""
@@ -4531,7 +4532,8 @@ async def test_the_compact_button_asks_how(store, tmp_path, monkeypatch, typed, 
     (False, False, False, "a cold one: unticked, as compacting saves nothing"),
     (True, True, False, "unticked by hand: parked without compacting"),
 ])
-async def test_park_offers_to_compact_first_by_cache_warmth(store, tmp_path, monkeypatch, warm, untick, compact, desc):
+async def test_park_offers_to_compact_first_by_cache_warmth(store, tmp_path, monkeypatch, sdk_on, warm, untick, compact,
+                                                         desc):
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
@@ -6894,7 +6896,7 @@ async def test_a_click_on_a_level_sets_it(store, tmp_path, monkeypatch, level):
     (200_000, ("click:#relaunch-cancel",), "RelaunchChoice", None, "Cancel clicked"),
 ])
 @pytest.mark.both
-async def test_relaunch_offers_to_compact_a_big_session_first(store, sid, monkeypatch, tokens, keys, dialog,
+async def test_relaunch_offers_to_compact_a_big_session_first(sdk_on, store, sid, monkeypatch, tokens, keys, dialog,
                                                               stopped, desc):
     from claude_wheelhouse import hub as hub_mod, liveness
     store.set_runner(sid, "sdk")
@@ -8315,7 +8317,9 @@ class Presses:
     follow_presses = WheelhouseApp.follow_presses
     under_way = WheelhouseApp.under_way
     busy_buttons = WheelhouseApp.busy_buttons
+    compacting = WheelhouseApp.compacting
     press = WheelhouseApp.press
+    running = lambda self, sid: self.statuses.get(sid) in ("live", "stalled", "starting")   # as Hub.running
     heard = WheelhouseApp.heard
     display_name = staticmethod(lambda s: s["name"])
 
@@ -8621,3 +8625,178 @@ async def test_ctrl_z_in_the_answer_box_is_its_own_undo(store, sid):
         await pilot.pause()
         assert app.answer.text == "", "the box's own undo took the typing back"
     assert store.item(sid, q)["status"] == "closed", "and the delete stays"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size", [(160, 40), (100, 30)])
+async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size):
+    """#150: while its host records a compaction (the question's Compact now, say), Compact is
+    off, the session's inbox rows dim and ignore clicks and keys, Detail dims on one of them,
+    and its eye in the session list is blue; an item it posts meanwhile is never locked; all
+    back once the host says it's compacted, and never while it only waits for notes."""
+    from claude_wheelhouse import host as host_mod, liveness
+    from claude_wheelhouse.tui import EYE_BLUE, ItemList, SessionList
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.post_item(sid, "task", "work")
+    store.post_item(sid, "question", "which?")
+    app = WheelhouseApp(store)
+
+    async def click(key):
+        await pilot.click(table, offset=(table.region.width // 2, table.get_row_index(key) + 1))
+        await pilot.pause()
+
+    async def again():
+        app.refresh_data()
+        await pilot.pause()
+
+    async with app.run_test(size=size) as pilot:
+        await pick(app, pilot, sid)
+        table = app.query_one(ItemList)
+        t1, q1 = (next(k for k in table.keys() if k and k.endswith(r)) for r in ("T1", "Q1"))
+        await click(t1)
+        assert app.selected == (sid, "T1"), f"{size}: picked by a click"
+
+        store.set_activity(sid, "compacting: collecting notes")   # as the host writes it
+        await again()
+        compact = app.query_one("#compact", Button)
+        assert compact.disabled, f"{size}: Compact off while compacting"
+        assert {t1, q1} <= table.locked, f"{size}: the session's rows locked"
+        assert "dim" in str(table.get_row(q1)[-1].spans), f"{size}: dimmed"
+        await click(q1)
+        assert app.selected == (sid, "T1"), f"{size}: a click on a locked row does nothing"
+        table.focus()
+        for key in ("up", "up", "down"):
+            await pilot.press(key)
+            await pilot.pause()
+            assert app.selected == (sid, "T1") and table.cursor_key() == t1, f"{size}: {key} never lands on a locked row"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen is app.screen_stack[0], f"{size}: Enter opens nothing locked"
+        assert app.detail.has_class("compacting"), f"{size}: Detail dims on the session's item"
+        sessions = app.query_one(SessionList)
+        assert sid in sessions.eyes and sid in sessions.blue, f"{size}: its eye sweeps, blue"
+        assert any(EYE_BLUE[0] in str(sp.style) for sp in tui.cylon(0, colours=EYE_BLUE).spans), size
+
+        store.post_item(sid, "question", "asked meanwhile")
+        await again()
+        q2 = next(k for k in table.keys() if k and k.endswith("Q2"))
+        assert q2 not in table.locked, f"{size}: an item posted while compacting is never locked"
+        await click(q2)
+        assert app.selected == (sid, "Q2"), f"{size}: and can be picked"
+
+        store.set_activity(sid, host_mod.AWAITING_NOTES)   # its notes' turn ended without them
+        await again()
+        assert not table.locked and sid not in sessions.blue, f"{size}: waiting for notes isn't compacting"
+
+        store.set_activity(sid, "compacting")
+        await again()
+        store.set_activity(sid, "idle · compacted")
+        await again()
+        assert not compact.disabled and not table.locked, f"{size}: Compact and the rows back"
+        assert not app.detail.has_class("compacting") and sid not in sessions.blue, f"{size}: all back to normal"
+        await click(q1)
+        assert app.selected == (sid, "Q1"), f"{size}: clicks work again"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("answer, chosen, desc", [
+    ("#steps-ok", True, "OK: the ticks kept, and the press goes on"),
+    ("escape", False, "Esc: the press cancelled, asked again next time"),
+])
+async def test_the_first_press_offers_the_steps(store, sid, live, first_press, answer, chosen, desc):
+    from claude_wheelhouse import steps
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pick(app, pilot, sid)
+        await pilot.click("#end")
+        await pilot.pause()
+        assert isinstance(app.screen, tui.FirstSteps), desc
+        if answer == "escape":
+            await pilot.press("escape")
+        else:
+            app.screen.query_one("#steps-cleanup", Checkbox).value = False
+            await pilot.click(answer)
+        await pilot.pause()
+        await pilot.pause()
+        assert bool(store.setting(steps.CHOSEN)) is chosen, desc
+        assert not isinstance(app.screen, tui.FirstSteps), desc
+        assert (app.screen is not app.screen_stack[0]) is chosen, f"{desc}: Forget's own dialog next, or nothing"
+        if not chosen:
+            await pilot.click("#end")
+            await pilot.pause()
+            assert isinstance(app.screen, tui.FirstSteps), f"{desc}: asked again at the next press"
+    if chosen:
+        assert store.setting(steps.setting_key("pr_merged", "cleanup")) == "off", f"{desc}: unticked kept"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+async def test_session_steps_keeps_what_changed(store, sid):
+    from claude_wheelhouse import steps
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        app.action_session_steps()
+        await pilot.pause()
+        assert isinstance(app.screen, tui.SessionSteps)
+        assert not app.screen.query("#step-before_compact-announce"), "no compaction rows outside SDK mode"
+        box = app.screen.query_one("#step-pr_merged-cleanup", Checkbox)
+        assert not box.value, "unattended add-ons off until a choice is made"
+        box.value = True
+        box.value = False
+        await pilot.click("#session-steps-ok")
+        await pilot.pause()
+    assert store.setting(steps.setting_key("pr_merged", "cleanup")) == "off"
+    assert store.setting(steps.CHOSEN), "answered here: the first-press dialog isn't shown"
+    assert store.setting(steps.setting_key("before_forget", "items")) == "on", "before any choice, all kept as shown"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("scenario", ["follow another", "restart", "two apps"])
+async def test_a_compactions_cut_off_is_the_stores_for_every_app(store, tmp_path, monkeypatch, scenario):
+    """#150: which items a compaction locks is set once, where it starts (Store.compact_cut),
+    never by what an app happened to show: following another session meanwhile, restarting
+    the app, or a second app on the same store all lock the items there before it started,
+    and never one posted since. Detail dims on a locked item only."""
+    from claude_wheelhouse import liveness
+    from claude_wheelhouse.tui import ItemList
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    a = store.create_session(str(tmp_path), name="alpha", runner="sdk")
+    b = store.create_session(str(tmp_path), name="bravo", runner="sdk")
+    store.post_item(a, "task", "work")
+    store.post_item(b, "task", "other")
+
+    async def locked_refs(app, pilot):
+        await pick(app, pilot, a)
+        app.refresh_data()
+        await pilot.pause()
+        table = app.query_one(ItemList)
+        refs = {k.split("|")[1] for k in table.locked}
+        dims = {}
+        for ref in ("T1", "Q1"):
+            app.selected = (a, ref)
+            app.paint_detail()
+            dims[ref] = app.detail.has_class("compacting")
+        return refs, dims
+
+    seen = []
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pick(app, pilot, b if scenario == "follow another" else a)
+        store.command(a, "compact")   # pressed: the cut-off is the newest item then
+        store.set_activity(a, "compacting: collecting notes")
+        app.refresh_data()
+        await pilot.pause()
+        store.post_item(a, "question", "asked meanwhile")   # after the cut-off
+        if scenario != "restart":
+            seen.append(await locked_refs(app, pilot))
+    if scenario != "follow another":
+        again = WheelhouseApp(store)
+        async with again.run_test(size=(160, 40)) as pilot:
+            seen.append(await locked_refs(again, pilot))
+    for refs, dims in seen:
+        assert refs == {"", "T1"}, f"{scenario}: the conversation and T1 locked, never Q1 posted since: {refs}"
+        assert dims == {"T1": True, "Q1": False}, f"{scenario}: Detail dims on a locked item only: {dims}"
+    assert len({frozenset(r) for r, _ in seen}) == 1, f"{scenario}: every app agrees"

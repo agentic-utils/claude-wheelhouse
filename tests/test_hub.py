@@ -610,7 +610,7 @@ def test_model_state(hub, store, tmp_path, monkeypatch, runner, status, shell, c
     ("sdk", None, "dead", 160_000, False, "dead: Relaunch is Restore, no host to compact"),
     ("tab", None, "live", 160_000, False, "a tab: no Compact command"),
 ])
-def test_compact_first_is_offered(hub, store, sid, monkeypatch, runner_, shell, status, tokens, offered, desc):
+def test_compact_first_is_offered(sdk_on, hub, store, sid, monkeypatch, runner_, shell, status, tokens, offered, desc):
     monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
     store.set_runner(sid, runner_)
     store.set_shell(sid, shell)
@@ -999,7 +999,7 @@ def notices(store, sid):
 
 @pytest.mark.parametrize("state, sent, desc", [
     ({}, True, "big, quiet 55 minutes, waiting on an open question: kept warm"),
-    ({"since": 54 * M}, False, "54 minutes: not yet"),
+    ({"since": 49 * M}, False, "49 minutes: not yet"),
     ({"context": 150_000}, False, "at the line, not past it"),
     ({"status": "dead"}, False, "never to a dead session"),
     ({"parked": True}, False, "never to a parked one"),
@@ -1046,8 +1046,8 @@ def test_a_tab_sessions_keepalive_is_sent_under_its_conditions(hub, store, sid, 
     assert notices(store, sid) == ([host_mod.KEEPALIVE_BODY] if sent else []), desc
 
 
-def test_a_tab_sessions_keepalive_repeats_every_55_minutes_up_to_the_limit(hub, store, sid):
-    """Each keepalive's own turn restarts the 55 minutes but not the quiet time; it is the
+def test_a_tab_sessions_keepalive_repeats_every_50_minutes_up_to_the_limit(hub, store, sid):
+    """Each keepalive's own turn restarts the 50 minutes but not the quiet time; it is the
     check while an item is in doubt."""
     t0 = time.time()
     store.post_item(sid, "question", "which?")
@@ -1061,7 +1061,7 @@ def test_a_tab_sessions_keepalive_repeats_every_55_minutes_up_to_the_limit(hub, 
         if len(notices(store, sid)) > len(sent_at):
             sent_at.append(minute)
             snap.last_at = at + 5   # the session's "ok"
-    assert sent_at == [55, 111], "55 minutes after each last response (the ok, 5 s on), until quiet 2 hours"
+    assert sent_at == [50, 101], "50 minutes after each last response (the ok, 5 s on), until quiet 2 hours"
 
 
 def test_a_tab_sessions_check_names_the_items_in_doubt(hub, store, sid, monkeypatch):

@@ -14,5 +14,5 @@
   request was cancelled, carry on as before. `park_session` and `end_session` stop this
   session a moment after they return: call them last.
 - While the person is away, the wheelhouse may send a `[wheelhouse] Keepalive` or
-  `[wheelhouse] Check:` notification about every 55 minutes to keep your prompt cache warm.
+  `[wheelhouse] Check:` notification about every 50 minutes to keep your prompt cache warm.
   Do as it says and nothing more.

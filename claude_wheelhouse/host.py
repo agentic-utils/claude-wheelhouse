@@ -30,10 +30,11 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 
-from . import features, liveness, models, plan_usage, transcript, transcript_usage
+from . import features, liveness, models, plan_usage, steps, transcript, transcript_usage
 from .launch import PROTOCOL_SDK, after_compaction, opening_prompt, transcript_exists
-from .monitor import REQUEST_TEXT
+from .monitor import REQUEST_TEXT, request_text
 from .store import CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, SessionGone, Store, db_path, now, runner
 
 POLL_SECONDS = 1.0
@@ -41,13 +42,19 @@ SHELL_POLL_SECONDS = 2.0
 CONFIRM_TRIES = (0.1, 0.5, 2.0)   # waits between tries to mark sent messages delivered
 STEADY_TRIES = (0.1, 0.5, 2.0, 5.0)   # waits between tries of a write the shell hand-over can't skip
 COMPACT_TIMEOUT = 600   # seconds Compact waits for its notes once nothing is running
-# asked of a session when the person presses Compact; the notes in its reply, inside the
-# block carrying this request's id, become /compact's instructions
-COMPACT_ASK = ("[wheelhouse] The person pressed Compact in the wheelhouse. If your own instructions say to "
-               "do anything before compaction (save a transcript or handoff note, say), do it now. Then "
-               "reply with the notes you want carried through compaction (open threads, decisions, file "
-               "paths, refs and next steps, as a terse list), with the line <keep id=\"{nonce}\"> before "
-               "them and the line </keep> after them, each tag on a line of its own.")
+# asked of a session when it's to be compacted, after the Before Compact step (steps.py); the
+# notes in its reply, inside the block carrying this request's id, become /compact's instructions
+KEEP_ASK = ("Then reply with the notes you want carried through compaction (open threads, decisions, file "
+            "paths, refs and next steps, as a terse list), with the line <keep id=\"{nonce}\"> before "
+            "them and the line </keep> after them, each tag on a line of its own.")
+PRESSED_COMPACT = "The person pressed Compact in the wheelhouse."
+QUIET_COMPACT = ("This session has been quiet {hours} hours: the wheelhouse compacts it now, while its prompt "
+                 "cache is warm.")
+
+
+def compact_ask(store: Store, nonce: str, why: str = PRESSED_COMPACT) -> str:
+    """The Before Compact step, as switched, then the keep ask."""
+    return steps.message(store, "before_compact", KEEP_ASK.format(nonce=nonce), why=why)
 CLOSED_UNANSWERED = "The person closed this in the wheelhouse without answering."
 LOST_ON_RESTART = "The wheelhouse host restarted while this was waiting: Claude Code will ask again if it still needs it."
 # Claude Code withdrew the call it was asking about (an interrupt, or the host letting go for a shell tab)
@@ -73,7 +80,7 @@ PARK_COMPACT_WITHIN = 3600
 # doesn't pay for ever. With an item in doubt the turn is the check (CHECK_BODY), which asks
 # the session about it. The hub keeps tab sessions warm the same way (Hub.keep_warm)
 KEEPALIVE_TOKENS = 150_000
-KEEPALIVE_AFTER = 55 * 60
+KEEPALIVE_AFTER = 50 * 60   # before Claude Code idle-compacts a tab at about 54 minutes
 KEEPALIVE_BODY = ("Keepalive: the person is away, and this turn only keeps your prompt cache "
                   "warm. Reply with the one word ok and do nothing else: no tools, no wheelhouse calls.")
 KEEPALIVE_TEXT = f"[wheelhouse] {KEEPALIVE_BODY}"
@@ -255,6 +262,9 @@ class Host:
         # with compact_key) ends; None: as after any compaction. park: the person's messages
         # and requests are held meanwhile
         self.compact_then: str | None = None
+        # the 8 h mark's compaction (cold_due): the quiet it was for, and its ask's nonce
+        self.cold_for: float | None = None
+        self.cold_nonce: str | None = None
         self.compact_key: str | None = None
         self.park_told: float | None = None   # when the park request went to the session (monotonic)
         self.parked_it = False   # parked after its compaction: Stop & Forget before it stops still wins
@@ -337,7 +347,7 @@ class Host:
         # said, so one not written is said again on the next poll (unsaid)
         await self.say("starting")
         if not resume:
-            await self.turn(opening_prompt(session))
+            await self.turn(opening_prompt(session, self.store))
         else:
             await self.say("idle")
 
@@ -576,12 +586,25 @@ class Host:
         await self.deliver(session, hold=self.compact_then == "park")
         if (self.compact_nonce and not self.pending and self.compact_idle is not None
                 and time.monotonic() - self.compact_idle > COMPACT_TIMEOUT):   # quiet all that time: nothing to overwrite
+            unattended = self.compact_nonce == self.cold_nonce
             self.end_compact()
             self.drop_plan()
-            self.store.set_activity(self.sid, NO_NOTES)
+            if unattended:   # the 8 h mark's: a bare /compact, as the alternative is a cold cache
+                self.compact_key = await self.turn("/compact")
+                self.compact_sent = time.monotonic()
+                self.store.set_activity(self.sid, "compacting: no notes came back, so without them")
+            else:
+                self.store.set_activity(self.sid, NO_NOTES)
         await self.reconcile(session)
         if self.keepalive_due(time.monotonic()):
             await self.turn(f"[wheelhouse] {keepalive_body(self.store.in_doubt(self.sid))}", keepalive=True)
+        elif self.cold_due(time.monotonic()):
+            nonce = secrets.token_hex(4)
+            self.cold_for, self.cold_nonce = self.quiet_since, nonce
+            hours = f"{self.keepalive_for / 3600:g}"
+            await self.turn(compact_ask(self.store, nonce, why=QUIET_COMPACT.format(hours=hours)))
+            self.compact_nonce, self.compact_notes = nonce, None
+            self.store.set_activity(self.sid, f"compacting after {hours} quiet hours: collecting notes")
         command = self.store.take_command(self.sid)
         if command == "interrupt":
             await self.client.interrupt()
@@ -599,7 +622,7 @@ class Host:
                 self.store.set_activity(self.sid, "compacting")
             else:
                 nonce = secrets.token_hex(4)
-                await self.turn(COMPACT_ASK.format(nonce=nonce))
+                await self.turn(compact_ask(self.store, nonce))
                 self.compact_nonce, self.compact_notes = nonce, None
                 self.store.set_activity(self.sid, "compacting: collecting notes")
         elif command == "shell":
@@ -623,6 +646,7 @@ class Host:
             elif ref in self.waiting and not self.waiting[ref].done():
                 self.handed[ref] = m
                 self.waiting[ref].set_result(m["body"])
+                self.person_back(m)
             elif ref in self.asking and ref not in self.handed and self.denied_with(ref, m):
                 self.handed[ref] = m
             else:
@@ -646,10 +670,12 @@ class Host:
                 self.store.release(turn)
                 raise
             await self.confirm(turn)
-        for what, text in () if hold else REQUEST_TEXT.items():
+            for m in turn:
+                self.person_back(m)
+        for what in () if hold else REQUEST_TEXT:
             asked = session[f"{what}_requested_at"]
             if asked and session[f"{what}_told_at"] != asked and self.store.tell_request(self.sid, what, asked):
-                await self.turn(text)
+                await self.turn(request_text(self.store, what))
                 if what == "park":
                     self.park_told = time.monotonic()
 
@@ -705,6 +731,18 @@ class Host:
         self.store.set_activity(self.sid, "compacting before it stops")
         return True
 
+    def after_compact(self, driven: bool) -> str:
+        """The After Compact step (steps.py), without the [wheelhouse] mark: its open items,
+        for one the host didn't drive (Claude Code's own, at full context) where the
+        conversation before it is, and the handoff inline, as switched."""
+        reminder = after_compaction(self.store, self.sid)
+        if not driven:
+            path = next(Path.home().glob(f".claude/projects/*/{self.sid}.jsonl"), None)
+            auto = "This compaction was automatic" + (f": the conversation before it is in {path}." if path else ".")
+            reminder = f"{auto}\n\n{reminder}" if reminder else auto
+        return steps.message(self.store, "after_compact", mark=False, reminder=reminder,
+                             handoff=steps.handoff_field(self.sid))
+
     def keepalive_due(self, at: float) -> bool:
         """Whether a keepalive turn is due: nothing running, no Compact under way, the last
         turn not a compaction (there is no cache to preserve), the context past KEEPALIVE_TOKENS,
@@ -715,6 +753,30 @@ class Host:
                 and self.quiet_since is not None and self.keepalive_for > 0
                 and (self.tokens or 0) > KEEPALIVE_TOKENS and at - self.last_turn >= KEEPALIVE_AFTER
                 and at - self.quiet_since < self.keepalive_for):
+            return False
+        session = self.store.session(self.sid)
+        return (session is not None and not session["parked"]
+                and (self.waits_on_person() or bool(self.store.in_doubt(self.sid))))
+
+    def person_back(self, m) -> None:
+        """A message delivered: one of the person's (not a notice) calls off the 8 h mark's
+        compaction while it waits for notes, so its bare /compact never lands on a session
+        in use. A Compact the person pressed is theirs, and stays."""
+        if "kind" in m.keys() and m["kind"] == "notice":
+            return
+        if self.cold_nonce is not None and self.compact_nonce == self.cold_nonce:
+            self.end_compact()
+        self.cold_nonce = None
+
+    def cold_due(self, at: float) -> bool:
+        """Whether the keepalive's window has just ended on a session it was keeping warm:
+        quiet features.keepalive_hours(), its cache still warm (a turn within the hour), over
+        KEEPALIVE_TOKENS, waiting on the person or with an item in doubt. Compacted once then
+        (the Before Compact step and the keep ask), rather than left to go cold."""
+        if not (not self.pending and self.compact_nonce is None and self.compact_then != "park" and not self.compacted_last
+                and self.quiet_since is not None and self.cold_for != self.quiet_since and self.keepalive_for > 0
+                and (self.tokens or 0) > KEEPALIVE_TOKENS and at - self.quiet_since >= self.keepalive_for
+                and at - self.last_turn < PARK_COMPACT_WITHIN):
             return False
         session = self.store.session(self.sid)
         return (session is not None and not session["parked"]
@@ -862,9 +924,9 @@ class Host:
                 self.store.set_activity(self.sid, "compacting")
                 return
         self.compacted_last = self.compacted_from is not None
-        then = None
+        then, driven = None, False
         if self.compact_key is not None and self.compact_key not in self.sent:   # the wheelhouse's /compact turn has ended
-            then = self.compact_then
+            then, driven = self.compact_then, True
             self.drop_plan()
         tokens = await self.context()
         if tokens is not None:
@@ -874,9 +936,9 @@ class Host:
             self.store.set_parked(self.sid, True)
             self.parked_it = True
         elif self.compacted_last and then != "end":
-            if reminder := after_compaction(self.store, self.sid):
-                # once per compaction, its open items: the next turn carries them, or it is one
-                self.store.notice(self.sid, reminder)
+            if told := self.after_compact(driven):
+                # once per compaction: the next turn carries it, or it is one
+                self.store.notice(self.sid, told)
             if then == "send":   # with them, in the same one prompt: the next poll claims both
                 self.store.dispatch(self.sid)
         if not self.pending:
@@ -917,7 +979,12 @@ class Host:
         store remembers it (COMPACT_QUESTION), so a host started again, or the person leaving
         it, never brings a second. It closes, saying so, once the session is compacted or back
         under NUDGE_TOKENS; only back under does the next crossing ask again, so a compaction
-        that leaves it past NUDGE_TOKENS brings no new question until it has been under."""
+        that leaves it past NUDGE_TOKENS brings no new question until it has been under.
+        No SDK mode check here: a host runs only because SDK mode started it, and is never
+        told the mode (open_host passes no flag; features.sdk_enabled() here would read only
+        the environment and .env, so a mode switched on by --enable-sdk would read as off).
+        SDK mode switched off later can't reach a running host; the app hides the question's
+        Compact button then (SDK_BUTTONS), and the host goes at its next relaunch."""
         asked = [i for i in self.store.items(self.sid) if i["answer"] == COMPACT_QUESTION]
         under = tokens < NUDGE_TOKENS
         if not (asked or under or compacted):
