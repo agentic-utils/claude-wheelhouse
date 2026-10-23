@@ -3473,8 +3473,6 @@ def key_name(key: str) -> str:
 DESCRIBE = {
     "submit": "Submit what's typed: queued, or sent at once, by the session's mode",
     "app.submit": "Submit what's typed: queued, or sent at once, by the session's mode",
-    "submit(False, 'queue')": "Submit what's typed: queued, or sent at once, by the session's mode",
-    "submit(False, 'send')": "Submit what's typed: queued, or sent at once, by the session's mode",
     "submit(True)": "Send what's typed at once, whatever the mode, leaving the mode and the rest of the queue as they are",
     "send_session": "Send the current session's queue (a dead one's waits: Relaunch it first)",
     "toggle_mode": "Switch the session between Queued and Immediate",
@@ -3846,17 +3844,14 @@ class WheelhouseApp(App):
 
     # keys shown in upper case, the usual convention: F is the f key, not Shift+F
     BINDINGS = [
-        # two bindings, one key: the footer says what Ctrl+Enter does in the session's mode (check_action)
-        Binding("ctrl+enter", "submit(False, 'queue')", "queue", key_display="Ctrl+Enter"),
-        Binding("ctrl+enter", "submit(False, 'send')", "send", key_display="Ctrl+Enter"),
+        Binding("ctrl+enter", "submit", "Submit", key_display="Ctrl+Enter"),
         Binding("ctrl+j", "submit", "Submit", show=False),   # Ctrl+Enter, as most terminals send it
         # Alt+S (#124): Ctrl+Shift+Enter can't be told from Ctrl+Enter in Windows Terminal. A terminal
         # sends it as a printable s, but the app's binding takes it before the answer box types it
-        # Alt+S, Ctrl+T and Ctrl+R off the footer, the least used: Relaunch all must fit at 100 columns (#135)
-        Binding("alt+s", "submit(True)", "send", show=False, key_display="Alt+S"),
-        Binding("ctrl+s", "send_session", "send queue", key_display="Ctrl+S"),
-        Binding("ctrl+t", "toggle_mode", "switch mode", show=False, key_display="Ctrl+T"),
-        Binding("ctrl+r", "recall", "edit last queued", show=False, key_display="Ctrl+R"),
+        Binding("alt+s", "submit(True)", "Send now", show=False, key_display="Alt+S"),   # off the footer, as Ctrl+R is: Relaunch must fit at 100 columns
+        Binding("ctrl+s", "send_session", "Send", key_display="Ctrl+S"),
+        Binding("ctrl+t", "toggle_mode", "Mode", key_display="Ctrl+T"),
+        Binding("ctrl+r", "recall", "Edit queued", show=False, key_display="Ctrl+R"),
         # New, Adopt and Relaunch all act on no one session, so they're here, not buttons (#62)
         Binding("n", "new_session", "New", key_display="N"),
         Binding("a", "adopt", "Adopt", key_display="A"),
@@ -3930,7 +3925,6 @@ class WheelhouseApp(App):
         self.deleted: set[str] = set()
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
         self.show_finished = False   # finished items (store.standing), after the rest
-        self.sends = "queue"   # what Ctrl+Enter does for the session in hand, as its footer says (paint_sendbar)
         self.collapsed: set[str] = set()   # the parent rows whose children are hidden, for this run alone
         # each list's sort (ordering.py), kept per TUI under layout.sort.*: read as the app starts
         self.item_sort, self.session_sort = ordering.ITEMS_DEFAULT, ordering.SESSIONS_DEFAULT
@@ -5616,9 +5610,6 @@ class WheelhouseApp(App):
                 show_button(bar, *args)
         total = sum(x["drafts"] for x in self.sessions if not self.dead(x["id"]))   # Send all skips the dead
         sends = "send" if s is not None and (mode(s) == "immediate" or self.sends_now(s["id"])) else "queue"
-        if sends != self.sends:   # Ctrl+Enter's footer label (check_action)
-            self.sends = sends
-            self.refresh_bindings()
         for h in hints:
             h.set_base(DENY_HINT if denying else PERMISSION_HINT if asking else COMPACT_HINT if nudged
                        else hint(sends, s is not None and self.dead(s["id"])))
@@ -6177,8 +6168,6 @@ class WheelhouseApp(App):
             return self.doc_here()[1] is not None and (action == "doc_layout" or self.doc_layout == TABBED)
         if action == "tour":   # L: only while the badge offers something
             return bool(getattr(self, "badge", None) and self.badge.display)
-        if action == "submit" and len(parameters) == 2:   # Ctrl+Enter's two: the one its session's mode does
-            return parameters[1] == self.sends
         return True
 
     def action_show_finished(self, show: bool) -> None:
@@ -6437,10 +6426,9 @@ class WheelhouseApp(App):
         return box, target, text
 
     @session_action
-    def action_submit(self, now: bool = False, says: str = "") -> None:
-        """Ctrl+Enter: queued or sent at once, by the session's mode (`says`, its footer label's
-        word, only picks the binding). Alt+S (now): sent at once whatever the mode, the rest of
-        the queue left queued (#124)."""
+    def action_submit(self, now: bool = False) -> None:
+        """Ctrl+Enter: queued or sent at once, by the session's mode. Alt+S (now): sent at
+        once whatever the mode, the rest of the queue left queued (#124)."""
         self.settle()
         box, target = self.composing()
         if box is not None and target and self.nudged(target):
