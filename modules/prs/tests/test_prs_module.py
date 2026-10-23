@@ -211,8 +211,8 @@ def test_a_merge_takes_the_method_the_repo_allows(tmp_path, allowed, want, desc)
     run, calls = merger(allowed)
     got = fetch.Fetcher(f.ctx, run, lambda: f.now).merge(URL.format(1))
     assert got == {"method": want}, desc
-    assert calls[0][:4] == ["gh", "repo", "view", "two-inc/wheelhouse"], "GitHub asked, not assumed"
-    assert calls[1] == ["gh", "pr", "merge", URL.format(1), f"--{want}"] and "--admin" not in calls[1], desc
+    assert calls[0][:3] == ["gh", "repo", "view"] and calls[0][-2:] == ["--", "two-inc/wheelhouse"], "GitHub asked, not assumed"
+    assert calls[1] == ["gh", "pr", "merge", f"--{want}", "--", URL.format(1)] and "--admin" not in calls[1], desc
     assert f.states == {URL.format(1): "merged"}, "its item marked merged"
 
 
@@ -235,13 +235,15 @@ def test_a_merge_that_fails_says_why(tmp_path, allowed, view, merge, raises, wan
     assert f.states == {}, f"{desc}: its item left as it was"
 
 
-def test_a_merged_pr_leaves_the_list(tmp_path):
-    f = Fake(tmp_path, [item(1)], {"data": {"p0": {"pullRequest": node(1)}, "search": {"nodes": [node(1)]}}})
+def test_a_merged_pr_leaves_the_list_and_the_others_stay(tmp_path):
+    f = Fake(tmp_path, [item(1), item(2)], {"data": {"p0": {"pullRequest": node(1)}, "p1": {"pullRequest": node(2)},
+                                                      "search": {"nodes": [node(1), node(2)]}}})
     fetcher = f.fetcher()
-    assert [r["number"] for r in fetcher.answer("mine", False)["prs"]] == [1]
+    assert sorted(r["number"] for r in fetcher.answer("mine", False)["prs"]) == [1, 2]
     fetcher.runner, _ = merger(ALL)
     fetcher.merge(URL.format(1))
-    assert fetcher.answer("mine", False)["prs"] == [], "marked merged in the cache: gone before the next fetch"
+    assert [r["number"] for r in fetcher.answer("mine", False)["prs"]] == [2], \
+        "the merged one gone before the next fetch, the others still there"
 
 
 def test_the_merge_route_takes_a_pr_url(tmp_path, monkeypatch):
@@ -251,7 +253,8 @@ def test_the_merge_route_takes_a_pr_url(tmp_path, monkeypatch):
     route = next(r for r in pane.routes(f.ctx) if r.path == "merge")
     assert route.method == "POST"
     assert route.handler(api.Call({}, {}, {"url": URL.format(3)})) == {"method": "merge"}
-    for body in ({}, {"url": "https://example.com/x"}):
+    for body in ({}, {"url": "https://example.com/x"}, {"url": "--body=https://github.com/a/b/pull/1"},
+                 {"url": URL.format(3) + "/files"}, {"url": " " + URL.format(3)}, {"url": 7}):
         with pytest.raises(api.Refused):
             route.handler(api.Call({}, {}, body))
     assert len(calls) == 2, "nothing run for a body without a PR"
