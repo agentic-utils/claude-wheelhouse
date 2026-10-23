@@ -417,3 +417,36 @@ def test_set_doc_dirs(store, sid, tmp_path, given, kept, said, desc):
     else:
         assert mcp_server.set_doc_dirs(given) == said, desc
         assert store.session(sid)["doc_dirs"] == kept, desc
+
+
+@pytest.mark.parametrize("runner, before, keep, said, desc", [
+    ("sdk", None, "keep the plan", "compaction requested", "in SDK mode: held for the turn's end"),
+    ("tab", None, "keep the plan", "only in a session run inside the wheelhouse", "a tab: refused, nothing held"),
+    ("sdk", None, "  ", "keep must say", "nothing to keep: refused"),
+    ("sdk", "pending", "again", "already pending", "one pending at a time"),
+    ("sdk", "compacting", "keep", "being compacted already", "a compaction under way: refused"),
+    ("sdk", "recent", "keep", "no sooner than 30 minutes", "within the gap of the last: refused"),
+    ("sdk", "long ago", "keep", "compaction requested", "past the gap: accepted"),
+])
+def test_request_compact(store, sid, runner, before, keep, said, desc):
+    """Doug: the model can signal the wheelhouse to compact, in SDK mode only, guarded so a
+    confused model can't loop."""
+    from datetime import datetime, timedelta, timezone
+    from claude_wheelhouse import mcp_server
+    mcp_server._store, mcp_server._sid = store, sid
+    store.set_runner(sid, runner)
+    if before in ("recent", "long ago", "pending"):
+        ago = timedelta(minutes=5 if before != "long ago" else 31)
+        with store.tx() as db:
+            db.execute("UPDATE sessions SET compact_requested_at = ?, compact_request = ? WHERE id = ?",
+                       ((datetime.now(timezone.utc) - ago).isoformat(), "first" if before == "pending" else None, sid))
+    elif before == "compacting":
+        store.set_activity(sid, "compacting")
+    held = store.session(sid)["compact_request"]
+    if said.startswith("compaction requested"):
+        assert mcp_server.request_compact(keep).startswith(said), desc
+        assert store.session(sid)["compact_request"] == keep.strip(), desc
+    else:
+        with pytest.raises(Exception, match=said):
+            mcp_server.request_compact(keep)
+        assert store.session(sid)["compact_request"] == held, f"{desc}: nothing changed"

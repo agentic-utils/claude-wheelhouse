@@ -1545,6 +1545,28 @@ def test_what_follows_the_wheelhouses_compaction(host, store, sid, notes, then, 
     assert (len(store.drafts(sid)), bool(store.session(sid)["parked"]), going) == (drafts, parked, not parked), desc
 
 
+@pytest.mark.parametrize("busy, command, held, after, desc", [
+    (False, None, ["/compact keep the plan"], [], "between turns: compacted at once, with the keep text"),
+    (True, None, ["a long one"], ["/compact keep the plan"], "mid-turn: held until that turn has ended"),
+    (False, "interrupt", [], [], "the person's Interrupt first: the request goes"),
+    (False, "compact", ["/compact mine"], [], "the person's own Compact first: theirs, and the request goes"),
+])
+def test_a_compaction_the_session_asked_for(host, store, sid, busy, command, held, after, desc):
+    """Doug: the model signals the wheelhouse to compact; never sent into a running turn."""
+    store.set_runner(sid, "sdk")
+    if busy:
+        run(host.turn("a long one"))
+    store.request_compact(sid, "keep the plan")
+    if command:
+        store.command(sid, command, "mine" if command == "compact" else None)
+    run(host.poll())
+    assert host.client.queries == held, desc
+    finish_at(host, 40_000, compacted=not busy)
+    run(host.poll())
+    assert host.client.queries[len(held):len(held) + len(after)] == after, f"{desc}: {host.client.queries}"
+    assert store.session(sid)["compact_request"] is None, f"{desc}: nothing left pending"
+
+
 @pytest.mark.parametrize("compact, sent, desc", [
     (True, ["/compact"], "Compact first: once the park's turn has ended, compacted, then nothing more"),
     (False, [], "without: the host stops once parked"),
