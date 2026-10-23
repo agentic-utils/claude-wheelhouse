@@ -76,6 +76,16 @@ resume at the same dialog.
   conversation row) nor its pane, else the least over them. It is placed as the step starts,
   on a resize or when its pane moves, and otherwise stays put unless it comes to cover them.
   Its pointer faces the pane from where it ends up, and the pane stays highlighted.
+- #133: a callout tries two widths, 46 and the screen's width less 4, placing itself by the
+  rule above at each, and takes the narrower unless it falls short where the wider doesn't:
+  covering the step's rows, then cut short by the screen, then covering its pane beside it.
+  A wider box wraps its text to fewer rows, so at 80x24 the inbox and docs steps clear the
+  demo's rows and show all their text. The tests walk the whole tour at 160x40, 100x30 and
+  80x24 and check each box's pane is there, its text fits and the rows are uncovered.
+- #101 and the app of 23 Oct: the principles say `?` lists every key and button; the answer
+  step points at the line under the box; the send step names Ctrl+T (Mode); the PRs step
+  says a PR picked there or in the inbox is highlighted in both, its tips covering the pane
+  following the session, M, and the Open, Merge and Request review actions.
 - The checks for 4 to 9 and 11 are today's step checks, moved over unchanged, including the
   rules that the app's own automatic selection never ticks anything.
 - A callout whose pane is absent (Stats disabled or uninstalled) is skipped, and its

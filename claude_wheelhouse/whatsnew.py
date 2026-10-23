@@ -52,7 +52,8 @@ DIALOGS = (
          "Once it's under way, Esc ends it at any time.", CHOICE),
     Stop("principles", None, "The wheelhouse",
          "Every Claude session in one place. Sessions ask you questions, record decisions and report tasks, "
-         "all in one inbox. A session that needs you says so in its row, so you never hunt through tabs.", NEXT),
+         "all in one inbox. A session that needs you says so in its row, so you never hunt through tabs.\n\n"
+         "Press ? (outside a text box) for every key and button.", NEXT),
     Stop("create", "sessions", "Starting a session", "Start a session: press N now to create a demo session.", ACTION),
     Stop("sessions", "sessions", "The session list",
          "This is your demo. Its row shows whether it's working, idle or needs you. It runs in a tab (or here, "
@@ -64,8 +65,11 @@ DIALOGS = (
     Stop("answer", "detail", "Answering",
          "Answer both questions now: select Q1, then Q2, in the inbox, type an answer to each in the box below "
          "and press Ctrl+Enter.\n\n"
-         "Ctrl+Enter queues each answer, so related answers go together.", ACTION),
-    Stop("send", "session-info", "Sending", "Press Ctrl+S, or Send, now to send the queue as one message.", ACTION),
+         "Ctrl+Enter queues each answer, so related answers go together. The line under the box lists the "
+         "keys.", ACTION),
+    Stop("send", "session-info", "Sending",
+         "Press Ctrl+S, or Send, now to send the queue as one message.\n\n"
+         "Ctrl+T (Mode) switches a session between queueing answers and sending each at once.", ACTION),
     Stop("reply", "detail", "Replies",
          "The session's reply arrives in the question's thread.\n\n"
          "Wait now: this box moves on when it lands.", ACTION),
@@ -89,7 +93,7 @@ DIALOGS = (
     Stop("prs", "prs", "The PRs pane",
          "The open pull requests your sessions made, each with a light: red for failing checks, changes asked or "
          "a conflict, orange while checks run, yellow awaiting review, green ready to merge, grey a draft.\n\n"
-         "M switches to every open PR you authored, R fetches now.", NEXT),
+         "Pick a PR here or in the inbox and the other list highlights it too, if it lists it. R fetches now.", NEXT),
     Stop("end", "session-info", "Ending a session",
          "You can park a session to move it to the bottom of the session list and resume later, or you can "
          "close it entirely by \"forgetting\" it. Press [Stop & Forget] now to close the demo session.", ACTION),
