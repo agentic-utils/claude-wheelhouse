@@ -1600,6 +1600,29 @@ def test_park_compacts_first(host, store, sid, compact, sent, desc):
     assert not store.session(sid)["park_compact"], desc
 
 
+@pytest.mark.parametrize("keep, sent, desc", [
+    ("the plan", ["/compact the plan"], "parked itself asking to compact: once its turn ends, with its keep text"),
+    ("", ["/compact"], "no keep: a bare /compact"),
+    (None, [], "opted out: the host stops once parked"),
+])
+def test_a_park_the_session_asked_for(host, store, sid, keep, sent, desc):
+    """Doug: a model-initiated park compacts, through the same path as the person's Park."""
+    store.set_runner(sid, "sdk")
+    run(host.turn("the last of the work"))
+    store.park(sid, keep)   # park_session, mid-turn: no request was told
+    assert run(host.poll()) == (keep is not None), f"{desc}: its turn still running"
+    assert host.client.queries == ["the last of the work"], f"{desc}: nothing sent into the turn"
+    finish_at(host, 220_000)
+    if keep is None:
+        return
+    assert run(host.poll()), desc
+    finish_at(host, 40_000, compacted=True)
+    assert run(host.poll()) is False, f"{desc}: the host stops"
+    assert host.client.queries[1:] == sent, f"{desc}: nothing after the compaction"
+    s = store.session(sid)
+    assert s["parked"] and not s["park_compact"] and s["park_keep"] is None, desc
+
+
 @pytest.mark.parametrize("then, desc", [
     ("park", "park: a message sent during the compaction stays queued, never sent or confirmed"),
     ("park-first", "Park's Compact first: the same"),
