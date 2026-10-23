@@ -1,6 +1,7 @@
 """Session steps (steps.py): their texts per event and switch, how a switch resolves, and the
 handoff file."""
 
+import json
 import os
 import time
 
@@ -192,13 +193,15 @@ def test_pr_merged_is_told_or_held(store, sid, running, parked, told, desc):
     hub.statuses[sid] = "live" if running else "available"
     if parked:
         store.set_parked(sid, True)
+    def said():   # the merge told, and held, as the store has them now
+        told_ = [m["body"] for m in store.pending(sid) if m["kind"] == "notice" and "repo#5 (PR5) has merged" in m["body"]]
+        return len(told_), json.loads(store.setting(steps.held_key(sid)) or "[]")
     hub.set_pr_states({url: "open"})
     hub.set_pr_states({url: "merged"})
-    notices = [m["body"] for m in store.pending(sid) if m["kind"] == "notice"]
-    assert bool([n for n in notices if "repo#5 (PR5) has merged" in n]) is told, desc
-    assert (steps.take_held(store, sid) == [("repo#5 (PR5)", "PR5")]) is not told, desc
+    first = said()
+    assert first == ((1, []) if told else (0, [["repo#5 (PR5)", "PR5"]])), f"{desc}: {first}"
     hub.set_pr_states({url: "merged"})
-    assert len(notices) <= 1 and steps.take_held(store, sid) == [], f"{desc}: once, not at every fetch"
+    assert said() == first, f"{desc}: once, not at every fetch"
 
 
 @pytest.mark.parametrize("on, has_last, desc", [
