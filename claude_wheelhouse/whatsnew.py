@@ -198,6 +198,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("handoff-tool", UNRELEASED, ADVANCED,
             note="Sessions keep a handoff with the write_handoff tool, shown as their handoff doc; Stop & Forget "
                  "and Compact ask for one."),
+    Feature("model-compact", UNRELEASED, ADVANCED, when="sdk",
+            note="A session run in the wheelhouse can ask to be compacted itself, with the request_compact tool "
+                 "and what it wants kept: it is compacted once its turn ends, as Compact would."),
 )
 
 
