@@ -10,7 +10,7 @@ import time
 
 from rich.text import Text
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import DataTable, Static
 
 from claude_wheelhouse import api
@@ -78,8 +78,16 @@ def link(url: str) -> Text:
     return api.pr_link(url)
 
 
-class PrCard(Static):
-    """The card under the table (card): it scrolls, where the pane is too short for all of it."""
+class PrCard(VerticalScroll, can_focus=False):
+    """The card under the table (card), its text in a Static of its own (#prs-card-text): it
+    scrolls, with the wheel, where the pane is too short for all of it. Never focused: a
+    click on it leaves the focus on the table, whose focus shows it."""
+
+    def compose(self):
+        yield Static(id="prs-card-text", markup=False)
+
+    def update(self, text: Text) -> None:
+        self.query_one("#prs-card-text", Static).update(text)
 
 
 def card(r: dict) -> Text:
@@ -117,7 +125,7 @@ class Prs(Vertical):
     Prs { height: 1fr; }
     Prs > PrTable { height: 1fr; }
     Prs > #prs-note { color: #777777; padding: 0 1; height: auto; }
-    Prs > #prs-card { padding: 0 1; height: auto; max-height: 50%; overflow-y: auto; border-top: solid #444444; }
+    Prs > #prs-card { padding: 0 1; height: auto; max-height: 50%; border-top: solid #444444; }
     """
     PANE_MINIMUM = (12, 3)
     KEYS_HELP = ("The PRs pane", False)
@@ -279,7 +287,7 @@ class Prs(Vertical):
         table = self.query_one(PrTable)
         r = self.row(self.key_at(table)) if table.has_focus else None
         shown = r is not None and r["item"] is None and self.error is None
-        box = self.query_one("#prs-card", Static)
+        box = self.query_one("#prs-card", PrCard)
         if shown:
             box.update(card(r))
         box.display = shown

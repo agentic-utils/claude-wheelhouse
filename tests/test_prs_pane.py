@@ -107,7 +107,8 @@ async def test_selecting_shows_an_item_or_a_card_and_enter_opens(store, sid, git
         await pilot.press("down")
         await pilot.pause()
         card = app.query_one("#prs-card")
-        assert card.display and "doug/7" in str(card.render()) and "success" in str(card.render()), \
+        text = str(app.query_one("#prs-card-text").render())
+        assert card.display and "doug/7" in text and "success" in text, \
             "a PR that isn't an item: a card with its branch and checks"
         assert shown == [], "nothing in Detail"
         await pilot.press("enter")
@@ -232,7 +233,7 @@ async def test_a_click_on_any_line_of_a_wrapped_link_opens_the_whole_url(store, 
         table.move_cursor(row=table.get_row_index(LONG_URL))
         await pilot.pause()
         card = app.query_one("#prs-card")
-        assert card.display and str(card.render()).startswith(f"{LONG}/pull/7000"), \
+        assert card.display and str(app.query_one("#prs-card-text").render()).startswith(f"{LONG}/pull/7000"), \
             f"{desc}: the card, its URL first and without https://github.com/"
         assert await click_link(app, pilot, card, line) == [LONG_URL], desc
         text = pane.card(app.query_one("#prs").row(LONG_URL))
@@ -259,3 +260,28 @@ async def test_a_click_on_a_pr_items_wrapped_link_in_detail_opens_the_whole_url(
         shown = "\n".join(strip.text for strip in thread.render_lines(thread.region.reset_offset))
         assert "https://github.com" not in shown and "/pull/" in shown, f"{size}: without https://github.com/"
         assert await click_link(app, pilot, thread, 1) == [LONG_URL], f"{size}: the whole URL from its second line"
+
+
+@pytest.mark.anyio
+async def test_a_short_panes_card_scrolls_to_its_last_line(store, sid, github):
+    """#139: at 80x24 the card has room for a line or two: it scrolls, down to Mergeable."""
+    github.found.append(node(7000, repo=LONG, updated="2026-10-21T12:00:00Z"))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        app.query_one("#prs").action_scope()
+        await settled(app, pilot)
+        table = app.query_one("#pr-list")
+        table.focus()
+        await pilot.pause()
+        table.move_cursor(row=table.get_row_index(LONG_URL))
+        await pilot.pause()
+        card = app.query_one("#prs-card")
+        await pilot.pause()   # its text laid out at its width: its height is the wrapped one
+        assert card.virtual_size.height > card.scrollable_content_region.height, "more card than room"
+        card.scroll_end(animate=False, immediate=True)
+        await pilot.pause()
+        text = app.query_one("#prs-card-text")
+        drawn = "".join(strip.text.strip() for strip in text.render_lines(text.region.reset_offset))
+        assert 0 < card.scroll_y == card.max_scroll_y and drawn.endswith("mergeable"), "scrolled to its end, Mergeable"
+        assert table.has_focus and card.display, "the table keeps the focus, and the card shows"
