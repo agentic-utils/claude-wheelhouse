@@ -69,18 +69,16 @@ As decided for SDK hosts:
   button does. Only for a session the keepalive was keeping warm (over 150k, waiting on the
   person or in doubt); others were never kept and are left as today.
 
-For tab sessions the decision as written has a gap: with idle compaction off, nothing can
-compact a tab at the 8 h mark, because only the person can type `/compact` there. Proposed,
-pending Doug's nod (Open 1): tabs keep idle compaction **on**, launched with
+For tab sessions the decision as written had a gap: with idle compaction off, nothing can
+compact a tab at the 8 h mark, because only the person can type `/compact` there. Settled
+(Open 1): tabs keep idle compaction **on**, launched with
 `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS=150000` to match `KEEPALIVE_TOKENS`. The 50 min keepalive
-beats the 54 min idle compaction while the window lasts. At the 8 h mark the hub sends the
-Before Compact step as a notice (announce, and the handoff if that add-on is on), sends no
-more keepalives, and Claude Code compacts about 54 min later with the cache still warm. The
-handoff carries what keep notes would have: the SessionStart `compact` hook puts it back in
-the context. The cost: a quiet tab not waiting on anyone idle-compacts at 54 min with no
-step, as it does today. If Doug keeps Q142 as written, `claude_argv` (launch.py:161) adds
-`--settings '{"idleCompaction": false}'` for tabs, and a tab past 8 h gets its step and then
-goes cold.
+beats the 54 min idle compaction while the window lasts. At the 8 h mark the hub sends no
+more keepalives, and Claude Code compacts about 54 min later with the cache still warm. No
+step runs for it: the wheelhouse can't drive a compaction in a tab (see below), so the
+Before and After Compact steps are SDK only. The SessionStart `compact` hook still tells the
+tab its open items afterwards, as today. The cost: a quiet tab not waiting on anyone
+idle-compacts at 54 min, as it does today.
 
 **The test**, before this lands: does a turn started by a monitor notice reset Claude Code's
 idle timer? One throwaway tab, from a scratch wheelhouse (`WHEELHOUSE_DB` and
@@ -98,16 +96,31 @@ read. A second tab with no notice is the control.
 
 | Event | Fires on | Announce says | Add-ons (default) |
 |---|---|---|---|
-| Before Compact | the Compact button, the 200k nudge's Compact now, the 8 h mark, Relaunch's compact first, Park's Compact first | which of those it is, then the keep ask | write the handoff (on) |
+| Before Compact (SDK only) | the Compact button, the 200k nudge's Compact now, the 8 h mark, Relaunch's compact first, Park's Compact first | which of those it is, then the keep ask | write the handoff (on) |
 | Before Forget | Stop & Forget's request | the session is about to end (today's text) | final handoff (on); close or hand over open items (on) |
 | On resume | unpark, Relaunch, Restore (`launch.JOINED_TEXT`, launch.py:79) after an hour or more away | the session is resumed, and how long it was away | the handoff inline (on); report what changed and update items (on) |
-| After Compact | the session's first turn after any compaction | the session was just compacted, and whether the wheelhouse drove it (`after_compaction` and the SessionStart hook, today's open items included) | the handoff inline (on) |
-| PR merged | one of the session's PR items (#111) turns `merged` | which PR merged | clean up its worktree and branch (off) |
+| After Compact (SDK only) | the session's first turn after any compaction | the session was just compacted, and whether the wheelhouse drove it (`after_compaction`, today's open items included) | the handoff inline (on) |
+| PR merged | one of the session's PR items (#111) turns `merged` | which PR merged | clean up its worktree and branch (on) |
 | Session start | a new session's opening prompt | none: Claude Code's own start already applies CLAUDE.md | the last handoff of an ended session in the same directory (off) |
 
 Not proposed: Fork (the fork carries the conversation; its own id gets its own handoff on its
 first step). Plain Park keeps its current text: parking with Compact first runs Before
 Compact, and the next life gets the handoff On resume.
+
+**Compaction is SDK only.** The wheelhouse can't type `/compact` into a tab, and a tab's
+PreCompact hook can't run a model turn, so it can't drive a compaction there. Per Doug, the
+Before and After Compact steps run only for a session the wheelhouse hosts (`runner` `sdk`,
+not in a shell tab) with SDK mode on (`features.sdk_enabled()`). Outside SDK mode they are
+disabled: the Session steps dialog doesn't list them, there is no Compact button, no 200k
+nudge, and Park offers no Compact first. The code already shows the button and the offers
+only for a running host (`tui.SDK_BUTTONS`, `Hub.compact_first`, the Park dialog); Park's
+offer also checks SDK mode, as the button does.
+
+**"After" events don't wait for the queue.** On resume, After Compact and PR merged tell the
+session as soon as the event happens, whether or not the session's queued answers have been
+sent (queued mode, Ctrl+S). They are the wheelhouse's own messages, not the person's, and
+holding them would leave the session acting on stale state. There is no switch to hold them;
+the Session steps dialog and the first-press dialog say so plainly instead.
 
 **PR merged and a parked session.** Telling a parked or stopped session means starting it,
 which writes its whole context to the cache cold: a 300k session costs about a full cold
@@ -115,8 +128,8 @@ read for the one notice. So a parked session isn't started for it. The announcem
 kept on the session, and joins its On resume message ("while you were away, PR108 merged").
 A live session is told at once, by notice or the host's turn. The worktree add-on asks the
 session to remove the PR's worktree and delete its branch if both are its own and nothing
-in them is uncommitted, and to say so on the PR item; it's off by default because removing a
-worktree is not something to do unasked.
+in them is uncommitted, and to say so on the PR item. It's on by default, per Doug: the
+conditions keep it safe, and the first-press dialog shows it before it ever runs.
 
 ### Prompts
 
@@ -138,9 +151,9 @@ followed. Drafts:
   UTC>:" and the file inline. What changed: "Check what changed while you were away (git
   status, new commits on your branch and its base, PRs merged), update your items to match,
   and call write_handoff if anything moved." Held PR merged announcements join here.
-- After Compact, announce: today's open-items reminder, plus for a compaction the wheelhouse
-  didn't drive: "This compaction was automatic: the conversation before it is in <transcript
-  path>." Handoff: the file inline with its age.
+- After Compact (SDK only), announce: today's open-items reminder, plus for a compaction the
+  wheelhouse didn't drive (the host's at full context): "This compaction was automatic: the
+  conversation before it is in <transcript path>." Handoff: the file inline with its age.
 - PR merged, announce: "Your PR <repo>#<n> (<ref>) has merged. If your own instructions say
   what to do once a PR merges, do it now."
 - Session start, last handoff: "The last session in this directory, <name>, ended <time
@@ -177,24 +190,39 @@ step was sent. A keep block without one still compacts; the activity line ends "
 written)", so the person sees a session that ignores the add-on. Interrupt cancels a step as
 it cancels Compact now.
 
+## Cache lifetime per session (Q147)
+
+Since about 12 Oct, interactive Claude Code has given Doug's tabs the 5-minute cache, while
+SDK sessions and `claude -p` get the hour. A 5-minute tab goes cold long before the
+keepalive, so the keepalive only pays for a cold re-read, and idle compaction (which needs
+the hour) never fires. Decided by Doug:
+
+- New session gets a Cache field, "1 hour" (the default) or "5 minutes", for tabs and SDK
+  sessions alike. It is kept on the session row (`cache_ttl`, through `ADDED_COLUMNS`), so
+  Relaunch, unpark, Restore and Fork keep the choice.
+- A tab gets it as `CLAUDE_CODE_PROMPT_CACHE_TTL` (`clean_env` keeps that variable, and
+  `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`, through `KEPT`). An SDK host passes the same
+  variable in its options' `env`.
+- The keepalive skips a session on 5 minutes: nothing it sends would find the cache warm.
+- A session launched before this change has no `cache_ttl` and runs as it does now until it's
+  relaunched, when it takes the default.
+
 ## SDK hosts and tab sessions
 
 | Event | SDK host | Tab |
 |---|---|---|
 | Before Compact, button, nudge, Relaunch | the host's turn | none: no Compact button, no nudge |
-| Before Compact, 8 h mark | the host's turn, then `/compact` | the hub's notice, then Claude Code's idle compaction (Open 1) |
-| Before Compact, Park's Compact first | in the park request | in the park request; the tab doesn't compact (as now) |
+| Before Compact, 8 h mark | the host's turn, then `/compact` | none: no more keepalives, then Claude Code's idle compaction (Open 1) |
+| Before Compact, Park's Compact first | in the park request | none: Park offers no Compact first |
 | Before Forget | the host's turn | the monitor's notice |
 | On resume, Session start | JOINED_TEXT, the opening prompt | the same |
-| After Compact | `after_compaction`, by the host | `after_compaction`, by the SessionStart hook |
+| After Compact | `after_compaction`, by the host | none: the SessionStart hook's open items, as today |
 | PR merged | the host's turn, or held for resume | a notice, or held for resume |
 
-A compaction the person types in a tab, or Claude Code's at full context, isn't the
-wheelhouse's to drive: PreCompact can block (exit 2) but can't run a model turn, so no
-Before Compact step runs there. After Compact still does, through the SessionStart hook,
-and says the compaction was automatic. The 200k nudge stays the real defence for hosts.
-Blocking a typed `/compact` until a fresh handoff exists is possible with PreCompact, and
-parked: it would surprise anyone not using the handoff.
+A compaction in a tab, typed or Claude Code's own, isn't the wheelhouse's to drive:
+PreCompact can block (exit 2) but can't run a model turn. So no compaction step runs in a
+tab, and the SessionStart `compact` hook keeps its current open-items text. The 200k nudge
+stays the real defence for hosts.
 
 ## The handoff file
 
@@ -228,7 +256,13 @@ or .env, shows a small dialog first:
 >     shown as its doc and read back after compaction and on resume
 > [x] before Stop & Forget, close or hand over its open items
 > [x] on resume, report what changed while it was away
+> [x] when its PR merges, remove the PR's worktree and branch if they're its own and clean
+> Messages after an event (resumed, compacted, PR merged) go to the session at once, without
+> waiting for its queued answers to be sent.
 > [OK] (Session steps in the command palette has every switch)
+
+Outside SDK mode the dialog's first line says "ends or resumes" and leaves out compaction.
+The note about "after" messages is plain text, not a tick box: they can't be held.
 
 OK stores the ticks and goes on with the press; Esc cancels the press and asks again next
 time. Until it is answered, the events nobody pressed (the 8 h mark, PR merged, After
@@ -237,8 +271,10 @@ offered.
 
 Changing it later: a command palette entry, "Session steps", opens a dialog with one row per
 event, its announce switch and its add-ons, showing a value given by flag or .env as fixed,
-with where from. The ? overlay lists the palette entry. Through the daemon: `GET
-/settings/steps` and `PUT /settings/steps/{event}`.
+with where from. Outside SDK mode it has no Before or After Compact rows. Below the rows, the
+same plain note: messages after an event go at once, without waiting for the queue. The ?
+overlay lists the palette entry. Through the daemon: `GET /settings/steps` and `PUT
+/settings/steps/{event}`.
 
 ## Protocol and versions
 
@@ -250,11 +286,9 @@ with where from. The ? overlay lists the palette entry. Through the daemon: `GET
 - `write_handoff`'s docstring and every announce and add-on text join `claude-wheelhouse
   protocol`'s listing (launch.injected), so a user can read all of it before switching
   anything on.
-- PR merged needs #111's PR items, so this lands after #111. `PROTOCOL_VERSION`
-  (store.py:74) is 16 in the batch and #111 takes 17: this takes 18. `fingerprint.API`
-  (fingerprint.py:13) is 6 in the batch; #111's doc says 6, written before #110 took it, so
-  it takes 7: this takes 8, for the settings routes. If the order changes, whichever lands
-  second takes the next numbers.
+- PR merged needs #111's PR items, which have landed. `PROTOCOL_VERSION` is 17 in the batch:
+  this takes 18, for `write_handoff` and the new protocol text. `fingerprint.API` is 7: this
+  takes 8, for the settings routes.
 
 ## Mixed versions
 
@@ -269,10 +303,10 @@ with where from. The ? overlay lists the palette entry. Through the daemon: `GET
 ## Tour and what's new
 
 One `whatsnew.Feature`, "session-steps", on the session pane's tour stop (where Compact
-sits; `when=""`, as tabs get Forget, resume, PR merged and the 8 h step too): "The wheelhouse
-tells a session before it compacts, ends or resumes, so its own instructions can act, and
-can keep a handoff doc for it. Switches: Session steps (command palette)." The 50 min
-keepalive and the 8 h compaction are ADVANCED: release notes only.
+sits; `when=""`, as tabs get Forget, resume and PR merged too): "The wheelhouse tells a
+session before it ends or resumes, so its own instructions can act, and can keep a handoff
+doc for it. Switches: Session steps (command palette)." The 50 min keepalive and the 8 h
+compaction are ADVANCED: release notes only.
 
 ## Tests
 
@@ -295,10 +329,14 @@ announce-only until it is answered; Session start's newest-handoff pick.
 - Session start has no announce (Claude Code's own start applies CLAUDE.md); its one add-on
   is off.
 - PR merged on a parked session is held for its resume, never a cold start for a notice.
-  Its cleanup add-on is off.
+  Its cleanup add-on is on by default (Doug, M7 review).
+- Before and After Compact are SDK only: outside SDK mode they're disabled, with no Compact
+  button and no compact offer on parking (Doug, M7 review). Tabs get no compaction step.
+- On resume, After Compact and PR merged go at once, never held behind the session's queued
+  answers. No switch holds them; the dialogs say so plainly (Doug, M7 review).
 - An unattended 8 h Compact without notes falls back to a bare `/compact`; a pressed one
   still compacts nothing.
-- For a compaction the wheelhouse didn't drive, After Compact names the transcript path,
+- For a compaction the host didn't drive, After Compact names the transcript path,
   instead of a doc item pointing at the `.jsonl` (the doc viewer renders markdown).
 - On resume runs only after an hour or more away (parked, or the last response over an hour
   ago), so a quick relaunch for a version bump costs no extra turn.
@@ -314,3 +352,12 @@ announce-only until it is answered; Session start's newest-handoff pick.
    a quiet tab not waiting on anyone idle-compacts at 54 min with no step, as today. Or idle
    off per Q142: at 8 h a tab gets its step and its cache goes cold (the next turn pays a
    full cold write). Either way the test above runs first, since the proposal depends on it.
+
+   Settled 20 Oct (Q145 (a), test T148): a notice turn resets the idle timer. Two sessions
+   at about 220k tokens on the 1h cache, Claude Code 2.1.302. B, left alone, idle-compacted
+   54 min 10 s after its last turn. A got a monitor notice 40 min in and compacted 54 min
+   8 s after the notice turn, not after its original last turn. So the proposal stands:
+   tabs keep idle compaction on at 150k, and the 50 min keepalive holds it off.
+
+   Changed in the M7 review: the hub sends a tab no Before Compact step at 8 h, since
+   compaction steps are SDK only. It just stops the keepalives.
