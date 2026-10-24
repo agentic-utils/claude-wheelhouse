@@ -2307,3 +2307,34 @@ def test_the_8_hour_mark_is_called_off_when_the_person_is_back(host, store, sid,
     run(host.poll())
     assert ("/compact" in host.client.queries) is compacted, desc
     assert host.compact_nonce is None, f"{desc}: nothing left waiting for notes"
+
+
+@pytest.mark.parametrize("how, desc", [
+    ("self", "a self-park with compact=false, waiting for its turn: Stop & Forget is still told"),
+    ("person", "the person's Park without Compact, waiting for its turn: the same"),
+])
+def test_stop_and_forget_wins_over_a_park_waiting_for_its_turn(host, store, sid, how, desc):
+    store.set_runner(sid, "sdk")
+    run(host.turn("the last of the work"))
+    if how == "person":
+        store.request(sid, "park", False)
+    store.park(sid, compact=False, reason="done for good")
+    assert run(host.poll()), f"{desc}: waiting for the turn"
+    store.request(sid, "end")
+    assert run(host.poll()), f"{desc}: not stopped, unparked to be told"
+    row = store.session(sid)
+    assert not row["parked"] and row["end_told_at"] == row["end_requested_at"], desc
+    assert host.client.queries[-1] == request_text(store, "end"), desc
+
+
+def test_a_park_waiting_for_its_turn_says_so(host, store, sid):
+    store.set_runner(sid, "sdk")
+    run(host.turn("the last of the work"))
+    host.show("running Bash")
+    store.park(sid, compact=False, reason="done for good")
+    run(host.poll())
+    assert store.session(sid)["activity"] == f"running Bash · {host_mod.PARKS_AFTER_TURN}", "said at once"
+    host.show("thinking")
+    assert store.session(sid)["activity"] == f"thinking · {host_mod.PARKS_AFTER_TURN}", "and kept as the turn goes on"
+    finish_at(host, 40_000)
+    assert run(host.poll()) is False and not host.parking_after, "stopped once the turn ended"

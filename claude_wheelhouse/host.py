@@ -73,6 +73,7 @@ NUDGE_TOKENS = 200_000
 # how soon after the park request is told the session must park for its Compact first to
 # hold: the prompt cache's lifetime, after which compacting saves nothing
 PARK_COMPACT_WITHIN = 3600
+PARKS_AFTER_TURN = "parks once this turn ends"   # the activity line's note while a park waits for its turn
 # Keepalive: the prompt cache lives an hour (1 h cache writes) and a cold one is written
 # again whole. A session over KEEPALIVE_TOKENS, quiet and waiting on the person or with an
 # item in doubt (Store.in_doubt), gets a tiny turn KEEPALIVE_AFTER seconds after its last, to
@@ -268,6 +269,7 @@ class Host:
         self.compact_key: str | None = None
         self.park_told: float | None = None   # when the park request went to the session (monotonic)
         self.parked_it = False   # parked after its compaction: Stop & Forget before it stops still wins
+        self.parking_after = False   # parked mid-turn: the activity line says it parks once the turn ends
         self.compact_sent = 0.0   # when the /compact turn went (monotonic): a hold lasts COMPACT_TIMEOUT at most
         self.turn_text: list[str] = []   # this turn's text so far, where Compact's block may straddle blocks
         # this turn's text since its last tool call: what it ends by saying, posted as the
@@ -686,14 +688,16 @@ class Host:
 
     def ending_wins(self, session) -> bool:
         """Stop & Forget pressed while parking compacts (or is about to, or has just parked
-        after one, before the host stops): the park's plan goes,
+        after one, before the host stops), or while a park waits for its turn to end: the park's plan goes,
         and the end request is told once the compaction's turn ends, as the next turn. A parked
         session is unparked for it. Whether the row changed."""
         asked = session["end_requested_at"]
-        parking = self.compact_then == "park" or (session["parked"] and (session["park_compact"] or self.parked_it))
+        # parked mid-turn, with Compact first or not, the host waits for that turn: parking too
+        parking = self.compact_then == "park" or (session["parked"] and (session["park_compact"] or self.parked_it
+                                                                          or self.pending))
         if not (asked and session["end_told_at"] != asked and parking):
             return False
-        self.parked_it = False
+        self.parked_it = self.parking_after = False
         if self.compact_then == "park":
             self.compact_then = "end"   # its turn ends with no reminder: the end request is the next prompt
         if session["parked"]:
@@ -723,7 +727,11 @@ class Host:
         if self.compact_then == "park":   # its compaction under way
             return True
         if self.pending:   # the park's own turn still running: its last words and calls still land
+            if not self.parking_after:
+                self.parking_after = True
+                self.show(session["activity"] or "thinking")
             return True
+        self.parking_after = False
         if not session["park_compact"]:
             return False
         # only a park this host asked for, lately, or one park_session settled as compacting
@@ -894,8 +902,10 @@ class Host:
 
     def show(self, activity: str) -> None:
         """What the running turn is doing, on the activity line: not a keepalive's, which
-        leaves the line as it found it."""
+        leaves the line as it found it. Parked mid-turn, it adds that it parks once the turn ends."""
         if not (self.taken_up and all(k in self.sent and self.sent[k].keepalive for k in self.taken_up)):
+            if self.parking_after and PARKS_AFTER_TURN not in activity:
+                activity = f"{activity} · {PARKS_AFTER_TURN}"
             self.store.set_activity(self.sid, activity)
 
     def answer(self, refs: dict[str, int], m) -> None:
