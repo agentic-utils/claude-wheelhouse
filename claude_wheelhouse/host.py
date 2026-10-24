@@ -578,6 +578,9 @@ class Host:
                 return False
             await self.deliver(session, hold=True)   # an answer to a call the park's turn waits on still goes
             return True
+        if self.parking_after:   # unparked (Park pressed again, Stop & Forget) while its park waited on the turn
+            self.parking_after = False
+            self.show((session["activity"] or "").replace(f" · {PARKS_AFTER_TURN}", "") or "thinking")
         if self.park_told is not None and time.monotonic() - self.park_told > PARK_COMPACT_WITHIN:
             self.park_told = None   # the park asked for never came: its Compact first goes
             self.store.take_park_compact(self.sid)

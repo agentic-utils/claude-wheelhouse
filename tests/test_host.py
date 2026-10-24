@@ -2338,3 +2338,16 @@ def test_a_park_waiting_for_its_turn_says_so(host, store, sid):
     assert store.session(sid)["activity"] == f"thinking · {host_mod.PARKS_AFTER_TURN}", "and kept as the turn goes on"
     finish_at(host, 40_000)
     assert run(host.poll()) is False and not host.parking_after, "stopped once the turn ended"
+
+
+def test_a_park_unparked_while_it_waits_for_its_turn_stops_saying_so(host, store, sid):
+    store.set_runner(sid, "sdk")
+    run(host.turn("the last of the work"))
+    host.show("running Bash")
+    store.park(sid, compact=False, reason="done for good")
+    run(host.poll())
+    store.set_parked(sid, False)   # Park pressed again while the park waits: the app's unpark
+    assert run(host.poll()) is True and not host.parking_after, "carries on, no longer parking"
+    assert store.session(sid)["activity"] == "running Bash", "the line drops its note at once"
+    host.show("thinking")
+    assert store.session(sid)["activity"] == "thinking", "and later lines don't bring it back"
