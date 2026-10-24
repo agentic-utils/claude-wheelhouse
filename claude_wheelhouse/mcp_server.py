@@ -259,7 +259,7 @@ def stop_soon(s) -> bool:
 
 @wheelhouse_tool
 def park_session(compact: bool = True, keep: str = "", reason: str = "") -> str:
-    """Park this session: it stops once parked, and shows dimmed at the foot of the
+    """Park this session: it stops once this turn ends, and shows dimmed at the foot of the
     wheelhouse's list until the person unparks it. Write your handoff notes into your items
     (and write_handoff, if your instructions keep one) first: this is the last thing you do.
     Call it when the wheelhouse asks you to park, or unasked, once you have come to the end
