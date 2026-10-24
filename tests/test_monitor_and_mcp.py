@@ -454,3 +454,67 @@ def test_request_compact(store, sid, runner, before, keep, said, desc):
         with pytest.raises(Exception, match=said):
             mcp_server.request_compact(keep)
         assert store.session(sid)["compact_request"] == held, f"{desc}: nothing changed"
+
+
+@pytest.mark.parametrize("runner, asked, kwargs, said, compact, keep, decision, desc", [
+    ("sdk", None, dict(keep="the plan"), "compacted once this turn ends", 1, "the plan", None,
+     "unasked in SDK mode: compacted first, with its keep text"),
+    ("sdk", None, {}, "compacted once this turn ends", 1, "", None, "unasked, no keep: a bare /compact"),
+    ("sdk", None, dict(compact=False, reason="they will Stop & Forget it"), "stops once this turn ends", 0, None,
+     "they will Stop & Forget it", "opting out: parked as it is, its reason a decision"),
+    ("sdk", None, dict(compact=False, reason="  "), "needs a reason", None, None, None,
+     "opting out with no reason: refused, not parked"),
+    ("sdk", False, dict(keep="the plan"), "stops once this turn ends", 0, None, None,
+     "answering the person's Park without Compact: their choice stands"),
+    ("sdk", True, dict(compact=False), "compacted once this turn ends", 1, "", None,
+     "answering the person's Park with Compact, told or not: theirs stands, no reason needed"),
+    ("sdk", True, dict(keep="the plan"), "compacted once this turn ends", 1, "the plan", None,
+     "answering it with keep: its instructions"),
+    ("tab", None, dict(compact=False), "parked", 0, None, None, "a tab: never compacted, nothing asked"),
+    ("shell", None, dict(keep="x"), "parked", 0, None, None, "an SDK session in a shell tab: as a tab"),
+])
+def test_park_session_parks_itself(store, sid, runner, asked, kwargs, said, compact, keep, decision, desc):
+    """Doug: a session can park itself; a model-initiated park compacts, unless the model has
+    a specific reason why compaction is undesirable."""
+    from claude_wheelhouse import mcp_server
+    mcp_server._store, mcp_server._sid = store, sid
+    store.set_runner(sid, "sdk" if runner == "shell" else runner)
+    if runner == "shell":
+        store.set_shell(sid, "tab")
+    if asked is not None:
+        store.request(sid, "park", asked)
+    if compact is None:
+        with pytest.raises(Exception, match=said):
+            mcp_server.park_session(**kwargs)
+        assert not store.session(sid)["parked"], f"{desc}: not parked"
+        return
+    assert said in mcp_server.park_session(**kwargs), desc
+    s = store.session(sid)
+    assert (s["parked"], s["park_compact"], s["park_keep"]) == (1, compact, keep), desc
+    whys = [i["body"] for i in store.items(sid) if i["kind"] == "decision"]
+    assert [decision in w for w in whys] == ([True] if decision else []), desc
+    store.set_parked(sid, False)
+    assert store.session(sid)["park_keep"] is None, f"{desc}: Unpark drops it"
+
+
+@pytest.mark.parametrize("then, desc", [
+    ("request", "a new Park request: a self-park's keep text goes"),
+    ("cancel", "a cancelled Park request: so does its keep text"),
+])
+def test_park_keep_goes_with_the_park(store, sid, then, desc):
+    with store.tx() as db:
+        db.execute("UPDATE sessions SET park_keep = 'stale', park_requested_at = '2026-10-24T00:00:00Z' WHERE id = ?",
+                   (sid,))
+    if then == "request":
+        store.request(sid, "park", True)
+    else:
+        store.cancel_request(sid, "park")
+    assert store.session(sid)["park_keep"] is None, desc
+
+
+def test_parking_itself_drops_a_pending_compact_request(store, sid):
+    store.set_runner(sid, "sdk")
+    store.request_compact(sid, "keep the plan")
+    store.park(sid, keep="the plan")
+    s = store.session(sid)
+    assert (s["compact_request"], s["compact_requested_at"]) == (None, None), "the park's compaction replaces it"

@@ -7,7 +7,7 @@ from textual.geometry import Region, Size
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
-from claude_wheelhouse.callout import POINTERS, facing, HIGHLIGHT, TourCallout, place
+from claude_wheelhouse.callout import POINTERS, covers, facing, HIGHLIGHT, TourCallout, place, widths
 
 S = Size(80, 24)
 
@@ -28,6 +28,28 @@ S = Size(80, 24)
 ])
 def test_placement(screen, pane, height, region, side, desc):
     assert place(screen, pane, height) == (region, side), desc
+
+
+@pytest.mark.parametrize("screen, expected, desc", [
+    (Size(160, 40), [46, 156], "46 wide, else the screen's width less the margin"),
+    (S, [46, 76], "80 by 24: 46, else 76"),
+    (Size(48, 20), [44], "a screen narrower than 46 and the margin: its width less the margin alone"),
+])
+def test_widths(screen, expected, desc):
+    """#133: the widths a callout tries, narrowest first; a wider one wraps its text to fewer rows."""
+    assert widths(screen) == expected, desc
+
+
+@pytest.mark.parametrize("w, height, clear, desc", [
+    (46, 23, False, "46 wide, 23 rows: nowhere on screen clear of the row at y 4"),
+    (76, 12, True, "76 wide, 12 rows: clear of it"),
+])
+def test_a_wider_box_clears_the_row(w, height, clear, desc):
+    """#133: the same text at 80x24 over a narrow pane, centred: at 46 wide it is too tall to
+    keep clear of the step's row; wider, and so shorter, it is."""
+    keep = Region(41, 4, 10, 1)
+    region, _ = place(S, Region(40, 1, 12, 11), height, keep, keep, centre=True, w=w)
+    assert region.width == w and (not covers(region, keep)) is clear, f"{desc}: {region}"
 
 
 ROWS = Region(33, 2, 12, 6)   # the demo's rows in the inbox (callout.rows), left of a pane on the right

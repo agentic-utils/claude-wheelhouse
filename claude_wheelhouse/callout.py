@@ -46,6 +46,12 @@ def width(screen: Size) -> int:
     return max(1, min(WIDTH, screen.width - MARGIN))
 
 
+def widths(screen: Size) -> list[int]:
+    """The widths a callout tries, in turn (#133): WIDTH, then the screen's less MARGIN, where
+    its text wraps to fewer rows."""
+    return list(dict.fromkeys((width(screen), max(1, screen.width - MARGIN))))
+
+
 def covers(r: Region, of: Region | None) -> int:
     """How much of `of` the box `r` covers, in cells."""
     return r.intersection(of).area if of is not None else 0
@@ -68,15 +74,15 @@ def facing(r: Region, pane: Region | None) -> str:
 
 
 def place(screen: Size, pane: Region | None, height: int, clear: Region | None = None,
-          keep: Region | None = None, centre: bool = False) -> tuple[Region, str]:
+          keep: Region | None = None, centre: bool = False, w: int | None = None) -> tuple[Region, str]:
     """Where a callout `height` rows high goes for a pane at `pane` (screen coordinates; None:
     absent), and the side it then points from (facing; "centred" with `centre`, the box
     centred as spot puts it for a pane too narrow or collapsed). One rule (#101): of the
     candidates (spot's choice; then below every inbox row, `clear`; below the step's own rows
     of the demo, `keep`; the screen's foot; its top), those on screen that cover neither `keep`
     nor the pane (bar a box spot put inside it), the nearest the pane; with none, the one
-    covering least of `keep`, then of the pane."""
-    first, side = spot(screen, None if centre else pane, height)
+    covering least of `keep`, then of the pane. `w`: its width, width's by default."""
+    first, side = spot(screen, None if centre else pane, height, w)
     avoid = None if side == "inside" else pane
     spots = candidates(screen, first, clear, keep)
     clear_of = [r for r in spots if not covers(r, keep) and not covers(r, avoid)]
@@ -96,12 +102,12 @@ def candidates(screen: Size, first: Region, clear: Region | None, keep: Region |
     return [r for r in spots if r.y >= 0 and r.bottom <= screen.height] or [first]
 
 
-def spot(screen: Size, pane: Region | None, height: int) -> tuple[Region, str]:
+def spot(screen: Size, pane: Region | None, height: int, w: int | None = None) -> tuple[Region, str]:
     """place's first candidate: beside the pane on the first side where it fits without
     covering it (right, left, below, above), else inside it over its top rows, else, for a
     pane narrower than the callout or collapsed, centred on the screen, a row higher for the
     line naming the pane."""
-    w = width(screen)
+    w = w or width(screen)
 
     def clamp(value: int, low: int, high: int) -> int:
         return max(low, min(value, high))
@@ -288,12 +294,20 @@ class TourCallout(Vertical):
         self.placed = (screen, region)
         self.highlight(target if region is not None else None)   # held for the step: the link, wherever it sits
         title = PANES.get(self.pane, ("", self.pane))[1]
-        w = width(screen)
-        at, side = place(screen, region, self.lines(w, self.text), clear, keep)
-        text = self.text
-        if side == "centred":   # its pane named first, a line that wraps on a narrow screen
-            text = f"In the {title} pane:\n{self.text}"
-            at, _ = place(screen, region, self.lines(w, text) - 1, clear, keep, centre=True)
+
+        def at_width(w: int) -> tuple[tuple, Region, str, str]:
+            """Placed at width w: how far it falls short (covering the step's rows, cut by the
+            screen, covering its pane beside it), where, its side and its text."""
+            at, side = place(screen, region, self.lines(w, self.text), clear, keep, w=w)
+            text = self.text
+            if side == "centred":   # its pane named first, a line that wraps on a narrow screen
+                text = f"In the {title} pane:\n{self.text}"
+                at, _ = place(screen, region, self.lines(w, text) - 1, clear, keep, centre=True, w=w)
+            over = covers(at, region) if side not in ("inside", "centred") else 0
+            return (covers(at, keep), self.lines(w, text) - at.height, over), at, side, text
+
+        # #133: the narrowest width that falls short least; a wider box wraps to fewer rows
+        _, at, side, text = min((at_width(w) for w in widths(screen)), key=lambda t: t[0])
         self.forced = keep if covers(at, keep) or side not in ("inside", "centred") and covers(at, region) else False
         if (at, side, text) == (self.at, self.side, getattr(self, "shown", None)):
             return   # unchanged: no refresh, which would only bring it back here (a layout loop)

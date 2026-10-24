@@ -97,6 +97,7 @@ DWELL = 1.0
 # every few tens of ms, so a gap longer than both means every key has been let go
 QUIET = 0.6
 NOTHING_SELECTED = "Select an item, or a session to follow its conversation."
+COMPACTING_LOCKED = "That session is compacting: its items open once it's done"   # a pick of a locked item (#150)
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8"}
@@ -3170,10 +3171,11 @@ class ParkSession(Dialog):
 
 
 class FirstSteps(Dialog):
-    """The first press of anything that fires a session step with add-ons (Compact, Stop &
-    Forget, Relaunch or Unpark), before any choice was made: what the wheelhouse tells a
-    session, and the add-ons offered (steps.OFFERED), ticked. OK answers {name: ticked};
-    Esc cancels the press, asked again next time. sdk: compaction is named only in SDK mode."""
+    """The first press of anything that fires a session step with add-ons (Compact, the
+    compact question's Compact now, Stop & Forget, or Relaunch, which Unpark goes through),
+    before any choice was made: what the wheelhouse tells a session, and the add-ons offered
+    (steps.OFFERED), ticked. OK answers {name: ticked}; Esc cancels the press, asked again
+    next time. sdk: compaction is named only in SDK mode."""
     ACTION = "steps-ok"
 
     def __init__(self, sdk: bool):
@@ -3930,7 +3932,7 @@ class WheelhouseApp(App):
         text-opacity: 100%; opacity: 100%; }}
     Button.-style-default:disabled {{ border-top: tall {OFF}; border-bottom: tall {OFF}; }}
     Button.-style-default.-textual-compact:disabled {{ border: none; }}
-    #detail.compacting {{ opacity: 50%; }}
+    #detail.compacting, #detail-more.compacting, #detail-bar.compacting {{ opacity: 50%; }}
     #session-steps-rows {{ height: auto; max-height: 60vh; }}
     #conversation-buttons #mode, #session-buttons Button.wide {{ column-span: 2; }}
     #dialog {{ width: 80; max-width: 100%; height: auto; max-height: 100%; overflow-y: auto; padding: 1 2;
@@ -5108,12 +5110,17 @@ class WheelhouseApp(App):
         self.paint_sendbar()
         self.paint_detail()
 
-    def show_item(self, sid: str, ref: str) -> None:
+    def show_item(self, sid: str, ref: str) -> bool:
         """A module's pick of an item (api.Context.show_item, the PRs pane's row that is one):
         shown in Detail with its thread and answer box, and highlighted in the inbox if listed
-        there; if not, the inbox's highlight hidden, not left on another item (#148)."""
-        self.shown_doc = None
+        there; if not, the inbox's highlight hidden, not left on another item (#148). An item
+        of a compacting session isn't picked, as its inbox row isn't: Detail keeps what it
+        showed, and False said (#165)."""
         key, table = f"{sid}|{ref}", self.items_table
+        if key in table.locked:
+            self.notify(COMPACTING_LOCKED, severity="warning")
+            return False
+        self.shown_doc = None
         if key in table.rows:
             with table.prevent(DataTable.RowHighlighted):
                 table.move_cursor(row=table.get_row_index(key), animate=False)
@@ -5121,6 +5128,7 @@ class WheelhouseApp(App):
         table.show_cursor = key in table.rows
         self.select_row(key)
         self.paint_sendbar()
+        return True
 
     def unselect(self, note: str) -> None:
         """A module's pick of something that isn't an item (api.Context.unselect, a PR no
@@ -5211,10 +5219,15 @@ class WheelhouseApp(App):
 
     def paint_compacting(self) -> None:
         """Detail dimmed while it shows a locked row's item or conversation (#150): not a new
-        item its session posted while compacting."""
+        item its session posted while compacting. A module's parts there (a PR's buttons and
+        detail) dim with it, and their buttons are off until it's compacted (#165)."""
         key = f"{self.viewing}|" if self.viewing else "|".join((self.selected[0], self.selected[1] or "")) \
             if self.selected else None
-        self.detail.set_class(not self.shown_doc and key in self.items_table.locked, "compacting")
+        locked = not self.shown_doc and key in self.items_table.locked
+        self.detail.set_class(locked, "compacting")
+        for part in self.query("#detail-more, #detail-bar"):
+            part.set_class(locked, "compacting")
+            part.disabled = locked
 
     def paint_detail(self) -> None:
         self.paint_compacting()
@@ -6334,7 +6347,7 @@ class WheelhouseApp(App):
     def open_thread(self, event: DataTable.RowSelected) -> None:
         self.settle()
         if event.row_key.value in self.items_table.locked:   # its session is being compacted (#150)
-            self.notify("That session is compacting: its items open once it's done", severity="warning")
+            self.notify(COMPACTING_LOCKED, severity="warning")
             return
         sid, ref = event.row_key.value.split("|")
         self.saw(sid, ref or None)

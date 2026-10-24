@@ -258,13 +258,28 @@ def stop_soon(s) -> bool:
 
 
 @wheelhouse_tool
-def park_session() -> str:
-    """Park this session: it stops a moment after this returns, and shows dimmed at the
-    foot of the wheelhouse's list until the person unparks it. Write your handoff notes into
-    your items first: this is the last thing you do."""
-    s = _store.session(_sid)
-    _store.set_parked(_sid, True)
-    return "parked; this session stops in a moment" if stop_soon(s) else "parked"
+def park_session(compact: bool = True, keep: str = "", reason: str = "") -> str:
+    """Park this session: it stops once this turn ends, and shows dimmed at the foot of the
+    wheelhouse's list until the person unparks it. Write your handoff notes into your items
+    (and write_handoff, if your instructions keep one) first: this is the last thing you do.
+    Call it when the wheelhouse asks you to park. Only in a session run inside the wheelhouse
+    (SDK mode), also call it unasked once you have come to the end of the useful work and are
+    only waiting on the person; never unasked in a terminal tab, where the person may be at
+    the keyboard. In SDK mode, parking unasked compacts it first,
+    once this turn ends, with `keep` as the compaction's instructions (what to carry through).
+    compact=false parks it as it is, and needs `reason`, shown to the person: why compacting
+    is undesirable (for example, you expect them to Stop & Forget it rather than carry on).
+    Either way it stops once this turn ends. Answering the wheelhouse's park request, the
+    person's choice decides, and these are ignored but for `keep`. In a terminal tab nothing
+    compacts, and these are ignored."""
+    s = _store.session(_sid)   # for stop_soon: the registered process, before parking
+    hosted = hosted_here(_store)
+    compacts = _store.park(_sid, compact, keep, reason, hosted=hosted)
+    if not hosted:
+        return "parked; this session stops in a moment" if stop_soon(s) else "parked"
+    if compacts:
+        return "parked; it is compacted once this turn ends, then stops: end your turn now"
+    return "parked; this session stops once this turn ends: end your turn now"
 
 
 @wheelhouse_tool

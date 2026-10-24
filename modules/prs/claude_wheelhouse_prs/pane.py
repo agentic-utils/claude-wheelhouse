@@ -942,14 +942,26 @@ class Prs(Vertical):
         table = self.query_one(PrTable)
         with table.prevent(DataTable.RowHighlighted):
             table.show_cursor = True
-        self.shown = url
+        before, self.shown = self.shown, url
         self.paint_card()
         if r["item"] is not None and self.ctx.show_item is not None:
-            self.ctx.show_item(r["item"]["session_id"], r["item"]["ref"])
+            if self.ctx.show_item(r["item"]["session_id"], r["item"]["ref"]) is False:
+                self.refused(before)
         elif r["item"] is None and self.ctx.unselect is not None:
             self.ctx.unselect(f"PR{r['number']} in {short(r)} isn't an item: no session made it.")
             self.in_detail = ("url", url)   # after unselect, whose showing(None, None) clears it
             self.paint_detail()
+
+    def refused(self, before: str | None) -> None:
+        """A PR item the app didn't show (its session compacting, #165): Detail still shows what
+        it did, so the highlight goes back on that PR, or is hidden if it isn't one (#148)."""
+        table = self.query_one(PrTable)
+        with table.prevent(DataTable.RowHighlighted):
+            if before is not None and before in table.rows:
+                table.move_cursor(row=table.get_row_index(before), animate=False)
+            table.show_cursor = before is not None and before in table.rows
+        self.shown = before if table.show_cursor else None
+        self.paint_card()
 
     def showing(self, sid: str | None, ref: str | None) -> None:
         """Detail shows another item (api's showing hook): its PR's detail and buttons there,

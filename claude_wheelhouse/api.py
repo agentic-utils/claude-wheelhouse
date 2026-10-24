@@ -170,8 +170,9 @@ class Context:
     set_pr_states: Callable[[dict[str, str]], None] | None = None
     # when a session last pushed, merged, readied or closed a PR (epoch seconds), else None. None TUI side
     pr_activity: Callable[[], float | None] | None = None
-    # an item shown in the Detail pane, highlighted in the inbox: (session id, ref). None daemon side
-    show_item: Callable[[str, str], None] | None = None
+    # an item shown in the Detail pane, highlighted in the inbox: (session id, ref). False if
+    # it isn't, its session compacting (#165). None daemon side
+    show_item: Callable[[str, str], bool | None] | None = None
     # nothing selected in the inbox, its highlight hidden, and Detail saying why: (note). For a
     # pick that isn't an item (a PR no session made, #148). None daemon side
     unselect: Callable[[str], None] | None = None

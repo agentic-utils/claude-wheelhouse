@@ -102,12 +102,15 @@ def test_prepare_starts_afresh(store, tmp_path):
     (False, "tab", "SDK mode off: the demo runs in a tab"),
     (True, "sdk", "SDK mode on: the demo is hosted in the wheelhouse (Doug, #78 6)"),
 ])
+@pytest.mark.parametrize("size", [(160, 40), (100, 30), (80, 24)])
 @pytest.mark.both
 @pytest.mark.anyio
-async def test_the_tour(store, monkeypatch, fake_claude, with_prs, sdk, runner_, desc):
+async def test_the_tour(store, monkeypatch, fake_claude, with_prs, sdk, runner_, desc, size):
     """Doug (#78): the principles first, then a walk round the screen in dialogs painted over
     the panes, starting with the demo's creation (N, New session filled in: Q119), and last
-    this release's notes. Each action dialog moves on as the person does what it asks."""
+    this release's notes. Each action dialog moves on as the person does what it asks. #133:
+    at every size, each box's pane is on screen and the box holds all its text, clear of the
+    demo's rows its step needs."""
     monkeypatch.setattr(features, "_flag", sdk)
     monkeypatch.delenv("WHEELHOUSE_RUNNER")   # New session's own default
     monkeypatch.setattr(tutorial, "should_offer", real_should_offer)
@@ -115,14 +118,29 @@ async def test_the_tour(store, monkeypatch, fake_claude, with_prs, sdk, runner_,
     monkeypatch.setattr(launch, "open_tab", lambda s, i: opened.append(("tab", i)))
     monkeypatch.setattr(launch, "open_host", lambda s, i: opened.append(("sdk", i)))
     app = WheelhouseApp(store)
+    app.running = lambda sid: True   # the demo's tab or host, as it runs live
+
+    def fits(where):
+        """The box showing on the main screen: its pane on screen, the box on screen with all
+        its text, clear of the demo's rows its step needs (tour.ROWS)."""
+        if app.screen is not app.screen_stack[0] or not (found := list(app.screen.query(TourCallout))):
+            return
+        box, pane = found[0].region, callout.find(app.screen, found[0].pane)
+        where = f"{desc} at {size}: {where}"
+        assert pane is not None and pane.display and pane.region.area, f"{where}: its pane {found[0].pane} on screen"
+        assert app.screen.region.contains_region(box), f"{where}: {box} on screen"
+        assert box.height >= found[0].lines(box.width, found[0].shown), f"{where}: {box} holds all its text"
+        _, mine = callout.rows(app.screen, found[0].keep, found[0].kinds)
+        assert not callout.covers(box, mine), f"{where}: {box} clear of its rows {mine}"
 
     async def step(act, expected, why):
         act()
         app.refresh_data()
         await pilot.pause()
         assert shown(app) == expected, f"{desc}: {why}"
+        fits(why)
 
-    async with app.run_test(size=(160, 40)) as pilot:
+    async with app.run_test(size=size) as pilot:
         await pilot.pause()
         await pilot.press("enter")   # the invite's Start
         await pilot.pause()
@@ -131,6 +149,7 @@ async def test_the_tour(store, monkeypatch, fake_claude, with_prs, sdk, runner_,
         await pilot.press("enter")   # Next
         await pilot.pause()
         assert shown(app) == ("create", "sessions"), f"{desc}: creating the demo comes first"
+        fits("creating the demo")
         assert app.focused is None or not isinstance(app.focused, Button), "an action callout leaves focus be"
         await pilot.press("n")
         await pilot.pause()
@@ -169,9 +188,11 @@ async def test_the_tour(store, monkeypatch, fake_claude, with_prs, sdk, runner_,
         app.screen_stack[0].query_one("#tour-next", Button).press()
         await pilot.pause()
         assert shown(app) == ("prs", "prs"), f"{desc}: Next, the Decisions passed over for want of their pane"
+        fits("the PRs")
         app.screen_stack[0].query_one("#tour-next", Button).press()
         await pilot.pause()
         assert shown(app) == ("end", "session-info"), f"{desc}: Next"
+        fits("the end")
         await step(lambda: store.end(sid), ("notes", None), "the demo gone")
         assert isinstance(app.screen, TourNotes), desc
         notes = app.screen.notes
@@ -295,7 +316,9 @@ CALLOUT_STEPS = [d.id for d in whatsnew.DIALOGS if d.pane]   # every step painte
 
 async def demo_at(app, pilot, store, tut, stop, more=0):
     """The demo's items (and `more` tasks) in the inbox, followed, the tour at `stop`: its
-    callout, its pane's region, and the demo's rows the step protects (tour.ROWS)."""
+    callout, its pane's region, and the demo's rows the step protects (tour.ROWS). The demo
+    running, as it is mid-tour, so no box adds the line saying it has stopped."""
+    app.running = lambda sid: True
     app.follow(tut)   # as launching it does
     tour_at(app, stop, None if stop == "create" else tut)
     await pilot.pause()
@@ -317,8 +340,9 @@ def fill_demo(store, tut, more=0):
 @pytest.mark.anyio
 async def test_a_callout_keeps_clear_of_what_its_step_needs(store, tut, every_module, stop, size, more):
     """Doug (#101 6): a step's box never covers the demo's rows that step needs (tour.ROWS),
-    nor its pane, wherever one of place's candidates is clear of both. `more`: the demo's
-    extra items."""
+    nor its pane, wherever one of place's candidates is clear of both. #133: down to 80x24 its
+    rows are never covered and its text is never cut, a box widening where it must. `more`:
+    the demo's extra items."""
     fill_demo(store, tut, more)
     app = WheelhouseApp(store)
     where = f"{stop} at {size} with {more} more"
@@ -328,6 +352,8 @@ async def test_a_callout_keeps_clear_of_what_its_step_needs(store, tut, every_mo
         box = found.region
         assert app.screen.region.contains_region(box), f"{where}: {box} on screen"
         assert (mine is not None) is (stop in ROWS), f"{where}: the rows it protects are in sight, and only its own"
+        assert not callout.covers(box, mine), f"{where}: {box} ({found.side}) clear of its rows {mine} (#133)"
+        assert box.height >= found.lines(box.width, found.shown), f"{where}: {box} holds all its text (#133)"
         avoid = None if found.side == "inside" else pane.region
         options = callout.candidates(app.screen.size, box, every, mine)
         if any(not callout.covers(o, mine) and not callout.covers(o, avoid) for o in options):
@@ -400,14 +426,15 @@ async def test_a_callout_stays_put_as_the_inbox_grows(store, tut, stop, size):
         assert moves == 0, f"{stop} at {size}: moved {moves} of 11 times"
 
 
-@pytest.mark.parametrize("stop", ["docs", "answer"])
+@pytest.mark.parametrize("stop, size", [("docs", (60, 20)), ("docs", (50, 18)), ("inbox", (60, 20))])
 @pytest.mark.anyio
-async def test_a_callout_with_nowhere_clear_rests(store, tut, stop):
-    """Review of #104: at 60x20 nowhere is clear of the step's rows, and the box put in the
-    least bad spot stays there: placing it again doesn't loop on its own layout refresh."""
+async def test_a_callout_with_nowhere_clear_rests(store, tut, stop, size):
+    """Review of #104: on a screen this small nowhere is clear of the step's rows, at either
+    width (#133), and the box put in the least bad spot stays there: placing it again doesn't
+    loop on its own layout refresh."""
     fill_demo(store, tut)
     app = WheelhouseApp(store)
-    async with app.run_test(size=(60, 20)) as pilot:
+    async with app.run_test(size=size) as pilot:
         await pilot.pause()
         found, _, _, _ = await demo_at(app, pilot, store, tut, stop)
         await pilot.pause()
@@ -415,7 +442,7 @@ async def test_a_callout_with_nowhere_clear_rests(store, tut, stop):
         found.place = lambda: (calls.append(1), place())
         await pilot.pause(1.0)   # idle: a second of wall-clock time, the loop's to show
         assert len(calls) <= 2, f"{stop}: placed {len(calls)} times in a second idle"
-        assert found.forced is not False, f"{stop}: nowhere clear at 60x20, as the test assumes"
+        assert found.forced is not False, f"{stop}: nowhere clear at {size}, as the test assumes"
 
 
 @pytest.mark.parametrize("size", [(40, 16), (60, 20)])

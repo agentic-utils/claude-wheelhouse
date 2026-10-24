@@ -98,7 +98,9 @@ reading its reply, closing the decision, opening the story it writes as a doc (r
 watching it work in its conversation, Stats, the Decisions pane's ADRs (architecture
 decision records, from each repo's `docs/adr`) while the design module is loaded, and ending
 it. A box beside Detail never covers the demo's rows in the inbox: it sits below every row, or
-below the demo's, or at the foot of the screen.
+below the demo's, or at the foot of the screen. On a small screen, where a box at its usual
+width would cover them or be cut short, it widens to nearly the screen's width, which makes
+it shorter.
 The last dialog shows this release's notes. `Esc` ends the tour at any time, from any of its
 boxes or the New session it opens, for good: the demo keeps running until you Stop & Forget
 it, and `claude-wheelhouse tutorial` offers the tour again from the start. Quitting mid-tour
@@ -727,7 +729,13 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   with those instructions (then just compact). One request at a time, none within 30
   minutes of its last, and only in a session run in the wheelhouse; a Compact or Interrupt
   you press first, Park, Stop & Forget or a move to a tab drops a request still waiting, and
-  lifts its 30 minutes. Permission items are answered with buttons: Allow and Always at once, while Deny opens a
+  lifts its 30 minutes. Once its useful work is done and it is only waiting on you, a session
+  run in the wheelhouse parks itself, unasked, with `park_session`: it is compacted once its
+  turn ends, with the notes it wants kept, then stops, as if you had pressed Park with Compact
+  first, and Unpark resumes it as usual. A session that thinks compacting undesirable (you're
+  likely to Stop & Forget it, say) parks as it is once its turn ends, and posts its reason as
+  a decision. A session in a terminal tab, where you may be at the keyboard, isn't asked to
+  park itself, and a park there is never compacted. Permission items are answered with buttons: Allow and Always at once, while Deny opens a
   one-line box for an optional reason (the session reads it as why, so it can try something
   else); Enter denies, empty or not, and Esc, wherever focus is, goes back to the buttons. The plugin's `SessionStart` hook does it
   ([`hooks.json`](claude_wheelhouse/plugin/hooks/hooks.json)): it runs
