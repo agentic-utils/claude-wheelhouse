@@ -8,7 +8,7 @@ from textual.widgets import Button, DataTable, Input, TextArea
 from claude_wheelhouse import callout, features, launch, tutorial, whatsnew
 from claude_wheelhouse.callout import DIM, HIGHLIGHT, TourCallout
 from claude_wheelhouse.store import NOTES_SEEN, TOUR_AT
-from claude_wheelhouse.tour import PANE, ROWS, Tour
+from claude_wheelhouse.tour import PANE, ROWS, SHUN, Tour
 from claude_wheelhouse.tui import BUTTONS, Compose, Dialog, ForgetChoice, ItemList, KeysHelp, LeaveTour, NewSession, ThreadView, Transcript, \
     TourInvite, TourNotes, TourStop, SDK_BUTTONS, WheelhouseApp, key_name, keys_help
 from claude_wheelhouse.tutorial import should_offer as real_should_offer   # before conftest stubs it
@@ -75,8 +75,10 @@ def test_the_brief_speaks_to_the_person_first():
     """Doug (#78, 7): a note in caps to the person watching the demo."""
     assert tutorial.BRIEF.startswith("TO THE USER: THIS IS A DUMMY SESSION FOR THE TUTORIAL. FOLLOW THE PROMPTS ON "
                                      "THE WHEELHOUSE SCREEN TO LEARN HOW TO USE IT.\n\nThat line is for the person")
-    for asked in ("bedtime story", "main characters", "set?", 'kind "doc"', tutorial.STORY, "no subagents"):
-        assert asked in tutorial.BRIEF, f"Doug (#101 8): the story, its two questions and its doc ({asked})"
+    for asked in ("bedtime story", "main characters", "set?", 'kind "doc"', tutorial.STORY,
+                  "start no subagent but the one", "Suggest story titles"):
+        assert asked in tutorial.BRIEF, f"Doug (#101 8, 9): the story, its two questions, its doc, one subagent ({asked})"
+    assert "Agent" in tutorial.SETTINGS["permissions"]["allow"], "its one subagent asks nothing (#101 9)"
     assert f"Write(./{tutorial.STORY})" in tutorial.SETTINGS["permissions"]["allow"], "writing it asks nothing"
 
 
@@ -173,6 +175,7 @@ async def test_the_tour(store, monkeypatch, fake_claude, with_prs, sdk, runner_,
         def post():
             nonlocal q1, q2
             q1, q2 = setup_items(store, sid)
+            store.post_item(sid, "agent", "Suggest story titles", status="done")   # its first turn's subagent (#101 9)
 
         def next_():
             app.screen_stack[0].query_one("#tour-next", Button).press()
@@ -183,6 +186,8 @@ async def test_the_tour(store, monkeypatch, fake_claude, with_prs, sdk, runner_,
         await step(lambda: store.queue(sid, "Holly", q2), ("send", "session-info"), "both answered")
         await step(lambda: store.dispatch(sid), ("reply", "detail"), "sent")
         await step(lambda: store.reply(sid, q1, "noted", status="answered"), ("reply", "detail"), "it replied: Next on")
+        await step(next_, ("subagent", "items"), "Next: its subagent, its first turn done by its reply (#101 9)")
+        assert callout.rows(app.screen, sid, ROWS["subagent"])[1] is not None, f"{desc}: A1 there to point at"
         await step(next_, ("decision", "items"), "Next")
         await step(lambda: store.close_decision(sid, "D1"), ("docs", "items"), "the decision closed")
         m1 = post_story(store, sid)
@@ -296,7 +301,7 @@ async def test_esc_ends_the_tour(store, tut, stop, focus, desc):
         assert f"Tour ended. {tutorial.AGAIN}." in said, desc
         assert badge(app) == "", f"{desc}: no badge offers it"
         assert store.setting(TOUR_AT) is None, f"{desc}: nothing kept to resume"
-        assert "decisions-pane" not in store.tour_seen() and "session-sort" in store.tour_seen(), \
+        assert "decisions-pane" not in store.tour_seen() and "relaunch-tip" in store.tour_seen(), \
             f"{desc}: what it would have shown seen, not an absent pane's (the design module's, left out here)"
         assert store.session(tut) is not None, f"{desc}: the demo keeps running"
         app.set_focus(None)
@@ -390,7 +395,8 @@ async def test_the_buttons_do_what_each_step_asks(store, monkeypatch, fake_claud
         store.reply(sid, q1, "noted", status="answered")
         app.refresh_data()
         await pilot.pause()
-        await press(app.screen_stack[0].query_one("#tour-next", Button), "decision", "Next, once it replied")
+        await press(app.screen_stack[0].query_one("#tour-next", Button), "subagent", "Next, once it replied")
+        await press(app.screen_stack[0].query_one("#tour-next", Button), "decision", "Next: no A1 needed, never stalls")
         await press(act(app), "close", "Read D1: selected")
         assert app.selected == (sid, "D1")
         post_story(store, sid)
@@ -524,9 +530,37 @@ async def demo_at(app, pilot, store, tut, stop, more=0):
 
 def fill_demo(store, tut, more=0):
     setup_items(store, tut)
+    store.post_item(tut, "agent", "Suggest story titles", status="done")   # its subagent (#101 9)
     post_story(store, tut)
     for n in range(more):
         store.post_item(tut, "task", f"more {n}", status="running")
+
+
+# the buttons a step's box must leave in sight: those it tells the person to press, by id
+TARGETS = {"end": ("end", "park")}
+
+
+@pytest.mark.parametrize("sdk", [False, True])
+@pytest.mark.parametrize("stop", CALLOUT_STEPS)
+@pytest.mark.anyio
+async def test_no_box_covers_its_target_at_80x24(store, tut, every_module, monkeypatch, stop, sdk):
+    """Review of #176: a step's tips never grow its box over what the step points at: at the
+    smallest screen, with SDK mode's tips too, it keeps clear of its rows (tour.ROWS), the pane
+    it has the person read (tour.SHUN) and the buttons it asks them to press (TARGETS)."""
+    monkeypatch.setattr(features, "_flag", sdk)
+    fill_demo(store, tut)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        found, _, _, mine = await demo_at(app, pilot, store, tut, stop)
+        box, where = found.region, f"{stop}, SDK mode {'on' if sdk else 'off'}"
+        assert not callout.covers(box, mine), f"{where}: {box} ({found.side}) covers its rows {mine}"
+        if stop in SHUN:
+            shunned = callout.find(app.screen, SHUN[stop]).region
+            assert not callout.covers(box, shunned), f"{where}: {box} covers {SHUN[stop]} {shunned}"
+        for button in app.screen.query(Button):
+            if button.id in TARGETS.get(stop, ()) and button.display:
+                assert not callout.covers(box, button.region), f"{where}: {box} covers {button.id} {button.region}"
 
 
 @pytest.mark.parametrize("more", [0, 3])
@@ -689,7 +723,7 @@ async def test_a_callout_points_at_its_pane(store, tut, every_module, stop, size
 @pytest.mark.anyio
 async def test_a_paused_tour_survives_a_restart(store, tmp_path, monkeypatch, at, gesture, then, desc):
     """A pause is never lost: the next start shows the badge, not the invite, and L resumes it."""
-    monkeypatch.setattr(tutorial, "state", lambda st: {**real_state(st), "seen": ["session-sort"]
+    monkeypatch.setattr(tutorial, "state", lambda st: {**real_state(st), "seen": ["relaunch-tip"]
                                                           if at.startswith("tour") else []})
     store.create_session(str(tmp_path), name="real work")
     store.set_setting(TOUR_AT, at)
@@ -707,7 +741,7 @@ async def test_a_paused_tour_survives_a_restart(store, tmp_path, monkeypatch, at
         assert app.tour.kind == at.partition(":")[0], desc
 
 
-def upgrader(store, tmp_path, monkeypatch, new=("session-sort", "tab-order", "pane-titles")):
+def upgrader(store, tmp_path, monkeypatch, new=("relaunch-tip", "tab-order", "pane-titles")):
     """An upgrader: a session of their own, the tour taken, every feature seen but `new`."""
     monkeypatch.setattr(tutorial, "state", real_state)
     store.create_session(str(tmp_path), name="real work")
@@ -733,7 +767,7 @@ async def test_an_upgraders_top_up(store, tmp_path, monkeypatch):
         assert line == f"Updated to {whatsnew.running_version()}: 2 new things in 2 places.", line
         await pilot.press("enter")
         await pilot.pause()
-        for stop, pane, tip in (("sessions", "sessions", "Click a column heading"), ("answer", "detail", "Tab goes round")):
+        for stop, pane, tip in (("sessions", "sessions", "A red dot: not running"), ("answer", "detail", "Tab goes round")):
             co = app.screen_stack[0].query_one(TourCallout)
             assert shown(app) == (stop, pane) and co.text.startswith(tip), f"{stop}: its new tip alone"
             assert app.focused is not None and app.focused.id == "tour-next", f"{stop}: Next takes focus"
@@ -755,7 +789,7 @@ async def test_an_upgraders_top_up(store, tmp_path, monkeypatch):
 @pytest.mark.parametrize("key, recorded, label, again, desc", [
     ("l", {}, "Tour: 2 new · L", True, "Later: nothing recorded, the badge carries it, offered again next start"),
     ("escape", {}, "Tour: 2 new · L", True, "Esc is Later"),
-    ("n", {"session-sort": "skipped", "tab-order": "skipped", "pane-titles": "skipped"}, "", False,
+    ("n", {"relaunch-tip": "skipped", "tab-order": "skipped", "pane-titles": "skipped"}, "", False,
      "Never: every pending feature skipped, so only later ones are offered"),
 ])
 @pytest.mark.anyio
@@ -1331,7 +1365,7 @@ async def test_a_paused_top_up_resumes_with_its_tips_after_a_restart(store, tmp_
         await pilot.press("enter")   # Next past the sessions dialog
         await pilot.pause()
         assert shown(pilot.app) == ("answer", "detail")
-    assert "session-sort" in store.tour_seen() and "tab-order" not in store.tour_seen(), "only the dialog passed"
+    assert "relaunch-tip" in store.tour_seen() and "tab-order" not in store.tour_seen(), "only the dialog passed"
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()

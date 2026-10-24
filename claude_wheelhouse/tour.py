@@ -71,6 +71,7 @@ CHECKS = {
 # row): what its callout keeps clear of (callout.place). A step not listed needs none: its
 # callout keeps clear of its own pane alone
 ROWS = {
+    "subagent": ("A",),   # the demo's subagent: after its reply, so its first turn (and A1) is done
     "inbox": ("Q",),
     "answer": ("Q",),
     "reply": ("Q",),

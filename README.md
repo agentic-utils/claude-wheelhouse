@@ -96,7 +96,9 @@ that stays off until it's done. It starts with the demo session: press `N` and N
 in (its brief begins with a note in capitals saying it's the tutorial's), so just press
 Launch, and the demo is selected in the session list. The demo writes a short children's
 bedtime story with you: it posts a task, two related questions (the main characters and the
-setting) and a decision, and each box moves on as you do what it asks: answering (once one
+setting) and a decision, and starts one small subagent to suggest titles, whose A item a box
+points out once the demo has replied (its Next is always on, so a subagent that failed never
+holds the tour up). Each box moves on as you do what it asks: answering (once one
 answer is queued, the other question is selected for you), sending, reading its reply,
 reading the decision, then closing it (that box keeps clear of the decision in Detail),
 opening the story it writes as a doc (rendered), opening its conversation and asking it for
@@ -113,7 +115,8 @@ keeps your place: the title bar's badge then reads "Tour paused · L", and `L` (
 the badge) resumes it at the same box.
 
 After an update that brings something new to a pane, the next start offers a top-up in the
-same centred dialog ("Updated to 0.3.0: 3 new things in 2 places"): only the new tips, in a
+same centred dialog ("Updated to 0.3.0: 3 new things in 2 places"): only the new tips (at most
+three a box: the rest are in the release notes), in a
 box beside each pane they concern, every one moved on with `Enter` (Next), skipping panes
 with nothing new, then the notes of every release since the last ones you saw. It launches
 no demo session and costs no tokens. Later leaves the badge ("Tour: 3 new · L") and offers
