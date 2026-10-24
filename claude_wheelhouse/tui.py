@@ -5110,16 +5110,16 @@ class WheelhouseApp(App):
         self.paint_sendbar()
         self.paint_detail()
 
-    def show_item(self, sid: str, ref: str) -> None:
+    def show_item(self, sid: str, ref: str) -> bool:
         """A module's pick of an item (api.Context.show_item, the PRs pane's row that is one):
         shown in Detail with its thread and answer box, and highlighted in the inbox if listed
         there; if not, the inbox's highlight hidden, not left on another item (#148). An item
         of a compacting session isn't picked, as its inbox row isn't: Detail keeps what it
-        showed (#165)."""
+        showed, and False said (#165)."""
         key, table = f"{sid}|{ref}", self.items_table
         if key in table.locked:
             self.notify(COMPACTING_LOCKED, severity="warning")
-            return
+            return False
         self.shown_doc = None
         if key in table.rows:
             with table.prevent(DataTable.RowHighlighted):
@@ -5128,6 +5128,7 @@ class WheelhouseApp(App):
         table.show_cursor = key in table.rows
         self.select_row(key)
         self.paint_sendbar()
+        return True
 
     def unselect(self, note: str) -> None:
         """A module's pick of something that isn't an item (api.Context.unselect, a PR no
