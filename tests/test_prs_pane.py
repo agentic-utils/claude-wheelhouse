@@ -864,3 +864,73 @@ async def test_actions_on_different_prs_at_once_keep_each_outcome(store, sid, gi
         p.acted("merge", [(a, {"method": "squash"})])
         p.acted("close", [(b, {"closed": True})])
         assert p.outcome == "Merged PR108 (squash).\nClosed PR109.", p.outcome
+
+
+@pytest.fixture
+def hosted(store, sid, monkeypatch):
+    """The session run in the wheelhouse (SDK mode) and live: one that can be compacting."""
+    from claude_wheelhouse import liveness
+    store.set_runner(sid, "sdk")
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+
+
+async def compacting(app, pilot, store, sid, on: bool):
+    """The session's host records a compaction starting, or done, and the app ticks."""
+    store.set_activity(sid, "compacting: collecting notes" if on else "idle · compacted")
+    app.refresh_data()
+    await pilot.pause()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("button, action", [
+    ("prd-open", "open"), ("prd-merge", "merge"), ("prd-review", "review"), ("prd-close", "close"),
+])
+async def test_a_compacting_sessions_pr_in_detail_dims_and_its_buttons_lock(store, sid, github, hosted, monkeypatch, button, action):
+    """#165: Detail's whole view of a locked PR item dims, its buttons off, as Detail does (#150);
+    all live again once it's compacted."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        await on_pr(app, pilot, URL.format(109))
+        await landed(app, pilot)
+        p = app.query_one("#prs")
+        acted = []
+        monkeypatch.setattr(p, "act", lambda a, rows: acted.append((a, [r["number"] for r in rows])))
+        parts = [app.query_one("#detail-more"), app.query_one("#detail-bar")]
+        await compacting(app, pilot, store, sid, True)
+        assert app.selected == (sid, "PR109") and app.detail.has_class("compacting"), f"{button}: Detail dimmed"
+        assert all(w.styles.opacity == 0.5 for w in parts), f"{button}: the PR's parts dimmed with it"
+        assert app.query_one(f"#{button}", Button).is_disabled, f"{button}: off while compacting"
+        await pilot.click(f"#{button}")
+        await pilot.pause()
+        assert acted == [], f"{button}: a click does nothing"
+        await compacting(app, pilot, store, sid, False)
+        assert all(w.styles.opacity == 1 for w in [app.detail, *parts]), f"{button}: undimmed"
+        assert not app.query_one(f"#{button}", Button).is_disabled, f"{button}: on again"
+        await pilot.click(f"#{button}")
+        await pilot.pause()
+        assert acted == [(action, [109])], f"{button}: and acts"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("locked, shown, said, desc", [
+    (True, "Q1", [tui.COMPACTING_LOCKED], "compacting: not picked, as its inbox row isn't, and said why"),
+    (False, "PR109", [], "compacted: picked as ever"),
+])
+async def test_picking_a_compacting_sessions_pr_in_the_pane(store, sid, github, hosted, monkeypatch, locked, shown, said, desc):
+    """#165: the PRs pane's pick of a PR item whose session is compacting leaves Detail on
+    what it showed, as a pick of the item's inbox row does (#150)."""
+    q = store.post_item(sid, "question", "Which way?", status="open")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        await pick_in_inbox(app, pilot, f"{sid}|{q}")
+        await compacting(app, pilot, store, sid, True)
+        if not locked:
+            await compacting(app, pilot, store, sid, False)
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda text, **kw: notes.append(text))
+        await on_pr(app, pilot, URL.format(109))
+        await landed(app, pilot)
+        assert app.selected == (sid, shown), desc
+        assert notes == said, f"{desc}: {notes}"
