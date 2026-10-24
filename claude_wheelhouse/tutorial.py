@@ -30,6 +30,10 @@ OFFER_KEY = TUTORIAL_OFFER   # settings: unset until the first-run offer is take
 RESET = "reset"   # OFFER_KEY as reset() leaves it: offered at the next start, sessions or not, until answered
 STOP_WAIT = 5.0   # seconds an earlier tutorial's host gets to exit before it is told to
 STORY = "story.md"   # the one file the demo writes, the doc the tour has the person open
+# what the tour's buttons type for the person (#174): an answer to either question, and the
+# change asked of the demo in its conversation
+ANSWER = "Your choice: surprise me."
+ASK = "Please make the story a little shorter."
 # what the tutorial's directory allows: the wheelhouse's own tools, and writing the story, run without a prompt
 SETTINGS = {"permissions": {"allow": ["mcp__wheelhouse__*", f"Write(./{STORY})", f"Edit(./{STORY})"]}}
 
@@ -198,7 +202,8 @@ def facts(store: Store) -> dict | None:
     """What the tour's dialogs wait on that the store records, for the tutorial's session
     (None while there is none): it has posted, a question has an answer, both have, the
     answers were sent, the session replied after that, and the decision was closed (closed,
-    not seen: automatic selection marks a decision seen, but only the person closes one). A
+    not seen: automatic selection marks a decision seen, but only the person closes one), and
+    the questions still to answer. A
     question the person closed unanswered counts as answered; with none answered at all,
     there is nothing to send or reply to, so those count as done."""
     sid = session_id(store)
@@ -222,4 +227,7 @@ def facts(store: Store) -> dict | None:
             m["author"] == "claude" and m["kind"] == "reply" and m["item_ref"] in questions
             and m["id"] > first_sent for m in msgs),
         "closed": any(it["kind"] == "decision" and it["status"] == "closed" for it in items.values()),
+        # the open questions with no answer yet, in order: the next the tour selects (#174)
+        "unanswered": sorted((q for q in questions if q not in answered and items[q]["status"] != "closed"),
+                             key=lambda q: int(q[1:]) if q[1:].isdigit() else 0),
     }

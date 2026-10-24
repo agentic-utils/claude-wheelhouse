@@ -88,21 +88,26 @@ off, and `L` (Later), `Esc` or a click outside it leaves it to be offered again 
 start. The tour opens with what the wheelhouse is for (every session in one place, their
 questions, decisions and tasks in one inbox, a row that shows when a session needs you),
 then paints a box beside each pane in turn, its border highlighted, saying what it is and
-what to do there. A box that waits on you says what to do now; one that only explains has
-a Next button. It starts with the demo session: press `N` and New session opens filled
+what to do there, with everything else on the screen dimmed. A box that waits on you says
+what to do now, and has a button that does it for you, captioned with the action and how to
+do it yourself ("Send (Ctrl+S)", "Read D1 (Click)"), off until it can act. One that only
+explains has a Next button; one that waits for the demo (starting, or replying) has a Next
+that stays off until it's done. It starts with the demo session: press `N` and New session opens filled
 in (its brief begins with a note in capitals saying it's the tutorial's), so just press
 Launch, and the demo is selected in the session list. The demo writes a short children's
 bedtime story with you: it posts a task, two related questions (the main characters and the
-setting) and a decision, and each box moves on as you do what it asks: answering, sending,
-reading its reply, closing the decision, opening the story it writes as a doc (rendered),
-watching it work in its conversation, Stats, the Decisions pane's ADRs (architecture
+setting) and a decision, and each box moves on as you do what it asks: answering (once one
+answer is queued, the other question is selected for you), sending, reading its reply,
+reading the decision, then closing it (that box keeps clear of the decision in Detail),
+opening the story it writes as a doc (rendered), opening its conversation and asking it for
+a change, Stats, the Decisions pane's ADRs (architecture
 decision records, from each repo's `docs/adr`) while the design module is loaded, and ending
 it. A box beside Detail never covers the demo's rows in the inbox: it sits below every row, or
 below the demo's, or at the foot of the screen. On a small screen, where a box at its usual
 width would cover them or be cut short, it widens to nearly the screen's width, which makes
 it shorter.
 The last dialog shows this release's notes. `Esc` ends the tour at any time, from any of its
-boxes or the New session it opens, for good: the demo keeps running until you Stop & Forget
+boxes or the New session it opens, once you confirm (`Enter` leaves, `Esc` stays), for good: the demo keeps running until you Stop & Forget
 it, and `claude-wheelhouse tutorial` offers the tour again from the start. Quitting mid-tour
 keeps your place: the title bar's badge then reads "Tour paused · L", and `L` (or a click on
 the badge) resumes it at the same box.
