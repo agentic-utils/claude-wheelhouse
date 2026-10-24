@@ -20,6 +20,7 @@ from pathlib import Path
 UNRELEASED = "UNRELEASED"   # a feature's version until `make stamp` gives it the release's
 ADVANCED = "advanced"   # a feature's where: for experienced users, in the release notes only
 WHENS = ("", "sdk")   # a feature's when: always, or only with SDK mode on
+MAX_TIPS = 3   # tips a dialog shows, SDK mode on: the rest go to the release notes, ADVANCED (Doug, #101 9)
 
 # how a dialog advances: on Next, on the person doing what it asks, on a choice, on Close, or
 # on Next once what it waits for has happened (Next off until then: Doug, #174)
@@ -65,6 +66,10 @@ DIALOGS = (
          "This is your demo. Its row shows whether it's working, idle or needs you. It runs in a tab (or here, "
          "in SDK mode): you won't need to look at it.",
          WAIT, ask="Wait now while it starts: Next lights up once it posts its first items."),
+    Stop("subagent", "items", "Subagents",
+         "A session can start subagents of its own. Each shows in the inbox as an A item, and selecting it shows "
+         "its conversation in Detail as it works. The demo is starting one now, to suggest titles for its story: "
+         "A1, once it appears.", NEXT),
     Stop("inbox", "items", "The inbox",
          "Questions (Q), decisions (D) and tasks (T) from every session land here, open questions first.",
          ACTION, ask="Click one of the questions or press the button to move on.", button="Open Q1 (Click)"),
@@ -122,9 +127,8 @@ TIPPED = tuple(d.id for d in DIALOGS if d.id not in ("invite", "notes"))
 FEATURES: tuple[Feature, ...] = (
     Feature("tour", UNRELEASED, ADVANCED,
             note="A guided tour: a box beside each pane walks you through a demo session."),
-    Feature("session-sort", UNRELEASED, "sessions",
-            note="Every session list column sorts: click its heading to cycle up, down and back.",
-            tip="Click a column heading to sort by it; click again to reverse it."),
+    Feature("session-sort", UNRELEASED, ADVANCED,
+            note="Every session list column sorts: click its heading to cycle up, down and back."),
     Feature("stats-pane", UNRELEASED, "stats",
             note="Stats has a pane of its own, under the session list.",
             tip="Stats now has a pane of its own, under the session list."),
@@ -156,11 +160,10 @@ FEATURES: tuple[Feature, ...] = (
             note="A pressed button (Compact, Interrupt, Relaunch, Park, Fork...) stays off, dark grey, until what it "
                  "started has finished, or for 30 seconds with no word from the session.",
             tip="A pressed button stays dark grey until what it started has finished."),
-    Feature("pins", UNRELEASED, "inbox",
+    Feature("pins", UNRELEASED, "close",
             note="Pin any inbox item (📌, a click on its first column or P) and clearing the inbox leaves it; "
                  "docs come pinned.",
-            tip="Ctrl+A / Delete remove all finished items except those that are pinned (📌). Pin an item with P, "
-                "or click the first column."),
+            tip="Clearing leaves pinned items (📌): pin one with P, or a click on its first column."),
     Feature("doc-threads", UNRELEASED, "docs",
             note="A doc has a thread of its own: comment on it below the doc (split) or on a Thread tab (tabbed); "
                  "Ctrl+L switches the two, Ctrl+PgUp and Ctrl+PgDn the tabs.",
@@ -169,20 +172,18 @@ FEATURES: tuple[Feature, ...] = (
             note="An inbox item's ref is coloured by its kind (a task green, a question yellow, a decision purple, "
                  "a PR light blue), and resting the pointer on a row, there or in the session list, shows it in full.",
             tip="A ref's colour says its kind. Rest the pointer on a row to read its full title."),
-    Feature("pr-items", UNRELEASED, "inbox",
+    Feature("pr-items", UNRELEASED, ADVANCED,
             note="A pull request a session makes shows in the inbox as PR and its number, under the task it was "
-                 "made for, with GitHub's status: merged and closed ones dim.",
-            tip="A session's PRs show as PR and their number, with GitHub's status."),
+                 "made for, with GitHub's status: merged and closed ones dim."),
     Feature("prs-pane", UNRELEASED, "prs",
             note="The PRs pane lists the open PRs your sessions made, or with M every open PR you authored, each "
                  "with a traffic light for checks, review and conflicts; with a session selected, its PRs alone.",
             tip="It follows the session selected, as the inbox does. M: your sessions' PRs or all of yours."),
-    Feature("session-menu", UNRELEASED, "sessions",
+    Feature("session-menu", UNRELEASED, "end",
             note="Right-click a session in the session list for a menu of its buttons, acting on that session.",
             tip="Right-click a session for a menu of its buttons."),
-    Feature("send-now", UNRELEASED, "send",
-            note="Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits.",
-            tip="Alt+S allows you to send the answer you have just typed, bypassing the queue."),
+    Feature("send-now", UNRELEASED, ADVANCED,
+            note="Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits."),
     Feature("pr-actions", UNRELEASED, "prs",
             note="A PR in the PRs pane has Open, Merge and Request review buttons, and a right-click on its row gives "
                  "them as a menu: Merge asks first and says what stood in its way, and Request review asks the "
@@ -196,11 +197,10 @@ FEATURES: tuple[Feature, ...] = (
             note="Detail, showing a PR, has its Open, Merge, Request review and Close buttons, and its failing "
                  "checks, description, history and comments.",
             tip="Pick a PR to read its failing checks, description, history and comments in Detail."),
-    Feature("pr-marks", UNRELEASED, "prs",
+    Feature("pr-marks", UNRELEASED, ADVANCED,
             note="Mark PRs in the PRs pane as in the inbox (Ctrl+click, Shift+click, Space, Shift+Up/Down) and act "
-                 "on them all; Close closes a PR unmerged, asked first, as Merge is.",
-            tip="Ctrl+click or Space marks PRs: the buttons then act on them all."),
-    Feature("session-steps", UNRELEASED, "sessions",
+                 "on them all; Close closes a PR unmerged, asked first, as Merge is."),
+    Feature("session-steps", UNRELEASED, "end",
             note="The wheelhouse tells a session before it ends or resumes (and, in SDK mode, compacts), so its own "
                  "instructions can act, and can keep a handoff doc for it. Session steps, in the command palette, "
                  "has every switch; the first press asks once.",
@@ -223,6 +223,53 @@ FEATURES: tuple[Feature, ...] = (
     Feature("model-park", UNRELEASED, ADVANCED, when="sdk",
             note="A session run in the wheelhouse parks itself once its useful work is done, compacted first "
                  "as Park with Compact would; one that skips the compaction says why, as a decision."),
+    # the tour's showcase (#101 9): what a new user would otherwise miss, highest-ranked first
+    Feature("relaunch-tip", UNRELEASED, "sessions",
+            note="After a reboot or a crash, a session that isn't running shows a red dot: L relaunches it, "
+                 "Shift+L relaunches every one.",
+            tip="A red dot: not running, after a reboot, say. L relaunches it, Shift+L every one."),
+    Feature("adopt-tip", UNRELEASED, "sessions",
+            note="A adopts a Claude Code session you started outside the wheelhouse: exit it in its tab first.",
+            tip="Already have sessions running? A adopts them (exit each in its tab first)."),
+    Feature("recall-tip", UNRELEASED, "answer",
+            note="Ctrl+R takes a queued answer back into the box to edit it, before it's sent.",
+            tip="Typo in a queued answer? Ctrl+R takes it back into the box to edit."),
+    Feature("show-all-tip", UNRELEASED, "conversation",
+            note="Selecting a session narrows the inbox to its items: Esc, or a click on the selected session, "
+                 "shows every session's again.",
+            tip="Selecting a session narrows the inbox to it: Esc, or a click on it again, shows every session's."),
+    Feature("bulk-clear-tip", UNRELEASED, "close",
+            note="Ctrl+A in the inbox marks every finished item and Delete clears them together; F shows "
+                 "finished items again.",
+            tip="Ctrl+A marks every finished item and Delete clears them all; F shows finished ones again."),
+    Feature("fork-tip", UNRELEASED, "end",
+            note="Fork (K) carries a session on in a copy, in a new worktree, taking the items you choose.",
+            tip="Fork (K) carries a session on in a copy, in a new worktree."),
+    Feature("compact-tip", UNRELEASED, "send",
+            note="A session's dot turns amber past 200k tokens of context: Compact (C) shrinks it, and a hosted "
+                 "session past 200k asks whether to.",
+            tip="An amber dot: past 200k tokens. Compact (C) shrinks it; a hosted session asks first."),
+    Feature("permission-tip", UNRELEASED, "inbox", when="sdk",
+            note="A hosted session asking to run a tool shows in the inbox as an orange row: 1 Allow, 2 Always, "
+                 "3 Deny.",
+            tip="An orange row asks to run a tool: 1 Allow, 2 Always, 3 Deny."),
+    Feature("interrupt-shell-tip", UNRELEASED, "send", when="sdk",
+            note="Interrupt (I) stops a hosted session's turn; Shell (H) opens it in a real tab, for slash "
+                 "commands.",
+            tip="I interrupts a turn. H opens the session in a real tab, for slash commands."),
+    Feature("model-effort-tip", UNRELEASED, "stats", when="sdk",
+            note="Model (M) changes a hosted session's model live, and the Stats slider sets its effort.",
+            tip="M changes the model live; the slider sets the effort."),
+    Feature("stats-zoom-tip", UNRELEASED, "stats",
+            note="Stats' - and + zoom its charts out to days, and its cache line says when the next turn "
+                 "costs more.",
+            tip="- and + zoom the charts out to days. The cache line says when a turn gets dearer."),
+    # notes only: the docs box has no line to spare at 80x24 without covering M1
+    Feature("doc-quote", UNRELEASED, ADVANCED,
+            note="Click a block of a doc and your next comment on it quotes that block."),
+    Feature("layout-keys", UNRELEASED, ADVANCED,
+            note="Alt+Up and Alt+Down reorder rows; drag a splitter to resize panes, and double-click it to reset."),
+
 )
 
 

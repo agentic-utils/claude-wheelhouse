@@ -34,8 +34,9 @@ STORY = "story.md"   # the one file the demo writes, the doc the tour has the pe
 # change asked of the demo in its conversation
 ANSWER = "Your choice: surprise me."
 ASK = "Please make the story a little shorter."
-# what the tutorial's directory allows: the wheelhouse's own tools, and writing the story, run without a prompt
-SETTINGS = {"permissions": {"allow": ["mcp__wheelhouse__*", f"Write(./{STORY})", f"Edit(./{STORY})"]}}
+# what the tutorial's directory allows: the wheelhouse's own tools, its one subagent (#101 9) and writing the
+# story, run without a prompt
+SETTINGS = {"permissions": {"allow": ["mcp__wheelhouse__*", "Agent", f"Write(./{STORY})", f"Edit(./{STORY})"]}}
 
 # the brief's first line, for the person watching the session's tab or conversation
 TO_THE_USER = ("TO THE USER: THIS IS A DUMMY SESSION FOR THE TUTORIAL. FOLLOW THE PROMPTS ON THE WHEELHOUSE SCREEN "
@@ -50,7 +51,7 @@ wheelhouse by working with you, and the wheelhouse's tour tells them what to do,
 don't explain in chat how to use the wheelhouse. Keep chat short and about the work.
 
 This is a throwaway session in a scratch directory. The only file you touch is story.md in \
-this directory; run no commands and use no subagents. When you're asked to end, skip any \
+this directory; run no commands, and start no subagent but the one in step 5. When you're asked to end, skip any \
 session-end routine your own instructions describe (no memory, transcript or handoff notes): \
 just call end_session.
 
@@ -66,7 +67,10 @@ clouds. Say in the body that the setting should suit the characters, so they're 
 answered together.
 4. Post a decision: "Keeping the story under 200 words", why: over a longer one: it's for \
 reading aloud at bedtime; undo: say so and it's lengthened.
-5. Say in one line of chat that you're waiting on the two questions, then stop.
+5. Start one subagent, so the person can watch one at work: the Agent tool, general-purpose, \
+description "Suggest story titles", in the foreground, asking it to reply with three one-line \
+title ideas for a children's bedtime story, using no tools. Keep its ideas for the title.
+6. Say in one line of chat that you're waiting on the two questions, then stop.
 
 When the answers arrive, write the story (under 200 words, in British English, with a title) \
 as markdown to story.md in this directory, and declare it as a doc item: post_item with \
