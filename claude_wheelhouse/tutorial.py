@@ -68,7 +68,7 @@ answered together.
 4. Post a decision: "Keeping the story under 200 words", why: over a longer one: it's for \
 reading aloud at bedtime; undo: say so and it's lengthened.
 5. Start one subagent, so the person can watch one at work: the Agent tool, general-purpose, \
-description "Suggest story titles", in the foreground, asking it to reply with three one-line \
+model "haiku", description "Suggest story titles", in the foreground, asking it to reply with three one-line \
 title ideas for a children's bedtime story, using no tools. Keep its ideas for the title.
 6. Say in one line of chat that you're waiting on the two questions, then stop.
 

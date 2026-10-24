@@ -252,7 +252,8 @@ Update these in the same commit as the behaviour they describe:
   with `version=UNRELEASED`. Set `where` to the tour dialog for the pane it changes, with a
   `tip` of at most two lines, or to `ADVANCED` when it is for experienced users only. A
   dialog shows at most `MAX_TIPS` (3) tips, counting SDK-only ones: past that, keep the tips
-  that matter most to a new user and set the rest to `ADVANCED`, notes only (a test fails). A
+  that matter most to a new user and set the rest to `ADVANCED`, notes only (a test fails). Its
+  box must also stay clear of what its step points at on an 80x24 screen (another test). A
   module's pane has a dialog of its own (`pane` its module's id, as `stats` and `decisions`),
   so its tips show only with that module loaded: core never advertises a module's pane. Give
   it a one-line `note` for the release notes. Fixes add nothing. Never change or reuse a

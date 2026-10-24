@@ -8,7 +8,7 @@ from textual.widgets import Button, DataTable, Input, TextArea
 from claude_wheelhouse import callout, features, launch, tutorial, whatsnew
 from claude_wheelhouse.callout import DIM, HIGHLIGHT, TourCallout
 from claude_wheelhouse.store import NOTES_SEEN, TOUR_AT
-from claude_wheelhouse.tour import PANE, ROWS, Tour
+from claude_wheelhouse.tour import PANE, ROWS, SHUN, Tour
 from claude_wheelhouse.tui import BUTTONS, Compose, Dialog, ForgetChoice, ItemList, KeysHelp, LeaveTour, NewSession, ThreadView, Transcript, \
     TourInvite, TourNotes, TourStop, SDK_BUTTONS, WheelhouseApp, key_name, keys_help
 from claude_wheelhouse.tutorial import should_offer as real_should_offer   # before conftest stubs it
@@ -175,17 +175,19 @@ async def test_the_tour(store, monkeypatch, fake_claude, with_prs, sdk, runner_,
         def post():
             nonlocal q1, q2
             q1, q2 = setup_items(store, sid)
+            store.post_item(sid, "agent", "Suggest story titles", status="done")   # its first turn's subagent (#101 9)
 
         def next_():
             app.screen_stack[0].query_one("#tour-next", Button).press()
         assert app.screen_stack[0].query_one("#tour-next", Button).disabled, f"{desc}: Next off while it starts (#174)"
         await step(post, ("sessions", "sessions"), "it posted: no auto-dismiss (#174)")
-        await step(next_, ("subagent", "items"), "Next, on once it posted: its subagent shown (#101 9)")
-        await step(next_, ("inbox", "items"), "Next at once, the subagent's item or not: never stalls on it")
+        await step(next_, ("inbox", "items"), "Next, on once it posted")
         await step(lambda: store.queue(sid, "a sleepy dragon", q1), ("answer", "detail"), "a question answered: it was opened")
         await step(lambda: store.queue(sid, "Holly", q2), ("send", "session-info"), "both answered")
         await step(lambda: store.dispatch(sid), ("reply", "detail"), "sent")
         await step(lambda: store.reply(sid, q1, "noted", status="answered"), ("reply", "detail"), "it replied: Next on")
+        await step(next_, ("subagent", "items"), "Next: its subagent, its first turn done by its reply (#101 9)")
+        assert callout.rows(app.screen, sid, ROWS["subagent"])[1] is not None, f"{desc}: A1 there to point at"
         await step(next_, ("decision", "items"), "Next")
         await step(lambda: store.close_decision(sid, "D1"), ("docs", "items"), "the decision closed")
         m1 = post_story(store, sid)
@@ -379,8 +381,7 @@ async def test_the_buttons_do_what_each_step_asks(store, monkeypatch, fake_claud
         q1, q2 = setup_items(store, sid)
         app.refresh_data()
         await pilot.pause()
-        await press(app.screen_stack[0].query_one("#tour-next", Button), "subagent", "Next, once it posted")
-        await press(app.screen_stack[0].query_one("#tour-next", Button), "inbox", "Next: no subagent needed")
+        await press(app.screen_stack[0].query_one("#tour-next", Button), "inbox", "Next, once it posted")
         await press(act(app), "answer", "Open Q1: the question selected, as a click would")
         assert app.selected == (sid, q1), "Q1 selected"
         await press(act(app), "answer", "Answer: Q1's answer queued")
@@ -394,7 +395,8 @@ async def test_the_buttons_do_what_each_step_asks(store, monkeypatch, fake_claud
         store.reply(sid, q1, "noted", status="answered")
         app.refresh_data()
         await pilot.pause()
-        await press(app.screen_stack[0].query_one("#tour-next", Button), "decision", "Next, once it replied")
+        await press(app.screen_stack[0].query_one("#tour-next", Button), "subagent", "Next, once it replied")
+        await press(app.screen_stack[0].query_one("#tour-next", Button), "decision", "Next: no A1 needed, never stalls")
         await press(act(app), "close", "Read D1: selected")
         assert app.selected == (sid, "D1")
         post_story(store, sid)
@@ -532,6 +534,33 @@ def fill_demo(store, tut, more=0):
     post_story(store, tut)
     for n in range(more):
         store.post_item(tut, "task", f"more {n}", status="running")
+
+
+# the buttons a step's box must leave in sight: those it tells the person to press, by id
+TARGETS = {"end": ("end", "park")}
+
+
+@pytest.mark.parametrize("sdk", [False, True])
+@pytest.mark.parametrize("stop", CALLOUT_STEPS)
+@pytest.mark.anyio
+async def test_no_box_covers_its_target_at_80x24(store, tut, every_module, monkeypatch, stop, sdk):
+    """Review of #176: a step's tips never grow its box over what the step points at: at the
+    smallest screen, with SDK mode's tips too, it keeps clear of its rows (tour.ROWS), the pane
+    it has the person read (tour.SHUN) and the buttons it asks them to press (TARGETS)."""
+    monkeypatch.setattr(features, "_flag", sdk)
+    fill_demo(store, tut)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        found, _, _, mine = await demo_at(app, pilot, store, tut, stop)
+        box, where = found.region, f"{stop}, SDK mode {'on' if sdk else 'off'}"
+        assert not callout.covers(box, mine), f"{where}: {box} ({found.side}) covers its rows {mine}"
+        if stop in SHUN:
+            shunned = callout.find(app.screen, SHUN[stop]).region
+            assert not callout.covers(box, shunned), f"{where}: {box} covers {SHUN[stop]} {shunned}"
+        for button in app.screen.query(Button):
+            if button.id in TARGETS.get(stop, ()) and button.display:
+                assert not callout.covers(box, button.region), f"{where}: {box} covers {button.id} {button.region}"
 
 
 @pytest.mark.parametrize("more", [0, 3])

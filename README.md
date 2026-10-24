@@ -96,9 +96,9 @@ that stays off until it's done. It starts with the demo session: press `N` and N
 in (its brief begins with a note in capitals saying it's the tutorial's), so just press
 Launch, and the demo is selected in the session list. The demo writes a short children's
 bedtime story with you: it posts a task, two related questions (the main characters and the
-setting) and a decision, and starts one small subagent to suggest titles, which a box points
-out as its A item appears (that box's Next is on from the start, so a slow subagent never holds
-the tour up). Each box then moves on as you do what it asks: answering (once one
+setting) and a decision, and starts one small subagent to suggest titles, whose A item a box
+points out once the demo has replied (its Next is always on, so a subagent that failed never
+holds the tour up). Each box moves on as you do what it asks: answering (once one
 answer is queued, the other question is selected for you), sending, reading its reply,
 reading the decision, then closing it (that box keeps clear of the decision in Detail),
 opening the story it writes as a doc (rendered), opening its conversation and asking it for

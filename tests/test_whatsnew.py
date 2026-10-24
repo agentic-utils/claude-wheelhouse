@@ -71,8 +71,8 @@ def test_registry_rules(features, expected, desc):
 
 
 def test_dialogs_are_the_tour_in_order():
-    assert [d.id for d in DIALOGS] == ["invite", "principles", "create", "sessions", "subagent", "inbox", "answer", "send",
-                                       "reply", "decision", "close", "docs", "conversation", "ask", "stats", "decisions", "prs", "end", "notes"]
+    assert [d.id for d in DIALOGS] == ["invite", "principles", "create", "sessions", "inbox", "answer", "send",
+                                       "reply", "subagent", "decision", "close", "docs", "conversation", "ask", "stats", "decisions", "prs", "end", "notes"]
     assert {d.pane for d in DIALOGS} == {None, "sessions", "items", "detail", "session-info", "stats", "design", "prs"}
 
 

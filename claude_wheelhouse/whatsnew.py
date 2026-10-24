@@ -66,10 +66,6 @@ DIALOGS = (
          "This is your demo. Its row shows whether it's working, idle or needs you. It runs in a tab (or here, "
          "in SDK mode): you won't need to look at it.",
          WAIT, ask="Wait now while it starts: Next lights up once it posts its first items."),
-    Stop("subagent", "items", "Subagents",
-         "A session can start subagents of its own. Each shows in the inbox as an A item, and selecting it shows "
-         "its conversation in Detail as it works. The demo is starting one now, to suggest titles for its story: "
-         "A1, once it appears.", NEXT),
     Stop("inbox", "items", "The inbox",
          "Questions (Q), decisions (D) and tasks (T) from every session land here, open questions first.",
          ACTION, ask="Click one of the questions or press the button to move on.", button="Open Q1 (Click)"),
@@ -83,6 +79,10 @@ DIALOGS = (
          ACTION, ask="Press Ctrl+S, or the button, now to send the queue as one message.", button="Send (Ctrl+S)"),
     Stop("reply", "detail", "Replies", "The session's reply arrives in the question's thread.",
          WAIT, ask="Wait now: Next lights up when it lands."),
+    Stop("subagent", "items", "Subagents",
+         "A session can start subagents of its own. Each shows in the inbox as an A item, and selecting it shows "
+         "its conversation in Detail as it works. The demo started one to suggest titles for "
+         "its story: A1.", NEXT),
     Stop("decision", "items", "Decisions", "Decisions record what a session chose.",
          ACTION, ask="Click D1 now to read it, or press the button.", button="Read D1 (Click)"),
     Stop("close", "items", "Closing an item", "Done with an item? Delete closes it, and it leaves the inbox.",
@@ -179,9 +179,8 @@ FEATURES: tuple[Feature, ...] = (
             note="The PRs pane lists the open PRs your sessions made, or with M every open PR you authored, each "
                  "with a traffic light for checks, review and conflicts; with a session selected, its PRs alone.",
             tip="It follows the session selected, as the inbox does. M: your sessions' PRs or all of yours."),
-    Feature("session-menu", UNRELEASED, "end",
-            note="Right-click a session in the session list for a menu of its buttons, acting on that session.",
-            tip="Right-click a session for a menu of its buttons."),
+    Feature("session-menu", UNRELEASED, ADVANCED,
+            note="Right-click a session in the session list for a menu of its buttons, acting on that session."),
     Feature("send-now", UNRELEASED, ADVANCED,
             note="Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits."),
     Feature("pr-actions", UNRELEASED, "prs",
@@ -200,11 +199,10 @@ FEATURES: tuple[Feature, ...] = (
     Feature("pr-marks", UNRELEASED, ADVANCED,
             note="Mark PRs in the PRs pane as in the inbox (Ctrl+click, Shift+click, Space, Shift+Up/Down) and act "
                  "on them all; Close closes a PR unmerged, asked first, as Merge is."),
-    Feature("session-steps", UNRELEASED, "end",
+    Feature("session-steps", UNRELEASED, ADVANCED,
             note="The wheelhouse tells a session before it ends or resumes (and, in SDK mode, compacts), so its own "
                  "instructions can act, and can keep a handoff doc for it. Session steps, in the command palette, "
-                 "has every switch; the first press asks once.",
-            tip="Sessions are told before they end or resume, and keep a handoff doc. Switches: Session steps (Ctrl+P)."),
+                 "has every switch; the first press asks once."),
     Feature("compacting-shown", UNRELEASED, "sessions", when="sdk",
             note="While a session is compacting, its Compact button is off, its inbox items and its Detail dim and "
                  "ignore clicks, and its busy eye in the session list turns blue.",
@@ -237,7 +235,7 @@ FEATURES: tuple[Feature, ...] = (
     Feature("show-all-tip", UNRELEASED, "conversation",
             note="Selecting a session narrows the inbox to its items: Esc, or a click on the selected session, "
                  "shows every session's again.",
-            tip="Selecting a session narrows the inbox to it: Esc, or a click on it again, shows every session's."),
+            tip="Selecting a session narrows the inbox to it: a click on it again shows every session's."),
     Feature("bulk-clear-tip", UNRELEASED, "close",
             note="Ctrl+A in the inbox marks every finished item and Delete clears them together; F shows "
                  "finished items again.",
@@ -245,10 +243,10 @@ FEATURES: tuple[Feature, ...] = (
     Feature("fork-tip", UNRELEASED, "end",
             note="Fork (K) carries a session on in a copy, in a new worktree, taking the items you choose.",
             tip="Fork (K) carries a session on in a copy, in a new worktree."),
-    Feature("compact-tip", UNRELEASED, "send",
-            note="A session's dot turns amber past 200k tokens of context: Compact (C) shrinks it, and a hosted "
-                 "session past 200k asks whether to.",
-            tip="An amber dot: past 200k tokens. Compact (C) shrinks it; a hosted session asks first."),
+    Feature("compact-tip", UNRELEASED, "send", when="sdk",
+            note="A hosted session's dot turns amber past 200k tokens of context, when it asks whether to "
+                 "compact: Compact (C) shrinks it.",
+            tip="An amber dot: past 200k tokens, and the session asks whether to compact. Compact (C) shrinks it."),
     Feature("permission-tip", UNRELEASED, "inbox", when="sdk",
             note="A hosted session asking to run a tool shows in the inbox as an orange row: 1 Allow, 2 Always, "
                  "3 Deny.",
