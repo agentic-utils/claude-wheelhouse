@@ -733,9 +733,9 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   run in the wheelhouse parks itself, unasked, with `park_session`: it is compacted once its
   turn ends, with the notes it wants kept, then stops, as if you had pressed Park with Compact
   first, and Unpark resumes it as usual. A session that thinks compacting undesirable (you're
-  likely to Stop & Forget it, say) parks as it is, and posts its reason as a decision. In a
-  terminal tab, where you may be at the keyboard, a session parks only when asked, and is
-  never compacted. Permission items are answered with buttons: Allow and Always at once, while Deny opens a
+  likely to Stop & Forget it, say) parks as it is once its turn ends, and posts its reason as
+  a decision. A session in a terminal tab, where you may be at the keyboard, isn't asked to
+  park itself, and a park there is never compacted. Permission items are answered with buttons: Allow and Always at once, while Deny opens a
   one-line box for an optional reason (the session reads it as why, so it can try something
   else); Enter denies, empty or not, and Esc, wherever focus is, goes back to the buttons. The plugin's `SessionStart` hook does it
   ([`hooks.json`](claude_wheelhouse/plugin/hooks/hooks.json)): it runs
