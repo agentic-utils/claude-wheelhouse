@@ -262,9 +262,10 @@ def park_session(compact: bool = True, keep: str = "", reason: str = "") -> str:
     """Park this session: it stops once this turn ends, and shows dimmed at the foot of the
     wheelhouse's list until the person unparks it. Write your handoff notes into your items
     (and write_handoff, if your instructions keep one) first: this is the last thing you do.
-    Call it when the wheelhouse asks you to park, or unasked, once you have come to the end
-    of the useful work and are only waiting on the person.
-    In a session run inside the wheelhouse (SDK mode), parking unasked compacts it first,
+    Call it when the wheelhouse asks you to park. Only in a session run inside the wheelhouse
+    (SDK mode), also call it unasked once you have come to the end of the useful work and are
+    only waiting on the person; never unasked in a terminal tab, where the person may be at
+    the keyboard. In SDK mode, parking unasked compacts it first,
     once this turn ends, with `keep` as the compaction's instructions (what to carry through).
     compact=false parks it as it is, and needs `reason`, shown to the person: why compacting
     is undesirable (for example, you expect them to Stop & Forget it rather than carry on).
