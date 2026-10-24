@@ -88,6 +88,7 @@ PROTOCOL_VERSION = 20
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
+PARKED_UNCOMPACTED = "Parked without compacting"   # the decision a session's reason not to compact is posted as
 # a compaction's cut-off (Store.compact_cut), in settings by session id, and the activity lines
 # that end one: the host's idle and interrupted lines, and its errors and stops
 COMPACT_CUTOFF = "compact.cutoff."
@@ -910,16 +911,29 @@ class Store:
             if parked:
                 self.unrequest_compact(db, sid)
 
-    def park(self, sid: str, keep: str | None = None) -> bool:
-        """The session parks itself (park_session). Answering the person's Park, their choice
-        of Compact first stands, with keep, if given, as its instructions. Unasked, it is
-        compacted first only if it asks (keep not None; '' for a bare /compact): its host does
-        that once the park's turn has ended, as for the person's Park. Whether it compacts."""
+    def park(self, sid: str, compact: bool = True, keep: str = "", reason: str = "", hosted: bool = True) -> bool:
+        """The session parks itself (park_session), in one transaction with what decides how.
+        Answering the person's Park, told yet or not, their choice of Compact first stands,
+        with keep as its instructions. Unasked in a host's session (hosted), it is compacted
+        first unless compact is false, which needs a reason, posted as a decision. Compacting,
+        park_keep holds keep ('' for a bare /compact), which tells the host the park was asked
+        to compact. Its host does that once the park's turn has ended, and stops then either
+        way. Not hosted (a tab), nothing compacts. Whether it compacts."""
+        keep, reason = keep.strip(), reason.strip()
         with self.tx() as db:
             s = db.execute("SELECT park_requested_at, park_compact FROM sessions WHERE id = ?", (sid,)).fetchone()
             if s is None:
                 raise SessionGone(sid)
-            compact = bool(s["park_compact"]) if s["park_requested_at"] else keep is not None
+            asked = s["park_requested_at"] is not None
+            if not hosted:
+                compact = False
+            elif asked:
+                compact = bool(s["park_compact"])
+            elif not compact:
+                if not reason:
+                    raise ValueError("compact=false needs a reason, shown to the person: why compacting is undesirable")
+                self._insert_item(db, sid, "decision", PARKED_UNCOMPACTED,
+                                  decision_body("", None, {"why": reason}), INITIAL_STATUS["decision"], False)
             db.execute("UPDATE sessions SET parked = 1, park_requested_at = NULL, park_told_at = NULL, "
                        "park_compact = ?, park_keep = ? WHERE id = ?", (int(compact), keep if compact else None, sid))
             self.unrequest_compact(db, sid)

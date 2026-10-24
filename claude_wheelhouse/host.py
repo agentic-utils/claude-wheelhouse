@@ -722,13 +722,13 @@ class Host:
             return False
         if self.compact_then == "park":   # its compaction under way
             return True
+        if self.pending:   # the park's own turn still running: its last words and calls still land
+            return True
         if not session["park_compact"]:
             return False
-        if self.pending:   # the park's own turn still running
-            return True
-        # only a park this host asked for, lately, or one the session asked to compact itself
-        # (park_session, park_keep): a request left unanswered, then a park of the session's
-        # own that didn't ask (or the person's, after a restart, answered with no keep), never compacts
+        # only a park this host asked for, lately, or one park_session settled as compacting
+        # (park_keep): a request left unanswered, then a park set some other way (by force,
+        # or an older session's), never compacts
         keep = session["park_keep"]
         asked = keep is not None or (self.park_told is not None
                                      and time.monotonic() - self.park_told <= PARK_COMPACT_WITHIN)

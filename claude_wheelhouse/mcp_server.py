@@ -257,9 +257,6 @@ def stop_soon(s) -> bool:
     return True
 
 
-PARKED_UNCOMPACTED = "Parked without compacting"   # the decision a session's reason is posted as
-
-
 @wheelhouse_tool
 def park_session(compact: bool = True, keep: str = "", reason: str = "") -> str:
     """Park this session: it stops once parked, and shows dimmed at the foot of the
@@ -271,20 +268,17 @@ def park_session(compact: bool = True, keep: str = "", reason: str = "") -> str:
     once this turn ends, with `keep` as the compaction's instructions (what to carry through).
     compact=false parks it as it is, and needs `reason`, shown to the person: why compacting
     is undesirable (for example, you expect them to Stop & Forget it rather than carry on).
-    Answering the wheelhouse's park request, the person's choice decides, and these are
-    ignored but for `keep`. In a terminal tab nothing compacts, and these are ignored."""
-    s = _store.session(_sid)
-    if not hosted_here(_store):
-        _store.park(_sid)
+    Either way it stops once this turn ends. Answering the wheelhouse's park request, the
+    person's choice decides, and these are ignored but for `keep`. In a terminal tab nothing
+    compacts, and these are ignored."""
+    s = _store.session(_sid)   # for stop_soon: the registered process, before parking
+    hosted = hosted_here(_store)
+    compacts = _store.park(_sid, compact, keep, reason, hosted=hosted)
+    if not hosted:
         return "parked; this session stops in a moment" if stop_soon(s) else "parked"
-    if not compact and not s["park_requested_at"]:
-        if not reason.strip():
-            raise ValueError("compact=false needs a reason, shown to the person: why compacting is undesirable")
-        _store.post_item(_sid, "decision", PARKED_UNCOMPACTED, why=reason.strip())
-    asked = s["park_requested_at"]
-    if _store.park(_sid, (keep.strip() or None) if asked else keep.strip() if compact else None):
+    if compacts:
         return "parked; it is compacted once this turn ends, then stops: end your turn now"
-    return "parked; this session stops in a moment"
+    return "parked; this session stops once this turn ends: end your turn now"
 
 
 @wheelhouse_tool
