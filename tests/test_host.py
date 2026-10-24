@@ -1583,7 +1583,7 @@ def test_a_compaction_the_session_asked_for_waits_for_one_under_way(host, store,
 
 @pytest.mark.parametrize("compact, sent, desc", [
     (True, ["/compact"], "Compact first: once the park's turn has ended, compacted, then nothing more"),
-    (False, [], "without: the host stops once parked"),
+    (False, [], "without: the host stops once the park's turn has ended, not during it"),
 ])
 def test_park_compacts_first(host, store, sid, compact, sent, desc):
     store.post_item(sid, "question", "which db?")
@@ -1591,13 +1591,41 @@ def test_park_compacts_first(host, store, sid, compact, sent, desc):
     run(host.poll())   # the park request goes as a turn
     assert host.client.queries == [REQUEST_TEXT["park"]], desc
     store.set_parked(sid, True)   # park_session, mid-turn
-    assert run(host.poll()) == compact, f"{desc}: the park's turn still running"
+    assert run(host.poll()), f"{desc}: the park's turn still running, its last words still to come"
     finish_at(host, 220_000)
     assert run(host.poll()) == compact, desc
     finish_at(host, 40_000, compacted=compact)
     assert run(host.poll()) is False, f"{desc}: the host stops"
     assert host.client.queries[1:] == sent, f"{desc}: no prompt after the compaction"
     assert not store.session(sid)["park_compact"], desc
+
+
+@pytest.mark.parametrize("kwargs, asked, sent, desc", [
+    (dict(keep="the plan"), None, ["/compact the plan"], "parked itself: once its turn ends, with its keep text"),
+    ({}, None, ["/compact"], "no keep: a bare /compact"),
+    (dict(compact=False, reason="done for good"), None, [], "opted out: the host stops once the turn ends"),
+    ({}, True, ["/compact"], "the person's Park with Compact, called before the host told it: still compacted"),
+    (dict(compact=False), False, [], "the person's Park without: their choice, after the turn"),
+])
+def test_a_park_the_session_asked_for(host, store, sid, kwargs, asked, sent, desc):
+    """Doug: a model-initiated park compacts, through the same path as the person's Park."""
+    store.set_runner(sid, "sdk")
+    run(host.turn("the last of the work"))
+    if asked is not None:
+        store.request(sid, "park", asked)   # pressed, not yet told: the turn is still running
+    store.park(sid, **kwargs)   # park_session, mid-turn
+    assert run(host.poll()), f"{desc}: its turn still running, so the host waits"
+    assert host.client.queries == ["the last of the work"], f"{desc}: nothing sent into the turn"
+    finish_at(host, 220_000)
+    if not sent:
+        assert run(host.poll()) is False, f"{desc}: the host stops after the turn"
+        return
+    assert run(host.poll()), desc
+    finish_at(host, 40_000, compacted=True)
+    assert run(host.poll()) is False, f"{desc}: the host stops"
+    assert host.client.queries[1:] == sent, f"{desc}: nothing after the compaction"
+    s = store.session(sid)
+    assert s["parked"] and not s["park_compact"] and s["park_keep"] is None, desc
 
 
 @pytest.mark.parametrize("then, desc", [
@@ -2279,3 +2307,47 @@ def test_the_8_hour_mark_is_called_off_when_the_person_is_back(host, store, sid,
     run(host.poll())
     assert ("/compact" in host.client.queries) is compacted, desc
     assert host.compact_nonce is None, f"{desc}: nothing left waiting for notes"
+
+
+@pytest.mark.parametrize("how, desc", [
+    ("self", "a self-park with compact=false, waiting for its turn: Stop & Forget is still told"),
+    ("person", "the person's Park without Compact, waiting for its turn: the same"),
+])
+def test_stop_and_forget_wins_over_a_park_waiting_for_its_turn(host, store, sid, how, desc):
+    store.set_runner(sid, "sdk")
+    run(host.turn("the last of the work"))
+    if how == "person":
+        store.request(sid, "park", False)
+    store.park(sid, compact=False, reason="done for good")
+    assert run(host.poll()), f"{desc}: waiting for the turn"
+    store.request(sid, "end")
+    assert run(host.poll()), f"{desc}: not stopped, unparked to be told"
+    row = store.session(sid)
+    assert not row["parked"] and row["end_told_at"] == row["end_requested_at"], desc
+    assert host.client.queries[-1] == request_text(store, "end"), desc
+
+
+def test_a_park_waiting_for_its_turn_says_so(host, store, sid):
+    store.set_runner(sid, "sdk")
+    run(host.turn("the last of the work"))
+    host.show("running Bash")
+    store.park(sid, compact=False, reason="done for good")
+    run(host.poll())
+    assert store.session(sid)["activity"] == f"running Bash · {host_mod.PARKS_AFTER_TURN}", "said at once"
+    host.show("thinking")
+    assert store.session(sid)["activity"] == f"thinking · {host_mod.PARKS_AFTER_TURN}", "and kept as the turn goes on"
+    finish_at(host, 40_000)
+    assert run(host.poll()) is False and not host.parking_after, "stopped once the turn ended"
+
+
+def test_a_park_unparked_while_it_waits_for_its_turn_stops_saying_so(host, store, sid):
+    store.set_runner(sid, "sdk")
+    run(host.turn("the last of the work"))
+    host.show("running Bash")
+    store.park(sid, compact=False, reason="done for good")
+    run(host.poll())
+    store.set_parked(sid, False)   # Park pressed again while the park waits: the app's unpark
+    assert run(host.poll()) is True and not host.parking_after, "carries on, no longer parking"
+    assert store.session(sid)["activity"] == "running Bash", "the line drops its note at once"
+    host.show("thinking")
+    assert store.session(sid)["activity"] == "thinking", "and later lines don't bring it back"
