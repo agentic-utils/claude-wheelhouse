@@ -89,7 +89,7 @@ LIT = {
     "inbox": ("items",), "answer": ("items",), "reply": ("items",),
     "decision": ("items", "detail"), "close": ("items", "detail"), "docs": ("items", "detail"),
     "conversation": ("items",), "ask": ("items",),
-    "decisions": ("detail",), "prs": ("items",), "end": ("sessions",),
+    "decisions": ("detail",), "prs": ("items", "detail"), "end": ("sessions",),
 }
 
 
