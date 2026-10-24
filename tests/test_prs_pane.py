@@ -864,3 +864,92 @@ async def test_actions_on_different_prs_at_once_keep_each_outcome(store, sid, gi
         p.acted("merge", [(a, {"method": "squash"})])
         p.acted("close", [(b, {"closed": True})])
         assert p.outcome == "Merged PR108 (squash).\nClosed PR109.", p.outcome
+
+
+@pytest.fixture
+def hosted(store, sid, monkeypatch):
+    """The session run in the wheelhouse (SDK mode), live until a test says otherwise
+    (hosted["liveness"]): one that can be compacting."""
+    from claude_wheelhouse import liveness
+    store.set_runner(sid, "sdk")
+    state = {"liveness": "live"}
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: state["liveness"])
+    return state
+
+
+async def compacting(app, pilot, store, sid, hosted, end: str | None = None):
+    """The session's host records a compaction starting (end None), or its end: "compacted",
+    or "host gone", stopped mid-way with its line left (store.compacting_now). The app ticks."""
+    if end == "host gone":
+        hosted["liveness"] = "dead"
+    else:
+        store.set_activity(sid, "idle · compacted" if end else "compacting: collecting notes")
+    app.refresh_data()
+    await pilot.pause()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("button, action, end", [
+    ("prd-open", "open", "compacted"), ("prd-merge", "merge", "compacted"),
+    ("prd-review", "review", "compacted"), ("prd-close", "close", "compacted"),
+    ("prd-close", "close", "host gone"),
+])
+async def test_a_compacting_sessions_pr_in_detail_dims_and_its_buttons_lock(store, sid, github, hosted, monkeypatch,
+                                                                             button, action, end):
+    """#165: Detail's whole view of a locked PR item dims, its buttons off, as Detail does (#150);
+    all live again once it's compacted, or its host stopped mid-way."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        await on_pr(app, pilot, URL.format(109))
+        await landed(app, pilot)
+        p = app.query_one("#prs")
+        acted = []
+        monkeypatch.setattr(p, "act", lambda a, rows: acted.append((a, [r["number"] for r in rows])))
+        parts = [app.query_one("#detail-more"), app.query_one("#detail-bar")]
+        await compacting(app, pilot, store, sid, hosted)
+        assert app.selected == (sid, "PR109") and app.detail.has_class("compacting"), f"{button}: Detail dimmed"
+        assert all(w.styles.opacity == 0.5 for w in parts), f"{button}: the PR's parts dimmed with it"
+        assert app.query_one(f"#{button}", Button).is_disabled, f"{button}: off while compacting"
+        await pilot.click(f"#{button}")
+        await pilot.pause()
+        assert acted == [], f"{button}: a click does nothing"
+        await compacting(app, pilot, store, sid, hosted, end)
+        assert all(w.styles.opacity == 1 for w in [app.detail, *parts]), f"{button}, {end}: undimmed"
+        assert not app.query_one(f"#{button}", Button).is_disabled, f"{button}, {end}: on again"
+        await pilot.click(f"#{button}")
+        await pilot.pause()
+        assert acted == [(action, [109])], f"{button}, {end}: and acts"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("start, lit, desc", [
+    ("Q1", None, "Detail on an item the pane doesn't list: its highlight hidden (#148)"),
+    ("PR108", "/108", "Detail on a PR: its highlight back there"),
+])
+async def test_picking_a_compacting_sessions_pr_in_the_pane(store, sid, github, hosted, monkeypatch, start, lit, desc):
+    """#165: the PRs pane's pick of a PR item whose session is compacting leaves Detail on
+    what it showed, as a pick of the item's inbox row does (#150), and the pane's highlight
+    with it; once compacted, a pick of it shows it."""
+    q = store.post_item(sid, "question", "Which way?", status="open")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        if start == "Q1":
+            await pick_in_inbox(app, pilot, f"{sid}|{q}")
+        else:
+            await on_pr(app, pilot, URL.format(108))
+            await landed(app, pilot)
+        await compacting(app, pilot, store, sid, hosted)
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda text, **kw: notes.append(text))
+        p = await on_pr(app, pilot, URL.format(109))
+        await landed(app, pilot)
+        table = app.query_one("#pr-list")
+        assert app.selected == (sid, start) and notes == [tui.COMPACTING_LOCKED], f"{desc}: not picked, said why"
+        here = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value if table.show_cursor else None
+        assert (here and here[-4:]) == lit and p.shown == here, f"{desc}: the highlight on what Detail shows"
+        await compacting(app, pilot, store, sid, hosted, "compacted")
+        await on_pr(app, pilot, URL.format(109))
+        await landed(app, pilot)
+        assert app.selected == (sid, "PR109"), f"{desc}: compacted, picked as ever"
