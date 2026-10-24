@@ -83,6 +83,13 @@ ROWS = {
 # a pane a step's callout keeps clear of, besides its own: what the step has the person read
 # there (Doug, #174: closing D1 never covers D1 shown in Detail)
 SHUN = {"close": "detail"}
+# the panes each step's text refers to besides its own: left undimmed with it (Doug, #174)
+LIT = {
+    "inbox": ("items",), "answer": ("items",), "reply": ("items",),
+    "decision": ("items", "detail"), "close": ("items", "detail"), "docs": ("items", "detail"),
+    "conversation": ("items",), "ask": ("items",),
+    "decisions": ("detail",), "prs": ("items", "detail"), "end": ("sessions",),
+}
 
 
 class Tour:

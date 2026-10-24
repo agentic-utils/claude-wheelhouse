@@ -393,9 +393,6 @@ async def test_the_buttons_do_what_each_step_asks(store, monkeypatch, fake_claud
         await press(app.screen_stack[0].query_one("#tour-next", Button), "decision", "Next, once it replied")
         await press(act(app), "close", "Read D1: selected")
         assert app.selected == (sid, "D1")
-        detail = callout.find(app.screen, "detail").region
-        assert not callout.covers(app.screen.query_one(TourCallout).region, detail), \
-            "closing D1 keeps clear of D1 shown in Detail"
         post_story(store, sid)
         await press(act(app), "docs", "Close D1: closed")
         assert store.item(sid, "D1")["status"] == "closed"
@@ -438,6 +435,75 @@ async def test_a_button_is_off_until_it_can_act(store, tut, stop, picked, on, de
         tour_at(app, stop, tut)
         await pilot.pause()
         assert act(app).disabled is not on, desc
+
+
+@pytest.mark.parametrize("size", [(80, 24), (100, 30), (160, 40)])
+@pytest.mark.anyio
+async def test_closing_d1_keeps_clear_of_it_in_detail(store, tut, size):
+    """Doug (#174): the close step's box never sits on D1 shown in Detail, which stays lit."""
+    setup_items(store, tut)
+    app = WheelhouseApp(store)
+    app.running = lambda sid: True
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        app.follow(tut)
+        app.tour_pick(f"{tut}|D1")
+        tour_at(app, "close", tut)
+        await pilot.pause()
+        detail = callout.find(app.screen, "detail")
+        box = app.screen.query_one(TourCallout).region
+        assert not callout.covers(box, detail.region), f"{size}: {box} clear of Detail {detail.region}"
+        assert DIM not in detail.classes, f"{size}: Detail lit, as the step refers to it"
+
+
+@pytest.mark.anyio
+async def test_a_revised_answer_keeps_its_question(store, tut):
+    """Review of #174: the other question is selected once, as an answer is queued; picking
+    the answered one again, to revise it, leaves it picked."""
+    q1, q2 = setup_items(store, tut)
+    app = WheelhouseApp(store)
+    app.running = lambda sid: True
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(tut)
+        app.tour_pick(f"{tut}|{q1}")
+        tour_at(app, "answer", tut)
+        await pilot.pause()
+        store.queue(tut, "a sleepy dragon", q1)
+        app.refresh_data()
+        await pilot.pause()
+        assert app.selected == (tut, q2), "the other question selected as Q1's answer is queued"
+        app.tour_pick(f"{tut}|{q1}")
+        app.refresh_data()
+        await pilot.pause()
+        assert app.selected == (tut, q1), "Q1 picked again to revise it: it stays"
+
+
+@pytest.mark.anyio
+async def test_esc_in_the_doc_editor_is_the_editors(store, tut, tmp_path):
+    """Doug (#174): Esc meant to close a doc's editor closes it, and the tour carries on."""
+    doc = tmp_path / "plan.md"
+    doc.write_text("# A plan\n\n" + "a long line of the plan " * 12 + "\n")
+    m = store.post_doc(tut, "the plan", str(doc))
+    app = WheelhouseApp(store)
+    app.running = lambda sid: True
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(tut)
+        tour_at(app, "docs", tut)
+        app.tour_pick(f"{tut}|{m}")
+        await pilot.pause()
+        box = app.screen.query_one(TourCallout).region   # a click beside the tour's box, on the doc
+        scroll = app.detail_scroll.region
+        x = next(x for x in range(scroll.x + 1, scroll.right - 1) if not box.contains(x, scroll.y + 3))
+        await pilot.click(offset=(x, scroll.y + 3))
+        await pilot.pause()
+        assert app.focused is not None and app.focused.id == "detail-editor", "the editor open"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, LeaveTour), "no question: the Esc was the editor's"
+        assert app.focused is None or app.focused.id != "detail-editor", "the editor closed"
+        assert app.tour is not None and app.screen_stack[0].query(TourCallout), "the tour carries on"
 
 
 CALLOUT_STEPS = [d.id for d in whatsnew.DIALOGS if d.pane]   # every step painted as a callout

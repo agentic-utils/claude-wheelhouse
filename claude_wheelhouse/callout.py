@@ -90,13 +90,13 @@ def place(screen: Size, pane: Region | None, height: int, clear: Region | None =
     nor the pane (bar a box spot put inside it), the nearest the pane; with none, the one
     covering least of `keep`, then of the pane. `w`: its width, width's by default. `shun`:
     another pane the step has the person read (tour.SHUN), kept clear of as `keep` is, and
-    the same boxes tried in the pane's own column too."""
+    the same boxes tried in the pane's own column and either side of `shun` too."""
     first, side = spot(screen, None if centre else pane, height, w)
     avoid = None if side == "inside" else pane
     spots = candidates(screen, first, clear, keep)
     if shun is not None and pane is not None:
-        x = max(0, min(pane.x, screen.width - first.width))
-        spots += [Region(x, r.y, r.width, r.height) for r in spots]
+        xs = {pane.x, shun.x - first.width, shun.right}
+        spots += [Region(max(0, min(x, screen.width - r.width)), r.y, r.width, r.height) for x in xs for r in spots]
     clear_of = [r for r in spots if not covers(r, keep) and not covers(r, shun) and not covers(r, avoid)]
     best = min(clear_of, key=lambda r: gap(r, pane)) if clear_of \
         else min(spots, key=lambda r: (covers(r, keep), covers(r, shun), covers(r, avoid), gap(r, pane)))
@@ -367,7 +367,7 @@ class TourCallout(Vertical):
                 text = f"In the {title} pane:\n{self.text}"
                 at, _ = place(screen, region, self.lines(w, text) - 1, clear, keep, centre=True, w=w, shun=shun)
             over = covers(at, region) if side not in ("inside", "centred") else 0
-            return (covers(at, keep), self.lines(w, text) - at.height, over), at, side, text
+            return (covers(at, keep), covers(at, shun), self.lines(w, text) - at.height, over), at, side, text
 
         # #133: the narrowest width that falls short least; a wider box wraps to fewer rows
         _, at, side, text = min((at_width(w) for w in widths(screen)), key=lambda t: t[0])

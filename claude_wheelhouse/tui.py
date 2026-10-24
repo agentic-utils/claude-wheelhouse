@@ -69,7 +69,7 @@ from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, compacting_now, state as hu
 from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
-from .tour import NOTES, PAUSED, ROWS as tour_rows, SHUN as tour_shun, TOPUP, TOUR, Tour, offered, opening
+from .tour import LIT as tour_lit, NOTES, PAUSED, ROWS as tour_rows, SHUN as tour_shun, TOPUP, TOUR, Tour, offered, opening
 from .store import (DEFAULT_THEN, DELETED, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mode, pinned, runner, spared, stamp, standing)
 from .unsent import Unsent
@@ -4127,6 +4127,7 @@ class WheelhouseApp(App):
         self.client.listen(self.heard)
         self.tour: Tour | None = None   # the tour under way (tour.py), painted by show_tour
         self.tour_showing: tuple | None = None   # what show_tour last painted: (dialog id, text)
+        self.tour_unanswered: tuple | None = None   # the demo's questions unanswered, as next_question last saw
         self.inbox_scroll: float | None = None   # the inbox's scroll before a tour step first moved it (callout.bring)
 
     def compose(self) -> ComposeResult:
@@ -4343,10 +4344,21 @@ class WheelhouseApp(App):
             return False
         form = self.screen if isinstance(self.screen, NewSession) and self.screen.tour else None
         if form is None and (self.screen is not self.screen_stack[0] or not self.screen.query(TourCallout)
-                             or any(r.target is not None for r in self.screen.query(DenyReason))):
+                             or any(r.target is not None for r in self.screen.query(DenyReason))
+                             or self.esc_is_focus_own()):
             return False
         self.ask_leave_tour(form)
         return True
+
+    def esc_is_focus_own(self) -> bool:
+        """Whether the widget with focus, or one holding it within the screen, binds Esc itself
+        (a doc's editor closing, say): its Esc, never the tour's (Doug, #174)."""
+        for w in self.focused.ancestors_with_self if self.focused is not None else ():
+            if isinstance(w, Screen):
+                return False
+            if "escape" in w._bindings.key_to_bindings:
+                return True
+        return False
 
     def ask_leave_tour(self, form: "NewSession | None" = None, stay: Callable[[], None] | None = None) -> None:
         """LeaveTour asked: leaving ends the tour (end_tour), closing the demo's New session
@@ -6074,7 +6086,7 @@ class WheelhouseApp(App):
         else:
             main.mount(TourCallout(stop.pane, text, next=nxt, keep=tour.sid or None, kinds=tour_rows.get(stop.id, ()),
                                    scrolled=self.tour_scrolled, act=act, ready=ready, act_ready=can,
-                                   shun=tour_shun.get(stop.id), also=("items",) if stop.id in tour_rows else ()))
+                                   shun=tour_shun.get(stop.id), also=tour_lit.get(stop.id, ())))
 
     def tour_scrolled(self, was: float) -> None:
         """A tour step scrolled the inbox to its rows: where it was before the first, kept to put
@@ -6147,8 +6159,8 @@ class WheelhouseApp(App):
             if not self.answer.text.strip():
                 self.answer.text = tutorial.ANSWER if stop.id == "answer" else tutorial.ASK
             self.action_submit(stop.id == "ask")
-        elif stop.id == "send":
-            self.send_session(sid)
+        elif stop.id == "send":   # Ctrl+S's own path
+            self.action_send_session()
         elif stop.id == "close":   # Delete in the inbox
             self.items_table.focus()
             self.action_close_question()
@@ -6196,11 +6208,14 @@ class WheelhouseApp(App):
         self.settle()
 
     def next_question(self, facts: dict | None) -> None:
-        """The answering step (Doug, #174): once the question selected has its answer queued,
-        the other one still unanswered is selected, the answer box kept."""
+        """The answering step (Doug, #174): as the question selected has its answer queued,
+        the other one still unanswered is selected, the answer box kept. Once, as it's
+        queued: a question picked again later, to revise its answer, stays picked."""
         picked, sid = self.selected, self.tour.sid
-        if not (facts and facts["unanswered"] and picked and picked[0] == sid and picked[1]
-                and picked[1].startswith("Q") and picked[1] not in facts["unanswered"]):
+        left = tuple(facts["unanswered"]) if facts else ()
+        was, self.tour_unanswered = self.tour_unanswered, left
+        if was is None or not left or len(left) >= len(was) or not (
+                picked and picked[0] == sid and picked[1] in was and picked[1] not in left):
             return
         self.tour_pick(f"{sid}|{facts['unanswered'][0]}", focus=False)
 
@@ -6216,7 +6231,7 @@ class WheelhouseApp(App):
         Nothing is kept to resume (tour_at cleared), and every feature it would have shown
         counts as seen (not an absent pane's, kept for when it's there), so the badge offers nothing. The demo, if any, keeps running for Stop &
         Forget; `claude-wheelhouse tutorial` offers the tour afresh."""
-        tour, self.tour, self.tour_showing = self.tour, None, None
+        tour, self.tour, self.tour_showing, self.tour_unanswered = self.tour, None, None, None
         if tour is None:
             return
         self.drop_callouts(list(self.screen_stack[0].query(TourCallout)))
