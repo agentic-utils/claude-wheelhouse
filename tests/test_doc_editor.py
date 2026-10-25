@@ -138,7 +138,7 @@ async def test_esc_closes_asking_first_with_edits(store, sid, doc, full):
         await click(pilot, view, row_with(view, "Build it."))
         await pilot.press("escape")
         await pilot.pause()
-        await pilot.press("d")
+        await pilot.press("alt+d")
         await pilot.pause()
         assert not editor.display and editor.key is None, "Discard closes it"
         assert "Not yet" not in "\n".join(view._layout(view.size.width)[1]), "the file shown again"
@@ -176,7 +176,7 @@ async def test_edits_outlive_another_doc_shown_and_come_back(store, sid, doc):
         assert app.query_one("#detail-pane").border_title == "Detail · edited", "and edited"
         await pilot.press("escape")
         await pilot.pause()
-        await pilot.press("d")
+        await pilot.press("alt+d")
         await pilot.pause()
         assert str(doc[1]) not in app.doc_edits, "Discard drops the buffer"
         assert "Kept" not in "\n".join(view._layout(view.size.width)[1]), "the file shown again"

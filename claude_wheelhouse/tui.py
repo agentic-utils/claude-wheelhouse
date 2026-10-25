@@ -414,7 +414,7 @@ def open_questions_said(refs: list) -> str:
 
 def deleted_hint(show_finished: bool, undoable: bool = True) -> str:
     """What a delete's notice adds: where the finished go, and how to take it back."""
-    said = ([] if show_finished else ["F shows finished items"]) + (["Ctrl+Z undoes it"] if undoable else [])
+    said = ([] if show_finished else ["Alt+F shows finished items"]) + (["Ctrl+Z undoes it"] if undoable else [])
     return ": " + ", ".join(said) if said else ""
 
 
@@ -1233,10 +1233,10 @@ class SessionList(SinkList):
     # E, S and Shift+S (End, Restore and Restore all before Forget and Relaunch took them
     # over) are bound to nothing for a release, so muscle memory does nothing rather than
     # something new. Delete and Backspace forget, as they close an item in the item list
-    BINDINGS = [Binding("r", "app.press('rename')", "Rename", show=False),
-                Binding("l", "app.press('relaunch')", "Relaunch", show=False),
-                Binding("p", "app.press('park')", "Park", show=False),
-                Binding("k", "app.press('fork')", "Fork", show=False),
+    BINDINGS = [Binding("alt+r", "app.press('rename')", "Rename", show=False),
+                Binding("alt+l", "app.press('relaunch')", "Relaunch", show=False),
+                Binding("alt+p", "app.press('park')", "Park", show=False),
+                Binding("alt+k", "app.press('fork')", "Fork", show=False),
                 Binding("delete", "app.press('end')", "Forget", show=False),
                 Binding("backspace", "app.press('end')", "Forget", show=False)]
 
@@ -1396,16 +1396,17 @@ class SessionList(SinkList):
 class ItemList(SinkList):
     """The inbox's items, with a multi-selection to close questions in one go, by row key
     so it survives refreshes. Ctrl+click toggles a row, Shift+click takes the range from the
-    last one toggled; Space and Shift+Up/Down do the same from the keyboard, for terminals
+    last one toggled; Ctrl+Space and Shift+Up/Down do the same from the keyboard, for terminals
     that keep Shift+click for their own text selection. Ctrl+A marks the finished rows."""
 
     # here only, not the app's: in an answer box Backspace and Delete edit the text (#64). Off
     # the footer, as Alt+S is: ahead of the app's keys it pushed Relaunch all off at 100 columns (#135)
     BINDINGS = [Binding("delete", "app.close_question", "Close", show=False, key_display="Del"),
                 Binding("backspace", "app.close_question", "Close", show=False),
-                Binding("space", "toggle_mark", "Mark", show=False),
+                Binding("ctrl+space", "toggle_mark", "Mark", show=False),
+                Binding("ctrl+@", "toggle_mark", "Mark", show=False),   # Ctrl+Space, as most terminals send it
                 Binding("ctrl+a", "app.mark_finished", "Mark finished", show=False),
-                Binding("p", "app.toggle_pinned", "Pin", show=False),
+                Binding("alt+p", "app.toggle_pinned", "Pin", show=False),
                 Binding("shift+up", "extend(-1)", "Extend up", show=False),
                 Binding("shift+down", "extend(1)", "Extend down", show=False)]
 
@@ -1829,7 +1830,7 @@ class Slot(Vertical):
 
 class SendBar(Horizontal):
     """Always on screen above the footer: Send all, every session's queue, and a line
-    saying what the session in context is doing. Send all's key is Shift+A (BUTTON_KEYS):
+    saying what the session in context is doing. Send all's key is Alt+Shift+A (BUTTON_KEYS):
     Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S as plain Ctrl+S. A click on a button
     never takes focus, so it leaves the answer box (and what's typed in it) where it was.
 
@@ -2646,7 +2647,7 @@ class TitleBar(Static):
 
 class TourBadge(Static):
     """The title row's right-hand end (.plan/tutorial-overhaul.md): what the tour has to offer
-    once its invite has gone, or a tour paused (BADGES). A click is L (WheelhouseApp.action_tour)."""
+    once its invite has gone, or a tour paused (BADGES). A click is Alt+T (WheelhouseApp.action_tour)."""
 
     text = ""   # what it says: nothing, hidden
 
@@ -2656,7 +2657,7 @@ class TourBadge(Static):
 
 
 # the badge's words by what the tour offers (tour.opening): n, the new tips a top-up brings
-BADGES = {PAUSED: "Tour paused · L", TOUR: "Tour · L", TOPUP: "Tour: {n} new · L", NOTES: "What's new · L"}
+BADGES = {PAUSED: "Tour paused · Alt+T", TOUR: "Tour · Alt+T", TOPUP: "Tour: {n} new · Alt+T", NOTES: "What's new · Alt+T"}
 
 
 class Hint(Label):
@@ -3256,7 +3257,7 @@ class ForgetChoice(Dialog):
     The default, focused for Enter, is to let it know while its prompt cache is warm, and to
     just stop it once cold: its end steps would re-read the whole context, which a session
     used for a quick look isn't worth. Answers "tell", "stop", or None."""
-    BINDINGS = [Binding("l", "answer('tell')", show=False), Binding("j", "answer('stop')", show=False)]
+    BINDINGS = [Binding("alt+l", "answer('tell')", show=False), Binding("alt+j", "answer('stop')", show=False)]
 
     def __init__(self, prompt: str, warm: bool):
         super().__init__()
@@ -3266,8 +3267,8 @@ class ForgetChoice(Dialog):
         with Vertical(id="dialog"):
             yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
-                yield Button(Text("[L]et it know"), variant="success", id="forget-tell")
-                yield Button(Text("[J]ust stop it"), variant="error", id="forget-stop")
+                yield Button(Text("Let it know [Alt+L]"), variant="success", id="forget-tell")
+                yield Button(Text("Just stop it [Alt+J]"), variant="error", id="forget-stop")
                 yield Button(Text("Cancel [Esc]"), id="forget-cancel")
 
     def on_mount(self) -> None:
@@ -3294,7 +3295,7 @@ def forget_prompt(name: str, warm: bool, expires: float | None, context: int, qu
 
 
 class Confirm(Dialog):
-    BINDINGS = [Binding("y", "answer(True)", show=False), Binding("n", "answer(False)", show=False)]
+    BINDINGS = [Binding("alt+y", "answer(True)", show=False), Binding("alt+n", "answer(False)", show=False)]
     CANCEL = False   # no ACTION: No has the focus, so a reflex Enter must not confirm
 
     def __init__(self, prompt: str):
@@ -3305,8 +3306,8 @@ class Confirm(Dialog):
         with Vertical(id="dialog"):
             yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
-                yield Button(Text("[Y]es"), variant="error", id="yes")
-                yield Button(Text("[N]o"), id="no")
+                yield Button(Text("Yes [Alt+Y]"), variant="error", id="yes")
+                yield Button(Text("No [Alt+N]"), id="no")
 
     def on_mount(self) -> None:
         self.set_focus(self.query_one("#no", Button))   # a reflex Enter must not confirm
@@ -3319,7 +3320,7 @@ class Confirm(Dialog):
 class LeaveEdits(Dialog):
     """Esc in a doc's editor with unsaved edits: close it keeping them (the default, on
     Enter), discard them, or keep editing (Esc). Saving is stage 8's, so no Save until then."""
-    BINDINGS = [Binding("c", "answer('close')", show=False), Binding("d", "answer('discard')", show=False)]
+    BINDINGS = [Binding("alt+c", "answer('close')", show=False), Binding("alt+d", "answer('discard')", show=False)]
     ACTION = "close"   # Enter keeps the edits: a reflex Enter loses nothing
     CANCEL = "keep"
 
@@ -3328,8 +3329,8 @@ class LeaveEdits(Dialog):
             yield Label("This doc has unsaved edits. Closing the editor keeps them, while the app runs.",
                         classes="dialog-prompt")
             with Horizontal(classes="buttons"):
-                yield Button(Text("[C]lose, keep edits"), variant="success", id="close")
-                yield Button(Text("[D]iscard"), variant="error", id="discard")
+                yield Button(Text("Close, keep edits [Alt+C]"), variant="success", id="close")
+                yield Button(Text("Discard [Alt+D]"), variant="error", id="discard")
                 yield Button(Text("Keep editing [Esc]"), id="keep")
 
     def on_mount(self) -> None:
@@ -3415,7 +3416,7 @@ class PaneMenu(SessionMenu):
 
 class Choice(Dialog):
     """A pending request: cancel it, force it, or leave it be."""
-    BINDINGS = [Binding("c", "answer('cancel')", show=False), Binding("f", "answer('force')", show=False)]
+    BINDINGS = [Binding("alt+c", "answer('cancel')", show=False), Binding("alt+f", "answer('force')", show=False)]
     CANCEL = "leave"
 
     def __init__(self, prompt: str):
@@ -3426,8 +3427,8 @@ class Choice(Dialog):
         with Vertical(id="dialog"):
             yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
-                yield Button(Text("[C]ancel request"), variant="success", id="cancel")
-                yield Button(Text("[F]orce"), variant="error", id="force")
+                yield Button(Text("Cancel request [Alt+C]"), variant="success", id="cancel")
+                yield Button(Text("Force [Alt+F]"), variant="error", id="force")
                 yield Button(Text("Leave it [Esc]"), id="leave")
 
     @on(Button.Pressed)
@@ -3437,7 +3438,7 @@ class Choice(Dialog):
 
 class RelaunchChoice(Dialog):
     """Relaunch of a big session: compact first, relaunch now, or neither."""
-    BINDINGS = [Binding("c", "answer('compact')", show=False), Binding("r", "answer('now')", show=False)]
+    BINDINGS = [Binding("alt+c", "answer('compact')", show=False), Binding("alt+r", "answer('now')", show=False)]
 
     def __init__(self, prompt: str):
         super().__init__()
@@ -3448,8 +3449,8 @@ class RelaunchChoice(Dialog):
             yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
                 # ids of its own: the app's host buttons (#compact) answer a press that bubbles up
-                yield Button(Text("[C]ompact first"), variant="success", id="relaunch-compact")
-                yield Button(Text("[R]elaunch now"), variant="error", id="relaunch-now")
+                yield Button(Text("Compact first [Alt+C]"), variant="success", id="relaunch-compact")
+                yield Button(Text("Relaunch now [Alt+R]"), variant="error", id="relaunch-now")
                 yield Button(Text("Cancel [Esc]"), id="relaunch-cancel")
 
     def on_mount(self) -> None:
@@ -3463,7 +3464,7 @@ class RelaunchChoice(Dialog):
 
 INVITE = next(d for d in whatsnew.DIALOGS if d.id == "invite")
 INVITE_HINT = f"Later offers it again at the next start. After Never, {tutorial.AGAIN[0].lower()}{tutorial.AGAIN[1:]}."
-UPGRADE_HINT = ("A few lines beside each pane, and no demo session. Later keeps it in the title bar (L) and offers it "
+UPGRADE_HINT = ("A few lines beside each pane, and no demo session. Later keeps it in the title bar (Alt+T) and offers it "
                 "again at the next start; Never skips these, so only what comes later is offered.")
 
 
@@ -3476,13 +3477,11 @@ def upgrade_text(found) -> str:
 
 
 class TourInvite(Dialog):
-    """The tour's invite (.plan/tutorial-overhaul.md), centred: Start (Enter) takes it, Never (N)
-    turns it off for good, and Later (L, Esc, or a click outside, which a misclick mustn't
+    """The tour's invite (.plan/tutorial-overhaul.md), centred: Start (Enter) takes it, Never (Alt+N)
+    turns it off for good, and Later (Alt+L, Esc, or a click outside, which a misclick mustn't
     cost the tour) leaves it to be offered again at the next start. Given `text`, an
     upgrader's top-up (tour.TOPUP) instead, the same three answers."""
-    # Shift too: some terminals send it as the capital, others as shift+
-    BINDINGS = [Binding(k, f"answer('{a}')", show=False)
-                for keys, a in (("l,L,shift+l", "later"), ("n,N,shift+n", "never")) for k in keys.split(",")]
+    BINDINGS = [Binding("alt+l", "answer('later')", show=False), Binding("alt+n", "answer('never')", show=False)]
     ACTION = "invite-start"
     CANCEL = "later"
 
@@ -3498,8 +3497,8 @@ class TourInvite(Dialog):
             with Horizontal(classes="buttons", id="invite-buttons"):
                 # ids of its own: the app's buttons answer a press that bubbles up
                 yield Button(Text("Start [Enter]"), variant="success", id="invite-start")
-                yield Button(Text("[L]ater"), id="invite-later")
-                yield Button(Text("[N]ever"), id="invite-never")
+                yield Button(Text("Later [Alt+L]"), id="invite-later")
+                yield Button(Text("Never [Alt+N]"), id="invite-never")
 
     STACK_BELOW = 60   # columns: on a screen narrower, the buttons stack, so they stay inside the box
 
@@ -3584,11 +3583,11 @@ class TourStop(Dialog):
 
 class TourNotes(Dialog):
     """The tour's last dialog: this release's notes (whatsnew.this_release), then a line
-    saying N starts a session of the person's own. Esc, Enter, Close or a click outside
-    closes it; N closes it and opens New session."""
+    saying Alt+N starts a session of the person's own. Esc, Enter, Close or a click outside
+    closes it; Alt+N closes it and opens New session."""
     RESPONSE = False
     CANCEL = "close"
-    BINDINGS = [Binding(k, "answer('new')", show=False) for k in ("n", "N", "shift+n")]
+    BINDINGS = [Binding("alt+n", "answer('new')", show=False)]
 
     def __init__(self, text: str, notes: str) -> None:
         super().__init__()
@@ -3616,14 +3615,14 @@ class TourNotes(Dialog):
 def key_name(key: str) -> str:
     """A binding's key as the person reads it: Ctrl+S, Shift+Up, Space, ?."""
     names = {"question_mark": "?", "escape": "Esc", "enter": "Enter", "space": "Space", "pageup": "PgUp",
-             "pagedown": "PgDn"}
+             "pagedown": "PgDn", "@": "Space"}   # ctrl+@: Ctrl+Space, as most terminals send it
     if len(key) == 1 and key.isupper():
         return f"Shift+{key}"
     return "+".join(names.get(part, part.capitalize() if len(part) > 1 else part.upper())
                     for part in key.split("+"))
 
 
-# what each key does, by its action, for the ? overlay; every binding must have one
+# what each key does, by its action, for the F1 overlay; every binding must have one
 DESCRIBE = {
     "submit": "Submit what's typed: queued, or sent at once, by the session's mode",
     "app.submit": "Submit what's typed: queued, or sent at once, by the session's mode",
@@ -3650,7 +3649,7 @@ DESCRIBE = {
     "doc_tab(-1)": "With a doc shown tabbed: the tab before",
     "doc_tab(1)": "With a doc shown tabbed: the tab after",
     "tour": ("The tour, while the title bar's badge shows: resume a tour quit in the middle where it was, or take what's new "
-             "(in the session list, L is Relaunch: click the badge)"),
+             "(Alt+T, or a click on the badge)"),
     "quit": "Quit the wheelhouse (sessions carry on without it)",
     "toggle_mark": "Mark or unmark the highlighted row",
     "app.mark_finished": "Mark every finished (dimmed) row shown but the pinned, for Delete to clear them together",
@@ -3696,56 +3695,56 @@ DESCRIBE = {
 BUTTONS = {
     "mode": "Mode (Ctrl+T): the session's send mode, Queued or Immediate",
     "send": "Send (Ctrl+S): send the session's queued answers as one message; its caption counts them",
-    "send-all": "Send all (Shift+A), above the footer: send every running session's queue; a dead one's waits until it's relaunched",
-    "allow": "Allow (1; over the answer box, on a permission item): let the tool call run, at once",
-    "always": "Always (2): allow it, and keep the rule Claude Code suggests",
-    "deny": ("Deny (3): refuse it, with a reason if you like: typed in the line that opens, the session reads "
+    "send-all": "Send all (Alt+Shift+A), above the footer: send every running session's queue; a dead one's waits until it's relaunched",
+    "allow": "Allow (Alt+Y; over the answer box, on a permission item): let the tool call run, at once",
+    "always": "Always (Alt+W): allow it, and keep the rule Claude Code suggests",
+    "deny": ("Deny (Alt+D): refuse it, with a reason if you like: typed in the line that opens, the session reads "
              "it as why, so it can try something else. Enter denies, Esc goes back"),
-    "compact-now": ("Compact (1, over the answer box, on the question suggesting it): compact the session, with the "
+    "compact-now": ("Compact (Alt+Y, over the answer box, on the question suggesting it): compact the session, with the "
                     "instructions typed in the box if any, else it's asked what to keep; then as chosen beside it: "
-                    "3 just compact, 4 send the queued answers in the same prompt, 5 park it at once"),
-    "leave-it": "Leave it (2): close the question; it isn't asked again until the context has been under 200k and passes it again",
-    "interrupt": "Interrupt (I): stop the session's current turn, like Esc in Claude Code",
-    "compact": ("Compact (C): compact the session with instructions of your own, or with what it says to keep; "
+                    "Alt+D just compact, Alt+E send the queued answers in the same prompt, Alt+X park it at once"),
+    "leave-it": "Leave it (Alt+W): close the question; it isn't asked again until the context has been under 200k and passes it again",
+    "interrupt": "Interrupt (Alt+I): stop the session's current turn, like Esc in Claude Code",
+    "compact": ("Compact (Alt+C): compact the session with instructions of your own, or with what it says to keep; "
                 "then just that, its queued answers sent in the same prompt (the default), or parked at once"),
-    "shell": "Shell (H): open the session in a real Claude Code tab; it comes back when you /exit",
-    "model": "Model (M): change the model a session run in the wheelhouse runs on, live; its prompt cache goes with the old one",
-    "relaunch": ("Relaunch / Unpark (L in the session list): start the session again where it left off, stopping it "
-                 "first if it's running (asked only if it's mid-turn); on a parked one, Unpark (P too)"),
-    "rename": "Rename (R in the session list): the session's name in the wheelhouse",
-    "fork": ("Fork (K in the session list): a new session, \"<name> (fork)\", carrying on from this one's "
+    "shell": "Shell (Alt+H): open the session in a real Claude Code tab; it comes back when you /exit",
+    "model": "Model (Alt+M): change the model a session run in the wheelhouse runs on, live; its prompt cache goes with the old one",
+    "relaunch": ("Relaunch / Unpark (Alt+L in the session list): start the session again where it left off, stopping it "
+                 "first if it's running (asked only if it's mid-turn); on a parked one, Unpark (Alt+P too)"),
+    "rename": "Rename (Alt+R in the session list): the session's name in the wheelhouse",
+    "fork": ("Fork (Alt+K in the session list): a new session, \"<name> (fork)\", carrying on from this one's "
              "conversation so far, which carries on too. Ticked items move to it; in a linked git worktree, it "
              "works in a new one on a new branch from the last commit (uncommitted changes stay behind), or this one"),
-    "park": ("Park (P in the session list): a running session writes its handoff notes into its items, then stops; "
+    "park": ("Park (Alt+P in the session list): a running session writes its handoff notes into its items, then stops; "
              "it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark. Off while it's "
              f"asked; on again after {BUSY_FOR} s, pressed again to cancel or force it"),
     "end": ("Stop & Forget, or Forget (Delete or Backspace in the session list): a running session asks first, "
-            "Let it know (L: it does its own end steps, then stops) or Just stop it (J: stopped now, told nothing), "
+            "Let it know (Alt+L: it does its own end steps, then stops) or Just stop it (Alt+J: stopped now, told nothing), "
             "the first by default while its prompt cache is warm, the second once cold, as its end steps would "
             "re-read its whole context; its wheelhouse data is deleted either way, queued answers with it. One not "
             "running is deleted at once, once you confirm. Adopt brings a forgotten one back. Off while it's asked; "
             f"on again after {BUSY_FOR} s, pressed again to cancel or force it"),
 }
 # keys for the buttons that have no other: each presses its button on the screen in front,
-# outside a text box (whose letters and digits are typing). 1, 2 and 3 number the
-# permission answers as Claude Code's own prompt does. Shift+A twice, as Shift+L
+# from a text box too, so each has a modifier (#189). Alt and a digit can't stand in for
+# Claude Code's 1 to 3 (Textual reads Esc 1 as ¡, Esc 3 as £), so the permission answers
+# are Alt+Y (yes), Alt+W (always) and Alt+D (deny)
 BUTTON_KEYS = [
-    Binding("i", "press('interrupt')", "Interrupt", show=False),
-    Binding("c", "press('compact')", "Compact", show=False),
-    Binding("h", "press('shell')", "Shell", show=False),
-    Binding("m", "press('model')", "Model", show=False),
-    Binding("1", "press('allow')", "Allow", show=False),
-    Binding("2", "press('always')", "Always", show=False),
-    Binding("3", "press('deny')", "Deny", show=False),
-    Binding("4", "press('compact-then-send')", "Then send the queued answers", show=False),
-    Binding("5", "press('compact-then-park')", "Then park it", show=False),
-    Binding("A", "press('send-all')", "Send all", show=False),
-    Binding("shift+a", "press('send-all')", "Send all", show=False),
+    Binding("alt+i", "press('interrupt')", "Interrupt", show=False),
+    Binding("alt+c", "press('compact')", "Compact", show=False),
+    Binding("alt+h", "press('shell')", "Shell", show=False),
+    Binding("alt+m", "press('model')", "Model", show=False),
+    Binding("alt+y", "press('allow')", "Allow", show=False),
+    Binding("alt+w", "press('always')", "Always", show=False),
+    Binding("alt+d", "press('deny')", "Deny", show=False),
+    Binding("alt+e", "press('compact-then-send')", "Then send the queued answers", show=False),
+    Binding("alt+x", "press('compact-then-park')", "Then park it", show=False),
+    Binding("alt+shift+a", "press('send-all')", "Send all", show=False),
 ]
-# the permission keys, 1 to 3, on the question suggesting Compact: Compact, Leave it and the
-# first then-choice; 4 and 5 (BUTTON_KEYS) the other two
+# the permission keys, Alt+Y, Alt+W and Alt+D, on the question suggesting Compact: Compact,
+# Leave it and the first then-choice; Alt+E and Alt+X (BUTTON_KEYS) the other two
 NUDGE_KEYS = {"allow": "compact-now", "always": "leave-it", "deny": "compact-then-compact"}
-# for the ? overlay, keys bound elsewhere: Tab and Shift+Tab are every screen's own
+# for the F1 overlay, keys bound elsewhere: Tab and Shift+Tab are every screen's own
 # (app.focus_next, which is cycle_focus), the lists' cursor keys DataTable's
 TAB_KEYS = [Binding("tab", "app.focus_next"), Binding("shift+tab", "app.focus_previous")]
 LIST_KEYS = [Binding(key, action) for key, action in (
@@ -3772,12 +3771,12 @@ SEND_RULES = (
     "queued answer back to edit.")
 MOUSE = ("Click selects a row; in the session list, a click on the selected session or the list's title "
          "past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may "
-         "keep Shift+click for itself: Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or "
+         "keep Shift+click for itself: Ctrl+Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or "
          "Backspace closes them together, the highlight going to the row above the topmost one taken, "
          "and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the "
          "right-hand end of its row: a click there hides them, and the + it becomes shows them again. "
          "A click on a doc opens its editor below it there, as a click on it moves it while it's open. "
-         "A click on a row's first column pins it (📌) or clears its pin, as P does. "
+         "A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. "
          "Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; "
          "elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
@@ -3785,14 +3784,14 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; "
          "Session steps there has what the wheelhouse tells a session at each event.")
 TOUR_HELP = ("Esc ends the tour at any time, once you confirm, from any of its boxes or the New session it opens. While the title bar "
-             "shows a badge, L, or a click on it, resumes a tour the wheelhouse quit in the middle of, or offers "
+             "shows a badge, Alt+T, or a click on it, resumes a tour the wheelhouse quit in the middle of, or offers "
              "what's new since you last looked: a top-up showing only the new tips, pane by pane, with no demo session, "
              "then the release notes. {again} at the next start.")
 DIALOGS = ("Esc, or a click outside the box, cancels a dialog (not the tutorial offer, which is all but outside). Enter presses the focused button; with focus on a "
            "one-line box or a checkbox, or nothing, it takes the dialog's one action (Launch, Rename, Fork, Park and "
            "the like), but in a list, a set of choices or a multi-line box it does what it does there. A dialog of "
            "several choices answers Enter only on the focused button. Tab and Shift+Tab go round its boxes and buttons.")
-# the SDK-only buttons' keys, and those buttons, which the ? overlay leaves out unless SDK
+# the SDK-only buttons' keys, and those buttons, which the F1 overlay leaves out unless SDK
 # mode is on (features.py, EXPERIMENTAL: the author's alone until Anthropic's terms are
 # confirmed) or the screen shows them (a host's session, which runs on with it off). Out of
 # it, a key of one that doesn't show says it doesn't apply, as any other button's does
@@ -3817,7 +3816,7 @@ def showing(button) -> bool:
 
 
 def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
-    """The ? overlay: every key, from the bindings themselves, and every button. Those of SDK
+    """The F1 overlay: every key, from the bindings themselves, and every button. Those of SDK
     mode (SDK_BUTTONS, the effort slider) only with it on (sdk), or those of SDK_BUTTONS the
     screen shows (shown: a host's session's, which run on with it off). panes: the modules'
     widgets, each with a section of its keys if it names one (api.py, KEYS_HELP)."""
@@ -3825,7 +3824,7 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
     offered = set(SDK_BUTTONS) if sdk else set(shown)
     hidden_keys = {f"press('{b}')" for b in SDK_BUTTONS if b not in offered}
     button_keys = [b for b in BUTTON_KEYS if b.action not in hidden_keys]
-    sections = [("Everywhere", everywhere), ("Outside a text box", button_keys),
+    sections = [("Everywhere", everywhere), ("The buttons", button_keys),
                 ("Moving between panes", TAB_KEYS), ("Either list", LIST_KEYS),
                 ("The session list", SessionList.BINDINGS),
                 ("The item list", ItemList.BINDINGS),
@@ -3843,9 +3842,9 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
         actions: dict[str, list[str]] = {}
         for b in bindings:
             keys = actions.setdefault(b.action, [])
-            if key_name(b.key) not in keys:   # Shift+L, bound as both L and shift+l
+            if key_name(b.key) not in keys:   # Ctrl+Space, bound as both ctrl+space and ctrl+@
                 keys.append(key_name(b.key))
-        # dict.fromkeys: one line for a key bound twice, as F is (its footer label changes)
+        # dict.fromkeys: one line for a key bound twice, as Alt+F is (its footer label changes)
         out += dict.fromkeys(f"- **{' or '.join(keys)}**: {described[action]}" for action, keys in actions.items())
     whose = WHOSE.format(sdk=SDK_WHOSE if sdk else HOSTED_WHOSE if offered & {"interrupt", "compact", "shell"}
                          else "; then Mode, and Send on one that isn't dead.")
@@ -3854,14 +3853,14 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
             *[f"- {text}" for text in buttons],
             "## Sending", SEND_RULES, "## Dialogs", DIALOGS,
             "## Tour", TOUR_HELP.format(again=tutorial.AGAIN),
-            "Esc, Enter, ? or a click outside closes this list."]
+            "Esc, Enter, F1 or a click outside closes this list."]
     return "\n\n".join(out)
 
 
 class KeysHelp(Dialog):
-    """? : every key and button, and how sending works. shown: the SDK_BUTTONS the screen
+    """F1: every key and button, and how sending works. shown: the SDK_BUTTONS the screen
     behind it shows (keys_help)."""
-    BINDINGS = [Binding("question_mark,q", "answer", show=False)]
+    BINDINGS = [Binding("f1", "answer", show=False)]
     RESPONSE = False
 
     def __init__(self, shown=()):
@@ -4004,7 +4003,8 @@ class WheelhouseApp(App):
     Footer {{ scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }}
     """
 
-    # keys shown in upper case, the usual convention: F is the f key, not Shift+F
+    # keys shown in upper case, the usual convention: Alt+F is alt and the f key, not Shift+F. Every
+    # one has a modifier (or is F1), so it acts from a text box too (#189)
     BINDINGS = [
         # the answer-box keys are off the footer: the hint under the box gives them (hint)
         Binding("ctrl+enter", "submit", "Submit", show=False, key_display="Ctrl+Enter"),
@@ -4017,24 +4017,22 @@ class WheelhouseApp(App):
         Binding("ctrl+r", "recall", "Edit queued", show=False, key_display="Ctrl+R"),
         Binding("ctrl+z", "undo", "Undo", show=False, key_display="Ctrl+Z"),   # a text box's own Ctrl+Z first
         # New, Adopt and Relaunch all act on no one session, so they're here, not buttons (#62)
-        Binding("n", "new_session", "New", key_display="N"),
-        Binding("a", "adopt", "Adopt", key_display="A"),
-        # Shift+L twice: some terminals send it as L, others as shift+l
-        Binding("L", "relaunch_all", "Relaunch all", key_display="Shift+L"),
-        Binding("shift+l", "relaunch_all", "Relaunch all", show=False),
+        Binding("alt+n", "new_session", "New", key_display="Alt+N"),
+        Binding("alt+a", "adopt", "Adopt", key_display="Alt+A"),
+        Binding("alt+shift+l", "relaunch_all", "Relaunch all", key_display="Alt+Shift+L"),
         Binding("escape", "clear_filter", "All sessions", key_display="Esc"),
         # one key, two bindings: the footer shows the one that applies (check_action)
-        Binding("f", "show_finished(True)", "Show finished", key_display="F"),
-        Binding("f", "show_finished(False)", "Hide finished", key_display="F"),
-        Binding("question_mark", "help", "Keys", key_display="?"),
+        Binding("alt+f", "show_finished(True)", "Show finished", key_display="Alt+F"),
+        Binding("alt+f", "show_finished(False)", "Hide finished", key_display="Alt+F"),
+        Binding("f1", "help", "Keys", key_display="F1"),
         # a doc item in Detail (.plan/docs-section.md): split or tabbed, and the tabs
         Binding("ctrl+l", "doc_layout", "Doc layout", show=False, key_display="Ctrl+L"),
         # priority: a scrolling container's own (page left and right) would take them first; they
         # act only while a tabbed doc shows (check_action), else go on as before
         Binding("ctrl+pageup", "doc_tab(-1)", "Doc's tab before", show=False, priority=True),
         Binding("ctrl+pagedown", "doc_tab(1)", "Doc's tab after", show=False, priority=True),
-        Binding("l", "tour", "Tour", key_display="L"),   # shown while the badge is (check_action)
-        Binding("q", "quit", "Quit", key_display="Q"),
+        Binding("alt+t", "tour", "Tour", key_display="Alt+T"),   # shown while the badge is (check_action)
+        Binding("ctrl+q", "quit", "Quit", key_display="Ctrl+Q"),
         *BUTTON_KEYS,
     ]
 
@@ -4318,7 +4316,7 @@ class WheelhouseApp(App):
         only once it came back up, so a later key could move the focus or a cursor first."""
         self.app_focus = True
         await self.land()
-        if self._exit or not self.screen_stack:   # quitting (Q), or quit as it landed: nothing to act on
+        if self._exit or not self.screen_stack:   # quitting (Ctrl+Q), or quit as it landed: nothing to act on
             return
         if self.focused is not None:
             self.screen._clear_tooltip()
@@ -6006,14 +6004,15 @@ class WheelhouseApp(App):
             self.refresh_bindings()
 
     def action_tour(self) -> None:
-        """L, or a click on the badge: a tour the app quit in the middle of resumes at the
+        """Alt+T, or a click on the badge: a tour the app quit in the middle of resumes at the
         dialog it was at (Q122); the whole tour's invite, or a top-up's, opens again; with
         only advanced features new, their release notes."""
-        if not isinstance(self.focused, (TextArea, Input)):   # there, L is typed
-            self.take_tour()
+        if self.under_dialog():
+            return
+        self.take_tour()
 
     def take_tour(self) -> None:
-        """What L, or a click on the badge, does (action_tour)."""
+        """What Alt+T, or a click on the badge, does (action_tour)."""
         if not self.badge.display:
             return
         kind, found = self.tour_offer()
@@ -6118,7 +6117,7 @@ class WheelhouseApp(App):
     def drop_callouts(self, found: list) -> None:
         """Callouts taken away. Focus on one's Next goes nowhere, not to the next in the chain
         (often the answer box, where Enter, meant as Next again, would type): the next Next
-        callout takes it, and meanwhile L and the app's keys are the app's."""
+        callout takes it, and meanwhile Alt+T and the app's keys are the app's."""
         main = self.screen_stack[0]
         for old in found:
             if main.focused is not None and old in main.focused.ancestors_with_self:
@@ -6127,7 +6126,7 @@ class WheelhouseApp(App):
 
     def tour_answered(self, answer: str | None) -> None:
         """A centred dialog of the tour answered: Next, pause (Esc), or, for the notes, closed
-        (N: then New session)."""
+        (Alt+N: then New session)."""
         if self.tour is None:
             return
         if answer == "pause":   # Esc: asked first, and staying shows the dialog again
@@ -6577,12 +6576,18 @@ class WheelhouseApp(App):
             return bool(getattr(self, "badge", None) and self.badge.display)
         return True
 
+    def under_dialog(self) -> bool:
+        """A dialog in front: the app's own keys (New, Adopt, F1 and the rest) wait until it closes,
+        rather than open over it; from a text box under none they act, each having a modifier (#189)."""
+        return isinstance(self.screen, Dialog)
+
     def action_show_finished(self, show: bool) -> None:
-        if not isinstance(self.focused, (TextArea, Input)):
-            self.show_finished = show
-            self.notify("showing finished items" if show else "hiding finished items")
-            self.refresh_bindings()
-            self.paint_items()
+        if self.under_dialog():
+            return
+        self.show_finished = show
+        self.notify("showing finished items" if show else "hiding finished items")
+        self.refresh_bindings()
+        self.paint_items()
 
     @session_action
     def action_close_question(self) -> None:
@@ -6657,7 +6662,7 @@ class WheelhouseApp(App):
         self.refresh_data()
 
     def toggle_pinned(self, key: str) -> None:
-        """The pin column clicked, or P in the item list: the row's item pinned, or its pin cleared."""
+        """The pin column clicked, or Alt+P in the item list: the row's item pinned, or its pin cleared."""
         sid, _, ref = key.partition("|")
         item = ref and self.client.item(sid, ref)
         if not item:   # the conversation row, or gone meanwhile
@@ -6845,9 +6850,9 @@ class WheelhouseApp(App):
         self.refresh_data()
 
     def action_help(self) -> None:
-        if not isinstance(self.focused, (TextArea, Input)):
-            self.push_screen(KeysHelp([b for b in SDK_BUTTONS
-                                       if any(showing(x) for x in self.screen.query(f"#{b}"))]))
+        if self.under_dialog():
+            return
+        self.push_screen(KeysHelp([b for b in SDK_BUTTONS if any(showing(x) for x in self.screen.query(f"#{b}"))]))
 
     def offer_answered(self, answer: str) -> None:
         """The tour's invite answered. Start or Never: it never comes back. Later records
@@ -6865,7 +6870,7 @@ class WheelhouseApp(App):
         elif answer == "never":
             self.told(self.client.answer_offer(False))
         else:
-            self.notify("Later: the badge in the title bar, or L, offers it; so does the next start.")
+            self.notify("Later: the badge in the title bar, or Alt+T, offers it; so does the next start.")
         self.paint_badge()
 
     def composing(self):
@@ -7152,12 +7157,12 @@ class WheelhouseApp(App):
         return table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value
 
     def action_new_session(self) -> None:
-        if isinstance(self.focused, (TextArea, Input)):
+        if self.under_dialog():
             return
         self.new_session()
 
     def new_session(self) -> None:
-        """New session opened: for the tour's demo, filled in (N, or the tour's button)."""
+        """New session opened: for the tour's demo, filled in (Alt+N, or the tour's button)."""
         stop = self.tour.stop if self.tour is not None and self.tour.kind == TOUR else None
         demo = stop is not None and stop.id == "create"   # the tour's demo: filled in (Q119)
         self.push_screen(NewSession(tutorial.form(self.client.tutorial_dir), whatsnew.LAUNCH) if demo else NewSession(),
@@ -7175,7 +7180,7 @@ class WheelhouseApp(App):
         self.refresh_data()
 
     def action_adopt(self) -> None:
-        if isinstance(self.focused, (TextArea, Input)):
+        if self.under_dialog():
             return
         self.push_screen(AdoptSession(self.client.adoptable()), self.launch_adopted)
 
@@ -7185,10 +7190,10 @@ class WheelhouseApp(App):
 
     async def action_press(self, button_id: str) -> None:
         """A key standing in for a button: as a click on it, on the
-        screen in front, the inbox or a full-screen item. Not in a text box, whose keys are
-        typing, nor under a dialog, whose keys are its own. One that doesn't apply to what's
+        screen in front, the inbox or a full-screen item, from a text box too (each has a modifier,
+        #189). Not under a dialog, whose keys are its own. One that doesn't apply to what's
         in context says so rather than doing nothing."""
-        if isinstance(self.focused, (TextArea, Input)) or self.composing()[0] is None:
+        if self.composing()[0] is None:
             return
         inbox = self.screen is self.screen_stack[0]
         if inbox and button_id in dict(LIFECYCLE).values() and self.current_session() is None:
@@ -7335,7 +7340,7 @@ class WheelhouseApp(App):
     def action_relaunch_all(self) -> None:
         """Relaunch all: every Available session, once confirmed. Parked and Active ones are
         left alone."""
-        if isinstance(self.focused, (TextArea, Input)):
+        if self.under_dialog():
             return
         available = self.client.relaunchable()
         if not available:
@@ -7348,7 +7353,7 @@ class WheelhouseApp(App):
     @session_action
     def park_pressed(self) -> None:
         """Park: an Active session is asked (it writes its handoff notes, then stops); an
-        Available one is parked at once. A Parked one's P is Unpark (action_press)."""
+        Available one is parked at once. A Parked one's Alt+P is Unpark (action_press)."""
         self.settle()
         sid = self.current_session()
         if not sid:

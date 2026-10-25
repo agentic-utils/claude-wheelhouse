@@ -106,7 +106,7 @@ async def test_the_pane_lists_the_sessions_prs_then_all(store, sid, github):
             "GitHub's state written back"
         app.query_one("#pr-list").focus()
         await pilot.pause()
-        await pilot.press("m")
+        await pilot.press("alt+o")
         await settled(app, pilot)
         assert str(p.border_title) == "PRs · all" and cells(app) == ["PR108", "PR7", "PR109"], "all: the search's too, newest first within a light"
         assert cells(app, 1) == ["wheelhouse", "mizpah", "wheelhouse"], "two repos: the Repo column"
@@ -174,11 +174,11 @@ async def test_r_fetches_again_after_the_gap(store, sid, github, monkeypatch):
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         app.query_one("#pr-list").focus()
-        await pilot.press("r")
+        await pilot.press("alt+r")
         await settled(app, pilot)
         assert github.calls == 1, "within the gap: the cache"
         monkeypatch.setattr(pane, "CLOCK", lambda: time.time() + fetch.GAP)
-        await pilot.press("r")
+        await pilot.press("alt+r")
         await settled(app, pilot)
         assert github.calls == 2, "past it: fetched"
 
@@ -669,7 +669,7 @@ async def test_detail_shows_a_prs_buttons_and_detail_as_text(store, sid, github,
         await pilot.click("#prd-close")
         assert acted == [("close", [109])], f"{size}: Detail's buttons act on its PR"
         monkeypatch.setattr(pane, "CLOCK", lambda: time.time() + fetch.DETAIL_GAP)
-        await pilot.press("r")   # the table still focused
+        await pilot.press("alt+r")   # the table still focused
         await landed(app, pilot)
         await settled(app, pilot)
         assert github.details.count(109) == 2, f"{size}: r fetches it again"
@@ -694,9 +694,9 @@ async def test_a_pr_no_session_made_shows_its_detail_and_link_in_detail(store, s
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("keys, clicks, want, desc", [
-    (["space", "down", "space"], [], {108, 109}, "Space marks the highlighted row, then another"),
+    (["ctrl+space", "down", "ctrl+space"], [], {108, 109}, "Ctrl+Space marks the highlighted row, then another"),
     (["shift+down"], [], {108, 109}, "Shift+Down takes the range"),
-    (["space", "down", "space", "escape"], [], set(), "Esc unmarks"),
+    (["ctrl+space", "down", "ctrl+space", "escape"], [], set(), "Esc unmarks"),
     ([], [(109, {"control": True})], {108, 109}, "Ctrl+click: the highlighted row and the one clicked"),
     ([], [(109, {"shift": True})], {108, 109}, "Shift+click: the range"),
     ([], [(109, {"control": True}), (109, {"control": True})], {108}, "a second Ctrl+click unmarks"),
@@ -768,7 +768,7 @@ async def test_merge_and_the_menu_act_on_every_pr_marked(store, sid, github):
         await pilot.click(f"#{next(b.id for b in menu.query(Button) if str(b.label) == 'Merge')}")
         await pilot.pause()
         assert isinstance(app.screen, tui.Confirm) and "Merge these 2 PRs" in app.screen.prompt, "asked first"
-        await pilot.press("y")
+        await pilot.press("alt+y")
         await landed(app, pilot)
         await settled(app, pilot)
         assert github.merges == [["--squash", "--", URL.format(n)] for n in (108, 109)], "each merged in turn"

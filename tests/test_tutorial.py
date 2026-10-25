@@ -2,6 +2,7 @@ import json
 import sys
 
 import pytest
+from textual import events
 from textual.geometry import Region
 from textual.widgets import Button, DataTable, Input, TextArea
 
@@ -153,7 +154,7 @@ async def test_the_tour(store, monkeypatch, fake_claude, with_prs, sdk, runner_,
         assert shown(app) == ("create", "sessions"), f"{desc}: creating the demo comes first"
         fits("creating the demo")
         assert app.focused is None or not isinstance(app.focused, Button), "an action callout leaves focus be"
-        await pilot.press("n")
+        await pilot.press("alt+n")
         await pilot.pause()
         form = app.screen
         assert isinstance(form, NewSession), desc
@@ -305,7 +306,7 @@ async def test_esc_ends_the_tour(store, tut, stop, focus, desc):
             f"{desc}: what it would have shown seen, not an absent pane's (the design module's, left out here)"
         assert store.session(tut) is not None, f"{desc}: the demo keeps running"
         app.set_focus(None)
-        await pilot.press("l")
+        await pilot.press("alt+t")
         await pilot.pause()
         assert app.tour is None and not app.screen_stack[0].query(TourCallout), f"{desc}: L brings nothing back"
     tutorial.reset(store)
@@ -325,7 +326,7 @@ async def test_esc_in_a_dialog_over_the_tour(store, dialog, ends, desc):
         tour_at(app, "create")
         await pilot.pause()
         if dialog == "tour":
-            await pilot.press("n")
+            await pilot.press("alt+n")
         else:
             app.push_screen(NewSession(), app.launch_new)
         await pilot.pause()
@@ -368,7 +369,7 @@ async def test_the_buttons_do_what_each_step_asks(store, monkeypatch, fake_claud
         await pilot.pause()
         tour_at(app, "create")
         await pilot.pause()
-        assert str(act(app).label) == "New session (N)", "captioned with the action and its key"
+        assert str(act(app).label) == "New session (Alt+N)", "captioned with the action and its key"
         act(app).press()
         await pilot.pause()
         assert isinstance(app.screen, NewSession) and app.screen.tour, "New session, filled in for the demo"
@@ -745,9 +746,9 @@ async def test_a_callout_points_at_its_pane(store, tut, every_module, stop, size
 
 
 @pytest.mark.parametrize("at, gesture, then, desc", [
-    ("tour:stats", "l", ("stats", "stats"), "L resumes the whole tour where it was"),
+    ("tour:stats", "alt+t", ("stats", "stats"), "Alt+T resumes the whole tour where it was"),
     ("tour:stats", "click", ("stats", "stats"), "so does a click on the badge"),
-    ("topup:sessions", "l", ("sessions", "sessions"), "a top-up, likewise"),
+    ("topup:sessions", "alt+t", ("sessions", "sessions"), "a top-up, likewise"),
 ])
 @pytest.mark.both
 @pytest.mark.anyio
@@ -760,10 +761,10 @@ async def test_a_paused_tour_survives_a_restart(store, tmp_path, monkeypatch, at
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert not isinstance(app.screen, TourInvite) and badge(app) == "Tour paused · L", desc
+        assert not isinstance(app.screen, TourInvite) and badge(app) == "Tour paused · Alt+T", desc
         app.set_focus(None)
-        if gesture == "l":
-            await pilot.press("l")
+        if gesture == "alt+t":
+            await pilot.press(gesture)
         else:
             await pilot.click("#tour-badge")
         await pilot.pause()
@@ -817,9 +818,9 @@ async def test_an_upgraders_top_up(store, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("key, recorded, label, again, desc", [
-    ("l", {}, "Tour: 2 new · L", True, "Later: nothing recorded, the badge carries it, offered again next start"),
-    ("escape", {}, "Tour: 2 new · L", True, "Esc is Later"),
-    ("n", {"relaunch-tip": "skipped", "tab-order": "skipped", "pane-titles": "skipped"}, "", False,
+    ("alt+l", {}, "Tour: 2 new · Alt+T", True, "Later: nothing recorded, the badge carries it, offered again next start"),
+    ("escape", {}, "Tour: 2 new · Alt+T", True, "Esc is Later"),
+    ("alt+n", {"relaunch-tip": "skipped", "tab-order": "skipped", "pane-titles": "skipped"}, "", False,
      "Never: every pending feature skipped, so only later ones are offered"),
 ])
 @pytest.mark.anyio
@@ -834,7 +835,7 @@ async def test_the_upgrade_invite(store, tmp_path, monkeypatch, key, recorded, l
         assert not isinstance(app.screen, TourInvite) and badge(app) == label, desc
         if label:
             app.set_focus(None)
-            await pilot.press("l")
+            await pilot.press("alt+t")
             await pilot.pause()
             assert isinstance(app.screen, TourInvite), f"{desc}: L opens it again"
     assert {k: v for k, v in store.tour_seen().items() if k not in before} == recorded, desc
@@ -850,9 +851,9 @@ async def test_advanced_features_alone_get_the_badge(store, tmp_path, monkeypatc
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert not isinstance(app.screen, TourInvite) and badge(app) == "What's new · L"
+        assert not isinstance(app.screen, TourInvite) and badge(app) == "What's new · Alt+T"
         app.set_focus(None)
-        await pilot.press("l")
+        await pilot.press("alt+t")
         await pilot.pause()
         assert isinstance(app.screen, TourNotes), "L: the release notes"
         notes = str(app.screen.notes)
@@ -904,7 +905,7 @@ async def test_n_on_the_notes_opens_new_session(store, focus, desc):
         tour_at(app, "notes")
         await pilot.pause()
         assert isinstance(app.screen, TourNotes), desc
-        await pilot.press("n")
+        await pilot.press("alt+n")
         await pilot.pause()
         assert isinstance(app.screen, NewSession) and app.tour is None, desc
 
@@ -1198,7 +1199,7 @@ def test_the_tutorial_command_resets_the_offer(store, tmp_path, monkeypatch, cap
 
 @pytest.mark.parametrize("key, setting, again, desc", [
     ("enter", "taken", False, "Enter takes it"),
-    ("n", "never", False, "N answers Never"),
+    ("alt+n", "never", False, "Alt+N answers Never"),
     ("escape", "reset", True, "Esc is Later: the reset stands, so it is offered again"),
 ])
 @pytest.mark.anyio
@@ -1227,13 +1228,11 @@ async def click_outside(pilot):
 @pytest.mark.parametrize("gesture, started, setting, again, desc", [
     (lambda p: p.press("enter"), True, "taken", False, "Enter is Start"),
     (lambda p: p.click("#invite-start"), True, "taken", False, "a click on Start"),
-    (lambda p: p.press("l"), False, "reset", True, "L is Later: offered at the next start"),
-    (lambda p: p.press("L"), False, "reset", True, "Shift+L too"),
-    (lambda p: p.press("N"), False, "never", False, "Shift+N too"),
+    (lambda p: p.press("alt+l"), False, "reset", True, "Alt+L is Later: offered at the next start"),
     (lambda p: p.click("#invite-later"), False, "reset", True, "a click on Later"),
     (lambda p: p.press("escape"), False, "reset", True, "Esc is Later, not Never"),
     (click_outside, False, "reset", True, "a click outside is Later: a misclick doesn't lose the tour"),
-    (lambda p: p.press("n"), False, "never", False, "N is Never: it never comes back"),
+    (lambda p: p.press("alt+n"), False, "never", False, "Alt+N is Never: it never comes back"),
     (lambda p: p.click("#invite-never"), False, "never", False, "a click on Never"),
 ])
 @pytest.mark.anyio
@@ -1305,21 +1304,50 @@ def test_the_overlay_leaves_sdk_mode_out_unless_it_is_on():
 
 
 @pytest.mark.anyio
-async def test_question_mark_opens_the_keys_and_types_in_a_box(store, sid):
+async def test_f1_opens_the_keys_and_question_mark_types_in_a_box(store, sid):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.press("question_mark")
-        await pilot.pause()
-        assert isinstance(app.screen, KeysHelp)
-        await pilot.press("escape")
-        await pilot.pause()
-        assert not isinstance(app.screen, KeysHelp)
         app.query_one("#answer", TextArea).focus()
-        await pilot.press("question_mark")
+        await pilot.press("f1")
+        await pilot.pause()
+        assert isinstance(app.screen, KeysHelp), "F1 opens the keys from the answer box"
+        await pilot.press("f1")
+        await pilot.pause()
+        assert not isinstance(app.screen, KeysHelp), "F1 closes them again"
+        app.query_one("#answer", TextArea).focus()
+        await pilot.press("question_mark", "q", "n")
         await pilot.pause()
         assert not isinstance(app.screen, KeysHelp)
-        assert app.query_one("#answer", TextArea).text == "?"
+        assert app.query_one("#answer", TextArea).text == "?qn", "plain keys type, quitting nothing"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key, character, screen, desc", [
+    ("alt+n", "n", NewSession, "Alt+N, as a terminal sends it (ESC n), opens New session"),
+    ("f1", None, KeysHelp, "F1 opens the keys"),
+])
+async def test_the_apps_keys_act_from_the_answer_box(store, sid, key, character, screen, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        box = app.query_one("#answer", TextArea)
+        box.focus()
+        app.post_message(events.Key(key, character))
+        await pilot.pause()
+        assert isinstance(app.screen, screen), desc
+        assert box.text == "", f"{desc}: nothing typed into the box"
+
+
+@pytest.mark.anyio
+async def test_ctrl_q_quits_from_the_answer_box(store, sid):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#answer", TextArea).focus()
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+        assert app._exit, "Ctrl+Q quits with the answer box focused"
 
 
 @pytest.mark.parametrize("marked, refused, desc", [
@@ -1399,9 +1427,9 @@ async def test_a_paused_top_up_resumes_with_its_tips_after_a_restart(store, tmp_
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert not isinstance(app.screen, TourInvite) and badge(app) == "Tour paused · L"
+        assert not isinstance(app.screen, TourInvite) and badge(app) == "Tour paused · Alt+T"
         app.set_focus(None)
-        await pilot.press("l")
+        await pilot.press("alt+t")
         await pilot.pause()
         co = app.screen_stack[0].query_one(TourCallout)
         assert shown(app) == ("answer", "detail") and co.text.startswith("Tab goes round"), "the paused dialog, its tip"

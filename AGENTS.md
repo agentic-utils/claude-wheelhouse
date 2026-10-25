@@ -109,7 +109,7 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   top-up, or the badge alone for advanced features). The app paints it
   (`WheelhouseApp.show_tour`): the principles and the release notes as centred dialogs, the
   rest as callouts (`callout.py`). Where a tour is, kept as it goes in the `tour_at` setting,
-  is what the title row's badge and `L` resume (`WheelhouseApp.action_tour`).
+  is what the title row's badge and `Alt+T` resume (`WheelhouseApp.action_tour`).
 - `whatsnew.py`: the tour's dialogs (`DIALOGS`) and every feature a user can see
   (`FEATURES`), each registered against a dialog or as advanced: what a top-up offers
   (`pending`, by the store's `tour_seen` record, never by version) and the release notes
@@ -260,7 +260,7 @@ Update these in the same commit as the behaviour they describe:
   released feature's id. Between releases `pyproject.toml`'s version is a `.dev` one (say
   `0.3.0.dev0` after 0.2.0): a release version fails the tests while any feature is
   `UNRELEASED`, until `make stamp` gives them that version.
-- `tui.py`'s `DESCRIBE` (each binding's line in the `?` overlay; a test fails when a binding
+- `tui.py`'s `DESCRIBE` (each binding's line in the `F1` overlay; a test fails when a binding
   has none), `BUTTONS` (each button's tooltip and overlay line), `SEND_RULES` and `MOUSE`.
 - `README.md`: anything a user sees or does.
 - The matching `.plan/` doc when a design decision changes.

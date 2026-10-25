@@ -148,7 +148,7 @@ async def test_the_pin_column_toggles(store, sid, tmp_path, how, desc):
                 await pilot.click(table, offset=(header_x(table, "pin"), table.header_height))
             else:
                 table.focus()
-                await pilot.press("p")
+                await pilot.press("alt+p")
             await pilot.pause()
             assert bool(store.item(sid, t)["pinned"]) == expected, desc
             assert str(table.get_row(f"{sid}|{t}")[0]) == (PIN if expected else UNPINNED), desc

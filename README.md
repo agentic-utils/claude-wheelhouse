@@ -83,8 +83,8 @@ make run
 ```
 
 The first time the wheelhouse opens with no sessions it invites you to the tutorial, in a
-dialog in the middle of the screen: `Enter` (Start) takes it, `N` (Never) turns the invite
-off, and `L` (Later), `Esc` or a click outside it leaves it to be offered again at the next
+dialog in the middle of the screen: `Enter` (Start) takes it, `Alt+N` (Never) turns the invite
+off, and `Alt+L` (Later), `Esc` or a click outside it leaves it to be offered again at the next
 start. The tour opens with what the wheelhouse is for (every session in one place, their
 questions, decisions and tasks in one inbox, a row that shows when a session needs you),
 then paints a box beside each pane in turn, its border highlighted, saying what it is and
@@ -92,7 +92,7 @@ what to do there, with everything else on the screen dimmed. A box that waits on
 what to do now, and has a button that does it for you, captioned with the action and how to
 do it yourself ("Send (Ctrl+S)", "Read D1 (Click)"), off until it can act. One that only
 explains has a Next button; one that waits for the demo (starting, or replying) has a Next
-that stays off until it's done. It starts with the demo session: press `N` and New session opens filled
+that stays off until it's done. It starts with the demo session: press `Alt+N` and New session opens filled
 in (its brief begins with a note in capitals saying it's the tutorial's), so just press
 Launch, and the demo is selected in the session list. The demo writes a short children's
 bedtime story with you: it posts a task, two related questions (the main characters and the
@@ -111,7 +111,7 @@ it shorter.
 The last dialog shows this release's notes. `Esc` ends the tour at any time, from any of its
 boxes or the New session it opens, once you confirm (`Enter` leaves, `Esc` stays), for good: the demo keeps running until you Stop & Forget
 it, and `claude-wheelhouse tutorial` offers the tour again from the start. Quitting mid-tour
-keeps your place: the title bar's badge then reads "Tour paused · L", and `L` (or a click on
+keeps your place: the title bar's badge then reads "Tour paused · Alt+T", and `Alt+T` (or a click on
 the badge) resumes it at the same box.
 
 After an update that brings something new to a pane, the next start offers a top-up in the
@@ -119,11 +119,10 @@ same centred dialog ("Updated to 0.3.0: 3 new things in 2 places"): only the new
 three a box: the rest are in the release notes), in a
 box beside each pane they concern, every one moved on with `Enter` (Next), skipping panes
 with nothing new, then the notes of every release since the last ones you saw. It launches
-no demo session and costs no tokens. Later leaves the badge ("Tour: 3 new · L") and offers
+no demo session and costs no tokens. Later leaves the badge ("Tour: 3 new · Alt+T") and offers
 it again at the next start; Never skips those features, so only later ones are offered. An
-update whose features are all for experienced users shows no dialog, only a "What's new · L"
-badge that opens the release notes. In the session list `L` is Relaunch: click the badge
-instead. The demo runs as a new session
+update whose features are all for experienced users shows no dialog, only a "What's new · Alt+T"
+badge that opens the release notes. The demo runs as a new session
 does: hosted in the wheelhouse with SDK mode on, otherwise in a Windows Terminal tab. If
 Claude Code asks whether you trust the demo's folder, say yes in its tab. It always starts
 afresh (any earlier tutorial is ended), in its own scratch directory,
@@ -152,7 +151,7 @@ the offer shows only when the app next starts. The offer, and the app's help, sa
 `claude-wheelhouse tutorial (make tutorial in a source checkout)` with the wheelhouse
 stopped: in your clone, that is `make tutorial`.
 
-After that, `make run` (`uv run claude-wheelhouse`) opens the wheelhouse, and `N` starts a
+After that, `make run` (`uv run claude-wheelhouse`) opens the wheelhouse, and `Alt+N` starts a
 session.
 
 ## What it does
@@ -169,7 +168,7 @@ session.
   session's mode. Under the session list, Mode and Send (n) do the same, for the
   same session, and a bar above the footer
   always shows Send all (n), every running session's queue; each Send is greyed out while its
-  queue is empty. Send all's key is `Shift+A`: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S
+  queue is empty. Send all's key is `Alt+Shift+A`: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S
   as plain Ctrl+S. A dead session's queue waits for it: Ctrl+S on one says to Relaunch it first,
   its hint leaves Ctrl+S out, and Send all skips it and doesn't count it. Ctrl+R takes a queued answer
   back to edit or drop. A sent answer shows as `you · sending`, as a queued one shows as
@@ -212,7 +211,7 @@ session.
   app runs). `Delete` on an item with children asks first, saying how many it takes and
   how many of them are still open or unread, and how many running ones stay, then closes
   or dismisses it and deletes the rest, at any depth. They stay deleted, even when a
-  subagent finishes; `Ctrl+R` with `F` showing brings one back. A pinned child is never
+  subagent finishes; `Ctrl+R` with `Alt+F` showing brings one back. A pinned child is never
   deleted or counted: it stays, at its session's level.
   A running child (a subagent still at work, say) is never deleted: it stays in the list
   with no parent, at the top level, and stays there if `Ctrl+R` brings its parent back.
@@ -236,12 +235,12 @@ session.
   question yellow, a decision purple, a PR light blue, a doc the theme's text colour, a
   subagent grey and a permission orange. Resting the pointer on a row shows its full title
   (a PR's with its repo), and on a session its full name and synopsis.
-- **Pins.** The inbox's first column pins an item (📌): a click there, or `P` in the item
+- **Pins.** The inbox's first column pins an item (📌): a click there, or `Alt+P` in the item
   list, pins the row or clears its pin. A doc comes pinned (a session can post a scratch
   report unpinned), anything else unpinned, and a doc posted again keeps the pin you set.
   Clearing the inbox never takes a pinned item: `Ctrl+A` never marks one, a `Delete` on
   marked rows leaves them (and says so: `1 pinned kept`), a parent's `Delete` leaves its
-  pinned children, and `F` never hides one. `Delete` on a pinned item asks first ("Delete
+  pinned children, and `Alt+F` never hides one. `Delete` on a pinned item asks first ("Delete
   pinned M2? The file stays on disk.", No by default), saying so too if a comment of
   yours on it awaits a reply; Yes clears its pin and deletes it.
 - **A doc's thread.** Select a doc and Detail shows it with its thread: **split** (the
@@ -284,7 +283,7 @@ session.
   and a subagent done or failed stay in the inbox, dimmed, below everything still
   needing you, the latest at the foot. One you've selected keeps its place, whatever its
   status does; once you move on it falls to the foot. `Delete` dismisses it (closes a
-  question or decision); `F` shows the dismissed and closed ones, and `Ctrl+R` on one
+  question or decision); `Alt+F` shows the dismissed and closed ones, and `Ctrl+R` on one
   brings it back (`Delete` only ever closes: on one its session finished while you had it
   selected, it lets it go at once). One you've answered and the session hasn't replied to stays up, as
   processing.
@@ -350,7 +349,7 @@ session.
   `Enter` or move in it again. A PR no session made isn't an item, so picking it leaves
   nothing selected and Detail says why. Without `gh`, or not logged in, the pane says so.
   Mark PRs to act on several at once, as in the inbox: `Ctrl+click` toggles one,
-  `Shift+click` (or `Alt+click`) takes the range, `Space` and `Shift+Up`/`Shift+Down` do
+  `Shift+click` (or `Alt+click`) takes the range, `Ctrl+Space` and `Shift+Up`/`Shift+Down` do
   the same from the keyboard, and a plain click or `Esc` drops the marks; the pane's
   bottom border counts them. Under the table, the PRs marked (or else the one selected)
   have four buttons, which a right-click on a row gives as a menu too (for every PR marked
@@ -414,8 +413,8 @@ session.
   until that question closes), Shell until the tab has it, Model until the session runs on the new
   one, Relaunch and Unpark until it's running again, Park until it's parked, Forget until it's gone,
   Fork until the fork is made or fails. With no word from the session in 30 seconds it comes back on
-  and says so. New (`N`), Adopt (`A`, a list of the sessions on disk you can adopt) and
-  Relaunch all (`Shift+L`) act on no one session, so they're keys in the footer. Ctrl+S, Ctrl+T and the
+  and says so. New (`Alt+N`), Adopt (`Alt+A`, a list of the sessions on disk you can adopt) and
+  Relaunch all (`Alt+Shift+L`) act on no one session, so they're keys in the footer. Ctrl+S, Ctrl+T and the
   hint under the answer box act on or describe the same session (with none selected, the highlighted item's).
   An item opened full screen has Mode, Send and the rest in its bar, for its own session. New session (directory, optional name, optional ticket, opening brief,
   model and effort) opens Claude in a Windows Terminal tab. The new session is selected in the session list
@@ -434,19 +433,19 @@ session.
   crash. Parked: not running, by intent, dimmed at the foot of the list. Forgotten: no longer
   in the wheelhouse at all, which Adopt can bring back. Relaunch starts an Available or Parked
   session again where it left off; on a running one it stops it (a tab's Claude Code or a
-  host) and starts it again, asking first only if it's mid-turn. Relaunch all (`Shift+L`)
+  host) and starts it again, asking first only if it's mid-turn. Relaunch all (`Alt+Shift+L`)
   brings back every Available session, and selecting an Available session also offers to
   relaunch it. Nothing restarts on its own, and a resumed session is asked to post the
   questions and tasks it already had open. Park on a running session asks it to write its
   handoff notes into its items, then it parks and stops (its tab closes); on one not running
   it parks at once. On one run in the wheelhouse, Park asks first, offering to compact it once
-  parked, before it stops (ticked while its prompt cache is warm: a cold one saves nothing). On a Parked session, Relaunch is captioned Unpark, and `P` and `L` both
+  parked, before it stops (ticked while its prompt cache is warm: a cold one saves nothing). On a Parked session, Relaunch is captioned Unpark, and `Alt+P` and `Alt+L` both
   press it. Forget deletes a session's wheelhouse data: on a running one, Stop & Forget asks you
-  first, Let it know (`L`: it does its own end steps, then stops) or Just stop it (`J`: it stops
+  first, Let it know (`Alt+L`: it does its own end steps, then stops) or Just stop it (`Alt+J`: it stops
   now, told nothing, which costs no tokens). The default is to let it know while its prompt cache
   is warm and to just stop it once cold, since its end steps would re-read its whole context: the
   dialog says which, and why. Answers queued for it go with it, and the dialog says how many. On
-  one not running it asks you to confirm. Fork (`K` in the session list)
+  one not running it asks you to confirm. Fork (`Alt+K` in the session list)
   makes a new session, "<name> (fork)", that carries on from a copy of the session's conversation
   so far, run as the session is, on its model and effort; the session itself carries on too. The
   dialog lists the session's open questions and its todo and blocked tasks, unticked: the ticked
@@ -455,7 +454,7 @@ session.
   default), at `<main checkout>/.worktrees/<branch>`, on a new branch from the session's last
   commit (`<branch>-fork` unless changed), or this one. Uncommitted changes stay where they are:
   the dialog warns when there are any, and the fork is told it won't see them. A
-  pending Park or Stop & Forget, its button back on after 30 seconds, is pressed again to choose: `C` cancels the request, `F` forces
+  pending Park or Stop & Forget, its button back on after 30 seconds, is pressed again to choose: `Alt+C` cancels the request, `Alt+F` forces
   it (the session is stopped at once, without its steps), `Esc` leaves it be. In the session's
   tab, `/wheelhouse park` and `/wheelhouse end` do the same from there. A tab closes once its
   session stops, by `/exit` or by the wheelhouse: its shell then exits cleanly, which Windows
@@ -463,8 +462,8 @@ session.
   the tab stays open on its error. If the wheelhouse can't start
   a session in its tab, the tab stays open saying why. The wheelhouse never deletes
   anything by itself.
-  `Tab` reaches the buttons after the answer box, and each has a key: with the list focused, `R` renames, `L` relaunches
-  (or unparks), `P` parks (or unparks) and `Delete` or `Backspace` forgets; the rest are under Keys below. `E`, `S`
+  `Tab` reaches the buttons after the answer box, and each has a key: with the list focused, `Alt+R` renames, `Alt+L` relaunches
+  (or unparks), `Alt+P` parks (or unparks) and `Delete` or `Backspace` forgets; the rest are under Keys below. `E`, `S`
   and `Shift+S` (End, Restore and Restore all before) do nothing for now.
 - **Adopt.** Brings a session the wheelhouse didn't launch into the wheelhouse: pick it
   from the recent sessions in `~/.claude/projects` that the wheelhouse has no record of
@@ -523,15 +522,15 @@ along with the launch command.
 
 ## Using it
 
-Keys, shown in upper case as usual (F means the f key, not Shift+F): `Enter` open an item's thread (or follow a session's conversation, in the
-session list), `F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `N` new session, `A` adopt, `Shift+L` relaunch all, `K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
+Keys, shown in upper case as usual (Alt+F means Alt and the f key, not Shift+F). Every one has a modifier (or is `F1`), so each works from the answer box too: `Enter` open an item's thread (or follow a session's conversation, in the
+session list), `Alt+F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
+highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `Alt+N` new session, `Alt+A` adopt, `Alt+Shift+L` relaunch all, `Alt+K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode), `Alt+S` send this one answer now (the queue and mode left as they are),
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
 as answered, a decision as seen), `Ctrl+Z` undo the last delete, pin or reopen in the inbox (the rows back as they
-stood, an open question open again; in a text box, its own undo), `?` list every key and button, `Q` quit. Outside a text box, `Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
-Every dialog opens centred over the screen, which stays in sight behind it. `Esc`, or a click outside the box, cancels it (on the tutorial's invite, that is Later, never Never), though not a click outside in the moment a dialog opens (a double-click's second). `Enter` presses the focused button; with focus on a one-line box or a checkbox it takes the dialog's one action (Launch, Rename, Fork, Park and the like), while in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices (Stop & Forget's, Relaunch's) answers `Enter` only on the focused button. `Tab` and `Shift+Tab` go round its boxes and buttons. A dialog asking yes or no takes `Y` or `N` (`Esc` is no, and so is `Enter`, as No has the focus). The `?` list closes on `Esc`, `Enter`, `?` or a click outside.
+stood, an open question open again; in a text box, its own undo), `F1` list every key and button, `Ctrl+Q` quit, `Alt+T` resume the tour while the title bar's badge shows. `Alt+Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
+Every dialog opens centred over the screen, which stays in sight behind it. `Esc`, or a click outside the box, cancels it (on the tutorial's invite, that is Later, never Never), though not a click outside in the moment a dialog opens (a double-click's second). `Enter` presses the focused button; with focus on a one-line box or a checkbox it takes the dialog's one action (Launch, Rename, Fork, Park and the like), while in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices (Stop & Forget's, Relaunch's) answers `Enter` only on the focused button. `Tab` and `Shift+Tab` go round its boxes and buttons. A dialog asking yes or no takes `Alt+Y` or `Alt+N` (`Esc` is no, and so is `Enter`, as No has the focus). The `F1` list closes on `Esc`, `Enter`, `F1` or a click outside.
 
 `Tab` goes round the session list, the items, the Decisions list, the answer box, the tour's Next while a tour box
 with one shows, then every button shown, in reading order, then the stats pane's effort slider (while it shows) and its zoom's `-` and `+` (`Enter` or
@@ -572,7 +571,7 @@ itself is in the database, shared by every TUI.
 
 Closing several questions or decisions at once: in the item list, `Ctrl`+click marks or unmarks a row
 and `Shift`+click or `Alt`+click marks the range from the last one marked (Windows Terminal keeps
-`Shift`+click for its own text selection, so use `Alt` there); from the keyboard, `Space`
+`Shift`+click for its own text selection, so use `Alt` there); from the keyboard, `Ctrl+Space`
 marks or unmarks the highlighted row, `Shift+Up`/`Shift+Down` extend the range, and `Ctrl+A`
 marks every finished (dimmed) row shown, never a pinned one. A `Ctrl`+, `Shift`+ or `Alt`+click never starts a drag. `Delete` or `Backspace` then closes the marked
 questions and decisions and dismisses the done tasks and subagents, leaving any pinned one among them, `Ctrl+R` brings back the finished ones, `Esc` clears the marks, and a plain click
@@ -656,7 +655,7 @@ the app.) On the other machine, `claude-wheelhouse --connect mybox.tailnet.ts.ne
 ran before. Don't run it while the daemon runs: two hubs would act on the same sessions (the
 app warns if you do).
 
-To stop the daemon, quit the app (`Q`) first, since an open app starts it again, then run
+To stop the daemon, quit the app (`Ctrl+Q`) first, since an open app starts it again, then run
 `make stop` in the clone (`claude-wheelhouse daemon --stop`). It stops the daemon by the pid in `daemon.lock`, with no
 token needed, and says what it did ("no wheelhouse daemon is running" if there was none).
 Running sessions carry on in their tabs, and the next `claude-wheelhouse` starts a fresh
@@ -778,7 +777,7 @@ a key spelt any other way isn't read.
 | `ANIMATION_FPS` | `WHEELHOUSE_ANIMATION_FPS` | `--animation-fps N` | 10 (0 turns animation off) |
 | `SESSION_DIR` | `WHEELHOUSE_SESSION_DIR` | none | the parent of the wheelhouse's clone |
 
-`SESSION_DIR` is the directory the New session dialog (`N`) starts in. `~` is allowed, and a
+`SESSION_DIR` is the directory the New session dialog (`Alt+N`) starts in. `~` is allowed, and a
 relative path is taken from your home directory (`SESSION_DIR=projects` is `~/projects`).
 If it isn't a directory, the dialog uses the default, and a line on the terminal the app
 was started from says why.
@@ -827,7 +826,7 @@ which the wheelhouse reads.
   them too. Only Claude Code 2.1.287 to 2.1.296 have been checked.
 - Each user's daemon listens on `127.0.0.1:7428`: a second WSL user on the same machine
   needs another port (see "Two wheelhouses on one machine").
-- Nothing restarts after a reboot: Relaunch all (`Shift+L`) brings the sessions back.
+- Nothing restarts after a reboot: Relaunch all (`Alt+Shift+L`) brings the sessions back.
 - This is a 0.1 prototype with no releases yet: update with `git pull` and `make install`.
 
 ## Reporting bugs
@@ -850,7 +849,7 @@ The logs hold your directory paths and session ids: look them over before you at
 
 1. End your sessions: Stop & Forget each one in the wheelhouse (its tab closes), or `/exit`
    it in its tab and close the tab.
-2. Quit the app (`Q`), then in the clone run `make stop`
+2. Quit the app (`Ctrl+Q`), then in the clone run `make stop`
    (`uv run claude-wheelhouse daemon --stop`).
 3. Delete the clone: `make install` put the wheelhouse in the clone's `.venv`, and nowhere
    else.

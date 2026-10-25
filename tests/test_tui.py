@@ -134,7 +134,7 @@ async def test_finished_items_toggle_in_and_take_a_message(store, sid):
         items = app.query_one("#items", DataTable)
         refs = lambda: [str(items.get_row_at(i)[2]) for i in range(items.row_count)]
         assert refs() == [t, done], "a done task stays, settled, at the foot; a closed question is hidden (T71)"
-        await pilot.press("f")
+        await pilot.press("alt+f")
         await pilot.pause()
         assert refs() == [t, done, closed], "finished items after the rest"
         items.move_cursor(row=refs().index(closed))
@@ -143,10 +143,14 @@ async def test_finished_items_toggle_in_and_take_a_message(store, sid):
         await pilot.press("ctrl+enter")
         await pilot.pause()
         app.query_one("#answer", TextArea).text = ""
-        app.query_one("#answer", TextArea).focus()
+        box = app.query_one("#answer", TextArea)
+        box.focus()
         await pilot.press("f")
         await pilot.pause()
-        assert len(refs()) == 3, "f types into the answer box instead of toggling"
+        assert len(refs()) == 3 and box.text == "f", "a plain f types into the answer box instead of toggling"
+        await pilot.press("alt+f")
+        await pilot.pause()
+        assert len(refs()) == 2 and box.text == "f", "Alt+F toggles from the answer box too (#189)"
     assert [(m["item_ref"], m["body"]) for m in store.drafts(sid)] == [(closed, "the punchline")]
     assert store.item(sid, closed)["status"] == "closed", "a message on a finished item leaves its status alone"
 
@@ -217,8 +221,8 @@ async def test_a_send_racing_an_end_does_not_crash(store, sid, monkeypatch):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("key, expected, desc", [
-    ("n", False, "N declines without opening New session"),
-    ("y", True, "Y confirms"),
+    ("alt+n", False, "Alt+N declines without opening New session"),
+    ("alt+y", True, "Alt+Y confirms"),
     ("escape", False, "Escape declines instead of clearing the filter underneath"),
 ])
 async def test_confirm_keys_stay_in_the_dialog(store, sid, key, expected, desc):
@@ -252,7 +256,7 @@ async def test_escape_closes_new_session(store, sid):
     """R6: Escape closes New session, as it does Confirm and Choice."""
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("n")
+        await pilot.press("alt+n")
         await pilot.pause()
         assert [type(s).__name__ for s in app.screen_stack] == ["Screen", "NewSession"]
         await pilot.press("escape")
@@ -278,10 +282,10 @@ async def test_adopt(store, monkeypatch, alive_on_adopt, launched, stack, desc):
     monkeypatch.setattr(adopt, "adopt", lambda store, c, name, sdk=None, may_tab=True: got.append((c.id, name)))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("a")
+        await pilot.press("alt+a")
         await pilot.pause()
         assert "Still running" in str(app.screen.query_one("#adopt-hint").render()), desc
-        await pilot.press("n")   # app keys stay out of the dialog
+        await pilot.press("alt+n")   # app keys stay out of the dialog
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
@@ -295,7 +299,7 @@ async def test_escape_closes_adopt(store, monkeypatch):
     monkeypatch.setattr(adopt, "candidates", lambda store: [])
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("a")
+        await pilot.press("alt+a")
         await pilot.pause()
         await pilot.press("escape")
         await pilot.pause()
@@ -314,7 +318,7 @@ async def test_adopt_prefills_the_name(store, monkeypatch, name, named, title, p
     monkeypatch.setattr(adopt, "candidates", lambda store: [Candidate("adopt-me", "/r", title, 0.0, None, name, named)])
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.press("a")
+        await pilot.press("alt+a")
         await pilot.pause()
         assert app.screen.query_one("#adopt-name", Input).value == prefill, desc
 
@@ -804,7 +808,7 @@ async def test_enter_on_a_session_follows_its_conversation(store, sid, tmp_path,
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         app.query_one("#session-list", DataTable).focus()
-        await pilot.press("enter", "n")   # it isn't running: decline the offer to relaunch it
+        await pilot.press("enter", "alt+n")   # it isn't running: decline the offer to relaunch it
         await pilot.pause()
         text = app._detail_text
         assert "demo · conversation" in text and "fix the VAT rounding" in text and "`⚙ Bash: make test`" in text
@@ -921,11 +925,11 @@ async def test_a_click_on_the_selected_session_unselects_it(store, sid, tmp_path
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("key, desc", [
-    ("l", "L: Relaunch"),
-    ("p", "P: Park"),
+    ("alt+l", "Alt+L: Relaunch"),
+    ("alt+p", "Alt+P: Park"),
     ("delete", "Delete: Forget"),
     ("backspace", "Backspace: Forget"),
-    ("r", "R: Rename"),
+    ("alt+r", "Alt+R: Rename"),
 ])
 async def test_session_keys_do_nothing_with_none_selected(store, sid, tmp_path, monkeypatch, key, desc):
     other = store.create_session(str(tmp_path), name="other")
@@ -950,10 +954,10 @@ async def test_session_keys_do_nothing_with_none_selected(store, sid, tmp_path, 
 @pytest.mark.parametrize("status, clicks, keys, stack, opened, desc", [
     ("dead", 1, (), ["Screen", "Confirm"], 0, "a click on a dead session offers to relaunch it"),
     ("dead", 2, (), ["Screen", "Confirm"], 0, "a double-click offers it once: its second click is the dialog's"),
-    ("dead", 1, ("y",), ["Screen"], 1, "a click, then Y: relaunched"),
-    ("dead", 2, ("y",), ["Screen"], 1, "a double-click, then Y: relaunched, no second offer left behind"),
-    ("dead", 1, ("n", "down"), ["Screen"], 0, "a click, then N: declined"),
-    ("dead", 2, ("n", "down"), ["Screen"], 0, "a double-click, then N: declined, no second offer left behind"),
+    ("dead", 1, ("alt+y",), ["Screen"], 1, "a click, then Alt+Y: relaunched"),
+    ("dead", 2, ("alt+y",), ["Screen"], 1, "a double-click, then Alt+Y: relaunched, no second offer left behind"),
+    ("dead", 1, ("alt+n", "down"), ["Screen"], 0, "a click, then Alt+N: declined"),
+    ("dead", 2, ("alt+n", "down"), ["Screen"], 0, "a double-click, then Alt+N: declined, no second offer left behind"),
     ("live", 2, (), ["Screen"], 0, "a double-click on a running session offers nothing"),
 ])
 async def test_a_double_click_on_a_dead_session_offers_one_relaunch(store, sid, tmp_path, monkeypatch, status, clicks,
@@ -1054,13 +1058,13 @@ async def step(app, pilot, how, sid, other):
         await pilot.click("#relaunch" if how == "unpark" else "#end")   # Unpark is Relaunch, captioned
         await pilot.pause()
         if how != "unpark":
-            await pilot.press("y")
+            await pilot.press("alt+y")
     elif how == "delete":
         app.items_table.focus()
         await pilot.press("delete")
         await pilot.pause()
         if app.screen is not app.screen_stack[0]:   # an open question asks first (#151)
-            await pilot.press("y")
+            await pilot.press("alt+y")
     elif how in ("up", "down"):
         app.session_list.focus()
         await pilot.press(how)
@@ -1069,7 +1073,7 @@ async def step(app, pilot, how, sid, other):
         await pilot.click("#session-list", offset=(4, row + 1))   # below the header row
         await pilot.pause()
         if isinstance(app.screen, Confirm):   # the offer to relaunch a dead session
-            await pilot.press("n")
+            await pilot.press("alt+n")
     elif how == "esc":
         app.items_table.focus()
         await pilot.press("escape")
@@ -1090,7 +1094,7 @@ async def step(app, pilot, how, sid, other):
         await pilot.press("enter")
         await pilot.pause()
         if isinstance(app.screen, Confirm):   # the offer to relaunch a dead session
-            await pilot.press("n")
+            await pilot.press("alt+n")
     elif how == "mark delete":   # A's and B's questions marked, closed together
         app.items_table.set_marks({r.key.value for r in app.items_table.ordered_rows
                                    if r.key.value.split("|")[1].startswith("Q")})
@@ -1099,7 +1103,7 @@ async def step(app, pilot, how, sid, other):
         await pilot.press("delete")
         await pilot.pause()
         if app.screen is not app.screen_stack[0]:   # open questions among them: asked once (#151)
-            await pilot.press("y")
+            await pilot.press("alt+y")
     elif how == "thread":   # the highlighted item's thread, full screen
         app.items_table.focus()
         await pilot.press("enter")
@@ -1262,7 +1266,7 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
         for _ in range(3):
             await pilot.pause()
         if isinstance(app.screen, Confirm):   # Delete on an open question asks first (#151): yes
-            await pilot.press("y")
+            await pilot.press("alt+y")
             await pilot.pause()
         desc = f"Down, {burst} from the {where} list, {'following A' if filtered else 'unfiltered'}"
         # the session acted on: following A, Down goes to B; unfiltered, the list's Down picks A
@@ -1322,7 +1326,7 @@ async def test_a_raw_burst_opens_what_the_cursor_is_on(store, sid, tmp_path, whe
             assert isinstance(app.screen, ThreadView) and (app.screen.sid, app.screen.ref) == (other, theirs), desc
         else:
             assert isinstance(app.screen, Confirm) and f"({other[:6]}," in app.screen.prompt, desc
-            await pilot.press("n")
+            await pilot.press("alt+n")
             await pilot.pause()
             assert_one_current(app, desc)
         assert app.current_session() == (other if where == "sessions" else None), desc   # unfiltered: none (#16)
@@ -1561,8 +1565,8 @@ async def test_a_raw_burst_then_a_click_on_a_shorter_list_ends_as_typed_slowly(t
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("keys, desc", [
-    (("q", "a"), "Q then A: no Adopt dialog opening as the app shuts down"),
-    (("q", "down", "tab", "enter"), "Q then a burst that opens a thread"),
+    (("ctrl+q", "alt+a"), "Ctrl+Q then Alt+A: no Adopt dialog opening as the app shuts down"),
+    (("ctrl+q", "down", "tab", "enter"), "Ctrl+Q then a burst that opens a thread"),
 ])
 async def test_keys_after_quit_are_dropped(store, sid, keys, desc):
     """Review 17: once Q has the app exiting, the keys typed after it don't act."""
@@ -1670,24 +1674,24 @@ class Burst:
 @pytest.mark.parametrize("focus, at, burst, seen, want, desc", [
     ("answer", "qa", ("a", "b", "backspace", "ctrl+enter"), lambda b: (b.answer("qa"), b.status("qa"), b.focus()),
      (["a"], "open", "answer"), "review 14 (1): Backspace edits the box, then Ctrl+Enter sends it; the question stays open"),
-    ("items", "qa", ("delete", "y", "down"), lambda b: (b.status("qa"), b.status("qb")), ("closed", "open"),
+    ("items", "qa", ("delete", "alt+y", "down"), lambda b: (b.status("qa"), b.status("qb")), ("closed", "open"),
      "review 14 (2): Delete closes the question it was on, once confirmed (an open one), not the next"),
     ("items", "qa", ("ctrl+s", "down"), lambda b: (b.sent("alpha"), b.sent("bravo")), (1, 0),
      "review 14 (3): Ctrl+S sends the queue of the session it was on, not the next row's"),
-    ("items", "qa", ("space", "down"), lambda b: b.marked(), {"qa"}, "review 14 (4): Space marks the row it was on"),
-    ("items", "pa", ("1", "tab"), lambda b: (b.status("pa"), b.focus()), ("allowed", "answer"),
-     "review 14 (5): 1 allows the permission, then Tab goes to the box"),
+    ("items", "qa", ("ctrl+space", "down"), lambda b: b.marked(), {"qa"}, "review 14 (4): Ctrl+Space marks the row it was on"),
+    ("items", "pa", ("alt+y", "tab"), lambda b: (b.status("pa"), b.focus()), ("allowed", "answer"),
+     "review 14 (5): Alt+Y allows the permission, then Tab goes to the box"),
     ("lines", "qb", ("up", "shift+tab"), lambda b: (b.app.answer.cursor_location, b.cursor(), b.focus()),
      ((0, 5), "qb", "items"), "review 14 (6): Up moves the box's cursor, not the items', then Shift+Tab goes to them"),
-    ("session-list", "qa", ("r", "down"), lambda b: b.asked(), "alpha", "R renames the session it was on"),
-    ("session-list", "qa", ("p", "down"), lambda b: b.asked(), "alpha",
-     "P on a session run in the wheelhouse asks first, about the session it was on (Compact first)"),
+    ("session-list", "qa", ("alt+r", "down"), lambda b: b.asked(), "alpha", "Alt+R renames the session it was on"),
+    ("session-list", "qa", ("alt+p", "down"), lambda b: b.asked(), "alpha",
+     "Alt+P on a session run in the wheelhouse asks first, about the session it was on (Compact first)"),
     ("session-list", "qa", ("delete", "down"), lambda b: b.asked(), "alpha",
      "Delete on the session it was on asks first (Let it know or Just stop it), its queued answer at stake"),
-    ("items", "qa", ("i", "down"), lambda b: (b.command("alpha"), b.command("bravo")), ("interrupt", None),
-     "I interrupts the session of the item it was on"),
-    ("items", "qa", ("c", "down"), lambda b: b.asked(), "alpha", "C compacts the session of the item it was on"),
-    ("items", "qa", ("h", "down"), lambda b: b.asked(), "alpha", "H opens a shell on the session of the item it was on"),
+    ("items", "qa", ("alt+i", "down"), lambda b: (b.command("alpha"), b.command("bravo")), ("interrupt", None),
+     "Alt+I interrupts the session of the item it was on"),
+    ("items", "qa", ("alt+c", "down"), lambda b: b.asked(), "alpha", "Alt+C compacts the session of the item it was on"),
+    ("items", "qa", ("alt+h", "down"), lambda b: b.asked(), "alpha", "Alt+H opens a shell on the session of the item it was on"),
 ])
 @pytest.mark.both
 async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch, sdk_on, focus, at, burst, seen, want,
@@ -1740,19 +1744,19 @@ async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch,
     ("items", "qa", ("enter", "q"), ("ThreadView", "q", [], False, "park"), "review 15 (1): raw Enter Q doesn't quit"),
     ("items", "conversation", ("enter", "h", "i"), ("Screen", "hi", [], False, "park"),
      "Enter on the conversation row goes to its box, and the letters behind it land there"),
-    ("session-list", "gone", ("enter", "n", "q"), ("Screen", "", [], True, "park"),
-     "Enter on a dead session offers a relaunch: N declines it, then Q quits"),
-    ("items", "qa", ("h", "n", "q"), ("Screen", "", [], True, "park"), "review 15 (2): H's Confirm takes N, then Q quits"),
-    ("items", "qa", ("h", "y", "y"), ("Screen", "", ["shell"], False, "park"),
-     "review 15 (2): a second Y once the dialog has closed doesn't dismiss it again"),
-    ("items", "qa", ("h", "n", "n"), ("NewSession", "", [], False, "park"),
-     "review 15 (2): a second N once the dialog has closed is the inbox's: New session"),
-    ("session-list", "alpha", ("p", "c", "q"), ("Screen", "", [], True, None),
-     "review 15 (2): P on a session asked to park offers the Choice, C cancels the request, then Q quits"),
-    ("session-list", "alpha", ("p", "c", "c"), ("CompactSession", "", [], False, None),
-     "review 15 (2): a second C once the Choice has closed is the inbox's: Compact"),
-    ("items", "qa", ("question_mark", "q"), ("Screen", "", [], False, "park"),
-     "? opens the keys, and Q behind it closes them rather than quitting"),
+    ("session-list", "gone", ("enter", "alt+n", "ctrl+q"), ("Screen", "", [], True, "park"),
+     "Enter on a dead session offers a relaunch: Alt+N declines it, then Ctrl+Q quits"),
+    ("items", "qa", ("alt+h", "alt+n", "ctrl+q"), ("Screen", "", [], True, "park"), "review 15 (2): Alt+H's Confirm takes Alt+N, then Ctrl+Q quits"),
+    ("items", "qa", ("alt+h", "alt+y", "alt+y"), ("Screen", "", ["shell"], False, "park"),
+     "review 15 (2): a second Alt+Y once the dialog has closed doesn't dismiss it again"),
+    ("items", "qa", ("alt+h", "alt+n", "alt+n"), ("NewSession", "", [], False, "park"),
+     "review 15 (2): a second Alt+N once the dialog has closed is the inbox's: New session"),
+    ("session-list", "alpha", ("alt+p", "alt+c", "ctrl+q"), ("Screen", "", [], True, None),
+     "review 15 (2): Alt+P on a session asked to park offers the Choice, Alt+C cancels the request, then Ctrl+Q quits"),
+    ("session-list", "alpha", ("alt+p", "alt+c", "alt+c"), ("CompactSession", "", [], False, None),
+     "review 15 (2): a second Alt+C once the Choice has closed is the inbox's: Compact"),
+    ("items", "qa", ("f1", "f1"), ("Screen", "", [], False, "park"),
+     "F1 opens the keys, and the F1 behind it closes them"),
 ])
 @pytest.mark.both
 async def test_a_key_that_opens_something_takes_the_keys_behind_it(store, tmp_path, monkeypatch, focus, at, burst,
@@ -1822,33 +1826,33 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
 @pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
 @pytest.mark.parametrize("focus, at, burst, want, desc", [
-    ("items", "qa", ("h", "enter", "y"), {"stack": ("Screen",), "hosts": []},
+    ("items", "qa", ("alt+h", "enter", "alt+y"), {"stack": ("Screen",), "hosts": []},
      "review 16 (1): H's Confirm opens on No, so Enter answers No, and the Y behind it isn't a Yes"),
-    ("items", "qa", ("h", "enter", "q"), {"stack": ("Screen",), "hosts": [], "quit": True},
+    ("items", "qa", ("alt+h", "enter", "ctrl+q"), {"stack": ("Screen",), "hosts": [], "quit": True},
      "review 16 (1): Enter on No answers No, then Q quits"),
-    ("session-list", "gone", ("enter", "enter", "y"), {"stack": ("Screen",), "launched": []},
+    ("session-list", "gone", ("enter", "enter", "alt+y"), {"stack": ("Screen",), "launched": []},
      "review 16 (1): Relaunch's Confirm opens on No, so Enter declines, and the Y behind it doesn't relaunch"),
-    ("session-list", "alpha", ("p", "enter", "f"), {"stack": ("Screen",), "pending": None, "parked": False},
+    ("session-list", "alpha", ("alt+p", "enter", "alt+f"), {"stack": ("Screen",), "pending": None, "parked": False},
      "review 16 (1): the Choice opens on Cancel request: Enter cancels the request, and the F behind it isn't Force"),
-    ("session-list", "alpha", ("p", "enter", "escape"), {"stack": ("Screen",), "pending": None},
+    ("session-list", "alpha", ("alt+p", "enter", "escape"), {"stack": ("Screen",), "pending": None},
      "review 16 (1): Enter cancels the request, and the Esc behind it isn't Leave it"),
-    ("session-list", "alpha", ("r", "x", "enter", "q"), {"stack": ("Screen",), "names": ["gone", "x"], "quit": True},
+    ("session-list", "alpha", ("alt+r", "x", "enter", "ctrl+q"), {"stack": ("Screen",), "names": ["gone", "x"], "quit": True},
      "review 16 (1): Rename takes X, Enter renames to it, then Q quits"),
-    ("session-list", "alpha", ("r", "enter", "enter"), {"stack": ("Screen",), "names": ["alpha", "gone"]},
+    ("session-list", "alpha", ("alt+r", "enter", "enter"), {"stack": ("Screen",), "names": ["alpha", "gone"]},
      "review 16 (2): Enter closes Rename once, and the second Enter is the session list's"),
-    ("session-list", "alpha", ("r", "x", "enter", "enter"), {"stack": ("Screen",), "names": ["gone", "x"]},
+    ("session-list", "alpha", ("alt+r", "x", "enter", "enter"), {"stack": ("Screen",), "names": ["gone", "x"]},
      "review 16 (2): X Enter renames, and the second Enter is the session list's"),
-    ("session-list", "alpha", ("n", "tab", "enter", "escape"), {"stack": ("Screen", "NewSession"), "focus": "browse"},
+    ("session-list", "alpha", ("alt+n", "tab", "enter", "escape"), {"stack": ("Screen", "NewSession"), "focus": "browse"},
      "review 16 (3): Enter on Browse opens the picker, and the Esc behind it closes the picker, not New session"),
-    ("session-list", "alpha", ("p", "f", "y"), {"stack": ("Screen",), "parked": True},
+    ("session-list", "alpha", ("alt+p", "alt+f", "alt+y"), {"stack": ("Screen",), "parked": True},
      "F on the Choice asks to confirm Force, and the Y behind it confirms"),
-    ("session-list", "alpha", ("p", "c", "p"), {"stack": ("Screen", "ParkSession"), "pending": None},
+    ("session-list", "alpha", ("alt+p", "alt+c", "alt+p"), {"stack": ("Screen", "ParkSession"), "pending": None},
      "C cancels the request before the P behind it, which asks afresh: Park's dialog, as alpha runs in the wheelhouse"),
-    ("session-list", "alpha", ("m", "down", "enter"), {"stack": ("Screen",), "model": "claude-sonnet-5-5"},
+    ("session-list", "alpha", ("alt+m", "down", "enter"), {"stack": ("Screen",), "model": "claude-sonnet-5-5"},
      "M opens Model, Down moves to the next model before Enter takes it"),
-    ("items", "qa", ("m", "enter", "q"), {"stack": ("Screen",), "model": "claude-opus-5-5", "quit": True},
+    ("items", "qa", ("alt+m", "enter", "ctrl+q"), {"stack": ("Screen",), "model": "claude-opus-5-5", "quit": True},
      "Model's Enter takes the highlighted model, then the Q behind it quits"),
-    ("session-list", "alpha", ("m", "escape", "m", "escape"), {"stack": ("Screen",), "model": None},
+    ("session-list", "alpha", ("alt+m", "escape", "alt+m", "escape"), {"stack": ("Screen",), "model": None},
      "Esc leaves the model as it was, each time"),
     ("stats", "alpha", ("right", "right", "left"), {"effort": "xhigh", "focus": "stats"},
      "the effort slider: each arrow moves on from where the last left it"),
@@ -1865,19 +1869,19 @@ async def test_a_key_lands_before_the_next_acts(store, tmp_path, monkeypatch, fo
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("focus, at, burst, desc", [
-    ("items", "qa", ("h", "enter", "y"), "a focused button's Enter, then a dialog key"),
-    ("session-list", "alpha", ("p", "enter", "escape"), "the Choice's Enter, then Esc"),
-    ("session-list", "alpha", ("p", "f", "y"), "a dialog's answer that opens another"),
-    ("session-list", "alpha", ("p", "c", "p"), "a dialog's answer, then a key that reads what it did"),
-    ("session-list", "alpha", ("r", "x", "enter", "q"), "an input's Enter, then a key on the screen behind"),
-    ("session-list", "alpha", ("r", "x", "enter", "enter"), "an input's Enter twice"),
-    ("session-list", "alpha", ("n", "tab", "enter", "escape", "tab", "a"), "the picker opened and closed by keys"),
-    ("session-list", "alpha", ("n", "a", "b", "escape", "q"), "typing in a dialog, then closing it"),
-    ("session-list", "gone", ("enter", "enter", "y"), "Enter on a dead session's relaunch offer declines it"),
+    ("items", "qa", ("alt+h", "enter", "alt+y"), "a focused button's Enter, then a dialog key"),
+    ("session-list", "alpha", ("alt+p", "enter", "escape"), "the Choice's Enter, then Esc"),
+    ("session-list", "alpha", ("alt+p", "alt+f", "alt+y"), "a dialog's answer that opens another"),
+    ("session-list", "alpha", ("alt+p", "alt+c", "alt+p"), "a dialog's answer, then a key that reads what it did"),
+    ("session-list", "alpha", ("alt+r", "x", "enter", "ctrl+q"), "an input's Enter, then a key on the screen behind"),
+    ("session-list", "alpha", ("alt+r", "x", "enter", "enter"), "an input's Enter twice"),
+    ("session-list", "alpha", ("alt+n", "tab", "enter", "escape", "tab", "a"), "the picker opened and closed by keys"),
+    ("session-list", "alpha", ("alt+n", "a", "b", "escape", "ctrl+q"), "typing in a dialog, then closing it"),
+    ("session-list", "gone", ("enter", "enter", "alt+y"), "Enter on a dead session's relaunch offer declines it"),
     ("items", "qa", ("enter", "x", "escape", "tab", "y"), "a thread left with Esc, then the inbox's box"),
     ("items", "qa", ("tab", "a", "b", "backspace", "ctrl+enter", "down"), "typing, editing and sending"),
-    ("items", "qa", ("question_mark", "q", "q"), "? and Q close the keys, then Q quits"),
-    ("session-list", "alpha", ("m", "down", "down", "enter", "m", "escape"), "Model chosen by keys, opened again"),
+    ("items", "qa", ("f1", "f1", "ctrl+q"), "F1 opens and closes the keys, then Ctrl+Q quits"),
+    ("session-list", "alpha", ("alt+m", "down", "down", "enter", "alt+m", "escape"), "Model chosen by keys, opened again"),
     ("stats", "alpha", ("right", "right", "left", "tab", "right"), "the slider's arrows, then Tab on round"),
 ])
 @pytest.mark.both
@@ -1991,7 +1995,7 @@ async def test_enter_on_the_followed_session_goes_to_the_newest_turn(store, sid,
         await pilot.pause()
         assert scroll.scroll_y == 0 < scroll.max_scroll_y, "scrolled up to read"
         app.session_list.focus()
-        await pilot.press("enter", "n")   # it isn't running: decline the offer to relaunch it
+        await pilot.press("enter", "alt+n")   # it isn't running: decline the offer to relaunch it
         await pilot.pause()
         assert scroll.scroll_y == scroll.max_scroll_y
 
@@ -2400,7 +2404,7 @@ async def relaunch_button(pilot):
 
 async def select_in_inbox(pilot):
     pilot.app.query_one("#session-list", DataTable).focus()
-    await pilot.press("enter", "y")
+    await pilot.press("enter", "alt+y")
 
 
 @pytest.mark.parametrize("how, desc", [
@@ -2432,7 +2436,7 @@ async def test_declining_the_relaunch_leaves_a_dead_session_be(store, sid, monke
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, Confirm)
-        await pilot.press("n")
+        await pilot.press("alt+n")
         await pilot.pause()
         assert app.viewing == sid, "it still follows the session's conversation"
 
@@ -2770,7 +2774,7 @@ async def test_delete_closes_and_ctrl_r_reopens_questions(store, sid, key, kind,
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         if finished:
-            await pilot.press("f")
+            await pilot.press("alt+f")
         app.items_table.focus()
         app.items_table.move_cursor(row=0)
         await pilot.pause()
@@ -2779,7 +2783,7 @@ async def test_delete_closes_and_ctrl_r_reopens_questions(store, sid, key, kind,
         await pilot.press(key)
         await pilot.pause()
         if isinstance(app.screen, Confirm):   # an open question asks first (#151)
-            await pilot.press("y")
+            await pilot.press("alt+y")
             await pilot.pause()
     assert store.item(sid, ref)["status"] == expected, desc
 
@@ -2934,7 +2938,7 @@ async def test_a_selected_item_moves_only_on_delete(store, sid, live, clock, sta
             await pilot.pause()
             table = app.items_table
             table.focus()
-            await pilot.press("f")   # finished items shown, so a finished target is in the list
+            await pilot.press("alt+f")   # finished items shown, so a finished target is in the list
             await pilot.pause()
             table.move_cursor(row=table.get_row_index(f"{sid}|{ref}"))
             await pilot.pause()
@@ -2944,7 +2948,7 @@ async def test_a_selected_item_moves_only_on_delete(store, sid, live, clock, sta
             if act in ("delete", "ctrl+r"):
                 await pilot.press(act)
                 if isinstance(app.screen, Confirm):   # Delete on an open question asks first (#151)
-                    await pilot.press("y")
+                    await pilot.press("alt+y")
             elif act.startswith("#"):
                 await pilot.click(act)
             else:
@@ -3011,8 +3015,8 @@ async def dwell_steps(pilot, app, keys, steps, clock) -> None:
     (("on D", "enter"), "unseen", "a thread opened on it: not at once"),
     (("on D", "enter", "rest"), "seen", "a thread opened on it: seen after the dwell"),
     (("on D", "short", "enter"), "unseen", "opening the thread starts the dwell again (it takes a while to open)"),
-    (("on D", "question_mark", "rest"), "unseen", "the keys overlay over it: not looked at"),
-    (("on D", "question_mark", "rest", "escape", "rest"), "seen", "back from the overlay: the dwell starts again"),
+    (("on D", "f1", "rest"), "unseen", "the keys overlay over it: not looked at"),
+    (("on D", "f1", "rest", "escape", "rest"), "seen", "back from the overlay: the dwell starts again"),
     (("on D", "delete"), "closed", "Delete: at once"),
     (("on D", "answer"), "seen", "answering it: seen at once"),
     (("follow A", "on D", "short", "session B", "rest"), "unseen", "a switch to another session mid-dwell"),
@@ -3263,7 +3267,7 @@ async def test_delete_closes_and_ctrl_r_reopens_decisions(store, sid, start, key
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         if finished:
-            await pilot.press("f")
+            await pilot.press("alt+f")
         app.items_table.focus()
         app.items_table.move_cursor(row=0)
         await pilot.pause()
@@ -3278,7 +3282,7 @@ async def test_delete_closes_and_ctrl_r_reopens_decisions(store, sid, start, key
     ([("click", 1), ("shift", 3)], ["Q2", "Q3", "Q4"], "Shift+click marks the range"),
     ([("click", 1), ("alt", 3)], ["Q2", "Q3", "Q4"], "Alt+click marks the range, as Shift+click"),
     ([("ctrl", 0), ("ctrl", 1), ("shift", 3)], ["Q2", "Q3", "Q4"], "the range runs from the last one toggled"),
-    ([("key", "space"), ("key", "down"), ("key", "down"), ("key", "space")], ["Q1", "Q3"], "Space toggles"),
+    ([("key", "ctrl+space"), ("key", "down"), ("key", "down"), ("key", "ctrl+space")], ["Q1", "Q3"], "Ctrl+Space toggles"),
     ([("key", "shift+down"), ("key", "shift+down")], ["Q1", "Q2", "Q3"], "Shift+Down extends"),
     ([("ctrl", 2), ("key", "escape")], [], "Esc clears the marks"),
     ([("ctrl", 2), ("click", 3)], [], "a plain click starts afresh"),
@@ -3320,7 +3324,7 @@ async def five_questions(store, sid, pilot, steps) -> None:
                               meta=how == "alt")
         await pilot.pause()
         if isinstance(app.screen, Confirm):   # Delete on an open question asks first (#151): yes
-            await pilot.press("y")
+            await pilot.press("alt+y")
             await pilot.pause()
 
 
@@ -3337,7 +3341,7 @@ def post_five(store, sid) -> None:
     ([("click", 3), ("ctrl", 1), ("key", "delete")], "Q1", "marked bottom first: still above the topmost"),
     ([("click", 2), ("key", "delete")], "Q2", "one row, unmarked: the row above it"),
     ([("key", "delete")], "Q2", "the first row: the new first row"),
-    ([("key", "f"), ("click", 2), ("key", "delete")], "Q3", "F on: the row stays in sight, the highlight with it"),
+    ([("key", "alt+f"), ("click", 2), ("key", "delete")], "Q3", "Alt+F on: the row stays in sight, the highlight with it"),
 ])
 @pytest.mark.anyio
 async def test_delete_puts_the_highlight_above_the_topmost_row_it_took(store, sid, steps, lands, desc):
@@ -3366,7 +3370,7 @@ async def test_ctrl_a_marks_the_finished_rows(store, sid, finished, focus, marke
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         if finished:
-            await pilot.press("f")
+            await pilot.press("alt+f")
         app.query_one(f"#{focus}").focus()
         await pilot.pause()
         await pilot.press("ctrl+a")
@@ -3414,7 +3418,7 @@ async def test_ctrl_r_takes_a_queued_answer_back_before_it_reopens(store, sid, q
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.press("f")
+        await pilot.press("alt+f")
         app.items_table.focus()
         app.items_table.move_cursor(row=0)
         await pilot.pause()
@@ -3444,7 +3448,7 @@ async def ctrl_r_where(tmp_path, follow, focus, at, marks, typed, slow) -> dict:
     notes = []
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.press("f")
+        await pilot.press("alt+f")
         if follow:
             app.follow(sid)
         await pilot.pause()
@@ -3522,7 +3526,7 @@ async def test_the_word_after_acting_on_marks_names_each_act(store, sid, kinds, 
             # the finished, and in the notice
             for k, r in zip(kinds, refs):
                 app.close(store.item(sid, r), True)
-            await pilot.press("f")
+            await pilot.press("alt+f")
         await pilot.pause()
         items.set_marks({f"{sid}|{r}" for r in refs})
         notes = []
@@ -3581,11 +3585,11 @@ async def test_delete_closes_the_marked_questions_and_ctrl_r_reopens_them(store,
         await pilot.press("backspace")
         await pilot.pause()
         assert isinstance(app.screen, Confirm) and "2 are open questions" in app.screen.prompt, "asked once"
-        await pilot.press("y")
+        await pilot.press("alt+y")
         await pilot.pause()
         assert [store.item(sid, r)["status"] for r in (q1, q2, q3, t)] == ["closed", "open", "closed", "running"]
         assert items.marked == set()
-        await pilot.press("f")
+        await pilot.press("alt+f")
         await pilot.pause()
         items.set_marks({f"{sid}|{q1}", f"{sid}|{q2}", f"{sid}|{q3}"})
         await pilot.pause()
@@ -4341,13 +4345,13 @@ async def test_permission_buttons(store, tmp_path, press, status, decision, desc
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("where, press, typed, then, status, message, desc", [
-    ("inbox", "3", "use rg", "enter", "denied", "use rg", "Deny, a reason, Enter: denied with it"),
+    ("inbox", "alt+d", "use rg", "enter", "denied", "use rg", "Deny, a reason, Enter: denied with it"),
     ("inbox", "#deny", "use rg", "enter", "denied", "use rg", "the Deny button, as its key"),
-    ("inbox", "3", "", "enter", "denied", "", "Deny then Enter: a plain deny"),
-    ("inbox", "3", "use rg", "escape", "open", None, "Deny then Esc: nothing sent, the buttons back"),
-    ("inbox", "1", "", None, "allowed", "", "Allow: at once, no reason asked"),
-    ("thread", "3", "use rg", "enter", "denied", "use rg", "in a full-screen item, denied with it"),
-    ("thread", "3", "use rg", "escape", "open", None, "Esc there: the buttons back, the item still open"),
+    ("inbox", "alt+d", "", "enter", "denied", "", "Deny then Enter: a plain deny"),
+    ("inbox", "alt+d", "use rg", "escape", "open", None, "Deny then Esc: nothing sent, the buttons back"),
+    ("inbox", "alt+y", "", None, "allowed", "", "Allow: at once, no reason asked"),
+    ("thread", "alt+d", "use rg", "enter", "denied", "use rg", "in a full-screen item, denied with it"),
+    ("thread", "alt+d", "use rg", "escape", "open", None, "Esc there: the buttons back, the item still open"),
 ])
 @pytest.mark.both
 async def test_denys_optional_reason(store, tmp_path, where, press, typed, then, status, message, desc):
@@ -4393,7 +4397,7 @@ async def test_deny_reason_esc_without_focus(store, tmp_path, where, desc):
         if where == "thread":
             app.push_screen(ThreadView(sid, ref))
             await pilot.pause()
-        await pilot.press("3")
+        await pilot.press("alt+d")
         await pilot.pause()
         reason, buttons = app.screen.query_one(DenyReason), app.screen.query_one(PermissionButtons)
         assert reason.display, desc
@@ -4559,8 +4563,8 @@ async def test_park_offers_to_compact_first_by_cache_warmth(store, tmp_path, mon
     ("sdk", False, ("enter",), 0, 1, "hosted, a cold one: Just stop it by default, stopped and forgotten"),
     ("tab", True, ("enter",), 1, 0, "a tab, a warm cache: Let it know by default"),
     ("tab", False, ("enter",), 0, 1, "a tab, a cold one: Just stop it by default"),
-    ("sdk", False, ("l",), 1, 0, "L lets it know, the cache cold"),
-    ("tab", True, ("j",), 0, 1, "J just stops it, the cache warm"),
+    ("sdk", False, ("alt+l",), 1, 0, "Alt+L lets it know, the cache cold"),
+    ("tab", True, ("alt+j",), 0, 1, "Alt+J just stops it, the cache warm"),
     ("sdk", True, ("click:#forget-stop",), 0, 1, "Just stop it clicked"),
     ("tab", False, ("click:#forget-tell",), 1, 0, "Let it know clicked"),
     ("sdk", True, ("escape",), 0, 0, "Esc: neither, the session left be"),
@@ -4689,7 +4693,7 @@ async def test_new_session_runner(store, tmp_path, monkeypatch, on, tick, runner
     monkeypatch.setenv("WHEELHOUSE_RUNNER", "sdk")
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
-        await pilot.press("n")
+        await pilot.press("alt+n")
         await pilot.pause()
         assert bool(app.screen.query("#tab")) is on, desc
         assert app.screen.query_one("#model", Select).display, f"{desc}: model and effort are a tab's too"
@@ -4708,7 +4712,7 @@ async def test_new_session_selected_as_it_appears(store, sid, tmp_path, monkeypa
     async with app.run_test(size=(180, 40)) as pilot:
         await pick(app, pilot, sid)
         app.session_list.focus()
-        await pilot.press("n")
+        await pilot.press("alt+n")
         await pilot.pause()
         app.screen.query_one("#cwd", Input).value = str(tmp_path)
         app.screen.query_one("#name", Input).value = "fresh"
@@ -4842,7 +4846,7 @@ async def test_new_session_starts_in_the_session_dir(store, tmp_path, monkeypatc
     monkeypatch.setenv("WHEELHOUSE_SESSION_DIR", str(tmp_path))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 50)) as pilot:
-        await pilot.press("n")
+        await pilot.press("alt+n")
         await pilot.pause()
         assert app.screen.query_one("#cwd", Input).value == str(tmp_path)
 
@@ -4852,7 +4856,7 @@ async def test_browse_fills_in_the_working_directory(store, tmp_path):
     (tmp_path / "repo").mkdir()
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 50)) as pilot:
-        await pilot.press("n")
+        await pilot.press("alt+n")
         await pilot.pause()
         app.screen.query_one("#cwd", Input).value = str(tmp_path)
         await pilot.click("#browse")
@@ -5318,7 +5322,7 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
         await pilot.pause()
         app.items_table.focus()
         for _ in range(presses):
-            await pilot.press("f")
+            await pilot.press("alt+f")
             await pilot.pause()
         labels = footer_labels(app)
         assert app.show_finished == shown, desc
@@ -6438,14 +6442,15 @@ def presses(app) -> list[str]:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("key, button", [("i", "interrupt"), ("c", "compact"), ("h", "shell"), ("1", "allow"),
-                                         ("2", "always"), ("3", "deny"), ("A", "send-all"), ("shift+a", "send-all")])
+@pytest.mark.parametrize("key, button", [("alt+i", "interrupt"), ("alt+c", "compact"), ("alt+h", "shell"),
+                                         ("alt+y", "allow"), ("alt+w", "always"), ("alt+d", "deny"),
+                                         ("alt+shift+a", "send-all")])
 @pytest.mark.parametrize("where, pressed", [
-    ("items", True), ("session-list", True), ("send-all", True), ("thread", True), ("answer", False), ("dialog", False),
+    ("items", True), ("session-list", True), ("send-all", True), ("thread", True), ("answer", True), ("dialog", False),
 ])
 async def test_the_button_keys(store, keyed, key, button, where, pressed):
     """#73: every button that was mouse-only has a key, pressing it on the screen in front,
-    except in a text box (where the key types) or under a dialog."""
+    from a text box too (#189: each has a modifier), but not under a dialog."""
     desc = f"{key} for {button} from {where}"
     sid, ref = keyed
     app = WheelhouseApp(store)
@@ -6469,20 +6474,20 @@ async def test_the_button_keys(store, keyed, key, button, where, pressed):
         await pilot.press(key)
         await pilot.pause()
         assert got == ([button] if pressed else []), desc
-        if where == "answer" and len(key) == 1:
-            assert app.answer.text == key, f"{desc}: typed instead"
+        if where == "answer":
+            assert app.answer.text == "", f"{desc}: nothing typed"
         assert_one_current(app, desc) if where != "dialog" else None
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("on, key, setup, said, desc", [
-    (True, "i", "tab", "Interrupt doesn't apply to this session", "Interrupt on a tab session"),
-    (True, "1", "question", "Allow doesn't apply to the item in context", "Allow on a question"),
-    (False, "i", "tab", "Interrupt doesn't apply to this session", "SDK mode off: Interrupt on a tab session says so too"),
-    (False, "1", "question", "Allow doesn't apply to the item in context", "and so does Allow on a question"),
-    (False, "m", "tab", "Model doesn't apply to this session", "and Model"),
-    (False, "A", "nothing queued", "Send all (0): nothing to do", "Send all with nothing queued"),
-    (False, "r", "dead", "Rename doesn't apply to this session", "the session list's R on a dead session"),
+    (True, "alt+i", "tab", "Interrupt doesn't apply to this session", "Interrupt on a tab session"),
+    (True, "alt+y", "question", "Allow doesn't apply to the item in context", "Allow on a question"),
+    (False, "alt+i", "tab", "Interrupt doesn't apply to this session", "SDK mode off: Interrupt on a tab session says so too"),
+    (False, "alt+y", "question", "Allow doesn't apply to the item in context", "and so does Allow on a question"),
+    (False, "alt+m", "tab", "Model doesn't apply to this session", "and Model"),
+    (False, "alt+shift+a", "nothing queued", "Send all (0): nothing to do", "Send all with nothing queued"),
+    (False, "alt+r", "dead", "Rename doesn't apply to this session", "the session list's Alt+R on a dead session"),
 ])
 async def test_a_button_key_that_does_not_apply_says_so(store, tmp_path, monkeypatch, on, key, setup, said, desc):
     from claude_wheelhouse import liveness
@@ -6518,7 +6523,7 @@ async def test_the_overlay_lists_the_buttons_the_screen_shows(store, tmp_path, m
         app.follow(sid)
         await pilot.pause()
         app.session_list.focus()
-        await pilot.press("question_mark")
+        await pilot.press("f1")
         await pilot.pause()
         assert isinstance(app.screen, KeysHelp) and app.screen.shown == shown, desc
     text = keys_help(False, shown)
@@ -6766,7 +6771,7 @@ async def test_new_session_model_and_effort(store, tmp_path, monkeypatch, model,
     monkeypatch.setattr(launch, "open_session", lambda s, i, may_tab=True: opened.append((s.session(i)["model"], s.session(i)["effort"])))
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
-        await pilot.press("n")
+        await pilot.press("alt+n")
         await pilot.pause()
         app.screen.query_one("#cwd", Input).value = str(tmp_path)
         models_, efforts = app.screen.query_one("#model", Select), app.screen.query_one("#effort", Select)
@@ -6833,7 +6838,7 @@ async def test_model_and_effort_are_offered_only_for_a_hosted_session(store, tmp
         await pilot.pause()
         assert focused_id(app) != "stats", f"{desc}: Tab goes round the inbox's own stops alone (#77)"
         app.session_list.focus()
-        await pilot.press("m")
+        await pilot.press("alt+m")
         await pilot.pause()
         assert [type(s).__name__ for s in app.screen_stack] == (["Screen", "ChooseModel"] if slider else ["Screen"])
         if slider:
@@ -6853,7 +6858,7 @@ async def test_a_model_change_says_so_and_shows_as_applying(store, tmp_path, mon
     async with app.run_test(size=(160, 40)) as pilot:
         await shown_stats(app, pilot)
         app.session_list.focus()
-        await pilot.press("m", "up", "enter")
+        await pilot.press("alt+m", "up", "enter")
         await pilot.pause()
         shown = await shown_stats(app, pilot)
         assert "demo · Opus 5.5 · high · 1M window" in shown and "applying…" in shown, "until its host confirms"
@@ -6884,8 +6889,8 @@ async def test_a_click_on_a_level_sets_it(store, tmp_path, monkeypatch, level):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("tokens, keys, dialog, stopped, desc", [
-    (200_000, ("c",), "RelaunchChoice", ("compact", (4242, 1)), "past 150k: C compacts first"),
-    (200_000, ("r",), "RelaunchChoice", ("now", (4242, 1)), "past 150k: R relaunches now"),
+    (200_000, ("alt+c",), "RelaunchChoice", ("compact", (4242, 1)), "past 150k: Alt+C compacts first"),
+    (200_000, ("alt+r",), "RelaunchChoice", ("now", (4242, 1)), "past 150k: Alt+R relaunches now"),
     (200_000, ("escape",), "RelaunchChoice", None, "Esc cancels"),
     (200_000, ("enter",), "RelaunchChoice", None, "it opens on Cancel: a reflex Enter relaunches nothing"),
     (100_000, (), None, ("now", (4242, 1)), "a small one, idle: relaunched at once, no confirm"),
@@ -6913,7 +6918,7 @@ async def test_relaunch_offers_to_compact_a_big_session_first(sdk_on, store, sid
         await pick(app, pilot, sid)
         app.session_list.focus()
         main = type(app.screen).__name__
-        await pilot.press("l")
+        await pilot.press("alt+l")
         await pilot.pause()
         assert type(app.screen).__name__ == (dialog or main), desc
         for key in keys:
@@ -6975,7 +6980,7 @@ async def test_model_in_a_full_screen_item_says_so(store, tmp_path, monkeypatch)
         assert not isinstance(app.focused, TextArea)
         got, notes = presses(app), []
         monkeypatch.setattr(app, "notify", lambda text, **kw: notes.append(text))
-        await pilot.press("m")
+        await pilot.press("alt+m")
         await pilot.pause()
         assert (got, notes) == ([], ["Model doesn't apply here: it's with the session list's buttons"])
         assert [type(s).__name__ for s in app.screen_stack] == ["Screen", "ThreadView"]
@@ -7232,7 +7237,7 @@ async def test_fork_dialog(store, tmp_path, worktree, claude_home, monkeypatch, 
     async with app.run_test(size=(160, 40)) as pilot:
         await pick(app, pilot, sid)
         app.session_list.focus()
-        await pilot.press("k")
+        await pilot.press("alt+k")
         await pilot.pause()
         dialog = app.screen
         assert type(dialog).__name__ == "ForkSession", desc
@@ -7368,14 +7373,14 @@ async def test_delete_on_a_parent_leaves_its_running_children(store, sid, shape,
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         app.items_table.focus()
-        await pilot.press("f")   # the parent stays in sight, finished, for Ctrl+R
+        await pilot.press("alt+f")   # the parent stays in sight, finished, for Ctrl+R
         await pilot.pause()
         app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(t))
         await pilot.pause()
         await pilot.press("delete")
         await pilot.pause()
         assert said in app.screen.prompt, f"{desc}: {app.screen.prompt}"
-        await pilot.press("y")
+        await pilot.press("alt+y")
         await pilot.pause()
         for n, r in enumerate(refs):
             item = store.item(sid, r)
@@ -7502,7 +7507,7 @@ async def test_delete_takes_agent_children_and_leaves_docs(store, sid, tmp_path)
         await pilot.pause()
         assert "child?" not in app.screen.prompt and "unread" not in app.screen.prompt, "the doc isn't counted"
         assert "1 running child stays in the list, at the top level." in app.screen.prompt
-        await pilot.press("y")
+        await pilot.press("alt+y")
         await pilot.pause()
         assert item_list_rows(app) == [["demo", f"└ {agent}"], ["", f"└ {doc}"]], \
             "the running subagent and the doc stay, in their session's group"
@@ -7542,7 +7547,7 @@ async def test_delete_on_marked_rows_asks_once_and_takes_the_children(store, sid
         assert app.screen.prompt.startswith("Delete the 2 marked rows? 1 running"), \
             f"the doc under {q} neither taken nor counted: {app.screen.prompt}"
         assert "1 running child stays in the list" in app.screen.prompt, app.screen.prompt
-        await pilot.press("y")
+        await pilot.press("alt+y")
         await pilot.pause()
         store.agent_status(sid, "agent-1", "done", "finished")
         await refresh(pilot, sid)
@@ -7671,7 +7676,7 @@ async def test_delete_asks_and_takes_finished_children_too(store, sid, tmp_path)
         await pilot.pause()
         assert isinstance(app.screen, Confirm), "children, even all finished: it asks"
         assert app.screen.prompt.endswith("and its 1 child? It stays deleted, even once finished or changed.")
-        await pilot.press("y")
+        await pilot.press("alt+y")
         await pilot.pause()
         store.update_item(sid, m, status="failed")
         await refresh(pilot, sid)
@@ -7693,7 +7698,7 @@ async def test_a_marked_child_its_parent_took_is_not_said_twice(store, sid, tmp_
         app.items_table.set_marks({f"{sid}|{q}", f"{sid}|{a}"})
         await pilot.press("delete")
         await pilot.pause()
-        await pilot.press("y")
+        await pilot.press("alt+y")
         await pilot.pause()
     assert said and said[-1].startswith(f"deleted with its children {q}") and a not in said[-1], said
 
@@ -7938,7 +7943,7 @@ async def test_the_selected_session_holds_its_place_under_the_sort(store, sid, t
             await pilot.click(table, offset=(3, table.header_height + row))
             await pilot.pause()
             if isinstance(app.screen, Confirm):   # the offer to relaunch a dead session
-                await pilot.press("n")
+                await pilot.press("alt+n")
                 await pilot.pause()
 
         await click(2)
@@ -7972,7 +7977,7 @@ async def test_a_session_selected_under_any_column_sort_holds_its_place(store, s
         await pilot.click(table, offset=(3, table.header_height))
         await pilot.pause()
         if isinstance(app.screen, Confirm):   # the offer to relaunch a dead session
-            await pilot.press("n")
+            await pilot.press("alt+n")
             await pilot.pause()
         picked = app.current_session()
         assert picked in (sid, other), spec
@@ -7997,7 +8002,7 @@ async def test_a_drop_beside_the_pinned_session_goes_by_what_shows(store, sid, t
         await pilot.click(table, offset=(3, table.header_height + 1))
         await pilot.pause()
         if isinstance(app.screen, Confirm):   # the offer to relaunch a dead session
-            await pilot.press("n")
+            await pilot.press("alt+n")
             await pilot.pause()
         assert app.current_session() == s1
         stamp(s1, "2026-02-01T00:00:00+00:00")
@@ -8570,24 +8575,24 @@ def undo_setup(store, sid, shape: str) -> list:
 @pytest.mark.both
 @pytest.mark.parametrize("shape, keys, want, said, desc", [
     # want: each row's (status, finished, pinned) at the end; said: notices that must appear
-    ("question open", ["delete", "y", "ctrl+z"], [("open", False, False)],
+    ("question open", ["delete", "alt+y", "ctrl+z"], [("open", False, False)],
      ["closed Q1: Ctrl+Z undoes it", "undone: closed Q1"], "an open question deleted comes back open, not answered"),
-    ("question open", ["delete", "n", "ctrl+z"], [("open", False, False)], ["nothing to undo"],
+    ("question open", ["delete", "alt+n", "ctrl+z"], [("open", False, False)], ["nothing to undo"],
      "No deletes nothing, so there's nothing to undo"),
     ("question answered", ["delete", "ctrl+z", "ctrl+z"], [("answered", False, False)],
      ["undone: closed Q1", "nothing to undo"], "one step: a second Ctrl+Z has nothing left"),
     ("decision unseen", ["delete", "ctrl+z"], [("unseen", False, False)], ["undone: closed D1"],
      "a decision comes back unseen, as it was"),
     ("task done", ["delete", "ctrl+z"], [("done", False, False)], ["undone: dismissed T1"], "a dismissed task comes back"),
-    ("question open", ["p", "ctrl+z"], [("open", False, False)], ["undone: pinned Q1"], "a pin undone"),
-    ("question open pinned", ["p", "ctrl+z"], [("open", False, True)], ["undone: unpinned Q1"], "an unpin undone"),
-    ("question answered pinned", ["delete", "y", "ctrl+z"], [("answered", False, True)], ["undone: closed Q1"],
+    ("question open", ["alt+p", "ctrl+z"], [("open", False, False)], ["undone: pinned Q1"], "a pin undone"),
+    ("question open pinned", ["alt+p", "ctrl+z"], [("open", False, True)], ["undone: unpinned Q1"], "an unpin undone"),
+    ("question answered pinned", ["delete", "alt+y", "ctrl+z"], [("answered", False, True)], ["undone: closed Q1"],
      "a pinned item deleted comes back pinned"),
     ("question closed", ["ctrl+r", "ctrl+z"], [("closed", True, False)], ["undone: reopened Q1"],
      "Ctrl+R undone: closed again"),
-    ("family", ["delete", "y", "ctrl+z"], [("open", False, False), ("open", False, False), ("done", False, False)],
+    ("family", ["delete", "alt+y", "ctrl+z"], [("open", False, False), ("open", False, False), ("done", False, False)],
      ["undone: deleted Q1 and 2 children"], "a parent and its children all come back as they were"),
-    ("two open", ["space", "down", "space", "delete", "y", "ctrl+z"], [("open", False, False)] * 2,
+    ("two open", ["ctrl+space", "down", "ctrl+space", "delete", "alt+y", "ctrl+z"], [("open", False, False)] * 2,
      ["undone: closed Q2, Q1"], "marked rows asked once, and undone together"),
 ])
 async def test_ctrl_z_undoes_the_last_inbox_act(store, sid, shape, keys, want, said, desc):
@@ -8595,7 +8600,7 @@ async def test_ctrl_z_undoes_the_last_inbox_act(store, sid, shape, keys, want, s
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.press("f")   # finished rows in sight, so Ctrl+R has one to reopen
+        await pilot.press("alt+f")   # finished rows in sight, so Ctrl+R has one to reopen
         app.items_table.focus()
         app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{refs[-1] if shape == 'two open' else refs[0]}"))
         await pilot.pause()
