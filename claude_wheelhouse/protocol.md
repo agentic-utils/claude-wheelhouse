@@ -56,5 +56,6 @@ anything here seems to conflict with them, follow yours.
   wheelhouse's item list), unless the work it unblocked is done.
 - Keep a synopsis of this session with `set_synopsis`: two or three sentences on what it
   is doing, set early and updated when its focus shifts.
-- If this repo keeps its design decisions (ADRs) somewhere other than `docs/adr`, say where
-  once with `set_doc_dirs(paths)`, relative to the git root, so the wheelhouse lists them.
+- If this project keeps its design decisions (ADRs) somewhere other than `docs/adr`, say where
+  once with `set_doc_dirs(paths)`, so the wheelhouse lists them: relative to the git root, or
+  in another repo (such as a sibling docs repo) as `../<repo>/<dir>` or an absolute path.

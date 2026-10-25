@@ -116,9 +116,10 @@ way, for `LocalClient` with `--local`, so `Context.call` answers alike through e
 viewer reads a doc root's file through `GET /docs?path=` (403 outside the roots, `have=` as
 a doc item's); `docroots.confine` is the allow-list stage 8 writes through. `show_doc`
 takes the Detail pane until the selection moves. `fingerprint.API` is 5. `set_doc_dirs`
-stores relative directories on the session (`sessions.doc_dirs`, an empty list for
-`docs/adr` again), never the git root itself, and none for a session in no git repo; a repo's directories are every one its sessions declared
-(`docroots.doc_dirs`, `api.doc_dirs`). `PROTOCOL_VERSION` is not bumped for it yet, as
+stores directories on the session (`sessions.doc_dirs`, an empty list for
+`docs/adr` again), relative to the git root or absolute: under it, or in another git repo
+(a sibling docs repo), never a repo's root itself, and none for a session in no git repo; a repo's directories are every one its sessions declared
+(`docroots.doc_dirs`, `api.doc_dirs`; `api.decision_dirs` pairs each with the repo that looks there, a directory several repos declare listed once). `PROTOCOL_VERSION` is not bumped for it yet, as
 nothing reads it until the Design module: stage 6 bumps it.
 
 **No module, no harm.** With neither installed, the wheelhouse is sessions, inbox and detail,
@@ -163,7 +164,7 @@ its own distribution in this repo:
 - **Where decisions come from (Q114).** By default the daemon side scans `docs/adr/` in the
   git root of each session's working directory, every 10 s and on demand. A session can
   declare other locations instead, with a new MCP tool `set_doc_dirs(paths)`: paths relative
-  to its git root, stored on the session and replacing the default for that repo. A file is
+  to its git root or absolute, in it or in another git repo (#191), stored on the session and replacing the default for that repo. A file is
   a decision if its name matches `NNNN-*.md`. Its status comes from its frontmatter `Status`,
   else from its filename (`0042-ACCEPTED-slug.md`, the tfu convention), else `?`. These
   directories are its `doc_roots`. Route: `GET /m/design/decisions`. It needs no database,

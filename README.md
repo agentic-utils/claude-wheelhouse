@@ -370,7 +370,8 @@ session.
   the PR changes, and on `r` in the PRs pane.
 - **The Decisions pane.** Under the inbox, the design decisions (ADRs) of every repo a session works
   in: each `NNNN-*.md` file in the repo's `docs/adr`, or in the directories a session there
-  named with `set_doc_dirs` instead (`.plan/`, say, only if named), read again every 10
+  named with `set_doc_dirs` instead (`.plan/`, say, only if named, or a directory in another
+  repo, such as a sibling docs repo; listed under the repo that named it), read again every 10
   seconds and whenever a session starts in another repo or names its directories. A row is
   its number, status and title, and its repo when the pane lists more than one. The status is the doc's front matter `status:`, else
   a `Status:` line or `## Status` section, else its file name's (`0042-ACCEPTED-slug.md`),

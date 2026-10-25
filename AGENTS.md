@@ -97,7 +97,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `docroots.py`: the doc roots' allow-list (`confine`: a path resolved, symlinks and `..`,
   and kept to a `.md` file under a root; stage 8 writes through it too), and where a repo's
   decisions are (`doc_dirs`: `docs/adr` under its git root, a linked worktree's main
-  repository's (`main_root`), unless a session declared others with `set_doc_dirs`, Q114).
+  repository's (`main_root`), unless a session declared others with `set_doc_dirs`, Q114, which may be in another git
+  repo beside it, #191; `decision_dirs` pairs each with the repo that looks there).
   Never imports Textual.
 - `models.py`: the models and effort levels offered. A new model is a row here.
 - `tutorial.py`: the tutorial's demo session: its directory, its brief (`BRIEF`, a line in
@@ -136,7 +137,7 @@ member and a dependency group of the same name (`pyproject.toml`): `modules/stat
 `claude-wheelhouse-stats`, the stats pane (`pane.py`) and its drawing, charts and gauges
 (`stats.py`), with its tests in `modules/stats/tests`; `modules/design` is
 `claude-wheelhouse-design`, the Decisions pane (`pane.py`: the pane, its route
-`GET /m/design/decisions` and its doc roots, the decision directories `api.doc_dirs` gives)
+`GET /m/design/decisions` and its doc roots, the decision directories `api.decision_dirs` gives)
 and the scan of those directories (`scan.py`, each file read again only when its stat
 changes), with its tests in `modules/design/tests` and the pane's pilot tests, which need
 core's fixtures, in `tests/test_decisions_pane.py`; `modules/prs` is `claude-wheelhouse-prs`,

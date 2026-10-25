@@ -84,12 +84,14 @@ def test_read_refuses_outside(tree):
 
 @pytest.fixture
 def repo(tmp_path):
-    """A git repo with docs/adr, docs/decisions and .plan, and a link out of it."""
+    """A git repo with docs/adr, docs/decisions and .plan, and a link out of it to a directory
+    in no repo; beside it, a sibling repo keeping its decisions (a docs repo, #191)."""
     r = tmp_path / "repo"
-    for d in (".git", "docs/adr", "docs/decisions", ".plan", "src"):
+    for d in (".git", "docs/adr", "docs/decisions", ".plan", "src", "../sib/.git", "../sib/decisions"):
         (r / d).mkdir(parents=True)
     (tmp_path / "elsewhere").mkdir()
     (r / "linkout").symlink_to(tmp_path / "elsewhere")
+    (r / "linksib").symlink_to(tmp_path / "sib" / "decisions")
     return r
 
 
@@ -99,8 +101,14 @@ def repo(tmp_path):
     (["docs/adr", ".plan"], ["docs/adr", ".plan"], "several, .plan among them"),
     (["not/yet"], ["not/yet"], "one not made yet"),
     ([], [], "none: back to the default"),
-    (["/etc"], ValueError, "an absolute path"),
-    (["../x"], ValueError, ".. out of the repo"),
+    (["../sib/decisions"], ["../sib/decisions"], "a sibling repo's, by .."),
+    (["SIB/decisions"], ["SIB/decisions"], "a sibling repo's, absolute"),
+    (["linksib"], ["linksib"], "a link to a sibling repo's"),
+    (["../sib/not/yet"], ["../sib/not/yet"], "one not made yet in a sibling repo"),
+    (["/etc"], ValueError, "an absolute path in no git repo"),
+    (["../x"], ValueError, ".. out of the repo, into no other"),
+    (["../sib"], ValueError, "a sibling repo's root itself"),
+    (["SIB"], ValueError, "a sibling repo's root itself, absolute"),
     (["docs/../../x"], ValueError, ".. out from deeper"),
     (["linkout"], ValueError, "a symlink out of the repo"),
     ([""], ValueError, "an empty path"),
@@ -110,6 +118,9 @@ def repo(tmp_path):
     ([f"d{i}" for i in range(docroots.MOST + 1)], ValueError, "too many"),
 ])
 def test_checked(repo, paths, expect, desc):
+    sib = str(repo.parent / "sib")
+    paths = [p.replace("SIB", sib) for p in paths] if isinstance(paths, list) else paths
+    expect = [p.replace("SIB", sib) for p in expect] if isinstance(expect, list) else expect
     if expect is ValueError:
         with pytest.raises(ValueError):
             docroots.checked(paths, str(repo / "src"))
@@ -127,10 +138,26 @@ def test_checked(repo, paths, expect, desc):
     ([("src", ["linkout"])], [], "one resolving outside the repo is left out"),
     ([("src", ["."])], [], "the git root itself, kept from before the check, is left out"),
     ([], [], "no sessions, no dirs"),
+    ([("src", ["../sib/decisions"])], ["../sib/decisions"], "a sibling repo's, declared"),
+    ([("src", ["../sib"])], [], "a sibling repo's root, kept from before the check, is left out"),
+    ([("src", ["../elsewhere"])], [], "a directory in no git repo is left out"),
 ])
 def test_doc_dirs(repo, sessions, expect, desc):
     given = [{"cwd": str(repo / cwd), "doc_dirs": dirs} for cwd, dirs in sessions]
     assert docroots.doc_dirs(given) == sorted((repo / d).resolve() for d in expect), desc
+
+
+def test_decision_dirs_lists_a_shared_directory_once_with_the_repo_that_declared_it(repo):
+    """Two repos declaring the sibling's decisions: listed once, under the first of them; the
+    sibling's own session (default docs/adr, which it hasn't) adds nothing."""
+    other = repo.parent / "other"
+    (other / ".git").mkdir(parents=True)
+    sib = (repo.parent / "sib" / "decisions").resolve()
+    given = [{"cwd": str(other), "doc_dirs": [str(sib)]},
+             {"cwd": str(repo / "src"), "doc_dirs": ["../sib/decisions", "docs/adr"]},
+             {"cwd": str(repo.parent / "sib"), "doc_dirs": None}]
+    assert docroots.decision_dirs(given) == [((repo / "docs/adr").resolve(), repo.resolve()),
+                                             (sib, other.resolve())]
 
 
 @pytest.mark.parametrize("dirs, desc", [
