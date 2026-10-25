@@ -2105,7 +2105,6 @@ class DocPanes:
         splitters = {s.key: s for s in root.query(Splitter)}
         self.editor_splitter, self.thread_splitter = splitters["editor"], splitters[DOC_THREAD]
         self.tab, self.tab_for, self.laid, self.text = DOC_TAB, None, None, None
-        self.thread_for = None   # the doc item whose thread is shown, by item_key
 
     def tab_names(self) -> list[str]:
         """The tabs there are: Editor only while the editor is open."""
@@ -2123,13 +2122,11 @@ class DocPanes:
         found = app.client.thread(doc["session_id"], doc["ref"]) if doc is not None else None
         blocks = doc_thread_blocks(found)
         text = "\n\n".join(md for _, md in blocks)
-        key = doc and item_key(doc)   # another doc's thread: from its top, as Detail (#177)
-        fresh, self.thread_for = key != self.thread_for, key
-        if fresh or text != self.text:
+        if text != self.text:
             scroll = self.thread_scroll
-            following = not fresh and scroll.scroll_y >= scroll.max_scroll_y - 1
+            following = scroll.scroll_y >= scroll.max_scroll_y - 1
             self.text = text
-            self.thread.update(render(blocks), top=fresh)
+            self.thread.update(render(blocks))
             if following:
                 app.call_after_refresh(scroll.scroll_end, animate=False)
         return self.lay(app, doc, bool(blocks))
