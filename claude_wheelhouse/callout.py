@@ -5,6 +5,10 @@ the screen under it stays usable, so the keys a dialog teaches reach the app.
 It finds its pane by id each time it places itself (find), so a pane moved to another slot
 takes its callout with it, and it places itself again whenever the screen's layout changes
 (a resize, a pane swapped, a splitter dragged). Where it goes is a pure function, place.
+
+While it shows, everything else on the screen is dimmed (DIM), but its pane and the panes its
+step also needs (Doug, #174). Under its text, a button that does what it asks for the person
+(its action: Act), and a Next, either off until it can be pressed.
 """
 
 from typing import Callable
@@ -12,7 +16,7 @@ from typing import Callable
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.geometry import Offset, Region, Size
 from textual.message import Message
 from textual.widget import Widget
@@ -23,6 +27,8 @@ MARGIN = 4   # the columns a narrower screen keeps free beside it
 COLLAPSED = 3   # a pane fewer rows high than this shows nothing a callout could sit over
 EDITABLE = (Input, TextArea)   # what a Next callout leaves focus in
 HIGHLIGHT = "tour-target"   # the class on the pane a callout describes: a yellow border
+DIM = "tour-dim"   # the class on what a callout isn't about: dimmed while it shows
+DIMMABLE = ".panel, SendBar, Footer"   # what can be dimmed, besides the panes PANES names
 
 # a tour pane id (whatsnew.Stop.pane): the selector of its widget on the screen and its title.
 # The one lookup (find), by the panes' ids in their slots (.plan/modules.md)
@@ -74,20 +80,26 @@ def facing(r: Region, pane: Region | None) -> str:
 
 
 def place(screen: Size, pane: Region | None, height: int, clear: Region | None = None,
-          keep: Region | None = None, centre: bool = False, w: int | None = None) -> tuple[Region, str]:
+          keep: Region | None = None, centre: bool = False, w: int | None = None,
+          shun: Region | None = None) -> tuple[Region, str]:
     """Where a callout `height` rows high goes for a pane at `pane` (screen coordinates; None:
     absent), and the side it then points from (facing; "centred" with `centre`, the box
     centred as spot puts it for a pane too narrow or collapsed). One rule (#101): of the
     candidates (spot's choice; then below every inbox row, `clear`; below the step's own rows
     of the demo, `keep`; the screen's foot; its top), those on screen that cover neither `keep`
     nor the pane (bar a box spot put inside it), the nearest the pane; with none, the one
-    covering least of `keep`, then of the pane. `w`: its width, width's by default."""
+    covering least of `keep`, then of the pane. `w`: its width, width's by default. `shun`:
+    another pane the step has the person read (tour.SHUN), kept clear of as `keep` is, and
+    the same boxes tried in the pane's own column and either side of `shun` too."""
     first, side = spot(screen, None if centre else pane, height, w)
     avoid = None if side == "inside" else pane
     spots = candidates(screen, first, clear, keep)
-    clear_of = [r for r in spots if not covers(r, keep) and not covers(r, avoid)]
+    if shun is not None and pane is not None:
+        xs = {pane.x, shun.x - first.width, shun.right}
+        spots += [Region(max(0, min(x, screen.width - r.width)), r.y, r.width, r.height) for x in xs for r in spots]
+    clear_of = [r for r in spots if not covers(r, keep) and not covers(r, shun) and not covers(r, avoid)]
     best = min(clear_of, key=lambda r: gap(r, pane)) if clear_of \
-        else min(spots, key=lambda r: (covers(r, keep), covers(r, avoid), gap(r, pane)))
+        else min(spots, key=lambda r: (covers(r, keep), covers(r, shun), covers(r, avoid), gap(r, pane)))
     tall = min(best.height, screen.height)   # a screen too short for it: cut to fit, its text clipped
     best = Region(max(0, min(best.x, screen.width - best.width)), max(0, min(best.y, screen.height - tall)),
                   best.width, tall)
@@ -207,8 +219,10 @@ class TourCallout(Vertical):
     TourCallout {{ overlay: screen; constrain: inside inside; width: {WIDTH}; height: auto; padding: 0 1; background: #12122a;
                    color: #e8e8e8; border: round #ffd300; border-title-color: #ffd300; }}
     TourCallout .tour-text {{ width: 1fr; height: auto; }}
-    TourCallout Button {{ width: auto; min-width: 0; }}
+    TourCallout Button {{ width: auto; min-width: 0; margin: 0 1 0 0; }}
+    TourCallout .tour-buttons {{ width: 1fr; height: auto; }}
     .{HIGHLIGHT} {{ border: round #ffd300 !important; }}
+    .{DIM} {{ opacity: 35%; }}
     """
 
     class Next(Message):
@@ -216,10 +230,22 @@ class TourCallout(Vertical):
             super().__init__()
             self.callout = callout
 
+    class Act(Message):
+        """Its action button pressed: the app does what the step asks, as the person would.
+        Not a Next: a handler of Next would take it too."""
+        def __init__(self, callout: "TourCallout") -> None:
+            super().__init__()
+            self.callout = callout
+
     def __init__(self, pane: str, text: str, next: bool = False, id: str | None = None, keep: str | None = None,
-                 kinds: tuple[str, ...] = (), scrolled: Callable[[float], None] | None = None) -> None:
+                 kinds: tuple[str, ...] = (), scrolled: Callable[[float], None] | None = None, act: str = "",
+                 ready: bool = True, act_ready: bool = True, shun: str | None = None, also: tuple[str, ...] = ()) -> None:
         super().__init__(id=id)
         self.pane, self.text, self.next = pane, text, next
+        # its action button's caption ("" none), and whether it and Next can be pressed yet
+        self.act, self.ready, self.act_ready = act, ready, act_ready
+        # a pane it keeps clear of besides its own (tour.SHUN), and the panes left undimmed with its own
+        self.shun, self.also = shun, also
         # the demo session, and the kinds of its inbox rows the step needs in sight (tour.ROWS):
         # what it never covers where it can help it (place)
         self.keep, self.kinds = keep, kinds
@@ -234,8 +260,15 @@ class TourCallout(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static(Text(self.text), classes="tour-text")   # plain: [Launch] is a button's name, not markup
-        if self.next:
-            yield Button("Next [Enter]", id="tour-next", compact=True, variant="primary")
+        if self.next or self.act:
+            with Horizontal(classes="tour-buttons"):
+                if self.act:   # never focused: the keys the step teaches stay the app's
+                    act = Button(Text(self.act), id="tour-act", compact=True, variant="success",
+                                 disabled=not self.act_ready)
+                    act.can_focus = False
+                    yield act
+                if self.next:
+                    yield Button("Next [Enter]", id="tour-next", compact=True, variant="primary", disabled=not self.ready)
 
     def on_mount(self) -> None:
         self.screen.screen_layout_refresh_signal.subscribe(self, lambda _: self.place())
@@ -243,12 +276,29 @@ class TourCallout(Vertical):
         if (was := bring(self.screen, self.keep, self.kinds)) is not None and self.scrolled:   # the step's rows in sight
             self.scrolled(was)
         self.place()
+        self.take_focus()
+
+    def take_focus(self) -> None:
+        """Its Next focused, if it has one that's on, so Enter is Next: never from a box being typed in."""
         found = self.query("#tour-next")   # none in one removed before it was composed
-        if found and not isinstance(self.screen.focused, EDITABLE):   # never from a box being typed in
+        if found and not found.first().disabled and not isinstance(self.screen.focused, EDITABLE):
             found.first().focus()
+
+    def enable(self, ready: bool, act_ready: bool) -> None:
+        """Its Next and its action button on or off, as what they wait on has happened or not.
+        Next, once on, takes focus as it would have had it been on from the start."""
+        was, self.ready, self.act_ready = self.ready, ready, act_ready
+        for found, live in ((self.query("#tour-next"), ready), (self.query("#tour-act"), act_ready)):
+            if found:
+                found.first().disabled = not live
+        if ready and not was:
+            self.take_focus()
 
     def on_unmount(self) -> None:
         self.highlight(None)
+        if self.is_attached and not any(c is not self for c in self.screen.query(TourCallout)):
+            for w in self.screen.query(f".{DIM}"):
+                w.remove_class(DIM)
 
     def say(self, text: str) -> None:
         """Its text changed: placed again, as its height may have."""
@@ -269,10 +319,21 @@ class TourCallout(Vertical):
         if target is not None:
             target.add_class(HIGHLIGHT)
         self.target = target
+        if target is not None:
+            self.dim([target, *filter(None, (find(self.screen, p) for p in self.also))])
+
+    def dim(self, lit: list[Widget]) -> None:
+        """Everything on the screen dimmed but `lit` (its pane and the panes its step needs),
+        what holds them and what they hold."""
+        screen = self.screen
+        found = [*screen.query(DIMMABLE), *filter(None, (find(screen, p) for p in PANES))]
+        for w in dict.fromkeys(found):
+            mine = any(w in k.ancestors_with_self or k in w.ancestors_with_self for k in lit)
+            w.set_class(not mine, DIM)
 
     def lines(self, w: int, text: str) -> int:
-        """Its height at width w: the text wrapped inside border and padding, the Next row, the border."""
-        return len(Text(text).wrap(self.app.console, max(1, w - 4))) + self.next + 2
+        """Its height at width w: the text wrapped inside border and padding, the buttons' row, the border."""
+        return len(Text(text).wrap(self.app.console, max(1, w - 4))) + bool(self.next or self.act) + 2
 
     def place(self) -> None:
         """Placed as place says when it shows, when its text changes (say), and when the screen
@@ -286,6 +347,8 @@ class TourCallout(Vertical):
         target = find(self.screen, self.pane)
         region = target.region if target is not None and target.display else None
         clear, keep = rows(self.screen, self.keep, self.kinds)
+        shunned = find(self.screen, self.shun) if self.shun else None
+        shun = shunned.region if shunned is not None and shunned.display else None
         beside = self.side not in ("inside", "centred")
         if self.placed == (screen, region) and self.at is not None and (
                 self.forced is not False and self.forced == keep
@@ -298,13 +361,13 @@ class TourCallout(Vertical):
         def at_width(w: int) -> tuple[tuple, Region, str, str]:
             """Placed at width w: how far it falls short (covering the step's rows, cut by the
             screen, covering its pane beside it), where, its side and its text."""
-            at, side = place(screen, region, self.lines(w, self.text), clear, keep, w=w)
+            at, side = place(screen, region, self.lines(w, self.text), clear, keep, w=w, shun=shun)
             text = self.text
             if side == "centred":   # its pane named first, a line that wraps on a narrow screen
                 text = f"In the {title} pane:\n{self.text}"
-                at, _ = place(screen, region, self.lines(w, text) - 1, clear, keep, centre=True, w=w)
+                at, _ = place(screen, region, self.lines(w, text) - 1, clear, keep, centre=True, w=w, shun=shun)
             over = covers(at, region) if side not in ("inside", "centred") else 0
-            return (covers(at, keep), self.lines(w, text) - at.height, over), at, side, text
+            return (covers(at, keep), covers(at, shun), self.lines(w, text) - at.height, over), at, side, text
 
         # #133: the narrowest width that falls short least; a wider box wraps to fewer rows
         _, at, side, text = min((at_width(w) for w in widths(screen)), key=lambda t: t[0])
@@ -322,3 +385,8 @@ class TourCallout(Vertical):
     def pressed(self, event: Button.Pressed) -> None:
         event.stop()   # the app's own buttons answer a press that bubbles up
         self.post_message(self.Next(self))
+
+    @on(Button.Pressed, "#tour-act")
+    def acted(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.post_message(self.Act(self))

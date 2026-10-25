@@ -5,7 +5,7 @@ from claude_wheelhouse.tour import NOTES, PAUSED, TOPUP, TOUR, Tour, offered, op
 from claude_wheelhouse.whatsnew import ADVANCED, UNRELEASED, Feature
 
 NONE = {"sid": "demo", "posted": False, "answered": False, "queued": False, "sent": False, "replied": False,
-        "closed": False}
+        "closed": False, "unanswered": []}
 
 
 def facts(**kw) -> dict:
@@ -16,18 +16,23 @@ def facts(**kw) -> dict:
     ("principles", None, None, set(), (), "principles", "a Next dialog waits for Next"),
     ("create", None, None, set(), (), "create", "no demo yet"),
     ("create", None, facts(), set(), (), "sessions", "the demo's row appeared"),
-    ("create", None, facts(posted=True), set(), (), "inbox", "it has posted already: past its row's dialog too"),
+    ("create", None, facts(posted=True), set(), (), "sessions", "posted already: its row's dialog waits for Next (#174)"),
     ("inbox", "demo", facts(posted=True), set(), (), "inbox", "waits for a question opened"),
     ("inbox", "demo", facts(posted=True), {"open"}, (), "answer", "a question opened, as the screen saw"),
     ("inbox", "demo", facts(answered=True), set(), (), "answer", "an answer means a question was opened"),
     ("answer", "demo", facts(answered=True), set(), (), "answer", "one answer isn't both"),
     ("answer", "demo", facts(answered=True, queued=True), set(), (), "send", "both answered"),
     ("send", "demo", facts(queued=True, sent=True), set(), (), "reply", "sent"),
-    ("reply", "demo", facts(sent=True, replied=True), set(), (), "decision", "it replied"),
-    ("decision", "demo", facts(replied=True), set(), (), "decision", "waits for the decision closed"),
+    ("reply", "demo", facts(sent=True, replied=True), set(), (), "reply", "it replied: waits for Next (#174)"),
+    ("decision", "demo", facts(replied=True), set(), (), "decision", "waits for D1 opened"),
+    ("decision", "demo", facts(replied=True), {"decision"}, (), "close", "D1 opened: now close it (#174)"),
+    ("close", "demo", facts(replied=True), {"decision"}, (), "close", "waits for the decision closed"),
     ("decision", "demo", facts(closed=True), set(), (), "docs", "the decision closed"),
     ("docs", "demo", facts(closed=True), set(), (), "docs", "waits for the story's doc to be opened"),
     ("docs", "demo", facts(closed=True), {"read"}, (), "conversation", "the story opened (Doug, #101 8)"),
+    ("conversation", "demo", facts(), set(), (), "conversation", "waits for its conversation picked"),
+    ("conversation", "demo", facts(), {"talk"}, (), "ask", "its conversation picked (#174)"),
+    ("ask", "demo", facts(), {"talk"}, (), "ask", "waits for a turn watched arriving"),
     ("conversation", "demo", facts(), {"follow"}, (), "stats", "a turn watched arriving"),
     ("stats", "demo", facts(), set(), ("stats",), "decisions", "Stats absent: passed over"),
     ("decisions", "demo", facts(), set(), ("design",), "prs", "the design module absent: its Decisions dialog passed over"),
@@ -49,11 +54,31 @@ def test_the_tour_moves_on(at, sid, given, seen, absent, expected, desc):
     assert (tour.dead == "the demo has ended") is gone, f"{desc}: says the demo has ended"
 
 
+@pytest.mark.parametrize("at, given, ready, desc", [
+    ("sessions", None, False, "no demo yet: Next off"),
+    ("sessions", facts(), False, "its row, nothing posted: Next off"),
+    ("sessions", facts(posted=True), True, "it posted: Next on"),
+    ("reply", facts(sent=True), False, "no reply yet: Next off"),
+    ("reply", facts(sent=True, replied=True), True, "it replied: Next on"),
+    ("inbox", facts(posted=True), False, "an action dialog has no Next to turn on"),
+])
+def test_a_wait_dialogs_next(at, given, ready, desc):
+    """Doug (#174): a dialog that waits moves on only at Next, off until the wait is over."""
+    tour = Tour(sdk=False)
+    tour.at = [d.id for d in tour.stops].index(at)
+    tour.sid = "demo" if given else None
+    tour.follow(given, lambda pane: True)
+    assert (tour.stop.id, tour.ready) == (at, ready), desc
+    if ready:
+        tour.next()
+        assert tour.stop.id != at, f"{desc}: Next moves on"
+
+
 @pytest.mark.parametrize("at, sid, given, stopped, dead, then, desc", [
     ("reply", "demo", facts(sent=True), "stopped: its tab has closed", "stopped: its tab has closed", "notes",
      "a stopped demo: said, and Next goes to the notes"),
     ("decision", "demo", None, None, "the demo has ended", "notes", "an ended one, the same"),
-    ("reply", "demo", facts(sent=True), None, None, "decision", "running: Next is the next dialog"),
+    ("reply", "demo", facts(sent=True), None, None, "subagent", "running: Next is the next dialog"),
     ("create", None, None, "stopped: never", None, "sessions", "no demo yet: nothing to be dead"),
     ("stats", "demo", None, None, None, "decisions", "a Next dialog isn't waiting on the demo"),
 ])
@@ -87,7 +112,8 @@ def test_what_a_dialog_shows(stop, sdk, absent, text, shown, desc):
     tour = Tour(sdk=sdk, features=FEATURES)
     tour.absent = absent
     found = next(d for d in tour.stops if d.id == stop)
-    assert tour.text(found) == "\n\n".join(filter(None, [found.text, text])), f"{desc}: a blank line between paragraphs"
+    assert tour.text(found) == "\n\n".join(filter(None, [found.text, text, found.ask])), \
+        f"{desc}: a blank line between paragraphs, what it asks last"
     assert tour.shown(found) == shown, desc
 
 

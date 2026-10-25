@@ -86,6 +86,18 @@ resume at the same dialog.
   step points at the line under the box; the send step names Ctrl+T (Mode); the PRs step
   says a PR picked there or in the inbox is highlighted in both, its tips covering the pane
   following the session, M, and the Open, Merge and Request review actions.
+- #174 (Doug's walk of 24 Oct): while a callout shows, everything else on the screen is
+  dimmed (callout.DIM) but its pane and, for a step with inbox rows (tour.ROWS), the inbox.
+  Each dialog that asks for something has an action button under its text, captioned with
+  the action and how to do it yourself ("New session (N)", "Open Q1 (Click)", "Answer
+  (Ctrl+Enter)", "Send (Ctrl+S)", "Read D1 (Click)", "Close D1 (Delete)", "Read M1 (Click)",
+  "Open the conversation (Click)", "Ask (Alt+S)", "Stop & Forget (Click)"), off until it can
+  act; pressing it does what the person would, and the tour moves on the same way. What it
+  asks is the last paragraph (Stop.ask), under the tips. `sessions` and `reply` wait (WAIT):
+  a Next, off until the demo has posted or replied. Once one answer is queued, the other
+  question is selected. `decision` splits into reading D1 and `close`, whose callout keeps
+  clear of Detail (tour.SHUN); `conversation` splits into picking it and `ask`. Esc asks
+  first (LeaveTour: Enter leaves, Esc stays).
 - The checks for 4 to 9 and 11 are today's step checks, moved over unchanged, including the
   rules that the app's own automatic selection never ticks anything.
 - A callout whose pane is absent (Stats disabled or uninstalled) is skipped, and its

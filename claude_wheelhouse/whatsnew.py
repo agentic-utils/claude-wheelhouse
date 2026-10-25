@@ -20,20 +20,26 @@ from pathlib import Path
 UNRELEASED = "UNRELEASED"   # a feature's version until `make stamp` gives it the release's
 ADVANCED = "advanced"   # a feature's where: for experienced users, in the release notes only
 WHENS = ("", "sdk")   # a feature's when: always, or only with SDK mode on
+MAX_TIPS = 3   # tips a dialog shows, SDK mode on: the rest go to the release notes, ADVANCED (Doug, #101 9)
 
-# how a dialog advances: on Next, on the person doing what it asks, on a choice, or on Close
-NEXT, ACTION, CHOICE, CLOSE = "next", "action", "choice", "close"
+# how a dialog advances: on Next, on the person doing what it asks, on a choice, on Close, or
+# on Next once what it waits for has happened (Next off until then: Doug, #174)
+NEXT, ACTION, CHOICE, CLOSE, WAIT = "next", "action", "choice", "close", "wait"
 
 
 @dataclass(frozen=True)
 class Stop:
     """One of the tour's dialogs. `pane` is the id of the pane it is painted beside (None:
-    centred), `title` its heading in the release notes."""
+    centred), `title` its heading in the release notes. `ask`: what it asks the person to do,
+    its last paragraph, under its tips; `button`: the caption of the button that does it for
+    them, the action then how to do it themselves (Doug, #174: "Send (Ctrl+S)")."""
     id: str
     pane: str | None
     title: str
     text: str
     advance: str
+    ask: str = ""
+    button: str = ""
 
 
 @dataclass(frozen=True)
@@ -49,41 +55,52 @@ class Feature:
 DIALOGS = (
     Stop("invite", None, "The tour",
          "New here? A five-minute tour, with a demo session that costs a few cents.\n\n"
-         "Once it's under way, Esc ends it at any time.", CHOICE),
+         "Once it's under way, Esc, then Enter, ends it at any time.", CHOICE),
     Stop("principles", None, "The wheelhouse",
          "Every Claude session in one place. Sessions ask you questions, record decisions and report tasks, "
          "all in one inbox. A session that needs you says so in its row, so you never hunt through tabs.\n\n"
          "Press ? (outside a text box) for every key and button.", NEXT),
-    Stop("create", "sessions", "Starting a session", "Start a session: press N now to create a demo session.", ACTION),
+    Stop("create", "sessions", "Starting a session", "Start a session: press N, or the button, to create a demo session.",
+         ACTION, button="New session (N)"),
     Stop("sessions", "sessions", "The session list",
          "This is your demo. Its row shows whether it's working, idle or needs you. It runs in a tab (or here, "
-         "in SDK mode): you won't need to look at it.\n\n"
-         "Wait now while it starts: this box moves on once it posts its first items.", ACTION),
+         "in SDK mode): you won't need to look at it.",
+         WAIT, ask="Wait now while it starts: Next lights up once it posts its first items."),
     Stop("inbox", "items", "The inbox",
-         "Questions (Q), decisions (D) and tasks (T) from every session land here, open questions first.\n\n"
-         "Click Q1 now to open it.", ACTION),
+         "Questions (Q), decisions (D) and tasks (T) from every session land here, open questions first.",
+         ACTION, ask="Click one of the questions or press the button to move on.", button="Open Q1 (Click)"),
     Stop("answer", "detail", "Answering",
-         "Answer both questions now: select Q1, then Q2, in the inbox, type an answer to each in the box below "
-         "and press Ctrl+Enter.\n\n"
-         "Ctrl+Enter queues each answer, so related answers go together. The line under the box lists the "
-         "keys.", ACTION),
+         "Ctrl+Enter queues each answer, so related answers go together. The line under the box lists the keys.",
+         ACTION, ask="To answer a question, type into the text area below it (bottom right) then press Ctrl+Enter "
+                     "to queue it. Do that now, or, press the button to enter an answer for you.",
+         button="Answer (Ctrl+Enter)"),
     Stop("send", "session-info", "Sending",
-         "Press Ctrl+S, or Send, now to send the queue as one message.\n\n"
-         "Ctrl+T (Mode) switches a session between queueing answers and sending each at once.", ACTION),
-    Stop("reply", "detail", "Replies",
-         "The session's reply arrives in the question's thread.\n\n"
-         "Wait now: this box moves on when it lands.", ACTION),
-    Stop("decision", "items", "Decisions",
-         "Decisions record what a session chose.\n\n"
-         "Select D1 now to read it, then press Delete to close it.", ACTION),
+         "Ctrl+T (Mode) switches a session between queueing answers and sending each at once.",
+         ACTION, ask="Press Ctrl+S, or the button, now to send the queue as one message.", button="Send (Ctrl+S)"),
+    Stop("reply", "detail", "Replies", "The session's reply arrives in the question's thread.",
+         WAIT, ask="Wait now: Next lights up when it lands."),
+    Stop("subagent", "items", "Subagents",
+         "A session can start subagents of its own. Each shows in the inbox as an A item, and selecting it shows "
+         "its conversation in Detail as it works. The demo started one to suggest titles for "
+         "its story: A1.", NEXT),
+    Stop("decision", "items", "Decisions", "Decisions record what a session chose.",
+         ACTION, ask="Click D1 now to read it, or press the button.", button="Read D1 (Click)"),
+    Stop("close", "items", "Closing an item", "Done with an item? Delete closes it, and it leaves the inbox.",
+         ACTION, ask="Press Delete now to close D1, or press the button.", button="Close D1 (Delete)"),
     Stop("docs", "items", "Documents",
          "A session declares each document it writes for you to read (a design, plan or report) as a doc item "
-         "(M), under the item it belongs to, and Detail shows it rendered.\n\n"
-         "Open the demo's story now: select M1, The bedtime story, under its task. Enter opens it full screen.",
-         ACTION),
+         "(M), under the item it belongs to, and Detail shows it rendered. Click the document there to edit it, "
+         "and Enter opens it full screen.",
+         ACTION, ask="Open the demo's story now: click M1, The bedtime story, under its task, or press the button.",
+         button="Read M1 (Click)"),
     Stop("conversation", "detail", "The conversation",
-         "Select the demo's conversation now: the top row of the inbox.\n\n"
-         "Then ask it for a change in the box below, and watch its answer arrive.", ACTION),
+         "The inbox's top row for a session is its conversation: Detail follows it as it works.",
+         ACTION, ask="Click the demo's conversation now, the top row of the inbox, or press the button.",
+         button="Open the conversation (Click)"),
+    Stop("ask", "detail", "Asking for a change",
+         "The box below a conversation talks to the session itself, not to one of its items.",
+         ACTION, ask="Ask it for a change now: type it in the box and press Alt+S to send it at once, or press the "
+                     "button. Then watch its answer arrive.", button="Ask (Alt+S)"),
     Stop("stats", "stats", "Stats", "Tokens, context and your plan's usage, for the highlighted session.", NEXT),
     Stop("decisions", "design", "The Decisions pane",
          "Architecture decision records (ADRs): each design decision a repo keeps as a markdown file in its "
@@ -96,7 +113,9 @@ DIALOGS = (
          "Pick a PR here or in the inbox and the other list highlights it too, if it lists it. R fetches now.", NEXT),
     Stop("end", "session-info", "Ending a session",
          "You can park a session to move it to the bottom of the session list and resume later, or you can "
-         "close it entirely by \"forgetting\" it. Press [Stop & Forget] now to close the demo session.", ACTION),
+         "close it entirely by \"forgetting\" it.",
+         ACTION, ask="Press [Stop & Forget] now to close the demo session, or the button here.",
+         button="Stop & Forget (Click)"),
     Stop("notes", None, "Release notes", "N starts a session of your own.", CLOSE),
 )
 # New session's line at its top while the tour has the person create the demo
@@ -108,9 +127,8 @@ TIPPED = tuple(d.id for d in DIALOGS if d.id not in ("invite", "notes"))
 FEATURES: tuple[Feature, ...] = (
     Feature("tour", UNRELEASED, ADVANCED,
             note="A guided tour: a box beside each pane walks you through a demo session."),
-    Feature("session-sort", UNRELEASED, "sessions",
-            note="Every session list column sorts: click its heading to cycle up, down and back.",
-            tip="Click a column heading to sort by it; click again to reverse it."),
+    Feature("session-sort", UNRELEASED, ADVANCED,
+            note="Every session list column sorts: click its heading to cycle up, down and back."),
     Feature("stats-pane", UNRELEASED, "stats",
             note="Stats has a pane of its own, under the session list.",
             tip="Stats now has a pane of its own, under the session list."),
@@ -145,29 +163,28 @@ FEATURES: tuple[Feature, ...] = (
     Feature("pins", UNRELEASED, "inbox",
             note="Pin any inbox item (📌, a click on its first column or P) and clearing the inbox leaves it; "
                  "docs come pinned.",
-            tip="Click a row's first column, or press P, to pin it (📌): Ctrl+A and Delete leave pinned rows."),
+            tip="Ctrl+A / Delete remove all finished items except those that are pinned (📌). Pin an item with P, "
+                "or click the first column."),
     Feature("doc-threads", UNRELEASED, "docs",
             note="A doc has a thread of its own: comment on it below the doc (split) or on a Thread tab (tabbed); "
                  "Ctrl+L switches the two, Ctrl+PgUp and Ctrl+PgDn the tabs.",
             tip="Comment on a doc in its thread, below it. Ctrl+L switches to tabs, Ctrl+PgUp and Ctrl+PgDn between them."),
-    Feature("kind-colours", UNRELEASED, "inbox",
+    Feature("kind-colours", UNRELEASED, "decision",
             note="An inbox item's ref is coloured by its kind (a task green, a question yellow, a decision purple, "
                  "a PR light blue), and resting the pointer on a row, there or in the session list, shows it in full.",
             tip="A ref's colour says its kind. Rest the pointer on a row to read its full title."),
-    Feature("pr-items", UNRELEASED, "inbox",
+    Feature("pr-items", UNRELEASED, ADVANCED,
             note="A pull request a session makes shows in the inbox as PR and its number, under the task it was "
-                 "made for, with GitHub's status: merged and closed ones dim.",
-            tip="A session's pull requests show as PR and their number, with GitHub's status."),
+                 "made for, with GitHub's status: merged and closed ones dim."),
     Feature("prs-pane", UNRELEASED, "prs",
             note="The PRs pane lists the open PRs your sessions made, or with M every open PR you authored, each "
                  "with a traffic light for checks, review and conflicts; with a session selected, its PRs alone.",
             tip="It follows the session selected, as the inbox does. M: your sessions' PRs or all of yours."),
-    Feature("session-menu", UNRELEASED, "sessions",
-            note="Right-click a session in the session list for a menu of its buttons, acting on that session.",
-            tip="Right-click a session for a menu of its buttons."),
+    Feature("session-menu", UNRELEASED, ADVANCED,
+            note="Right-click a session in the session list for a menu of its buttons, acting on that session."),
     Feature("send-now", UNRELEASED, "send",
             note="Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits.",
-            tip="Alt+S sends just this answer now, leaving the rest of the queue for Ctrl+S."),
+            tip="Alt+S allows you to send the answer you have just typed, bypassing the queue."),
     Feature("pr-actions", UNRELEASED, "prs",
             note="A PR in the PRs pane has Open, Merge and Request review buttons, and a right-click on its row gives "
                  "them as a menu: Merge asks first and says what stood in its way, and Request review asks the "
@@ -181,15 +198,13 @@ FEATURES: tuple[Feature, ...] = (
             note="Detail, showing a PR, has its Open, Merge, Request review and Close buttons, and its failing "
                  "checks, description, history and comments.",
             tip="Pick a PR to read its failing checks, description, history and comments in Detail."),
-    Feature("pr-marks", UNRELEASED, "prs",
+    Feature("pr-marks", UNRELEASED, ADVANCED,
             note="Mark PRs in the PRs pane as in the inbox (Ctrl+click, Shift+click, Space, Shift+Up/Down) and act "
-                 "on them all; Close closes a PR unmerged, asked first, as Merge is.",
-            tip="Ctrl+click or Space marks PRs: the buttons then act on them all."),
-    Feature("session-steps", UNRELEASED, "sessions",
+                 "on them all; Close closes a PR unmerged, asked first, as Merge is."),
+    Feature("session-steps", UNRELEASED, ADVANCED,
             note="The wheelhouse tells a session before it ends or resumes (and, in SDK mode, compacts), so its own "
                  "instructions can act, and can keep a handoff doc for it. Session steps, in the command palette, "
-                 "has every switch; the first press asks once.",
-            tip="Sessions are told before they end or resume, and keep a handoff doc. Switches: Session steps (Ctrl+P)."),
+                 "has every switch; the first press asks once."),
     Feature("compacting-shown", UNRELEASED, "sessions", when="sdk",
             note="While a session is compacting, its Compact button is off, its inbox items and its Detail dim and "
                  "ignore clicks, and its busy eye in the session list turns blue.",
@@ -208,6 +223,53 @@ FEATURES: tuple[Feature, ...] = (
     Feature("model-park", UNRELEASED, ADVANCED, when="sdk",
             note="A session run in the wheelhouse parks itself once its useful work is done, compacted first "
                  "as Park with Compact would; one that skips the compaction says why, as a decision."),
+    # the tour's showcase (#101 9): what a new user would otherwise miss, highest-ranked first
+    Feature("relaunch-tip", UNRELEASED, "sessions",
+            note="After a reboot or a crash, a session that isn't running shows a red dot: L relaunches it, "
+                 "Shift+L relaunches every one.",
+            tip="A red dot: not running, after a reboot, say. L relaunches it, Shift+L every one."),
+    Feature("adopt-tip", UNRELEASED, "sessions",
+            note="A adopts a Claude Code session you started outside the wheelhouse: exit it in its tab first.",
+            tip="Already have sessions running? A adopts them (exit each in its tab first)."),
+    Feature("recall-tip", UNRELEASED, "answer",
+            note="Ctrl+R takes a queued answer back into the box to edit it, before it's sent.",
+            tip="Typo in a queued answer? Ctrl+R takes it back into the box to edit."),
+    Feature("show-all-tip", UNRELEASED, "conversation",
+            note="Selecting a session narrows the inbox to its items: Esc, or a click on the selected session, "
+                 "shows every session's again.",
+            tip="Selecting a session narrows the inbox to it: a click on it again shows every session's."),
+    Feature("bulk-clear-tip", UNRELEASED, "close",
+            note="Ctrl+A in the inbox marks every finished item and Delete clears them together; F shows "
+                 "finished items again.",
+            tip="F shows finished items, or hides them again."),
+    Feature("fork-tip", UNRELEASED, "end",
+            note="Fork (K) carries a session on in a copy, in a new worktree, taking the items you choose.",
+            tip="Fork (K) carries a session on in a copy, in a new worktree."),
+    Feature("compact-tip", UNRELEASED, "send", when="sdk",
+            note="A hosted session's dot turns amber past 200k tokens of context, when it asks whether to "
+                 "compact: Compact (C) shrinks it.",
+            tip="An amber dot: past 200k tokens, and the session asks whether to compact. Compact (C) shrinks it."),
+    Feature("permission-tip", UNRELEASED, "inbox", when="sdk",
+            note="A hosted session asking to run a tool shows in the inbox as an orange row: 1 Allow, 2 Always, "
+                 "3 Deny.",
+            tip="An orange row asks to run a tool: 1 Allow, 2 Always, 3 Deny."),
+    Feature("interrupt-shell-tip", UNRELEASED, "ask", when="sdk",
+            note="Interrupt (I) stops a hosted session's turn; Shell (H) opens it in a real tab, for slash "
+                 "commands.",
+            tip="I interrupts a turn. H opens the session in a real tab, for slash commands."),
+    Feature("model-effort-tip", UNRELEASED, "stats", when="sdk",
+            note="Model (M) changes a hosted session's model live, and the Stats slider sets its effort.",
+            tip="M changes the model live; the slider sets the effort."),
+    Feature("stats-zoom-tip", UNRELEASED, "stats",
+            note="Stats' - and + zoom its charts out to days, and its cache line says when the next turn "
+                 "costs more.",
+            tip="- and + zoom the charts out to days. The cache line says when a turn gets dearer."),
+    # notes only: the docs box has no line to spare at 80x24 without covering M1
+    Feature("doc-quote", UNRELEASED, ADVANCED,
+            note="Click a block of a doc and your next comment on it quotes that block."),
+    Feature("layout-keys", UNRELEASED, ADVANCED,
+            note="Alt+Up and Alt+Down reorder rows; drag a splitter to resize panes, and double-click it to reset."),
+
 )
 
 

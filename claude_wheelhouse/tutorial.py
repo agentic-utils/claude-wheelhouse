@@ -30,8 +30,13 @@ OFFER_KEY = TUTORIAL_OFFER   # settings: unset until the first-run offer is take
 RESET = "reset"   # OFFER_KEY as reset() leaves it: offered at the next start, sessions or not, until answered
 STOP_WAIT = 5.0   # seconds an earlier tutorial's host gets to exit before it is told to
 STORY = "story.md"   # the one file the demo writes, the doc the tour has the person open
-# what the tutorial's directory allows: the wheelhouse's own tools, and writing the story, run without a prompt
-SETTINGS = {"permissions": {"allow": ["mcp__wheelhouse__*", f"Write(./{STORY})", f"Edit(./{STORY})"]}}
+# what the tour's buttons type for the person (#174): an answer to either question, and the
+# change asked of the demo in its conversation
+ANSWER = "Your choice: surprise me."
+ASK = "Please make the story a little shorter."
+# what the tutorial's directory allows: the wheelhouse's own tools, its one subagent (#101 9) and writing the
+# story, run without a prompt
+SETTINGS = {"permissions": {"allow": ["mcp__wheelhouse__*", "Agent", f"Write(./{STORY})", f"Edit(./{STORY})"]}}
 
 # the brief's first line, for the person watching the session's tab or conversation
 TO_THE_USER = ("TO THE USER: THIS IS A DUMMY SESSION FOR THE TUTORIAL. FOLLOW THE PROMPTS ON THE WHEELHOUSE SCREEN "
@@ -46,7 +51,7 @@ wheelhouse by working with you, and the wheelhouse's tour tells them what to do,
 don't explain in chat how to use the wheelhouse. Keep chat short and about the work.
 
 This is a throwaway session in a scratch directory. The only file you touch is story.md in \
-this directory; run no commands and use no subagents. When you're asked to end, skip any \
+this directory; run no commands, and start no subagent but the one in step 5. When you're asked to end, skip any \
 session-end routine your own instructions describe (no memory, transcript or handoff notes): \
 just call end_session.
 
@@ -62,7 +67,10 @@ clouds. Say in the body that the setting should suit the characters, so they're 
 answered together.
 4. Post a decision: "Keeping the story under 200 words", why: over a longer one: it's for \
 reading aloud at bedtime; undo: say so and it's lengthened.
-5. Say in one line of chat that you're waiting on the two questions, then stop.
+5. Start one subagent, so the person can watch one at work: the Agent tool, general-purpose, \
+model "haiku", description "T1: Suggest story titles" (the task's ref first files it under the task), \
+in the foreground, asking it to reply with three one-line title ideas for a children's bedtime story, using no tools. Keep its ideas for the title.
+6. Say in one line of chat that you're waiting on the two questions, then stop.
 
 When the answers arrive, write the story (under 200 words, in British English, with a title) \
 as markdown to story.md in this directory, and declare it as a doc item: post_item with \
@@ -198,7 +206,8 @@ def facts(store: Store) -> dict | None:
     """What the tour's dialogs wait on that the store records, for the tutorial's session
     (None while there is none): it has posted, a question has an answer, both have, the
     answers were sent, the session replied after that, and the decision was closed (closed,
-    not seen: automatic selection marks a decision seen, but only the person closes one). A
+    not seen: automatic selection marks a decision seen, but only the person closes one), and
+    the questions still to answer. A
     question the person closed unanswered counts as answered; with none answered at all,
     there is nothing to send or reply to, so those count as done."""
     sid = session_id(store)
@@ -222,4 +231,7 @@ def facts(store: Store) -> dict | None:
             m["author"] == "claude" and m["kind"] == "reply" and m["item_ref"] in questions
             and m["id"] > first_sent for m in msgs),
         "closed": any(it["kind"] == "decision" and it["status"] == "closed" for it in items.values()),
+        # the open questions with no answer yet, in order: the next the tour selects (#174)
+        "unanswered": sorted((q for q in questions if q not in answered and items[q]["status"] != "closed"),
+                             key=lambda q: int(q[1:]) if q[1:].isdigit() else 0),
     }

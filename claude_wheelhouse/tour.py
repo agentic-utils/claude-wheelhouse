@@ -5,7 +5,8 @@ callout.py); this holds no Textual.
 An action dialog moves on once what it asks has happened: what the store records of the
 demo session (tutorial.facts), or what only the screen has seen the person do (seen: a
 question or the story's doc opened, a turn of Claude's watched arriving), never the app's
-own automatic selection. A Next dialog moves on only on Next. A dialog whose pane is absent (Stats turned
+own automatic selection. A Next dialog moves on only on Next; a wait dialog too, its Next
+off until what it waits on has happened (ready). A dialog whose pane is absent (Stats turned
 off) is passed over. A demo that has gone, or stopped, leaves nothing to wait on: the action
 dialog showing says so (dead) and its Next goes straight to the release notes. Ending it is
 what the last action dialog asks, so there it simply moves on.
@@ -19,7 +20,7 @@ only the title row's badge, is `opening`'s to say.
 from dataclasses import replace
 
 from . import whatsnew
-from .whatsnew import ACTION, ADVANCED, NEXT, TIPPED
+from .whatsnew import ACTION, ADVANCED, NEXT, TIPPED, WAIT
 
 TOUR, TOPUP = "tour", "topup"   # a new user's whole tour; an upgrader's top-up
 # what a start, or the badge, offers (opening): a tour paused (the app quit mid-tour),
@@ -57,9 +58,11 @@ CHECKS = {
     "answer": lambda facts, seen: bool(facts and facts["queued"]),
     "send": lambda facts, seen: bool(facts and facts["sent"]),
     "reply": lambda facts, seen: bool(facts and facts["replied"]),
-    "decision": lambda facts, seen: bool(facts and facts["closed"]),
+    "decision": lambda facts, seen: "decision" in seen or bool(facts and facts["closed"]),   # D1 opened
+    "close": lambda facts, seen: bool(facts and facts["closed"]),
     "docs": lambda facts, seen: "read" in seen,   # the story's doc opened
-    "conversation": lambda facts, seen: "follow" in seen,
+    "conversation": lambda facts, seen: bool({"talk", "follow"} & seen),   # its conversation picked
+    "ask": lambda facts, seen: "follow" in seen,
     "end": lambda facts, seen: False,   # only the demo going ends it
 }
 
@@ -68,12 +71,25 @@ CHECKS = {
 # row): what its callout keeps clear of (callout.place). A step not listed needs none: its
 # callout keeps clear of its own pane alone
 ROWS = {
+    "subagent": ("A",),   # the demo's subagent: after its reply, so its first turn (and A1) is done
     "inbox": ("Q",),
     "answer": ("Q",),
     "reply": ("Q",),
     "decision": ("D",),
+    "close": ("D",),
     "docs": ("M",),
     "conversation": ("",),
+    "ask": ("",),
+}
+# a pane a step's callout keeps clear of, besides its own: what the step has the person read
+# there (Doug, #174: closing D1 never covers D1 shown in Detail)
+SHUN = {"close": "detail"}
+# the panes each step's text refers to besides its own: left undimmed with it (Doug, #174)
+LIT = {
+    "inbox": ("items",), "answer": ("items",), "reply": ("items",),
+    "decision": ("items", "detail"), "close": ("items", "detail"), "docs": ("items", "detail"),
+    "conversation": ("items", "sessions"), "ask": ("items",), "subagent": ("detail",),
+    "decisions": ("detail",), "prs": ("items", "detail"), "end": ("sessions",),
 }
 
 
@@ -89,7 +105,7 @@ class Tour:
         self.stops = [d for d in dialogs if d.id != "invite"]
         if pending is not None:
             features = list(pending)
-            self.stops = [replace(d, text="", advance=NEXT) for d in self.stops
+            self.stops = [replace(d, text="", advance=NEXT, ask="", button="") for d in self.stops
                           if d.id in TIPPED and whatsnew.tips(d.id, sdk, features)] + [self.stops[-1]]
         self.sdk, self.features, self.notes_seen = sdk, features, notes_seen
         self.at = 0
@@ -97,6 +113,7 @@ class Tour:
         self.seen: set[str] = set()   # the steps only the screen sees ("open", "read", "follow")
         self.absent: set[str] = set()   # the dialogs passed over for want of their pane
         self.dead: str | None = None   # why the demo can't go on (gone or stopped), at an action dialog
+        self.ready = False   # a wait dialog's: what it waits on has happened, so its Next is on
 
     @property
     def stop(self) -> whatsnew.Stop | None:
@@ -104,10 +121,11 @@ class Tour:
         return self.stops[self.at] if self.at < len(self.stops) else None
 
     def text(self, stop: whatsnew.Stop) -> str:
-        """A dialog's text and, below it, every tip registered to it; in a top-up, only its
-        pending tips. Each its own paragraph, a blank line between."""
+        """A dialog's text, below it every tip registered to it, then what it asks (ask); in a
+        top-up, only its pending tips. Each its own paragraph, a blank line between."""
         tips = [f.tip for f in whatsnew.tips(stop.id, self.sdk, self.features)]
-        return "\n\n".join(tips if self.kind == TOPUP and stop.id != "notes" else [stop.text, *tips])
+        return "\n\n".join(tips if self.kind == TOPUP and stop.id != "notes"
+                           else [p for p in (stop.text, *tips, stop.ask) if p])
 
     def where(self) -> str | None:
         """Where it is, as tour_at keeps it ("tour:answer"), for resume; None once it's over."""
@@ -139,7 +157,8 @@ class Tour:
                 break
             self.at += 1
             moved = True
-        waiting = stop is not None and stop.advance == ACTION and self.sid is not None
+        self.ready = stop is not None and stop.advance == WAIT and CHECKS[stop.id](facts, self.seen)
+        waiting = stop is not None and stop.advance in (ACTION, WAIT) and self.sid is not None
         self.dead = ("the demo has ended" if gone else stopped) if waiting else None
         return moved
 

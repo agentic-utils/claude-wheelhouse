@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from claude_wheelhouse import whatsnew
-from claude_wheelhouse.whatsnew import ADVANCED, DIALOGS, FEATURES, TIPPED, UNRELEASED, WHENS, Feature
+from claude_wheelhouse.whatsnew import ADVANCED, DIALOGS, FEATURES, MAX_TIPS, TIPPED, UNRELEASED, WHENS, Feature
 
 EM_DASH = chr(0x2014)
 # the version being worked on, from pyproject.toml: the installed metadata is stale until `uv sync`
@@ -31,6 +31,8 @@ def problems(features, dialogs=DIALOGS) -> set[str]:
             found.add("unknown when")
         if not f.note.strip() or "\n" in f.note:
             found.add("note not one line")
+    if any(len(whatsnew.tips(d.id, True, features)) > MAX_TIPS for d in dialogs):
+        found.add("over MAX_TIPS tips")
     texts = [t for f in features for t in (f.note, f.tip)] + [t for d in dialogs for t in (d.title, d.text)] \
         + [whatsnew.LAUNCH]
     if any(EM_DASH in t for t in texts):
@@ -57,6 +59,12 @@ def feature(fid="f", where="inbox", tip="A tip.", **kw):
     ((feature(when="mac"),), {"unknown when"}, "a when no one checks"),
     ((feature(note="two\nlines"),), {"note not one line"}, "a note over one line"),
     ((feature(tip=f"Drag {EM_DASH} drop."),), {"em-dash"}, "an em-dash in a tip"),
+    (tuple(feature(f"t{n}") for n in range(MAX_TIPS)), set(), "a dialog at the cap"),
+    (tuple(feature(f"t{n}") for n in range(MAX_TIPS + 1)), {"over MAX_TIPS tips"}, "one over: to the notes"),
+    ((*(feature(f"t{n}") for n in range(MAX_TIPS)), feature("s", when="sdk")), {"over MAX_TIPS tips"},
+     "an sdk tip counts: SDK mode on shows it too"),
+    ((*(feature(f"t{n}") for n in range(MAX_TIPS)), feature("s", where=ADVANCED, tip="")), set(),
+     "the notes take the overflow"),
 ])
 def test_registry_rules(features, expected, desc):
     assert problems(features) == expected, desc
@@ -64,7 +72,7 @@ def test_registry_rules(features, expected, desc):
 
 def test_dialogs_are_the_tour_in_order():
     assert [d.id for d in DIALOGS] == ["invite", "principles", "create", "sessions", "inbox", "answer", "send",
-                                       "reply", "decision", "docs", "conversation", "stats", "decisions", "prs", "end", "notes"]
+                                       "reply", "subagent", "decision", "close", "docs", "conversation", "ask", "stats", "decisions", "prs", "end", "notes"]
     assert {d.pane for d in DIALOGS} == {None, "sessions", "items", "detail", "session-info", "stats", "design", "prs"}
 
 
