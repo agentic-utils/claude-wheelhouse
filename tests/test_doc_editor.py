@@ -301,7 +301,7 @@ async def test_discard_full_screen_clears_detail_at_once(store, sid, doc):
         await edited(app, pilot, view, editor)
         full, full_editor = await shown(app, pilot, doc[0], full=True)
         await click(pilot, full, row_with(full, "The plan"))
-        for key in ("escape", "d"):
+        for key in ("escape", "alt+d"):
             await pilot.press(key)
             await pilot.pause()
         assert not editor.display and editor.key is None, "Detail's editor on it closed too"

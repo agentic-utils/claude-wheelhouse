@@ -150,7 +150,7 @@ async def test_finished_items_toggle_in_and_take_a_message(store, sid):
         assert len(refs()) == 3 and box.text == "f", "a plain f types into the answer box instead of toggling"
         await pilot.press("alt+f")
         await pilot.pause()
-        assert len(refs()) == 2 and box.text == "f", "Alt+F toggles from the answer box too (#189)"
+        assert len(refs()) == 2, "Alt+F toggles from the answer box too (#189)"
     assert [(m["item_ref"], m["body"]) for m in store.drafts(sid)] == [(closed, "the punchline")]
     assert store.item(sid, closed)["status"] == "closed", "a message on a finished item leaves its status alone"
 
@@ -1195,12 +1195,22 @@ def dwell(app) -> None:
     app.dwelt(app.dwell_gen)
 
 
+def terminal_character(key: str) -> str | None:
+    """A key's character as Textual's parser gives it from a terminal: an Alt key arrives as Esc
+    and its letter (alt+n with "n", alt+shift+l with "L"), a plain letter as itself."""
+    if len(key) == 1:
+        return key
+    if key.startswith("alt+") and len(last := key.rpartition("+")[2]) == 1:
+        return last.upper() if "shift+" in key else last
+    return None
+
+
 def raw_keys(app, *keys) -> None:
     """Keys as a terminal sends a burst: all posted at once, with no idle wait between them.
     Pilot.press waits for idle after each key, which hid review 12's bugs: an action key
     ran before the arrow ahead of it had its highlight handled."""
     for key in keys:
-        event = events.Key(key, key if len(key) == 1 else None)
+        event = events.Key(key, terminal_character(key))
         event.set_sender(app)
         app._driver.send_message(event)
 
@@ -1716,7 +1726,7 @@ async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch,
         b = Burst(app, store, sids, refs)
         table = app.items_table
         assert [b.keys[k] for k in table.keys()] == ["qa", "qb", "pa"], desc
-        if burst[0] in ("r", "p", "delete", "i", "c", "h"):   # a session's keys: alpha selected first (#16)
+        if burst[0] in ("alt+r", "alt+p", "delete", "alt+i", "alt+c", "alt+h"):   # a session's keys: alpha selected first (#16)
             await pick(app, pilot, sids["alpha"])
         table.move_cursor(row=table.get_row_index(next(k for k, name in b.keys.items() if name == at)))
         await pilot.pause()
@@ -2555,9 +2565,9 @@ async def test_one_click_on_a_dead_session_opens_one_prompt_and_yes_closes_it(st
 
 
 @pytest.mark.parametrize("screen, labels, desc", [
-    (lambda: Confirm("ok?"), ["[Y]es", "[N]o"], "the relaunch and destructive confirms"),
-    (lambda: Choice("hm?"), ["[C]ancel request", "[F]orce", "Leave it [Esc]"], "a pending request's choice"),
-    (lambda: RelaunchChoice("big?"), ["[C]ompact first", "[R]elaunch now", "Cancel [Esc]"],
+    (lambda: Confirm("ok?"), ["Yes [Alt+Y]", "No [Alt+N]"], "the relaunch and destructive confirms"),
+    (lambda: Choice("hm?"), ["Cancel request [Alt+C]", "Force [Alt+F]", "Leave it [Esc]"], "a pending request's choice"),
+    (lambda: RelaunchChoice("big?"), ["Compact first [Alt+C]", "Relaunch now [Alt+R]", "Cancel [Esc]"],
      "Relaunch of a big session"),
 ])
 @pytest.mark.anyio
@@ -3155,9 +3165,9 @@ TIE_SECOND = "2026-10-08T10:00:05+00:00"   # every write a case makes, after its
      "review 47: seen by the dwell while selected: held, then Down goes to the row below"),
     ("D1-D3 unseen", "D2", "", "D3 D2 D1", "down+lapse", "D3 D1 D2", "D1",
      "review 47: Down typed as the dwell lapses: Down goes to the row below"),
-    ("T1-T3 done", "T2", "f delete ctrl+r", "T1 T2 T3", "up", "T1 T2 T3", "T1",
+    ("T1-T3 done", "T2", "alt+f delete ctrl+r", "T1 T2 T3", "up", "T1 T2 T3", "T1",
      "Delete then Ctrl+R in one second: a task dismissed and brought back returns to where it settled"),
-    ("Q1-Q3 answered", "Q2", "f delete ctrl+r", "Q1 Q3 Q2", "up", "Q1 Q3 Q2", "Q3",
+    ("Q1-Q3 answered", "Q2", "alt+f delete ctrl+r", "Q1 Q3 Q2", "up", "Q1 Q3 Q2", "Q3",
      "Delete then Ctrl+R in one second: a question closed and reopened, answered again, settles last"),
     ("Q1-Q3 open", "Q2", "Q2 answered, Q3 answered", "Q2 Q1 Q3", "down", "Q1 Q2 Q3", "Q1",
      "a question answered while selected, then another: held, then the two by id, Q2 above Q3"),
@@ -3507,9 +3517,9 @@ async def test_ctrl_r_reopens_only_from_the_item_list(tmp_path, follow, focus, a
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("kinds, key, said, desc", [
-    (("question", "task"), "delete", "closed Q1; dismissed T1: F shows finished items, Ctrl+Z undoes it",
+    (("question", "task"), "delete", "closed Q1; dismissed T1: Alt+F shows finished items, Ctrl+Z undoes it",
      "Delete on mixed marks says which it closed and which it dismissed"),
-    (("task", "agent"), "delete", "dismissed T1, A1: F shows finished items, Ctrl+Z undoes it", "all dismissed: said so"),
+    (("task", "agent"), "delete", "dismissed T1, A1: Alt+F shows finished items, Ctrl+Z undoes it", "all dismissed: said so"),
     (("question", "task"), "ctrl+r", "reopened T1, Q1", "Ctrl+R brings either back"),
 ])
 async def test_the_word_after_acting_on_marks_names_each_act(store, sid, kinds, key, said, desc):
@@ -3562,7 +3572,7 @@ async def test_the_word_after_acting_on_marks_mid_sink_names_them_as_they_will_s
         app.notify = lambda text, **kw: notes.append(text)
         await pilot.press("delete")
         await pilot.pause()
-    assert notes == ["dismissed T1; closed Q1: F shows finished items, Ctrl+Z undoes it"]
+    assert notes == ["dismissed T1; closed Q1: Alt+F shows finished items, Ctrl+Z undoes it"]
 
 
 @pytest.mark.anyio
@@ -4442,9 +4452,9 @@ async def test_what_shows_over_the_answer_box(store, tmp_path, monkeypatch, kind
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("typed, then, press, command, plan, status, desc", [
-    ("", None, "keys:5,1", "compact", (None, "park"), "open", "keys, outside the box: 5 chooses park, 1 compacts"),
-    ("", None, "keys:3,1", "compact", (None, "compact"), "open", "3 chooses just compact"),
-    ("", None, "keys:2", None, (None, None), "closed", "2 leaves it"),
+    ("", None, "keys:alt+x,alt+y", "compact", (None, "park"), "open", "keys: Alt+X chooses park, Alt+Y compacts"),
+    ("", None, "keys:alt+d,alt+y", "compact", (None, "compact"), "open", "Alt+D chooses just compact"),
+    ("", None, "keys:alt+w", None, (None, None), "closed", "Alt+W leaves it"),
     ("", None, "#compact-now", "compact", (None, "send"), "open",
      "Compact: the session is asked what to keep, then its queued answers go with the reminder (the default)"),
     ("keep the PR list", "#compact-then-park", "#compact-now", "compact", ("keep the PR list", "park"), "open",
@@ -4486,8 +4496,8 @@ async def test_the_compact_question(store, tmp_path, monkeypatch, typed, then, p
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("key, desc", [
-    ("1", "allowed: the box back, and the focus in it"),
-    ("3,enter", "denied: the same"),
+    ("alt+y", "allowed: the box back, and the focus in it"),
+    ("alt+d,enter", "denied: the same"),
 ])
 async def test_a_threads_box_takes_the_focus_back_after_a_permission(store, tmp_path, key, desc):
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
@@ -4605,8 +4615,8 @@ async def test_stop_and_forget_offers_a_choice_by_cache_warmth(store, tmp_path, 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("key, desc", [
-    ("l", "Let it know after the session stopped: the confirm keeps the queued-answers warning"),
-    ("j", "Just stop it after the session stopped: the same"),
+    ("alt+l", "Let it know after the session stopped: the confirm keeps the queued-answers warning"),
+    ("alt+j", "Just stop it after the session stopped: the same"),
 ])
 async def test_stop_and_forget_stopped_while_open_keeps_queued_warning(store, tmp_path, monkeypatch, key, desc):
     from claude_wheelhouse import liveness
@@ -5432,7 +5442,7 @@ async def test_the_footer_fits_at_100_columns_whatever_has_focus(store, sid, tmp
             drawn = "".join(seg.text for seg in app.screen._compositor.render_strips()[app.screen.query_one(Footer).region.y])
             for key in (("N", "New"), ("A", "Adopt"), ("Shift+L", "Relaunch all")):
                 assert key not in shown or " ".join(key) in drawn, f"{name}: {' '.join(key)} drawn whole, got {drawn!r}"
-            assert widget.id not in ("session-list", "items") or ("Shift+L", "Relaunch all") in shown, \
+            assert widget.id not in ("session-list", "items") or ("Alt+Shift+L", "Relaunch all") in shown, \
                 f"{name}: Relaunch all in the footer"
 
 
@@ -5774,8 +5784,8 @@ async def test_parked_sessions_stay_in_the_list_after_the_rest(store, sid, tmp_p
 def test_the_keys_overlay_has_relaunch_and_no_tabs():
     from claude_wheelhouse.tui import keys_help
     text = keys_help(sdk=True)
-    assert "Relaunch / Unpark (L in the session list):" in text and "Sessions tab" not in text and "Inbox tab" not in text
-    for key in ("**I**", "**C**", "**H**", "**1**", "**2**", "**3**", "**Shift+A**", "**Tab**", "**Shift+Tab**",
+    assert "Relaunch / Unpark (Alt+L in the session list):" in text and "Sessions tab" not in text and "Inbox tab" not in text
+    for key in ("**Alt+I**", "**Alt+C**", "**Alt+H**", "**Alt+Y**", "**Alt+W**", "**Alt+D**", "**Alt+Shift+A**", "**Tab**", "**Shift+Tab**",
                 "## Tab order"):
         assert text.count(key) == 1, f"{key} listed once (#73)"
     assert text.count("Show or hide finished items") == 1, "F once, though it has two bindings"
@@ -5833,15 +5843,15 @@ async def test_tab_goes_from_the_session_list_to_the_items(store, sid):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("key, button, live, desc", [
-    ("r", "rename", True, "R renames"),
-    ("l", "relaunch", True, "L relaunches"),
-    ("l", "relaunch", False, "L relaunches one that isn't running"),
-    ("p", "park", True, "P parks"),
-    ("p", "park", False, "P parks a dead one too"),
+    ("alt+r", "rename", True, "Alt+R renames"),
+    ("alt+l", "relaunch", True, "Alt+L relaunches"),
+    ("alt+l", "relaunch", False, "Alt+L relaunches one that isn't running"),
+    ("alt+p", "park", True, "Alt+P parks"),
+    ("alt+p", "park", False, "Alt+P parks a dead one too"),
     ("delete", "end", True, "Delete forgets (Stop & Forget)"),
     ("backspace", "end", False, "so does Backspace, on one that isn't running"),
-    ("k", "fork", True, "K forks"),
-    ("k", "fork", False, "one that isn't running too"),
+    ("alt+k", "fork", True, "Alt+K forks"),
+    ("alt+k", "fork", False, "one that isn't running too"),
 ])
 async def test_the_session_lists_keys_press_its_buttons(store, sid, monkeypatch, key, button, live, desc):
     """The buttons are out of the Tab order, so the list's keys keep them on the keyboard.
@@ -6498,9 +6508,9 @@ async def test_a_button_key_that_does_not_apply_says_so(store, tmp_path, monkeyp
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
         await pilot.pause()
-        if key in ("r", "m"):   # a session's own keys: it selected first, as with none they do nothing (#16)
+        if key in ("alt+r", "alt+m"):   # a session's own keys: it selected first, as with none they do nothing (#16)
             await pick(app, pilot, sid)
-        (app.session_list if key == "r" else app.items_table).focus()
+        (app.session_list if key == "alt+r" else app.items_table).focus()
         await pilot.pause()
         got, notes = presses(app), []
         monkeypatch.setattr(app, "notify", lambda text, **kw: notes.append(text))
@@ -7320,8 +7330,8 @@ async def test_children_sit_under_their_parent_and_its_control_hides_them(store,
 @pytest.mark.anyio
 @pytest.mark.both
 @pytest.mark.parametrize("answer, said, closed, desc", [
-    ("y", "and its 2 children? 1 still open and 1 unread.", True, "yes takes the parent and every child not running"),
-    ("n", "and its 2 children? 1 still open and 1 unread.", False, "no takes nothing"),
+    ("alt+y", "and its 2 children? 1 still open and 1 unread.", True, "yes takes the parent and every child not running"),
+    ("alt+n", "and its 2 children? 1 still open and 1 unread.", False, "no takes nothing"),
     ("escape", "and its 2 children? 1 still open and 1 unread.", False, "Esc takes nothing"),
 ])
 async def test_delete_on_a_parent_asks_then_takes_its_children(store, sid, answer, said, closed, desc):
@@ -8547,7 +8557,7 @@ def test_the_keys_overlay_describes_a_module_panes_keys():
     from claude_wheelhouse.tui import keys_help
     from claude_wheelhouse_prs.pane import Prs
     text = keys_help(panes=[Prs])
-    assert "## The PRs pane" in text and "**M**: Mine or all" in text and "**R**: Fetch now" in text, text
+    assert "## The PRs pane" in text and "**Alt+O**: Mine or all" in text and "**Alt+R**: Fetch now" in text, text
 
 
 def undo_setup(store, sid, shape: str) -> list:

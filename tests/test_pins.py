@@ -196,9 +196,9 @@ async def test_a_multi_select_delete_skips_pinned_rows_and_says_so(store, sid, t
 @pytest.mark.anyio
 @pytest.mark.parametrize("kind, pinned, comment, key, prompt, gone, desc", [
     ("doc", None, False, "enter", "Delete pinned M1? The file stays on disk.", False, "Enter takes the default, No"),
-    ("doc", None, False, "y", "Delete pinned M1? The file stays on disk.", True, "Y deletes it"),
-    ("doc", None, True, "n", "Delete pinned M1? The file stays on disk. Your comment", False, "awaiting a reply: said"),
-    ("task", True, False, "y", "Delete pinned T1?", True, "a pinned task asks too"),
+    ("doc", None, False, "alt+y", "Delete pinned M1? The file stays on disk.", True, "Y deletes it"),
+    ("doc", None, True, "alt+n", "Delete pinned M1? The file stays on disk. Your comment", False, "awaiting a reply: said"),
+    ("task", True, False, "alt+y", "Delete pinned T1?", True, "a pinned task asks too"),
     ("doc", False, False, None, None, True, "an unpinned doc goes at once, unasked"),
 ])
 async def test_delete_on_a_pinned_item_asks_first(store, sid, tmp_path, kind, pinned, comment, key, prompt, gone, desc):
@@ -238,8 +238,8 @@ async def test_f_never_hides_a_pinned_item(store, sid, tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("key, gone, desc", [
-    ("n", False, "No: the parent and its child kept, the pin too"),
-    ("y", True, "Yes: both gone, the pin cleared"),
+    ("alt+n", False, "No: the parent and its child kept, the pin too"),
+    ("alt+y", True, "Yes: both gone, the pin cleared"),
 ])
 async def test_delete_on_a_pinned_parent_asks_once(store, sid, key, gone, desc):
     t = store.post_item(sid, "task", "build it", status="done", pinned=True)

@@ -132,8 +132,8 @@ async def test_a_pending_request_can_be_cancelled_or_forced(
 @pytest.mark.parametrize("then, launched, parked, desc", [
     (None, [], 1, "an Available session parked from its button is parked, nothing launched"),
     ("#relaunch", ["restore"], 0, "Unpark, in Relaunch's place, brings it back where it left off, unparked"),
-    ("p", ["restore"], 0, "P presses Unpark on a Parked session"),
-    ("l", ["restore"], 0, "so does L"),
+    ("alt+p", ["restore"], 0, "Alt+P presses Unpark on a Parked session"),
+    ("alt+l", ["restore"], 0, "so does Alt+L"),
 ])
 async def test_a_dead_session_parks_then_comes_back(store, sid, monkeypatch, then, launched, parked, desc):
     fake_status(monkeypatch, "dead")

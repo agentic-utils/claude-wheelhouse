@@ -369,9 +369,9 @@ async def test_the_selected_pr_has_its_actions_and_open_opens_it(store, sid, git
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("n, answer, merged, said, desc", [
-    (109, "n", None, None, "No: nothing merged"),
-    (109, "y", (0, ""), "Merged PR109 (squash).", "Yes: merged the way the repo allows, gone from the list"),
-    (108, "y", (1, "X Pull request #108 is not mergeable: the base branch policy prohibits the merge."),
+    (109, "alt+n", None, None, "No: nothing merged"),
+    (109, "alt+y", (0, ""), "Merged PR109 (squash).", "Yes: merged the way the repo allows, gone from the list"),
+    (108, "alt+y", (1, "X Pull request #108 is not mergeable: the base branch policy prohibits the merge."),
      "Couldn't merge PR108: checks are failing. gh says: X Pull request #108 is not mergeable", "a failure says why"),
 ])
 async def test_merge_asks_first_and_says_what_came_of_it(store, sid, github, n, answer, merged, said, desc):
@@ -729,9 +729,9 @@ async def marked_both(app, pilot):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("answer, closed, said, desc", [
-    ("n", {}, None, "No: nothing closed"),
-    ("y", {}, "Closed PR108.\nClosed PR109.", "Yes: each closed, each said"),
-    ("y", {URL.format(109): (1, "X Could not close: not allowed")},
+    ("alt+n", {}, None, "No: nothing closed"),
+    ("alt+y", {}, "Closed PR108.\nClosed PR109.", "Yes: each closed, each said"),
+    ("alt+y", {URL.format(109): (1, "X Could not close: not allowed")},
      "Closed PR108.\nCouldn't close PR109: gh says: X Could not close: not allowed", "one refused: said, the other closed"),
 ])
 async def test_close_asks_naming_every_pr_marked_and_says_what_came_of_each(store, sid, github, answer, closed, said, desc):
@@ -747,7 +747,7 @@ async def test_close_asks_naming_every_pr_marked_and_says_what_came_of_each(stor
         await pilot.press(answer)
         await landed(app, pilot)
         await settled(app, pilot)
-        assert github.closes == ([["--", URL.format(n)] for n in (108, 109)] if answer == "y" else []), desc
+        assert github.closes == ([["--", URL.format(n)] for n in (108, 109)] if answer == "alt+y" else []), desc
         assert (p.outcome == said) if said else not p.outcome, f"{desc}: {p.outcome!r}"
 
 
