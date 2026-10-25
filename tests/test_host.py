@@ -2614,3 +2614,71 @@ def test_mcp_reply_on_a_question_the_person_closed(mcp_host, store, sid, reopen,
         assert last_said(store, sid, ref) == getattr(host_mod, note), desc
     else:
         assert store.item(sid, ref)["status"] == "closed", f"{desc}: connected, so closed"
+
+
+SEKRIT = "http://localhost/cb?code=SEKRIT&state=s"
+
+
+def _surfaced(reader, h, store, sid, ref, msg_id):
+    """What a reader of the person's messages shows or hands on."""
+    from claude_wheelhouse import mcp_server, monitor
+    import io
+    mcp_server._store, mcp_server._sid = store, sid
+    if reader == "host":
+        run(h.poll())
+        return "\n".join(h.client.queries)
+    store.set_shell(sid, "tab")   # handed to a shell tab: the tab's readers have it
+    if reader == "monitor":
+        out = io.StringIO()
+        monitor.poll_once(store, sid, out)
+        return out.getvalue()
+    if reader == "get_input()":
+        return mcp_server.get_input()
+    if reader == "get_input(ref)":
+        return mcp_server.get_input(ref)
+    if reader == "get_input(message_id)":
+        return mcp_server.get_input(message_id=msg_id)
+    if reader == "take_pending":
+        return "\n".join(m["body"] for m in store.take_pending(sid))
+    if reader == "claim":
+        return "\n".join(m["body"] for m in store.claim(sid))
+    raise AssertionError(reader)
+
+
+@pytest.mark.parametrize("reader", ["host", "monitor", "get_input()", "get_input(ref)", "get_input(message_id)",
+                                    "take_pending", "claim"])
+def test_a_reply_on_an_mcp_question_never_surfaces_through_any_reader(mcp_host, store, sid, reader):
+    ref = ask(mcp_host, store, sid, {"local-oauth": "needs-auth"})
+    store.send(sid, SEKRIT, ref)
+    msg_id = store.thread(sid, ref)[-1]["id"]
+    store.send(sid, "general")
+    shown = _surfaced(reader, mcp_host, store, sid, ref, msg_id)
+    assert "SEKRIT" not in shown, f"{reader}: the code surfaced"
+    if reader in ("monitor", "get_input()", "take_pending", "claim"):
+        assert "general" in shown, f"{reader}: the other messages still go"
+
+
+def test_closing_a_question_drops_the_reconnect_it_was_owed(mcp_host, store, sid, monkeypatch):
+    monkeypatch.setattr(host_mod, "MCP_WITHIN", 0.05)
+    mcp_host.client.then = "needs-auth"
+    ref = ask(mcp_host, store, sid, {"local-oauth": "needs-auth"})
+    mcp_host.client.callback_slow = 1
+    store.send(sid, PASTED, ref)
+    run(mcp_host.poll())
+    assert mcp_host.mcp_owed == {"local-oauth"}
+    store.update_item(sid, ref, status="closed")
+    run(mcp_host.check_mcp())
+    assert mcp_host.mcp_owed == set() and ("mcp_reconnect", "local-oauth") not in mcp_host.client.sent
+
+
+def test_a_reply_on_a_reopened_question_points_at_the_open_one(mcp_host, store, sid):
+    old = ask(mcp_host, store, sid, {"a": ("failed", "boom")})
+    store.update_item(sid, old, status="closed")
+    mcp_host.client.servers = {"a": ("failed", "a new error")}
+    run(mcp_host.check_mcp())
+    new = next(r for r in mcp_host.mcp_items)
+    store.update_item(sid, old, status="open")
+    store.send(sid, "done", old)
+    run(mcp_host.poll())
+    assert last_said(store, sid, old) == host_mod.MCP_ELSEWHERE.format(ref=new, name="a")
+    assert ("mcp_reconnect", "a") not in mcp_host.client.sent

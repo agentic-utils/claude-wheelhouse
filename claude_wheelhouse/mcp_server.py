@@ -13,7 +13,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from . import docroots, liveness, steps
-from .store import GONE_TEXT, SessionGone, Store, runner
+from .store import GONE_TEXT, SessionGone, Store, redacted, runner
 
 HEARTBEAT_SECONDS = 30
 STOP_AFTER = 1   # seconds after park_session or end_session replies before its Claude Code is stopped
@@ -214,13 +214,14 @@ def get_input(ref: str | None = None, message_id: int | None = None) -> str:
         return HOSTED_TEXT
     if message_id is not None:
         m = s.message(_sid, message_id)
-        return f"[{m['item_ref'] or 'general'}] {m['body']}" if m else f"no message {message_id}"
+        return f"[{m['item_ref'] or 'general'}] {redacted(m['body'])}" if m else f"no message {message_id}"
     if ref:
         item = s.item(_sid, ref)
         if item is None:
             return f"no item {ref}"
         if not hosted:
             s.take_pending(_sid, ref)   # shown in the thread below, so the monitor mustn't repeat them
+            s.settle_mcp_replies(_sid)   # a reply on an MCP question: noted, its code redacted, never acted on
         lines = [f"{ref} [{item['status']}] {item['title']}", item["body"], ""]
         # a tab session leaves out what the monitor has claimed and is printing right now. A
         # hosted one shows the person's every sent message, saying which reach it as a user
@@ -231,9 +232,10 @@ def get_input(ref: str | None = None, message_id: int | None = None) -> str:
             via = ""
             if hosted and m["author"] == "person" and m["delivered_at"] is None:   # claimed: already passed on
                 via = " (passed to you)" if m["claimed_at"] else " (reaches you as a user turn)"
-            lines.append(f"{m['author']} @ {m['created_at']}{via}: {m['body']}")
+            lines.append(f"{m['author']} @ {m['created_at']}{via}: {redacted(m['body'])}")
         return "\n".join(lines)
-    msgs = s.take_pending(_sid)
+    msgs = s.take_pending(_sid)   # never a reply on an MCP question (Store.claim): settled instead
+    s.settle_mcp_replies(_sid)
     return "\n\n".join(f"[{m['item_ref'] or 'general'}] {m['body']}" for m in msgs) or "nothing new"
 
 

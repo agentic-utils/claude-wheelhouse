@@ -99,6 +99,7 @@ MCP_WITHIN = 20   # seconds a reply's sign-in and reconnect may take before the 
 MCP_GONE = "The wheelhouse host restarted: it checks the MCP servers again as it starts."
 MCP_SHELL = "Handed to a shell tab: /mcp there manages MCP servers."
 MCP_STOPPED = "The wheelhouse host stopped: it checks the MCP servers again when the session next runs."
+MCP_ELSEWHERE = "Nothing acted on this reply: {ref} is the open question about {name}, so reply there."
 MCP_CLOSED = ("This question is closed, so the wheelhouse didn't act on the reply. A new question comes "
               "if the server needs you again.")
 
@@ -701,7 +702,7 @@ class Host:
         """The person's messages, as one turn (or to the call waiting on one), and End and
         Park requests. Held (hold): only what a call waiting on the person takes goes; the
         rest is left unclaimed, and no request is told."""
-        mcp, msgs = self.store.take_mcp_replies(self.sid, self.store.claim(self.sid))
+        mcp, msgs = self.store.take_mcp_replies(self.sid, self.store.claim(self.sid, mcp="with"))
         self.forget_delivered()
         handed = {m["id"]: ref for ref, m in self.handed.items()}
         again, turn = [m for m in mcp if m["id"] in self.delivered], []
@@ -1135,6 +1136,7 @@ class Host:
             if item is None or item["status"] in CLOSED:
                 self.mcp_items.pop(ref)
                 self.mcp_quiet[name] = self.mcp_asked.pop(name, None)
+                self.mcp_owed.discard(name)   # "not now": no reconnect retried behind its back
 
     async def mcp_auth(self, name: str) -> dict | None:
         """Claude Code's sign-in for a server (mcp_authenticate): a claude.ai connector's
@@ -1164,9 +1166,17 @@ class Host:
                 if ref in self.mcp_items:
                     await self.mcp_reply(ref, url)
                 else:
-                    self.store.update_item(self.sid, ref, note=MCP_CLOSED)
+                    self.store.update_item(self.sid, ref, note=self.mcp_elsewhere(ref) or MCP_CLOSED)
             except Exception as e:
                 print(f"{now()} the reply on MCP question {ref} failed: {e}", file=sys.stderr, flush=True)
+
+    def mcp_elsewhere(self, ref: str) -> str | None:
+        """For a reply on an MCP question that isn't the host's while another about the same
+        server is: where to reply instead."""
+        item = self.store.item(self.sid, ref)
+        name = mcp_server(item["answer"]) if item else None
+        newer = next((r for r, n in self.mcp_items.items() if n == name), None)
+        return MCP_ELSEWHERE.format(ref=newer, name=name) if newer else None
 
     def mcp_adopt(self, ref: str) -> None:
         """An MCP question open again (the person reopened it): the host's once more. Its

@@ -84,7 +84,9 @@ DECISION_FIELDS = (("why", "Why"),)
 # 20: park_session's compact, keep and reason, with which a session run in the wheelhouse parks
 # itself unasked, compacted first unless it says why not (sessions.park_keep): an older one's
 # park_session takes no arguments.
-PROTOCOL_VERSION = 20
+# 21: a reply on the host's MCP question (#179) is never passed on: claim skips it, the
+# monitor notes it and get_input redacts a pasted sign-in code. An older reader passes it on.
+PROTOCOL_VERSION = 21
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
@@ -136,6 +138,16 @@ def mcp_server(answer: str | None) -> str | None:
     except ValueError:
         return None
     return mark.get("server") if isinstance(mark, dict) and mark.get("from") == MCP_FROM else None
+
+
+# a message that is the person's reply on an MCP question (in SQL, on a messages row): claim
+# skips these unless asked (Store.claim), so no reader but the host can pass one on
+MCP_REPLY = f"""EXISTS (SELECT 1 FROM items mi WHERE mi.session_id = messages.session_id AND mi.ref = messages.item_ref
+                AND mi.kind = 'question'
+                AND CASE WHEN json_valid(mi.answer) THEN json_extract(mi.answer, '$.from') END = '{MCP_FROM}')"""
+# what a reply on an MCP question gets in a terminal tab (Shell), where nothing acts on it
+MCP_IN_TAB = ("This session is in a terminal tab, so nothing acted on the reply: /mcp in the tab manages "
+              "MCP servers.")
 
 
 def callback_url(text: str) -> str | None:
@@ -1116,6 +1128,18 @@ class Store:
                 self.redact_message(sid, m["id"], redacted(m["body"]))
         return mcp, rest
 
+    def settle_mcp_replies(self, sid: str, note: str = MCP_IN_TAB) -> int:
+        """Where no host acts on them (a terminal tab): the person's replies on MCP questions
+        taken, their sign-in codes redacted, and each question noted. How many."""
+        mcp, _ = self.take_mcp_replies(sid, self.claim(sid, mcp="only"))
+        self.confirm(mcp)
+        for ref in dict.fromkeys(m["item_ref"] for m in mcp):
+            try:
+                self.update_item(sid, ref, note=note)
+            except (KeyError, SessionGone):
+                pass
+        return len(mcp)
+
     def redact_message(self, sid: str, msg_id: int, body: str) -> None:
         """A message's body replaced by a redacted copy: a pasted secret, once used, not kept."""
         with self.tx() as db:
@@ -1620,16 +1644,20 @@ class Store:
             "SELECT * FROM messages WHERE session_id = ? AND delivered_at IS NULL AND draft = 0 ORDER BY id", (sid,)
         )
 
-    def claim(self, sid: str, item_ref: str | None = None) -> list[sqlite3.Row]:
+    def claim(self, sid: str, item_ref: str | None = None, mcp: str = "skip") -> list[sqlite3.Row]:
         """Claim undelivered messages in one transaction, so the monitor and get_input()
         never both hand Claude the same one. The claimer confirms or releases them; a claim
-        left by a monitor that died mid-print is retaken after CLAIM_TIMEOUT."""
+        left by a monitor that died mid-print is retaken after CLAIM_TIMEOUT. Every reader
+        claims through here, and the person's replies on MCP questions (MCP_REPLY) are left
+        out unless asked for: mcp "with" (the host, which acts on them) or "only"
+        (settle_mcp_replies)."""
         stale = (datetime.now(timezone.utc) - timedelta(seconds=CLAIM_TIMEOUT)).isoformat(timespec="microseconds")
+        which = {"skip": f"AND NOT {MCP_REPLY}", "with": "", "only": f"AND {MCP_REPLY}"}[mcp]
         with self.tx() as db:
             rows = db.execute(
-                """UPDATE messages SET claimed_at = ? WHERE session_id = ? AND delivered_at IS NULL
+                f"""UPDATE messages SET claimed_at = ? WHERE session_id = ? AND delivered_at IS NULL
                    AND draft = 0 AND (claimed_at IS NULL OR claimed_at < ?) AND (? IS NULL OR item_ref = ?)
-                   RETURNING *""", (stamp(), sid, stale, item_ref, item_ref)
+                   {which} RETURNING *""", (stamp(), sid, stale, item_ref, item_ref)
             ).fetchall()
         return sorted(rows, key=lambda m: m["id"])   # RETURNING order is unspecified
 

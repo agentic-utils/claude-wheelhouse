@@ -9,7 +9,7 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from claude_wheelhouse import monitor
-from claude_wheelhouse.store import PROTOCOL_VERSION
+from claude_wheelhouse.store import MCP_IN_TAB, PROTOCOL_VERSION
 
 
 @pytest.mark.parametrize("ref, body, kind, expected, desc", [
@@ -124,7 +124,7 @@ def test_poll_once_never_passes_on_a_reply_on_an_mcp_question(store, sid, status
     assert "SECRET" not in out.getvalue() and "general" in out.getvalue(), desc
     thread = store.thread(sid, ref)
     assert all("SECRET" not in m["body"] for m in thread), f"{desc}: no code kept"
-    assert thread[-1]["body"] == monitor.MCP_IN_TAB, desc
+    assert thread[-1]["body"] == MCP_IN_TAB, desc
     assert monitor.poll_once(store, sid, out) == 0, f"{desc}: taken, not left for later"
 
 
