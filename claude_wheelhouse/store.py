@@ -84,7 +84,9 @@ DECISION_FIELDS = (("why", "Why"),)
 # 20: park_session's compact, keep and reason, with which a session run in the wheelhouse parks
 # itself unasked, compacted first unless it says why not (sessions.park_keep): an older one's
 # park_session takes no arguments.
-PROTOCOL_VERSION = 20
+# 21: a reply on the host's MCP question (#179) is never passed on: claim skips it, the
+# monitor notes it and get_input redacts a pasted sign-in code. An older reader passes it on.
+PROTOCOL_VERSION = 21
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
@@ -117,6 +119,52 @@ DEFAULT_THEN = "send"
 # until the context is back under that; then it is marked done, and the next crossing asks again
 COMPACT_QUESTION = '{"from": "context nudge"}'
 COMPACT_QUESTION_DONE = '{"from": "context nudge", "done": true}'
+# an item's answer column marks the host's question about an MCP server that needs signing in
+# or has failed (#179, .plan/mcp-reauth.md): the person's replies on it are the host's, never a turn
+MCP_FROM = "mcp server"
+
+
+def mcp_question(server: str) -> str:
+    """The answer column's mark on the host's question about this MCP server."""
+    return json.dumps({"from": MCP_FROM, "server": server})
+
+
+def mcp_server(answer: str | None) -> str | None:
+    """The MCP server a question so marked is about; None for any other item."""
+    if not answer or MCP_FROM not in answer:
+        return None
+    try:
+        mark = json.loads(answer)
+    except ValueError:
+        return None
+    return mark.get("server") if isinstance(mark, dict) and mark.get("from") == MCP_FROM else None
+
+
+# a message that is the person's reply on an MCP question (in SQL, on a messages row): claim
+# skips these unless asked (Store.claim), so no reader but the host can pass one on
+MCP_REPLY = f"""EXISTS (SELECT 1 FROM items mi WHERE mi.session_id = messages.session_id AND mi.ref = messages.item_ref
+                AND mi.kind = 'question'
+                AND CASE WHEN json_valid(mi.answer) THEN json_extract(mi.answer, '$.from') END = '{MCP_FROM}')"""
+# what a reply on an MCP question gets in a terminal tab (Shell), where nothing acts on it
+MCP_IN_TAB = ("This session is in a terminal tab, so nothing acted on the reply: /mcp in the tab manages "
+              "MCP servers.")
+
+
+def callback_url(text: str) -> str | None:
+    """An OAuth redirect URL pasted as a reply: one carrying a code or an error."""
+    m = re.search(r"https?://\S+[?&](?:code|error)=\S*", text or "")
+    return m.group(0) if m else None
+
+
+def redacted(text: str) -> str:
+    """A reply with any OAuth redirect URL's query (its one-time code) taken out, as kept."""
+    return re.sub(r"(https?://[^\s?]+)\?\S*(?:code|error)=\S*", r"\1?[redacted]", text)
+
+
+def wheelhouse_question(answer: str | None) -> bool:
+    """A question the wheelhouse asks the person itself (Compact, an MCP server), not the
+    session: it never means the session waits on the person, nor is the session told it."""
+    return answer == COMPACT_QUESTION or mcp_server(answer) is not None
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -1058,12 +1106,52 @@ class Store:
         return changed
 
     def post_compact_question(self, sid: str, title: str, body: str) -> str:
-        """The host's question suggesting Compact, marked (COMPACT_QUESTION) as it is posted:
-        one transaction, so no reader sees it unmarked."""
+        """The host's question suggesting Compact, marked (COMPACT_QUESTION) as it is posted."""
+        return self.post_marked_question(sid, title, body, COMPACT_QUESTION)
+
+    def take_mcp_replies(self, sid: str, msgs) -> tuple[list, list]:
+        """Claimed messages split into the person's replies on MCP questions (marked
+        mcp_question) and the rest. Every reader of the person's messages (the host, a shell
+        tab's monitor) splits through this, so none passes such a reply on as a turn. The
+        replies' kept bodies are redacted (a pasted redirect URL's one-time code); the rows
+        returned are as sent, for the host to act on."""
+        marks: dict[str, bool] = {}
+        mcp, rest = [], []
+        for m in msgs:
+            ref = m["item_ref"]
+            if ref and ref not in marks:
+                item = self.item(sid, ref)
+                marks[ref] = bool(item and item["kind"] == "question" and mcp_server(item["answer"]))
+            (mcp if ref and marks[ref] else rest).append(m)
+        for m in mcp:
+            if redacted(m["body"]) != m["body"]:
+                self.redact_message(sid, m["id"], redacted(m["body"]))
+        return mcp, rest
+
+    def settle_mcp_replies(self, sid: str, note: str = MCP_IN_TAB) -> int:
+        """Where no host acts on them (a terminal tab): the person's replies on MCP questions
+        taken, their sign-in codes redacted, and each question noted. How many."""
+        mcp, _ = self.take_mcp_replies(sid, self.claim(sid, mcp="only"))
+        self.confirm(mcp)
+        for ref in dict.fromkeys(m["item_ref"] for m in mcp):
+            try:
+                self.update_item(sid, ref, note=note)
+            except (KeyError, SessionGone):
+                pass
+        return len(mcp)
+
+    def redact_message(self, sid: str, msg_id: int, body: str) -> None:
+        """A message's body replaced by a redacted copy: a pasted secret, once used, not kept."""
+        with self.tx() as db:
+            db.execute("UPDATE messages SET body = ? WHERE session_id = ? AND id = ?", (body, sid, msg_id))
+
+    def post_marked_question(self, sid: str, title: str, body: str, mark: str) -> str:
+        """A question of the host's own, marked in its answer column as it is posted: one
+        transaction, so no reader sees it unmarked."""
         with self.tx() as db:
             self._require(db, sid)
             ref = self._insert_item(db, sid, "question", title, body, INITIAL_STATUS["question"])
-            db.execute("UPDATE items SET answer = ? WHERE session_id = ? AND ref = ?", (COMPACT_QUESTION, sid, ref))
+            db.execute("UPDATE items SET answer = ? WHERE session_id = ? AND ref = ?", (mark, sid, ref))
         return ref
 
     @staticmethod
@@ -1323,7 +1411,7 @@ class Store:
         question, as list_items orders them; no agent, decision or permission items."""
         return [r for r in self.items(sid, include_closed=False)
                 if (r["kind"] == "task" and r["status"] not in SETTLED["task"])
-                or (r["kind"] == "question" and r["status"] == "open" and r["answer"] != COMPACT_QUESTION)]
+                or (r["kind"] == "question" and r["status"] == "open" and not wheelhouse_question(r["answer"]))]
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's answer to a permission item: allow, always (allow, and keep the rule
@@ -1556,16 +1644,20 @@ class Store:
             "SELECT * FROM messages WHERE session_id = ? AND delivered_at IS NULL AND draft = 0 ORDER BY id", (sid,)
         )
 
-    def claim(self, sid: str, item_ref: str | None = None) -> list[sqlite3.Row]:
+    def claim(self, sid: str, item_ref: str | None = None, mcp: str = "skip") -> list[sqlite3.Row]:
         """Claim undelivered messages in one transaction, so the monitor and get_input()
         never both hand Claude the same one. The claimer confirms or releases them; a claim
-        left by a monitor that died mid-print is retaken after CLAIM_TIMEOUT."""
+        left by a monitor that died mid-print is retaken after CLAIM_TIMEOUT. Every reader
+        claims through here, and the person's replies on MCP questions (MCP_REPLY) are left
+        out unless asked for: mcp "with" (the host, which acts on them) or "only"
+        (settle_mcp_replies)."""
         stale = (datetime.now(timezone.utc) - timedelta(seconds=CLAIM_TIMEOUT)).isoformat(timespec="microseconds")
+        which = {"skip": f"AND NOT {MCP_REPLY}", "with": "", "only": f"AND {MCP_REPLY}"}[mcp]
         with self.tx() as db:
             rows = db.execute(
-                """UPDATE messages SET claimed_at = ? WHERE session_id = ? AND delivered_at IS NULL
+                f"""UPDATE messages SET claimed_at = ? WHERE session_id = ? AND delivered_at IS NULL
                    AND draft = 0 AND (claimed_at IS NULL OR claimed_at < ?) AND (? IS NULL OR item_ref = ?)
-                   RETURNING *""", (stamp(), sid, stale, item_ref, item_ref)
+                   {which} RETURNING *""", (stamp(), sid, stale, item_ref, item_ref)
             ).fetchall()
         return sorted(rows, key=lambda m: m["id"])   # RETURNING order is unspecified
 

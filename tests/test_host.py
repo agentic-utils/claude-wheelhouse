@@ -1451,6 +1451,7 @@ def test_the_sdks_control_request_path_is_where_the_host_expects_it():
     params = inspect.signature(Query._send_control_request).parameters
     assert list(params)[:2] == ["self", "request"] and inspect.iscoroutinefunction(Query._send_control_request)
     assert "set_model" in vars(ClaudeSDKClient)
+    assert "get_mcp_status" in vars(ClaudeSDKClient) and "reconnect_mcp_server" in vars(ClaudeSDKClient)
     fields = ClaudeAgentOptions.__dataclass_fields__
     assert "model" in fields and "effort" in fields
 
@@ -2351,3 +2352,333 @@ def test_a_park_unparked_while_it_waits_for_its_turn_stops_saying_so(host, store
     assert store.session(sid)["activity"] == "running Bash", "the line drops its note at once"
     host.show("thinking")
     assert store.session(sid)["activity"] == "thinking", "and later lines don't bring it back"
+
+
+# MCP servers (#179, .plan/mcp-reauth.md)
+
+SLACK_URL = "https://claude.ai/api/organizations/o/mcp/start-auth/s?product_surface=sdk-py"
+LOCAL_URL = "https://auth.example.com/authorize?state=x"
+PASTED = "here: http://localhost:4321/callback?code=SECRET&state=x"
+
+
+class McpClient(FakeClient):
+    """FakeClient with MCP servers, answering as Claude Code does. get_mcp_status reports
+    `servers` (name: status, or (status, error), or (status, error, config type));
+    reconnect_mcp_server connects a server signed in by a pasted URL, else sets it to `then`,
+    or raises `refuse`, or takes `slow` seconds; mcp_authenticate answers for a claude.ai
+    connector, or for a local OAuth server (a name starting local) with a callback expected;
+    mcp_oauth_callback_url stores the sign-in and leaves the reconnect to its caller."""
+
+    def __init__(self, options=None):
+        super().__init__(options)
+        self.servers, self.then, self.refuse, self.slow, self.sent, self.down = {}, "connected", None, 0, [], False
+        self.callback_slow = 0   # seconds the answer to a pasted URL takes, its sign-in already stored
+        self.signed_in: set[str] = set()
+        self._query = SimpleNamespace(_send_control_request=self.control)
+
+    async def get_mcp_status(self):
+        if self.down:
+            raise Exception("Control request timeout: mcp_status")
+        out = []
+        for n, s in self.servers.items():
+            status, error, kind = (s, None, None) if isinstance(s, str) else (*s, None)[:3]
+            out.append({"name": n, "status": status, **({"error": error} if error else {}),
+                        **({"config": {"type": kind}} if kind else {})})
+        return {"mcpServers": out}
+
+    async def reconnect_mcp_server(self, name):
+        self.sent.append(("mcp_reconnect", name))
+        if self.slow:
+            await asyncio.sleep(self.slow)
+        if self.refuse:
+            raise Exception(self.refuse)
+        self.servers[name] = "connected" if name in self.signed_in else self.then
+
+    async def control(self, request, timeout=60.0):
+        if request["subtype"] == "get_settings":
+            return {"applied": {}}
+        self.sent.append((request["subtype"], request["serverName"]))
+        if request["subtype"] == "mcp_authenticate":
+            await asyncio.sleep(0)   # a real round trip: another check may run meanwhile
+            if request["serverName"].startswith("local"):
+                return {"authUrl": LOCAL_URL, "requiresUserAction": True, "callbackExpected": True, "callbackPort": 4321}
+            return {"authUrl": SLACK_URL, "requiresUserAction": True, "callbackExpected": False}
+        if request["subtype"] == "mcp_oauth_callback_url":
+            self.signed_in.add(request["serverName"])
+            await asyncio.sleep(self.callback_slow)
+            return {}
+        raise AssertionError(request)
+
+
+@pytest.fixture
+def mcp_host(store, sid, monkeypatch):
+    monkeypatch.setattr(host_mod, "transcript_exists", lambda sid: True)
+    h = Host(store, sid, client_factory=McpClient, person="doug")
+    run(h.connect())
+    return h
+
+
+def mcp_questions(store, sid, include_closed=False):
+    return [i for i in store.items(sid, include_closed=include_closed) if host_mod.mcp_server(i["answer"])]
+
+
+def ask(h, store, sid, servers):
+    """The host checks with servers as given: the ref of the one question it asks."""
+    h.client.servers = dict(servers)
+    run(h.check_mcp())
+    return mcp_questions(store, sid)[0]["ref"]
+
+
+def last_said(store, sid, ref):
+    return store.thread(sid, ref)[-1]["body"]
+
+
+@pytest.mark.parametrize("servers, titles, says, desc", [
+    ({"claude.ai Slack": "needs-auth"}, ["MCP claude.ai Slack: sign in"], SLACK_URL, "a connector: its claude.ai link"),
+    ({"local-oauth": "needs-auth"}, ["MCP local-oauth: sign in"], "paste the address", "a local server: its OAuth link"),
+    ({"sentry": ("failed", "ECONNREFUSED")}, ["MCP sentry failed"], "ECONNREFUSED", "failed: its error"),
+    ({"remote": ("failed", "401 Unauthorized", "http")}, ["MCP remote failed"], SLACK_URL,
+     "a remote server failed: maybe a rejected token, so a sign-in link too"),
+    ({"a": "connected", "b": "pending", "c": "disabled"}, [], None, "nothing to ask"),
+])
+def test_mcp_check_asks_about_a_server_needing_the_person(mcp_host, store, sid, servers, titles, says, desc):
+    mcp_host.client.servers = servers
+    run(mcp_host.check_mcp())
+    run(mcp_host.check_mcp())   # asked once, however often it is checked
+    asked = mcp_questions(store, sid)
+    assert [i["title"] for i in asked] == titles, desc
+    if says:
+        assert says in asked[0]["body"], desc
+    assert not host_mod.waits_on_person(store, sid) and store.open_items(sid) == [], \
+        f"{desc}: the wheelhouse's own question, not the session's"
+
+
+def test_mcp_checks_at_once_ask_once(mcp_host, store, sid):
+    """The reader (a turn's end) and the poll both check, each awaiting mcp_authenticate."""
+    mcp_host.client.servers = {"claude.ai Slack": "needs-auth"}
+
+    async def both():
+        await asyncio.gather(mcp_host.check_mcp(), mcp_host.check_mcp())
+    run(both())
+    assert len(mcp_questions(store, sid)) == 1
+
+
+@pytest.mark.parametrize("replies, server, sent, desc", [
+    (["done"], "claude.ai Slack", [("mcp_reconnect", "claude.ai Slack")], "a reply reconnects"),
+    (["done", "done again"], "claude.ai Slack", [("mcp_reconnect", "claude.ai Slack")],
+     "two replies in one poll: acted on once"),
+    ([PASTED], "local-oauth", [("mcp_oauth_callback_url", "local-oauth"), ("mcp_reconnect", "local-oauth")],
+     "a pasted redirect URL finishes the sign-in, then reconnects, as Claude Code leaves that to its caller"),
+])
+def test_mcp_reply_connects_and_closes_without_a_turn(mcp_host, store, sid, replies, server, sent, desc):
+    mcp_host.client.then = "needs-auth"   # only a sign-in connects it
+    if server == "claude.ai Slack":
+        mcp_host.client.then = "connected"
+    ref = ask(mcp_host, store, sid, {server: "needs-auth"})
+    for r in replies:
+        store.send(sid, r, ref)
+    assert run(mcp_host.poll()), f"{desc}: the host carries on"
+    assert [x for x in mcp_host.client.sent if x[0] != "mcp_authenticate"] == sent, desc
+    assert mcp_host.client.queries == [], f"{desc}: the reply is the host's, never a turn"
+    assert store.item(sid, ref)["status"] == "closed" and mcp_host.mcp_items == {}, desc
+    assert all("SECRET" not in m["body"] for m in store.thread(sid, ref)), f"{desc}: no code kept"
+
+
+@pytest.mark.parametrize("setup, says, desc", [
+    (lambda c: setattr(c, "refuse", "Server not found"), "Reconnecting claude.ai Slack failed: Server not found",
+     "the reconnect refused"),
+    (lambda c: setattr(c, "then", "needs-auth"), "isn't connected yet", "reconnected, but still not signed in"),
+    (lambda c: setattr(c, "slow", 1), "Still reconnecting", "a slow reconnect: the poll moves on"),
+])
+def test_mcp_reply_that_doesnt_connect_says_so_and_stays_open(mcp_host, store, sid, monkeypatch, setup, says, desc):
+    monkeypatch.setattr(host_mod, "MCP_WITHIN", 0.05)
+    ref = ask(mcp_host, store, sid, {"claude.ai Slack": "needs-auth"})
+    setup(mcp_host.client)
+    store.send(sid, "done", ref)
+    assert run(mcp_host.poll()), desc
+    assert store.item(sid, ref)["status"] == "open", desc
+    assert says in last_said(store, sid, ref), desc
+    assert len(mcp_questions(store, sid)) == 1, f"{desc}: no second question"
+
+
+@pytest.mark.parametrize("age, fresh, desc", [
+    (host_mod.MCP_FLOW_LIFE + 10, True, "expired: a reply starts a fresh sign-in and posts its link"),
+    (10, False, "still waiting on the browser: no new sign-in"),
+])
+def test_mcp_reply_refreshes_an_expired_local_sign_in(mcp_host, store, sid, age, fresh, desc):
+    mcp_host.client.then = "needs-auth"
+    ref = ask(mcp_host, store, sid, {"local-oauth": "needs-auth"})
+    mcp_host.mcp_flows["local-oauth"] -= age
+    store.send(sid, "it timed out", ref)
+    run(mcp_host.poll())
+    starts = [x for x in mcp_host.client.sent if x[0] == "mcp_authenticate"]
+    assert len(starts) == (2 if fresh else 1), desc
+    assert (LOCAL_URL in last_said(store, sid, ref)) is fresh, desc
+    assert store.item(sid, ref)["status"] == "open", desc
+
+
+@pytest.mark.parametrize("later, asked_again, desc", [
+    ({"a": ("failed", "boom")}, False, "the same failure: left alone"),
+    ({"a": ("failed", "a new error")}, True, "a new failure: asked again"),
+    ({"a": "connected"}, False, "well again: nothing to ask"),
+])
+def test_mcp_question_closed_by_the_person_isnt_nagged(mcp_host, store, sid, later, asked_again, desc):
+    ref = ask(mcp_host, store, sid, {"a": ("failed", "boom")})
+    store.update_item(sid, ref, status="closed")
+    mcp_host.client.servers = later
+    run(mcp_host.check_mcp())
+    assert mcp_host.mcp_items.get(ref) is None, f"{desc}: no longer the host's, so no 30 s rechecks for it"
+    assert len(mcp_questions(store, sid)) == (1 if asked_again else 0), desc
+
+
+def test_mcp_question_closes_once_connected_and_when_gone(mcp_host, store, sid):
+    mcp_host.client.servers = {"a": "needs-auth", "b": ("failed", "boom")}
+    run(mcp_host.check_mcp())
+    mcp_host.client.servers = {"a": "connected"}   # signed in through its link; b removed
+    run(mcp_host.check_mcp())
+    assert mcp_questions(store, sid) == [] and mcp_host.mcp_items == {}
+
+
+def test_mcp_check_failing_is_not_the_sessions_end(mcp_host, store, sid):
+    mcp_host.client.down = True
+    run(mcp_host.check_mcp())
+    assert mcp_questions(store, sid) == []
+
+
+@pytest.mark.parametrize("stopped, desc", [
+    (True, "the host stopped (parked, ended): it closed its questions"),
+    (False, "the host died: it couldn't"),
+])
+def test_mcp_reply_after_the_host_has_gone_is_never_a_turn(mcp_host, store, sid, monkeypatch, stopped, desc):
+    ref = ask(mcp_host, store, sid, {"local-oauth": "needs-auth"})
+    if stopped:
+        mcp_host.close_mcp(host_mod.MCP_STOPPED)
+        assert mcp_questions(store, sid) == [], desc
+    store.send(sid, PASTED, ref)
+    fresh = Host(store, sid, client_factory=McpClient, person="doug")
+    fresh.deny_stale()
+    run(fresh.connect())
+    run(fresh.poll())
+    assert fresh.client.queries == [], f"{desc}: the reply never reaches the session"
+    assert ("mcp_oauth_callback_url", "local-oauth") not in fresh.client.sent, desc
+    assert all("SECRET" not in m["body"] for m in store.thread(sid, ref)), f"{desc}: no code kept"
+    assert last_said(store, sid, ref) == host_mod.MCP_CLOSED, desc
+
+
+def test_mcp_questions_go_with_their_claude_code(mcp_host, store, sid):
+    """A restarted host closes the last one's (its sign-in died with that Claude Code), and
+    Shell closes its own: /mcp in the tab is the way then."""
+    mcp_host.client.servers = {"a": "needs-auth"}
+    run(mcp_host.check_mcp())
+    fresh = Host(store, sid, client_factory=McpClient, person="doug")
+    fresh.deny_stale()
+    assert mcp_questions(store, sid) == []
+    mcp_host.mcp_items.clear()   # as a new host starts
+    run(mcp_host.check_mcp())
+    assert len(mcp_questions(store, sid)) == 1
+    mcp_host.close_mcp(host_mod.MCP_SHELL)
+    assert mcp_questions(store, sid) == [] and mcp_host.mcp_items == {}
+
+
+def test_mcp_reconnect_owed_after_the_cap_cut_a_sign_in_short(mcp_host, store, sid, monkeypatch):
+    """The cap fired while Claude Code answered the pasted URL: the next check sends the
+    reconnect the sign-in is owed, and the question closes."""
+    monkeypatch.setattr(host_mod, "MCP_WITHIN", 0.05)
+    mcp_host.client.then = "needs-auth"
+    ref = ask(mcp_host, store, sid, {"local-oauth": "needs-auth"})
+    mcp_host.client.callback_slow = 1
+    store.send(sid, PASTED, ref)
+    run(mcp_host.poll())
+    assert "Still reconnecting" in last_said(store, sid, ref)
+    assert ("mcp_reconnect", "local-oauth") not in mcp_host.client.sent
+    run(mcp_host.check_mcp())
+    assert ("mcp_reconnect", "local-oauth") in mcp_host.client.sent
+    assert store.item(sid, ref)["status"] == "closed" and mcp_host.mcp_owed == set()
+
+
+@pytest.mark.parametrize("reopen, reconnects, note, desc", [
+    (False, False, "MCP_CLOSED", "closed by the person: nothing acted on, and the note says why"),
+    (True, True, None, "reopened by the person: the host's again, and the reply reconnects"),
+])
+def test_mcp_reply_on_a_question_the_person_closed(mcp_host, store, sid, reopen, reconnects, note, desc):
+    ref = ask(mcp_host, store, sid, {"claude.ai Slack": "needs-auth"})
+    store.update_item(sid, ref, status="closed")
+    run(mcp_host.check_mcp())   # dropped: no longer the host's
+    if reopen:
+        store.update_item(sid, ref, status="open")
+    store.send(sid, "done", ref)
+    run(mcp_host.poll())
+    assert (("mcp_reconnect", "claude.ai Slack") in mcp_host.client.sent) is reconnects, desc
+    assert mcp_host.client.queries == [], desc
+    if note:
+        assert last_said(store, sid, ref) == getattr(host_mod, note), desc
+    else:
+        assert store.item(sid, ref)["status"] == "closed", f"{desc}: connected, so closed"
+
+
+SEKRIT = "http://localhost/cb?code=SEKRIT&state=s"
+
+
+def _surfaced(reader, h, store, sid, ref, msg_id):
+    """What a reader of the person's messages shows or hands on."""
+    from claude_wheelhouse import mcp_server, monitor
+    import io
+    mcp_server._store, mcp_server._sid = store, sid
+    if reader == "host":
+        run(h.poll())
+        return "\n".join(h.client.queries)
+    store.set_shell(sid, "tab")   # handed to a shell tab: the tab's readers have it
+    if reader == "monitor":
+        out = io.StringIO()
+        monitor.poll_once(store, sid, out)
+        return out.getvalue()
+    if reader == "get_input()":
+        return mcp_server.get_input()
+    if reader == "get_input(ref)":
+        return mcp_server.get_input(ref)
+    if reader == "get_input(message_id)":
+        return mcp_server.get_input(message_id=msg_id)
+    if reader == "take_pending":
+        return "\n".join(m["body"] for m in store.take_pending(sid))
+    if reader == "claim":
+        return "\n".join(m["body"] for m in store.claim(sid))
+    raise AssertionError(reader)
+
+
+@pytest.mark.parametrize("reader", ["host", "monitor", "get_input()", "get_input(ref)", "get_input(message_id)",
+                                    "take_pending", "claim"])
+def test_a_reply_on_an_mcp_question_never_surfaces_through_any_reader(mcp_host, store, sid, reader):
+    ref = ask(mcp_host, store, sid, {"local-oauth": "needs-auth"})
+    store.send(sid, SEKRIT, ref)
+    msg_id = store.thread(sid, ref)[-1]["id"]
+    store.send(sid, "general")
+    shown = _surfaced(reader, mcp_host, store, sid, ref, msg_id)
+    assert "SEKRIT" not in shown, f"{reader}: the code surfaced"
+    if reader in ("monitor", "get_input()", "take_pending", "claim"):
+        assert "general" in shown, f"{reader}: the other messages still go"
+
+
+def test_closing_a_question_drops_the_reconnect_it_was_owed(mcp_host, store, sid, monkeypatch):
+    monkeypatch.setattr(host_mod, "MCP_WITHIN", 0.05)
+    mcp_host.client.then = "needs-auth"
+    ref = ask(mcp_host, store, sid, {"local-oauth": "needs-auth"})
+    mcp_host.client.callback_slow = 1
+    store.send(sid, PASTED, ref)
+    run(mcp_host.poll())
+    assert mcp_host.mcp_owed == {"local-oauth"}
+    store.update_item(sid, ref, status="closed")
+    run(mcp_host.check_mcp())
+    assert mcp_host.mcp_owed == set() and ("mcp_reconnect", "local-oauth") not in mcp_host.client.sent
+
+
+def test_a_reply_on_a_reopened_question_points_at_the_open_one(mcp_host, store, sid):
+    old = ask(mcp_host, store, sid, {"a": ("failed", "boom")})
+    store.update_item(sid, old, status="closed")
+    mcp_host.client.servers = {"a": ("failed", "a new error")}
+    run(mcp_host.check_mcp())
+    new = next(r for r in mcp_host.mcp_items)
+    store.update_item(sid, old, status="open")
+    store.send(sid, "done", old)
+    run(mcp_host.poll())
+    assert last_said(store, sid, old) == host_mod.MCP_ELSEWHERE.format(ref=new, name="a")
+    assert ("mcp_reconnect", "a") not in mcp_host.client.sent

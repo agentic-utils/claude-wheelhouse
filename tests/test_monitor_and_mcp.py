@@ -9,7 +9,7 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from claude_wheelhouse import monitor
-from claude_wheelhouse.store import PROTOCOL_VERSION
+from claude_wheelhouse.store import MCP_IN_TAB, PROTOCOL_VERSION
 
 
 @pytest.mark.parametrize("ref, body, kind, expected, desc", [
@@ -104,6 +104,28 @@ def test_poll_once_delivers_each_message_once(store, sid):
     assert monitor.poll_once(store, sid, out) == 1
     assert monitor.poll_once(store, sid, out) == 0
     assert out.getvalue().count("first") == 1
+
+
+@pytest.mark.parametrize("status, desc", [
+    ("closed", "closed by the host as it handed over to the tab"),
+    ("open", "reopened by the person meanwhile"),
+])
+def test_poll_once_never_passes_on_a_reply_on_an_mcp_question(store, sid, status, desc):
+    """After Shell the tab's monitor reads the person's messages: a reply on the host's MCP
+    question, a pasted sign-in code most of all, never reaches the session."""
+    from claude_wheelhouse.store import mcp_question
+    ref = store.post_marked_question(sid, "MCP local-oauth: sign in", "body", mcp_question("local-oauth"))
+    if status == "closed":
+        store.update_item(sid, ref, status="closed")
+    store.send(sid, "http://localhost:4321/callback?code=SECRET&state=x", ref)
+    store.send(sid, "general")
+    out = io.StringIO()
+    monitor.poll_once(store, sid, out)
+    assert "SECRET" not in out.getvalue() and "general" in out.getvalue(), desc
+    thread = store.thread(sid, ref)
+    assert all("SECRET" not in m["body"] for m in thread), f"{desc}: no code kept"
+    assert thread[-1]["body"] == MCP_IN_TAB, desc
+    assert monitor.poll_once(store, sid, out) == 0, f"{desc}: taken, not left for later"
 
 
 def test_mcp_server_round_trip(store, sid, db_file, tmp_path):
