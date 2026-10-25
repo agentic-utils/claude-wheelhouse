@@ -36,8 +36,10 @@ not the problem: their terminal has `/mcp`.
    `mcp_authenticate`. Any reply on the item is the host's, never a turn: a pasted redirect
    URL goes to `mcp_oauth_callback_url`, anything else to `mcp_reconnect`. The item closes
    once the server is connected (or disabled), saying so; a failed reconnect is replied on
-   the item and it stays open. No TUI, daemon or route change, so no `PROTOCOL_VERSION` or
-   `fingerprint.API` bump: items and replies already travel everywhere.
+   the item and it stays open. No TUI, daemon or route change and no `fingerprint.API` bump:
+   items and replies already travel everywhere. `PROTOCOL_VERSION` goes to 21, because
+   `Store.claim` now holds replies on MCP questions back from every reader but the host, and
+   an older monitor would still pass them on as turns.
 3. **An MCP panel in Session info** with status rows and Reconnect / Sign in buttons:
    status over a new daemon route, a host command per action. More surface for the same
    two calls, and it only helps when Doug goes looking; an item finds him.
