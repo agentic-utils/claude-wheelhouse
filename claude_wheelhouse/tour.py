@@ -71,6 +71,7 @@ CHECKS = {
 # row): what its callout keeps clear of (callout.place). A step not listed needs none: its
 # callout keeps clear of its own pane alone
 ROWS = {
+    "subagent": ("A",),   # the demo's subagent: after its reply, so its first turn (and A1) is done
     "inbox": ("Q",),
     "answer": ("Q",),
     "reply": ("Q",),
@@ -87,7 +88,7 @@ SHUN = {"close": "detail"}
 LIT = {
     "inbox": ("items",), "answer": ("items",), "reply": ("items",),
     "decision": ("items", "detail"), "close": ("items", "detail"), "docs": ("items", "detail"),
-    "conversation": ("items",), "ask": ("items",),
+    "conversation": ("items", "sessions"), "ask": ("items",), "subagent": ("detail",),
     "decisions": ("detail",), "prs": ("items", "detail"), "end": ("sessions",),
 }
 

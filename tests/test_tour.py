@@ -78,7 +78,7 @@ def test_a_wait_dialogs_next(at, given, ready, desc):
     ("reply", "demo", facts(sent=True), "stopped: its tab has closed", "stopped: its tab has closed", "notes",
      "a stopped demo: said, and Next goes to the notes"),
     ("decision", "demo", None, None, "the demo has ended", "notes", "an ended one, the same"),
-    ("reply", "demo", facts(sent=True), None, None, "decision", "running: Next is the next dialog"),
+    ("reply", "demo", facts(sent=True), None, None, "subagent", "running: Next is the next dialog"),
     ("create", None, None, "stopped: never", None, "sessions", "no demo yet: nothing to be dead"),
     ("stats", "demo", None, None, None, "decisions", "a Next dialog isn't waiting on the demo"),
 ])
