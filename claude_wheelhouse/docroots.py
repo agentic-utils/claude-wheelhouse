@@ -105,7 +105,8 @@ def allowed(real: Path, root: Path) -> str | None:
     """Why real, a resolved directory declared from a session whose git root is root, can't
     hold its decisions, None if it can: under root but not root itself, or in another git
     work tree (a sibling repo kept for docs) but not that tree's root. Anything in no git
-    repo is refused, so a session can't point the wheelhouse at arbitrary files."""
+    repo is refused, so a session can't point the wheelhouse at arbitrary files by mistake: a
+    guard, not a security boundary (a repo at ~ would admit everything under it)."""
     if real == root:
         return "is the git root itself: name the directory the decisions are in"
     if real.is_relative_to(root):
@@ -156,7 +157,7 @@ def decision_dirs(sessions) -> list[tuple[Path, Path]]:
     and "doc_dirs", declared or None), each with the git root of the repo that looks there:
     per git root, every directory the sessions there declared, else DEFAULT. Each resolved,
     and left out if it isn't a directory or isn't allowed (since it was declared, a link may
-    have moved). A directory several repos look in is listed once, with the first of them.
+    have moved). A directory several repos look in is listed once, with the one whose root sorts first.
     A session in no git repo adds none."""
     repos: dict[Path, set[str]] = {}
     for s in sessions:

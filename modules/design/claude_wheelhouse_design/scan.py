@@ -1,6 +1,7 @@
 """Where a repo's decisions are and what each says of itself (.plan/modules.md, "Design, a new
 module"; Q114): every NNNN-*.md file in the directories api.doc_dirs gives (docs/adr under
-each session's git root, unless a session there declared others with set_doc_dirs), with its
+each session's git root, unless a session there declared others with set_doc_dirs, perhaps
+in a sibling repo), with its
 number, status, title and repo. A file is read again only when its mtime or size has changed,
 so a scan every 10 s costs a directory listing and a stat a file. Never imports Textual."""
 
@@ -61,12 +62,11 @@ def front_matter(lines: list[str]) -> tuple[dict[str, str], int]:
 
 def parse(path: Path, text: str, repo: str) -> Decision | None:
     """What a decision's file says of itself, None if its name isn't NNNN-*.md
-    or names a template. Its status:
-    its front matter's, else a Status line or ## Status section in the doc, else its name's
+    or is NNNN-template.md. Its status: its front matter's, else a Status line or ## Status section in the doc, else its name's
     (0042-ACCEPTED-slug.md), else UNKNOWN. Its title: its front matter's, else its first #
     heading (a leading number such as "1. " or "ADR-0042: " left out), else its name's slug."""
     found = NAME.match(path.name)
-    if found is None or "template" in found[2].lower():   # 0000-template.md: a blank, not a decision
+    if found is None or found[2].lower() == "template":   # 0000-template.md: a blank, not a decision
         return None
     number, rest = found[1], found[2]
     named = WORD.match(rest)
