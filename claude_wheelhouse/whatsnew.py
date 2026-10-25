@@ -160,15 +160,16 @@ FEATURES: tuple[Feature, ...] = (
             note="A pressed button (Compact, Interrupt, Relaunch, Park, Fork...) stays off, dark grey, until what it "
                  "started has finished, or for 30 seconds with no word from the session.",
             tip="A pressed button stays dark grey until what it started has finished."),
-    Feature("pins", UNRELEASED, "close",
+    Feature("pins", UNRELEASED, "inbox",
             note="Pin any inbox item (📌, a click on its first column or P) and clearing the inbox leaves it; "
                  "docs come pinned.",
-            tip="Clearing leaves pinned items (📌): pin one with P, or a click on its first column."),
+            tip="Ctrl+A / Delete remove all finished items except those that are pinned (📌). Pin an item with P, "
+                "or click the first column."),
     Feature("doc-threads", UNRELEASED, "docs",
             note="A doc has a thread of its own: comment on it below the doc (split) or on a Thread tab (tabbed); "
                  "Ctrl+L switches the two, Ctrl+PgUp and Ctrl+PgDn the tabs.",
             tip="Comment on a doc in its thread, below it. Ctrl+L switches to tabs, Ctrl+PgUp and Ctrl+PgDn between them."),
-    Feature("kind-colours", UNRELEASED, "inbox",
+    Feature("kind-colours", UNRELEASED, "decision",
             note="An inbox item's ref is coloured by its kind (a task green, a question yellow, a decision purple, "
                  "a PR light blue), and resting the pointer on a row, there or in the session list, shows it in full.",
             tip="A ref's colour says its kind. Rest the pointer on a row to read its full title."),
@@ -181,8 +182,9 @@ FEATURES: tuple[Feature, ...] = (
             tip="It follows the session selected, as the inbox does. M: your sessions' PRs or all of yours."),
     Feature("session-menu", UNRELEASED, ADVANCED,
             note="Right-click a session in the session list for a menu of its buttons, acting on that session."),
-    Feature("send-now", UNRELEASED, ADVANCED,
-            note="Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits."),
+    Feature("send-now", UNRELEASED, "send",
+            note="Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits.",
+            tip="Alt+S allows you to send the answer you have just typed, bypassing the queue."),
     Feature("pr-actions", UNRELEASED, "prs",
             note="A PR in the PRs pane has Open, Merge and Request review buttons, and a right-click on its row gives "
                  "them as a menu: Merge asks first and says what stood in its way, and Request review asks the "
@@ -239,7 +241,7 @@ FEATURES: tuple[Feature, ...] = (
     Feature("bulk-clear-tip", UNRELEASED, "close",
             note="Ctrl+A in the inbox marks every finished item and Delete clears them together; F shows "
                  "finished items again.",
-            tip="Ctrl+A marks every finished item and Delete clears them all; F shows finished ones again."),
+            tip="F shows finished items, or hides them again."),
     Feature("fork-tip", UNRELEASED, "end",
             note="Fork (K) carries a session on in a copy, in a new worktree, taking the items you choose.",
             tip="Fork (K) carries a session on in a copy, in a new worktree."),
@@ -251,7 +253,7 @@ FEATURES: tuple[Feature, ...] = (
             note="A hosted session asking to run a tool shows in the inbox as an orange row: 1 Allow, 2 Always, "
                  "3 Deny.",
             tip="An orange row asks to run a tool: 1 Allow, 2 Always, 3 Deny."),
-    Feature("interrupt-shell-tip", UNRELEASED, "send", when="sdk",
+    Feature("interrupt-shell-tip", UNRELEASED, "ask", when="sdk",
             note="Interrupt (I) stops a hosted session's turn; Shell (H) opens it in a real tab, for slash "
                  "commands.",
             tip="I interrupts a turn. H opens the session in a real tab, for slash commands."),

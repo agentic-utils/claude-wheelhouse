@@ -88,7 +88,7 @@ SHUN = {"close": "detail"}
 LIT = {
     "inbox": ("items",), "answer": ("items",), "reply": ("items",),
     "decision": ("items", "detail"), "close": ("items", "detail"), "docs": ("items", "detail"),
-    "conversation": ("items",), "ask": ("items",),
+    "conversation": ("items", "sessions"), "ask": ("items",), "subagent": ("detail",),
     "decisions": ("detail",), "prs": ("items", "detail"), "end": ("sessions",),
 }
 
