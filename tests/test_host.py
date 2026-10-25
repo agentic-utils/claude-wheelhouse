@@ -2372,6 +2372,7 @@ class McpClient(FakeClient):
     def __init__(self, options=None):
         super().__init__(options)
         self.servers, self.then, self.refuse, self.slow, self.sent, self.down = {}, "connected", None, 0, [], False
+        self.callback_slow = 0   # seconds the answer to a pasted URL takes, its sign-in already stored
         self.signed_in: set[str] = set()
         self._query = SimpleNamespace(_send_control_request=self.control)
 
@@ -2404,6 +2405,7 @@ class McpClient(FakeClient):
             return {"authUrl": SLACK_URL, "requiresUserAction": True, "callbackExpected": False}
         if request["subtype"] == "mcp_oauth_callback_url":
             self.signed_in.add(request["serverName"])
+            await asyncio.sleep(self.callback_slow)
             return {}
         raise AssertionError(request)
 
@@ -2560,7 +2562,7 @@ def test_mcp_reply_after_the_host_has_gone_is_never_a_turn(mcp_host, store, sid,
     assert fresh.client.queries == [], f"{desc}: the reply never reaches the session"
     assert ("mcp_oauth_callback_url", "local-oauth") not in fresh.client.sent, desc
     assert all("SECRET" not in m["body"] for m in store.thread(sid, ref)), f"{desc}: no code kept"
-    assert last_said(store, sid, ref) == host_mod.MCP_STALE, desc
+    assert last_said(store, sid, ref) == host_mod.MCP_CLOSED, desc
 
 
 def test_mcp_questions_go_with_their_claude_code(mcp_host, store, sid):
@@ -2576,3 +2578,39 @@ def test_mcp_questions_go_with_their_claude_code(mcp_host, store, sid):
     assert len(mcp_questions(store, sid)) == 1
     mcp_host.close_mcp(host_mod.MCP_SHELL)
     assert mcp_questions(store, sid) == [] and mcp_host.mcp_items == {}
+
+
+def test_mcp_reconnect_owed_after_the_cap_cut_a_sign_in_short(mcp_host, store, sid, monkeypatch):
+    """The cap fired while Claude Code answered the pasted URL: the next check sends the
+    reconnect the sign-in is owed, and the question closes."""
+    monkeypatch.setattr(host_mod, "MCP_WITHIN", 0.05)
+    mcp_host.client.then = "needs-auth"
+    ref = ask(mcp_host, store, sid, {"local-oauth": "needs-auth"})
+    mcp_host.client.callback_slow = 1
+    store.send(sid, PASTED, ref)
+    run(mcp_host.poll())
+    assert "Still reconnecting" in last_said(store, sid, ref)
+    assert ("mcp_reconnect", "local-oauth") not in mcp_host.client.sent
+    run(mcp_host.check_mcp())
+    assert ("mcp_reconnect", "local-oauth") in mcp_host.client.sent
+    assert store.item(sid, ref)["status"] == "closed" and mcp_host.mcp_owed == set()
+
+
+@pytest.mark.parametrize("reopen, reconnects, note, desc", [
+    (False, False, "MCP_CLOSED", "closed by the person: nothing acted on, and the note says why"),
+    (True, True, None, "reopened by the person: the host's again, and the reply reconnects"),
+])
+def test_mcp_reply_on_a_question_the_person_closed(mcp_host, store, sid, reopen, reconnects, note, desc):
+    ref = ask(mcp_host, store, sid, {"claude.ai Slack": "needs-auth"})
+    store.update_item(sid, ref, status="closed")
+    run(mcp_host.check_mcp())   # dropped: no longer the host's
+    if reopen:
+        store.update_item(sid, ref, status="open")
+    store.send(sid, "done", ref)
+    run(mcp_host.poll())
+    assert (("mcp_reconnect", "claude.ai Slack") in mcp_host.client.sent) is reconnects, desc
+    assert mcp_host.client.queries == [], desc
+    if note:
+        assert last_said(store, sid, ref) == getattr(host_mod, note), desc
+    else:
+        assert store.item(sid, ref)["status"] == "closed", f"{desc}: connected, so closed"

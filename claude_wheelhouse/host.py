@@ -35,8 +35,8 @@ from pathlib import Path
 from . import features, liveness, models, plan_usage, steps, transcript, transcript_usage
 from .launch import PROTOCOL_SDK, after_compaction, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT, request_text
-from .store import (CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, SessionGone, Store, db_path, mcp_question,
-                    mcp_server, now, runner, wheelhouse_question)
+from .store import (CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, SessionGone, Store, callback_url, db_path,
+                    mcp_question, mcp_server, now, runner, wheelhouse_question)
 
 POLL_SECONDS = 1.0
 SHELL_POLL_SECONDS = 2.0
@@ -99,8 +99,8 @@ MCP_WITHIN = 20   # seconds a reply's sign-in and reconnect may take before the 
 MCP_GONE = "The wheelhouse host restarted: it checks the MCP servers again as it starts."
 MCP_SHELL = "Handed to a shell tab: /mcp there manages MCP servers."
 MCP_STOPPED = "The wheelhouse host stopped: it checks the MCP servers again when the session next runs."
-MCP_STALE = ("This question was about a Claude Code that has since stopped, so nothing acted on the reply. "
-             "The wheelhouse asks again if the server still needs you.")
+MCP_CLOSED = ("This question is closed, so the wheelhouse didn't act on the reply. A new question comes "
+              "if the server needs you again.")
 
 
 def mcp_item(name: str, server: dict, auth: dict | None) -> tuple[str, str]:
@@ -128,17 +128,6 @@ def mcp_item(name: str, server: dict, auth: dict | None) -> tuple[str, str]:
         body = (f"{head} Claude Code gave no sign-in link: Shell (H) opens this session in a tab, where "
                 "/mcp signs in; or reply here to reconnect it.")
     return title, f"{body} This closes by itself once it's connected."
-
-
-def callback_url(text: str) -> str | None:
-    """An OAuth redirect URL pasted as a reply: one carrying a code or an error."""
-    m = re.search(r"https?://\S+[?&](?:code|error)=\S*", text or "")
-    return m.group(0) if m else None
-
-
-def redacted(text: str) -> str:
-    """A reply with any OAuth redirect URL's query (its one-time code) taken out, as kept."""
-    return re.sub(r"(https?://[^\s?]+)\?\S*(?:code|error)=\S*", r"\1?[redacted]", text)
 
 
 CHECK_BODY = ("Check: {items}. Correct any that's finished with update_item or reply, then reply ok. "
@@ -357,6 +346,8 @@ class Host:
         # only once that changes (a new failure), never for the same one
         self.mcp_quiet: dict[str, tuple] = {}
         self.mcp_flows: dict[str, float] = {}   # when each local OAuth flow started (monotonic)
+        # servers signed in by a pasted URL and not yet reconnected (the cap cut in): each check retries
+        self.mcp_owed: set[str] = set()
         self.mcp_checked = 0.0   # when the MCP servers were last checked (monotonic)
         self.mcp_lock_for: tuple | None = None   # (event loop, lock): check_mcp one at a time
 
@@ -710,18 +701,17 @@ class Host:
         """The person's messages, as one turn (or to the call waiting on one), and End and
         Park requests. Held (hold): only what a call waiting on the person takes goes; the
         rest is left unclaimed, and no request is told."""
-        msgs = self.store.claim(self.sid)
+        mcp, msgs = self.store.take_mcp_replies(self.sid, self.store.claim(self.sid))
         self.forget_delivered()
         handed = {m["id"]: ref for ref, m in self.handed.items()}
-        again, turn, mcp, marks = [], [], [], {}
+        again, turn = [m for m in mcp if m["id"] in self.delivered], []
+        mcp = [m for m in mcp if m["id"] not in self.delivered]
         for m in msgs:
             ref = m["item_ref"]
             if m["id"] in self.delivered:   # passed on, but never marked
                 again.append(m)
             elif m["id"] in handed:   # still with its call, claimed again as stale: keep the new claim
                 self.handed[handed[m["id"]]] = m
-            elif ref in self.mcp_items or self.mcp_marked(ref, marks):
-                mcp.append(m)
             elif ref in self.waiting and not self.waiting[ref].done():
                 self.handed[ref] = m
                 self.waiting[ref].set_result(m["body"])
@@ -1115,6 +1105,7 @@ class Host:
     async def check_mcp_now(self) -> None:
         self.mcp_checked = time.monotonic()
         self.mcp_dropped()
+        await self.mcp_pay_owed()
         servers = {s["name"]: s for s in (await self.client.get_mcp_status()).get("mcpServers", [])}
         asked = {name: ref for ref, name in self.mcp_items.items()}
         for name, server in servers.items():
@@ -1157,34 +1148,35 @@ class Host:
             self.mcp_flows[name] = time.monotonic()
         return auth
 
-    def mcp_marked(self, ref: str | None, marks: dict) -> bool:
-        """Whether ref is an MCP question, this host's or an earlier one's: a reply on one is
-        never a turn, whatever happened to the host that asked it."""
-        if not ref:
-            return False
-        if ref not in marks:
-            item = self.store.item(self.sid, ref)
-            marks[ref] = bool(item and item["kind"] == "question" and mcp_server(item["answer"]))
-        return marks[ref]
-
     async def mcp_replies(self, msgs) -> None:
         """The person's replies on MCP questions, acted on once per question, however many
-        came in one poll; a pasted redirect URL's code is taken out of what is kept."""
+        came in one poll (the store has taken a pasted redirect URL's code out of what is
+        kept). One on a question the person reopened is taken up again; one on a closed
+        question gets a note saying nothing acted on it."""
         by_ref: dict[str, list] = {}
         for m in msgs:
             by_ref.setdefault(m["item_ref"], []).append(m)
         for ref, ms in by_ref.items():
             url = next((u for u in (callback_url(m["body"]) for m in reversed(ms)) if u), None)
             try:
-                for m in ms:
-                    if redacted(m["body"]) != m["body"]:
-                        self.store.redact_message(self.sid, m["id"], redacted(m["body"]))
+                if ref not in self.mcp_items:
+                    self.mcp_adopt(ref)
                 if ref in self.mcp_items:
                     await self.mcp_reply(ref, url)
                 else:
-                    self.store.update_item(self.sid, ref, note=MCP_STALE)
+                    self.store.update_item(self.sid, ref, note=MCP_CLOSED)
             except Exception as e:
                 print(f"{now()} the reply on MCP question {ref} failed: {e}", file=sys.stderr, flush=True)
+
+    def mcp_adopt(self, ref: str) -> None:
+        """An MCP question open again (the person reopened it): the host's once more. Its
+        link may be a dead sign-in's, so a reply that doesn't connect brings a fresh one."""
+        item = self.store.item(self.sid, ref)
+        name = mcp_server(item["answer"]) if item else None
+        if name and item["status"] not in CLOSED and name not in self.mcp_items.values():
+            self.mcp_items[ref] = name
+            self.mcp_quiet.pop(name, None)
+            self.mcp_flows[name] = float("-inf")
 
     async def mcp_reply(self, ref: str, url: str | None) -> None:
         """A reply on an MCP question: a pasted redirect URL finishes the sign-in waiting on
@@ -1219,14 +1211,30 @@ class Host:
 
     async def mcp_connect(self, name: str, url: str | None) -> None:
         if url:
-            await self.control({"subtype": "mcp_oauth_callback_url", "serverName": name, "callbackUrl": url})
+            self.mcp_owed.add(name)   # owed a reconnect from here, even if the cap cuts in
+            try:
+                await self.control({"subtype": "mcp_oauth_callback_url", "serverName": name, "callbackUrl": url})
+            except Exception:
+                self.mcp_owed.discard(name)
+                raise
             self.mcp_flows.pop(name, None)
         await self.client.reconnect_mcp_server(name)
+        self.mcp_owed.discard(name)
+
+    async def mcp_pay_owed(self) -> None:
+        """The reconnect a pasted URL's sign-in is owed, when the cap cut in before it went."""
+        for name in list(self.mcp_owed):
+            try:
+                await asyncio.wait_for(self.client.reconnect_mcp_server(name), MCP_WITHIN)
+                self.mcp_owed.discard(name)
+            except Exception as e:   # the sign-in may still be finishing: the next check tries again
+                print(f"{now()} the owed reconnect of {name} failed: {e}", file=sys.stderr, flush=True)
 
     def settle_mcp(self, ref: str, note: str) -> None:
         name = self.mcp_items.pop(ref, None)
         self.mcp_asked.pop(name, None)
         self.mcp_flows.pop(name, None)
+        self.mcp_owed.discard(name)
         self.close_quietly(ref, "question", note)
 
     def close_mcp(self, why: str) -> None:

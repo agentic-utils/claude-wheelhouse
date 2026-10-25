@@ -138,6 +138,17 @@ def mcp_server(answer: str | None) -> str | None:
     return mark.get("server") if isinstance(mark, dict) and mark.get("from") == MCP_FROM else None
 
 
+def callback_url(text: str) -> str | None:
+    """An OAuth redirect URL pasted as a reply: one carrying a code or an error."""
+    m = re.search(r"https?://\S+[?&](?:code|error)=\S*", text or "")
+    return m.group(0) if m else None
+
+
+def redacted(text: str) -> str:
+    """A reply with any OAuth redirect URL's query (its one-time code) taken out, as kept."""
+    return re.sub(r"(https?://[^\s?]+)\?\S*(?:code|error)=\S*", r"\1?[redacted]", text)
+
+
 def wheelhouse_question(answer: str | None) -> bool:
     """A question the wheelhouse asks the person itself (Compact, an MCP server), not the
     session: it never means the session waits on the person, nor is the session told it."""
@@ -1085,6 +1096,25 @@ class Store:
     def post_compact_question(self, sid: str, title: str, body: str) -> str:
         """The host's question suggesting Compact, marked (COMPACT_QUESTION) as it is posted."""
         return self.post_marked_question(sid, title, body, COMPACT_QUESTION)
+
+    def take_mcp_replies(self, sid: str, msgs) -> tuple[list, list]:
+        """Claimed messages split into the person's replies on MCP questions (marked
+        mcp_question) and the rest. Every reader of the person's messages (the host, a shell
+        tab's monitor) splits through this, so none passes such a reply on as a turn. The
+        replies' kept bodies are redacted (a pasted redirect URL's one-time code); the rows
+        returned are as sent, for the host to act on."""
+        marks: dict[str, bool] = {}
+        mcp, rest = [], []
+        for m in msgs:
+            ref = m["item_ref"]
+            if ref and ref not in marks:
+                item = self.item(sid, ref)
+                marks[ref] = bool(item and item["kind"] == "question" and mcp_server(item["answer"]))
+            (mcp if ref and marks[ref] else rest).append(m)
+        for m in mcp:
+            if redacted(m["body"]) != m["body"]:
+                self.redact_message(sid, m["id"], redacted(m["body"]))
+        return mcp, rest
 
     def redact_message(self, sid: str, msg_id: int, body: str) -> None:
         """A message's body replaced by a redacted copy: a pasted secret, once used, not kept."""

@@ -95,6 +95,10 @@ REQUEST_TEXT = {
 END_MECHANICS = "Then call end_session: this session stops once it returns."
 
 
+MCP_IN_TAB = ("This session is in a terminal tab, so nothing acted on the reply: /mcp in the tab manages "
+              "MCP servers.")
+
+
 def request_text(store: Store, what: str, sep: str = "\n\n") -> str:
     """A request as the session is told it. End is the Before Forget step (steps.py): its
     announce and add-ons as switched, then end_session; Park keeps its own text."""
@@ -125,7 +129,14 @@ def poll_once(store: Store, sid: str, out=sys.stdout) -> int | None:
     if session is None:
         print(GONE_TEXT, file=out, flush=True)
         return None
-    msgs = store.claim(sid)
+    mcp, msgs = store.take_mcp_replies(sid, store.claim(sid))
+    if mcp:   # the host's questions, never the session's turn: nothing here acts on them
+        retry(lambda: store.confirm(mcp))
+        for ref in dict.fromkeys(m["item_ref"] for m in mcp):
+            try:
+                store.update_item(sid, ref, note=MCP_IN_TAB)
+            except KeyError:
+                pass
     shown = 0
     try:
         if msgs:   # everything sent since the last poll, as one notification
