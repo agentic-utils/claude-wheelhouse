@@ -60,8 +60,8 @@ DIALOGS = (
          "Every Claude session in one place. Sessions ask you questions, record decisions and report tasks, "
          "all in one inbox. A session that needs you says so in its row, so you never hunt through tabs.\n\n"
          "Press ? (outside a text box) for every key and button.", NEXT),
-    Stop("create", "sessions", "Starting a session", "Start a session: press N, or the button, to create a demo session.",
-         ACTION, button="New session (N)"),
+    Stop("create", "sessions", "Starting a session", "",
+         ACTION, ask="Start a session: press N, or the button, to create a demo session.", button="New session (N)"),
     Stop("sessions", "sessions", "The session list",
          "This is your demo. Its row shows whether it's working, idle or needs you. It runs in a tab (or here, "
          "in SDK mode): you won't need to look at it.",
