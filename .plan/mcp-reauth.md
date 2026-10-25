@@ -48,6 +48,15 @@ not the problem: their terminal has `/mcp`.
   a shell tab) closes any left open, and the next check posts fresh ones with fresh URLs (a
   local OAuth flow dies with its process). Shell closes them as it hands over: `/mcp` in
   the tab is the way then.
+- A pasted redirect URL goes to `mcp_oauth_callback_url`, then `mcp_reconnect` (the CLI
+  leaves the reconnect to its caller then). Its query string is redacted once used. A local
+  flow lasts 300 s: a reply after that starts a fresh `mcp_authenticate` and posts its link.
+- Replies are acted on once per question per poll, bounded to 20 s; no MCP failure stops the
+  host. The host closes its questions when it stops, and a reply on any MCP question, even
+  an earlier host's, is never a turn.
+- A failed claude.ai connector or HTTP/SSE server gets a sign-in link too (a rejected token
+  shows as failed). Checks are serialised. Closing the question means "not now": that
+  server is asked about again only after a new failure.
 - They are left out of what makes a session "wait on the person" (keepalive) and of the
   open items a session is told after compaction, as the Compact question is.
 - A check that fails (old CLI, a fake client) is a nicety lost, never the session.

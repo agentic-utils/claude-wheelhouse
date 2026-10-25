@@ -1086,6 +1086,11 @@ class Store:
         """The host's question suggesting Compact, marked (COMPACT_QUESTION) as it is posted."""
         return self.post_marked_question(sid, title, body, COMPACT_QUESTION)
 
+    def redact_message(self, sid: str, msg_id: int, body: str) -> None:
+        """A message's body replaced by a redacted copy: a pasted secret, once used, not kept."""
+        with self.tx() as db:
+            db.execute("UPDATE messages SET body = ? WHERE session_id = ? AND id = ?", (body, sid, msg_id))
+
     def post_marked_question(self, sid: str, title: str, body: str, mark: str) -> str:
         """A question of the host's own, marked in its answer column as it is posted: one
         transaction, so no reader sees it unmarked."""

@@ -2358,39 +2358,52 @@ def test_a_park_unparked_while_it_waits_for_its_turn_stops_saying_so(host, store
 
 SLACK_URL = "https://claude.ai/api/organizations/o/mcp/start-auth/s?product_surface=sdk-py"
 LOCAL_URL = "https://auth.example.com/authorize?state=x"
+PASTED = "here: http://localhost:4321/callback?code=SECRET&state=x"
 
 
 class McpClient(FakeClient):
-    """FakeClient with MCP servers: get_mcp_status reports `servers` (name: status, or
-    (status, error)); reconnect_mcp_server sets the server to `then` (connected by default)
-    or raises `refuse`; mcp_authenticate answers as Claude Code does for a claude.ai
-    connector, or for a local OAuth server when its name starts local."""
+    """FakeClient with MCP servers, answering as Claude Code does. get_mcp_status reports
+    `servers` (name: status, or (status, error), or (status, error, config type));
+    reconnect_mcp_server connects a server signed in by a pasted URL, else sets it to `then`,
+    or raises `refuse`, or takes `slow` seconds; mcp_authenticate answers for a claude.ai
+    connector, or for a local OAuth server (a name starting local) with a callback expected;
+    mcp_oauth_callback_url stores the sign-in and leaves the reconnect to its caller."""
 
     def __init__(self, options=None):
         super().__init__(options)
-        self.servers, self.then, self.refuse, self.sent, self.down = {}, "connected", None, [], False
+        self.servers, self.then, self.refuse, self.slow, self.sent, self.down = {}, "connected", None, 0, [], False
+        self.signed_in: set[str] = set()
         self._query = SimpleNamespace(_send_control_request=self.control)
 
     async def get_mcp_status(self):
         if self.down:
             raise Exception("Control request timeout: mcp_status")
-        return {"mcpServers": [{"name": n, "status": s if isinstance(s, str) else s[0],
-                                **({} if isinstance(s, str) else {"error": s[1]})} for n, s in self.servers.items()]}
+        out = []
+        for n, s in self.servers.items():
+            status, error, kind = (s, None, None) if isinstance(s, str) else (*s, None)[:3]
+            out.append({"name": n, "status": status, **({"error": error} if error else {}),
+                        **({"config": {"type": kind}} if kind else {})})
+        return {"mcpServers": out}
 
     async def reconnect_mcp_server(self, name):
         self.sent.append(("mcp_reconnect", name))
+        if self.slow:
+            await asyncio.sleep(self.slow)
         if self.refuse:
             raise Exception(self.refuse)
-        self.servers[name] = self.then
+        self.servers[name] = "connected" if name in self.signed_in else self.then
 
     async def control(self, request, timeout=60.0):
+        if request["subtype"] == "get_settings":
+            return {"applied": {}}
         self.sent.append((request["subtype"], request["serverName"]))
         if request["subtype"] == "mcp_authenticate":
+            await asyncio.sleep(0)   # a real round trip: another check may run meanwhile
             if request["serverName"].startswith("local"):
                 return {"authUrl": LOCAL_URL, "requiresUserAction": True, "callbackExpected": True, "callbackPort": 4321}
             return {"authUrl": SLACK_URL, "requiresUserAction": True, "callbackExpected": False}
         if request["subtype"] == "mcp_oauth_callback_url":
-            self.servers[request["serverName"]] = "connected"
+            self.signed_in.add(request["serverName"])
             return {}
         raise AssertionError(request)
 
@@ -2407,10 +2420,23 @@ def mcp_questions(store, sid, include_closed=False):
     return [i for i in store.items(sid, include_closed=include_closed) if host_mod.mcp_server(i["answer"])]
 
 
+def ask(h, store, sid, servers):
+    """The host checks with servers as given: the ref of the one question it asks."""
+    h.client.servers = dict(servers)
+    run(h.check_mcp())
+    return mcp_questions(store, sid)[0]["ref"]
+
+
+def last_said(store, sid, ref):
+    return store.thread(sid, ref)[-1]["body"]
+
+
 @pytest.mark.parametrize("servers, titles, says, desc", [
     ({"claude.ai Slack": "needs-auth"}, ["MCP claude.ai Slack: sign in"], SLACK_URL, "a connector: its claude.ai link"),
     ({"local-oauth": "needs-auth"}, ["MCP local-oauth: sign in"], "paste the address", "a local server: its OAuth link"),
     ({"sentry": ("failed", "ECONNREFUSED")}, ["MCP sentry failed"], "ECONNREFUSED", "failed: its error"),
+    ({"remote": ("failed", "401 Unauthorized", "http")}, ["MCP remote failed"], SLACK_URL,
+     "a remote server failed: maybe a rejected token, so a sign-in link too"),
     ({"a": "connected", "b": "pending", "c": "disabled"}, [], None, "nothing to ask"),
 ])
 def test_mcp_check_asks_about_a_server_needing_the_person(mcp_host, store, sid, servers, titles, says, desc):
@@ -2425,42 +2451,82 @@ def test_mcp_check_asks_about_a_server_needing_the_person(mcp_host, store, sid, 
         f"{desc}: the wheelhouse's own question, not the session's"
 
 
-def test_mcp_reply_reconnects_and_closes_without_a_turn(mcp_host, store, sid):
+def test_mcp_checks_at_once_ask_once(mcp_host, store, sid):
+    """The reader (a turn's end) and the poll both check, each awaiting mcp_authenticate."""
     mcp_host.client.servers = {"claude.ai Slack": "needs-auth"}
-    run(mcp_host.check_mcp())
-    ref = mcp_questions(store, sid)[0]["ref"]
-    store.send(sid, "done", ref)
-    run(mcp_host.poll())
-    assert ("mcp_reconnect", "claude.ai Slack") in mcp_host.client.sent
-    assert mcp_host.client.queries == [], "the reply is the host's, never a turn"
-    assert store.item(sid, ref)["status"] == "closed" and mcp_host.mcp_items == {}
+
+    async def both():
+        await asyncio.gather(mcp_host.check_mcp(), mcp_host.check_mcp())
+    run(both())
+    assert len(mcp_questions(store, sid)) == 1
 
 
-def test_mcp_reply_with_a_redirect_url_finishes_the_sign_in(mcp_host, store, sid):
-    mcp_host.client.servers = {"local-oauth": "needs-auth"}
-    run(mcp_host.check_mcp())
-    ref = mcp_questions(store, sid)[0]["ref"]
-    store.send(sid, "here: http://localhost:4321/callback?code=abc&state=x", ref)
-    run(mcp_host.poll())
-    assert ("mcp_oauth_callback_url", "local-oauth") in mcp_host.client.sent
-    assert ("mcp_reconnect", "local-oauth") not in mcp_host.client.sent
-    assert store.item(sid, ref)["status"] == "closed"
-
-
-@pytest.mark.parametrize("refuse, then, says, desc", [
-    ("Server not found", "connected", "Reconnecting claude.ai Slack failed: Server not found", "the reconnect refused"),
-    (None, "needs-auth", "isn't connected yet", "reconnected, but still not signed in"),
+@pytest.mark.parametrize("replies, server, sent, desc", [
+    (["done"], "claude.ai Slack", [("mcp_reconnect", "claude.ai Slack")], "a reply reconnects"),
+    (["done", "done again"], "claude.ai Slack", [("mcp_reconnect", "claude.ai Slack")],
+     "two replies in one poll: acted on once"),
+    ([PASTED], "local-oauth", [("mcp_oauth_callback_url", "local-oauth"), ("mcp_reconnect", "local-oauth")],
+     "a pasted redirect URL finishes the sign-in, then reconnects, as Claude Code leaves that to its caller"),
 ])
-def test_mcp_reply_that_doesnt_connect_says_so_and_stays_open(mcp_host, store, sid, refuse, then, says, desc):
-    mcp_host.client.servers = {"claude.ai Slack": "needs-auth"}
-    mcp_host.client.refuse, mcp_host.client.then = refuse, then
-    run(mcp_host.check_mcp())
-    ref = mcp_questions(store, sid)[0]["ref"]
+def test_mcp_reply_connects_and_closes_without_a_turn(mcp_host, store, sid, replies, server, sent, desc):
+    mcp_host.client.then = "needs-auth"   # only a sign-in connects it
+    if server == "claude.ai Slack":
+        mcp_host.client.then = "connected"
+    ref = ask(mcp_host, store, sid, {server: "needs-auth"})
+    for r in replies:
+        store.send(sid, r, ref)
+    assert run(mcp_host.poll()), f"{desc}: the host carries on"
+    assert [x for x in mcp_host.client.sent if x[0] != "mcp_authenticate"] == sent, desc
+    assert mcp_host.client.queries == [], f"{desc}: the reply is the host's, never a turn"
+    assert store.item(sid, ref)["status"] == "closed" and mcp_host.mcp_items == {}, desc
+    assert all("SECRET" not in m["body"] for m in store.thread(sid, ref)), f"{desc}: no code kept"
+
+
+@pytest.mark.parametrize("setup, says, desc", [
+    (lambda c: setattr(c, "refuse", "Server not found"), "Reconnecting claude.ai Slack failed: Server not found",
+     "the reconnect refused"),
+    (lambda c: setattr(c, "then", "needs-auth"), "isn't connected yet", "reconnected, but still not signed in"),
+    (lambda c: setattr(c, "slow", 1), "Still reconnecting", "a slow reconnect: the poll moves on"),
+])
+def test_mcp_reply_that_doesnt_connect_says_so_and_stays_open(mcp_host, store, sid, monkeypatch, setup, says, desc):
+    monkeypatch.setattr(host_mod, "MCP_WITHIN", 0.05)
+    ref = ask(mcp_host, store, sid, {"claude.ai Slack": "needs-auth"})
+    setup(mcp_host.client)
     store.send(sid, "done", ref)
-    run(mcp_host.poll())
+    assert run(mcp_host.poll()), desc
     assert store.item(sid, ref)["status"] == "open", desc
-    assert says in store.thread(sid, ref)[-1]["body"], desc
+    assert says in last_said(store, sid, ref), desc
     assert len(mcp_questions(store, sid)) == 1, f"{desc}: no second question"
+
+
+@pytest.mark.parametrize("age, fresh, desc", [
+    (host_mod.MCP_FLOW_LIFE + 10, True, "expired: a reply starts a fresh sign-in and posts its link"),
+    (10, False, "still waiting on the browser: no new sign-in"),
+])
+def test_mcp_reply_refreshes_an_expired_local_sign_in(mcp_host, store, sid, age, fresh, desc):
+    mcp_host.client.then = "needs-auth"
+    ref = ask(mcp_host, store, sid, {"local-oauth": "needs-auth"})
+    mcp_host.mcp_flows["local-oauth"] -= age
+    store.send(sid, "it timed out", ref)
+    run(mcp_host.poll())
+    starts = [x for x in mcp_host.client.sent if x[0] == "mcp_authenticate"]
+    assert len(starts) == (2 if fresh else 1), desc
+    assert (LOCAL_URL in last_said(store, sid, ref)) is fresh, desc
+    assert store.item(sid, ref)["status"] == "open", desc
+
+
+@pytest.mark.parametrize("later, asked_again, desc", [
+    ({"a": ("failed", "boom")}, False, "the same failure: left alone"),
+    ({"a": ("failed", "a new error")}, True, "a new failure: asked again"),
+    ({"a": "connected"}, False, "well again: nothing to ask"),
+])
+def test_mcp_question_closed_by_the_person_isnt_nagged(mcp_host, store, sid, later, asked_again, desc):
+    ref = ask(mcp_host, store, sid, {"a": ("failed", "boom")})
+    store.update_item(sid, ref, status="closed")
+    mcp_host.client.servers = later
+    run(mcp_host.check_mcp())
+    assert mcp_host.mcp_items.get(ref) is None, f"{desc}: no longer the host's, so no 30 s rechecks for it"
+    assert len(mcp_questions(store, sid)) == (1 if asked_again else 0), desc
 
 
 def test_mcp_question_closes_once_connected_and_when_gone(mcp_host, store, sid):
@@ -2475,6 +2541,26 @@ def test_mcp_check_failing_is_not_the_sessions_end(mcp_host, store, sid):
     mcp_host.client.down = True
     run(mcp_host.check_mcp())
     assert mcp_questions(store, sid) == []
+
+
+@pytest.mark.parametrize("stopped, desc", [
+    (True, "the host stopped (parked, ended): it closed its questions"),
+    (False, "the host died: it couldn't"),
+])
+def test_mcp_reply_after_the_host_has_gone_is_never_a_turn(mcp_host, store, sid, monkeypatch, stopped, desc):
+    ref = ask(mcp_host, store, sid, {"local-oauth": "needs-auth"})
+    if stopped:
+        mcp_host.close_mcp(host_mod.MCP_STOPPED)
+        assert mcp_questions(store, sid) == [], desc
+    store.send(sid, PASTED, ref)
+    fresh = Host(store, sid, client_factory=McpClient, person="doug")
+    fresh.deny_stale()
+    run(fresh.connect())
+    run(fresh.poll())
+    assert fresh.client.queries == [], f"{desc}: the reply never reaches the session"
+    assert ("mcp_oauth_callback_url", "local-oauth") not in fresh.client.sent, desc
+    assert all("SECRET" not in m["body"] for m in store.thread(sid, ref)), f"{desc}: no code kept"
+    assert last_said(store, sid, ref) == host_mod.MCP_STALE, desc
 
 
 def test_mcp_questions_go_with_their_claude_code(mcp_host, store, sid):
