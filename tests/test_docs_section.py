@@ -21,7 +21,8 @@ def doc(store, sid, tmp_path):
 
 async def select(app, pilot, ref: str) -> None:
     await pilot.pause()
-    app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(f"└ {ref}"))   # in its session's group
+    app.items_table.move_cursor(row=next(i for i, r in enumerate(item_list_rows(app))
+                                         if r[1] in (ref, f"└ {ref}")))   # its session's group's head, or in it
     await pilot.pause()
 
 
@@ -189,6 +190,46 @@ async def test_a_reposted_doc_reloads_where_it_was_scrolled(store, sid, tmp_path
         await pilot.pause()
         assert "Revised prose." in app._detail_text and store.item(sid, ref)["status"] == "updated"
         assert app.detail_scroll.scroll_y == 40, "the reading place kept"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("other, desc", [("doc", "another doc"), ("question", "a question with a long body")])
+async def test_another_item_after_a_doc_read_to_the_end_shows_from_the_top(store, sid, tmp_path, other, desc):
+    """#177: the scrollbar's thumb back at the top of its travel too, not left where the
+    last doc was read to, and the next scroll from the top."""
+    path = tmp_path / "long.md"
+    path.write_text(LONG)
+    first = store.post_doc(sid, "long", str(path))
+    if other == "doc":
+        (tmp_path / "next.md").write_text(LONG.replace("Section", "Part"))
+        second = store.post_doc(sid, "next", str(tmp_path / "next.md"))
+    else:
+        second = store.post_item(sid, other, "which?", LONG)
+    for ref in (first, second):
+        store.mark_seen(sid, ref)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        scroll, bar = app.detail_scroll, app.detail_scroll.vertical_scrollbar
+        await select(app, pilot, first)
+        scroll.scroll_end(animate=False)
+        await pilot.pause()
+        assert scroll.scroll_y > 0 and bar.position == scroll.scroll_y, f"{desc}: the first doc read to its end"
+        await select(app, pilot, second)
+        await pilot.pause(0.2)
+        assert scroll.max_scroll_y > 0, f"{desc}: long enough to scroll"
+        assert (scroll.scroll_y, scroll.scroll_target_y, bar.position) == (0, 0, 0), f"{desc}: shown, thumb and target at the top"
+        app.items_table.focus()
+        app.set_focus(None)
+        scroll.scroll_down(animate=False)
+        await pilot.pause()
+        assert scroll.scroll_y == 1, f"{desc}: the next scroll goes on from the top"
+        if other == "doc":   # full screen: its own scroll, from the top too
+            app.items_table.focus()
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            full = app.screen.query_one("#docview-scroll")
+            assert isinstance(app.screen, tui.DocView) and full.max_scroll_y > 0, f"{desc}: full screen"
+            assert (full.scroll_y, full.vertical_scrollbar.position) == (0, 0), f"{desc}: full screen from the top"
 
 
 @pytest.mark.anyio

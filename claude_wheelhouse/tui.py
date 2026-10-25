@@ -653,18 +653,22 @@ class Transcript(Widget, can_focus=False):
         self.doc_at: tuple[int, docblocks.DocMap] | None = None   # the doc block's first row and map, as laid out
         self.on_laid: Callable[[], None] | None = None   # told once a doc rendered off the loop is laid out (DocEditor)
 
-    def update(self, content: "Blocks | list[tuple[str, str]]") -> None:
-        """New blocks. Scrolled up to read (not at the end, which follows), the block at the top
-        of the view keeps its place on screen, whatever changed above it; if it changed itself
-        (a reply growing as it streams, a queued answer sent), the nearest unchanged block above
-        it does, so the reader's line stays put and what grew shows below it; with none above,
-        the first unchanged block below it in the view. Found more than once (a block said
-        twice, a run of the same tool line), the one followed by most of what followed it,
-        then preceded by most of what preceded it, then the nearest."""
+    def update(self, content: "Blocks | list[tuple[str, str]]", top: bool = False) -> None:
+        """New blocks: something else's (top), shown from the top. Its own, scrolled up to read
+        (not at the end, which follows), the block at the top of the view keeps its place on
+        screen, whatever changed above it; if it changed itself (a reply growing as it streams,
+        a queued answer sent), the nearest unchanged block above it does, so the reader's line
+        stays put and what grew shows below it; with none above, the first unchanged block below
+        it in the view. Found more than once (a block said twice, a run of the same tool line),
+        the one followed by most of what followed it, then preceded by most of what preceded
+        it, then the nearest."""
         old, laid, scroll = self.blocks, self._laid, self.parent
         self.blocks = content.blocks if isinstance(content, Blocks) else list(content)
         self._laid = None
         self.refresh(layout=True)
+        if top and isinstance(scroll, VerticalScroll):   # now, while the old blocks' height stands (#177):
+            scroll.scroll_home(animate=False, immediate=True)   # left to a shrink's clamp, the thumb stays put
+            return
         if not laid or not isinstance(scroll, VerticalScroll) or scroll.scroll_y >= scroll.max_scroll_y - 1:
             return
         width, starts, new = laid[0], laid[3], self.blocks
@@ -5317,11 +5321,14 @@ class WheelhouseApp(App):
         thread = None if shown or self.viewing or doc else self.selected
         same, self._detail_thread = thread is not None and thread == getattr(self, "_detail_thread", None), thread
         text = "\n\n".join(md for _, md in blocks)
-        if text != getattr(self, "_detail_text", None):
+        # something else shown (another doc or item, a conversation): from its top (#177)
+        shows = (shown[0] if shown else None, self.viewing, None if shown or self.viewing else self.selected)
+        fresh, self._detail_shows = shows != getattr(self, "_detail_shows", None), shows
+        if fresh or text != getattr(self, "_detail_text", None):
             following = ((self.detail_follows or same)
                          and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1)
             self._detail_text = text
-            self.detail.update(render(blocks))   # a doc posted again: where it was scrolled to stays
+            self.detail.update(render(blocks), top=fresh)   # a doc posted again: where it was scrolled to stays
             if following:   # stay at the newest turn or reply, unless the person has scrolled up to read
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
         if hasattr(self, "detail_panes"):
