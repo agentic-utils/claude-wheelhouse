@@ -207,3 +207,10 @@ def test_an_upgraders_notes(monkeypatch, running, seen, expected, desc):
 ])
 def test_version_order(a, b, desc):
     assert whatsnew.version_key(a) < whatsnew.version_key(b), desc
+
+
+@pytest.mark.parametrize("feature", ["show-all-tip", "interrupt-shell-tip"])
+def test_session_list_tips_hang_on_its_dialog(feature):
+    """Doug (#183): a tip about the session list shows beside it, titled Sessions, never on Detail's."""
+    where = next(f.where for f in FEATURES if f.id == feature)
+    assert next(d.pane for d in DIALOGS if d.id == where) == "sessions", f"{feature} on {where}"
