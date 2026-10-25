@@ -722,6 +722,15 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   [Settings](#settings)), sets another limit; fractions are allowed and 0
   turns it off. Each message costs one request, which reads the cached context: for a
   quiet session that is much cheaper than writing the cache again when you come back.
+- A session run in the wheelhouse has no `/mcp`, so the wheelhouse watches its MCP servers
+  for it, as it starts and after every turn. One that needs signing in again (a claude.ai
+  connector such as Slack, or a server of your own with OAuth) gets a question carrying its
+  sign-in link; one that failed gets a question with its error. For a claude.ai connector,
+  open the link, authorise it, then reply anything on the question: the wheelhouse
+  reconnects the server. For a server of your own, Claude Code waits for the browser to
+  come back and reconnects it itself; if the browser can't reach it, paste the address the
+  browser ends on as your reply. The question closes once the server is connected. Shell
+  closes them, as `/mcp` in the tab does the same.
 - After a compaction, the session is told its open tasks and questions, with their titles,
   once. A session run in the wheelhouse has a Compact button, and past 200k of context a
   question suggesting it, answered with buttons (Compact, Leave it); both take optional

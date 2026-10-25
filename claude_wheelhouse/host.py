@@ -35,7 +35,8 @@ from pathlib import Path
 from . import features, liveness, models, plan_usage, steps, transcript, transcript_usage
 from .launch import PROTOCOL_SDK, after_compaction, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT, request_text
-from .store import CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, SessionGone, Store, db_path, now, runner
+from .store import (CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, SessionGone, Store, db_path, mcp_question,
+                    mcp_server, now, runner, wheelhouse_question)
 
 POLL_SECONDS = 1.0
 SHELL_POLL_SECONDS = 2.0
@@ -85,6 +86,44 @@ KEEPALIVE_AFTER = 50 * 60   # before Claude Code idle-compacts a tab at about 54
 KEEPALIVE_BODY = ("Keepalive: the person is away, and this turn only keeps your prompt cache "
                   "warm. Reply with the one word ok and do nothing else: no tools, no wheelhouse calls.")
 KEEPALIVE_TEXT = f"[wheelhouse] {KEEPALIVE_BODY}"
+# MCP servers (#179, .plan/mcp-reauth.md): a hosted session has no /mcp, so the host asks the
+# person about a server that needs signing in or has failed, and reconnects it on their reply
+MCP_ASK = ("needs-auth", "failed")   # the statuses the host posts a question for
+MCP_SETTLED = ("connected", "disabled")   # the statuses that close it
+MCP_RECHECK = 30   # seconds between checks while a question about one is open
+MCP_GONE = "The wheelhouse host restarted: it checks the MCP servers again as it starts."
+MCP_SHELL = "Handed to a shell tab: /mcp there manages MCP servers."
+
+
+def mcp_item(name: str, server: dict, auth: dict | None) -> tuple[str, str]:
+    """The question about an MCP server: its title and body. auth: what mcp_authenticate
+    said, for one that needs signing in."""
+    if server.get("status") == "failed":
+        why = (server.get("error") or "no reason given").strip()
+        return (f"MCP {name} failed",
+                f"The MCP server {name} failed to connect: {why}\n\nReply anything here and the "
+                "wheelhouse reconnects it. This closes by itself once it's connected.")
+    url = (auth or {}).get("authUrl")
+    if not url:
+        return (f"MCP {name}: sign in",
+                f"The MCP server {name} needs signing in, and Claude Code gave no sign-in link. Shell "
+                "(H) opens this session in a tab, where /mcp signs in; or reply here to reconnect it.")
+    if (auth or {}).get("callbackExpected"):
+        how = ("Open the link and sign in: Claude Code is waiting for the browser to come back, and "
+               "reconnects it then. If the browser can't reach it, paste the address the browser ends "
+               "on here as a reply.")
+    else:   # a claude.ai connector: authorised on claude.ai, nothing waits locally
+        how = "Open the link and authorise it, then reply anything here and the wheelhouse reconnects it."
+    return (f"MCP {name}: sign in",
+            f"The MCP server {name} needs signing in.\n\n{url}\n\n{how} This closes by itself once it's connected.")
+
+
+def callback_url(text: str) -> str | None:
+    """An OAuth redirect URL pasted as a reply: one carrying a code or an error."""
+    m = re.search(r"https?://\S+[?&](?:code|error)=\S*", text or "")
+    return m.group(0) if m else None
+
+
 CHECK_BODY = ("Check: {items}. Correct any that's finished with update_item or reply, then reply ok. "
               "Leave alone any you don't recognise.")
 
@@ -93,7 +132,7 @@ def waits_on_person(store: Store, sid: str) -> bool:
     """Whether the session waits on the person: an open question, an unseen decision or an
     open permission. The host's keepalive and the hub's (tab sessions) both ask. The host's
     own question suggesting Compact is the wheelhouse's, not the session waiting."""
-    return any((i["kind"] == "question" and i["status"] == "open" and i["answer"] != COMPACT_QUESTION)
+    return any((i["kind"] == "question" and i["status"] == "open" and not wheelhouse_question(i["answer"]))
                or (i["kind"] == "decision" and i["status"] == "unseen")
                or (i["kind"] == "permission" and i["status"] == "open")
                for i in store.items(sid, include_closed=False))
@@ -295,6 +334,8 @@ class Host:
         self.unsaid: str | None = None   # an activity line a locked database kept unwritten (say)
         self.stopping = False
         self.stop_reason = ""
+        self.mcp_items: dict[str, str] = {}   # the open MCP questions' refs, by ref: the server each is about
+        self.mcp_checked = 0.0   # when the MCP servers were last checked (monotonic)
 
     # options and connection
 
@@ -352,6 +393,7 @@ class Host:
             await self.turn(opening_prompt(session, self.store))
         else:
             await self.say("idle")
+        await self.check_mcp()
 
     async def say(self, activity: str) -> None:
         """The activity line, through a locked database (steady); one still not written is
@@ -601,6 +643,8 @@ class Host:
             else:
                 self.store.set_activity(self.sid, NO_NOTES)
         await self.reconcile(session)
+        if self.mcp_items and time.monotonic() - self.mcp_checked > MCP_RECHECK:
+            await self.check_mcp()
         if self.keepalive_due(time.monotonic()):
             await self.turn(f"[wheelhouse] {keepalive_body(self.store.in_doubt(self.sid))}", keepalive=True)
         elif self.cold_due(time.monotonic()):
@@ -646,13 +690,15 @@ class Host:
         msgs = self.store.claim(self.sid)
         self.forget_delivered()
         handed = {m["id"]: ref for ref, m in self.handed.items()}
-        again, turn = [], []
+        again, turn, mcp = [], [], []
         for m in msgs:
             ref = m["item_ref"]
             if m["id"] in self.delivered:   # passed on, but never marked
                 again.append(m)
             elif m["id"] in handed:   # still with its call, claimed again as stale: keep the new claim
                 self.handed[handed[m["id"]]] = m
+            elif ref in self.mcp_items:
+                mcp.append(m)
             elif ref in self.waiting and not self.waiting[ref].done():
                 self.handed[ref] = m
                 self.waiting[ref].set_result(m["body"])
@@ -662,6 +708,10 @@ class Host:
             else:
                 turn.append(m)
         await self.confirm(again)
+        if mcp:
+            await self.confirm(mcp)
+            for m in mcp:
+                await self.mcp_reply(m["item_ref"], m["body"])
         # closed unanswered: after the messages, so a reply sent just before X still counts
         for ref, fut in list(self.waiting.items()):
             item = self.store.item(self.sid, ref)
@@ -964,6 +1014,7 @@ class Host:
             if then == "send":   # with them, in the same one prompt: the next poll claims both
                 self.store.dispatch(self.sid)
         if not self.pending:
+            await self.check_mcp()
             self.last_turn = time.monotonic()
             if self.quiet_since is None:
                 self.quiet_since = self.last_turn
@@ -1018,6 +1069,68 @@ class Host:
             if under:
                 self.store.set_answer(self.sid, item["ref"], COMPACT_QUESTION_DONE)
 
+    # MCP servers (#179, .plan/mcp-reauth.md)
+
+    async def check_mcp(self) -> None:
+        """Ask Claude Code how its MCP servers are: one question for each that needs signing
+        in or has failed, carrying the sign-in link; a question closed once its server is
+        connected, disabled or gone. A check that fails is a nicety lost, never the session."""
+        self.mcp_checked = time.monotonic()
+        try:
+            servers = {s["name"]: s for s in (await self.client.get_mcp_status()).get("mcpServers", [])}
+        except Exception as e:
+            print(f"{now()} get_mcp_status failed: {e}", file=sys.stderr, flush=True)
+            return
+        asked = {name: ref for ref, name in self.mcp_items.items()}
+        for name, server in servers.items():
+            status, ref = server.get("status"), asked.get(name)
+            if status in MCP_ASK and ref is None:
+                auth = await self.mcp_auth(name) if status == "needs-auth" else None
+                ref = self.store.post_marked_question(self.sid, *mcp_item(name, server, auth), mcp_question(name))
+                self.mcp_items[ref] = name
+            elif status in MCP_SETTLED and ref is not None:
+                self.settle_mcp(ref, f"{name} is {status} now.")
+        for name, ref in asked.items():
+            if name not in servers:
+                self.settle_mcp(ref, f"{name} is no longer configured.")
+
+    async def mcp_auth(self, name: str) -> dict | None:
+        """Claude Code's sign-in for a server (mcp_authenticate): a claude.ai connector's
+        authorise link, or a local OAuth flow's, with Claude Code waiting on its callback."""
+        try:
+            return await self.control({"subtype": "mcp_authenticate", "serverName": name})
+        except Exception as e:
+            print(f"{now()} mcp_authenticate {name} failed: {e}", file=sys.stderr, flush=True)
+            return None
+
+    async def mcp_reply(self, ref: str, body: str) -> None:
+        """The person's reply on an MCP question: a pasted redirect URL finishes the sign-in
+        waiting on it; anything else reconnects the server. Then a fresh check closes the
+        question, or the reply says how it stands and it stays open."""
+        name = self.mcp_items[ref]
+        url = callback_url(body)
+        try:
+            if url:
+                await self.control({"subtype": "mcp_oauth_callback_url", "serverName": name, "callbackUrl": url})
+            else:
+                await self.client.reconnect_mcp_server(name)
+        except Exception as e:
+            self.store.reply(self.sid, ref, f"{'Sign-in' if url else 'Reconnecting'} {name} failed: {e}", status="open")
+            return
+        await self.check_mcp()
+        if ref in self.mcp_items:
+            self.store.reply(self.sid, ref, f"Tried: {name} isn't connected yet. Sign in at the link above if "
+                             "you haven't, then reply again.", status="open")
+
+    def settle_mcp(self, ref: str, note: str) -> None:
+        self.mcp_items.pop(ref, None)
+        self.close_quietly(ref, "question", note)
+
+    def close_mcp(self, why: str) -> None:
+        """Close every open MCP question: the Claude Code they were about is going."""
+        for ref in list(self.mcp_items):
+            self.settle_mcp(ref, why)
+
     # hand-over to an interactive tab
 
     async def shell(self) -> None:
@@ -1030,6 +1143,7 @@ class Host:
         self.store.set_activity(self.sid, SHELL_OPENING)
         if self.pending:
             await self.client.interrupt()
+        self.close_mcp(MCP_SHELL)
         await self.disconnect()
         # once the session is let go, a locked database mustn't strand it half handed over
         await self.steady(self.store.unregister, self.sid)
@@ -1139,6 +1253,8 @@ class Host:
                 self.close_quietly(item["ref"], "permission", LOST_ON_RESTART)
             elif item["kind"] == "question" and item["answer"] == HOST_QUESTION:
                 self.close_quietly(item["ref"], "question", LOST_ON_RESTART)
+            elif item["kind"] == "question" and mcp_server(item["answer"]) and item["ref"] not in self.mcp_items:
+                self.close_quietly(item["ref"], "question", MCP_GONE)
 
     async def run(self) -> None:
         if not self.register():

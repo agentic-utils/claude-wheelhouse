@@ -117,6 +117,31 @@ DEFAULT_THEN = "send"
 # until the context is back under that; then it is marked done, and the next crossing asks again
 COMPACT_QUESTION = '{"from": "context nudge"}'
 COMPACT_QUESTION_DONE = '{"from": "context nudge", "done": true}'
+# an item's answer column marks the host's question about an MCP server that needs signing in
+# or has failed (#179, .plan/mcp-reauth.md): the person's replies on it are the host's, never a turn
+MCP_FROM = "mcp server"
+
+
+def mcp_question(server: str) -> str:
+    """The answer column's mark on the host's question about this MCP server."""
+    return json.dumps({"from": MCP_FROM, "server": server})
+
+
+def mcp_server(answer: str | None) -> str | None:
+    """The MCP server a question so marked is about; None for any other item."""
+    if not answer or MCP_FROM not in answer:
+        return None
+    try:
+        mark = json.loads(answer)
+    except ValueError:
+        return None
+    return mark.get("server") if isinstance(mark, dict) and mark.get("from") == MCP_FROM else None
+
+
+def wheelhouse_question(answer: str | None) -> bool:
+    """A question the wheelhouse asks the person itself (Compact, an MCP server), not the
+    session: it never means the session waits on the person, nor is the session told it."""
+    return answer == COMPACT_QUESTION or mcp_server(answer) is not None
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -1058,12 +1083,16 @@ class Store:
         return changed
 
     def post_compact_question(self, sid: str, title: str, body: str) -> str:
-        """The host's question suggesting Compact, marked (COMPACT_QUESTION) as it is posted:
-        one transaction, so no reader sees it unmarked."""
+        """The host's question suggesting Compact, marked (COMPACT_QUESTION) as it is posted."""
+        return self.post_marked_question(sid, title, body, COMPACT_QUESTION)
+
+    def post_marked_question(self, sid: str, title: str, body: str, mark: str) -> str:
+        """A question of the host's own, marked in its answer column as it is posted: one
+        transaction, so no reader sees it unmarked."""
         with self.tx() as db:
             self._require(db, sid)
             ref = self._insert_item(db, sid, "question", title, body, INITIAL_STATUS["question"])
-            db.execute("UPDATE items SET answer = ? WHERE session_id = ? AND ref = ?", (COMPACT_QUESTION, sid, ref))
+            db.execute("UPDATE items SET answer = ? WHERE session_id = ? AND ref = ?", (mark, sid, ref))
         return ref
 
     @staticmethod
@@ -1323,7 +1352,7 @@ class Store:
         question, as list_items orders them; no agent, decision or permission items."""
         return [r for r in self.items(sid, include_closed=False)
                 if (r["kind"] == "task" and r["status"] not in SETTLED["task"])
-                or (r["kind"] == "question" and r["status"] == "open" and r["answer"] != COMPACT_QUESTION)]
+                or (r["kind"] == "question" and r["status"] == "open" and not wheelhouse_question(r["answer"]))]
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's answer to a permission item: allow, always (allow, and keep the rule

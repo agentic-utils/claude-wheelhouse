@@ -269,6 +269,9 @@ FEATURES: tuple[Feature, ...] = (
             note="Click a block of a doc and your next comment on it quotes that block."),
     Feature("layout-keys", UNRELEASED, ADVANCED,
             note="Alt+Up and Alt+Down reorder rows; drag a splitter to resize panes, and double-click it to reset."),
+    Feature("mcp-reauth", UNRELEASED, ADVANCED, when="sdk",
+            note="An MCP server that needs signing in again, or has failed, gets a question with its sign-in link; "
+                 "reply on it and the wheelhouse reconnects the server."),
 
 )
 
