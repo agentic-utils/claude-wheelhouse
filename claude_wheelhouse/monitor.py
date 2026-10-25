@@ -125,7 +125,7 @@ def poll_once(store: Store, sid: str, out=sys.stdout) -> int | None:
     if session is None:
         print(GONE_TEXT, file=out, flush=True)
         return None
-    msgs = store.claim(sid)
+    msgs = store.claim(sid)   # never a reply on an MCP question: settled below, after these
     shown = 0
     try:
         if msgs:   # everything sent since the last poll, as one notification
@@ -137,6 +137,10 @@ def poll_once(store: Store, sid: str, out=sys.stdout) -> int | None:
             retry(lambda: store.confirm(msgs[:shown]))
         finally:
             store.release(msgs[shown:])
+    try:   # the host's MCP questions: nothing in a tab acts on a reply, so it is noted, never shown
+        store.settle_mcp_replies(sid)
+    except sqlite3.OperationalError:   # locked: the next poll settles them
+        pass
     for what in REQUEST_TEXT:
         asked = session[f"{what}_requested_at"]
         if asked and session[f"{what}_told_at"] != asked and store.tell_request(sid, what, asked):
