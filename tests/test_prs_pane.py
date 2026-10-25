@@ -147,6 +147,28 @@ async def test_selecting_shows_an_item_or_a_card_and_enter_opens(store, sid, git
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("picked, desc", [
+    (False, "none picked: the highlight hidden, so the table's hover stays put"),
+    (True, "one picked: the highlight showing"),
+])
+async def test_the_tooltip_is_the_hovered_prs(store, sid, github, picked, desc):
+    """#184: Doug, "the tooltip on the PR window always shows the description of the first
+    PR in the list, even when I hover over other ones"."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        table = app.query_one("#pr-list")
+        if picked:
+            table.reveal(0)
+            await pilot.pause()
+        assert table.show_cursor == picked, f"{desc}: the highlight as set up"
+        for row, n in [(1, 109), (0, 108), (1, 109)]:
+            await pilot.hover(table, offset=(2, table.header_height + row))
+            await pilot.pause()
+            assert str(table.tooltip) == f"two-inc/wheelhouse #{n}: Change {n}", f"{desc}: row {row}'s PR"
+
+
+@pytest.mark.anyio
 async def test_r_fetches_again_after_the_gap(store, sid, github, monkeypatch):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:

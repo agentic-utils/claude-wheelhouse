@@ -43,20 +43,25 @@ class RowTips:
     a narrow column cuts off. A list says what that is for a row in `tips`, by row key, as it
     paints, or overrides `row_tip(row)` (its index; None or '' for none). The tooltip changes
     only when the pointer's row does; tip_again() asks again for the row under it, when the
-    rows change under a still pointer."""
+    rows change under a still pointer. The pointer's row is its own (tip_row), not the hover
+    shade's: DataTable moves that only while the cursor shows, so a table with its cursor
+    hidden tipped the first row wherever the pointer was (#184)."""
 
     tips: dict = {}   # row key: its full text, set per instance as the list paints
+    tip_row = -1      # the row under the pointer, -1 for none (the header, or below the rows)
 
     def row_tip(self, row: int) -> str | None:
         return self.tips.get(self.coordinate_to_cell_key((row, 0)).row_key.value)
 
-    def watch_hover_coordinate(self, old, value) -> None:
-        super().watch_hover_coordinate(old, value)
-        if old.row != value.row:
+    def _on_mouse_move(self, event) -> None:
+        # Textual runs every class's _on_mouse_move in turn, DataTable's too: no super() call
+        row = event.style.meta.get("row", -1)
+        if row != self.tip_row:
+            self.tip_row = row
             self.tip_again()
 
     def tip_again(self) -> None:
-        row = self.hover_coordinate.row
+        row = self.tip_row
         try:
             text = self.row_tip(row) if 0 <= row < self.row_count else None
         except (IndexError, KeyError):
