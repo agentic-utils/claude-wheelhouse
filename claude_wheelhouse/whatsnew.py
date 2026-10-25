@@ -60,8 +60,8 @@ DIALOGS = (
          "Every Claude session in one place. Sessions ask you questions, record decisions and report tasks, "
          "all in one inbox. A session that needs you says so in its row, so you never hunt through tabs.\n\n"
          "Press ? (outside a text box) for every key and button.", NEXT),
-    Stop("create", "sessions", "Starting a session", "Start a session: press N, or the button, to create a demo session.",
-         ACTION, button="New session (N)"),
+    Stop("create", "sessions", "Starting a session", "",
+         ACTION, ask="Start a session: press N, or the button, to create a demo session.", button="New session (N)"),
     Stop("sessions", "sessions", "The session list",
          "This is your demo. Its row shows whether it's working, idle or needs you. It runs in a tab (or here, "
          "in SDK mode): you won't need to look at it.",
@@ -234,7 +234,7 @@ FEATURES: tuple[Feature, ...] = (
     Feature("recall-tip", UNRELEASED, "answer",
             note="Ctrl+R takes a queued answer back into the box to edit it, before it's sent.",
             tip="Typo in a queued answer? Ctrl+R takes it back into the box to edit."),
-    Feature("show-all-tip", UNRELEASED, "conversation",
+    Feature("show-all-tip", UNRELEASED, "create",
             note="Selecting a session narrows the inbox to its items: Esc, or a click on the selected session, "
                  "shows every session's again.",
             tip="Selecting a session narrows the inbox to it: a click on it again shows every session's."),
@@ -253,7 +253,7 @@ FEATURES: tuple[Feature, ...] = (
             note="A hosted session asking to run a tool shows in the inbox as an orange row: 1 Allow, 2 Always, "
                  "3 Deny.",
             tip="An orange row asks to run a tool: 1 Allow, 2 Always, 3 Deny."),
-    Feature("interrupt-shell-tip", UNRELEASED, "ask", when="sdk",
+    Feature("interrupt-shell-tip", UNRELEASED, "create", when="sdk",
             note="Interrupt (I) stops a hosted session's turn; Shell (H) opens it in a real tab, for slash "
                  "commands.",
             tip="I interrupts a turn. H opens the session in a real tab, for slash commands."),

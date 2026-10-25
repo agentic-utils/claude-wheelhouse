@@ -8,7 +8,7 @@ from textual.widgets import Button, DataTable, Input, TextArea
 from claude_wheelhouse import callout, features, launch, tutorial, whatsnew
 from claude_wheelhouse.callout import DIM, HIGHLIGHT, TourCallout
 from claude_wheelhouse.store import NOTES_SEEN, TOUR_AT
-from claude_wheelhouse.tour import PANE, ROWS, SHUN, Tour
+from claude_wheelhouse.tour import LIT, PANE, ROWS, SHUN, Tour
 from claude_wheelhouse.tui import BUTTONS, Compose, Dialog, ForgetChoice, ItemList, KeysHelp, LeaveTour, NewSession, ThreadView, Transcript, \
     TourInvite, TourNotes, TourStop, SDK_BUTTONS, WheelhouseApp, key_name, keys_help
 from claude_wheelhouse.tutorial import should_offer as real_should_offer   # before conftest stubs it
@@ -249,7 +249,7 @@ async def test_a_callout_beside_its_pane(store, stop, pane, focus, desc, size):
         await pilot.pause()
         assert shown(app) == (stop, pane), desc
         assert HIGHLIGHT in callout.find(app.screen, pane).classes, f"{desc}: its pane highlighted"
-        lit = {pane, *(("items",) if stop in ROWS else ())}
+        lit = {pane, *LIT.get(stop, ())}
         for other in ("sessions", "session-info", "items", "detail"):
             assert (DIM in callout.find(app.screen, other).classes) is (other not in lit), \
                 f"{desc}: {other} dimmed unless it's what the step is about (#174)"
@@ -459,7 +459,21 @@ async def test_closing_d1_keeps_clear_of_it_in_detail(store, tut, size):
         detail = callout.find(app.screen, "detail")
         box = app.screen.query_one(TourCallout).region
         assert not callout.covers(box, detail.region), f"{size}: {box} clear of Detail {detail.region}"
-        assert DIM not in detail.classes, f"{size}: Detail lit, as the step refers to it"
+        assert DIM in detail.classes, f"{size}: Detail dimmed, as the step has nothing done there (#183)"
+
+
+@pytest.mark.parametrize("stop", [d.id for d in whatsnew.DIALOGS if d.pane == "items"])
+@pytest.mark.parametrize("size", [(80, 24), (100, 30), (120, 40), (160, 40), (200, 60)])
+@pytest.mark.anyio
+async def test_a_callout_below_the_inbox_sits_right_under_it(store, tut, every_module, stop, size):
+    """Doug (#183): a box under the inbox sits immediately below it, never at the screen's foot."""
+    fill_demo(store, tut)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        found, pane, _, _ = await demo_at(app, pilot, store, tut, stop)
+        if found.side.startswith("below"):
+            assert found.region.y == pane.region.bottom, f"{stop} at {size}: {found.region} under {pane.region}"
 
 
 @pytest.mark.anyio
@@ -685,6 +699,22 @@ async def test_a_callout_fits_a_small_screen(store, tut, every_module, stop, siz
         await pilot.pause()
         found, _, _, _ = await demo_at(app, pilot, store, tut, stop)
         assert app.screen.region.contains_region(found.region), f"{stop} at {size}: {found.region} on screen"
+
+
+@pytest.mark.parametrize("stop", CALLOUT_STEPS)
+@pytest.mark.anyio
+async def test_a_callout_dims_all_but_what_it_refers_to(store, tut, every_module, stop):
+    """Doug (#174, #183): "Dim all text except the callouts and what it is referring to": its
+    own pane and those its step has the person act in (tour.LIT), every other pane dimmed."""
+    fill_demo(store, tut)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        found, _, _, _ = await demo_at(app, pilot, store, tut, stop)
+        lit = {found.pane, *LIT.get(stop, ())}
+        for other in callout.PANES:
+            if (pane := callout.find(app.screen, other)) is not None:
+                assert (DIM in pane.classes) is (other not in lit), f"{stop}: {other} dimmed unless lit ({lit})"
 
 
 @pytest.mark.parametrize("stop", CALLOUT_STEPS)

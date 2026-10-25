@@ -87,7 +87,7 @@ resume at the same dialog.
   says a PR picked there or in the inbox is highlighted in both, its tips covering the pane
   following the session, M, and the Open, Merge and Request review actions.
 - #174 (Doug's walk of 24 Oct): while a callout shows, everything else on the screen is
-  dimmed (callout.DIM) but its pane and, for a step with inbox rows (tour.ROWS), the inbox.
+  dimmed (callout.DIM) but its pane and the panes its step needs (tour.LIT, #183 below).
   Each dialog that asks for something has an action button under its text, captioned with
   the action and how to do it yourself ("New session (N)", "Open Q1 (Click)", "Answer
   (Ctrl+Enter)", "Send (Ctrl+S)", "Read D1 (Click)", "Close D1 (Delete)", "Read M1 (Click)",
@@ -98,6 +98,11 @@ resume at the same dialog.
   question is selected. `decision` splits into reading D1 and `close`, whose callout keeps
   clear of Detail (tour.SHUN); `conversation` splits into picking it and `ask`. Esc asks
   first (LeaveTour: Enter leaves, Esc stays).
+- #183: only its pane, and a pane its step has the person act in (tour.LIT: the inbox for
+  `conversation`), stay lit; a pane the text only mentions dims too. The session list's tips
+  (show-all, interrupt-shell) hang on `create`, so a top-up shows them beside Sessions. A box
+  that leaves its pane's side to keep clear of `shun` can sit right below the pane
+  (callout.candidates), not only at the screen's foot.
 - The checks for 4 to 9 and 11 are today's step checks, moved over unchanged, including the
   rules that the app's own automatic selection never ticks anything.
 - A callout whose pane is absent (Stats disabled or uninstalled) is skipped, and its

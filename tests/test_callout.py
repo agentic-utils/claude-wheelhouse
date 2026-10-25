@@ -98,6 +98,14 @@ def test_the_nearest_clear_candidate_wins():
         "moved down off the rows: pointing up and back at the pane"
 
 
+def test_shunning_a_pane_beside_it_puts_the_box_right_below():
+    """Doug (#183): with no room right of the inbox clear of Detail, the box goes right below
+    the inbox, not to the screen's foot."""
+    inbox, detail = Region(46, 1, 45, 22), Region(91, 1, 69, 39)
+    region, side = place(Size(160, 40), inbox, 11, Region(47, 2, 43, 8), Region(47, 6, 43, 1), shun=detail)
+    assert (region.y, side) == (inbox.bottom, "below"), f"{region} under {inbox}"
+
+
 class Panes(App):
     """Three fake panes, by the main screen's ids, side by side."""
     CSS = "Horizontal { height: 1fr; } .pane { height: 1fr; border: round #7b61ff; } " \

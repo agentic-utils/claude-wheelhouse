@@ -86,14 +86,15 @@ def place(screen: Size, pane: Region | None, height: int, clear: Region | None =
     absent), and the side it then points from (facing; "centred" with `centre`, the box
     centred as spot puts it for a pane too narrow or collapsed). One rule (#101): of the
     candidates (spot's choice; then below every inbox row, `clear`; below the step's own rows
-    of the demo, `keep`; the screen's foot; its top), those on screen that cover neither `keep`
-    nor the pane (bar a box spot put inside it), the nearest the pane; with none, the one
-    covering least of `keep`, then of the pane. `w`: its width, width's by default. `shun`:
-    another pane the step has the person read (tour.SHUN), kept clear of as `keep` is, and
-    the same boxes tried in the pane's own column and either side of `shun` too."""
+    of the demo, `keep`; right below the pane; the screen's foot; its top), those on screen
+    that cover neither `keep` nor the pane (bar a box spot put inside it), the nearest the
+    pane; with none, the one covering least of `keep`, then of the pane. `w`: its width,
+    width's by default. `shun`: another pane the step has the person read (tour.SHUN), kept
+    clear of as `keep` is, and the same boxes tried in the pane's own column and either side
+    of `shun` too."""
     first, side = spot(screen, None if centre else pane, height, w)
     avoid = None if side == "inside" else pane
-    spots = candidates(screen, first, clear, keep)
+    spots = candidates(screen, first, clear, keep, None if centre else pane)
     if shun is not None and pane is not None:
         xs = {pane.x, shun.x - first.width, shun.right}
         spots += [Region(max(0, min(x, screen.width - r.width)), r.y, r.width, r.height) for x in xs for r in spots]
@@ -106,10 +107,13 @@ def place(screen: Size, pane: Region | None, height: int, clear: Region | None =
     return best, "centred" if side == "centred" else facing(best, pane)
 
 
-def candidates(screen: Size, first: Region, clear: Region | None, keep: Region | None) -> list[Region]:
+def candidates(screen: Size, first: Region, clear: Region | None, keep: Region | None,
+               pane: Region | None = None) -> list[Region]:
     """place's candidates, in order, those on screen: `first`, then the same box below every
-    inbox row, below the demo's, at the screen's foot and at its top."""
-    tops = [first.y] + [r.bottom for r in (clear, keep) if r is not None] + [screen.height - first.height, 0]
+    inbox row, below the demo's, right below the pane (#183: never the screen's foot when
+    `first` sat beside it, level with its top, and the box must move off that column), at the
+    screen's foot and at its top."""
+    tops = [first.y] + [r.bottom for r in (clear, keep, pane) if r is not None] + [screen.height - first.height, 0]
     spots = [Region(first.x, y, first.width, first.height) for y in tops]
     return [r for r in spots if r.y >= 0 and r.bottom <= screen.height] or [first]
 
