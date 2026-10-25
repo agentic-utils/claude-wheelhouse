@@ -60,12 +60,13 @@ def front_matter(lines: list[str]) -> tuple[dict[str, str], int]:
 
 
 def parse(path: Path, text: str, repo: str) -> Decision | None:
-    """What a decision's file says of itself, None if its name isn't NNNN-*.md. Its status:
+    """What a decision's file says of itself, None if its name isn't NNNN-*.md
+    or names a template. Its status:
     its front matter's, else a Status line or ## Status section in the doc, else its name's
     (0042-ACCEPTED-slug.md), else UNKNOWN. Its title: its front matter's, else its first #
     heading (a leading number such as "1. " or "ADR-0042: " left out), else its name's slug."""
     found = NAME.match(path.name)
-    if found is None:
+    if found is None or "template" in found[2].lower():   # 0000-template.md: a blank, not a decision
         return None
     number, rest = found[1], found[2]
     named = WORD.match(rest)

@@ -44,7 +44,7 @@ def test_parse(tmp_path, name, text, number, status, title, desc):
 
 @pytest.mark.parametrize("name, desc", [
     ("README.md", "no number"), ("042-short.md", "three digits"), ("0001-x.txt", "not markdown"),
-    ("0001-x.md.bak", "a backup"), ("template.md", "a template"),
+    ("0001-x.md.bak", "a backup"), ("template.md", "a template"), ("0000-template.md", "a numbered template"),
 ])
 def test_not_a_decision(tmp_path, name, desc):
     assert scan.parse(tmp_path / name, "# x\n", "repo") is None, desc
