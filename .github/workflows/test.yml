@@ -20,3 +20,7 @@ jobs:
           enable-cache: true
       - run: uv sync --all-packages --locked
       - run: uv run --no-sync python -m pytest -q -o faulthandler_timeout=120  # a hung test dumps its stacks
+        env:
+          WHEELHOUSE_TEST_SIGNAL_LOG: ${{ runner.temp }}/signals.log   # [DIAG TEMP #188]
+      - if: always()   # [DIAG TEMP #188] signals the tests' guard refused
+        run: cat "${{ runner.temp }}/signals.log" 2>/dev/null || echo "no signals refused"

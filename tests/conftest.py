@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import time
+import traceback
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -422,6 +423,10 @@ def via(request, monkeypatch):
 
 
 RUN_STARTED = liveness.start_time(os.getpid())   # this pytest process's start, in clock ticks since boot
+SIGNAL_LOG = os.environ.get("WHEELHOUSE_TEST_SIGNAL_LOG")   # where CI collects refused signals
+REFUSED = []   # every signal refused, as (the test running, the call and why)
+running = ["(no test yet)"]   # the test under way, or the last one, for a thread that outlives it
+real_kill, real_killpg = os.kill, os.killpg
 
 
 def foreign(pid: int) -> bool:
@@ -430,36 +435,48 @@ def foreign(pid: int) -> bool:
     return start is not None and start < RUN_STARTED
 
 
+def refuse(name: str, target: int, sig: int, members: list[int]) -> None:
+    """Raises PermissionError, and records it, for a signal aimed at pid 0 or below (every
+    process of ours, or a group), at this pytest process, or at a process or group older
+    than the run. Signal 0 (is it alive?) is let through."""
+    if sig == 0:
+        return
+    reason = ("pid 0 or below" if target <= 0 else "this pytest process" if target == os.getpid()
+              else "a process older than the run" if any(foreign(p) for p in members) else None)
+    if reason is None:
+        return
+    call = f"{name}({target}, {signal.Signals(sig).name}): {reason}"
+    REFUSED.append((running[0], call))
+    if SIGNAL_LOG:
+        with open(SIGNAL_LOG, "a") as log:
+            log.write(f"{running[0]}: {call}\n{''.join(traceback.format_stack()[-8:-2])}\n")
+    raise PermissionError(f"test guard: {call}")
+
+
+def guarded_kill(pid, sig):
+    refuse("os.kill", pid, sig, [pid])
+    real_kill(pid, sig)
+
+
+def guarded_killpg(group, sig):
+    refuse("os.killpg", group, sig, group_members(group))
+    real_killpg(group, sig)
+
+
+# for the whole run, not per test: a thread that outlives its test is held to it too
+os.kill, os.killpg = guarded_kill, guarded_killpg
+liveness.killpg = guarded_killpg
+
+
 @pytest.fixture(autouse=True)
-def only_own_processes_signalled(request, monkeypatch):
-    """No test signals a process it didn't start: os.kill or os.killpg aimed at pid 0 or
-    below (every process of ours, or a group), at this pytest process, or at a process or
-    group older than the run is refused, and the test fails naming the call. Signal 0 (is it
-    alive?) is let through. Where there is no /proc (macOS) only the pid checks apply."""
-    refused = []
-    kill, killpg = os.kill, os.killpg
-
-    def check(name, target, sig, members):
-        if sig == 0:
-            return
-        reason = ("pid 0 or below" if target <= 0 else "this pytest process" if target == os.getpid()
-                  else "a process older than the run" if any(foreign(p) for p in members) else None)
-        if reason:
-            refused.append(f"{name}({target}, {signal.Signals(sig).name}): {reason}")
-            raise PermissionError(f"test guard: {refused[-1]}")
-
-    def guarded_kill(pid, sig):
-        check("os.kill", pid, sig, [pid])
-        kill(pid, sig)
-
-    def guarded_killpg(group, sig):
-        check("os.killpg", group, sig, group_members(group))
-        killpg(group, sig)
-
-    monkeypatch.setattr(os, "kill", guarded_kill)
-    monkeypatch.setattr(os, "killpg", guarded_killpg)
+def only_own_processes_signalled(request):
+    """No test signals a process it didn't start (refuse): the call is refused, and the test
+    fails naming it. Where there is no /proc (macOS) only the pid checks apply."""
+    running[0] = request.node.nodeid
+    before = len(REFUSED)
     yield
-    assert not refused, f"{request.node.nodeid} signalled processes it didn't start: {refused}"
+    mine = [call for _, call in REFUSED[before:]]
+    assert not mine, f"{request.node.nodeid} signalled processes it didn't start: {mine}"
 
 
 def group_members(group: int) -> list[int]:
