@@ -33,5 +33,5 @@ jobs:
           }
           BT
           sudo setsid bpftrace -B line --unsafe "$RUNNER_TEMP/sig.bt" 2>&1 | grep --line-buffered -vE "comm=(python3?|sleep|claude)$" &
-          (while sleep 30; do echo "MEM $(date -u +%T) $(free -m | awk 'NR==2{print $3"/"$2" used, avail "$7}') disk $(df -h / /tmp | awk 'NR>1{print $6, $4" free"}' | tr '\n' ' ')"; sudo dmesg | tail -3 | sed 's/^/KERN /'; done) &
+          (while sleep 30; do echo "MEM $(date -u +%T) $(free -m | awk 'NR==2{print $3"/"$2" used, avail "$7}') disk $(df -h / /tmp | awk 'NR>1{print $6, $4" free"}' | tr '\n' ' ')"; echo "SHM $(free -m | awk 'NR==2{print "shared "$5}') $(du -sm /dev/shm 2>/dev/null)"; ps -eo rss=,pid=,ppid=,etimes=,args= --sort=-rss | head -4 | cut -c1-160 | sed 's/^/TOP /'; done) &
           uv run --no-sync python -m pytest -q -o faulthandler_timeout=120
