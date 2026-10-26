@@ -5,7 +5,6 @@ import os
 import signal
 import subprocess
 import time
-import traceback
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +21,17 @@ NO_DEFAULT_DB = Path("/nonexistent-wheelhouse-test-state/wheelhouse.db")   # unw
 
 def live_state_dir() -> Path:
     return (Path.home() / ".local/state/claude-wheelhouse").resolve()
+
+
+def pytest_collection_modifyitems(config, items):
+    """WHEELHOUSE_TEST_SHARD=i/n runs every nth test from the ith: CI runs the suite as
+    several processes in turn, as each worker's memory grows test by test (#188)."""
+    shard = os.environ.get("WHEELHOUSE_TEST_SHARD")
+    if not shard:
+        return
+    i, n = (int(part) for part in shard.split("/"))
+    config.hook.pytest_deselected(items=[item for k, item in enumerate(items) if k % n != i - 1])
+    items[:] = items[i - 1::n]
 
 
 def pytest_configure(config):
@@ -441,7 +451,6 @@ def via(request, monkeypatch):
 
 
 RUN_STARTED = liveness.start_time(os.getpid())   # this pytest process's start, in clock ticks since boot
-SIGNAL_LOG = os.environ.get("WHEELHOUSE_TEST_SIGNAL_LOG")   # where CI collects refused signals
 REFUSED = []   # every signal refused, as (the test running, the call and why)
 running = ["(no test yet)"]   # the test under way, or the last one, for a thread that outlives it
 real_kill, real_killpg = os.kill, os.killpg
@@ -465,9 +474,6 @@ def refuse(name: str, target: int, sig: int, members: list[int]) -> None:
         return
     call = f"{name}({target}, {signal.Signals(sig).name}): {reason}"
     REFUSED.append((running[0], call))
-    if SIGNAL_LOG:
-        with open(SIGNAL_LOG, "a") as log:
-            log.write(f"{running[0]}: {call}\n{''.join(traceback.format_stack()[-8:-2])}\n")
     raise PermissionError(f"test guard: {call}")
 
 
