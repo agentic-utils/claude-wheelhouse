@@ -25,9 +25,12 @@ jobs:
           cat > "$RUNNER_TEMP/sig.bt" <<'BT'
           tracepoint:signal:signal_generate /args->sig == 1 || args->sig == 2 || args->sig == 9 || args->sig == 15 || args->sig == 19 || args->sig == 20/ {
             printf("SIG %s sig=%d from pid=%d ppid=%d comm=%s -> pid=%d comm=%s\n", strftime("%H:%M:%S", nsecs), args->sig, pid, curtask->real_parent->tgid, comm, args->pid, args->comm);
-            if (strncmp(args->comm, "Runner", 6) == 0 || strncmp(args->comm, "bash", 4) == 0) {
-              system("ps -o pid,ppid,pgid,sid,lstart,args -p %d,%d | sed 's/^/SIGPS /'", pid, curtask->real_parent->tgid);
+            if (strncmp(args->comm, "hosted", 6) == 0 || strncmp(args->comm, "bash", 4) == 0) {
+              system("ps -o pid,ppid,pgid,args -p %d,%d", pid, curtask->real_parent->tgid);
             }
+          }
+          tracepoint:syscalls:sys_enter_kill /args->pid <= 0 && args->sig != 0/ {
+            printf("SIG %s kill(%d, %d) from pid=%d ppid=%d comm=%s\n", strftime("%H:%M:%S", nsecs), args->pid, args->sig, pid, curtask->real_parent->tgid, comm);
           }
           BT
           sudo nohup bpftrace --unsafe "$RUNNER_TEMP/sig.bt" > "$RUNNER_TEMP/sig.log" 2>&1 &
