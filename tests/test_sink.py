@@ -503,8 +503,8 @@ async def held(clock, tmp_path, keys, slow, closed=False) -> dict:
 @pytest.mark.anyio
 @pytest.mark.parametrize("keys, desc", [
     (("down", "down", "down", "down", "delete"), "Down off D as it holds, on down to it at the foot, Delete"),
-    (("down", "1", "down", "down", "down", "delete"), "the same with a 1 on the way, which does nothing on a task"),
-    (("down", "down", "1", "down", "down", "delete"), "and a 1 on alpha's conversation (#192) does nothing there"),
+    (("down", "alt+y", "down", "down", "down", "delete"), "the same with an Alt+Y on the way, which does nothing on a task"),
+    (("down", "down", "alt+y", "down", "down", "delete"), "and an Alt+Y on alpha's conversation (#192) does nothing there"),
 ])
 async def test_delete_on_a_row_still_sinking_ends_as_typed_slowly(tmp_path, clock, keys, desc):
     """Review 25: a burst's Delete lands on a frame the sink hasn't drawn yet. The row it takes
