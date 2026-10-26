@@ -19,4 +19,4 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-packages --locked
-      - run: uv run --no-sync python -m pytest -v -o faulthandler_timeout=120  # [DIAG TEMP #188] -v: prove the long-id stall is gone
+      - run: uv run --no-sync python -m pytest -q -o faulthandler_timeout=120  # a hung test dumps its stacks
