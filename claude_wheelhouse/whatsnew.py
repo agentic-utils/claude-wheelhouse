@@ -59,9 +59,9 @@ DIALOGS = (
     Stop("principles", None, "The wheelhouse",
          "Every Claude session in one place. Sessions ask you questions, record decisions and report tasks, "
          "all in one inbox. A session that needs you says so in its row, so you never hunt through tabs.\n\n"
-         "Press ? (outside a text box) for every key and button.", NEXT),
+         "Press F1 for every key and button.", NEXT),
     Stop("create", "sessions", "Starting a session", "",
-         ACTION, ask="Start a session: press N, or the button, to create a demo session.", button="New session (N)"),
+         ACTION, ask="Start a session: press Alt+N, or the button, to create a demo session.", button="New session (Alt+N)"),
     Stop("sessions", "sessions", "The session list",
          "This is your demo. Its row shows whether it's working, idle or needs you. It runs in a tab (or here, "
          "in SDK mode): you won't need to look at it.",
@@ -116,7 +116,7 @@ DIALOGS = (
          "close it entirely by \"forgetting\" it.",
          ACTION, ask="Press [Stop & Forget] now to close the demo session, or the button here.",
          button="Stop & Forget (Click)"),
-    Stop("notes", None, "Release notes", "N starts a session of your own.", CLOSE),
+    Stop("notes", None, "Release notes", "Alt+N starts a session of your own.", CLOSE),
 )
 # New session's line at its top while the tour has the person create the demo
 LAUNCH = "This is part of the tutorial: press [Launch] to proceed."
@@ -154,16 +154,16 @@ FEATURES: tuple[Feature, ...] = (
             note="A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered. Saving comes next."),
     Feature("tour-topups", UNRELEASED, "principles",
             note="After an update, the tour shows only what's new, pane by pane, with no demo; Esc ends it at any "
-                 "time, and after quitting mid-tour, L or the title bar's badge resumes it.",
-            tip="After an update, the badge in the title bar (L) offers just what's new."),
+                 "time, and after quitting mid-tour, Alt+T or the title bar's badge resumes it.",
+            tip="After an update, the badge in the title bar (Alt+T) offers just what's new."),
     Feature("busy-buttons", UNRELEASED, "send",
             note="A pressed button (Compact, Interrupt, Relaunch, Park, Fork...) stays off, dark grey, until what it "
                  "started has finished, or for 30 seconds with no word from the session.",
             tip="A pressed button stays dark grey until what it started has finished."),
     Feature("pins", UNRELEASED, "inbox",
-            note="Pin any inbox item (📌, a click on its first column or P) and clearing the inbox leaves it; "
+            note="Pin any inbox item (📌, a click on its first column or Alt+P) and clearing the inbox leaves it; "
                  "docs come pinned.",
-            tip="Ctrl+A / Delete remove all finished items except those that are pinned (📌). Pin an item with P, "
+            tip="Ctrl+A / Delete remove all finished items except those that are pinned (📌). Pin an item with Alt+P, "
                 "or click the first column."),
     Feature("doc-threads", UNRELEASED, "docs",
             note="A doc has a thread of its own: comment on it below the doc (split) or on a Thread tab (tabbed); "
@@ -199,7 +199,7 @@ FEATURES: tuple[Feature, ...] = (
                  "checks, description, history and comments.",
             tip="Pick a PR to read its failing checks, description, history and comments in Detail."),
     Feature("pr-marks", UNRELEASED, ADVANCED,
-            note="Mark PRs in the PRs pane as in the inbox (Ctrl+click, Shift+click, Space, Shift+Up/Down) and act "
+            note="Mark PRs in the PRs pane as in the inbox (Ctrl+click, Shift+click, Ctrl+Space, Shift+Up/Down) and act "
                  "on them all; Close closes a PR unmerged, asked first, as Merge is."),
     Feature("session-steps", UNRELEASED, ADVANCED,
             note="The wheelhouse tells a session before it ends or resumes (and, in SDK mode, compacts), so its own "
@@ -225,12 +225,12 @@ FEATURES: tuple[Feature, ...] = (
                  "as Park with Compact would; one that skips the compaction says why, as a decision."),
     # the tour's showcase (#101 9): what a new user would otherwise miss, highest-ranked first
     Feature("relaunch-tip", UNRELEASED, "sessions",
-            note="After a reboot or a crash, a session that isn't running shows a red dot: L relaunches it, "
-                 "Shift+L relaunches every one.",
-            tip="A red dot: not running, after a reboot, say. L relaunches it, Shift+L every one."),
+            note="After a reboot or a crash, a session that isn't running shows a red dot: Alt+L relaunches it, "
+                 "Alt+Shift+L relaunches every one.",
+            tip="A red dot: not running, after a reboot, say. Alt+L relaunches it, Alt+Shift+L all."),
     Feature("adopt-tip", UNRELEASED, "sessions",
-            note="A adopts a Claude Code session you started outside the wheelhouse: exit it in its tab first.",
-            tip="Already have sessions running? A adopts them (exit each in its tab first)."),
+            note="Alt+A adopts a Claude Code session you started outside the wheelhouse: exit it in its tab first.",
+            tip="Already have sessions running? Alt+A adopts them (exit each in its tab first)."),
     Feature("recall-tip", UNRELEASED, "answer",
             note="Ctrl+R takes a queued answer back into the box to edit it, before it's sent.",
             tip="Typo in a queued answer? Ctrl+R takes it back into the box to edit."),
@@ -239,27 +239,27 @@ FEATURES: tuple[Feature, ...] = (
                  "shows every session's again.",
             tip="Selecting a session narrows the inbox to it: a click on it again shows every session's."),
     Feature("bulk-clear-tip", UNRELEASED, "close",
-            note="Ctrl+A in the inbox marks every finished item and Delete clears them together; F shows "
+            note="Ctrl+A in the inbox marks every finished item and Delete clears them together; Alt+V shows "
                  "finished items again.",
-            tip="F shows finished items, or hides them again."),
+            tip="Alt+V shows finished items, or hides them again."),
     Feature("fork-tip", UNRELEASED, "end",
-            note="Fork (K) carries a session on in a copy, in a new worktree, taking the items you choose.",
-            tip="Fork (K) carries a session on in a copy, in a new worktree."),
+            note="Fork (Alt+K) carries a session on in a copy, in a new worktree, taking the items you choose.",
+            tip="Fork (Alt+K) carries a session on in a copy, in a new worktree."),
     Feature("compact-tip", UNRELEASED, "send", when="sdk",
             note="A hosted session's dot turns amber past 200k tokens of context, when it asks whether to "
-                 "compact: Compact (C) shrinks it.",
-            tip="An amber dot: past 200k tokens, and the session asks whether to compact. Compact (C) shrinks it."),
+                 "compact: Compact (Alt+C) shrinks it.",
+            tip="An amber dot: past 200k tokens, and the session asks whether to compact. Alt+C shrinks it."),
     Feature("permission-tip", UNRELEASED, "inbox", when="sdk",
-            note="A hosted session asking to run a tool shows in the inbox as an orange row: 1 Allow, 2 Always, "
-                 "3 Deny.",
-            tip="An orange row asks to run a tool: 1 Allow, 2 Always, 3 Deny."),
+            note="A hosted session asking to run a tool shows in the inbox as an orange row: Alt+Y Allow, "
+                 "Alt+W Always, Alt+D Deny.",
+            tip="An orange row asks to run a tool: Alt+Y Allow, Alt+W Always, Alt+D Deny."),
     Feature("interrupt-shell-tip", UNRELEASED, "create", when="sdk",
-            note="Interrupt (I) stops a hosted session's turn; Shell (H) opens it in a real tab, for slash "
+            note="Interrupt (Alt+I) stops a hosted session's turn; Shell (Alt+H) opens it in a real tab, for slash "
                  "commands.",
-            tip="I interrupts a turn. H opens the session in a real tab, for slash commands."),
+            tip="Alt+I interrupts a turn. Alt+H opens the session in a real tab, for slash commands."),
     Feature("model-effort-tip", UNRELEASED, "stats", when="sdk",
-            note="Model (M) changes a hosted session's model live, and the Stats slider sets its effort.",
-            tip="M changes the model live; the slider sets the effort."),
+            note="Model (Alt+M) changes a hosted session's model live, and the Stats slider sets its effort.",
+            tip="Alt+M changes the model live; the slider sets the effort."),
     Feature("stats-zoom-tip", UNRELEASED, "stats",
             note="Stats' - and + zoom its charts out to days, and its cache line says when the next turn "
                  "costs more.",
@@ -269,6 +269,9 @@ FEATURES: tuple[Feature, ...] = (
             note="Click a block of a doc and your next comment on it quotes that block."),
     Feature("layout-keys", UNRELEASED, ADVANCED,
             note="Alt+Up and Alt+Down reorder rows; drag a splitter to resize panes, and double-click it to reset."),
+    Feature("key-modifiers", UNRELEASED, ADVANCED,
+            note="Every key has a modifier, so a letter typed in the answer box is always just typed, and the "
+                 "app's own keys work from there: Ctrl+Q quits, F1 lists the keys, Alt+N is New session."),
     Feature("mcp-reauth", UNRELEASED, ADVANCED, when="sdk",
             note="An MCP server that needs signing in again, or has failed, gets a question with its sign-in link; "
                  "reply on it and the wheelhouse reconnects the server."),

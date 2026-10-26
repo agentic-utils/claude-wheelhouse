@@ -126,7 +126,7 @@ def mcp_item(name: str, server: dict, auth: dict | None) -> tuple[str, str]:
     elif failed:
         body = f"{head}\n\nReply anything here and the wheelhouse reconnects it."
     else:
-        body = (f"{head} Claude Code gave no sign-in link: Shell (H) opens this session in a tab, where "
+        body = (f"{head} Claude Code gave no sign-in link: Shell (Alt+H) opens this session in a tab, where "
                 "/mcp signs in; or reply here to reconnect it.")
     return title, f"{body} This closes by itself once it's connected."
 

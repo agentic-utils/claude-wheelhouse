@@ -25,7 +25,7 @@ methods on it:
 - `landed(sid)`: the hub's own read of a session's transcript has brought something (its
   transcript followers are shared, `follower`): a pane showing that session can repaint.
 
-A pane's widget may also name a section of the ? overlay for its BINDINGS: `KEYS_HELP =
+A pane's widget may also name a section of the F1 overlay for its BINDINGS: `KEYS_HELP =
 (title, sdk_only)`, sdk_only to list them only with SDK mode on. A list in a pane (the
 Decisions pane's table) that sets `TAB_LIST = True` is a Tab stop after the inbox, before the
 answer box (tui.tab_stops, #77). A pane's widget may say the least room it needs, `PANE_MINIMUM = (columns,

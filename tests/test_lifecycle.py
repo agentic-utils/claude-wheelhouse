@@ -40,16 +40,16 @@ async def press(app, pilot, button, *keys):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("button, state, parked, queued, keys, kept, want_parked, end_flag, park_flag, desc", [
-    ("#end", "live", 0, 0, ["l"], True, 0, True, False, "Stop & Forget on an Active session: L lets it know, asked"),
-    ("#end", "live", 0, 2, ["l"], True, 0, True, False,
+    ("#end", "live", 0, 0, ["alt+l"], True, 0, True, False, "Stop & Forget on an Active session: Alt+L lets it know, asked"),
+    ("#end", "live", 0, 2, ["alt+l"], True, 0, True, False,
      "with answers queued, the choice names how many go: 2 queued answer(s) will be discarded"),
     ("#end", "live", 0, 2, ["escape"], True, 0, False, False, "and backs out, the answers kept"),
-    ("#end", "stalled", 0, 0, ["l"], True, 0, True, False, "so on a quiet one"),
-    ("#end", "dead", 0, 0, ["y"], False, None, None, None, "Forget on an Available session deletes it, once confirmed"),
-    ("#end", "dead", 0, 0, ["n"], True, 0, False, False, "backed out of at the confirm"),
-    ("#end", "live", 1, 0, ["l"], True, 0, True, False,
+    ("#end", "stalled", 0, 0, ["alt+l"], True, 0, True, False, "so on a quiet one"),
+    ("#end", "dead", 0, 0, ["alt+y"], False, None, None, None, "Forget on an Available session deletes it, once confirmed"),
+    ("#end", "dead", 0, 0, ["alt+n"], True, 0, False, False, "backed out of at the confirm"),
+    ("#end", "live", 1, 0, ["alt+l"], True, 0, True, False,
      "a running row parked under the old rules is unparked at the hub's first start, then asked (round-3 #1)"),
-    ("#end", "dead", 1, 0, ["y"], False, None, None, None, "Forget on a Parked session deletes it, once confirmed"),
+    ("#end", "dead", 1, 0, ["alt+y"], False, None, None, None, "Forget on a Parked session deletes it, once confirmed"),
     ("#park", "live", 0, 0, [], True, 0, False, True, "Park on an Active session asks it, with no confirm"),
     ("#park", "stalled", 0, 0, [], True, 0, False, True, "so on a quiet one"),
     ("#park", "dead", 0, 0, [], True, 1, False, False, "Park on an Available session parks it at once, asking nothing"),
@@ -96,12 +96,12 @@ async def test_the_wheelhouse_never_deletes_by_itself(store, sid, monkeypatch, s
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("button, flag, keys, kept, parked, notice, desc", [
-    ("#end", "end", ["c"], True, 0, True, "Cancel clears the forget request and tells the session"),
-    ("#end", "end", ["f", "y"], False, None, False, "Force forget deletes after a confirm"),
-    ("#end", "end", ["f", "n"], True, 0, False, "Force forget can be backed out of"),
+    ("#end", "end", ["alt+c"], True, 0, True, "Cancel clears the forget request and tells the session"),
+    ("#end", "end", ["alt+o", "alt+y"], False, None, False, "Force forget deletes after a confirm"),
+    ("#end", "end", ["alt+o", "alt+n"], True, 0, False, "Force forget can be backed out of"),
     ("#end", "end", ["escape"], True, 0, False, "Escape leaves the request pending"),
-    ("#park", "park", ["c"], True, 0, True, "Cancel clears the park request and tells the session"),
-    ("#park", "park", ["f", "y"], True, 1, False, "Force park parks it after a confirm"),
+    ("#park", "park", ["alt+c"], True, 0, True, "Cancel clears the park request and tells the session"),
+    ("#park", "park", ["alt+o", "alt+y"], True, 1, False, "Force park parks it after a confirm"),
 ])
 async def test_a_pending_request_can_be_cancelled_or_forced(
         store, sid, monkeypatch, button, flag, keys, kept, parked, notice, desc):
@@ -122,7 +122,7 @@ async def test_a_pending_request_can_be_cancelled_or_forced(
     assert (s is not None) == kept, desc
     if kept:
         assert s["parked"] == parked, desc
-        cancelled = keys == ["c"]
+        cancelled = keys == ["alt+c"]
         assert (s[f"{flag}_requested_at"] is None) == (cancelled or parked == 1), desc
         assert bool(store.pending(sid)) == notice, desc
 
@@ -132,8 +132,8 @@ async def test_a_pending_request_can_be_cancelled_or_forced(
 @pytest.mark.parametrize("then, launched, parked, desc", [
     (None, [], 1, "an Available session parked from its button is parked, nothing launched"),
     ("#relaunch", ["restore"], 0, "Unpark, in Relaunch's place, brings it back where it left off, unparked"),
-    ("p", ["restore"], 0, "P presses Unpark on a Parked session"),
-    ("l", ["restore"], 0, "so does L"),
+    ("alt+p", ["restore"], 0, "Alt+P presses Unpark on a Parked session"),
+    ("alt+l", ["restore"], 0, "so does Alt+L"),
 ])
 async def test_a_dead_session_parks_then_comes_back(store, sid, monkeypatch, then, launched, parked, desc):
     fake_status(monkeypatch, "dead")
@@ -181,9 +181,9 @@ async def test_retired_keys_do_nothing(store, sid, monkeypatch, key, desc):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("key, keys, kept, desc", [
-    ("delete", ["y"], False, "Delete forgets an Available session, once confirmed"),
-    ("backspace", ["y"], False, "so does Backspace"),
-    ("delete", ["n"], True, "and the confirm backs out"),
+    ("delete", ["alt+y"], False, "Delete forgets an Available session, once confirmed"),
+    ("backspace", ["alt+y"], False, "so does Backspace"),
+    ("delete", ["alt+n"], True, "and the confirm backs out"),
 ])
 async def test_delete_and_backspace_forget(store, sid, monkeypatch, key, keys, kept, desc):
     fake_status(monkeypatch, "dead")
@@ -211,7 +211,7 @@ async def test_relaunch_all_picks_available_sessions_only(store, sid, tmp_path, 
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        for key in ("L", "y"):   # Relaunch all is in the footer (#62)
+        for key in ("alt+shift+l", "alt+y"):   # Relaunch all is in the footer (#62)
             await pilot.press(key)
             await pilot.pause()
     assert calls == [sid], "Available only: not Parked, Active or starting"
@@ -351,10 +351,10 @@ def notices(app, monkeypatch):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("state, request_first, button, keys, desc", [
-    ("live", "end", "#end", ["c"], "Cancel after the session ended itself (round-4 #1)"),
-    ("live", "end", "#end", ["f"], "Force after the session ended itself (round-4 #2)"),
-    ("live", "end", "#end", ["f", "y"], "Force confirmed after the session ended itself"),
-    ("dead", None, "#end", ["y"], "the dead-session confirm after the row went"),
+    ("live", "end", "#end", ["alt+c"], "Cancel after the session ended itself (round-4 #1)"),
+    ("live", "end", "#end", ["alt+o"], "Force after the session ended itself (round-4 #2)"),
+    ("live", "end", "#end", ["alt+o", "alt+y"], "Force confirmed after the session ended itself"),
+    ("dead", None, "#end", ["alt+y"], "the dead-session confirm after the row went"),
 ])
 async def test_a_dialog_outliving_its_session_does_not_crash(
         store, sid, monkeypatch, state, request_first, button, keys, desc):
@@ -409,7 +409,7 @@ async def test_the_dead_path_rechecks_liveness_at_confirm(store, sid, monkeypatc
     async with app.run_test(size=(160, 40)) as pilot:
         await press(app, pilot, "#end")
         fake_status(monkeypatch, "live")
-        await pilot.press("y")
+        await pilot.press("alt+y")
         await pilot.pause()
     s = store.session(sid)
     assert s is not None, "a running session is not deleted"
@@ -471,10 +471,10 @@ def test_the_monitor_says_so_once_and_stops(store, sid):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("run, state, shell, busy, stops, keys, killed, launched, said, desc", [
-    ("sdk", "live", None, True, True, ["y"], True, ["open"], "relaunched demo",
+    ("sdk", "live", None, True, True, ["alt+y"], True, ["open"], "relaunched demo",
      "a running host mid-turn is stopped once confirmed, then started again once its process has gone (#56)"),
     ("sdk", "stalled", None, False, True, [], True, ["open"], "relaunched demo", "an idle one, at once: no confirm"),
-    ("sdk", "live", None, True, True, ["n"], False, [], None, "backed out of at the mid-turn confirm"),
+    ("sdk", "live", None, True, True, ["alt+n"], False, [], None, "backed out of at the mid-turn confirm"),
     ("sdk", "live", None, False, False, [], True, [], "didn't stop within",
      "a host that doesn't stop isn't started twice: it says so"),
     ("tab", "live", None, False, True, [], True, ["open"], "relaunched demo",
@@ -560,7 +560,7 @@ async def test_relaunch_races(store, sid, monkeypatch, before, during_confirm, a
         await press(app, pilot, "#relaunch")
         if during_confirm:
             during_confirm(store, sid, alive)
-        await pilot.press("y")
+        await pilot.press("alt+y")
         await pilot.pause()
         app.refresh_data()
         await pilot.pause()
@@ -574,8 +574,8 @@ async def test_relaunch_races(store, sid, monkeypatch, before, during_confirm, a
 @pytest.mark.parametrize("stopped, keys, launched, exited, desc", [
     (True, [], ["open"], True, "its host has gone: started before quitting, not left dead (review 7)"),
     (False, [], [], False, "still stopping: quitting asks first"),
-    (False, ["y"], [], True, "and quits if told to"),
-    (False, ["n"], [], False, "or stays"),
+    (False, ["alt+y"], [], True, "and quits if told to"),
+    (False, ["alt+n"], [], False, "or stays"),
 ])
 async def test_quitting_mid_relaunch(store, sid, monkeypatch, stopped, keys, launched, exited, desc):
     store.set_runner(sid, "sdk")
@@ -588,11 +588,11 @@ async def test_quitting_mid_relaunch(store, sid, monkeypatch, stopped, keys, lau
     monkeypatch.setattr(launch, "open_session", lambda s, i, may_tab=True: calls.append("open"))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await press(app, pilot, "#relaunch", "y")
+        await press(app, pilot, "#relaunch", "alt+y")
         monkeypatch.setattr(app, "exit", lambda *a, **kw: exits.append(True))
         if stopped:
             alive.clear()
-        await pilot.press("q")
+        await pilot.press("ctrl+q")
         await pilot.pause()
         prompt = getattr(app.screen, "prompt", "")
         for key in keys:
@@ -606,7 +606,7 @@ async def test_quitting_mid_relaunch(store, sid, monkeypatch, stopped, keys, lau
 @pytest.mark.anyio
 @pytest.mark.parametrize("keys, exited, desc", [
     ([], False, "compacting first: quitting asks, saying what happens"),
-    (["y"], True, "and quits if told to"),
+    (["alt+y"], True, "and quits if told to"),
 ])
 async def test_quitting_while_compacting_first(store, sid, monkeypatch, keys, exited, desc):
     store.set_runner(sid, "sdk")
@@ -619,7 +619,7 @@ async def test_quitting_while_compacting_first(store, sid, monkeypatch, keys, ex
         await pilot.pause()
         assert app.hub.compact_then_relaunch(sid, (4242, 1)).ok
         monkeypatch.setattr(app, "exit", lambda *a, **kw: exits.append(True))
-        await pilot.press("q")
+        await pilot.press("ctrl+q")
         await pilot.pause()
         prompt = getattr(app.screen, "prompt", "")
         for key in keys:
