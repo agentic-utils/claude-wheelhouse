@@ -1,6 +1,8 @@
 import functools
 import itertools
 import json
+import os
+import signal
 import subprocess
 import time
 import uuid
@@ -417,6 +419,60 @@ def via(request, monkeypatch):
         client.disconnect()
     for served in daemons.values():
         served.stop()
+
+
+RUN_STARTED = liveness.start_time(os.getpid())   # this pytest process's start, in clock ticks since boot
+
+
+def foreign(pid: int) -> bool:
+    """A process that was running before this pytest process started: none of the run's own."""
+    start = liveness.start_time(pid)
+    return start is not None and start < RUN_STARTED
+
+
+@pytest.fixture(autouse=True)
+def only_own_processes_signalled(request, monkeypatch):
+    """No test signals a process it didn't start: os.kill or os.killpg aimed at pid 0 or
+    below (every process of ours, or a group), at this pytest process, or at a process or
+    group older than the run is refused, and the test fails naming the call. Signal 0 (is it
+    alive?) is let through. Where there is no /proc (macOS) only the pid checks apply."""
+    refused = []
+    kill, killpg = os.kill, os.killpg
+
+    def check(name, target, sig, members):
+        if sig == 0:
+            return
+        reason = ("pid 0 or below" if target <= 0 else "this pytest process" if target == os.getpid()
+                  else "a process older than the run" if any(foreign(p) for p in members) else None)
+        if reason:
+            refused.append(f"{name}({target}, {signal.Signals(sig).name}): {reason}")
+            raise PermissionError(f"test guard: {refused[-1]}")
+
+    def guarded_kill(pid, sig):
+        check("os.kill", pid, sig, [pid])
+        kill(pid, sig)
+
+    def guarded_killpg(group, sig):
+        check("os.killpg", group, sig, group_members(group))
+        killpg(group, sig)
+
+    monkeypatch.setattr(os, "kill", guarded_kill)
+    monkeypatch.setattr(os, "killpg", guarded_killpg)
+    yield
+    assert not refused, f"{request.node.nodeid} signalled processes it didn't start: {refused}"
+
+
+def group_members(group: int) -> list[int]:
+    """The pids in a process group, from /proc (none where there is no /proc)."""
+    members = []
+    for stat in liveness.PROC.glob("[0-9]*/stat"):
+        try:
+            fields = stat.read_text().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        if fields[2] == str(group):   # field 5, pgrp
+            members.append(int(stat.parent.name))
+    return members
 
 
 @pytest.fixture(autouse=True)
