@@ -4847,14 +4847,21 @@ class WheelhouseApp(App):
         table.followers = {key_of[id(it)] for it, nested, _ in rows if nested == CHILD}
         table.toggles = {key: key in self.collapsed for key in counts}
         sunk = {key_of[id(it)] for it, _, n in rows if n}
-        if self.filter_sid:   # the session's own conversation, pinned first
-            general = (self.filter_sid, None) in queued
-            rows_out.append((f"{self.filter_sid}|", ("", names.get(self.filter_sid, "")[:14], Text("💬"),
-                             Text("queued", style="bold #05d9e8") if general else "",
-                             Text("Conversation", style="bold"))))
-            if self.filter_sid in compacting:
-                rows_out[-1] = (rows_out[-1][0], faded(rows_out[-1][1]))
-                table.locked.add(rows_out[-1][0])
+        # the session's own conversation, pinned first; unfiltered, every unparked session's, as
+        # their items show, named after them, in the session list's order under the active items,
+        # so the top of the inbox stays what's waiting on the person (#192)
+        conversations = []
+        for conv in [self.filter_sid] if self.filter_sid else self.conversation_sids():
+            general = (conv, None) in queued
+            cells = ("", names.get(conv, "")[:14] if self.filter_sid else "", Text("💬"),
+                     Text("queued", style="bold #05d9e8") if general else "",
+                     Text("Conversation" if self.filter_sid else names.get(conv, ""), style="bold"))
+            if conv in compacting:
+                cells = faded(cells)
+                table.locked.add(f"{conv}|")
+            conversations.append((f"{conv}|", cells))
+        if self.filter_sid:
+            rows_out += conversations
         for it, nested, _ in rows:
             # an unfinished item of any kind with an answer waiting to be sent shows as queued, and one
             # whose answer went with no reply since as processing (D28); neither is stored
@@ -4887,6 +4894,9 @@ class WheelhouseApp(App):
                 cells = faded(cells)
             rows_out.append((key_of[id(it)], cells))
             tips[key_of[id(it)]] = item_tip(it)
+        if not self.filter_sid:   # between the active band and the settled
+            at = next((i for i, (_, _, band) in enumerate(rows) if band), len(rows))
+            rows_out[at:at] = conversations
         if self.filter_sid:   # the session column goes: the inbox follows the one session
             rows_out = [(k, cells[:1] + cells[2:]) for k, cells in rows_out]
         cells = dict(rows_out)
@@ -4969,6 +4979,13 @@ class WheelhouseApp(App):
         self.repin = set()
         self.ranks, self.rank_tokens = ranks, tokens
         return sorted(keyed, key=lambda pair: ranks[pair[0]])
+
+    def conversation_sids(self) -> list[str]:
+        """The sessions whose conversation rows the unfiltered inbox shows: the unparked, whose
+        items it shows (client.inbox), in the session list's order; one not laid there yet last."""
+        unparked = [s["id"] for s in self.sessions if not s["parked"]]
+        listed = [k for k in self.session_list.final() if k in unparked]
+        return listed + [k for k in unparked if k not in listed]
 
     def session_names(self) -> dict[str, str]:
         return {s["id"]: s["name"] or short(s["id"]) for s in self.sessions}
@@ -6559,10 +6576,9 @@ class WheelhouseApp(App):
 
     def clear_filter(self) -> None:
         """No session selected: every session's items, and no highlight in the session list,
-        so no current session for its buttons and keys (D20) until one is picked again."""
+        so no current session for its buttons and keys (D20) until one is picked again. A
+        conversation shown stays: its row is in the unfiltered inbox too (#192)."""
         self.filter_sid = None
-        if self.viewing:   # its row goes with the filter; the highlight lands on an item
-            self.selected = None
         self.session_list.show_cursor = False
         self.sessions_cursor = None
         self.paint_session_info()

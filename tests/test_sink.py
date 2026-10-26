@@ -88,7 +88,8 @@ def test_a_dismissed_item_comes_back(store, sid, kind, change, back, desc):
 
 
 def refs(app) -> list[str]:
-    return [k.split("|")[1] for k in app.items_table.keys()]
+    """The items' refs, in the order shown: not the sessions' conversation rows (#192)."""
+    return [k.split("|")[1] for k in app.items_table.keys() if not k.endswith("|")]
 
 
 SETTLE = {
@@ -396,7 +397,9 @@ async def moving(clock, tmp_path, where, keys, typed, count=3, start=None) -> di
             await clock.finish_moves(pilot, app)
             assert_one_current(app, f"{where} {keys}: after the move")
             return {"current": ids.get(app.current_session()), "early": early,
-                    "selected": app.selected and refs_.get(app.selected[1]),
+                    # unfiltered, a session's conversation row by its name (#192)
+                    "selected": app.selected and (refs_.get(app.selected[1]) if app.selected[1] or app.filter_sid
+                                                  else f"💬 {ids[app.selected[0]]}"),
                     "marked": sorted(refs_[k.split("|")[1]] for k in app.items_table.marked)}
 
 
@@ -407,7 +410,7 @@ async def moving(clock, tmp_path, where, keys, typed, count=3, start=None) -> di
     ("sessions", ("down", "down", "up"), "charlie", None, "and back up: charlie, never a blank row"),
     ("items", ("down",), None, "three", "Down on two as one sinks: three"),
     ("items", ("up",), None, "two", "Up on two as one sinks: two is first now, so it stays"),
-    ("items", ("down", "down"), None, "one", "Down, Down: one, at the foot"),
+    ("items", ("down",) * 5, None, "one", "Down past the three conversations (#192): one, at the foot"),
 ])
 async def test_keys_typed_during_a_move_end_as_typed_slowly(tmp_path, clock, where, keys, current, selected, desc):
     """Arrows step through the final order, never a frame's, so a burst typed during a move
@@ -422,8 +425,9 @@ async def test_keys_typed_during_a_move_end_as_typed_slowly(tmp_path, clock, whe
 @pytest.mark.anyio
 @pytest.mark.parametrize("where, start, keys, current, selected, marked, desc", [
     ("items", "two", ("shift+up",), None, "two", ["two"], "Shift+Up on two as one sinks: two is first, so only it"),
-    ("items", "four", ("shift+down",), None, "one", ["four", "one"], "Shift+Down on four: one, below it now"),
-    ("items", "four", ("down", "shift+up"), None, "four", ["four", "one"], "Down then Shift+Up: back to four"),
+    # under four, alpha's conversation (#192), never marked, rather than one as it sinks
+    ("items", "four", ("shift+down",), None, "💬 alpha", ["four"], "Shift+Down on four: the conversation below it"),
+    ("items", "four", ("down", "shift+up"), None, "four", ["four"], "Down then Shift+Up: back to four"),
     ("items", "three", ("pageup",), None, "two", [], "PageUp on three: two, the top now"),
     ("items", "two", ("pagedown",), None, "one", [], "PageDown on two: one, the foot now"),
     ("items", "three", ("ctrl+home",), None, "two", [], "Ctrl+Home: two, the top now"),
@@ -466,7 +470,7 @@ async def held(clock, tmp_path, keys, slow, closed=False) -> dict:
             store.post_item(sid, kind, t)
         d = store.post_item(sid, "question" if closed else "task", "D")
         store.post_item(sid, "question", "Q2")
-    title = {it["ref"]: it["title"] for it in store.items(sid)}
+    title = {it["ref"]: it["title"] for it in store.items(sid)} | {None: "💬"}   # its conversation row (#192)
     with mock.patch.object(liveness, "status", lambda s, waking=False: "live"):
         app = WheelhouseApp(store)
         async with app.run_test(size=(160, 40)) as pilot:
@@ -496,7 +500,8 @@ async def held(clock, tmp_path, keys, slow, closed=False) -> dict:
 @pytest.mark.anyio
 @pytest.mark.parametrize("keys, desc", [
     (("down", "down", "down", "down", "delete"), "Down off D as it holds, on down to it at the foot, Delete"),
-    (("down", "1", "down", "down", "delete"), "the same with a 1 on the way, which does nothing on a task"),
+    (("down", "1", "down", "down", "down", "delete"),
+     "the same with a 1 on the way, on alpha's conversation (#192), which does nothing there"),
 ])
 async def test_delete_on_a_row_still_sinking_ends_as_typed_slowly(tmp_path, clock, keys, desc):
     """Review 25: a burst's Delete lands on a frame the sink hasn't drawn yet. The row it takes
