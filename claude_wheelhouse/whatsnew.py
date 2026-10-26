@@ -275,6 +275,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("mcp-reauth", UNRELEASED, ADVANCED, when="sdk",
             note="An MCP server that needs signing in again, or has failed, gets a question with its sign-in link; "
                  "reply on it and the wheelhouse reconnects the server."),
+    Feature("all-conversations", UNRELEASED, ADVANCED,
+            note="With no session selected, the inbox lists each session's conversation (💬, named after the "
+                 "session) under the items waiting on you."),
 
 )
 

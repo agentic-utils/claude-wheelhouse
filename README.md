@@ -290,7 +290,8 @@ session.
 - **Follow a session.** Click a session in the inbox's list (or move to it, or Enter on it): its items
   list gains a pinned first row, 💬 Conversation, highlighted, and drops its session column (it shows
   only while the list has every session's items, after `Esc` or a click on the selected session, which
-  unselects it), and the right-hand pane
+  unselects it; there every unparked session has its 💬 row, named after it, under the active items, in the
+  session list's order, or at the bottom while a column sort is on), and the right-hand pane
   follows its conversation, read live from its transcript: your prompts and general
   messages (in green, line breaks kept, without the `[wheelhouse] from …` prefix, and in
   full even when the notification that delivered one was cut short) and Claude's replies
@@ -400,7 +401,7 @@ session.
   (`ANIMATION_FPS=0`) it stays steady. A row selected or under the mouse keeps its dot's colour, and an
   item's status its own, on the row's shade.
   The selected session, highlighted, is the current one, and the inbox shows its items
-  alone. A click on it or on the list's title, or `Esc`, unselects it: the inbox shows every session's items, the
+  alone. A click on it or on the list's title, or `Esc`, unselects it: the inbox shows every session's items and conversations, the
   list has no highlight, the description says All sessions and the buttons under it are
   disabled (as are their keys) until you click a session, Enter or an arrow in the list
   (which picks the session last selected, or the first). Highlighting an item never brings
