@@ -33,7 +33,7 @@ jobs:
             printf("SIG %s kill(%d, %d) from pid=%d ppid=%d comm=%s\n", strftime("%H:%M:%S", nsecs), args->pid, args->sig, pid, curtask->real_parent->tgid, comm);
           }
           BT
-          sudo nohup bpftrace --unsafe "$RUNNER_TEMP/sig.bt" > "$RUNNER_TEMP/sig.log" 2>&1 &
+          sudo nohup bpftrace -B line --unsafe "$RUNNER_TEMP/sig.bt" > "$RUNNER_TEMP/sig.log" 2>&1 &
           sleep 8
           cat "$RUNNER_TEMP/sig.log"
       - run: |  # [DIAG TEMP #188] tail: the post steps are skipped when the runner is signalled
