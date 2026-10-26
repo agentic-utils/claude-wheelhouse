@@ -38,6 +38,24 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
+def stores_closed(monkeypatch):
+    """Every Store a test opens, its own, its app's or its hub's, is closed once the test is
+    done: an open SQLite connection keeps its database, WAL and shared memory open for the
+    rest of the run. First of the autouse fixtures, so closed last."""
+    opened = []
+    init = Store.__init__
+
+    def opening(self, *args, **kwargs):
+        opened.append(self)
+        init(self, *args, **kwargs)
+    monkeypatch.setattr(Store, "__init__", opening)
+    yield
+    for store in opened:
+        if hasattr(store, "db"):
+            store.db.close()
+
+
+@pytest.fixture(autouse=True)
 def isolated_db(tmp_path, monkeypatch):
     """Every test has a database of its own (db_file is this one), wherever the run was started."""
     path = tmp_path / "wheelhouse.db"
