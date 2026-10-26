@@ -19,19 +19,15 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-packages --locked
-      - run: sudo apt-get install -y -qq bpftrace > /dev/null  # [DIAG TEMP #188]
-      - run: |  # [DIAG TEMP #188] who signals the runner, and memory, disk and the kernel's log as the run goes
-          cat > "$RUNNER_TEMP/sig.bt" <<'BT'
-          tracepoint:signal:signal_generate /args->sig == 1 || args->sig == 2 || args->sig == 9 || args->sig == 15 || args->sig == 19 || args->sig == 20/ {
-            printf("SIG %s sig=%d from pid=%d ppid=%d comm=%s -> pid=%d comm=%s\n", strftime("%H:%M:%S", nsecs), args->sig, pid, curtask->real_parent->tgid, comm, args->pid, args->comm);
-            if (strncmp(args->comm, "hosted", 6) == 0 || strncmp(args->comm, "bash", 4) == 0) {
-              system("ps -o pid,ppid,pgid,args -p %d,%d", pid, curtask->real_parent->tgid);
-            }
-          }
-          tracepoint:syscalls:sys_enter_kill /args->pid <= 0 && args->sig != 0/ {
-            printf("SIG %s kill(%d, %d) from pid=%d ppid=%d comm=%s\n", strftime("%H:%M:%S", nsecs), args->pid, args->sig, pid, curtask->real_parent->tgid, comm);
-          }
-          BT
-          sudo setsid bpftrace -B line --unsafe "$RUNNER_TEMP/sig.bt" 2>&1 | grep --line-buffered -vE "comm=(python3?|sleep|claude)$" &
-          (while sleep 30; do echo "MEM $(date -u +%T) $(free -m | awk 'NR==2{print $3"/"$2" used, avail "$7}') disk $(df -h / /tmp | awk 'NR>1{print $6, $4" free"}' | tr '\n' ' ')"; echo "SHM $(free -m | awk 'NR==2{print "shared "$5}') $(du -sm /dev/shm 2>/dev/null)"; ps -eo rss=,pid=,ppid=,etimes=,args= --sort=-rss | head -4 | cut -c1-160 | sed 's/^/TOP /'; done) &
-          uv run --no-sync python -m pytest -q -o faulthandler_timeout=120
+      # in turn, a quarter of the suite each: a worker's memory grows test by test (#188), and the
+      # whole suite in one process outgrows the runner's 16 GB. A hung test dumps its stacks.
+      - run: |
+          (while sleep 15; do free -m | awk 'NR==2{print $3}' >> "$RUNNER_TEMP/mem"; done) &  # [DIAG TEMP #188] peak memory
+          failed=0
+          for shard in 1/4 2/4 3/4 4/4; do
+            echo "::group::shard $shard"
+            WHEELHOUSE_TEST_SHARD=$shard uv run --no-sync python -m pytest -q -o faulthandler_timeout=120 || failed=1
+            echo "::endgroup::"
+            echo "shard $shard peak $(sort -n "$RUNNER_TEMP/mem" | tail -1) MB used"; : > "$RUNNER_TEMP/mem"  # [DIAG TEMP #188]
+          done
+          exit $failed
