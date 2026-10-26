@@ -159,11 +159,12 @@ def write_handoff(text: str) -> str:
 @wheelhouse_tool
 def set_doc_dirs(paths: list[str]) -> str:
     """Where this repo keeps its design decisions (ADRs), when that isn't docs/adr: directories
-    relative to the git root of your working directory, such as ["docs/decisions"]. The
-    wheelhouse then lists the NNNN-*.md files in them instead of docs/adr's, for every
-    session in this repo. Only directories you name are looked in (.plan/, say, only if
-    named), never the git root itself, and none outside a git repo. An empty list goes back
-    to docs/adr."""
+    relative to the git root of your working directory, such as ["docs/decisions"], or in
+    another git repo, such as a sibling docs repo (["../myproj-docs/decisions"], or an
+    absolute path). The wheelhouse then lists the NNNN-*.md files in them instead of
+    docs/adr's, for every session in this repo. Only directories you name are looked in
+    (.plan/, say, only if named), never a repo's root itself, and none outside a git repo. An
+    empty list goes back to docs/adr."""
     session = _store.session(_sid)
     if session is None:   # gone since the tool's own check: said as it says it (GONE_TEXT)
         raise SessionGone(_sid)

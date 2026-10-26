@@ -39,9 +39,11 @@ KINDS = [
     ("", "empty"),
 ]
 REPO_DOCS = sorted(p for p in [*ROOT.glob("*.md"), *ROOT.glob(".plan/*.md"), *ROOT.glob("claude_wheelhouse/*.md")])
+DOCS = KINDS + [(p.read_text(), str(p.relative_to(ROOT))) for p in REPO_DOCS]
 
 
-@pytest.mark.parametrize("md, desc", KINDS + [(p.read_text(), str(p.relative_to(ROOT))) for p in REPO_DOCS])
+# named by desc: a whole document as a test id is a line of up to 68 KB in pytest -v's output
+@pytest.mark.parametrize("md, desc", DOCS, ids=[desc for _, desc in DOCS])
 @pytest.mark.parametrize("width", [40, 100])
 def test_rendered_by_block_as_rich_renders_it_whole(md, desc, width):
     c = console()

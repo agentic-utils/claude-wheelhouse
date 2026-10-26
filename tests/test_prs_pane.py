@@ -106,7 +106,7 @@ async def test_the_pane_lists_the_sessions_prs_then_all(store, sid, github):
             "GitHub's state written back"
         app.query_one("#pr-list").focus()
         await pilot.pause()
-        await pilot.press("m")
+        await pilot.press("alt+o")
         await settled(app, pilot)
         assert str(p.border_title) == "PRs · all" and cells(app) == ["PR108", "PR7", "PR109"], "all: the search's too, newest first within a light"
         assert cells(app, 1) == ["wheelhouse", "mizpah", "wheelhouse"], "two repos: the Repo column"
@@ -174,11 +174,11 @@ async def test_r_fetches_again_after_the_gap(store, sid, github, monkeypatch):
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         app.query_one("#pr-list").focus()
-        await pilot.press("r")
+        await pilot.press("alt+r")
         await settled(app, pilot)
         assert github.calls == 1, "within the gap: the cache"
         monkeypatch.setattr(pane, "CLOCK", lambda: time.time() + fetch.GAP)
-        await pilot.press("r")
+        await pilot.press("alt+r")
         await settled(app, pilot)
         assert github.calls == 2, "past it: fetched"
 
@@ -369,9 +369,9 @@ async def test_the_selected_pr_has_its_actions_and_open_opens_it(store, sid, git
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("n, answer, merged, said, desc", [
-    (109, "n", None, None, "No: nothing merged"),
-    (109, "y", (0, ""), "Merged PR109 (squash).", "Yes: merged the way the repo allows, gone from the list"),
-    (108, "y", (1, "X Pull request #108 is not mergeable: the base branch policy prohibits the merge."),
+    (109, "alt+n", None, None, "No: nothing merged"),
+    (109, "alt+y", (0, ""), "Merged PR109 (squash).", "Yes: merged the way the repo allows, gone from the list"),
+    (108, "alt+y", (1, "X Pull request #108 is not mergeable: the base branch policy prohibits the merge."),
      "Couldn't merge PR108: checks are failing. gh says: X Pull request #108 is not mergeable", "a failure says why"),
 ])
 async def test_merge_asks_first_and_says_what_came_of_it(store, sid, github, n, answer, merged, said, desc):
@@ -669,7 +669,7 @@ async def test_detail_shows_a_prs_buttons_and_detail_as_text(store, sid, github,
         await pilot.click("#prd-close")
         assert acted == [("close", [109])], f"{size}: Detail's buttons act on its PR"
         monkeypatch.setattr(pane, "CLOCK", lambda: time.time() + fetch.DETAIL_GAP)
-        await pilot.press("r")   # the table still focused
+        await pilot.press("alt+r")   # the table still focused
         await landed(app, pilot)
         await settled(app, pilot)
         assert github.details.count(109) == 2, f"{size}: r fetches it again"
@@ -694,9 +694,9 @@ async def test_a_pr_no_session_made_shows_its_detail_and_link_in_detail(store, s
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("keys, clicks, want, desc", [
-    (["space", "down", "space"], [], {108, 109}, "Space marks the highlighted row, then another"),
+    (["ctrl+space", "down", "ctrl+space"], [], {108, 109}, "Ctrl+Space marks the highlighted row, then another"),
     (["shift+down"], [], {108, 109}, "Shift+Down takes the range"),
-    (["space", "down", "space", "escape"], [], set(), "Esc unmarks"),
+    (["ctrl+space", "down", "ctrl+space", "escape"], [], set(), "Esc unmarks"),
     ([], [(109, {"control": True})], {108, 109}, "Ctrl+click: the highlighted row and the one clicked"),
     ([], [(109, {"shift": True})], {108, 109}, "Shift+click: the range"),
     ([], [(109, {"control": True}), (109, {"control": True})], {108}, "a second Ctrl+click unmarks"),
@@ -729,9 +729,9 @@ async def marked_both(app, pilot):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("answer, closed, said, desc", [
-    ("n", {}, None, "No: nothing closed"),
-    ("y", {}, "Closed PR108.\nClosed PR109.", "Yes: each closed, each said"),
-    ("y", {URL.format(109): (1, "X Could not close: not allowed")},
+    ("alt+n", {}, None, "No: nothing closed"),
+    ("alt+y", {}, "Closed PR108.\nClosed PR109.", "Yes: each closed, each said"),
+    ("alt+y", {URL.format(109): (1, "X Could not close: not allowed")},
      "Closed PR108.\nCouldn't close PR109: gh says: X Could not close: not allowed", "one refused: said, the other closed"),
 ])
 async def test_close_asks_naming_every_pr_marked_and_says_what_came_of_each(store, sid, github, answer, closed, said, desc):
@@ -747,7 +747,7 @@ async def test_close_asks_naming_every_pr_marked_and_says_what_came_of_each(stor
         await pilot.press(answer)
         await landed(app, pilot)
         await settled(app, pilot)
-        assert github.closes == ([["--", URL.format(n)] for n in (108, 109)] if answer == "y" else []), desc
+        assert github.closes == ([["--", URL.format(n)] for n in (108, 109)] if answer == "alt+y" else []), desc
         assert (p.outcome == said) if said else not p.outcome, f"{desc}: {p.outcome!r}"
 
 
@@ -768,7 +768,7 @@ async def test_merge_and_the_menu_act_on_every_pr_marked(store, sid, github):
         await pilot.click(f"#{next(b.id for b in menu.query(Button) if str(b.label) == 'Merge')}")
         await pilot.pause()
         assert isinstance(app.screen, tui.Confirm) and "Merge these 2 PRs" in app.screen.prompt, "asked first"
-        await pilot.press("y")
+        await pilot.press("alt+y")
         await landed(app, pilot)
         await settled(app, pilot)
         assert github.merges == [["--squash", "--", URL.format(n)] for n in (108, 109)], "each merged in turn"

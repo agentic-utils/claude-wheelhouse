@@ -1,0 +1,31 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}   # every push to main keeps its result
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.2  # setup-uv publishes no floating major tag
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages --locked
+      # in turn, a quarter of the suite each: a worker's memory grows test by test (#188), and the
+      # whole suite in one process outgrows the runner's 16 GB. A hung test dumps its stacks.
+      - run: |
+          failed=0
+          for shard in 1/4 2/4 3/4 4/4; do
+            echo "::group::shard $shard"
+            WHEELHOUSE_TEST_SHARD=$shard uv run --no-sync python -m pytest -q -o faulthandler_timeout=120 || failed=1
+            echo "::endgroup::"
+          done
+          exit $failed

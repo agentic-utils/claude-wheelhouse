@@ -210,7 +210,8 @@ async def test_a_pane_reaches_its_routes_and_shows_its_docs(store, sid, monkeypa
         await pilot.pause()
         assert "Not shown" in app._detail_text and "not for showing" not in app._detail_text, \
             "a path outside the doc roots is refused, .. resolved first"
-        app.selected = (sid, None)
+        assert app.selected == (sid, None), "the session's conversation row, the only row (#192)"
+        app.selected = None   # the highlight moved off it
         app.paint_detail()
         assert "Not shown" not in app._detail_text, "the next selection takes the Detail pane back"
 

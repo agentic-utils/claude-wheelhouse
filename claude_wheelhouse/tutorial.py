@@ -82,7 +82,7 @@ story.md, post the doc again with the same path, then say in one line that you'r
 and the session can be ended."""
 
 # what has the next start offer the tutorial again (reset), named by every hint (the offer, the
-# ? overlay, the tour, the dismiss notice): fixed, as which copy the person's own shell
+# F1 overlay, the tour, the dismiss notice): fixed, as which copy the person's own shell
 # runs can't be told from here
 COMMAND = "claude-wheelhouse tutorial (make tutorial in a source checkout)"
 # every hint shown in a running app says so: the command is refused while the wheelhouse runs

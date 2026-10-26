@@ -372,10 +372,11 @@ class PrTable(api.RowTips, DataTable):
     Its highlight is hidden while Detail shows an item it doesn't list (Prs.showing, #148),
     until a click, Enter or a moving key brings it back, that row shown. PRs are marked to act
     on together (#146), as the inbox's rows are: Ctrl+click toggles one, Shift+click (or
-    Alt+click) takes the range from the last one toggled; Space and Shift+Up/Down do the same
+    Alt+click) takes the range from the last one toggled; Ctrl+Space and Shift+Up/Down do the same
     from the keyboard; a plain click or Esc drops them."""
     TAB_LIST = True
-    BINDINGS = [Binding("space", "toggle_mark", "Mark", show=False),
+    BINDINGS = [Binding("ctrl+space", "toggle_mark", "Mark", show=False),
+                Binding("ctrl+@", "toggle_mark", "Mark", show=False),   # Ctrl+Space, as most terminals send it
                 Binding("shift+up", "extend(-1)", "Extend up", show=False),
                 Binding("shift+down", "extend(1)", "Extend down", show=False),
                 Binding("escape", "unmark", "Unmark", show=False)]
@@ -481,8 +482,8 @@ class Prs(Vertical):
     """
     PANE_MINIMUM = (12, 3)
     KEYS_HELP = ("The PRs pane", False)
-    BINDINGS = [Binding("m", "scope", "Mine or all", show=False),
-                Binding("r", "refresh", "Fetch now", show=False)]
+    BINDINGS = [Binding("alt+o", "scope", "Mine or all", show=False),
+                Binding("alt+r", "refresh", "Fetch now", show=False)]
 
     def __init__(self, ctx: api.Context, **kwargs):
         super().__init__(classes="panel", **kwargs)

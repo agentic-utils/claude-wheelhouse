@@ -5,7 +5,7 @@ import pytest
 
 from claude_wheelhouse import tui
 from claude_wheelhouse.tui import WheelhouseApp
-from test_tui import item_list_rows
+from test_tui import item_list_rows, item_row
 
 DOC = "# The plan\n\nBuild it.\n\n## Recommendation\n\n**Add as tips.** They are cheap.\n"
 LONG = "".join(f"## Section {i}\n\nProse for section {i}.\n\n" for i in range(60))
@@ -21,8 +21,9 @@ def doc(store, sid, tmp_path):
 
 async def select(app, pilot, ref: str) -> None:
     await pilot.pause()
-    app.items_table.move_cursor(row=next(i for i, r in enumerate(item_list_rows(app))
-                                         if r[1] in (ref, f"└ {ref}")))   # its session's group's head, or in it
+    rows = [str(app.items_table.get_row_at(i)[2]) for i in range(app.items_table.row_count)]
+    app.items_table.move_cursor(row=next(i for i, r in enumerate(rows)
+                                         if r in (ref, f"└ {ref}")))   # its session's group's head, or in it
     await pilot.pause()
 
 
@@ -54,7 +55,7 @@ async def test_a_doc_with_unseen_replies_says_how_many(store, sid, doc):
         await pilot.pause()
         rows = item_list_rows(app)
         assert [r[1] for r in rows] == [q, f"└ {doc[0]}"], "in its session's group"
-        assert str(app.items_table.get_row_at(1)[3]) == "2 new"
+        assert str(app.items_table.get_row(f"{sid}|{doc[0]}")[3]) == "2 new"
 
 
 # Detail

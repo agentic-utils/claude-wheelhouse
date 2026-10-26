@@ -1,6 +1,8 @@
 import functools
 import itertools
 import json
+import os
+import signal
 import subprocess
 import time
 import uuid
@@ -21,6 +23,17 @@ def live_state_dir() -> Path:
     return (Path.home() / ".local/state/claude-wheelhouse").resolve()
 
 
+def pytest_collection_modifyitems(config, items):
+    """WHEELHOUSE_TEST_SHARD=i/n runs every nth test from the ith: CI runs the suite as
+    several processes in turn, as each worker's memory grows test by test (#188)."""
+    shard = os.environ.get("WHEELHOUSE_TEST_SHARD")
+    if not shard:
+        return
+    i, n = (int(part) for part in shard.split("/"))
+    config.hook.pytest_deselected(items=[item for k, item in enumerate(items) if k % n != i - 1])
+    items[:] = items[i - 1::n]
+
+
 def pytest_configure(config):
     """A run never touches the person's own wheelhouse. A session the wheelhouse launched
     hands its tests WHEELHOUSE_DB, pointing at the live database: the run stops before any
@@ -32,6 +45,24 @@ def pytest_configure(config):
         if path.resolve().is_relative_to(live):
             raise pytest.UsageError(f"test isolation: {name} is {path}, under the live wheelhouse {live}. "
                                     "Unset WHEELHOUSE_DB (and WHEELHOUSE_SESSION_ID, WHEELHOUSE_TOKEN) and run again.")
+
+
+@pytest.fixture(autouse=True)
+def stores_closed(monkeypatch):
+    """Every Store a test opens, its own, its app's or its hub's, is closed once the test is
+    done: an open SQLite connection keeps its database, WAL and shared memory open for the
+    rest of the run. First of the autouse fixtures, so closed last."""
+    opened = []
+    init = Store.__init__
+
+    def opening(self, *args, **kwargs):
+        opened.append(self)
+        init(self, *args, **kwargs)
+    monkeypatch.setattr(Store, "__init__", opening)
+    yield
+    for store in opened:
+        if hasattr(store, "db"):
+            store.db.close()
 
 
 @pytest.fixture(autouse=True)
@@ -417,6 +448,72 @@ def via(request, monkeypatch):
         client.disconnect()
     for served in daemons.values():
         served.stop()
+
+
+RUN_STARTED = liveness.start_time(os.getpid())   # this pytest process's start, in clock ticks since boot
+REFUSED = []   # every signal refused, as (the test running, the call and why)
+running = ["(no test yet)"]   # the test under way, or the last one, for a thread that outlives it
+real_kill, real_killpg = os.kill, os.killpg
+
+
+def foreign(pid: int) -> bool:
+    """A process that was running before this pytest process started: none of the run's own."""
+    start = liveness.start_time(pid)
+    return start is not None and start < RUN_STARTED
+
+
+def refuse(name: str, target: int, sig: int, members: list[int]) -> None:
+    """Raises PermissionError, and records it, for a signal aimed at pid 0 or below (every
+    process of ours, or a group), at this pytest process, or at a process or group older
+    than the run. Signal 0 (is it alive?) is let through."""
+    if sig == 0:
+        return
+    reason = ("pid 0 or below" if target <= 0 else "this pytest process" if target == os.getpid()
+              else "a process older than the run" if any(foreign(p) for p in members) else None)
+    if reason is None:
+        return
+    call = f"{name}({target}, {signal.Signals(sig).name}): {reason}"
+    REFUSED.append((running[0], call))
+    raise PermissionError(f"test guard: {call}")
+
+
+def guarded_kill(pid, sig):
+    refuse("os.kill", pid, sig, [pid])
+    real_kill(pid, sig)
+
+
+def guarded_killpg(group, sig):
+    refuse("os.killpg", group, sig, group_members(group))
+    real_killpg(group, sig)
+
+
+# for the whole run, not per test: a thread that outlives its test is held to it too
+os.kill, os.killpg = guarded_kill, guarded_killpg
+liveness.killpg = guarded_killpg
+
+
+@pytest.fixture(autouse=True)
+def only_own_processes_signalled(request):
+    """No test signals a process it didn't start (refuse): the call is refused, and the test
+    fails naming it. Where there is no /proc (macOS) only the pid checks apply."""
+    running[0] = request.node.nodeid
+    before = len(REFUSED)
+    yield
+    mine = [call for _, call in REFUSED[before:]]
+    assert not mine, f"{request.node.nodeid} signalled processes it didn't start: {mine}"
+
+
+def group_members(group: int) -> list[int]:
+    """The pids in a process group, from /proc (none where there is no /proc)."""
+    members = []
+    for stat in liveness.PROC.glob("[0-9]*/stat"):
+        try:
+            fields = stat.read_text().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        if fields[2] == str(group):   # field 5, pgrp
+            members.append(int(stat.parent.name))
+    return members
 
 
 @pytest.fixture(autouse=True)

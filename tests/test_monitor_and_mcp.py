@@ -420,7 +420,7 @@ def test_post_item_declares_a_doc(store, sid, tmp_path):
     (["docs/adr", ".plan/"], '["docs/adr", ".plan"]', "decisions are looked for in docs/adr, .plan", "several, normalised"),
     ([], None, "decisions are looked for in docs/adr", "none: docs/adr again"),
     (["../elsewhere"], "unchanged", "is outside the git root", "outside the repo: refused, nothing kept"),
-    (["/abs"], "unchanged", "relative to the git root", "an absolute path: refused"),
+    (["/abs"], "unchanged", "in no other git repo", "an absolute path in no git repo: refused"),
     (["."], "unchanged", "the git root itself", "the repo's root: refused"),
     (["docs"], "no git", "in no git repo", "a session in no git repo: refused"),
 ])
