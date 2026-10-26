@@ -35,8 +35,14 @@ jobs:
           BT
           sudo nohup bpftrace -B line --unsafe "$RUNNER_TEMP/sig.bt" > "$RUNNER_TEMP/sig.log" 2>&1 &
           sleep 8
+          sleep 30 & kill $!   # the tracer's own check: this kill must show
+          sudo apt-get install -y -qq auditd > /dev/null
+          sudo auditctl -a always,exit -F arch=b64 -S kill -S tkill -S tgkill -k sig
+          sleep 2
           cat "$RUNNER_TEMP/sig.log"
+          sudo ausearch -k sig -i | tail -5
       - run: |  # [DIAG TEMP #188] tail: the post steps are skipped when the runner is signalled
+          (sudo tail -F /var/log/audit/audit.log | grep --line-buffered -E 'key="sig"' | grep --line-buffered -vE 'a1=0 |a1=0x0 ' | sed -u 's/^/AUDIT /') &
           (tail -F "$RUNNER_TEMP/sig.log" | grep --line-buffered -v "comm=python3\? -> pid=[0-9]* comm=\(sleep\|python3\?\)$") &
           (while sleep 60; do ps -eo pid,ppid,pgid,sid,etimes,args --sort=etimes | awk '$5 > 300' | grep -v "ps -eo" | cut -c1-160 | sed 's/^/PS /'; echo PS --; done) &
           uv run --no-sync python -m pytest -q -o faulthandler_timeout=120
