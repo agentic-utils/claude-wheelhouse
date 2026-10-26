@@ -425,9 +425,12 @@ async def test_keys_typed_during_a_move_end_as_typed_slowly(tmp_path, clock, whe
 @pytest.mark.anyio
 @pytest.mark.parametrize("where, start, keys, current, selected, marked, desc", [
     ("items", "two", ("shift+up",), None, "two", ["two"], "Shift+Up on two as one sinks: two is first, so only it"),
-    # under four, alpha's conversation (#192), never marked, rather than one as it sinks
-    ("items", "four", ("shift+down",), None, "💬 alpha", ["four"], "Shift+Down on four: the conversation below it"),
-    ("items", "four", ("down", "shift+up"), None, "four", ["four"], "Down then Shift+Up: back to four"),
+    # under four, the three sessions' conversations (#192), never marked, then one as it sinks
+    ("items", "four", ("shift+down",) * 4, None, "one", ["four", "one"],
+     "Shift+Down on four, past the conversations: one, below them now"),
+    ("items", "four", ("shift+down",), None, "💬 alpha", ["four"], "Shift+Down on four: a conversation, unmarked"),
+    ("items", "four", ("down",) * 4 + ("shift+up",) * 4, None, "four", ["four", "one"],
+     "Down to one, then Shift+Up: back to four"),
     ("items", "three", ("pageup",), None, "two", [], "PageUp on three: two, the top now"),
     ("items", "two", ("pagedown",), None, "one", [], "PageDown on two: one, the foot now"),
     ("items", "three", ("ctrl+home",), None, "two", [], "Ctrl+Home: two, the top now"),
@@ -500,8 +503,8 @@ async def held(clock, tmp_path, keys, slow, closed=False) -> dict:
 @pytest.mark.anyio
 @pytest.mark.parametrize("keys, desc", [
     (("down", "down", "down", "down", "delete"), "Down off D as it holds, on down to it at the foot, Delete"),
-    (("down", "1", "down", "down", "down", "delete"),
-     "the same with a 1 on the way, on alpha's conversation (#192), which does nothing there"),
+    (("down", "1", "down", "down", "down", "delete"), "the same with a 1 on the way, which does nothing on a task"),
+    (("down", "down", "1", "down", "down", "delete"), "and a 1 on alpha's conversation (#192) does nothing there"),
 ])
 async def test_delete_on_a_row_still_sinking_ends_as_typed_slowly(tmp_path, clock, keys, desc):
     """Review 25: a burst's Delete lands on a frame the sink hasn't drawn yet. The row it takes

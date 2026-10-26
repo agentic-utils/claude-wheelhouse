@@ -291,7 +291,7 @@ session.
   list gains a pinned first row, 💬 Conversation, highlighted, and drops its session column (it shows
   only while the list has every session's items, after `Esc` or a click on the selected session, which
   unselects it; there every unparked session has its 💬 row, named after it, under the active items, in the
-  session list's order), and the right-hand pane
+  session list's order, or at the bottom while a column sort is on), and the right-hand pane
   follows its conversation, read live from its transcript: your prompts and general
   messages (in green, line breaks kept, without the `[wheelhouse] from …` prefix, and in
   full even when the notification that delivered one was cut short) and Claude's replies

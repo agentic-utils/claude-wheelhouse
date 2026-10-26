@@ -6,7 +6,7 @@ import pytest
 
 from claude_wheelhouse import tui
 from claude_wheelhouse.tui import DocEditor, LeaveEdits, WheelhouseApp
-from test_tui import item_list_rows
+from test_tui import item_list_rows, item_row
 
 DOC = "# The plan\n\nBuild it.\n\n- one\n- two\n\n```py\nx = 1\n```\n\n| alpha | beta |\n|---|---|\n| 1 | 2 |\n"
 # a doc taller than the viewer: forty sections of a heading and a paragraph, four lines each
@@ -24,7 +24,7 @@ def doc(store, sid, tmp_path):
 async def shown(app, pilot, ref: str, full: bool = False):
     """The doc item highlighted, in Detail or full screen: its viewer and editor."""
     await pilot.pause()
-    app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(f"└ {ref}"))
+    app.items_table.move_cursor(row=item_row(app, f"└ {ref}"))
     await pilot.pause()
     if full:
         app.items_table.focus()
@@ -163,7 +163,7 @@ async def test_edits_outlive_another_doc_shown_and_come_back(store, sid, doc):
     async with app.run_test(size=(160, 40)) as pilot:
         view, editor = await shown(app, pilot, doc[0])
         await edited(app, pilot, view, editor)
-        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(q))
+        app.items_table.move_cursor(row=item_row(app, q))
         await pilot.pause()
         assert not editor.display, "another item: the editor closes"
         assert app.query_one("#detail-pane").border_title == "Detail", "the title back"
@@ -286,7 +286,7 @@ async def test_a_click_on_a_block_the_edits_took_out_keeps_the_cursor(store, sid
         editor.delete((4, 0), (6, 0))   # the list, not rendered again
         editor.move_cursor((2, 3))
         await pilot.pause()
-        app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(q))
+        app.items_table.move_cursor(row=item_row(app, q))
         await pilot.pause()
         view, editor = await shown(app, pilot, doc[0])
         await click(pilot, view, row_with(view, "one"))

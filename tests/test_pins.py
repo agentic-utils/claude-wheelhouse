@@ -87,7 +87,7 @@ async def test_docs_cleared_before_pins_stay_unpinned_and_hidden(store, sid, tmp
     app = WheelhouseApp(again)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert set(app.items_table.rows) == {f"{sid}|{live}"}, "the cleared docs stay hidden with F off"
+        assert set(app.items_table.rows) == {f"{sid}|{live}", f"{sid}|"}, "the cleared docs stay hidden with F off, the conversation shown"
 
 
 def test_a_parents_delete_leaves_its_pinned_children(store, sid, tmp_path):
@@ -233,7 +233,7 @@ async def test_f_never_hides_a_pinned_item(store, sid, tmp_path):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert set(app.items_table.rows) == {f"{sid}|{kept}"}, "the pinned one shows with F off"
+        assert set(app.items_table.rows) == {f"{sid}|{kept}", f"{sid}|"}, "the pinned one shows with F off, beside the conversation"
 
 
 @pytest.mark.anyio
