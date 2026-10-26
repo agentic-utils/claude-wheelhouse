@@ -36,6 +36,8 @@ def repo(root: Path, files: dict[str, str], where="docs/adr") -> Path:
      "front matter outranks the name"),
     ("0008-open.md", "---\nstatus: Accepted\n# never closed\n", "0008", "ACCEPTED", "never closed",
      "front matter never closed is read as the doc's body"),
+    ("0012-ACCEPTED-use-jinja-templates.md", "", "0012", "ACCEPTED", "use jinja templates",
+     "a slug that mentions templates is still a decision"),
 ])
 def test_parse(tmp_path, name, text, number, status, title, desc):
     d = scan.parse(tmp_path / name, text, "repo")
@@ -44,7 +46,8 @@ def test_parse(tmp_path, name, text, number, status, title, desc):
 
 @pytest.mark.parametrize("name, desc", [
     ("README.md", "no number"), ("042-short.md", "three digits"), ("0001-x.txt", "not markdown"),
-    ("0001-x.md.bak", "a backup"), ("template.md", "a template"),
+    ("0001-x.md.bak", "a backup"), ("template.md", "a template"), ("0000-template.md", "a numbered template"),
+    ("0000-TEMPLATE.md", "a numbered template, in capitals"),
 ])
 def test_not_a_decision(tmp_path, name, desc):
     assert scan.parse(tmp_path / name, "# x\n", "repo") is None, desc
@@ -148,6 +151,19 @@ def test_a_link_out_of_the_directory_is_never_read(tmp_path):
     got = scan.Scanner().scan([(d, "r")])
     assert [(x.number, x.title) for x in got] == [("0003", "A"), ("0001", "A")], \
         "a link outside its directory skipped, its title never listed; one inside it read"
+
+
+def test_route_lists_a_sibling_docs_repos_decisions_under_the_declaring_repo(tmp_path):
+    """A project split over sibling repos (#191): the code repo's session declares the docs
+    repo's decisions; they list once, under the code repo, and read through /docs."""
+    app, docs = tmp_path / "app", tmp_path / "app-docs" / "decisions"
+    for d in (app / ".git", tmp_path / "app-docs" / ".git", docs):
+        d.mkdir(parents=True)
+    (docs / "0001-ACCEPTED-separate-docs-repo.md").write_text("# ADR-0001: Separate\n\n- **Status:** ACCEPTED\n")
+    rows = sessions((app, ["../app-docs/decisions"]), (app, [str(docs)]))
+    assert listed(rows) == [("app", "0001", "ACCEPTED")]
+    s = served.Served([api.Loaded("design", design.module)], api.Context(Path("/tmp"), lambda: rows, lambda: None))
+    assert "Separate" in s.read(str(docs / "0001-ACCEPTED-separate-docs-repo.md"))["text"]
 
 
 def test_doc_roots_are_the_decision_dirs(tmp_path):

@@ -28,9 +28,9 @@ SCANNER = scan.Scanner()   # the daemon's (or a --local app's) files read, kept 
 # the daemon side: where decisions are, and the route the pane asks
 
 def dirs(ctx: api.Context) -> list[tuple[Path, str]]:
-    """Each directory decisions are found in (api.doc_dirs: docs/adr, or what sessions
-    declared), with its repo's name."""
-    return [(d, root.name if (root := api.git_root(d)) else d.name) for d in api.doc_dirs(ctx.sessions())]
+    """Each directory decisions are found in (api.decision_dirs: docs/adr, or what sessions
+    declared, perhaps in another repo), with the name of the repo that looks there."""
+    return [(d, root.name) for d, root in api.decision_dirs(ctx.sessions())]
 
 
 def routes(ctx: api.Context) -> list[api.Route]:
