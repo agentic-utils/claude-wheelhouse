@@ -19,9 +19,8 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-packages --locked
-      - name: trace signals  # [DIAG TEMP #188] who signals the runner
-        run: |
-          sudo apt-get install -y -qq bpftrace > /dev/null
+      - run: sudo apt-get install -y -qq bpftrace > /dev/null  # [DIAG TEMP #188]
+      - run: |  # [DIAG TEMP #188] who signals the runner, and memory, disk and the kernel's log as the run goes
           cat > "$RUNNER_TEMP/sig.bt" <<'BT'
           tracepoint:signal:signal_generate /args->sig == 1 || args->sig == 2 || args->sig == 9 || args->sig == 15 || args->sig == 19 || args->sig == 20/ {
             printf("SIG %s sig=%d from pid=%d ppid=%d comm=%s -> pid=%d comm=%s\n", strftime("%H:%M:%S", nsecs), args->sig, pid, curtask->real_parent->tgid, comm, args->pid, args->comm);
@@ -33,16 +32,6 @@ jobs:
             printf("SIG %s kill(%d, %d) from pid=%d ppid=%d comm=%s\n", strftime("%H:%M:%S", nsecs), args->pid, args->sig, pid, curtask->real_parent->tgid, comm);
           }
           BT
-          sudo nohup bpftrace -B line --unsafe "$RUNNER_TEMP/sig.bt" > "$RUNNER_TEMP/sig.log" 2>&1 &
-          sleep 8
-          sleep 30 & kill $!   # the tracer's own check: this kill must show
-          sudo apt-get install -y -qq auditd > /dev/null
-          sudo auditctl -a always,exit -F arch=b64 -S kill -S tkill -S tgkill -k sig
-          sleep 2
-          cat "$RUNNER_TEMP/sig.log"
-          sudo ausearch -k sig -i | tail -5
-      - run: |  # [DIAG TEMP #188] tail: the post steps are skipped when the runner is signalled
-          (sudo tail -F /var/log/audit/audit.log | grep --line-buffered -E 'key="sig"' | grep --line-buffered -vE 'a1=0 |a1=0x0 ' | sed -u 's/^/AUDIT /') &
-          (tail -F "$RUNNER_TEMP/sig.log" | grep --line-buffered -v "comm=python3\? -> pid=[0-9]* comm=\(sleep\|python3\?\)$") &
-          (while sleep 60; do ps -eo pid,ppid,pgid,sid,etimes,args --sort=etimes | awk '$5 > 300' | grep -v "ps -eo" | cut -c1-160 | sed 's/^/PS /'; echo PS --; done) &
+          sudo setsid bpftrace -B line --unsafe "$RUNNER_TEMP/sig.bt" 2>&1 | grep --line-buffered -vE "comm=(python3?|sleep|claude)$" &
+          (while sleep 30; do echo "MEM $(date -u +%T) $(free -m | awk 'NR==2{print $3"/"$2" used, avail "$7}') disk $(df -h / /tmp | awk 'NR>1{print $6, $4" free"}' | tr '\n' ' ')"; sudo dmesg | tail -3 | sed 's/^/KERN /'; done) &
           uv run --no-sync python -m pytest -q -o faulthandler_timeout=120
