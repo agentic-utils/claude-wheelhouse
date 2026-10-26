@@ -183,7 +183,7 @@ async def test_delete_moves_at_once(store, sid, clock):
         app.items_table.focus()
         app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{q}"))
         await pilot.pause()
-        await pilot.press("alt+f")   # finished items shown: the closed one goes to the foot
+        await pilot.press("alt+v")   # finished items shown: the closed one goes to the foot
         await pilot.press("delete")
         await pilot.pause()
         assert app.item_sink.move is None and refs(app)[-1] == q, "at the foot, at once"
@@ -209,7 +209,7 @@ async def test_delete_moves_at_once_both_ways(store, sid, clock, subject, keys, 
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         app.items_table.focus()
-        await pilot.press("alt+f")
+        await pilot.press("alt+v")
         await pilot.pause()
         app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{ref[subject]}"))
         await pilot.pause()
@@ -272,7 +272,7 @@ async def test_delete_dismisses_settled_tasks_and_subagents(store, sid, monkeypa
         gone = said.startswith("dismissed")
         assert (f"{sid}|{ref}" not in app.items_table.rows) == gone, f"{desc}: off the inbox"
         if gone:
-            await pilot.press("alt+f")
+            await pilot.press("alt+v")
             await pilot.pause()
             app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{ref}"))
             await pilot.pause()

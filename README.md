@@ -211,7 +211,7 @@ session.
   app runs). `Delete` on an item with children asks first, saying how many it takes and
   how many of them are still open or unread, and how many running ones stay, then closes
   or dismisses it and deletes the rest, at any depth. They stay deleted, even when a
-  subagent finishes; `Ctrl+R` with `Alt+F` showing brings one back. A pinned child is never
+  subagent finishes; `Ctrl+R` with `Alt+V` showing brings one back. A pinned child is never
   deleted or counted: it stays, at its session's level.
   A running child (a subagent still at work, say) is never deleted: it stays in the list
   with no parent, at the top level, and stays there if `Ctrl+R` brings its parent back.
@@ -240,7 +240,7 @@ session.
   report unpinned), anything else unpinned, and a doc posted again keeps the pin you set.
   Clearing the inbox never takes a pinned item: `Ctrl+A` never marks one, a `Delete` on
   marked rows leaves them (and says so: `1 pinned kept`), a parent's `Delete` leaves its
-  pinned children, and `Alt+F` never hides one. `Delete` on a pinned item asks first ("Delete
+  pinned children, and `Alt+V` never hides one. `Delete` on a pinned item asks first ("Delete
   pinned M2? The file stays on disk.", No by default), saying so too if a comment of
   yours on it awaits a reply; Yes clears its pin and deletes it.
 - **A doc's thread.** Select a doc and Detail shows it with its thread: **split** (the
@@ -283,7 +283,7 @@ session.
   and a subagent done or failed stay in the inbox, dimmed, below everything still
   needing you, the latest at the foot. One you've selected keeps its place, whatever its
   status does; once you move on it falls to the foot. `Delete` dismisses it (closes a
-  question or decision); `Alt+F` shows the dismissed and closed ones, and `Ctrl+R` on one
+  question or decision); `Alt+V` shows the dismissed and closed ones, and `Ctrl+R` on one
   brings it back (`Delete` only ever closes: on one its session finished while you had it
   selected, it lets it go at once). One you've answered and the session hasn't replied to stays up, as
   processing.
@@ -334,7 +334,7 @@ session.
   size the same way, as a one-cell bar in the same colours, filled in eighths on a
   linear scale: an eighth for each 125k begun, so the cell is full past 875k.
 - **The PRs pane.** Under the inbox, the open pull requests your sessions made (`PRs ·
-  mine`), or with `m` every open PR you authored in any repo (`PRs · all`). As the inbox
+  mine`), or with `Alt+O` every open PR you authored in any repo (`PRs · all`). As the inbox
   does, it follows the session selected: its PRs alone (`PRs · mine · <session>`), or every
   one with none selected (`Esc`). Each row is its
   `PR` number, repo (when there's more than one), title and a light: red for a failed
@@ -342,7 +342,7 @@ session.
   run; yellow while a review is awaited; green when it's ready to merge; grey for a draft.
   One `gh api graphql` call, made by the daemon with `gh`'s own login, fetches them all
   every 5 minutes, when the pane is shown, 20 seconds after a session pushes or merges,
-  and on `r`; every app shares it, and a merged or closed PR leaves the pane at once.
+  and on `Alt+R`; every app shares it, and a merged or closed PR leaves the pane at once.
   Highlighting a session's PR shows it in Detail with its thread; `Enter` opens it in the
   browser. Detail always shows what you picked last, in the inbox or here: the other list
   highlights it too if it lists it, and otherwise hides its highlight until you click, press
@@ -366,7 +366,7 @@ session.
   checks (each failing one by name, a link to its run), description, history (commits,
   a run of them on one line, reviews and events) and comments, all as plain text. That
   detail is fetched in the background and kept for two minutes, fetched again sooner when
-  the PR changes, and on `r` in the PRs pane.
+  the PR changes, and on `Alt+R` in the PRs pane.
 - **The Decisions pane.** Under the inbox, the design decisions (ADRs) of every repo a session works
   in: each `NNNN-*.md` file in the repo's `docs/adr`, or in the directories a session there
   named with `set_doc_dirs` instead (`.plan/`, say, only if named), read again every 10
@@ -454,7 +454,7 @@ session.
   default), at `<main checkout>/.worktrees/<branch>`, on a new branch from the session's last
   commit (`<branch>-fork` unless changed), or this one. Uncommitted changes stay where they are:
   the dialog warns when there are any, and the fork is told it won't see them. A
-  pending Park or Stop & Forget, its button back on after 30 seconds, is pressed again to choose: `Alt+C` cancels the request, `Alt+F` forces
+  pending Park or Stop & Forget, its button back on after 30 seconds, is pressed again to choose: `Alt+C` cancels the request, `Alt+O` forces
   it (the session is stopped at once, without its steps), `Esc` leaves it be. In the session's
   tab, `/wheelhouse park` and `/wheelhouse end` do the same from there. A tab closes once its
   session stops, by `/exit` or by the wheelhouse: its shell then exits cleanly, which Windows
@@ -522,8 +522,8 @@ along with the launch command.
 
 ## Using it
 
-Keys, shown in upper case as usual (Alt+F means Alt and the f key, not Shift+F). Every one has a modifier (or is `F1`), so each works from the answer box too: `Enter` open an item's thread (or follow a session's conversation, in the
-session list), `Alt+F` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
+Keys, shown in upper case as usual (Alt+V means Alt and the v key, not Shift+V). Every one has a modifier (or is `F1`), so each works from the answer box too: `Enter` open an item's thread (or follow a session's conversation, in the
+session list), `Alt+V` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
 highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `Alt+N` new session, `Alt+A` adopt, `Alt+Shift+L` relaunch all, `Alt+K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode), `Alt+S` send this one answer now (the queue and mode left as they are),
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and

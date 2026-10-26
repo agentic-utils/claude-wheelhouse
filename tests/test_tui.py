@@ -134,7 +134,7 @@ async def test_finished_items_toggle_in_and_take_a_message(store, sid):
         items = app.query_one("#items", DataTable)
         refs = lambda: [str(items.get_row_at(i)[2]) for i in range(items.row_count)]
         assert refs() == [t, done], "a done task stays, settled, at the foot; a closed question is hidden (T71)"
-        await pilot.press("alt+f")
+        await pilot.press("alt+v")
         await pilot.pause()
         assert refs() == [t, done, closed], "finished items after the rest"
         items.move_cursor(row=refs().index(closed))
@@ -148,9 +148,9 @@ async def test_finished_items_toggle_in_and_take_a_message(store, sid):
         await pilot.press("f")
         await pilot.pause()
         assert len(refs()) == 3 and box.text == "f", "a plain f types into the answer box instead of toggling"
-        await pilot.press("alt+f")
+        await pilot.press("alt+v")
         await pilot.pause()
-        assert len(refs()) == 2, "Alt+F toggles from the answer box too (#189)"
+        assert len(refs()) == 2, "Alt+V toggles from the answer box too (#189)"
     assert [(m["item_ref"], m["body"]) for m in store.drafts(sid)] == [(closed, "the punchline")]
     assert store.item(sid, closed)["status"] == "closed", "a message on a finished item leaves its status alone"
 
@@ -1842,7 +1842,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
      "review 16 (1): Enter on No answers No, then Q quits"),
     ("session-list", "gone", ("enter", "enter", "alt+y"), {"stack": ("Screen",), "launched": []},
      "review 16 (1): Relaunch's Confirm opens on No, so Enter declines, and the Y behind it doesn't relaunch"),
-    ("session-list", "alpha", ("alt+p", "enter", "alt+f"), {"stack": ("Screen",), "pending": None, "parked": False},
+    ("session-list", "alpha", ("alt+p", "enter", "alt+o"), {"stack": ("Screen",), "pending": None, "parked": False},
      "review 16 (1): the Choice opens on Cancel request: Enter cancels the request, and the F behind it isn't Force"),
     ("session-list", "alpha", ("alt+p", "enter", "escape"), {"stack": ("Screen",), "pending": None},
      "review 16 (1): Enter cancels the request, and the Esc behind it isn't Leave it"),
@@ -1854,7 +1854,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
      "review 16 (2): X Enter renames, and the second Enter is the session list's"),
     ("session-list", "alpha", ("alt+n", "tab", "enter", "escape"), {"stack": ("Screen", "NewSession"), "focus": "browse"},
      "review 16 (3): Enter on Browse opens the picker, and the Esc behind it closes the picker, not New session"),
-    ("session-list", "alpha", ("alt+p", "alt+f", "alt+y"), {"stack": ("Screen",), "parked": True},
+    ("session-list", "alpha", ("alt+p", "alt+o", "alt+y"), {"stack": ("Screen",), "parked": True},
      "F on the Choice asks to confirm Force, and the Y behind it confirms"),
     ("session-list", "alpha", ("alt+p", "alt+c", "alt+p"), {"stack": ("Screen", "ParkSession"), "pending": None},
      "C cancels the request before the P behind it, which asks afresh: Park's dialog, as alpha runs in the wheelhouse"),
@@ -1881,7 +1881,7 @@ async def test_a_key_lands_before_the_next_acts(store, tmp_path, monkeypatch, fo
 @pytest.mark.parametrize("focus, at, burst, desc", [
     ("items", "qa", ("alt+h", "enter", "alt+y"), "a focused button's Enter, then a dialog key"),
     ("session-list", "alpha", ("alt+p", "enter", "escape"), "the Choice's Enter, then Esc"),
-    ("session-list", "alpha", ("alt+p", "alt+f", "alt+y"), "a dialog's answer that opens another"),
+    ("session-list", "alpha", ("alt+p", "alt+o", "alt+y"), "a dialog's answer that opens another"),
     ("session-list", "alpha", ("alt+p", "alt+c", "alt+p"), "a dialog's answer, then a key that reads what it did"),
     ("session-list", "alpha", ("alt+r", "x", "enter", "ctrl+q"), "an input's Enter, then a key on the screen behind"),
     ("session-list", "alpha", ("alt+r", "x", "enter", "enter"), "an input's Enter twice"),
@@ -2566,7 +2566,7 @@ async def test_one_click_on_a_dead_session_opens_one_prompt_and_yes_closes_it(st
 
 @pytest.mark.parametrize("screen, labels, desc", [
     (lambda: Confirm("ok?"), ["Yes [Alt+Y]", "No [Alt+N]"], "the relaunch and destructive confirms"),
-    (lambda: Choice("hm?"), ["Cancel request [Alt+C]", "Force [Alt+F]", "Leave it [Esc]"], "a pending request's choice"),
+    (lambda: Choice("hm?"), ["Cancel request [Alt+C]", "Force [Alt+O]", "Leave it [Esc]"], "a pending request's choice"),
     (lambda: RelaunchChoice("big?"), ["Compact first [Alt+C]", "Relaunch now [Alt+R]", "Cancel [Esc]"],
      "Relaunch of a big session"),
 ])
@@ -2784,7 +2784,7 @@ async def test_delete_closes_and_ctrl_r_reopens_questions(store, sid, key, kind,
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         if finished:
-            await pilot.press("alt+f")
+            await pilot.press("alt+v")
         app.items_table.focus()
         app.items_table.move_cursor(row=0)
         await pilot.pause()
@@ -2948,7 +2948,7 @@ async def test_a_selected_item_moves_only_on_delete(store, sid, live, clock, sta
             await pilot.pause()
             table = app.items_table
             table.focus()
-            await pilot.press("alt+f")   # finished items shown, so a finished target is in the list
+            await pilot.press("alt+v")   # finished items shown, so a finished target is in the list
             await pilot.pause()
             table.move_cursor(row=table.get_row_index(f"{sid}|{ref}"))
             await pilot.pause()
@@ -3165,9 +3165,9 @@ TIE_SECOND = "2026-10-08T10:00:05+00:00"   # every write a case makes, after its
      "review 47: seen by the dwell while selected: held, then Down goes to the row below"),
     ("D1-D3 unseen", "D2", "", "D3 D2 D1", "down+lapse", "D3 D1 D2", "D1",
      "review 47: Down typed as the dwell lapses: Down goes to the row below"),
-    ("T1-T3 done", "T2", "alt+f delete ctrl+r", "T1 T2 T3", "up", "T1 T2 T3", "T1",
+    ("T1-T3 done", "T2", "alt+v delete ctrl+r", "T1 T2 T3", "up", "T1 T2 T3", "T1",
      "Delete then Ctrl+R in one second: a task dismissed and brought back returns to where it settled"),
-    ("Q1-Q3 answered", "Q2", "alt+f delete ctrl+r", "Q1 Q3 Q2", "up", "Q1 Q3 Q2", "Q3",
+    ("Q1-Q3 answered", "Q2", "alt+v delete ctrl+r", "Q1 Q3 Q2", "up", "Q1 Q3 Q2", "Q3",
      "Delete then Ctrl+R in one second: a question closed and reopened, answered again, settles last"),
     ("Q1-Q3 open", "Q2", "Q2 answered, Q3 answered", "Q2 Q1 Q3", "down", "Q1 Q2 Q3", "Q1",
      "a question answered while selected, then another: held, then the two by id, Q2 above Q3"),
@@ -3277,7 +3277,7 @@ async def test_delete_closes_and_ctrl_r_reopens_decisions(store, sid, start, key
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         if finished:
-            await pilot.press("alt+f")
+            await pilot.press("alt+v")
         app.items_table.focus()
         app.items_table.move_cursor(row=0)
         await pilot.pause()
@@ -3351,7 +3351,7 @@ def post_five(store, sid) -> None:
     ([("click", 3), ("ctrl", 1), ("key", "delete")], "Q1", "marked bottom first: still above the topmost"),
     ([("click", 2), ("key", "delete")], "Q2", "one row, unmarked: the row above it"),
     ([("key", "delete")], "Q2", "the first row: the new first row"),
-    ([("key", "alt+f"), ("click", 2), ("key", "delete")], "Q3", "Alt+F on: the row stays in sight, the highlight with it"),
+    ([("key", "alt+v"), ("click", 2), ("key", "delete")], "Q3", "Alt+V on: the row stays in sight, the highlight with it"),
 ])
 @pytest.mark.anyio
 async def test_delete_puts_the_highlight_above_the_topmost_row_it_took(store, sid, steps, lands, desc):
@@ -3380,7 +3380,7 @@ async def test_ctrl_a_marks_the_finished_rows(store, sid, finished, focus, marke
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         if finished:
-            await pilot.press("alt+f")
+            await pilot.press("alt+v")
         app.query_one(f"#{focus}").focus()
         await pilot.pause()
         await pilot.press("ctrl+a")
@@ -3428,7 +3428,7 @@ async def test_ctrl_r_takes_a_queued_answer_back_before_it_reopens(store, sid, q
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.press("alt+f")
+        await pilot.press("alt+v")
         app.items_table.focus()
         app.items_table.move_cursor(row=0)
         await pilot.pause()
@@ -3458,7 +3458,7 @@ async def ctrl_r_where(tmp_path, follow, focus, at, marks, typed, slow) -> dict:
     notes = []
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.press("alt+f")
+        await pilot.press("alt+v")
         if follow:
             app.follow(sid)
         await pilot.pause()
@@ -3517,9 +3517,9 @@ async def test_ctrl_r_reopens_only_from_the_item_list(tmp_path, follow, focus, a
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("kinds, key, said, desc", [
-    (("question", "task"), "delete", "closed Q1; dismissed T1: Alt+F shows finished items, Ctrl+Z undoes it",
+    (("question", "task"), "delete", "closed Q1; dismissed T1: Alt+V shows finished items, Ctrl+Z undoes it",
      "Delete on mixed marks says which it closed and which it dismissed"),
-    (("task", "agent"), "delete", "dismissed T1, A1: Alt+F shows finished items, Ctrl+Z undoes it", "all dismissed: said so"),
+    (("task", "agent"), "delete", "dismissed T1, A1: Alt+V shows finished items, Ctrl+Z undoes it", "all dismissed: said so"),
     (("question", "task"), "ctrl+r", "reopened T1, Q1", "Ctrl+R brings either back"),
 ])
 async def test_the_word_after_acting_on_marks_names_each_act(store, sid, kinds, key, said, desc):
@@ -3536,7 +3536,7 @@ async def test_the_word_after_acting_on_marks_names_each_act(store, sid, kinds, 
             # the finished, and in the notice
             for k, r in zip(kinds, refs):
                 app.close(store.item(sid, r), True)
-            await pilot.press("alt+f")
+            await pilot.press("alt+v")
         await pilot.pause()
         items.set_marks({f"{sid}|{r}" for r in refs})
         notes = []
@@ -3572,7 +3572,7 @@ async def test_the_word_after_acting_on_marks_mid_sink_names_them_as_they_will_s
         app.notify = lambda text, **kw: notes.append(text)
         await pilot.press("delete")
         await pilot.pause()
-    assert notes == ["dismissed T1; closed Q1: Alt+F shows finished items, Ctrl+Z undoes it"]
+    assert notes == ["dismissed T1; closed Q1: Alt+V shows finished items, Ctrl+Z undoes it"]
 
 
 @pytest.mark.anyio
@@ -3599,7 +3599,7 @@ async def test_delete_closes_the_marked_questions_and_ctrl_r_reopens_them(store,
         await pilot.pause()
         assert [store.item(sid, r)["status"] for r in (q1, q2, q3, t)] == ["closed", "open", "closed", "running"]
         assert items.marked == set()
-        await pilot.press("alt+f")
+        await pilot.press("alt+v")
         await pilot.pause()
         items.set_marks({f"{sid}|{q1}", f"{sid}|{q2}", f"{sid}|{q3}"})
         await pilot.pause()
@@ -5332,7 +5332,7 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
         await pilot.pause()
         app.items_table.focus()
         for _ in range(presses):
-            await pilot.press("alt+f")
+            await pilot.press("alt+v")
             await pilot.pause()
         labels = footer_labels(app)
         assert app.show_finished == shown, desc
@@ -7383,7 +7383,7 @@ async def test_delete_on_a_parent_leaves_its_running_children(store, sid, shape,
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         app.items_table.focus()
-        await pilot.press("alt+f")   # the parent stays in sight, finished, for Ctrl+R
+        await pilot.press("alt+v")   # the parent stays in sight, finished, for Ctrl+R
         await pilot.pause()
         app.items_table.move_cursor(row=[r[1] for r in item_list_rows(app)].index(t))
         await pilot.pause()
@@ -8610,7 +8610,7 @@ async def test_ctrl_z_undoes_the_last_inbox_act(store, sid, shape, keys, want, s
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.press("alt+f")   # finished rows in sight, so Ctrl+R has one to reopen
+        await pilot.press("alt+v")   # finished rows in sight, so Ctrl+R has one to reopen
         app.items_table.focus()
         app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{refs[-1] if shape == 'two open' else refs[0]}"))
         await pilot.pause()
@@ -8815,3 +8815,47 @@ async def test_a_compactions_cut_off_is_the_stores_for_every_app(store, tmp_path
         assert refs == {"", "T1"}, f"{scenario}: the conversation and T1 locked, never Q1 posted since: {refs}"
         assert dims == {"T1": True, "Q1": False}, f"{scenario}: Detail dims on a locked item only: {dims}"
     assert len({frozenset(r) for r, _ in seen}) == 1, f"{scenario}: every app agrees"
+
+
+def bound_combos() -> list[str]:
+    """Every Alt and Ctrl+letter combo bound anywhere: the app's, its widgets' and dialogs', and
+    the PRs pane's."""
+    import re
+    from claude_wheelhouse import tui
+    from claude_wheelhouse_prs import pane
+    keys = {k.strip() for mod in (tui, pane) for obj in vars(mod).values()
+            if isinstance(obj, type) and obj.__module__ == mod.__name__
+            for b in obj.__dict__.get("BINDINGS", []) for k in b.key.split(",")}
+    keys |= {b.key for b in tui.BUTTON_KEYS}
+    return sorted(k for k in keys if re.fullmatch(r"alt\+(shift\+)?[a-z]|ctrl\+[a-z@]", k))
+
+
+def terminal_bytes(key: str) -> str:
+    """What a terminal (Windows Terminal among them) sends for a combo: Alt as Esc before the
+    letter, Ctrl+letter as its control character, Ctrl+Space as NUL (ctrl+@)."""
+    *mods, letter = key.split("+")
+    if mods[0] == "alt":
+        return "\x1b" + (letter.upper() if "shift" in mods else letter)
+    return "\x00" if letter == "@" else chr(ord(letter) - 96)
+
+
+@pytest.mark.parametrize("key", bound_combos())
+def test_every_bound_combo_arrives_as_bound(key):
+    """#189: Textual reads some Esc sequences as other keys (Esc f is ctrl+right, Esc b
+    ctrl+left), so a combo bound to one of those would never arrive."""
+    from textual._xterm_parser import XTermParser
+    parser = XTermParser(debug=False)
+    got = [e.key for e in [*parser.feed(terminal_bytes(key)), *parser.feed("")] if isinstance(e, events.Key)]
+    assert got == [key], f"{key}: the terminal's bytes parse as {got}"
+
+
+@pytest.mark.anyio
+async def test_a_lists_alt_key_is_not_typed_in_the_answer_box(store, sid):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        box = app.query_one("#answer", TextArea)
+        box.focus()
+        app.post_message(events.Key("alt+r", "r"))   # the session list's Rename, as a terminal sends it
+        await pilot.pause()
+        assert box.text == "" and app.screen is app.screen_stack[0], "dropped: neither typed nor acted on"

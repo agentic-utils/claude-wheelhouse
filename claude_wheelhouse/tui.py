@@ -414,7 +414,7 @@ def open_questions_said(refs: list) -> str:
 
 def deleted_hint(show_finished: bool, undoable: bool = True) -> str:
     """What a delete's notice adds: where the finished go, and how to take it back."""
-    said = ([] if show_finished else ["Alt+F shows finished items"]) + (["Ctrl+Z undoes it"] if undoable else [])
+    said = ([] if show_finished else ["Alt+V shows finished items"]) + (["Ctrl+Z undoes it"] if undoable else [])
     return ": " + ", ".join(said) if said else ""
 
 
@@ -3416,7 +3416,7 @@ class PaneMenu(SessionMenu):
 
 class Choice(Dialog):
     """A pending request: cancel it, force it, or leave it be."""
-    BINDINGS = [Binding("alt+c", "answer('cancel')", show=False), Binding("alt+f", "answer('force')", show=False)]
+    BINDINGS = [Binding("alt+c", "answer('cancel')", show=False), Binding("alt+o", "answer('force')", show=False)]
     CANCEL = "leave"
 
     def __init__(self, prompt: str):
@@ -3428,7 +3428,7 @@ class Choice(Dialog):
             yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
                 yield Button(Text("Cancel request [Alt+C]"), variant="success", id="cancel")
-                yield Button(Text("Force [Alt+F]"), variant="error", id="force")
+                yield Button(Text("Force [Alt+O]"), variant="error", id="force")
                 yield Button(Text("Leave it [Esc]"), id="leave")
 
     @on(Button.Pressed)
@@ -3844,7 +3844,7 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
             keys = actions.setdefault(b.action, [])
             if key_name(b.key) not in keys:   # Ctrl+Space, bound as both ctrl+space and ctrl+@
                 keys.append(key_name(b.key))
-        # dict.fromkeys: one line for a key bound twice, as Alt+F is (its footer label changes)
+        # dict.fromkeys: one line for a key bound twice, as Alt+V is (its footer label changes)
         out += dict.fromkeys(f"- **{' or '.join(keys)}**: {described[action]}" for action, keys in actions.items())
     whose = WHOSE.format(sdk=SDK_WHOSE if sdk else HOSTED_WHOSE if offered & {"interrupt", "compact", "shell"}
                          else "; then Mode, and Send on one that isn't dead.")
@@ -4003,7 +4003,7 @@ class WheelhouseApp(App):
     Footer {{ scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }}
     """
 
-    # keys shown in upper case, the usual convention: Alt+F is alt and the f key, not Shift+F. Every
+    # keys shown in upper case, the usual convention: Alt+V is alt and the v key, not Shift+V. Every
     # one has a modifier (or is F1), so it acts from a text box too (#189)
     BINDINGS = [
         # the answer-box keys are off the footer: the hint under the box gives them (hint)
@@ -4022,8 +4022,8 @@ class WheelhouseApp(App):
         Binding("alt+shift+l", "relaunch_all", "Relaunch all", key_display="Alt+Shift+L"),
         Binding("escape", "clear_filter", "All sessions", key_display="Esc"),
         # one key, two bindings: the footer shows the one that applies (check_action)
-        Binding("alt+f", "show_finished(True)", "Show finished", key_display="Alt+F"),
-        Binding("alt+f", "show_finished(False)", "Hide finished", key_display="Alt+F"),
+        Binding("alt+v", "show_finished(True)", "Show finished", key_display="Alt+V"),
+        Binding("alt+v", "show_finished(False)", "Hide finished", key_display="Alt+V"),
         Binding("f1", "help", "Keys", key_display="F1"),
         # a doc item in Detail (.plan/docs-section.md): split or tabbed, and the tabs
         Binding("ctrl+l", "doc_layout", "Doc layout", show=False, key_display="Ctrl+L"),
@@ -4332,6 +4332,8 @@ class WheelhouseApp(App):
         if self.type_to_thread(event):
             return
         if not (await self._check_bindings(event.key, priority=True) or await self._check_bindings(event.key)):
+            if event.key.startswith("alt+") and isinstance(self.focused, (TextArea, Input)):
+                return   # an Alt key bound elsewhere (a list's): never typed as its letter (#189)
             (self.focused or self.screen)._forward_event(event)
         if isinstance(self.focused, (TextArea, Input)):   # queued behind the key, which restarts the blink if sent there
             self.focused.call_later(self.hold_cursor, self.focused)
@@ -6566,19 +6568,19 @@ class WheelhouseApp(App):
         self.paint_session_info()
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
-        """F's two bindings: only the one that applies shows in the footer, and runs. A doc's keys
+        """Alt+V's two bindings: only the one that applies shows in the footer, and runs. A doc's keys
         (Ctrl+L, its tabs') only while a doc item shows, so they fall through otherwise."""
         if action == "show_finished":
             return parameters[0] != self.show_finished
         if action in ("doc_tab", "doc_layout"):   # only while a doc item shows: tabbed, for its tabs
             return self.doc_here()[1] is not None and (action == "doc_layout" or self.doc_layout == TABBED)
-        if action == "tour":   # L: only while the badge offers something
+        if action == "tour":   # Alt+T: only while the badge offers something
             return bool(getattr(self, "badge", None) and self.badge.display)
         return True
 
     def under_dialog(self) -> bool:
-        """A dialog in front: the app's own keys (New, Adopt, F1 and the rest) wait until it closes,
-        rather than open over it; from a text box under none they act, each having a modifier (#189)."""
+        """A dialog in front: the app's own keys (New, Adopt, F1 and the rest) are dropped rather than
+        open something over it; from a text box under none they act, each having a modifier (#189)."""
         return isinstance(self.screen, Dialog)
 
     def action_show_finished(self, show: bool) -> None:

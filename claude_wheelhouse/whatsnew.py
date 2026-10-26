@@ -239,9 +239,9 @@ FEATURES: tuple[Feature, ...] = (
                  "shows every session's again.",
             tip="Selecting a session narrows the inbox to it: a click on it again shows every session's."),
     Feature("bulk-clear-tip", UNRELEASED, "close",
-            note="Ctrl+A in the inbox marks every finished item and Delete clears them together; Alt+F shows "
+            note="Ctrl+A in the inbox marks every finished item and Delete clears them together; Alt+V shows "
                  "finished items again.",
-            tip="Alt+F shows finished items, or hides them again."),
+            tip="Alt+V shows finished items, or hides them again."),
     Feature("fork-tip", UNRELEASED, "end",
             note="Fork (Alt+K) carries a session on in a copy, in a new worktree, taking the items you choose.",
             tip="Fork (Alt+K) carries a session on in a copy, in a new worktree."),
@@ -270,8 +270,8 @@ FEATURES: tuple[Feature, ...] = (
     Feature("layout-keys", UNRELEASED, ADVANCED,
             note="Alt+Up and Alt+Down reorder rows; drag a splitter to resize panes, and double-click it to reset."),
     Feature("key-modifiers", UNRELEASED, ADVANCED,
-            note="Every key has a modifier, so it works from the answer box too: Ctrl+Q quits, F1 lists the keys, "
-                 "Alt+N is New session."),
+            note="Every key has a modifier, so a letter typed in the answer box is always just typed, and the "
+                 "app's own keys work from there: Ctrl+Q quits, F1 lists the keys, Alt+N is New session."),
     Feature("mcp-reauth", UNRELEASED, ADVANCED, when="sdk",
             note="An MCP server that needs signing in again, or has failed, gets a question with its sign-in link; "
                  "reply on it and the wheelhouse reconnects the server."),

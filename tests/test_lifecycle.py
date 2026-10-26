@@ -97,11 +97,11 @@ async def test_the_wheelhouse_never_deletes_by_itself(store, sid, monkeypatch, s
 @pytest.mark.anyio
 @pytest.mark.parametrize("button, flag, keys, kept, parked, notice, desc", [
     ("#end", "end", ["alt+c"], True, 0, True, "Cancel clears the forget request and tells the session"),
-    ("#end", "end", ["alt+f", "alt+y"], False, None, False, "Force forget deletes after a confirm"),
-    ("#end", "end", ["alt+f", "alt+n"], True, 0, False, "Force forget can be backed out of"),
+    ("#end", "end", ["alt+o", "alt+y"], False, None, False, "Force forget deletes after a confirm"),
+    ("#end", "end", ["alt+o", "alt+n"], True, 0, False, "Force forget can be backed out of"),
     ("#end", "end", ["escape"], True, 0, False, "Escape leaves the request pending"),
     ("#park", "park", ["alt+c"], True, 0, True, "Cancel clears the park request and tells the session"),
-    ("#park", "park", ["alt+f", "alt+y"], True, 1, False, "Force park parks it after a confirm"),
+    ("#park", "park", ["alt+o", "alt+y"], True, 1, False, "Force park parks it after a confirm"),
 ])
 async def test_a_pending_request_can_be_cancelled_or_forced(
         store, sid, monkeypatch, button, flag, keys, kept, parked, notice, desc):
@@ -352,8 +352,8 @@ def notices(app, monkeypatch):
 @pytest.mark.anyio
 @pytest.mark.parametrize("state, request_first, button, keys, desc", [
     ("live", "end", "#end", ["alt+c"], "Cancel after the session ended itself (round-4 #1)"),
-    ("live", "end", "#end", ["alt+f"], "Force after the session ended itself (round-4 #2)"),
-    ("live", "end", "#end", ["alt+f", "alt+y"], "Force confirmed after the session ended itself"),
+    ("live", "end", "#end", ["alt+o"], "Force after the session ended itself (round-4 #2)"),
+    ("live", "end", "#end", ["alt+o", "alt+y"], "Force confirmed after the session ended itself"),
     ("dead", None, "#end", ["alt+y"], "the dead-session confirm after the row went"),
 ])
 async def test_a_dialog_outliving_its_session_does_not_crash(
