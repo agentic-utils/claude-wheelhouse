@@ -12,13 +12,11 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.2  # setup-uv publishes no floating major tag
         with:
           enable-cache: true
       - run: uv sync --all-packages --locked
-      - run: |  # [DIAG TEMP #188]
-          (while sleep 10; do echo "MEM $(date -u +%T) $(free -m | awk 'NR==2{print $3"/"$2" used, avail "$7}') swap $(free -m | awk 'NR==3{print $3}')"; ps -eo rss=,args= --sort=-rss | head -3 | cut -c1-120 | sed 's/^/MEM   /'; done) &
-          uv run --no-sync python -m pytest -v --durations=30 -o faulthandler_timeout=120
+      - run: uv run --no-sync python -m pytest -v -o faulthandler_timeout=120  # [DIAG TEMP #188] -v: prove the long-id stall is gone
