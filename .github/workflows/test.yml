@@ -19,8 +19,21 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-packages --locked
-      - run: uv run --no-sync python -m pytest -q -o faulthandler_timeout=120  # a hung test dumps its stacks
-        env:
-          WHEELHOUSE_TEST_SIGNAL_LOG: ${{ runner.temp }}/signals.log   # [DIAG TEMP #188]
-      - if: always()   # [DIAG TEMP #188] signals the tests' guard refused
-        run: cat "${{ runner.temp }}/signals.log" 2>/dev/null || echo "no signals refused"
+      - name: trace signals  # [DIAG TEMP #188] who signals the runner
+        run: |
+          sudo apt-get install -y -qq bpftrace > /dev/null
+          cat > "$RUNNER_TEMP/sig.bt" <<'BT'
+          tracepoint:signal:signal_generate /args->sig == 1 || args->sig == 2 || args->sig == 9 || args->sig == 15 || args->sig == 19 || args->sig == 20/ {
+            printf("SIG %s sig=%d from pid=%d ppid=%d comm=%s -> pid=%d comm=%s\n", strftime("%H:%M:%S", nsecs), args->sig, pid, curtask->real_parent->tgid, comm, args->pid, args->comm);
+            if (strncmp(args->comm, "Runner", 6) == 0 || strncmp(args->comm, "bash", 4) == 0) {
+              system("ps -o pid,ppid,pgid,sid,lstart,args -p %d,%d | sed 's/^/SIGPS /'", pid, curtask->real_parent->tgid);
+            }
+          }
+          BT
+          sudo nohup bpftrace --unsafe "$RUNNER_TEMP/sig.bt" > "$RUNNER_TEMP/sig.log" 2>&1 &
+          sleep 8
+          cat "$RUNNER_TEMP/sig.log"
+      - run: |  # [DIAG TEMP #188] tail: the post steps are skipped when the runner is signalled
+          (tail -F "$RUNNER_TEMP/sig.log" | grep --line-buffered -v "comm=python3\? -> pid=[0-9]* comm=\(sleep\|python3\?\)$") &
+          (while sleep 60; do ps -eo pid,ppid,pgid,sid,etimes,args --sort=etimes | awk '$5 > 300' | grep -v "ps -eo" | cut -c1-160 | sed 's/^/PS /'; echo PS --; done) &
+          uv run --no-sync python -m pytest -q -o faulthandler_timeout=120
