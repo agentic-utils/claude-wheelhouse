@@ -64,7 +64,7 @@ def main() -> int:
     notes.write_text(f"The port I use is {CANARY}.\n")
     argv = helper.command()
     at = argv.index("--add-dir") if "--add-dir" in argv else len(argv)
-    argv[at:at] = ["--debug-file", str(debug)]   # each claude's own log: the sandbox's question is the last
+    argv[at:at] = ["--debug-file", str(debug)]   # appended to by every claude: the sandbox's has its own
     before = {p: p.stat().st_mtime for p in projects_dir().glob("*.jsonl")} if projects_dir().exists() else {}
     events: queue.Queue = queue.Queue()
     h = helper.Helper(events.put, command_=argv)
@@ -79,13 +79,15 @@ def main() -> int:
                   f"context {event.tokens} tokens; read {', '.join(tools) or 'nothing'}")
             if not ok:
                 print("      " + event.text.replace("\n", "\n      "))
+        h.stop()
+        h = helper.Helper(events.put, command_=[str(scratch / "sandbox.log") if a == str(debug) else a for a in argv])
         event, tools = ask(h, events, f"How do I set the wheelhouse's port? My notes on it are in {notes}: "
                                       "read them first.")
         sandbox = event, tools
     finally:
         h.stop()
     time.sleep(3)   # its kill is on a thread: the debug log and any transcript settle
-    log = debug.read_text(errors="replace") if debug.exists() else ""
+    log = (scratch / "sandbox.log").read_text(errors="replace") if (scratch / "sandbox.log").exists() else ""
     event, tools = sandbox
     tried = any(t.startswith("Read") and str(notes) in t for t in tools)
     denied = "Read tool permission denied" in log
@@ -103,7 +105,7 @@ def main() -> int:
     written = [p.name for p, m in after.items() if before.get(p) != m]
     failed += bool(written)
     print(f"{'FAIL' if written else 'PASS'}  sandbox: no transcript written {written or ''}")
-    print(f"{failed} failed; debug log kept in {debug}")
+    print(f"{failed} failed; debug logs kept in {scratch}")
     return 1 if failed else 0
 
 

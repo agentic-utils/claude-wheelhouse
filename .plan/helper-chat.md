@@ -103,8 +103,9 @@ not yet run again):
 - Real context: 39.2k to 40.0k tokens a question (the briefing, the rules and the tool
   definitions), under the 100k price break.
 - A Read outside the package and the modules (a canary file in /tmp, which the question
-  asked it to read) was attempted and denied: the debug log says "Read tool permission
-  denied" for it, and the canary never reached the answer.
+  asked it to read) was attempted and denied: the debug log has one "Read tool
+  permission denied", during the canary question (the line names no path), and the canary
+  never reached the answer. The eval now gives that question a debug log of its own.
 - CLAUDE.md: not settled by the log, which never mentions CLAUDE.md, loaded or not. By
   inference from size, it isn't loaded: every question's context was 39.2k to 40.0k
   tokens, about the briefing alone, and Doug's `~/.claude/CLAUDE.md` would add several
