@@ -2365,6 +2365,62 @@ async def test_a_new_reply_in_a_long_thread_in_detail(store, sid, up, own, desc,
             assert scroll.scroll_y == scroll.max_scroll_y, desc
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("view, shrink, desc", [
+    ("conversation", "emoji", "a conversation, emoji suggestions wrapping under the box as a code is typed"),
+    ("conversation", "splitter", "a conversation, its answer box made taller with the splitter"),
+    ("thread", "emoji", "an item's thread, emoji suggestions wrapping under the box"),
+    ("thread", "splitter", "an item's thread, its answer box made taller with the splitter"),
+])
+async def test_detail_at_its_end_stays_there_when_its_view_shrinks(store, sid, tmp_path, monkeypatch, view, shrink,
+                                                                     desc):
+    """#200: Detail at its end, its view made shorter by what's under it (the hint's emoji
+    suggestions, the answer box's splitter): its last line stays in view, and what's new
+    after, a reply, still shows at the end."""
+    folder = tmp_path / "projects/-home-u-repo"
+    folder.mkdir(parents=True)
+    path = folder.joinpath(f"{sid}.jsonl")
+    path.write_text("".join(json.dumps({"type": "user", "timestamp": "2026-10-07T21:30:00Z",
+                                        "message": {"content": f"turn {i}"}}) + "\n" for i in range(60)))
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    ref = store.post_item(sid, "question", "q", body="\n\n".join(f"para {i}" for i in range(80)), status="open")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await laid(pilot)
+        scroll = app.detail_scroll
+        if view == "conversation":
+            app.follow(sid)
+        else:
+            app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{ref}"))
+            await laid(pilot)
+            scroll.scroll_end(animate=False, immediate=True)
+        await laid(pilot)
+        height = scroll.size.height
+        assert scroll.scroll_y == scroll.max_scroll_y > 0, f"{desc}: at the end"
+        app.answer.focus()
+        if shrink == "emoji":
+            await pilot.press("colon", "s", "t")
+        else:
+            app.answer.styles.height = app.answer.size.height + 4
+        await laid(pilot)
+        assert scroll.size.height < height, f"{desc}: the view shorter"
+        assert scroll.scroll_y == scroll.max_scroll_y, f"{desc}: its last line still in view"
+        if view == "conversation":
+            say_in(path, "a reply\n\n" * 4)
+        else:
+            store.reply(sid, ref, "a reply\n\n" * 4, status="open")
+        app.refresh_data()
+        await laid(pilot)
+        assert scroll.scroll_y == scroll.max_scroll_y, f"{desc}: the reply shows at the end"
+
+
+def say_in(path, text: str) -> None:
+    """A reply of Claude's at the end of a session's transcript."""
+    with open(path, "a") as f:
+        f.write(json.dumps({"type": "assistant", "timestamp": "2026-10-07T21:31:00Z",
+                            "message": {"content": [{"type": "text", "text": text}]}}) + "\n")
+
+
 class OneTranscript(App):
     """A Transcript alone in its scroll: blocks laid out and changed, nothing else."""
     def compose(self) -> ComposeResult:

@@ -1705,7 +1705,17 @@ def under_way(button: str, s, status: str, relaunching: bool) -> bool:
 class ConversationScroll(VerticalScroll, can_focus=False):
     """The conversation pane's scroll, or a full-screen item's thread's, never a Tab stop: a
     click in it puts focus in the answer box (#77), where PgUp and PgDn scroll it; on a doc,
-    which has no box, in the doc, whose keys scroll it."""
+    which has no box, in the doc, whose keys scroll it. At its end (within a line), it stays
+    there when its view gets shorter (#200): emoji suggestions wrapping under the box, the box's
+    splitter, a button row shown. Left to itself the last lines go under, and once more than a
+    line is hidden, what's new no longer follows (paint_detail's test)."""
+    _height: int | None = None   # the view's height as last laid out
+
+    def on_resize(self) -> None:
+        before, self._height = self._height, self.container_size.height
+        if before is not None and self._height < before \
+                and self.scroll_y >= self.virtual_size.height - before - 1:   # at the end as it was
+            self.scroll_end(animate=False, immediate=True)
 
     def on_mouse_down(self) -> None:
         self.app.focus_answer()
