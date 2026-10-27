@@ -272,11 +272,13 @@ and the README; not the sheet, the tests, `.plan/` or this file). The pre-commit
 clone. It runs `python3 claude_wheelhouse/facts.py check --commit`, needing no venv. A
 rebase's picks don't run it: after a rebase, `make facts` and commit, or CI's test catches it.
 
-Two branches stamped apart conflict on the stamp line, and their merge has a hash neither
-had. A merge or rebase resolves it with `make facts` (it takes a version past both stamps,
-and regenerates its part; a conflict in the guide is the one thing to resolve by hand). A
-batch merge restamps: once the batch's PRs are in, `make facts` on the batch branch and
-commit `#<issue>/chore restamp the helper's fact sheet`, so the promotion PR's tests pass.
+Two branches stamped apart conflict on the stamp line (and on the generated part, when both
+change it), and their merge has a hash neither had. So batch merges are done locally, never
+with GitHub's merge button: in a worktree of the batch branch, `git merge --no-ff` each PR's
+branch, run `make facts` while the sheet is still conflicted (it drops both stamps for one a
+version past them, regenerates its part and stages it; only a conflict in the guide needs a
+person), commit the merge, and push. GitHub marks each PR merged once its head is in the
+base, and each PR's own CI stays green, its stamp matching its own tree.
 
 ## Docs kept in step
 

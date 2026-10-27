@@ -129,3 +129,26 @@ def test_the_hook_needs_no_venv():
     banned = [line for line in Path(facts.__file__).read_text().splitlines()
               if line.startswith(("import ", "from ")) and line.split()[1].split(".")[0] not in sys.stdlib_module_names]
     assert banned == [], "the hook runs python3 with no venv: standard library only at the top"
+
+
+def test_a_merge_of_two_stamped_branches_restamps_with_make_facts(repo, monkeypatch):
+    """A batch merge, as AGENTS.md has it: each branch stamped for its own tree, so the merge
+    conflicts on the stamp (and here the generated part); make facts resolves both."""
+    run = lambda *a: subprocess.run([*GIT, *a], cwd=repo, check=True, capture_output=True, text=True)   # noqa: E731
+    base = run("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    for branch, path in (("a", "claude_wheelhouse/tui.py"), ("b", "README.md")):
+        run("checkout", "-q", "-b", branch, base)
+        (repo / path).write_text(f"{branch}\n")
+        run("add", "-A")
+        monkeypatch.setattr(facts, "generated", lambda b=branch: f"the keys, as {b} has them")
+        facts.make(repo, now=AT)
+        run("commit", "-qm", branch)
+    merging = subprocess.run([*GIT, "merge", "--no-ff", "-q", "a"], cwd=repo, capture_output=True, text=True)
+    assert merging.returncode != 0 and "<<<<<<<" in (repo / "claude_wheelhouse/helper_facts.md").read_text()
+    monkeypatch.setattr(facts, "generated", lambda: "the keys, merged")
+    facts.make(repo, now=AT)
+    sheet = (repo / "claude_wheelhouse/helper_facts.md").read_text()
+    assert "<<<<<<<" not in sheet and sheet.endswith("the keys, merged\n") and "The guide." in sheet
+    assert facts.read_stamp(sheet) == (3, facts.source_hash(repo)), "a version past both branches' 2"
+    facts.check(repo, commit=True)
+    run("commit", "-qm", "merge a")

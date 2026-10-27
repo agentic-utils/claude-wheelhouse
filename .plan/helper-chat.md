@@ -65,9 +65,9 @@ exactly what the commit holds, and the CI test (a clean checkout) the same.
   repo it's in. No pre-commit framework: the repo had none, and this needs no install.
 - `test_facts.py` checks the stamp against the checkout and the generated part against the
   code, in the suite CI already runs.
-- Two branches stamped apart conflict on the stamp line. `make facts` resolves it (a
-  version past both, its part regenerated); only a conflict in the guide needs a person. A
-  batch merge restamps once its PRs are in (AGENTS.md).
+- Two branches stamped apart conflict on the stamp line, so batch merges are local
+  `git merge --no-ff`s, each resolved by `make facts` in the merge commit (a version past
+  both, its part regenerated); only a conflict in the guide needs a person (AGENTS.md).
 
 ## Privacy and safety
 
