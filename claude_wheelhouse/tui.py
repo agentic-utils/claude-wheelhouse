@@ -1592,8 +1592,13 @@ class Compose(TextArea):
         return row, col, self.document.get_line(row)[:col]
 
     chosen = 0   # the suggestion Tab or Enter takes, by its place (Up and Down move it)
+    # where the text typed last left the cursor: a code's suggestions show, and Up and Down
+    # choose among them, only while it stays there, not once moved off (nor back onto a code)
+    typed_at: tuple[int, int] | None = None
 
     def suggestions(self) -> tuple[str | None, list[tuple[str, str]]]:
+        if self.cursor_location != self.typed_at:
+            return None, []
         code = emoji.partial(self._before_cursor()[2])
         return code, emoji.suggest(code) if code else []
 
@@ -1603,8 +1608,13 @@ class Compose(TextArea):
         if done and done.group(1) in emoji.EMOJI:   # a code just closed: swap it in place
             self.replace(emoji.EMOJI[done.group(1)], (row, col - len(done.group(0))), (row, col))
             return
-        self.chosen = 0
+        self.typed_at, self.chosen = (row, col), 0
         self.show_suggestions()
+
+    def on_text_area_selection_changed(self, event) -> None:
+        if self.typed_at is not None and self.cursor_location != self.typed_at:   # moved off: the hint's back
+            self.typed_at = None
+            self.show_suggestions()
 
     def show_suggestions(self) -> None:
         """The suggestions for a code being typed in the hint line, the one chosen marked."""

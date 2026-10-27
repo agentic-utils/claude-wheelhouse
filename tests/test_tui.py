@@ -2748,6 +2748,29 @@ async def test_a_click_on_an_emoji_suggestion_takes_it(store, sid, at, desc):
 
 
 @pytest.mark.anyio
+async def test_emoji_suggestions_go_once_the_cursor_moves_off_the_code(store, sid):
+    """#201: moved off the code typed, the hint is the keys' again, so nothing out of date is
+    clicked or taken, and Up and Down move between lines, even onto a line holding a code."""
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(200, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=0)
+        await pilot.click("#answer")
+        await pilot.press("colon", *"star")
+        hint = app.query_one("#detail-pane .answer-hint", Hint)
+        assert hint.suggesting is not None, "suggested as typed"
+        await pilot.press("down", "left", "left")
+        await pilot.pause()
+        assert hint.suggesting is None, "moved off the code: the suggestions gone"
+        assert app.answer.suggestions() == (None, []), "and none to take"
+        app.answer.text = "top\nsee :sta\nbottom"
+        app.answer.move_cursor((2, 6))
+        await pilot.press("up", "up")
+        assert app.answer.cursor_location[0] == 0, "Up goes up past a line holding a code"
+
+
+@pytest.mark.anyio
 async def test_a_pasted_code_converts_on_send(store, sid):
     store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
