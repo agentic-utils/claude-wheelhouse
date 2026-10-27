@@ -11,9 +11,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from rich.cells import cell_len
 from rich.color import Color
 from rich.style import Style
-from rich.cells import cell_len
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
@@ -4286,6 +4286,8 @@ async def test_typing_redraws_the_hint_only_when_it_changes(store, sid, monkeypa
         assert drawn == [], "a key that changes no suggestion leaves the hint alone"
         await pilot.press(*" :smi")
         assert drawn and all(x != y for x, y in zip(drawn, drawn[1:])), "suggestions redraw only as they change"
+        assert all(a[0] != app.query_one("#detail-pane .answer-hint", Hint).base for a in drawn), \
+            "a key typed in a code never flickers the keys' hint back (#201)"
 
 
 @pytest.mark.anyio

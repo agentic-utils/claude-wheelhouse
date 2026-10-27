@@ -1612,6 +1612,11 @@ class Compose(TextArea):
         self.show_suggestions()
 
     def on_text_area_selection_changed(self, event) -> None:
+        # judged once the edit that moved it, if any, has landed: a key typed moves the cursor
+        # (posted before Changed, which moves typed_at too), and the hint mustn't flicker back
+        self.call_later(self.moved_off)
+
+    def moved_off(self) -> None:
         if self.typed_at is not None and self.cursor_location != self.typed_at:   # moved off: the hint's back
             self.typed_at = None
             self.show_suggestions()
@@ -1640,7 +1645,6 @@ class Compose(TextArea):
         if event.key == "enter" and self.take_suggestion():
             event.prevent_default()
             event.stop()
-
 
 
 # the current session's lifecycle buttons, (caption, id), under the session list: each
