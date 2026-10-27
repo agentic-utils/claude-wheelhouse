@@ -4771,7 +4771,9 @@ class WheelhouseApp(App):
             queued = Text(str(s["drafts"]), style="bold #05d9e8") if s["drafts"] else ""
             # decisions inform, they don't block: counted, but not blinking like questions
             unseen = Text(str(s["unseen_decisions"]), style=DECISION) if s["unseen_decisions"] else ""
-            q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
+            # a parked session's questions wait for its unpark: dimmed and still, not calling (#210)
+            q = (Text(str(s["open_questions"]), style="dim #ffd300" if s["parked"] else "bold #ffd300 blink")
+                 if s["open_questions"] else "")
             rows.append((s["id"], (dot, name, self.context_cell(s), q, unseen, queued, busy)))
         # a long name widened its column and pushed ? and D past the pane's edge, scrolled out
         # of sight: it is cut to the room the others leave, at whatever width the pane is (#51)
