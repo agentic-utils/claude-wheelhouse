@@ -2372,6 +2372,8 @@ async def test_a_new_reply_in_a_long_thread_in_detail(store, sid, up, own, desc,
     ("thread", "emoji", "an item's thread, emoji suggestions wrapping under the box"),
     ("thread", "splitter", "an item's thread, its answer box made taller with the splitter"),
     ("full", "splitter", "an item full screen, its answer box made taller"),
+    ("thread", "narrower", "an item's thread, the pane narrower: its text wraps taller"),
+    ("thread", "up", "an item's thread scrolled up to read, then shorter: what shows stays put"),
 ])
 async def test_detail_at_its_end_stays_there_when_its_view_shrinks(store, sid, tmp_path, monkeypatch, view, shrink,
                                                                      desc):
@@ -2399,16 +2401,23 @@ async def test_detail_at_its_end_stays_there_when_its_view_shrinks(store, sid, t
         if view == "full":
             scroll, box = app.screen.query_one("#thread-scroll"), app.screen.box
         scroll.scroll_end(animate=False, immediate=True)
+        if shrink == "up":
+            scroll.scroll_to(y=scroll.max_scroll_y - 10, animate=False, immediate=True)
         await laid(pilot)
-        height = scroll.size.height
-        assert scroll.scroll_y == scroll.max_scroll_y > 0, f"{desc}: at the end"
+        size, y = scroll.size, scroll.scroll_y
+        assert scroll.max_scroll_y > 0 and (shrink == "up") == (y < scroll.max_scroll_y), f"{desc}: at the end, or not"
         box.focus()
         if shrink == "emoji":
             await pilot.press("colon", "s", "t")
+        elif shrink == "narrower":
+            await pilot.resize_terminal(80, 30)
         else:
             box.styles.height = box.size.height + 4
         await laid(pilot)
-        assert scroll.size.height < height, f"{desc}: the view shorter"
+        assert scroll.size != size, f"{desc}: the view another size"
+        if shrink == "up":
+            assert scroll.scroll_y == y, desc
+            return
         assert scroll.scroll_y == scroll.max_scroll_y, f"{desc}: its last line still in view"
         if view == "conversation":
             say_in(path, "a reply\n\n" * 4)
