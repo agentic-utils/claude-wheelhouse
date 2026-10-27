@@ -49,7 +49,10 @@ Unproven, so nothing depends on them:
   person; one connected, pending or disabled is said so and nothing is asked; one with an
   open question gets its ref. Otherwise it leaves an ask (`do: ask`) in `sessions.mcp_asks`
   (JSON list, taken whole by the host's next poll; the same ask about the same server
-  replaces the one waiting). A name without Claude Code's `claude.ai ` prefix or
+  replaces the one waiting). With no look yet, the host matches the name when it takes the
+  ask. An ask the host took but couldn't carry out (Claude Code didn't answer) goes back for
+  its next poll, at most three times. `mcp_asks` is never served by the daemon: a pasted
+  sign-in address stays on this machine. A name without Claude Code's `claude.ai ` prefix or
   its case still matches, once unambiguous.
 - The host, on that ask, reads the status afresh and posts the marked question as before
   (`mcp_item`, `mcp_question(name)`), the session's `why` at the top. A server no longer
@@ -87,7 +90,8 @@ Unproven, so nothing depends on them:
 
 ### (c) A connector's question closes once it is authorised
 
-While a question about a claude.ai connector in `needs-auth` is open, the check reconnects
+While a question about a claude.ai connector in `needs-auth` (or `failed`, as a reconnect
+may leave it) is open, the check reconnects
 it before reading the status: at each 30 s recheck for the first 10 minutes, then every 5
 minutes, and not after 2 hours (`MCP_RETRY_*`). Each try is cut off after 5 s, and one that
 fails is logged, never replied: if H2 is false, the cost is a log line every few minutes
@@ -96,10 +100,13 @@ fake keeps a connector `needs-auth` until it is reconnected.
 
 ### (d) Today's open questions
 
-`deny_stale` already closes every MCP question a new host doesn't own, so Relaunch (or
-Relaunch all, Alt+Shift+L) clears the eager ones. Its note now says that servers are asked
-about only when a session needs one, and that Alt+Shift+M lists them. A host still on the
-old code keeps asking until it is relaunched; the release note says to Relaunch all.
+`deny_stale` already closes every MCP question a new host doesn't own, so a Relaunch clears
+the eager ones (Relaunch all, Alt+Shift+L, starts only sessions not running, so a running
+one needs its own Relaunch). Its note now says that servers are asked about only when a
+session needs one, and that Alt+Shift+M lists them. It also drops asks left in
+`mcp_asks` for the Claude Code that has gone, so a pasted sign-in address is never
+replayed. A host still on the old code keeps asking until it is relaunched; the release
+note says so.
 
 ## Not changing
 

@@ -13,7 +13,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from . import docroots, liveness, steps
-from .store import GONE_TEXT, SessionGone, Store, mcp_servers, redacted, runner
+from .store import GONE_TEXT, SessionGone, Store, mcp_named, mcp_servers, redacted, runner
 
 HEARTBEAT_SECONDS = 30
 STOP_AFTER = 1   # seconds after park_session or end_session replies before its Claude Code is stopped
@@ -205,16 +205,6 @@ def request_compact(keep: str) -> str:
 MCP_NEEDY = ("needs-auth", "failed")   # host.MCP_ASK: the statuses a sign-in question is asked about
 
 
-def mcp_named(server: str, servers: dict[str, dict]) -> str | None:
-    """The server a name means: as given, else the one it names without its case or
-    Claude Code's "claude.ai " prefix (the model may write Slack for claude.ai Slack)."""
-    if server in servers:
-        return server
-    bare = server.strip().lower().removeprefix("claude.ai ")
-    found = [n for n in servers if n.lower().removeprefix("claude.ai ") == bare]
-    return found[0] if len(found) == 1 else None
-
-
 @wheelhouse_tool
 def request_mcp_signin(server: str, why: str) -> str:
     """Ask the person to sign in to an MCP server your work needs: one Claude Code lists as
@@ -244,8 +234,9 @@ def request_mcp_signin(server: str, why: str) -> str:
     if ref := _store.open_mcp_question(_sid, name):
         return f"already asked: {ref} is the person's question about {name}"
     _store.ask_mcp(_sid, "ask", name, why=why.strip())
-    return (f"asked: the person gets a question about {name} shortly, and it closes once {name} is "
-            "connected. Carry on with what you can")
+    return (f"asked: unless {name} turns out not to need them, or they have closed a question about it "
+            f"already, the person gets a question about it shortly, which closes once {name} is connected. "
+            "Carry on with what you can")
 
 
 @wheelhouse_tool

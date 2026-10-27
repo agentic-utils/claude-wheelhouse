@@ -36,7 +36,7 @@ from . import features, liveness, models, plan_usage, steps, transcript, transcr
 from .launch import PROTOCOL_SDK, after_compaction, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT, request_text
 from .store import (CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, SessionGone, Store, callback_url, db_path,
-                    mcp_question, mcp_server, now, runner, wheelhouse_question)
+                    mcp_named, mcp_question, mcp_server, now, runner, wheelhouse_question)
 
 POLL_SECONDS = 1.0
 SHELL_POLL_SECONDS = 2.0
@@ -692,7 +692,8 @@ class Host:
         await self.reconcile(session)
         asks = self.store.take_mcp_asks(self.sid)
         if asks or (self.mcp_items and time.monotonic() - self.mcp_checked > MCP_RECHECK):
-            await self.check_mcp(asks)
+            if not await self.check_mcp(asks) and asks:
+                self.store.give_back_mcp_asks(self.sid, asks)
         if self.keepalive_due(time.monotonic()):
             await self.turn(f"[wheelhouse] {keepalive_body(self.store.in_doubt(self.sid))}", keepalive=True)
         elif self.cold_due(time.monotonic()):
@@ -1126,16 +1127,19 @@ class Host:
             self.mcp_lock_for = (loop, asyncio.Lock())
         return self.mcp_lock_for[1]
 
-    async def check_mcp(self, asks=()) -> None:
+    async def check_mcp(self, asks=()) -> bool:
         """Ask Claude Code how its MCP servers are, and keep what it says for the wheelhouse
         (set_mcp_status). A question is asked only when the session asks for one (asks, from
         request_mcp_signin), carrying a sign-in link where signing in may cure it, and closed
-        once its server is connected, disabled or gone."""
+        once its server is connected, disabled or gone. Whether it got as far as Claude Code's
+        answer and acted on it."""
         try:
             async with self.mcp_lock():
                 await self.check_mcp_now(asks)
+            return True
         except Exception as e:
             print(f"{now()} checking MCP servers failed: {e}", file=sys.stderr, flush=True)
+            return False
 
     async def check_mcp_now(self, asks=()) -> None:
         self.mcp_checked = time.monotonic()
@@ -1159,7 +1163,7 @@ class Host:
                 self.settle_mcp(ref, f"{name} is no longer configured.")
         for ask in asks:
             if ask.get("do") == "ask":   # the session's request_mcp_signin
-                await self.mcp_ask(ask.get("server"), ask.get("why") or "")
+                await self.mcp_ask(mcp_named(ask.get("server") or "", servers) or "", ask.get("why") or "")
         self.show_mcp(servers, fresh=bool(asks))
 
     async def mcp_act(self, do: str, name: str, url: str | None) -> None:
@@ -1201,13 +1205,14 @@ class Host:
         self.mcp_tries[name] = [time.monotonic()] * 2
 
     async def mcp_retry(self) -> None:
-        """A claude.ai connector a question waits on, reconnected unasked as MCP_RETRY_*
+        """A claude.ai connector a question waits on (needs-auth, or failed, as a reconnect may
+        leave it), reconnected unasked as MCP_RETRY_*
         allow: Claude Code reads its sign-in afresh only then. A try that fails is logged and
         left for the next; nothing here ever replies."""
         t = time.monotonic()
         for name in list(self.mcp_items.values()):
             server, tries = self.mcp_seen.get(name) or {}, self.mcp_tries.get(name)
-            if (tries is None or server.get("status") != "needs-auth"
+            if (tries is None or server.get("status") not in MCP_ASK
                     or (server.get("config") or {}).get("type") != MCP_CONNECTOR):
                 continue
             age, since = t - tries[0], t - tries[1]
@@ -1474,7 +1479,9 @@ class Host:
 
     def deny_stale(self) -> None:
         """Permissions and questions left open by a Claude Code that has gone can never be
-        answered: close them. Questions the session posted itself stay."""
+        answered: close them. Questions the session posted itself stay. MCP asks left waiting
+        were for that Claude Code too: a pasted sign-in address in one is dropped, not replayed."""
+        self.store.take_mcp_asks(self.sid)
         for item in self.store.items(self.sid, include_closed=False):
             if item["status"] != "open" or item["ref"] in self.asking or item["ref"] in self.waiting:
                 continue

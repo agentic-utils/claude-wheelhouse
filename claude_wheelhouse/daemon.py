@@ -765,7 +765,8 @@ class Daemon:
         follower = self.hub.contexts.get(sid)
         snap = transcript_usage.current(follower.snap, host_context(s)) if follower and follower.ready else None
         running = follower.snap if follower and follower.ready else None
-        return {**dict(s), "status": self.hub.shown_status(sid), "liveness": self.hub.statuses.get(sid, "dead"),
+        return {**{k: s[k] for k in s.keys() if k != "mcp_asks"},   # a pasted sign-in code stays on this machine
+                "status": self.hub.shown_status(sid), "liveness": self.hub.statuses.get(sid, "dead"),
                 "model_state": self.hub.model_state(s), "mode": mode(s), "busy": self.hub.busy(sid),
                 "running_model": running and running.model, "running_effort": running and running.effort,
                 "stale": self.hub.stale(sid), "sends_now": self.hub.sends_now(sid),

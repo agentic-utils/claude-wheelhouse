@@ -143,6 +143,17 @@ def mcp_server(answer: str | None) -> str | None:
     return mark.get("server") if isinstance(mark, dict) and mark.get("from") == MCP_FROM else None
 
 
+def mcp_named(server: str, servers) -> str | None:
+    """The server a name means among servers (names): as given, else the one it names
+    without its case or Claude Code's "claude.ai " prefix (the model may write Slack for
+    claude.ai Slack), if just one."""
+    if server in servers:
+        return server
+    bare = server.strip().lower().removeprefix("claude.ai ")
+    found = [n for n in servers if n.lower().removeprefix("claude.ai ") == bare]
+    return found[0] if len(found) == 1 else None
+
+
 def mcp_servers(session) -> dict[str, dict] | None:
     """A session's MCP servers as its host last saw them (sessions.mcp_status), by name;
     None before its host has looked."""
@@ -1180,6 +1191,14 @@ class Store:
             asks = [a for a in json.loads(row[0] or "[]") if (a.get("do"), a.get("server")) != (do, server)]
             asks.append({"do": do, "server": server, **more})
             db.execute("UPDATE sessions SET mcp_asks = ? WHERE id = ?", (json.dumps(asks), sid))
+
+    def give_back_mcp_asks(self, sid: str, asks: list[dict], tries: int = 3) -> None:
+        """Asks a host took but couldn't carry out (Claude Code didn't answer): back for its
+        next poll, each at most `tries` times."""
+        for a in asks:
+            if a.get("tries", 0) + 1 < tries:
+                self.ask_mcp(sid, a["do"], a.get("server") or "",
+                             **{k: v for k, v in a.items() if k not in ("do", "server")}, tries=a.get("tries", 0) + 1)
 
     def take_mcp_asks(self, sid: str) -> list[dict]:
         """The host takes what it is asked to do about its MCP servers, once."""

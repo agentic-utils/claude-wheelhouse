@@ -2846,3 +2846,41 @@ def test_mcp_check_asked_dates_the_look_afresh(mcp_host, store, sid, monkeypatch
     store.ask_mcp(sid, "check", "")
     run(mcp_host.poll())
     assert json.loads(store.session(sid)["mcp_status"])["at"].startswith("2099"), "asked: written, dated now"
+
+
+def test_mcp_connector_left_failed_by_a_retry_is_still_retried(mcp_host, store, sid):
+    ref = ask(mcp_host, store, sid, {"claude.ai Slack": "needs-auth"})
+    mcp_host.client.then = ("failed", "401")
+    for _ in range(2):
+        t = time.monotonic()
+        mcp_host.mcp_tries["claude.ai Slack"] = [t - host_mod.MCP_RECHECK - 1] * 2
+        run(mcp_host.check_mcp())
+    assert mcp_host.client.sent.count(("mcp_reconnect", "claude.ai Slack")) == 2
+    mcp_host.client.signed_in.add("claude.ai Slack")
+    mcp_host.mcp_tries["claude.ai Slack"] = [time.monotonic() - host_mod.MCP_RECHECK - 1] * 2
+    run(mcp_host.check_mcp())
+    assert store.item(sid, ref)["status"] == "closed"
+
+
+@pytest.mark.parametrize("down, given_back, desc", [
+    (True, True, "Claude Code didn't answer: the ask goes back for the next poll"),
+    (False, False, "carried out: gone"),
+])
+def test_mcp_ask_survives_a_check_that_fails(mcp_host, store, sid, down, given_back, desc):
+    mcp_host.client.servers = {"claude.ai Slack": "needs-auth"}
+    mcp_host.client.down = down
+    store.ask_mcp(sid, "ask", "slack", why="w")
+    run(mcp_host.poll())
+    back = store.take_mcp_asks(sid)
+    assert bool(back) is given_back, desc
+    if given_back:
+        assert back[0]["tries"] == 1, desc
+    else:
+        assert mcp_questions(store, sid)[0]["title"] == "MCP claude.ai Slack: sign in", \
+            f"{desc}: a name without its prefix matched by the host"
+
+
+def test_mcp_asks_left_for_a_gone_claude_code_are_dropped(store, sid):
+    store.ask_mcp(sid, "callback", "local-oauth", url="http://localhost/cb?code=SECRET")
+    Host(store, sid, client_factory=McpClient, person="doug").deny_stale()
+    assert store.take_mcp_asks(sid) == []

@@ -274,8 +274,8 @@ FEATURES: tuple[Feature, ...] = (
                  "app's own keys work from there: Ctrl+Q quits, F1 lists the keys, Alt+N is New session."),
     Feature("mcp-reauth", UNRELEASED, ADVANCED, when="sdk",
             note="When a session needs an MCP server that wants signing in, or has failed, it asks you, with the "
-                 "sign-in link; the question closes once the server is connected. Relaunch all (Alt+Shift+L) "
-                 "to stop older sessions asking about every server."),
+                 "sign-in link; the question closes once the server is connected. Relaunch a session started "
+                 "before this to stop it asking about every server."),
     Feature("mcp-servers", UNRELEASED, ADVANCED, when="sdk",
             note="Alt+Shift+M lists the MCP servers of the session in context, with a button to sign in to or "
                  "reconnect each; a claude.ai connector reconnects in every session that has it."),

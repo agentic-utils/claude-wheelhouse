@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import time
+from types import SimpleNamespace
 from datetime import datetime, timezone
 
 import pytest
@@ -1494,3 +1495,12 @@ def test_mcp_press_on_a_session_not_hosted_says_so(hub, store, sid, monkeypatch)
     hub.refresh()
     done = hub.mcp(sid, "reconnect", "github")
     assert not done.ok and store.take_mcp_asks(sid) == []
+
+
+def test_a_pasted_sign_in_address_is_never_served(store, sid):
+    from claude_wheelhouse.daemon import Daemon
+    store.ask_mcp(sid, "callback", "local-oauth", url="http://localhost/cb?code=SECRET")
+    hub = Hub(store)
+    hub.refresh()
+    view = Daemon.session_view(SimpleNamespace(hub=hub), hub.listed(sid))
+    assert "mcp_asks" not in view and "SECRET" not in json.dumps(view, default=str)
