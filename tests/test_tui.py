@@ -13,6 +13,7 @@ from unittest import mock
 import pytest
 from rich.color import Color
 from rich.style import Style
+from rich.cells import cell_len
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
@@ -22,7 +23,7 @@ from textual.strip import Strip
 from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
-from claude_wheelhouse import features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
+from claude_wheelhouse import emoji, features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
 from claude_wheelhouse.host import NO_NOTES
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
@@ -2704,6 +2705,9 @@ async def test_typing_survives_refresh_ticks_even_when_items_arrive_above(store,
     (["colon", "t", "h", "u", "enter"], "👍", "so does Enter"),
     (["o", "k", "space", "colon", "t", "a", "d", "a", "colon"], "ok 🎉", "a closed code turns into its emoji"),
     (["o", "k", "enter", "x"], "ok\nx", "Enter with no suggestion is a new line"),
+    (["colon", "s", "t", "a", "r", "down", "down", "tab"], "🌠", "Down chooses the next suggestion, Tab takes it"),
+    (["colon", "s", "t", "a", "r", "up", "enter"], "✡", "Up from the first wraps to the last, Enter takes it"),
+    (["o", "k", "enter", "x", "up", "y"], "oyk\nx", "Up with no suggestion moves up a line"),
 ])
 @pytest.mark.anyio
 async def test_emoji_codes_in_the_answer_box(store, sid, keys, expected, desc):
@@ -2716,6 +2720,31 @@ async def test_emoji_codes_in_the_answer_box(store, sid, keys, expected, desc):
         await pilot.press(*keys)
         await pilot.pause()
         assert app.answer.text == expected, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("at, desc", [(0, "the first"), (1, "the second"), (4, "the last")])
+async def test_a_click_on_an_emoji_suggestion_takes_it(store, sid, at, desc):
+    """#201: the code typed so far becomes the emoji clicked, focus stays in the box and the
+    cursor goes after the emoji, so typing carries on."""
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(200, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=0)
+        await pilot.click("#answer")
+        await pilot.press(*"go ", "colon", *"star")
+        await pilot.pause()
+        hint = app.query_one("#detail-pane .answer-hint", Hint)
+        found = emoji.suggest("star")
+        x = sum(cell_len(f"{g} :{c}:  ") for c, g in found[:at]) + 1   # inside the suggestion, past its first cell
+        await pilot.click(hint, offset=(x, 0))
+        await pilot.pause()
+        assert app.answer.text == f"go {found[at][1]}", f"{desc}: the code replaced by the emoji clicked"
+        assert app.focused is app.answer, f"{desc}: focus still in the box"
+        await pilot.press("x")
+        assert app.answer.text == f"go {found[at][1]}x", f"{desc}: the cursor after the emoji"
+        assert hint.suggesting is None, f"{desc}: the suggestions gone"
 
 
 @pytest.mark.anyio
