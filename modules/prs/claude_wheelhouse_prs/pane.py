@@ -801,7 +801,8 @@ class Prs(Vertical):
         (merge_off, merge_tip), (review_off, review_tip) = (True, busy) if doing else off("merge"), off("review")
         return [("open", False, "Open", tips["open"]),
                 ("merge", merge_off, "Merging…" if "merge" in doing else "Merge", merge_tip),
-                ("ready", bool(doing), flipping, busy if doing else flip[2]),
+                ("ready", bool(doing), flipping, busy if doing else flip[2] if flip is DRAFT or all(
+                    r.get("draft") for r in rows) else "Mark the drafts ready for review; the others are left as they are"),
                 ("review", review_off, "Request review", review_tip),
                 ("close", bool(doing), "Closing…" if "close" in doing else "Close", busy if doing else tips["close"])]
 
@@ -838,7 +839,9 @@ class Prs(Vertical):
             ask = f"Merge {name(rows[0])}? The way the repo allows: {how}"
         else:
             ask = (f"Merge these {len(rows)} PRs, each the way its repo allows: {how}\n\n"
-                   + "\n".join(f"• {name(r)}" + (f": {why}" if (why := '; '.join(blockers(r))) else "") for r in rows))
+                   + "\n".join(f"• {name(r)}" + (f": {why}" if (why := '; '.join(blockers(r))) else "") for r in rows)
+                   + ("\n\nThose with something in their way are tried too: GitHub refuses them only where "
+                      "its rules require it." if any(blockers(r) for r in rows) else ""))
         self.ctx.confirm(ask, lambda yes: yes and self.each("merge", rows))
 
     def close(self, rows: list[dict]) -> None:

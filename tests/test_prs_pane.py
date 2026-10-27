@@ -461,8 +461,12 @@ async def test_draft_ready_on_marked_prs_acts_on_the_drafts_alone_and_review_ski
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
-        p = await marked_both(app, pilot)
-        assert str(app.query_one("#pr-ready", Button).label) in ("Mark ready", "Ready"), "a draft among them"
+        p = await on_pr(app, pilot, URL.format(108))
+        app.query_one("#pr-list").set_marks({URL.format(108), URL.format(109)})   # the draft's grey sorts it after PR109
+        p.marks_changed()
+        await pilot.pause()
+        button = app.query_one("#pr-ready", Button)
+        assert str(button.label) in ("Mark ready", "Ready") and "the others are left" in button.tooltip, "a draft among them"
         await pilot.click("#pr-ready")
         await landed(app, pilot)
         await settled(app, pilot)
@@ -851,6 +855,8 @@ async def test_merge_and_the_menu_act_on_every_pr_marked(store, sid, github):
         await pilot.click(f"#{next(b.id for b in menu.query(Button) if str(b.label) == 'Merge')}")
         await pilot.pause()
         assert isinstance(app.screen, tui.Confirm) and "Merge these 2 PRs" in app.screen.prompt, "asked first"
+        assert "PR108 (Change 108) in wheelhouse: checks are failing" in app.screen.prompt \
+            and "are tried too" in app.screen.prompt, f"what blocks each named: {app.screen.prompt}"
         await pilot.press("alt+y")
         await landed(app, pilot)
         await settled(app, pilot)
