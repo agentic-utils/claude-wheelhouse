@@ -56,6 +56,7 @@ from starlette.routing import Route
 
 from . import api, auth, docroots, features, fingerprint, liveness, models, served, steps, transcript_usage, tutorial
 from .hub import Done, Event, Hub, host_context
+from .host import MCP_DOS
 from .store import COMPACT_QUESTION, NOTES_SEEN, THEN, TOUR_AT, SessionGone, Store, inbox_rank, mode, runner, standing
 
 ADDRESS = "127.0.0.1"   # the port is features.port()
@@ -1085,6 +1086,11 @@ class Daemon:
                 raise Refused(400, "branch must be a branch name or null")
             self.remote_needs_sdk(request)
             return hub.fork(sid, refs, branch or None, this_machine(request))
+        if action == "mcp":
+            do = text(body, "do")
+            if do not in MCP_DOS:
+                raise Refused(400, f"do must be one of {', '.join(MCP_DOS)}")
+            return hub.mcp(sid, do, text(body, "server", False) or "", text(body, "url", False))
         if action == "model":
             return hub.set_model(sid, models.check_model(text(body, "model")))
         if action == "effort":

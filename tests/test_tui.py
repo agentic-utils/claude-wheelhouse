@@ -6063,6 +6063,7 @@ async def test_a_long_prompt_wraps_in_its_dialog(store, sid, dialog, height, des
     (lambda app, sid, cwd: tui.PickDirectory(cwd), "the folder picker"),
     (lambda app, sid, cwd: RenameSession("demo"), "Rename"),
     (lambda app, sid, cwd: tui.ChooseModel("demo", None), "the model"),
+    (lambda app, sid, cwd: tui.McpServers(sid), "MCP servers"),
     (lambda app, sid, cwd: tui.AdoptSession([]), "Adopt"),
     (lambda app, sid, cwd: tui.ForkSession(app.client.fork_plan(sid)), "Fork"),
     (lambda app, sid, cwd: CompactSession("demo"), "Compact: was top-left"),
@@ -6108,6 +6109,7 @@ OPEN = object()   # the dialog still open: Enter was its focus's own (a list's, 
     (lambda app, sid, cwd: RenameSession("demo"), None, None, "demo", ["new-name", "ok", "cancel"], "Rename"),
     (lambda app, sid, cwd: tui.ChooseModel("demo", None), None, None, models.MODELS[0].id, ["models", "ok", "cancel"],
      "the model: Enter takes the highlighted one"),
+    (lambda app, sid, cwd: tui.McpServers(sid), None, None, None, ["cancel"], "MCP servers: nothing asked"),
     (lambda app, sid, cwd: tui.AdoptSession([]), None, None, OPEN, ["adopt-list", "adopt-name", "adopt", "cancel"],
      "Adopt, with nothing to adopt"),
     (lambda app, sid, cwd: tui.ForkSession(app.client.fork_plan(sid)), None, None, {"refs": [], "branch": None},
@@ -8951,3 +8953,94 @@ async def test_a_lists_alt_key_is_not_typed_in_the_answer_box(store, sid):
         app.post_message(events.Key("alt+r", "r"))   # the session list's Rename, as a terminal sends it
         await pilot.pause()
         assert box.text == "" and app.screen is app.screen_stack[0], "dropped: neither typed nor acted on"
+
+
+MCP_SEEN = [{"name": "sentry", "status": "disabled", "kind": "stdio"},
+            {"name": "claude.ai Clay", "status": "connected", "kind": "claudeai-proxy"},
+            {"name": "local-oauth", "status": "needs-auth", "kind": "http"},
+            {"name": "claude.ai Slack", "status": "needs-auth", "kind": "claudeai-proxy"},
+            {"name": "github", "status": "failed", "kind": "stdio", "error": "ECONNREFUSED"}]
+
+
+@pytest.mark.parametrize("server, press, desc", [
+    ({"status": "disabled", "kind": "stdio"}, None, "disabled: no button (Q3)"),
+    ({"status": "needs-auth", "kind": "claudeai-proxy"}, ("Sign in", "signin"), "a connector to sign in"),
+    ({"status": "needs-auth", "kind": "claudeai-proxy", "link": "https://x"}, ("Reconnect", "reconnect"),
+     "a connector with its link out: reconnect once authorised"),
+    ({"status": "needs-auth", "kind": "http", "link": "https://x"}, ("Sign in", "signin"),
+     "a local OAuth server: Claude Code connects it, so Sign in again for a fresh link"),
+    ({"status": "failed", "kind": "stdio"}, ("Reconnect", "reconnect"), "failed: reconnect (a restart)"),
+    ({"status": "connected", "kind": "claudeai-proxy"}, ("Reconnect", "reconnect"), "connected: reconnect"),
+])
+def test_mcp_press(server, press, desc):
+    assert tui.mcp_press(server) == press, desc
+
+
+@pytest.mark.anyio
+async def test_mcp_servers_dialog_lists_and_presses(store, tmp_path, monkeypatch):
+    monkeypatch.setattr(features, "_flag", True)
+    sid, app = await hosted_app(store, tmp_path, monkeypatch, "sdk")
+    store.set_mcp_status(sid, MCP_SEEN)
+    opened = []
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        monkeypatch.setattr(app, "open_url", lambda url, **kw: opened.append(url))
+        app.session_list.focus()
+        await pilot.press("alt+shift+m")
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, tui.McpServers)
+        assert [a["do"] for a in store.take_mcp_asks(sid)] == ["check"], "opening it asks the host to look again"
+        texts = [str(w.content).split(" · ")[0] for w in dialog.query(".mcp-text")]
+        assert texts == ["claude.ai Slack", "local-oauth", "github", "claude.ai Clay", "sentry"], \
+            "those that need you first"
+        assert "ECONNREFUSED" in str(list(dialog.query(".mcp-text"))[2].content)
+        buttons = {dialog.presses[b.id][1]: str(b.label) for b in dialog.query(".mcp-row Button")}
+        assert buttons == {"claude.ai Slack": "Sign in", "local-oauth": "Sign in", "github": "Reconnect",
+                           "claude.ai Clay": "Reconnect"}, "disabled has none"
+        slack = next(b for b in dialog.query(".mcp-row Button") if dialog.presses[b.id][1] == "claude.ai Slack")
+        slack.press()
+        await pilot.pause()
+        assert store.take_mcp_asks(sid) == [{"do": "signin", "server": "claude.ai Slack"}]
+        seen = [dict(s, **({"link": "https://claude.ai/start", "note": "Authorise it"} if s["name"] == "claude.ai Slack"
+                           else {"link": "https://auth/x", "waits": True} if s["name"] == "local-oauth" else {}))
+                for s in MCP_SEEN]
+        store.set_mcp_status(sid, seen)
+        app.refresh_data()
+        await pilot.pause()
+        assert opened == ["https://claude.ai/start"], "the link pressed for opens once the host has it"
+        buttons = {dialog.presses[b.id][1]: str(b.label) for b in dialog.query(".mcp-row Button")}
+        assert buttons["claude.ai Slack"] == "Reconnect"
+        paste = dialog.query_one("#mcp-rows Input", Input)
+        paste.value = "http://localhost:4321/callback?code=C"
+        paste.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert store.take_mcp_asks(sid) == [{"do": "callback", "server": "local-oauth",
+                                             "url": "http://localhost:4321/callback?code=C"}]
+        app.refresh_data()
+        await pilot.pause()
+        assert opened == ["https://claude.ai/start"], "opened once"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("runner_, live, says, desc", [
+    ("tab", True, tui.MCP_TAB, "a tab: /mcp there (Q4)"),
+    ("sdk", False, "Not running", "a hosted session not running: the last look, no buttons"),
+])
+async def test_mcp_servers_dialog_without_a_running_host(store, tmp_path, monkeypatch, runner_, live, says, desc):
+    monkeypatch.setattr(features, "_flag", True)
+    sid, app = await hosted_app(store, tmp_path, monkeypatch, runner_)
+    if not live:
+        from claude_wheelhouse import liveness
+        monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead")
+    store.set_mcp_status(sid, MCP_SEEN)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.session_list.focus()
+        await pilot.press("alt+shift+m")
+        await pilot.pause()
+        dialog = app.screen
+        assert says in str(dialog.query_one("#mcp-when", Label).content), desc
+        assert list(dialog.query(".mcp-row Button")) == [], desc
+        assert store.take_mcp_asks(sid) == [], f"{desc}: no host to ask"

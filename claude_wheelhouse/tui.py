@@ -64,14 +64,14 @@ from . import api, callout, columns, docblocks, docroots, emoji, features, model
 from .rows import KIND_COLOUR, RowTips, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
-from .host import AWAITING_NOTES, HOLD_EXPIRED, NUDGE_TOKENS, SHELL_OPENING
+from .host import AWAITING_NOTES, HOLD_EXPIRED, MCP_CONNECTOR, NUDGE_TOKENS, SHELL_OPENING
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, compacting_now, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
 from .tour import LIT as tour_lit, NOTES, PAUSED, ROWS as tour_rows, SHUN as tour_shun, TOPUP, TOUR, Tour, offered, opening
 from .store import (DEFAULT_THEN, DELETED, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
-                    family, inbox_rank, mode, pinned, runner, spared, stamp, standing)
+                    family, inbox_rank, mcp_servers, mode, pinned, runner, spared, stamp, standing)
 from .unsent import Unsent
 
 MATRIX = "#00ff41"
@@ -2994,6 +2994,115 @@ def ago(epoch: float, now: float | None = None) -> str:
     return f"{mins}m ago" if mins < 60 else f"{mins // 60}h ago" if mins < 48 * 60 else f"{mins // 1440}d ago"
 
 
+def mcp_press(server: dict) -> tuple[str, str] | None:
+    """A server's button in the MCP servers dialog, (caption, what it asks: host.MCP_DOS),
+    or None (disabled: Q3). A claude.ai connector needing sign-in starts it, then, its link
+    out, reconnects; a local OAuth one starts it, Claude Code connecting it itself."""
+    status, kind = server.get("status"), server.get("kind")
+    if status == "disabled":
+        return None
+    if status == "needs-auth" and not (kind == MCP_CONNECTOR and server.get("link")):
+        return "Sign in", "signin"
+    return "Reconnect", "reconnect"
+
+
+MCP_ORDER = {"needs-auth": 0, "failed": 1}   # first in the dialog: those that need you
+MCP_TAB = "Runs in a tab: /mcp there manages its MCP servers."
+
+
+class McpServers(Dialog):
+    """A session's MCP servers as its host last saw them (sessions.mcp_status,
+    .plan/mcp-on-demand.md), each with its button (mcp_press). Painted again on each refresh
+    while it shows (paint), its rows rebuilt only when what the host wrote changes. A Sign in
+    pressed here opens its link once the host has it. Closes on Esc, a click outside, or Enter
+    on Close, where focus starts; no ACTION, so Enter on a row's button or paste box is theirs."""
+
+    def __init__(self, sid: str):
+        super().__init__()
+        self.sid = sid
+        self.shown: tuple | None = None
+        self.presses: dict[str, tuple[str, str]] = {}   # button id: (what it asks, server)
+        self.signing: set[str] = set()   # servers whose Sign in was pressed here, their link not yet opened
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog", classes="wide"):
+            yield Label("MCP SERVERS", classes="dialog-title", id="mcp-title", markup=False)
+            yield Label("", classes="dialog-prompt", id="mcp-when", markup=False)
+            yield VerticalScroll(id="mcp-rows", can_focus=False)   # its buttons and boxes are the stops
+            with Horizontal(classes="buttons"):
+                yield Button("Close", id="cancel")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self.paint()
+        self.set_focus(self.query_one("#cancel", Button))   # Enter closes it; on a row's button or box, it's theirs
+
+    def paint(self) -> None:
+        try:
+            s = self.app.row(self.sid)
+        except SessionGone:
+            self.dismiss(None)
+            return
+        hosted = runner(s) == "sdk" and not s["shell"]
+        live = hosted and self.app.client.running(self.sid)
+        servers = mcp_servers(s) if hosted else None
+        raw = s["mcp_status"] if "mcp_status" in s.keys() else None
+        shown = (hosted, live, raw)
+        if shown == self.shown:
+            return
+        self.shown = shown
+        self.query_one("#mcp-title", Label).update(f"MCP SERVERS · {display_name(s)}")
+        at = json.loads(raw)["at"] if servers is not None else ""
+        when = (MCP_TAB if not hosted else
+                "Its host hasn't looked yet." if servers is None else
+                f"As its host saw them at {at[11:19]}Z." if live else
+                f"Not running: as its host last saw them, at {at[:16].replace('T', ' ')}Z. Relaunch it to act on them.")
+        self.query_one("#mcp-when", Label).update(when)
+        rows = self.query_one("#mcp-rows", VerticalScroll)
+        rows.remove_children()
+        self.presses = {}
+        for i, server in enumerate(sorted((servers or {}).values(),
+                                          key=lambda v: (MCP_ORDER.get(v.get("status"), 2), v["name"].lower()))):
+            name, status = server["name"], (server.get("status") or "unknown").replace("-", " ")
+            kind = "claude.ai" if server.get("kind") == MCP_CONNECTOR else "local"
+            said = [x for x in (server.get("error"), server.get("note"), server.get("link")) if x]
+            press = mcp_press(server) if live else None
+            row = Horizontal(classes="mcp-row")
+            rows.mount(row)
+            row.mount(Label(Text(f"{name} · {kind} · {status}" + "".join(f"\n  {x}" for x in said)),
+                            classes="mcp-text"))
+            if press:
+                self.presses[f"mcp-{i}"] = (press[1], name)
+                row.mount(Button(press[0], id=f"mcp-{i}", compact=True))
+            if live and server.get("waits") and server.get("status") == "needs-auth":
+                self.presses[f"mcp-paste-{i}"] = ("callback", name)
+                rows.mount(Input(placeholder=f"{name}: the address the browser ended on, then Enter",
+                                 id=f"mcp-paste-{i}"))
+            if name in self.signing and server.get("link"):
+                self.signing.discard(name)
+                self.app.open_url(server["link"])
+
+    @on(Button.Pressed, ".mcp-row Button")
+    def pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        do, name = self.presses[event.button.id]
+        if do == "signin":
+            self.signing.add(name)
+        self.app.told(self.app.client.mcp(self.sid, do, name))
+
+    @on(Input.Submitted, "#mcp-rows Input")
+    def pasted(self, event: Input.Submitted) -> None:
+        event.stop()
+        url = event.value.strip()
+        if url:
+            self.app.told(self.app.client.mcp(self.sid, "callback", self.presses[event.input.id][1], url))
+            event.input.value = ""
+
+    @on(Button.Pressed, "#cancel")
+    def cancel(self) -> None:
+        self.action_answer(None)
+
+
 class AdoptSession(Dialog):
     """Pick a session to bring into the wheelhouse. A running one must be /exit-ed first:
     the wheelhouse never kills it, and only launches once it has gone."""
@@ -3636,6 +3745,8 @@ DESCRIBE = {
     "new_session": "New session",
     "adopt": "Adopt: pick a Claude Code session that isn't in the wheelhouse yet, from those on disk",
     "relaunch_all": "Relaunch all: every Available session (not running, not parked)",
+    "mcp_servers": ("MCP servers: the session in context's, as its host last saw them, each with a button to sign in "
+                    "or reconnect it (a claude.ai connector in every session run in the wheelhouse); a tab's: /mcp there"),
     "clear_filter": "Clear a text selection first, then the marks, else show every session's items again",
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
@@ -3972,6 +4083,9 @@ class WheelhouseApp(App):
     #adopt-list {{ height: 16; }}
     #adopt-hint {{ color: #ffd300; }}
     #fork-items {{ height: auto; max-height: 12; background: #000000; }}
+    #mcp-rows {{ height: auto; max-height: 20; }}
+    .mcp-row {{ height: auto; }}
+    .mcp-text {{ width: 1fr; }}
     #fork-where {{ background: #000000; }}
     #fork-warning {{ color: #ffd300; }}
     #model-row {{ height: auto; }}
@@ -4020,6 +4134,7 @@ class WheelhouseApp(App):
         Binding("alt+n", "new_session", "New", key_display="Alt+N"),
         Binding("alt+a", "adopt", "Adopt", key_display="Alt+A"),
         Binding("alt+shift+l", "relaunch_all", "Relaunch all", key_display="Alt+Shift+L"),
+        Binding("alt+shift+m", "mcp_servers", "MCP servers", show=False, key_display="Alt+Shift+M"),
         Binding("escape", "clear_filter", "All sessions", key_display="Esc"),
         # one key, two bindings: the footer shows the one that applies (check_action)
         Binding("alt+v", "show_finished(True)", "Show finished", key_display="Alt+V"),
@@ -4566,7 +4681,7 @@ class WheelhouseApp(App):
         self.paint_sendbar()
         self.show_tour()
         self.paint_badge()
-        if isinstance(self.screen, (ThreadView, DocView)) and self.screen.is_mounted:   # not before its widgets exist
+        if isinstance(self.screen, (ThreadView, DocView, McpServers)) and self.screen.is_mounted:   # not before its widgets exist
             self.screen.paint()   # an action here (queue, take back) shows at once
 
     @property
@@ -7354,6 +7469,16 @@ class WheelhouseApp(App):
         box, not lost with Send, disabled now its queue has gone. From a list it stays (#77)."""
         if isinstance(focused, Button) or getattr(focused, "id", None) in ANSWER_BOXES:
             self.focus_answer()
+
+    def action_mcp_servers(self) -> None:
+        """MCP servers (Alt+Shift+M): the session in context's, asking its host to look again."""
+        if self.under_dialog():
+            return
+        if sid := self.context_session():
+            s = self.row(sid)
+            if runner(s) == "sdk" and not s["shell"] and self.client.running(sid):
+                self.client.mcp(sid, "check")
+            self.push_screen(McpServers(sid))
 
     def action_relaunch_all(self) -> None:
         """Relaunch all: every Available session, once confirmed. Parked and Active ones are

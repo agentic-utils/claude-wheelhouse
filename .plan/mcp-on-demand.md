@@ -47,8 +47,9 @@ Unproven, so nothing depends on them:
   like `request_compact`. It reads the host's last look at the servers
   (`sessions.mcp_status`): an unknown name is refused, naming the servers that need the
   person; one connected, pending or disabled is said so and nothing is asked; one with an
-  open question gets its ref. Otherwise it leaves an ask in `sessions.mcp_asks` (JSON list,
-  taken whole by the host's next poll). A name without Claude Code's `claude.ai ` prefix or
+  open question gets its ref. Otherwise it leaves an ask (`do: ask`) in `sessions.mcp_asks`
+  (JSON list, taken whole by the host's next poll; the same ask about the same server
+  replaces the one waiting). A name without Claude Code's `claude.ai ` prefix or
   its case still matches, once unambiguous.
 - The host, on that ask, reads the status afresh and posts the marked question as before
   (`mcp_item`, `mcp_question(name)`), the session's `why` at the top. A server no longer
@@ -68,7 +69,10 @@ Unproven, so nothing depends on them:
 - Rows from `sessions.mcp_status`, which reaches the app with the session's row: name,
   kind (`claude.ai` or `local`), status, and the error, link or result of the last press.
   Needs-auth and failed sort first. Opening it asks the host for a fresh check.
-- A button per row (host ask `mcp` through the daemon's `/sessions/<id>/mcp`):
+- A button per row (`Hub.mcp`, the daemon's `POST /sessions/<id>/mcp`, an ask in
+  `sessions.mcp_asks`: `check`, `reconnect`, `signin` or `callback`, `host.MCP_DOS`). The
+  host's answer, the link or the error, lands in the row (`sessions.mcp_status`), never in
+  the session's turns. A pasted address sits in `mcp_asks` only until the next poll takes it. Per kind:
   - claude.ai connector, connected or failed: Reconnect, here and in every other hosted
     session that has it (Q1).
   - claude.ai connector, needs auth: Sign in runs `mcp_authenticate`; the link shows in
@@ -79,6 +83,7 @@ Unproven, so nothing depends on them:
   - local stdio, or anything failed: Reconnect (a stdio server's process restarts).
   - disabled: no button (Q3).
 - The session not running: the last look, dated, with no buttons. A tab session: Q4.
+- Each look is written only when it changes, or when the dialog asked for it (dated then).
 
 ### (c) A connector's question closes once it is authorised
 

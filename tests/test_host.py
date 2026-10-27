@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from claude_wheelhouse import features, host as host_mod, launch
+from claude_wheelhouse import store as store_mod
 from claude_wheelhouse.host import (AWAITING_NOTES, CANCELLED, compact_ask, HOST_QUESTION, NO_NOTES, Host, format_turn,
                                     keep_notes, question_answers, question_item, tool_summary)
 from claude_wheelhouse.store import COMPACT_QUESTION, COMPACT_QUESTION_DONE, SessionGone
@@ -2428,7 +2429,7 @@ def mcp_questions(store, sid, include_closed=False):
 
 def signin(*names, why="to read the channel"):
     """What request_mcp_signin leaves the host, for each server named."""
-    return [{"do": "signin", "server": n, "why": why} for n in names]
+    return [{"do": "ask", "server": n, "why": why} for n in names]
 
 
 def ask(h, store, sid, servers):
@@ -2799,3 +2800,49 @@ def test_request_mcp_signin_reaches_the_person_through_the_host(mcp_host, store,
     assert mcp_server.request_mcp_signin("claude.ai Slack", "again") == \
         f"already asked: {q['ref']} is the person's question about claude.ai Slack"
     assert mcp_host.client.queries == [], "never a turn"
+
+
+def shown_servers(store, sid):
+    return store_mod.mcp_servers(store.session(sid))
+
+
+@pytest.mark.parametrize("server, do, setup, row, sent, desc", [
+    ("claude.ai Slack", "signin", lambda c: None, {"link": SLACK_URL, "waits": False, "status": "needs-auth"},
+     [("mcp_authenticate", "claude.ai Slack")], "Sign in: the link kept for the dialog"),
+    ("local-oauth", "signin", lambda c: None, {"link": LOCAL_URL, "waits": True}, [("mcp_authenticate", "local-oauth")],
+     "a local sign-in: Claude Code waits for the browser"),
+    ("claude.ai Slack", "reconnect", lambda c: c.signed_in.add("claude.ai Slack"), {"status": "connected"},
+     [("mcp_reconnect", "claude.ai Slack")], "Reconnect, authorised: connected"),
+    ("github", "reconnect", lambda c: setattr(c, "refuse", "spawn ENOENT"),
+     {"note": "Reconnecting failed: spawn ENOENT", "status": "failed"}, [("mcp_reconnect", "github")],
+     "a refused reconnect: said in its row"),
+])
+def test_mcp_dialog_presses(mcp_host, store, sid, server, do, setup, row, sent, desc):
+    mcp_host.client.servers = {"claude.ai Slack": "needs-auth", "local-oauth": "needs-auth", "github": ("failed", "x")}
+    setup(mcp_host.client)
+    store.ask_mcp(sid, do, server)
+    assert run(mcp_host.poll()), desc
+    assert mcp_host.client.sent == sent, desc
+    got = shown_servers(store, sid)[server]
+    assert {k: got.get(k) for k in row} == row, desc
+    assert mcp_questions(store, sid) == [] and mcp_host.client.queries == [], f"{desc}: no question, no turn"
+
+
+def test_mcp_dialog_callback_finishes_a_local_sign_in(mcp_host, store, sid):
+    mcp_host.client.servers = {"local-oauth": "needs-auth"}
+    store.ask_mcp(sid, "callback", "local-oauth", url="http://localhost:4321/callback?code=C")
+    run(mcp_host.poll())
+    assert mcp_host.client.sent == [("mcp_oauth_callback_url", "local-oauth"), ("mcp_reconnect", "local-oauth")]
+    assert shown_servers(store, sid)["local-oauth"]["status"] == "connected"
+
+
+def test_mcp_check_asked_dates_the_look_afresh(mcp_host, store, sid, monkeypatch):
+    mcp_host.client.servers = {"a": "connected"}
+    run(mcp_host.check_mcp())
+    first = json.loads(store.session(sid)["mcp_status"])["at"]
+    monkeypatch.setattr(store_mod, "stamp", lambda: "2099-01-01T00:00:00.000000+00:00")
+    run(mcp_host.check_mcp())
+    assert json.loads(store.session(sid)["mcp_status"])["at"] == first, "unchanged: not written again"
+    store.ask_mcp(sid, "check", "")
+    run(mcp_host.poll())
+    assert json.loads(store.session(sid)["mcp_status"])["at"].startswith("2099"), "asked: written, dated now"

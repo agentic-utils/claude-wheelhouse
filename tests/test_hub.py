@@ -1464,3 +1464,33 @@ def test_a_doc_swapped_for_a_fifo_is_never_opened(hub, store, sid, tmp_path):
     doc.unlink()
     os.mkfifo(doc)   # opened for reading, it would block until a writer came
     assert hub.document(sid, ref) == {"path": str(doc), "text": "", "stamp": "not a file", "gone": "not a file"}
+
+
+@pytest.mark.parametrize("do, server, fanned, desc", [
+    ("reconnect", "claude.ai Slack", ["b"], "a connector: every other running hosted session that has it"),
+    ("signin", "claude.ai Slack", [], "a sign-in: this session alone, its link is its own"),
+    ("reconnect", "github", [], "a local server: this session's alone"),
+    ("check", "", [], "a fresh look"),
+])
+def test_mcp_press_goes_to_the_host_and_a_connector_reconnects_everywhere(hub, store, tmp_path, monkeypatch,
+                                                                          do, server, fanned, desc):
+    seen = [{"name": "claude.ai Slack", "status": "needs-auth", "kind": "claudeai-proxy"},
+            {"name": "github", "status": "failed", "kind": "stdio"}]
+    sids = {}
+    for name, runner_, has in (("a", "sdk", True), ("b", "sdk", True), ("c", "tab", True), ("d", "sdk", False),
+                               ("e", "sdk", True)):
+        sids[name] = store.create_session(str(tmp_path), name=name, runner=runner_)
+        if has:
+            store.set_mcp_status(sids[name], seen)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "dead" if s["name"] == "e" else "live")
+    hub.refresh()
+    assert hub.mcp(sids["a"], do, server).ok, desc
+    assert store.take_mcp_asks(sids["a"]) == [{"do": do, "server": server}], desc
+    assert [n for n in "bcde" if store.take_mcp_asks(sids[n])] == fanned, desc
+
+
+def test_mcp_press_on_a_session_not_hosted_says_so(hub, store, sid, monkeypatch):
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    hub.refresh()
+    done = hub.mcp(sid, "reconnect", "github")
+    assert not done.ok and store.take_mcp_asks(sid) == []

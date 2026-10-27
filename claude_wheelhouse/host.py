@@ -106,6 +106,9 @@ MCP_RETRY_FAST = 10 * 60
 MCP_RETRY_SLOW = 5 * 60
 MCP_RETRY_STOP = 2 * 3600
 MCP_RETRY_WITHIN = 5
+# what the MCP servers dialog asks a host to do (Hub.mcp): look again, reconnect a server, start
+# its sign-in, or finish one with the address the browser ended on
+MCP_DOS = ("check", "reconnect", "signin", "callback")
 MCP_GONE = ("The wheelhouse host restarted. MCP servers are now asked about only when a session needs one: "
             "Alt+Shift+M lists them all.")
 MCP_SHELL = "Handed to a shell tab: /mcp there manages MCP servers."
@@ -376,6 +379,9 @@ class Host:
         # each connector question's server: when it was asked (or taken up again), and when the
         # check last reconnected it unasked (mcp_retry), monotonic
         self.mcp_tries: dict[str, list[float]] = {}
+        # what the dialog's last press on each server came to: its sign-in link, whether Claude
+        # Code waits for the browser, and a note (the error, or what to do next)
+        self.mcp_notes: dict[str, dict] = {}
         self.mcp_lock_for: tuple | None = None   # (event loop, lock): check_mcp one at a time
 
     # options and connection
@@ -1136,6 +1142,9 @@ class Host:
         self.mcp_dropped()
         await self.mcp_pay_owed()
         await self.mcp_retry()
+        for ask in asks:
+            if ask.get("do") in ("reconnect", "signin", "callback"):
+                await self.mcp_act(ask["do"], ask.get("server") or "", ask.get("url"))
         servers = {s["name"]: s for s in (await self.client.get_mcp_status()).get("mcpServers", [])}
         self.mcp_seen = servers
         asked = {name: ref for ref, name in self.mcp_items.items()}
@@ -1149,9 +1158,32 @@ class Host:
             if name not in servers:
                 self.settle_mcp(ref, f"{name} is no longer configured.")
         for ask in asks:
-            if ask.get("do") == "signin":
+            if ask.get("do") == "ask":   # the session's request_mcp_signin
                 await self.mcp_ask(ask.get("server"), ask.get("why") or "")
-        self.show_mcp(servers)
+        self.show_mcp(servers, fresh=bool(asks))
+
+    async def mcp_act(self, do: str, name: str, url: str | None) -> None:
+        """A press in the MCP servers dialog: Sign in (mcp_authenticate, its link kept for the
+        dialog), Reconnect, or the address a local sign-in's browser ended on, then a reconnect.
+        What came of it shows in the server's row; it never touches the session's turns."""
+        if do == "signin":
+            auth = await self.mcp_auth(name) or {}
+            link, waits = auth.get("authUrl"), bool(auth.get("callbackExpected"))
+            note = ("Claude Code gave no sign-in link: Shell (Alt+H), then /mcp, signs in" if not link else
+                    f"Sign in at the link: Claude Code connects it once the browser comes back, within "
+                    f"{MCP_FLOW_LIFE // 60} minutes. If the browser can't reach it, paste the address it ends on"
+                    if waits else "Authorise it at the link, then press Reconnect")
+            self.mcp_notes[name] = {"link": link, "waits": waits, "note": note}
+            return
+        kept = self.mcp_notes.get(name, {})
+        try:
+            await asyncio.wait_for(self.mcp_connect(name, url if do == "callback" else None), MCP_WITHIN)
+            note = ""
+        except TimeoutError:
+            note = "Still reconnecting"
+        except Exception as e:
+            note = f"{'Sign-in' if do == 'callback' else 'Reconnecting'} failed: {e}"
+        self.mcp_notes[name] = {**kept, "note": note}
 
     async def mcp_ask(self, name: str, why: str) -> None:
         """The question the session asked for about a server: only while it needs the person,
@@ -1187,12 +1219,17 @@ class Host:
             except Exception as e:
                 print(f"{now()} reconnecting {name} unasked failed: {e!r}", file=sys.stderr, flush=True)
 
-    def show_mcp(self, servers: dict[str, dict]) -> None:
+    def show_mcp(self, servers: dict[str, dict], fresh: bool = False) -> None:
         """The servers as the wheelhouse shows them (sessions.mcp_status), written when they
-        change."""
+        change, or when asked (fresh: the dialog's look, dated now). A press's link and note
+        go once the server is connected."""
+        for name in list(self.mcp_notes):
+            if (servers.get(name) or {}).get("status") in (None, "connected"):
+                self.mcp_notes.pop(name)
         shown = [{"name": name, "status": s.get("status"), "kind": (s.get("config") or {}).get("type"),
-                  "scope": s.get("scope"), "error": s.get("error")} for name, s in servers.items()]
-        if shown != self.mcp_shown:
+                  "scope": s.get("scope"), "error": s.get("error"), **self.mcp_notes.get(name, {})}
+                 for name, s in servers.items()]
+        if fresh or shown != self.mcp_shown:
             self.store.set_mcp_status(self.sid, shown)
             self.mcp_shown = shown
 

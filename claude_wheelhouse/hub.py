@@ -29,8 +29,10 @@ from typing import Callable
 
 from . import adopt, api, features, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
 from .docroots import DOC_CAP
-from .host import AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, NO_NOTES, keepalive_body, waits_on_person
-from .store import COMPACT_QUESTION, DISMISSABLE, compacting_now, PRS_SINCE, STATUSES, SessionGone, Store, can_queue, mode, needs_relaunch, runner, standing
+from .host import (AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, NO_NOTES, keepalive_body,
+                   waits_on_person)
+from .store import (COMPACT_QUESTION, DISMISSABLE, compacting_now, PRS_SINCE, STATUSES, SessionGone, Store, can_queue,
+                    mcp_servers, mode, needs_relaunch, runner, standing)
 
 RUNNING = ("live", "stalled", "starting")
 # a hosted session's activity when nothing is under way: errored and stopped count as resting
@@ -901,6 +903,36 @@ class Hub:
         return done
 
     # model and effort (.plan/model-effort.md)
+
+    def hosted_now(self, s) -> bool:
+        """Run by its host right now: not a tab's, not handed to one, not stopped."""
+        return runner(s) == "sdk" and not s["shell"] and self.running(s["id"])
+
+    def mcp(self, sid: str, do: str, server: str = "", url: str | None = None) -> Done:
+        """The MCP servers dialog's press (host.MCP_DOS), for the session's host to carry out
+        on its next poll (.plan/mcp-on-demand.md). Reconnecting a claude.ai connector, whose
+        sign-in is account-wide, reconnects it in every other hosted session that has it."""
+        if do not in MCP_DOS:
+            raise ValueError(f"do must be one of {', '.join(MCP_DOS)}, not {do!r}")
+        try:
+            s = self.listed(sid)
+        except SessionGone:
+            return Done(False)
+        if not self.hosted_now(s):
+            return Done(False).say(f"{display_name(s)} isn't running in the wheelhouse: nothing to ask", "warning")
+        self.store.ask_mcp(sid, do, server, **({"url": url} if url else {}))
+        if do == "check":
+            return Done()
+        done = Done().say({"reconnect": f"reconnecting {server}", "signin": f"starting {server}'s sign-in",
+                           "callback": f"finishing {server}'s sign-in"}[do])
+        if do == "reconnect" and ((mcp_servers(s) or {}).get(server) or {}).get("kind") == MCP_CONNECTOR:
+            others = [o["id"] for o in self.store.sessions()
+                      if o["id"] != sid and self.hosted_now(o) and server in (mcp_servers(o) or {})]
+            for o in others:
+                self.store.ask_mcp(o, "reconnect", server)
+            if others:
+                done.say(f"and in {len(others)} other session(s): a claude.ai sign-in is the account's")
+        return done
 
     def set_model(self, sid: str, model: str) -> Done:
         """A hosted session's model: its host applies it live, and every launch passes it.

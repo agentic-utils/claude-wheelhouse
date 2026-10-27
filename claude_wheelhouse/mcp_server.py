@@ -243,7 +243,7 @@ def request_mcp_signin(server: str, why: str) -> str:
                 }.get(status, f"{name} is {status}")
     if ref := _store.open_mcp_question(_sid, name):
         return f"already asked: {ref} is the person's question about {name}"
-    _store.ask_mcp(_sid, "signin", name, why=why.strip())
+    _store.ask_mcp(_sid, "ask", name, why=why.strip())
     return (f"asked: the person gets a question about {name} shortly, and it closes once {name} is "
             "connected. Carry on with what you can")
 
