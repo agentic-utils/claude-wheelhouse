@@ -1566,13 +1566,24 @@ class Compose(TextArea):
     Most terminals (Windows Terminal among them) send Ctrl+Enter as a line feed, which
     arrives as ctrl+j, so both are bound.
     Emoji: a complete :code: turns into its emoji as it's typed, and a code being typed
-    shows suggestions in the hint line, the first taken with Tab or Enter."""
+    shows suggestions in the hint line: Up and Down choose one (the first to start with),
+    Tab or Enter takes it, and a click takes the one clicked (#201)."""
     BINDINGS = [Binding("ctrl+enter", "app.submit", "Submit", show=False),   # the app's shows in the footer
                 Binding("ctrl+j", "app.submit", "Submit", show=False),
                 Binding("ctrl+a", "select_all", "Select all", show=False),   # not line start
                 # the conversation (or thread) above: focus stays here (#77), so its page keys do
                 Binding("pageup", "page(-1)", "Page up", show=False),
-                Binding("pagedown", "page(1)", "Page down", show=False)]
+                Binding("pagedown", "page(1)", "Page down", show=False),
+                # another emoji suggestion while a code is typed, else another line (#201)
+                Binding("up", "choose(-1)", "Up", show=False),
+                Binding("down", "choose(1)", "Down", show=False)]
+
+    def action_choose(self, step: int) -> None:
+        if found := self.suggestions()[1]:
+            self.chosen = (self.chosen + step) % len(found)
+            self.show_suggestions()
+        else:
+            self.action_cursor_down() if step > 0 else self.action_cursor_up()
 
     def action_page(self, step: int) -> None:
         scroll = next(iter(self.screen.query("#detail-scroll, #thread-scroll")), None)
@@ -1583,7 +1594,14 @@ class Compose(TextArea):
         row, col = self.cursor_location
         return row, col, self.document.get_line(row)[:col]
 
+    chosen = 0   # the suggestion Tab or Enter takes, by its place (Up and Down move it)
+    # where the text typed last left the cursor: a code's suggestions show, and Up and Down
+    # choose among them, only while it stays there, not once moved off (nor back onto a code)
+    typed_at: tuple[int, int] | None = None
+
     def suggestions(self) -> tuple[str | None, list[tuple[str, str]]]:
+        if self.cursor_location != self.typed_at:
+            return None, []
         code = emoji.partial(self._before_cursor()[2])
         return code, emoji.suggest(code) if code else []
 
@@ -1593,19 +1611,36 @@ class Compose(TextArea):
         if done and done.group(1) in emoji.EMOJI:   # a code just closed: swap it in place
             self.replace(emoji.EMOJI[done.group(1)], (row, col - len(done.group(0))), (row, col))
             return
+        self.typed_at, self.chosen = (row, col), 0
+        self.show_suggestions()
+
+    def on_text_area_selection_changed(self, event) -> None:
+        # judged once the edit that moved it, if any, has landed: a key typed moves the cursor
+        # (posted before Changed, which moves typed_at too), and the hint mustn't flicker back
+        self.call_later(self.moved_off)
+
+    def moved_off(self) -> None:
+        if self.typed_at is not None and self.cursor_location != self.typed_at:   # moved off: the hint's back
+            self.typed_at = None
+            self.show_suggestions()
+
+    def show_suggestions(self) -> None:
+        """The suggestions for a code being typed in the hint line, the one chosen marked."""
         hint = next(iter(self.parent.query(Hint)), None)
         if hint is not None:
-            _, found = self.suggestions()
-            hint.suggest(Text("  ".join(f"{g} :{c}:" for c, g in found) + "   ⇥ Tab takes the first")
-                         if found else None)
+            hint.suggest(self, self.suggestions()[1], self.chosen)
 
-    def take_suggestion(self) -> bool:
-        """The first suggestion for a code being typed, if there is one, in its place."""
+    def take_suggestion(self, at: int | None = None) -> bool:
+        """A suggestion for a code being typed, if there is one, in its place: the one at
+        `at` (a click), else the one chosen. Focus here, the cursor after it."""
         code, found = self.suggestions()
-        if found:
-            row, col, _ = self._before_cursor()
-            self.replace(found[0][1], (row, col - len(code) - 1), (row, col))
-        return bool(found)
+        at = self.chosen if at is None else at
+        if not 0 <= at < len(found):
+            return False
+        row, col, _ = self._before_cursor()
+        self.replace(found[at][1], (row, col - len(code) - 1), (row, col))
+        self.focus()
+        return True
 
     async def _on_key(self, event) -> None:
         # Enter here; Tab is a binding, which acts before the box sees its key (take_key),
@@ -2680,11 +2715,13 @@ BADGES = {PAUSED: "Tour paused · Alt+T", TOUR: "Tour · Alt+T", TOPUP: "Tour: {
 
 
 class Hint(Label):
-    """Under an answer box: what the keys do, or emoji suggestions while a :code: is typed."""
+    """Under an answer box: what the keys do, or emoji suggestions while a :code: is typed,
+    each taken by a click (#201), into the box that suggested it."""
 
     def __init__(self, **kwargs):
         super().__init__(hint("queue"), **kwargs)
         self.base, self.suggesting = hint("queue"), None
+        self.box: Compose | None = None   # the box whose suggestions show
 
     def set_base(self, text: str) -> None:
         if text != self.base:
@@ -2692,11 +2729,19 @@ class Hint(Label):
             if self.suggesting is None:
                 self.update(text)
 
-    def suggest(self, text: Text | None) -> None:
+    def suggest(self, box: "Compose", found: list[tuple[str, str]], chosen: int = 0) -> None:
         # called on every key typed: most change nothing, and an update lays out the screen
-        if text != self.suggesting:
-            self.suggesting = text
-            self.update(self.base if text is None else text)
+        shown = (tuple(found), chosen) if found else None
+        if shown != self.suggesting:
+            self.suggesting, self.box = shown, box
+            self.update(self.base if shown is None else Content.from_markup("  ".join(   # no code holds [ or ]
+                f"[{'reverse ' * (i == chosen)}@click=take({i})]{g} :{c}:[/]" for i, (c, g) in enumerate(found))
+                + "   ↑↓ choose · Tab, Enter or a click takes it"))
+
+    def action_take(self, at: int) -> None:
+        """A click on a suggestion: it in the box, in place of the code typed."""
+        if self.box is not None:
+            self.box.take_suggestion(at)
 
 
 # where focus is on one of these, Enter is its own (a button presses, a list or radio set picks,
@@ -3756,6 +3801,8 @@ DESCRIBE = {
     "select_all": "Select all of it, to copy",
     "page(-1)": "Scroll the conversation (or the thread) up a page",
     "page(1)": "Scroll it down a page",
+    "choose(-1)": "While an emoji code is typed, choose the suggestion before (Tab or Enter takes it); else up a line",
+    "choose(1)": "While an emoji code is typed, choose the next suggestion; else down a line",
     "leave": "Back to the inbox; with the doc's editor open, close it first",
     "render_edits": "Show the edits rendered in the doc above",
     "save_doc": "Says writing the doc comes next; never sends the session's queue",
@@ -3875,6 +3922,7 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "right-hand end of its row: a click there hides them, and the + it becomes shows them again. "
          "A click on a doc opens its editor below it there, as a click on it moves it while it's open. "
          "A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. "
+         "A click on an emoji suggestion under the answer box takes it in place of the code typed. "
          "Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; "
          "elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
@@ -7477,7 +7525,7 @@ class WheelhouseApp(App):
     def cycle_focus(self, step: int) -> None:
         """Tab and Shift+Tab on the inbox and a full-screen item go round tab_stops (#77);
         elsewhere (a doc, a dialog) in screen order. In an answer box with an emoji code being
-        typed, Tab takes the first suggestion instead. Tab is a key, so the cursors have
+        typed, Tab takes the suggestion chosen instead. Tab is a key, so the cursors have
         settled (land) before it moves on."""
         if step > 0 and isinstance(self.focused, Compose) and self.focused.take_suggestion():
             return

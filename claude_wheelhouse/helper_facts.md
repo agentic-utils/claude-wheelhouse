@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 16, 2026-10-27T15:36:56Z, source 66526a1c466a4819 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 17, 2026-10-27T15:37:20Z, source a41cdaa2381fd1c7 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -168,6 +168,10 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **PgDn**: Scroll it down a page
 
+- **Up**: While an emoji code is typed, choose the suggestion before (Tab or Enter takes it); else up a line
+
+- **Down**: While an emoji code is typed, choose the next suggestion; else down a line
+
 ### The conversation pane
 
 - **Ctrl+A**: Select all of it, to copy
@@ -206,7 +210,7 @@ Tab goes round the session list, the items, the answer box, a tour box's Next wh
 
 ### Mouse
 
-Click selects a row; in the session list, a click on the selected session or the list's title past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may keep Shift+click for itself: Ctrl+Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or Backspace closes them together, the highlight going to the row above the topmost one taken, and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the right-hand end of its row: a click there hides them, and the + it becomes shows them again. A click on a doc opens its editor below it there, as a click on it moves it while it's open. A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. Drag the lines between the panes to resize them (they light up under the pointer); the sizes are kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; Session steps there has what the wheelhouse tells a session at each event.
+Click selects a row; in the session list, a click on the selected session or the list's title past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may keep Shift+click for itself: Ctrl+Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or Backspace closes them together, the highlight going to the row above the topmost one taken, and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the right-hand end of its row: a click there hides them, and the + it becomes shows them again. A click on a doc opens its editor below it there, as a click on it moves it while it's open. A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. A click on an emoji suggestion under the answer box takes it in place of the code typed. Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. Drag the lines between the panes to resize them (they light up under the pointer); the sizes are kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; Session steps there has what the wheelhouse tells a session at each event.
 
 ### Buttons
 
@@ -329,3 +333,4 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Alt+Up and Alt+Down reorder rows; drag a splitter to resize panes, and double-click it to reset.
 - Every key has a modifier, so a letter typed in the answer box is always just typed, and the app's own keys work from there: Ctrl+Q quits, F1 lists the keys, Alt+N is New session.
 - With no session selected, the inbox lists each session's conversation (💬, named after the session) under the items waiting on you.
+- Emoji suggestions take a click: type :star and click the one you want, or choose it with Up and Down and take it with Tab or Enter.
