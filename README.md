@@ -363,8 +363,8 @@ session.
   session a message asking it to post the request on Slack; and **Close**, asked first,
   with `gh pr close`. A button that can't apply to any of the PRs is greyed, and resting
   the pointer on it says why: Merge for a draft, a review still required or changes
-  requested, a conflict, failing checks or checks still running (not while GitHub is still
-  working out whether it can merge); Request review for a draft, a PR already approved or
+  requested, a conflict, failing checks or checks still running (it stays on while GitHub
+  hasn't yet worked out whether there's a conflict); Request review for a draft, a PR already approved or
   one no session made (a PR among several it doesn't apply to is skipped, and said so). Merge
   and Close name every PR in their question (Merge with what blocks each), and say under the table what came of each:
   done, or what stood in its way (a review required, conflicts, failing checks, as `gh`

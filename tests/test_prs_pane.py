@@ -448,6 +448,34 @@ async def test_a_merge_that_cant_apply_is_off_and_its_tooltip_says_why(store, si
         box = table.content_region
         menu = app.query_one("#prs").menu_at(box.x + 1, box.y + table.header_height + table.get_row_index(URL.format(108)))
         assert ("merge", "Merge", True, "Can't merge: checks are failing") in menu.entries, menu.entries
+        await landed(app, pilot)
+        detail = app.query_one("#prd-merge", Button)
+        assert detail.disabled and detail.tooltip == "Can't merge: checks are failing", f"Detail's: {detail.tooltip}"
+
+
+@pytest.mark.anyio
+async def test_draft_ready_on_marked_prs_acts_on_the_drafts_alone_and_review_skips_them(store, sid, github, monkeypatch):
+    """#212: PR108 a draft, PR109 not, both marked: Mark ready, for PR108 alone; Request
+    review asks for PR109 alone and says why it skipped PR108."""
+    github.tracked[0] = github.found[0] = node(108, draft=True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p = await marked_both(app, pilot)
+        assert str(app.query_one("#pr-ready", Button).label) in ("Mark ready", "Ready"), "a draft among them"
+        await pilot.click("#pr-ready")
+        await landed(app, pilot)
+        await settled(app, pilot)
+        assert github.readies == [["--", URL.format(108)]], "the draft alone"
+        github.readies.clear()
+        sent = []
+        p.ctx = dataclasses.replace(p.ctx, ask=lambda q, past, then: then("#reviews"),
+                                    send=lambda s, ref, text: sent.append(ref))
+        p.rows = [{**r, "draft": r["number"] == 108} for r in p.rows]   # as before the refresh: PR108 still a draft
+        p.act("review", [r for r in p.rows])
+        await pilot.pause()
+        assert sent == ["PR109"], sent
+        assert "Not asked for PR108 (still a draft: mark it ready first)." in p.outcome, p.outcome
 
 
 @pytest.mark.anyio

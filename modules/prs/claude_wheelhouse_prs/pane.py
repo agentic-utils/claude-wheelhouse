@@ -948,7 +948,7 @@ class Prs(Vertical):
                 self.ctx.set_setting(TARGETS, json.dumps(remembered(past, target)))
             for r, sid, ref in asking:
                 self.ctx.send(sid, ref, request(r, target))
-            skipped = [f"PR{r['number']}: {why.lower()}" for r in rows if (why := unreviewable(r))]
+            skipped = [f"PR{r['number']} ({why[0].lower()}{why[1:]})" for r in rows if (why := unreviewable(r))]
             if skipped:
                 self.outcomes["review"] = "Not asked for " + "; ".join(skipped) + "."
                 self.paint_note()
