@@ -132,7 +132,8 @@ def plainly(text: str) -> str:
 
 class Helper:
     """One chat. ask() a question; its answer comes to on_event as Events, on a thread of the
-    helper's own (a claude that can't start: on the asker's). One question at a time: ask while busy is refused (False). The claude
+    helper's own (a claude that can't start: on the asker's), mostly under its lock: the
+    callback hands each to its own loop and returns, never calling back in. One question at a time: ask while busy is refused (False). The claude
     starts at the first ask and stops on stop(), on reset() (New chat, the history
     cleared too) or on idle() past IDLE, the history kept for the next."""
 
@@ -178,7 +179,7 @@ class Helper:
             if why:
                 self.busy = False
                 self.halt()
-        if why:   # outside the lock, as every event is: the callback may ask again
+        if why:
             self.on_event(Event("error", why))
         return True
 
@@ -258,10 +259,9 @@ class Helper:
 
     def emit(self, proc: subprocess.Popen, event: Event) -> None:
         """An event from this claude, unless it has been stopped since (New chat)."""
-        with self.lock:
-            current = self.proc is proc
-        if current:   # outside the lock, as every event is
-            self.on_event(event)
+        with self.lock:   # under it, so a New chat between the check and the event can't let it through
+            if self.proc is proc:
+                self.on_event(event)
 
     def finish(self, proc: subprocess.Popen, result: dict, streamed: str) -> None:
         """A result: the answer done, kept in the history, or an error said."""
@@ -275,7 +275,7 @@ class Helper:
                 text = streamed.strip() or str(result.get("result") or "").strip()
                 self.history.append((self.question, text))
                 event = Event("done", text, self.tokens)
-        self.on_event(event)
+            self.on_event(event)
 
     def idle(self, now: float | None = None) -> bool:
         """Its claude stopped if the chat has been quiet IDLE seconds: True if it was."""
@@ -292,10 +292,12 @@ class Helper:
             self.history, self.tokens, self.busy = [], 0, False
 
     def stop(self) -> None:
-        """The app is quitting: the claude stopped."""
+        """The app is quitting: the claude stopped before it returns, not on a thread the
+        interpreter's exit could beat (the claude, in a session of its own, would run on)."""
         with self.lock:
-            self.halt()
-            self.busy = False
+            proc, self.proc, self.busy = self.proc, None, False
+        if proc is not None:
+            plan_usage.kill(proc)
 
     def halt(self) -> None:
         """Under the lock: the claude and its children ended, if one runs, off the caller's thread."""

@@ -274,8 +274,9 @@ rebase's picks don't run it: after a rebase, `make facts` and commit, or CI's te
 
 Two branches stamped apart conflict on the stamp line (and on the generated part, when both
 change it), and their merge has a hash neither had. So batch merges are done locally, never
-with GitHub's merge button: in a worktree of the batch branch, `git merge --no-ff` each PR's
-branch, run `make facts` while the sheet is still conflicted (it drops both stamps for one a
+with GitHub's merge button: in a worktree of the batch branch, `git merge --no-ff --no-commit`
+each PR's branch (so a merge with no conflict waits too), run `make facts`, with the sheet
+conflicted or not (it drops both stamps for one a
 version past them, regenerates its part and stages it; only a conflict in the guide needs a
 person), commit the merge, and push. GitHub marks each PR merged once its head is in the
 base. A PR's CI runs on its own tree until another lands first; from then on it conflicts

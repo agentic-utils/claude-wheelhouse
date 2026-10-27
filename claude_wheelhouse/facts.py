@@ -78,7 +78,10 @@ def check(root: Path = ROOT, sheet: Path | None = None, commit: bool = False) ->
     if commit and git(root, "rev-parse", "--verify", "-q", "HEAD").strip() and \
             rel not in git(root, "diff", "--cached", "--name-only", "--", rel).split():
         raise Stale(f"every commit restamps the fact sheet, and this one doesn't: {FIX}")
-    text = sheet.read_text() if sheet.exists() else ""
+    try:   # the staged copy, which is what the commit holds
+        text = git(root, "show", f":{rel}")
+    except ValueError:   # not added yet
+        text = ""
     stamp = read_stamp(text)
     if stamp is None:
         raise Stale(f"{sheet.name} has no stamp on its first line: {FIX}")
