@@ -2723,8 +2723,13 @@ async def test_emoji_codes_in_the_answer_box(store, sid, keys, expected, desc):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("at, desc", [(0, "the first"), (1, "the second"), (4, "the last")])
-async def test_a_click_on_an_emoji_suggestion_takes_it(store, sid, at, desc):
+@pytest.mark.parametrize("at, chose, desc", [
+    (0, [], "the first"),
+    (1, [], "the second"),
+    (4, [], "the last"),
+    (0, ["down"], "the first, though Down chose the second"),
+])
+async def test_a_click_on_an_emoji_suggestion_takes_it(store, sid, at, chose, desc):
     """#201: the code typed so far becomes the emoji clicked, focus stays in the box and the
     cursor goes after the emoji, so typing carries on."""
     store.post_item(sid, "question", "which db?")
@@ -2733,7 +2738,7 @@ async def test_a_click_on_an_emoji_suggestion_takes_it(store, sid, at, desc):
         await pilot.pause()
         app.items_table.move_cursor(row=0)
         await pilot.click("#answer")
-        await pilot.press(*"go ", "colon", *"star")
+        await pilot.press(*"go ", "colon", *"star", *chose)
         await pilot.pause()
         hint = app.query_one("#detail-pane .answer-hint", Hint)
         found = emoji.suggest("star")

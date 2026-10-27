@@ -176,7 +176,7 @@ session.
   has passed it on, and in the conversation until the session has it, which may wait for
   its turn to end. Emoji codes work as in chat apps: `:tada:` turns into 🎉, and while
   you type `:gri` the hint line suggests matches: click one to take it, or choose with Up and Down
-  (the first to start with) and take it with Tab or Enter. Text you haven't sent stays with the item (or session) you typed it
+  (the first is chosen to start with) and take it with Tab or Enter. Text you haven't sent stays with the item (or session) you typed it
   for: moving to another clears the box, and coming back restores it. Each session shows
   its queued count in the ✉ column. Sending doesn't change a question's status: the session's
   reply declares it, `open` while it still needs you or `answered`. Until it replies the

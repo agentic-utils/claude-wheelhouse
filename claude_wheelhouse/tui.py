@@ -2717,7 +2717,7 @@ class Hint(Label):
             self.suggesting, self.box = shown, box
             self.update(self.base if shown is None else Content.from_markup("  ".join(   # codes are [a-z0-9_+-]
                 f"[{'reverse ' * (i == chosen)}@click=take({i})]{g} :{c}:[/]" for i, (c, g) in enumerate(found))
-                + "   ↑↓ choose · Tab or a click takes it"))
+                + "   ↑↓ choose · Tab, Enter or a click takes it"))
 
     def action_take(self, at: int) -> None:
         """A click on a suggestion: it in the box, in place of the code typed."""
