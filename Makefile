@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help args install run stop tutorial test stamp facts hooks uv-check
+.PHONY: help args install run stop tutorial test stamp facts hooks helper-eval uv-check
 
 # where Astral's installer puts uv, which isn't on PATH until a new shell
 export PATH := $(PATH):$(HOME)/.local/bin
@@ -62,6 +62,9 @@ stamp: uv-check $(STAMP) ## Give every UNRELEASED feature in whatsnew.py a relea
 
 facts: uv-check $(STAMP) ## Write the helper's fact sheet's generated part again and restamp it for the source git has staged, staging it too: before every commit (AGENTS.md)
 	$(RUN) python -m claude_wheelhouse.facts make
+
+helper-eval: uv-check $(STAMP) ## Ask the helper chat how-to questions through real Haiku on your Claude Code login (a few pence of plan usage) and check its answers and its sandbox: by hand, before a release that touches keys or the helper
+	$(RUN) python tests/helper_eval.py
 
 hooks: ## Install the repo's git hooks (.githooks): the pre-commit check that the helper's fact sheet is stamped
 	git config core.hooksPath .githooks
