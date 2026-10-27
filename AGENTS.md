@@ -205,6 +205,10 @@ and `transcripts.py` the transcripts the core's and the stats module's tests wri
   time. The fixture fails on any app timer it doesn't know: add it to the fixture.
 - Prefer parametrised tests: one case per line, ending in a description used in the
   assertion message.
+- `make helper-eval` (`tests/helper_eval.py`, never collected) asks the helper chat how-to
+  questions through real Haiku on your login, a few pence of plan usage, and checks its
+  answers and its sandbox. Run it by hand before a release that touches keys or the helper,
+  or after a Claude Code update; add a question when an answer goes wrong.
 - `test_host` pins Agent SDK internals (`Host.control`): rerun it after bumping
   `claude-agent-sdk`.
 

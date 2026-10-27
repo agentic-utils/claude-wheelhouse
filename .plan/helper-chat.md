@@ -92,12 +92,39 @@ Read-only, with nothing that acts on sessions. The command line (`helper.command
 What leaves the machine: the questions, the briefing and the source Haiku reads, under the
 person's own Claude Code account. No session content, transcripts, items or store data.
 
+## Verified (make helper-eval, 27 Oct 2026, Claude Code 2.1.311)
+
+One run against Doug's login (the eval's first version; a review then tightened its checks,
+not yet run again):
+
+- The nine how-to questions each named the key or command they must (Alt+P, F1, Alt+N, Ctrl+S,
+  Ctrl+T, Alt+A, Reset layout, PORT, Ctrl+Z). Seven answered from the briefing alone, two
+  after one Grep of the source.
+- Real context: 39.2k to 40.0k tokens a question (the briefing, the rules and the tool
+  definitions), under the 100k price break.
+- A Read outside the package and the modules (a canary file in /tmp, which the question
+  asked it to read) was attempted and denied: the debug log has one "Read tool
+  permission denied", during the canary question (the line names no path), and the canary
+  never reached the answer. The eval now gives that question a debug log of its own.
+- CLAUDE.md: not settled by the log, which never mentions CLAUDE.md, loaded or not. By
+  inference from size, it isn't loaded: every question's context was 39.2k to 40.0k
+  tokens, about the briefing alone, and Doug's `~/.claude/CLAUDE.md` would add several
+  thousand. The eval now reports this as INFO rather than passing it. A positive control
+  (the same run without `--setting-sources=`) would settle it, at the cost of sending
+  CLAUDE.md to Haiku once.
+- Claude Code's built-in plugins still run under `--setting-sources=` (the log shows
+  `cc-plugin-sec-default` and `cc-plugin-agents-md` hooks). They are Claude Code's own,
+  not the person's; whether `agents-md` adds the checkout's AGENTS.md to the context is
+  unchecked (the context size suggests not).
+- No transcript written under `~/.claude/projects/` for the package's path
+  (`--no-session-persistence`).
+
 ## Haiku 5.5 and cost
 
 From the claude-api skill (6 Oct 2026): 1M context, 128K output; $0.10 in, $0.50 out per
 million tokens up to 100k tokens of prompt, $0.50 and $2.50 above; cache reads 0.1x. A
-question costs about $0.01 cold and $0.004 warm at API rates (about 35k of briefing, four
-tool rounds, 20k of source read). Past 90k tokens of context (`helper.FULL`) the drawer
+question costs about $0.01 cold and $0.004 warm at API rates (about 39k of context, measured;
+most questions need no tool round). Past 90k tokens of context (`helper.FULL`) the drawer
 offers New chat, before a request crosses 100k onto the long-prompt card.
 
 ## Delivery
