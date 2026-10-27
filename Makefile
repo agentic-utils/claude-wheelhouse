@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help args install run stop tutorial test stamp uv-check
+.PHONY: help args install run stop tutorial test stamp facts hooks uv-check
 
 # where Astral's installer puts uv, which isn't on PATH until a new shell
 export PATH := $(PATH):$(HOME)/.local/bin
@@ -59,6 +59,12 @@ test: uv-check $(STAMP) ## Run the tests
 stamp: uv-check $(STAMP) ## Give every UNRELEASED feature in whatsnew.py a release's version (make stamp VERSION=0.2.0), as a release commit does
 	@test -n "$(VERSION)" || { echo "make stamp VERSION=0.2.0"; exit 1; }
 	$(RUN) python -m claude_wheelhouse.whatsnew stamp $(VERSION)
+
+facts: uv-check $(STAMP) ## Write the helper's fact sheet's generated part again and restamp it for the source git has staged, staging it too: before every commit (AGENTS.md)
+	$(RUN) python -m claude_wheelhouse.facts make
+
+hooks: ## Install the repo's git hooks (.githooks): the pre-commit check that the helper's fact sheet is stamped
+	git config core.hooksPath .githooks
 
 uv-check:
 	@command -v uv >/dev/null 2>&1 || { echo "uv not found: run make install" >&2; exit 1; }
