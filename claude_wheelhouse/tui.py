@@ -60,7 +60,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, callout, columns, docblocks, docroots, emoji, features, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
+from . import api, callout, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .rows import KIND_COLOUR, RowTips, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
@@ -3612,6 +3612,81 @@ class TourNotes(Dialog):
         self.action_answer("close")
 
 
+HELPER_PRIVACY = ("Answers come from Haiku on your own Claude Code login. Your questions, the wheelhouse's help and the "
+                  "source it reads leave this machine; your sessions, items and transcripts don't.")
+HELPER_FULL = "This chat is long, and a long chat costs more per question: New chat (Alt+N) starts afresh."
+
+
+class HelperDrawer(Dialog):
+    """Alt+G: the helper chat (helper.py, .plan/helper-chat.md), a drawer down the right-hand
+    side, the screen behind showing through. The chat is the app's (WheelhouseApp.helper_log),
+    so Esc, Alt+G or a click outside closes the drawer and the next Alt+G finds it as it was,
+    an answer still coming included. Enter asks; Alt+N starts a new chat."""
+    ACTION = "helper-ask"
+    BINDINGS = [Binding("alt+g", "close_helper", show=False), Binding("alt+n", "new_chat", show=False)]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="helper"):
+            yield Label("ASK THE WHEELHOUSE", classes="dialog-title")
+            yield VerticalScroll(id="helper-chat")
+            yield Static("", id="helper-status")
+            yield Input(placeholder="How do I...?", id="helper-question")
+            with Horizontal(classes="buttons"):
+                yield Button(Text("Ask [Enter]"), variant="success", id="helper-ask")
+                yield Button(Text("New chat [Alt+N]"), id="helper-new")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self.paint()
+        self.set_focus(self.query_one("#helper-question", Input))
+
+    def paint(self, last_only: bool = False) -> None:
+        """The chat as the app holds it, or just its last entry (a piece of an answer)."""
+        chat = self.query_one("#helper-chat", VerticalScroll)
+        log = self.app.helper_log or [{"who": "note", "text": HELPER_PRIVACY}]
+        shown = chat.query(Static)
+        if last_only and len(shown) == len(log):
+            shown.last().update(helper_text(log[-1]))
+        else:
+            shown.remove()
+            chat.mount_all([Static(helper_text(entry), classes=f"helper-{entry['who']}") for entry in log])
+        self.query_one("#helper-status", Static).update(self.app.helper_status())
+        chat.scroll_end(animate=False)
+
+    def action_close_helper(self) -> None:
+        self.action_cancel()
+
+    def action_new_chat(self) -> None:
+        self.app.new_helper_chat()
+        self.paint()
+        self.set_focus(self.query_one("#helper-question", Input))
+
+    @on(Button.Pressed, "#helper-ask")
+    def pressed_ask(self, event: Button.Pressed) -> None:
+        event.stop()
+        box = self.query_one("#helper-question", Input)
+        if self.app.ask_helper(box.value):
+            box.value = ""
+            self.paint()
+        box.focus()
+
+    @on(Button.Pressed, "#helper-new")
+    def pressed_new(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_new_chat()
+
+
+def helper_text(entry: dict) -> Text | RichMarkdown:
+    """A helper chat entry as the drawer shows it: the person's question, the answer as
+    Markdown (keys in bold), an error or a note."""
+    who, text = entry["who"], entry["text"]
+    if who == "you":
+        return Text(f"› {text}", style=f"bold {VOICE['you']}")
+    if who == "helper":
+        return RichMarkdown(text or "…", style=VOICE["claude"])
+    return Text(text, style=VOICE["warn" if who == "error" else "note"])
+
+
 def key_name(key: str) -> str:
     """A binding's key as the person reads it: Ctrl+S, Shift+Up, Space, ?."""
     names = {"question_mark": "?", "escape": "Esc", "enter": "Enter", "space": "Space", "pageup": "PgUp",
@@ -3645,6 +3720,10 @@ DESCRIBE = {
                            "for marked rows), saying how many are still open or unread, then takes them all but the pinned"),
     "app.toggle_pinned": "Pin the highlighted item (📌), or clear its pin: Ctrl+A and Delete leave a pinned item",
     "help": "This list",
+    "helper": ("Ask the wheelhouse: a chat that answers how-to questions about it, from its help and its source "
+               "(Haiku, on your Claude Code login). Alt+G again, or Esc, closes it; the chat is kept until you quit"),
+    "close_helper": "Close the helper, keeping the chat",
+    "new_chat": "New chat: the helper forgets this one",
     "doc_layout": "With a doc shown: its thread under it (split), or Doc and Thread as tabs (tabbed); kept",
     "doc_tab(-1)": "With a doc shown tabbed: the tab before",
     "doc_tab(1)": "With a doc shown tabbed: the tab after",
@@ -3832,6 +3911,7 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
                 ("An item opened full screen", ThreadView.BINDINGS),
                 ("A doc opened full screen", DocView.BINDINGS),
                 ("A doc's editor", DocEditor.BINDINGS),
+                ("The helper (Alt+G)", HelperDrawer.BINDINGS),
                 *[(w.KEYS_HELP[0], w.BINDINGS) for w in panes
                   if (keys := getattr(w, "KEYS_HELP", None)) and (sdk or not keys[1])]]
     # a module's pane says what its own keys do: core's DESCRIBE can't know them (#154)
@@ -3986,6 +4066,13 @@ class WheelhouseApp(App):
     #tour-notes-text, #tour-line, #tour-stop-esc {{ margin: 1 0 0 0; color: #ffd300; }}
     #invite-buttons.stacked {{ layout: vertical; height: auto; }}
     #invite-buttons.stacked Button {{ width: 100%; }}
+    /* the helper chat: a drawer down the right-hand side, the screen showing through left of it */
+    HelperDrawer {{ align: right top; }}
+    #helper {{ width: 64; max-width: 100%; height: 100%; padding: 0 1; background: #000000; color: {MATRIX};
+               border-left: thick #ff2a6d; }}
+    #helper-chat {{ height: 1fr; }}
+    #helper-chat Static {{ margin: 1 0 0 0; }}
+    #helper-status {{ height: 1; color: #777777; text-style: italic; }}
     #keys-dialog {{ width: 100; max-width: 100%; height: 90%; background: #000000; color: {MATRIX};
                     border: thick #ff2a6d; padding: 0 1; }}
     /* selected text black on white: the theme's dark teal hid the characters (#52) */
@@ -4025,6 +4112,7 @@ class WheelhouseApp(App):
         Binding("alt+v", "show_finished(True)", "Show finished", key_display="Alt+V"),
         Binding("alt+v", "show_finished(False)", "Hide finished", key_display="Alt+V"),
         Binding("f1", "help", "Keys", key_display="F1"),
+        Binding("alt+g", "helper", "Ask", key_display="Alt+G"),   # the helper chat (HelperDrawer)
         # a doc item in Detail (.plan/docs-section.md): split or tabbed, and the tabs
         Binding("ctrl+l", "doc_layout", "Doc layout", show=False, key_display="Ctrl+L"),
         # priority: a scrolling container's own (page left and right) would take them first; they
@@ -4115,6 +4203,10 @@ class WheelhouseApp(App):
         self.ctx = api.Context(state_dir, self.module_sessions, self.stats_sid, usage=self.client.usage,
                                set_effort=self.set_effort)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
+        # the helper chat (Alt+G): its driver, made at the first question, and the chat, kept for the run
+        self.helper: helper.Helper | None = None
+        self.helper_log: list[dict] = []
+        self.helper_reading = ""   # what it's reading as it answers (a tool event), for the status line
         self.weights: dict[str, float] = {}   # each slot's weight in its column, as kept (columns.py)
         self.module_ids: dict[str, str] = {}   # each pane's widget id: the module that has it
         self.pane_homes: dict[str, str] = {}   # each module pane's default slot, as it declares it (hosted)
@@ -4250,8 +4342,11 @@ class WheelhouseApp(App):
             self.push_screen(TourInvite(upgrade_text(found)), self.topup_answered)
 
     def on_unmount(self) -> None:
-        """The daemon's stream let go as the app closes: nothing posts to it after."""
+        """The daemon's stream let go as the app closes: nothing posts to it after. The
+        helper's claude, if one runs, stopped."""
         self.client.disconnect()
+        if self.helper is not None:
+            self.helper.stop()
 
     def column_width(self, splitter: Splitter) -> int | None:
         """A column's width with none dragged: the stylesheet's 45 (Q113) where there's room.
@@ -4531,6 +4626,8 @@ class WheelhouseApp(App):
         if not self.landing and self.screen_stack:
             self.paint_title()   # the daemon out of reach, said even while the animation rests
             self.refresh_data()
+        if self.helper is not None:
+            self.helper.idle()   # its claude stopped after helper.IDLE quiet seconds
 
     def paint_title(self) -> None:
         """The title at this frame: one line, never a new size. The daemon out of reach says so
@@ -5669,6 +5766,8 @@ class WheelhouseApp(App):
 
     def get_system_commands(self, screen: Screen):
         yield from super().get_system_commands(screen)
+        yield SystemCommand("Ask the wheelhouse", "A chat that answers how-to questions about the wheelhouse, "
+                            "from its help and its source (Alt+G)", self.action_helper)
         yield SystemCommand("Reset layout", "Put every pane back in its default place, and the dividers at their default sizes",
                             self.action_reset_layout)
         yield SystemCommand("Session steps", "What the wheelhouse tells a session when it compacts, ends, resumes or "
@@ -6866,6 +6965,67 @@ class WheelhouseApp(App):
         self.notify("; ".join(([told] if told else []) + ([kept] if kept else []))
                     + (deleted_hint(self.show_finished) if closed and done else ""))
         self.refresh_data()
+
+    def action_helper(self) -> None:
+        """Alt+G: the helper's drawer, or closed if it's in front. Over another dialog, nothing."""
+        if isinstance(self.screen, HelperDrawer):
+            self.screen.action_cancel()
+        elif not self.under_dialog():
+            self.push_screen(HelperDrawer())
+
+    def ask_helper(self, question: str) -> bool:
+        """A question to the helper, its claude started at the first (helper.Helper): False if
+        there's nothing to ask or an answer is still coming. Its events come back on the loop."""
+        if self.helper is None:
+            loop = asyncio.get_running_loop()
+            self.helper = helper.Helper(lambda event: loop.call_soon_threadsafe(self.helper_said, event),
+                                        sdk=self.client.sdk)
+        if not self.helper.ask(question):
+            return False
+        self.helper_log += [{"who": "you", "text": question.strip()}, {"who": "helper", "text": ""}]
+        self.helper_reading = ""
+        return True
+
+    def helper_said(self, event: "helper.Event") -> None:
+        """A helper event, on the loop: the chat brought up to date, and the drawer if it shows.
+        An answer that ends while the drawer is closed says so."""
+        log = self.helper_log
+        answering = bool(log) and log[-1]["who"] == "helper"
+        if event.kind == "text" and answering:
+            log[-1]["text"] += event.text
+            self.helper_reading = ""
+        elif event.kind == "tool":
+            self.helper_reading = event.text
+        elif event.kind == "done" and answering:
+            log[-1]["text"] = event.text
+            if self.helper is not None and self.helper.full and {"who": "note", "text": HELPER_FULL} not in log:
+                log.append({"who": "note", "text": HELPER_FULL})   # offered once a chat
+        elif event.kind == "error":
+            if answering and not log[-1]["text"]:
+                log.pop()
+            log.append({"who": "error", "text": event.text})
+        if event.kind in ("done", "error"):
+            self.helper_reading = ""
+        drawer = next((s for s in self.screen_stack if isinstance(s, HelperDrawer)), None)
+        if drawer is not None:
+            if drawer.is_mounted:   # one pushed but not yet composed paints itself on mounting
+                drawer.paint(last_only=event.kind == "text")
+        elif event.kind in ("done", "error"):
+            self.notify("The helper has answered: Alt+G" if event.kind == "done" else "The helper couldn't answer: Alt+G")
+
+    def helper_status(self) -> str:
+        """The drawer's status line: what the helper is reading, or that it's thinking."""
+        if self.helper is None or not self.helper.busy:
+            return ""
+        if self.helper_reading:
+            return f"Reading {self.helper_reading}"
+        return "" if self.helper_log and self.helper_log[-1]["text"] else "Thinking…"
+
+    def new_helper_chat(self) -> None:
+        """New chat: the helper's claude stopped and the chat forgotten."""
+        if self.helper is not None:
+            self.helper.reset()
+        self.helper_log, self.helper_reading = [], ""
 
     def action_help(self) -> None:
         if self.under_dialog():

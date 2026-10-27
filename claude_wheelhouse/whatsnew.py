@@ -152,6 +152,10 @@ FEATURES: tuple[Feature, ...] = (
             "Drag a pane by its title onto another to swap them. Ctrl+P, Reset layout, puts them back."),
     Feature("doc-editor", UNRELEASED, ADVANCED,
             note="A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered. Saving comes next."),
+    Feature("helper-chat", UNRELEASED, "principles",
+            note="Alt+G asks the wheelhouse how to do something: a chat that answers from its help and its source, "
+                 "through Haiku on your own Claude Code login.",
+            tip="Stuck? Alt+G asks the wheelhouse how to do something."),
     Feature("tour-topups", UNRELEASED, "principles",
             note="After an update, the tour shows only what's new, pane by pane, with no demo; Esc ends it at any "
                  "time, and after quitting mid-tour, Alt+T or the title bar's badge resumes it.",
