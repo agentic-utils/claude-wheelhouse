@@ -5,7 +5,7 @@ test runs the real claude: test_helper.py covers the driver)."""
 import pytest
 from textual.widgets import DataTable, Input, Static
 
-from claude_wheelhouse import helper, tui
+from claude_wheelhouse import facts, helper, tui
 from claude_wheelhouse.helper import Event
 from claude_wheelhouse.tui import HelperDrawer, WheelhouseApp
 
@@ -148,8 +148,12 @@ async def test_new_chat_and_a_long_chat_offering_it(store, fake_helper):
         assert fake.resets == 1 and app.helper_log == [] and "leave this machine" in chat_text(app)
 
 
+@pytest.mark.parametrize("event, says, desc", [
+    (Event("done", "a"), "The helper has answered: Alt+G", "an answer"),
+    (Event("error", "gone"), "The helper couldn't answer: Alt+G", "an error"),
+])
 @pytest.mark.anyio
-async def test_an_answer_landing_with_the_drawer_closed_says_so(store, fake_helper, monkeypatch):
+async def test_an_answer_landing_with_the_drawer_closed_says_so(store, fake_helper, monkeypatch, event, says, desc):
     app = WheelhouseApp(store)
     said = []
     async with app.run_test(size=(160, 40)) as pilot:
@@ -160,9 +164,33 @@ async def test_an_answer_landing_with_the_drawer_closed_says_so(store, fake_help
         await ask(app, pilot, "q")
         await pilot.press("escape")
         await pilot.pause()
-        fake_helper[0].say(Event("done", "a"))
+        fake_helper[0].say(event)
         await pilot.pause()
-        assert said == ["The helper has answered: Alt+G"]
+        assert said == [says], desc
+
+
+@pytest.mark.anyio
+async def test_an_event_before_the_drawer_is_composed_waits_for_it(store, fake_helper):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.helper_log = [{"who": "you", "text": "q"}, {"who": "helper", "text": ""}]
+        app.push_screen(HelperDrawer())
+        app.helper_said(Event("text", "early"))   # before it composes: no NoMatches
+        await pilot.pause()
+        assert app.helper_log[-1]["text"] == "early" and len(app.screen.query("#helper-chat Static")) == 2
+
+
+@pytest.mark.anyio
+async def test_a_question_while_one_is_answered_stays_in_the_box(store, fake_helper):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("alt+g")
+        await pilot.pause()
+        await ask(app, pilot, "q")
+        await ask(app, pilot, "again")
+        assert fake_helper[0].asked == ["q"] and app.screen.query_one("#helper-question", Input).value == "again"
 
 
 @pytest.mark.anyio
@@ -195,5 +223,4 @@ async def test_alt_g_over_another_dialog_does_nothing(store):
 def test_the_overlay_and_the_palette_list_it():
     text = tui.keys_help()
     assert "**Alt+G**: Ask the wheelhouse" in text and "## The helper (Alt+G)" in text
-    assert ("Ask the wheelhouse", ) == tuple(t for t, _ in __import__("claude_wheelhouse.facts").facts.palette(tui)
-                                            if t.startswith("Ask"))
+    assert [t for t, _ in facts.palette(tui) if t.startswith("Ask")] == ["Ask the wheelhouse"]

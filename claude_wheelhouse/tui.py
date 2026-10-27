@@ -6998,8 +6998,8 @@ class WheelhouseApp(App):
             self.helper_reading = event.text
         elif event.kind == "done" and answering:
             log[-1]["text"] = event.text
-            if self.helper is not None and self.helper.full:
-                log.append({"who": "note", "text": HELPER_FULL})
+            if self.helper is not None and self.helper.full and {"who": "note", "text": HELPER_FULL} not in log:
+                log.append({"who": "note", "text": HELPER_FULL})   # offered once a chat
         elif event.kind == "error":
             if answering and not log[-1]["text"]:
                 log.pop()
@@ -7008,7 +7008,8 @@ class WheelhouseApp(App):
             self.helper_reading = ""
         drawer = next((s for s in self.screen_stack if isinstance(s, HelperDrawer)), None)
         if drawer is not None:
-            drawer.paint(last_only=event.kind == "text")
+            if drawer.is_mounted:   # one pushed but not yet composed paints itself on mounting
+                drawer.paint(last_only=event.kind == "text")
         elif event.kind in ("done", "error"):
             self.notify("The helper has answered: Alt+G" if event.kind == "done" else "The helper couldn't answer: Alt+G")
 
