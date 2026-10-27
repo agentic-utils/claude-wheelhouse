@@ -94,7 +94,8 @@ person's own Claude Code account. No session content, transcripts, items or stor
 
 ## Verified (make helper-eval, 27 Oct 2026, Claude Code 2.1.311)
 
-One run against Doug's login, all twelve checks passing:
+One run against Doug's login (the eval's first version; a review then tightened its checks,
+not yet run again):
 
 - The nine how-to questions each named the key or command they must (Alt+P, F1, Alt+N, Ctrl+S,
   Ctrl+T, Alt+A, Reset layout, PORT, Ctrl+Z). Seven answered from the briefing alone, two
@@ -102,9 +103,18 @@ One run against Doug's login, all twelve checks passing:
 - Real context: 39.2k to 40.0k tokens a question (the briefing, the rules and the tool
   definitions), under the 100k price break.
 - A Read outside the package and the modules (a canary file in /tmp, which the question
-  asked it to read) was attempted and denied: the canary never reached the answer.
-- `--setting-sources=` keeps CLAUDE.md out: the debug log (`--debug-file`, 2,951 lines) names
-  no CLAUDE.md, so no `--settings` deny rule is needed.
+  asked it to read) was attempted and denied: the debug log says "Read tool permission
+  denied" for it, and the canary never reached the answer.
+- CLAUDE.md: not settled by the log, which never mentions CLAUDE.md, loaded or not. By
+  inference from size, it isn't loaded: every question's context was 39.2k to 40.0k
+  tokens, about the briefing alone, and Doug's `~/.claude/CLAUDE.md` would add several
+  thousand. The eval now reports this as INFO rather than passing it. A positive control
+  (the same run without `--setting-sources=`) would settle it, at the cost of sending
+  CLAUDE.md to Haiku once.
+- Claude Code's built-in plugins still run under `--setting-sources=` (the log shows
+  `cc-plugin-sec-default` and `cc-plugin-agents-md` hooks). They are Claude Code's own,
+  not the person's; whether `agents-md` adds the checkout's AGENTS.md to the context is
+  unchecked (the context size suggests not).
 - No transcript written under `~/.claude/projects/` for the package's path
   (`--no-session-persistence`).
 
