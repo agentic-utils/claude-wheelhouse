@@ -86,7 +86,10 @@ DECISION_FIELDS = (("why", "Why"),)
 # park_session takes no arguments.
 # 21: a reply on the host's MCP question (#179) is never passed on: claim skips it, the
 # monitor notes it and get_input redacts a pasted sign-in code. An older reader passes it on.
-PROTOCOL_VERSION = 21
+# 22: request_mcp_signin (.plan/mcp-on-demand.md), with which a session run in the wheelhouse asks
+# the person to sign in to an MCP server it needs (sessions.mcp_asks): the host no longer asks
+# about every server unprompted, and an older host still does.
+PROTOCOL_VERSION = 22
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
@@ -138,6 +141,18 @@ def mcp_server(answer: str | None) -> str | None:
     except ValueError:
         return None
     return mark.get("server") if isinstance(mark, dict) and mark.get("from") == MCP_FROM else None
+
+
+def mcp_servers(session) -> dict[str, dict] | None:
+    """A session's MCP servers as its host last saw them (sessions.mcp_status), by name;
+    None before its host has looked."""
+    raw = session["mcp_status"] if session is not None and "mcp_status" in session.keys() else None
+    if not raw:
+        return None
+    try:
+        return {s["name"]: s for s in json.loads(raw)["servers"]}
+    except (ValueError, KeyError, TypeError):
+        return None
 
 
 # a message that is the person's reply on an MCP question (in SQL, on a messages row): claim
@@ -331,7 +346,11 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "compact_request", "TEXT"), ("sessions", "compact_requested_at", "TEXT"),
                  # a park the session asked to be compacted first itself (park_session): /compact's
                  # instructions, '' for none; NULL when it didn't ask
-                 ("sessions", "park_keep", "TEXT")]
+                 ("sessions", "park_keep", "TEXT"),
+                 # its host's last look at its MCP servers (JSON: when, and each server's name, status,
+                 # kind, scope and error), and what it is asked to do about them (JSON list, taken
+                 # whole): a sign-in the session asked for (request_mcp_signin), .plan/mcp-on-demand.md
+                 ("sessions", "mcp_status", "TEXT"), ("sessions", "mcp_asks", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -1144,6 +1163,38 @@ class Store:
         """A message's body replaced by a redacted copy: a pasted secret, once used, not kept."""
         with self.tx() as db:
             db.execute("UPDATE messages SET body = ? WHERE session_id = ? AND id = ?", (body, sid, msg_id))
+
+    def set_mcp_status(self, sid: str, servers: list[dict]) -> None:
+        """The host's last look at the session's MCP servers (mcp_servers reads it)."""
+        with self.tx() as db:
+            db.execute("UPDATE sessions SET mcp_status = ? WHERE id = ?",
+                       (json.dumps({"at": stamp(), "servers": servers}), sid))
+
+    def ask_mcp(self, sid: str, do: str, server: str, **more) -> None:
+        """Ask the session's host to act on one of its MCP servers, on its next poll: the
+        same ask about the same server, already waiting, is replaced."""
+        with self.tx() as db:
+            row = db.execute("SELECT mcp_asks FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if row is None:
+                raise SessionGone(sid)
+            asks = [a for a in json.loads(row[0] or "[]") if (a.get("do"), a.get("server")) != (do, server)]
+            asks.append({"do": do, "server": server, **more})
+            db.execute("UPDATE sessions SET mcp_asks = ? WHERE id = ?", (json.dumps(asks), sid))
+
+    def take_mcp_asks(self, sid: str) -> list[dict]:
+        """The host takes what it is asked to do about its MCP servers, once."""
+        with self.tx() as db:
+            row = db.execute("SELECT mcp_asks FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if not row or not row[0]:
+                return []
+            db.execute("UPDATE sessions SET mcp_asks = NULL WHERE id = ?", (sid,))
+        return json.loads(row[0])
+
+    def open_mcp_question(self, sid: str, server: str) -> str | None:
+        """The ref of the host's open question about this MCP server, if there is one."""
+        return next((i["ref"] for i in self.items(sid, include_closed=False)
+                     if i["kind"] == "question" and i["status"] not in CLOSED and mcp_server(i["answer"]) == server),
+                    None)
 
     def post_marked_question(self, sid: str, title: str, body: str, mark: str) -> str:
         """A question of the host's own, marked in its answer column as it is posted: one

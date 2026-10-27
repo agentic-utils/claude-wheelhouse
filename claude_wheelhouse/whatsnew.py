@@ -273,8 +273,9 @@ FEATURES: tuple[Feature, ...] = (
             note="Every key has a modifier, so a letter typed in the answer box is always just typed, and the "
                  "app's own keys work from there: Ctrl+Q quits, F1 lists the keys, Alt+N is New session."),
     Feature("mcp-reauth", UNRELEASED, ADVANCED, when="sdk",
-            note="An MCP server that needs signing in again, or has failed, gets a question with its sign-in link; "
-                 "reply on it and the wheelhouse reconnects the server."),
+            note="When a session needs an MCP server that wants signing in, or has failed, it asks you, with the "
+                 "sign-in link; the question closes once the server is connected. Relaunch all (Alt+Shift+L) "
+                 "to stop older sessions asking about every server."),
     Feature("all-conversations", UNRELEASED, ADVANCED,
             note="With no session selected, the inbox lists each session's conversation (💬, named after the "
                  "session) under the items waiting on you."),
