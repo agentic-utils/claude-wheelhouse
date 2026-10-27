@@ -101,6 +101,13 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   repo beside it, #191; `decision_dirs` pairs each with the repo that looks there).
   Never imports Textual.
 - `models.py`: the models and effort levels offered. A new model is a row here.
+- `helper.py`: the helper chat (#198, `.plan/helper-chat.md`): how-to questions answered by
+  Haiku through the person's own login, one sandboxed `claude -p` over stream-json per chat,
+  started at the first question (read-only tools, no MCP servers, settings, transcript or
+  `WHEELHOUSE_*` variables). Never imports Textual.
+- `facts.py` and `helper_facts.md`: the helper's fact sheet, a hand-written guide above
+  the part `make facts` generates from the code, stamped for the source (below, The helper's
+  fact sheet).
 - `tutorial.py`: the tutorial's demo session: its directory, its brief (`BRIEF`, a line in
   capitals to the person first), New session's fields for it (`form`) and what the store
   records of it (`facts`).
@@ -198,6 +205,10 @@ and `transcripts.py` the transcripts the core's and the stats module's tests wri
   time. The fixture fails on any app timer it doesn't know: add it to the fixture.
 - Prefer parametrised tests: one case per line, ending in a description used in the
   assertion message.
+- `make helper-eval` (`tests/helper_eval.py`, never collected) asks the helper chat how-to
+  questions through real Haiku on your login, a few pence of plan usage, and checks its
+  answers and its sandbox. Run it by hand before a release that touches keys or the helper,
+  or after a Claude Code update; add a question when an answer goes wrong.
 - `test_host` pins Agent SDK internals (`Host.control`): rerun it after bumping
   `claude-agent-sdk`.
 
@@ -243,6 +254,40 @@ Sessions keep running the code they started with, against the same database.
   trigger must stay harmless when older and newer versions fire together. To retire one,
   match it in a `RETIRED_*` pattern so every version is dropped on open.
 
+## The helper's fact sheet
+
+`claude_wheelhouse/helper_facts.md` is what the helper chat knows before it reads any source.
+Its first line is a stamp: a version, a UTC time, and a hash of the source as git's index
+holds it (the package's `.py` and `.md` files, the modules' `.py` files but their tests,
+and the README; not the sheet, the tests, `.plan/` or this file). The pre-commit hook and
+`test_facts.py` fail when the hash isn't the source's, so on every commit:
+
+1. `git add` your change.
+2. Check the sheet's guide (above its `generated` line) against it: a pane, a word, a file
+   the guide names. Fix what it describes wrongly or leaves out. Never edit below that line.
+3. `make facts`: the generated part (keys, buttons, palette, settings, features) written
+   again from the code, and the sheet restamped and added. Run it even when the guide needed
+   nothing: a commit that changes no source still gets a new version.
+   It names any source you changed but didn't add, which the stamp leaves out.
+4. Commit. The hook refuses a commit whose stamp isn't for its source, or that doesn't
+   include the sheet.
+
+`make hooks` installs the hook (`.githooks/pre-commit`, through `core.hooksPath`), once per
+clone. It runs `python3 claude_wheelhouse/facts.py check --commit`, needing no venv. A
+rebase's picks don't run it: after a rebase, `make facts` and commit, or CI's test catches it.
+
+Two branches stamped apart conflict on the stamp line (and on the generated part, when both
+change it), and their merge has a hash neither had. So batch merges are done locally, never
+with GitHub's merge button: in a worktree of the batch branch, `git merge --no-ff --no-commit`
+each PR's branch (so a merge with no conflict waits too), run `make facts`, with the sheet
+conflicted or not (it drops both stamps for one a
+version past them, regenerates its part and stages it; only a conflict in the guide needs a
+person), commit the merge, and push. GitHub marks each PR merged once its head is in the
+base. A PR's CI runs on its own tree until another lands first; from then on it conflicts
+with the batch, and GitHub runs no PR checks on a conflicting PR. The pushed batch branch
+runs the tests itself (`test.yml` runs on a push to `batch/**`), so that is the check that
+counts once merging starts.
+
 ## Docs kept in step
 
 Update these in the same commit as the behaviour they describe:
@@ -265,6 +310,7 @@ Update these in the same commit as the behaviour they describe:
   has none), `BUTTONS` (each button's tooltip and overlay line), `SEND_RULES` and `MOUSE`.
 - `README.md`: anything a user sees or does.
 - The matching `.plan/` doc when a design decision changes.
+- `helper_facts.md`'s guide, then `make facts`: every commit (The helper's fact sheet).
 
 ## Commits
 

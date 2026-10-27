@@ -175,8 +175,9 @@ session.
   `you · queued`, until the session takes it up: in an item's thread until the wheelhouse
   has passed it on, and in the conversation until the session has it, which may wait for
   its turn to end. Emoji codes work as in chat apps: `:tada:` turns into 🎉, and while
-  you type `:gri` the hint line suggests matches (Tab or Enter takes the first). Text you haven't sent stays with the item (or session) you typed it
-  for: moving to another clears the box, and coming back restores it. Each session shows
+  you type `:gri` the hint line suggests matches: click one to take it, or choose with Up
+  and Down (the first is chosen to start with) and take it with Tab or Enter. Text you
+  haven't sent stays with the item (or session) you typed it for: moving to another clears the box, and coming back restores it. Each session shows
   its queued count in the ✉ column. Sending doesn't change a question's status: the session's
   reply declares it, `open` while it still needs you or `answered`. Until it replies the
   question shows as `processing` (dimmed), awaiting the session, and the session list's
@@ -353,14 +354,20 @@ session.
   `Shift+click` (or `Alt+click`) takes the range, `Ctrl+Space` and `Shift+Up`/`Shift+Down` do
   the same from the keyboard, and a plain click or `Esc` drops the marks; the pane's
   bottom border counts them. Under the table, the PRs marked (or else the one selected)
-  have four buttons, which a right-click on a row gives as a menu too (for every PR marked
+  have five buttons, which a right-click on a row gives as a menu too (for every PR marked
   if the row is one of them, else for that row alone): **Open** (the browser); **Merge**,
   asked first, with `gh pr merge` the way the repo allows (a merge commit where it can,
-  else squash, else rebase); **Request review**, which asks once for a Slack channel or
+  else squash, else rebase); **Mark ready** or **Make draft** (`gh pr ready`, or with
+  `--undo`), not asked first: Mark ready while any PR it acts on is a draft, for the drafts
+  alone; **Request review**, which asks once for a Slack channel or
   name (`#channel`, `@name`, past ones offered most recent first) and sends each PR's
-  session a message asking it to post the request on Slack (greyed, or the PR skipped and
-  said so, where no session made it); and **Close**, asked first, with `gh pr close`. Merge
-  and Close name every PR in their question, and say under the table what came of each:
+  session a message asking it to post the request on Slack; and **Close**, asked first,
+  with `gh pr close`. A button that can't apply to any of the PRs is greyed, and resting
+  the pointer on it says why: Merge for a draft, a review still required or changes
+  requested, a conflict, failing checks or checks still running (it stays on while GitHub
+  hasn't yet worked out whether there's a conflict); Request review for a draft, a PR already approved or
+  one no session made (a PR among several it doesn't apply to is skipped, and said so). Merge
+  and Close name every PR in their question (Merge with what blocks each), and say under the table what came of each:
   done, or what stood in its way (a review required, conflicts, failing checks, as `gh`
   says). While Detail shows a PR the pane lists (a session's PR item, or one no session
   made, picked here), it has the same buttons for that PR, and under its thread the PR's
@@ -527,13 +534,13 @@ along with the launch command.
 
 Keys, shown in upper case as usual (Alt+V means Alt and the v key, not Shift+V). Every one has a modifier (or is `F1`), so each works from the answer box too: `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `Alt+V` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `Alt+N` new session, `Alt+A` adopt, `Alt+Shift+L` relaunch all, `Alt+K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
+highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `Alt+N` new session, `Alt+A` adopt, `Alt+Shift+L` relaunch all, `Alt+Shift+M` the MCP servers of the session in context, `Alt+K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode), `Alt+S` send this one answer now (the queue and mode left as they are),
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
 as answered, a decision as seen), `Ctrl+Z` undo the last delete, pin or reopen in the inbox (the rows back as they
-stood, an open question open again; in a text box, its own undo), `F1` list every key and button, `Ctrl+Q` quit, `Alt+T` resume the tour while the title bar's badge shows. `Alt+Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
-Every dialog opens centred over the screen, which stays in sight behind it. `Esc`, or a click outside the box, cancels it (on the tutorial's invite, that is Later, never Never), though not a click outside in the moment a dialog opens (a double-click's second). `Enter` presses the focused button; with focus on a one-line box or a checkbox it takes the dialog's one action (Launch, Rename, Fork, Park and the like), while in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices (Stop & Forget's, Relaunch's) answers `Enter` only on the focused button. `Tab` and `Shift+Tab` go round its boxes and buttons. A dialog asking yes or no takes `Alt+Y` or `Alt+N` (`Esc` is no, and so is `Enter`, as No has the focus). The `F1` list closes on `Esc`, `Enter`, `F1` or a click outside.
+stood, an open question open again; in a text box, its own undo), `F1` list every key and button, `Alt+G` ask the wheelhouse how to do something (the helper, below), `Ctrl+Q` quit, `Alt+T` resume the tour while the title bar's badge shows. `Alt+Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
+Every dialog opens centred over the screen (the helper's drawer docks right), which stays in sight behind it. `Esc`, or a click outside the box, cancels it (on the tutorial's invite, that is Later, never Never), though not a click outside in the moment a dialog opens (a double-click's second). `Enter` presses the focused button; with focus on a one-line box or a checkbox it takes the dialog's one action (Launch, Rename, Fork, Park and the like), while in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices (Stop & Forget's, Relaunch's) answers `Enter` only on the focused button. `Tab` and `Shift+Tab` go round its boxes and buttons. A dialog asking yes or no takes `Alt+Y` or `Alt+N` (`Esc` is no, and so is `Enter`, as No has the focus). The `F1` list closes on `Esc`, `Enter`, `F1` or a click outside.
 
 `Tab` goes round the session list, the items, the Decisions list, the answer box, the tour's Next while a tour box
 with one shows, then every button shown, in reading order, then the stats pane's effort slider (while it shows) and its zoom's `-` and `+` (`Enter` or
@@ -544,11 +551,27 @@ gives focus to the answer box. Send (its button or `Ctrl+S`) from the answer box
 the box; from the session list or the items, focus stays there. An item opened full screen goes the same way: its
 answer box, then its buttons, and a click in its thread puts focus in the box. A conversation or an item's thread,
 in Detail or full screen, follows what's new to its end (your own answer, a reply) unless you've scrolled more than a
-line up from the end; an item just selected shows from its top. A doc shown in Detail
+line up from the end, and stays at its end when the view gets shorter (emoji suggestions under the box, the box
+made taller); an item just selected shows from its top. A doc shown in Detail
 is a stop after the answer box (in its place when the box doesn't show), and focused, the arrows,
 `PgUp`, `PgDn`, `Home` and `End` scroll it. Keys typed ahead of the screen end as if typed slowly: each acts once the one
 before it has done all it does, so the ones behind a key that opens a thread or a dialog go to it, and the ones behind a
 dialog's answer go to the screen it uncovers.
+
+### Asking the wheelhouse
+
+`Alt+G` (or Ask the wheelhouse, in the command palette) opens the helper: a drawer down the right-hand side
+where you ask how to do something ("how do I pin an item?") and get a short answer naming the keys and
+buttons. It answers from a fact sheet generated from the code (every key, button, setting and feature), this
+README and what sessions are told, and reads the wheelhouse's own source when it needs to, saying which file
+an answer came from. It runs Claude Haiku through your own Claude Code login, so it costs a little plan usage
+(or API spend, on an API-key login); nothing starts until your first question. What leaves the machine: your
+questions, the help and the source it reads. Your sessions, items and transcripts don't, and it can't act on
+anything: its Claude Code has only the read-only file tools, no MCP servers, none of your settings or hooks,
+and writes no transcript. `Esc`, `Alt+G` again or a click outside closes the drawer and keeps the chat, an
+answer still coming included (a notification says when it lands); `Alt+N` in the drawer starts a new chat,
+which it offers once a chat gets long. The chat lasts until you quit. A chat quiet for ten minutes lets its
+Claude Code go, and the next question starts another, told the chat so far.
 
 Ordering the lists: click a column header in the inbox to sort by it. Status cycles `*`
 (the inbox's own order: open questions first, then blocked, running and the rest, newest
@@ -724,15 +747,26 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   [Settings](#settings)), sets another limit; fractions are allowed and 0
   turns it off. Each message costs one request, which reads the cached context: for a
   quiet session that is much cheaper than writing the cache again when you come back.
-- A session run in the wheelhouse has no `/mcp`, so the wheelhouse watches its MCP servers
-  for it, as it starts and after every turn. One that needs signing in again (a claude.ai
-  connector such as Slack, or a server of your own with OAuth) gets a question carrying its
-  sign-in link; one that failed gets a question with its error. For a claude.ai connector,
-  open the link, authorise it, then reply anything on the question: the wheelhouse
-  reconnects the server. For a server of your own, Claude Code waits for the browser to
-  come back and reconnects it itself; if the browser can't reach it, paste the address the
-  browser ends on as your reply. The question closes once the server is connected. Shell
-  closes them, as `/mcp` in the tab does the same.
+- A session run in the wheelhouse has no `/mcp`. When its work needs an MCP server that
+  wants signing in (a claude.ai connector such as Slack, or a server of your own with
+  OAuth) or has failed, the session asks for it (`request_mcp_signin`), and you get a
+  question saying what it needs the server for, with its sign-in link or its error.
+  Servers it doesn't need are never asked about. For a claude.ai connector, open the link
+  and authorise it: the wheelhouse reconnects it every few minutes for two hours, so the
+  question closes by itself, or reply anything to reconnect it at once. For a server of
+  your own, Claude Code waits for the browser to come back and connects it itself; if the
+  browser can't reach it, paste the address the browser ends on as your reply. Shell
+  closes these questions, as `/mcp` in the tab does the same.
+- `Alt+Shift+M` lists the MCP servers of the session in context, as its host last saw
+  them (it looks again as the dialog opens), those that need you first, each with its
+  error or sign-in link. Sign in starts a server's sign-in and opens its link; for a
+  claude.ai connector, press Reconnect once you've authorised it. A server of your own
+  connects once the browser comes back, or paste the address the browser ends on into
+  the box under it. Reconnect on a claude.ai connector reconnects it in every session run
+  in the wheelhouse that has it, as its sign-in is your account's; a local server's is
+  this session's alone (a stdio server's process restarts). Disabled servers have no
+  button: `/mcp` or the settings turn them on. A session not running shows its last look;
+  a tab session says to use `/mcp` there.
 - After a compaction, the session is told its open tasks and questions, with their titles,
   once. A session run in the wheelhouse has a Compact button, and past 200k of context a
   question suggesting it, answered with buttons (Compact, Leave it); both take optional

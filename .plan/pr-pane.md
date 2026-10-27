@@ -305,6 +305,26 @@ action for Close which should be subject to a confirmation dialog."
 - **Narrow bars.** Buttons go in a row, then in a row with short captions, then two to a
   line, then one to a line.
 
+### Actions that can't apply, and Draft/Ready (#212)
+
+Doug: "PR details show buttons for actions even when an action isn't sensible (eg merge on
+a PR that needs review and doesn't have it yet). Also, no buttons for switching between
+draft and ready status."
+
+- **Off, saying why.** The bar under the table, Detail's bar and a row's menu all read
+  `Prs.entries`, which gives each action's tooltip too. Merge is off when none of the PRs
+  it acts on can merge, by the same `blockers` that word a failed merge: a draft, a review
+  required or changes requested, a conflict, failed checks, checks still running.
+  Mergeability not yet worked out leaves it on. With several marked and one able to merge
+  it stays on, and its question names what blocks each of the rest. Request review is off
+  for a draft and for a PR already approved, as well as one no session made; with several
+  marked it asks only those it applies to and says which it skipped. Open and Close keep
+  their rules. The PR actions have no keys, so there's no key to say it too.
+- **Draft/Ready.** One button: Mark ready while any PR it acts on is a draft (acting on the
+  drafts only), else Make draft. `gh pr ready` or `gh pr ready --undo` through `POST ready`
+  and `POST draft`, not asked first (it's undone as easily), busy while it runs as Merge
+  and Close are; the daemon's cached row and the PR item's status change with it.
+
 ## 4. Versions and schema
 
 - `PROTOCOL_VERSION`: 17 (#110 took 16). The

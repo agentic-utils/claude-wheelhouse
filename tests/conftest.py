@@ -232,7 +232,7 @@ class Clock:
         return self.t
 
     def after(self, delay, callback):
-        timer = SimpleNamespace(due=self.t + delay, callback=callback, stopped=False)
+        timer = SimpleNamespace(due=round(self.t + delay, 9), callback=callback, stopped=False)   # as advance rounds
         timer.stop = lambda: setattr(timer, "stopped", True)
         self.timers.append(timer)
         return timer

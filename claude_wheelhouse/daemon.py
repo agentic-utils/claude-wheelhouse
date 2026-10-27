@@ -56,6 +56,7 @@ from starlette.routing import Route
 
 from . import api, auth, docroots, features, fingerprint, liveness, models, served, steps, transcript_usage, tutorial
 from .hub import Done, Event, Hub, host_context
+from .host import MCP_DOS
 from .store import COMPACT_QUESTION, NOTES_SEEN, THEN, TOUR_AT, SessionGone, Store, inbox_rank, mode, runner, standing
 
 ADDRESS = "127.0.0.1"   # the port is features.port()
@@ -764,7 +765,8 @@ class Daemon:
         follower = self.hub.contexts.get(sid)
         snap = transcript_usage.current(follower.snap, host_context(s)) if follower and follower.ready else None
         running = follower.snap if follower and follower.ready else None
-        return {**dict(s), "status": self.hub.shown_status(sid), "liveness": self.hub.statuses.get(sid, "dead"),
+        return {**{k: s[k] for k in s.keys() if k != "mcp_asks"},   # a pasted sign-in code stays on this machine
+                "status": self.hub.shown_status(sid), "liveness": self.hub.statuses.get(sid, "dead"),
                 "model_state": self.hub.model_state(s), "mode": mode(s), "busy": self.hub.busy(sid),
                 "running_model": running and running.model, "running_effort": running and running.effort,
                 "stale": self.hub.stale(sid), "sends_now": self.hub.sends_now(sid),
@@ -1085,6 +1087,11 @@ class Daemon:
                 raise Refused(400, "branch must be a branch name or null")
             self.remote_needs_sdk(request)
             return hub.fork(sid, refs, branch or None, this_machine(request))
+        if action == "mcp":
+            do = text(body, "do")
+            if do not in MCP_DOS:
+                raise Refused(400, f"do must be one of {', '.join(MCP_DOS)}")
+            return hub.mcp(sid, do, text(body, "server", False) or "", text(body, "url", False))
         if action == "model":
             return hub.set_model(sid, models.check_model(text(body, "model")))
         if action == "effort":

@@ -60,18 +60,18 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, callout, columns, docblocks, docroots, emoji, features, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
+from . import api, callout, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .rows import KIND_COLOUR, RowTips, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
-from .host import AWAITING_NOTES, HOLD_EXPIRED, NUDGE_TOKENS, SHELL_OPENING
+from .host import AWAITING_NOTES, HOLD_EXPIRED, MCP_CONNECTOR, NUDGE_TOKENS, SHELL_OPENING
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, compacting_now, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
 from .tour import LIT as tour_lit, NOTES, PAUSED, ROWS as tour_rows, SHUN as tour_shun, TOPUP, TOUR, Tour, offered, opening
 from .store import (DEFAULT_THEN, DELETED, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
-                    family, inbox_rank, mode, pinned, runner, spared, stamp, standing)
+                    family, inbox_rank, mcp_servers, mode, pinned, runner, spared, stamp, standing)
 from .unsent import Unsent
 
 MATRIX = "#00ff41"
@@ -668,6 +668,7 @@ class Transcript(Widget, can_focus=False):
         self.refresh(layout=True)
         if top and isinstance(scroll, VerticalScroll):   # now, while the old blocks' height stands (#177):
             scroll.scroll_home(animate=False, immediate=True)   # left to a shrink's clamp, the thumb stays put
+            scroll.at_end = False   # nor sent to its end by a resize as it lands (ConversationScroll, #200)
             return
         if not laid or not isinstance(scroll, VerticalScroll) or scroll.scroll_y >= scroll.max_scroll_y - 1:
             return
@@ -769,7 +770,9 @@ class Transcript(Widget, can_focus=False):
         y = scroll.scroll_y if isinstance(scroll, VerticalScroll) else 0
         self._laid = None   # at another width, laid out again, which asks for this one
         self.refresh(layout=True)
-        if y and before:   # the reading place kept, in proportion if the doc's length changed
+        if y and before and y >= scroll.max_scroll_y - 1:   # read to its end: kept there (#200)
+            self.call_after_refresh(scroll.scroll_end, animate=False)
+        elif y and before:   # the reading place kept, in proportion if the doc's length changed
             after = len(self._layout(self.size.width)[0])
             target = round(y * after / before)
             self.call_after_refresh(scroll.scroll_to, y=target, animate=False)
@@ -1563,13 +1566,24 @@ class Compose(TextArea):
     Most terminals (Windows Terminal among them) send Ctrl+Enter as a line feed, which
     arrives as ctrl+j, so both are bound.
     Emoji: a complete :code: turns into its emoji as it's typed, and a code being typed
-    shows suggestions in the hint line, the first taken with Tab or Enter."""
+    shows suggestions in the hint line: Up and Down choose one (the first to start with),
+    Tab or Enter takes it, and a click takes the one clicked (#201)."""
     BINDINGS = [Binding("ctrl+enter", "app.submit", "Submit", show=False),   # the app's shows in the footer
                 Binding("ctrl+j", "app.submit", "Submit", show=False),
                 Binding("ctrl+a", "select_all", "Select all", show=False),   # not line start
                 # the conversation (or thread) above: focus stays here (#77), so its page keys do
                 Binding("pageup", "page(-1)", "Page up", show=False),
-                Binding("pagedown", "page(1)", "Page down", show=False)]
+                Binding("pagedown", "page(1)", "Page down", show=False),
+                # another emoji suggestion while a code is typed, else another line (#201)
+                Binding("up", "choose(-1)", "Up", show=False),
+                Binding("down", "choose(1)", "Down", show=False)]
+
+    def action_choose(self, step: int) -> None:
+        if found := self.suggestions()[1]:
+            self.chosen = (self.chosen + step) % len(found)
+            self.show_suggestions()
+        else:
+            self.action_cursor_down() if step > 0 else self.action_cursor_up()
 
     def action_page(self, step: int) -> None:
         scroll = next(iter(self.screen.query("#detail-scroll, #thread-scroll")), None)
@@ -1580,7 +1594,14 @@ class Compose(TextArea):
         row, col = self.cursor_location
         return row, col, self.document.get_line(row)[:col]
 
+    chosen = 0   # the suggestion Tab or Enter takes, by its place (Up and Down move it)
+    # where the text typed last left the cursor: a code's suggestions show, and Up and Down
+    # choose among them, only while it stays there, not once moved off (nor back onto a code)
+    typed_at: tuple[int, int] | None = None
+
     def suggestions(self) -> tuple[str | None, list[tuple[str, str]]]:
+        if self.cursor_location != self.typed_at:
+            return None, []
         code = emoji.partial(self._before_cursor()[2])
         return code, emoji.suggest(code) if code else []
 
@@ -1590,19 +1611,36 @@ class Compose(TextArea):
         if done and done.group(1) in emoji.EMOJI:   # a code just closed: swap it in place
             self.replace(emoji.EMOJI[done.group(1)], (row, col - len(done.group(0))), (row, col))
             return
+        self.typed_at, self.chosen = (row, col), 0
+        self.show_suggestions()
+
+    def on_text_area_selection_changed(self, event) -> None:
+        # judged once the edit that moved it, if any, has landed: a key typed moves the cursor
+        # (posted before Changed, which moves typed_at too), and the hint mustn't flicker back
+        self.call_later(self.moved_off)
+
+    def moved_off(self) -> None:
+        if self.typed_at is not None and self.cursor_location != self.typed_at:   # moved off: the hint's back
+            self.typed_at = None
+            self.show_suggestions()
+
+    def show_suggestions(self) -> None:
+        """The suggestions for a code being typed in the hint line, the one chosen marked."""
         hint = next(iter(self.parent.query(Hint)), None)
         if hint is not None:
-            _, found = self.suggestions()
-            hint.suggest(Text("  ".join(f"{g} :{c}:" for c, g in found) + "   ⇥ Tab takes the first")
-                         if found else None)
+            hint.suggest(self, self.suggestions()[1], self.chosen)
 
-    def take_suggestion(self) -> bool:
-        """The first suggestion for a code being typed, if there is one, in its place."""
+    def take_suggestion(self, at: int | None = None) -> bool:
+        """A suggestion for a code being typed, if there is one, in its place: the one at
+        `at` (a click), else the one chosen. Focus here, the cursor after it."""
         code, found = self.suggestions()
-        if found:
-            row, col, _ = self._before_cursor()
-            self.replace(found[0][1], (row, col - len(code) - 1), (row, col))
-        return bool(found)
+        at = self.chosen if at is None else at
+        if not 0 <= at < len(found):
+            return False
+        row, col, _ = self._before_cursor()
+        self.replace(found[at][1], (row, col - len(code) - 1), (row, col))
+        self.focus()
+        return True
 
     async def _on_key(self, event) -> None:
         # Enter here; Tab is a binding, which acts before the box sees its key (take_key),
@@ -1705,7 +1743,23 @@ def under_way(button: str, s, status: str, relaunching: bool) -> bool:
 class ConversationScroll(VerticalScroll, can_focus=False):
     """The conversation pane's scroll, or a full-screen item's thread's, never a Tab stop: a
     click in it puts focus in the answer box (#77), where PgUp and PgDn scroll it; on a doc,
-    which has no box, in the doc, whose keys scroll it."""
+    which has no box, in the doc, whose keys scroll it. At its end (within a line), it stays
+    there when its view changes size (#200): shorter (emoji suggestions wrapping under the box,
+    the box's splitter, a button row shown) or narrower, its text wrapping taller. Left to
+    itself the last lines go under, and once more than a line is hidden, what's new no longer
+    follows (paint_detail's test)."""
+    _seen_size: tuple[int, int] | None = None   # the view's size as last laid out
+    at_end = False   # at its end (within a line), as last laid out or scrolled; not once it shows something else
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_y(old_value, new_value)
+        self.at_end = new_value >= self.max_scroll_y - 1
+
+    def on_resize(self) -> None:
+        before, self._seen_size = self._seen_size, tuple(self.container_size)
+        if self.at_end and before is not None and self._seen_size != before:   # its own size, not only its content's
+            self.scroll_end(animate=False, immediate=True)
+        self.at_end = self.scroll_y >= self.max_scroll_y - 1
 
     def on_mouse_down(self) -> None:
         self.app.focus_answer()
@@ -2661,11 +2715,13 @@ BADGES = {PAUSED: "Tour paused · Alt+T", TOUR: "Tour · Alt+T", TOPUP: "Tour: {
 
 
 class Hint(Label):
-    """Under an answer box: what the keys do, or emoji suggestions while a :code: is typed."""
+    """Under an answer box: what the keys do, or emoji suggestions while a :code: is typed,
+    each taken by a click (#201), into the box that suggested it."""
 
     def __init__(self, **kwargs):
         super().__init__(hint("queue"), **kwargs)
         self.base, self.suggesting = hint("queue"), None
+        self.box: Compose | None = None   # the box whose suggestions show
 
     def set_base(self, text: str) -> None:
         if text != self.base:
@@ -2673,11 +2729,19 @@ class Hint(Label):
             if self.suggesting is None:
                 self.update(text)
 
-    def suggest(self, text: Text | None) -> None:
+    def suggest(self, box: "Compose", found: list[tuple[str, str]], chosen: int = 0) -> None:
         # called on every key typed: most change nothing, and an update lays out the screen
-        if text != self.suggesting:
-            self.suggesting = text
-            self.update(self.base if text is None else text)
+        shown = (tuple(found), chosen) if found else None
+        if shown != self.suggesting:
+            self.suggesting, self.box = shown, box
+            self.update(self.base if shown is None else Content.from_markup("  ".join(   # no code holds [ or ]
+                f"[{'reverse ' * (i == chosen)}@click=take({i})]{g} :{c}:[/]" for i, (c, g) in enumerate(found))
+                + "   ↑↓ choose · Tab, Enter or a click takes it"))
+
+    def action_take(self, at: int) -> None:
+        """A click on a suggestion: it in the box, in place of the code typed."""
+        if self.box is not None:
+            self.box.take_suggestion(at)
 
 
 # where focus is on one of these, Enter is its own (a button presses, a list or radio set picks,
@@ -2992,6 +3056,114 @@ class ChooseModel(Dialog):
 def ago(epoch: float, now: float | None = None) -> str:
     mins = int(((now or time.time()) - epoch) // 60)
     return f"{mins}m ago" if mins < 60 else f"{mins // 60}h ago" if mins < 48 * 60 else f"{mins // 1440}d ago"
+
+
+def mcp_press(server: dict) -> tuple[str, str] | None:
+    """A server's button in the MCP servers dialog, (caption, what it asks: host.MCP_DOS),
+    or None (disabled: Q3). A claude.ai connector needing sign-in starts it, then, its link
+    out, reconnects; a local OAuth one starts it, Claude Code connecting it itself."""
+    status, kind = server.get("status"), server.get("kind")
+    if status == "disabled":
+        return None
+    if status == "needs-auth" and not (kind == MCP_CONNECTOR and server.get("link")):
+        return "Sign in", "signin"
+    return "Reconnect", "reconnect"
+
+
+MCP_ORDER = {"needs-auth": 0, "failed": 1}   # first in the dialog: those that need you
+MCP_TAB = "Runs in a tab: /mcp there manages its MCP servers."
+
+
+class McpServers(Dialog):
+    """A session's MCP servers as its host last saw them (sessions.mcp_status,
+    .plan/mcp-on-demand.md), each with its button (mcp_press). Painted again on each refresh
+    while it shows (paint), its rows rebuilt only when what the host wrote changes. A Sign in
+    pressed here opens its link once the host has it. Closes on Esc, a click outside, or Enter
+    on Close, where focus starts; no ACTION, so Enter on a row's button or paste box is theirs."""
+
+    def __init__(self, sid: str):
+        super().__init__()
+        self.sid = sid
+        self.shown: tuple | None = None
+        self.signing: set[str] = set()   # servers whose Sign in was pressed here, their link not yet opened
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog", classes="wide"):
+            yield Label("MCP SERVERS", classes="dialog-title", id="mcp-title", markup=False)
+            yield Label("", classes="dialog-prompt", id="mcp-when", markup=False)
+            yield VerticalScroll(id="mcp-rows", can_focus=False)   # its buttons and boxes are the stops
+            with Horizontal(classes="buttons"):
+                yield Button("Close", id="cancel")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self.paint()
+        self.set_focus(self.query_one("#cancel", Button))   # Enter closes it; on a row's button or box, it's theirs
+
+    def paint(self) -> None:
+        try:
+            s = self.app.row(self.sid)
+        except SessionGone:
+            self.dismiss(None)
+            return
+        hosted = runner(s) == "sdk" and not s["shell"]
+        live = hosted and self.app.client.running(self.sid)
+        servers = mcp_servers(s) if hosted else None
+        raw = s["mcp_status"] if "mcp_status" in s.keys() else None
+        shown = (hosted, live, raw)
+        if shown == self.shown:
+            return
+        self.shown = shown
+        self.query_one("#mcp-title", Label).update(f"MCP SERVERS · {display_name(s)}")
+        at = json.loads(raw)["at"] if servers is not None else ""
+        when = (MCP_TAB if not hosted else
+                "Its host hasn't looked yet." if servers is None else
+                f"As its host saw them at {at[11:19]}Z." if live else
+                f"Not running: as its host last saw them, at {at[:16].replace('T', ' ')}Z. Relaunch it to act on them.")
+        self.query_one("#mcp-when", Label).update(when)
+        rows = self.query_one("#mcp-rows", VerticalScroll)
+        rows.remove_children()   # removed later, so the new rows carry no ids to clash with them
+        for i, server in enumerate(sorted((servers or {}).values(),
+                                          key=lambda v: (MCP_ORDER.get(v.get("status"), 2), v["name"].lower()))):
+            name, status = server["name"], (server.get("status") or "unknown").replace("-", " ")
+            kind = "claude.ai" if server.get("kind") == MCP_CONNECTOR else "local"
+            said = [x for x in (server.get("error"), server.get("note"), server.get("link")) if x]
+            press = mcp_press(server) if live else None
+            row = Horizontal(classes="mcp-row")
+            rows.mount(row)
+            row.mount(Label(Text(f"{name} · {kind} · {status}" + "".join(f"\n  {x}" for x in said)),
+                            classes="mcp-text"))
+            if press:
+                button = Button(press[0], compact=True)
+                button.mcp = (press[1], name)
+                row.mount(button)
+            if live and server.get("waits") and server.get("status") == "needs-auth":
+                paste = Input(placeholder=f"{name}: the address the browser ended on, then Enter")
+                paste.mcp = ("callback", name)
+                rows.mount(paste)
+            if name in self.signing and server.get("link"):
+                self.signing.discard(name)
+                self.app.open_url(server["link"])
+
+    @on(Button.Pressed, ".mcp-row Button")
+    def pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        do, name = event.button.mcp
+        if do == "signin":
+            self.signing.add(name)
+        self.app.told(self.app.client.mcp(self.sid, do, name))
+
+    @on(Input.Submitted, "#mcp-rows Input")
+    def pasted(self, event: Input.Submitted) -> None:
+        event.stop()
+        url = event.value.strip()
+        if url:
+            self.app.told(self.app.client.mcp(self.sid, "callback", event.input.mcp[1], url))
+            event.input.value = ""
+
+    @on(Button.Pressed, "#cancel")
+    def cancel(self) -> None:
+        self.action_answer(None)
 
 
 class AdoptSession(Dialog):
@@ -3612,6 +3784,81 @@ class TourNotes(Dialog):
         self.action_answer("close")
 
 
+HELPER_PRIVACY = ("Answers come from Haiku on your own Claude Code login. Your questions, the wheelhouse's help and the "
+                  "source it reads leave this machine; your sessions, items and transcripts don't.")
+HELPER_FULL = "This chat is long, and a long chat costs more per question: New chat (Alt+N) starts afresh."
+
+
+class HelperDrawer(Dialog):
+    """Alt+G: the helper chat (helper.py, .plan/helper-chat.md), a drawer down the right-hand
+    side, the screen behind showing through. The chat is the app's (WheelhouseApp.helper_log),
+    so Esc, Alt+G or a click outside closes the drawer and the next Alt+G finds it as it was,
+    an answer still coming included. Enter asks; Alt+N starts a new chat."""
+    ACTION = "helper-ask"
+    BINDINGS = [Binding("alt+g", "close_helper", show=False), Binding("alt+n", "new_chat", show=False)]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="helper"):
+            yield Label("ASK THE WHEELHOUSE", classes="dialog-title")
+            yield VerticalScroll(id="helper-chat")
+            yield Static("", id="helper-status")
+            yield Input(placeholder="How do I...?", id="helper-question")
+            with Horizontal(classes="buttons"):
+                yield Button(Text("Ask [Enter]"), variant="success", id="helper-ask")
+                yield Button(Text("New chat [Alt+N]"), id="helper-new")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self.paint()
+        self.set_focus(self.query_one("#helper-question", Input))
+
+    def paint(self, last_only: bool = False) -> None:
+        """The chat as the app holds it, or just its last entry (a piece of an answer)."""
+        chat = self.query_one("#helper-chat", VerticalScroll)
+        log = self.app.helper_log or [{"who": "note", "text": HELPER_PRIVACY}]
+        shown = chat.query(Static)
+        if last_only and len(shown) == len(log):
+            shown.last().update(helper_text(log[-1]))
+        else:
+            shown.remove()
+            chat.mount_all([Static(helper_text(entry), classes=f"helper-{entry['who']}") for entry in log])
+        self.query_one("#helper-status", Static).update(self.app.helper_status())
+        chat.scroll_end(animate=False)
+
+    def action_close_helper(self) -> None:
+        self.action_cancel()
+
+    def action_new_chat(self) -> None:
+        self.app.new_helper_chat()
+        self.paint()
+        self.set_focus(self.query_one("#helper-question", Input))
+
+    @on(Button.Pressed, "#helper-ask")
+    def pressed_ask(self, event: Button.Pressed) -> None:
+        event.stop()
+        box = self.query_one("#helper-question", Input)
+        if self.app.ask_helper(box.value):
+            box.value = ""
+            self.paint()
+        box.focus()
+
+    @on(Button.Pressed, "#helper-new")
+    def pressed_new(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_new_chat()
+
+
+def helper_text(entry: dict) -> Text | RichMarkdown:
+    """A helper chat entry as the drawer shows it: the person's question, the answer as
+    Markdown (keys in bold), an error or a note."""
+    who, text = entry["who"], entry["text"]
+    if who == "you":
+        return Text(f"› {text}", style=f"bold {VOICE['you']}")
+    if who == "helper":
+        return RichMarkdown(text or "…", style=VOICE["claude"])
+    return Text(text, style=VOICE["warn" if who == "error" else "note"])
+
+
 def key_name(key: str) -> str:
     """A binding's key as the person reads it: Ctrl+S, Shift+Up, Space, ?."""
     names = {"question_mark": "?", "escape": "Esc", "enter": "Enter", "space": "Space", "pageup": "PgUp",
@@ -3636,6 +3883,8 @@ DESCRIBE = {
     "new_session": "New session",
     "adopt": "Adopt: pick a Claude Code session that isn't in the wheelhouse yet, from those on disk",
     "relaunch_all": "Relaunch all: every Available session (not running, not parked)",
+    "mcp_servers": ("MCP servers: the session in context's, as its host last saw them, each with a button to sign in "
+                    "or reconnect it (a claude.ai connector in every session the wheelhouse hosts); a tab's: /mcp there"),
     "clear_filter": "Clear a text selection first, then the marks, else show every session's items again",
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
@@ -3645,6 +3894,10 @@ DESCRIBE = {
                            "for marked rows), saying how many are still open or unread, then takes them all but the pinned"),
     "app.toggle_pinned": "Pin the highlighted item (📌), or clear its pin: Ctrl+A and Delete leave a pinned item",
     "help": "This list",
+    "helper": ("Ask the wheelhouse: a chat that answers how-to questions about it, from its help and its source "
+               "(Haiku, on your Claude Code login). Alt+G again, or Esc, closes it; the chat is kept until you quit"),
+    "close_helper": "Close the helper, keeping the chat",
+    "new_chat": "New chat: the helper forgets this one",
     "doc_layout": "With a doc shown: its thread under it (split), or Doc and Thread as tabs (tabbed); kept",
     "doc_tab(-1)": "With a doc shown tabbed: the tab before",
     "doc_tab(1)": "With a doc shown tabbed: the tab after",
@@ -3658,6 +3911,8 @@ DESCRIBE = {
     "select_all": "Select all of it, to copy",
     "page(-1)": "Scroll the conversation (or the thread) up a page",
     "page(1)": "Scroll it down a page",
+    "choose(-1)": "While an emoji code is typed, choose the suggestion before (Tab or Enter takes it); else up a line",
+    "choose(1)": "While an emoji code is typed, choose the next suggestion; else down a line",
     "leave": "Back to the inbox; with the doc's editor open, close it first",
     "render_edits": "Show the edits rendered in the doc above",
     "save_doc": "Says writing the doc comes next; never sends the session's queue",
@@ -3777,6 +4032,7 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "right-hand end of its row: a click there hides them, and the + it becomes shows them again. "
          "A click on a doc opens its editor below it there, as a click on it moves it while it's open. "
          "A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. "
+         "A click on an emoji suggestion under the answer box takes it in place of the code typed. "
          "Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; "
          "elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
@@ -3832,6 +4088,7 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
                 ("An item opened full screen", ThreadView.BINDINGS),
                 ("A doc opened full screen", DocView.BINDINGS),
                 ("A doc's editor", DocEditor.BINDINGS),
+                ("The helper (Alt+G)", HelperDrawer.BINDINGS),
                 *[(w.KEYS_HELP[0], w.BINDINGS) for w in panes
                   if (keys := getattr(w, "KEYS_HELP", None)) and (sdk or not keys[1])]]
     # a module's pane says what its own keys do: core's DESCRIBE can't know them (#154)
@@ -3972,6 +4229,9 @@ class WheelhouseApp(App):
     #adopt-list {{ height: 16; }}
     #adopt-hint {{ color: #ffd300; }}
     #fork-items {{ height: auto; max-height: 12; background: #000000; }}
+    #mcp-rows {{ height: auto; max-height: 20; }}
+    .mcp-row {{ height: auto; }}
+    .mcp-text {{ width: 1fr; }}
     #fork-where {{ background: #000000; }}
     #fork-warning {{ color: #ffd300; }}
     #model-row {{ height: auto; }}
@@ -3986,6 +4246,13 @@ class WheelhouseApp(App):
     #tour-notes-text, #tour-line, #tour-stop-esc {{ margin: 1 0 0 0; color: #ffd300; }}
     #invite-buttons.stacked {{ layout: vertical; height: auto; }}
     #invite-buttons.stacked Button {{ width: 100%; }}
+    /* the helper chat: a drawer down the right-hand side, the screen showing through left of it */
+    HelperDrawer {{ align: right top; }}
+    #helper {{ width: 64; max-width: 100%; height: 100%; padding: 0 1; background: #000000; color: {MATRIX};
+               border-left: thick #ff2a6d; }}
+    #helper-chat {{ height: 1fr; }}
+    #helper-chat Static {{ margin: 1 0 0 0; }}
+    #helper-status {{ height: 1; color: #777777; text-style: italic; }}
     #keys-dialog {{ width: 100; max-width: 100%; height: 90%; background: #000000; color: {MATRIX};
                     border: thick #ff2a6d; padding: 0 1; }}
     /* selected text black on white: the theme's dark teal hid the characters (#52) */
@@ -4020,11 +4287,13 @@ class WheelhouseApp(App):
         Binding("alt+n", "new_session", "New", key_display="Alt+N"),
         Binding("alt+a", "adopt", "Adopt", key_display="Alt+A"),
         Binding("alt+shift+l", "relaunch_all", "Relaunch all", key_display="Alt+Shift+L"),
+        Binding("alt+shift+m", "mcp_servers", "MCP servers", show=False, key_display="Alt+Shift+M"),
         Binding("escape", "clear_filter", "All sessions", key_display="Esc"),
         # one key, two bindings: the footer shows the one that applies (check_action)
         Binding("alt+v", "show_finished(True)", "Show finished", key_display="Alt+V"),
         Binding("alt+v", "show_finished(False)", "Hide finished", key_display="Alt+V"),
         Binding("f1", "help", "Keys", key_display="F1"),
+        Binding("alt+g", "helper", "Ask", key_display="Alt+G"),   # the helper chat (HelperDrawer)
         # a doc item in Detail (.plan/docs-section.md): split or tabbed, and the tabs
         Binding("ctrl+l", "doc_layout", "Doc layout", show=False, key_display="Ctrl+L"),
         # priority: a scrolling container's own (page left and right) would take them first; they
@@ -4115,6 +4384,10 @@ class WheelhouseApp(App):
         self.ctx = api.Context(state_dir, self.module_sessions, self.stats_sid, usage=self.client.usage,
                                set_effort=self.set_effort)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
+        # the helper chat (Alt+G): its driver, made at the first question, and the chat, kept for the run
+        self.helper: helper.Helper | None = None
+        self.helper_log: list[dict] = []
+        self.helper_reading = ""   # what it's reading as it answers (a tool event), for the status line
         self.weights: dict[str, float] = {}   # each slot's weight in its column, as kept (columns.py)
         self.module_ids: dict[str, str] = {}   # each pane's widget id: the module that has it
         self.pane_homes: dict[str, str] = {}   # each module pane's default slot, as it declares it (hosted)
@@ -4250,8 +4523,11 @@ class WheelhouseApp(App):
             self.push_screen(TourInvite(upgrade_text(found)), self.topup_answered)
 
     def on_unmount(self) -> None:
-        """The daemon's stream let go as the app closes: nothing posts to it after."""
+        """The daemon's stream let go as the app closes: nothing posts to it after. The
+        helper's claude, if one runs, stopped."""
         self.client.disconnect()
+        if self.helper is not None:
+            self.helper.stop()
 
     def column_width(self, splitter: Splitter) -> int | None:
         """A column's width with none dragged: the stylesheet's 45 (Q113) where there's room.
@@ -4531,6 +4807,8 @@ class WheelhouseApp(App):
         if not self.landing and self.screen_stack:
             self.paint_title()   # the daemon out of reach, said even while the animation rests
             self.refresh_data()
+        if self.helper is not None:
+            self.helper.idle()   # its claude stopped after helper.IDLE quiet seconds
 
     def paint_title(self) -> None:
         """The title at this frame: one line, never a new size. The daemon out of reach says so
@@ -4566,7 +4844,7 @@ class WheelhouseApp(App):
         self.paint_sendbar()
         self.show_tour()
         self.paint_badge()
-        if isinstance(self.screen, (ThreadView, DocView)) and self.screen.is_mounted:   # not before its widgets exist
+        if isinstance(self.screen, (ThreadView, DocView, McpServers)) and self.screen.is_mounted:   # not before its widgets exist
             self.screen.paint()   # an action here (queue, take back) shows at once
 
     @property
@@ -4771,7 +5049,9 @@ class WheelhouseApp(App):
             queued = Text(str(s["drafts"]), style="bold #05d9e8") if s["drafts"] else ""
             # decisions inform, they don't block: counted, but not blinking like questions
             unseen = Text(str(s["unseen_decisions"]), style=DECISION) if s["unseen_decisions"] else ""
-            q = Text(str(s["open_questions"]), style="bold #ffd300 blink") if s["open_questions"] else ""
+            # a parked session's questions wait for its unpark: dimmed and still, not calling (#210)
+            q = (Text(str(s["open_questions"]), style="dim #ffd300" if s["parked"] else "bold #ffd300 blink")
+                 if s["open_questions"] else "")
             rows.append((s["id"], (dot, name, self.context_cell(s), q, unseen, queued, busy)))
         # a long name widened its column and pushed ? and D past the pane's edge, scrolled out
         # of sight: it is cut to the room the others leave, at whatever width the pane is (#51)
@@ -5669,6 +5949,8 @@ class WheelhouseApp(App):
 
     def get_system_commands(self, screen: Screen):
         yield from super().get_system_commands(screen)
+        yield SystemCommand("Ask the wheelhouse", "A chat that answers how-to questions about the wheelhouse, "
+                            "from its help and its source (Alt+G)", self.action_helper)
         yield SystemCommand("Reset layout", "Put every pane back in its default place, and the dividers at their default sizes",
                             self.action_reset_layout)
         yield SystemCommand("Session steps", "What the wheelhouse tells a session when it compacts, ends, resumes or "
@@ -6867,6 +7149,67 @@ class WheelhouseApp(App):
                     + (deleted_hint(self.show_finished) if closed and done else ""))
         self.refresh_data()
 
+    def action_helper(self) -> None:
+        """Alt+G: the helper's drawer, or closed if it's in front. Over another dialog, nothing."""
+        if isinstance(self.screen, HelperDrawer):
+            self.screen.action_cancel()
+        elif not self.under_dialog():
+            self.push_screen(HelperDrawer())
+
+    def ask_helper(self, question: str) -> bool:
+        """A question to the helper, its claude started at the first (helper.Helper): False if
+        there's nothing to ask or an answer is still coming. Its events come back on the loop."""
+        if self.helper is None:
+            loop = asyncio.get_running_loop()
+            self.helper = helper.Helper(lambda event: loop.call_soon_threadsafe(self.helper_said, event),
+                                        sdk=self.client.sdk)
+        if not self.helper.ask(question):
+            return False
+        self.helper_log += [{"who": "you", "text": question.strip()}, {"who": "helper", "text": ""}]
+        self.helper_reading = ""
+        return True
+
+    def helper_said(self, event: "helper.Event") -> None:
+        """A helper event, on the loop: the chat brought up to date, and the drawer if it shows.
+        An answer that ends while the drawer is closed says so."""
+        log = self.helper_log
+        answering = bool(log) and log[-1]["who"] == "helper"
+        if event.kind == "text" and answering:
+            log[-1]["text"] += event.text
+            self.helper_reading = ""
+        elif event.kind == "tool":
+            self.helper_reading = event.text
+        elif event.kind == "done" and answering:
+            log[-1]["text"] = event.text
+            if self.helper is not None and self.helper.full and {"who": "note", "text": HELPER_FULL} not in log:
+                log.append({"who": "note", "text": HELPER_FULL})   # offered once a chat
+        elif event.kind == "error":
+            if answering and not log[-1]["text"]:
+                log.pop()
+            log.append({"who": "error", "text": event.text})
+        if event.kind in ("done", "error"):
+            self.helper_reading = ""
+        drawer = next((s for s in self.screen_stack if isinstance(s, HelperDrawer)), None)
+        if drawer is not None:
+            if drawer.is_mounted:   # one pushed but not yet composed paints itself on mounting
+                drawer.paint(last_only=event.kind == "text")
+        elif event.kind in ("done", "error"):
+            self.notify("The helper has answered: Alt+G" if event.kind == "done" else "The helper couldn't answer: Alt+G")
+
+    def helper_status(self) -> str:
+        """The drawer's status line: what the helper is reading, or that it's thinking."""
+        if self.helper is None or not self.helper.busy:
+            return ""
+        if self.helper_reading:
+            return f"Reading {self.helper_reading}"
+        return "" if self.helper_log and self.helper_log[-1]["text"] else "Thinking…"
+
+    def new_helper_chat(self) -> None:
+        """New chat: the helper's claude stopped and the chat forgotten."""
+        if self.helper is not None:
+            self.helper.reset()
+        self.helper_log, self.helper_reading = [], ""
+
     def action_help(self) -> None:
         if self.under_dialog():
             return
@@ -7296,7 +7639,7 @@ class WheelhouseApp(App):
     def cycle_focus(self, step: int) -> None:
         """Tab and Shift+Tab on the inbox and a full-screen item go round tab_stops (#77);
         elsewhere (a doc, a dialog) in screen order. In an answer box with an emoji code being
-        typed, Tab takes the first suggestion instead. Tab is a key, so the cursors have
+        typed, Tab takes the suggestion chosen instead. Tab is a key, so the cursors have
         settled (land) before it moves on."""
         if step > 0 and isinstance(self.focused, Compose) and self.focused.take_suggestion():
             return
@@ -7354,6 +7697,19 @@ class WheelhouseApp(App):
         box, not lost with Send, disabled now its queue has gone. From a list it stays (#77)."""
         if isinstance(focused, Button) or getattr(focused, "id", None) in ANSWER_BOXES:
             self.focus_answer()
+
+    def action_mcp_servers(self) -> None:
+        """MCP servers (Alt+Shift+M): the session in context's, asking its host to look again."""
+        if self.under_dialog():
+            return
+        if sid := self.context_session():
+            try:
+                s = self.row(sid)
+            except SessionGone:
+                return
+            if runner(s) == "sdk" and not s["shell"] and self.client.running(sid):
+                self.client.mcp(sid, "check")
+            self.push_screen(McpServers(sid))
 
     def action_relaunch_all(self) -> None:
         """Relaunch all: every Available session, once confirmed. Parked and Active ones are

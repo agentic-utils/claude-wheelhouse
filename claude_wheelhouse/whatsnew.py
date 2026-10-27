@@ -152,6 +152,10 @@ FEATURES: tuple[Feature, ...] = (
             "Drag a pane by its title onto another to swap them. Ctrl+P, Reset layout, puts them back."),
     Feature("doc-editor", UNRELEASED, ADVANCED,
             note="A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered. Saving comes next."),
+    Feature("helper-chat", UNRELEASED, "principles",
+            note="Alt+G asks the wheelhouse how to do something: a chat that answers from its help and its source, "
+                 "through Haiku on your own Claude Code login.",
+            tip="Stuck? Alt+G asks the wheelhouse how to do something."),
     Feature("tour-topups", UNRELEASED, "principles",
             note="After an update, the tour shows only what's new, pane by pane, with no demo; Esc ends it at any "
                  "time, and after quitting mid-tour, Alt+T or the title bar's badge resumes it.",
@@ -201,6 +205,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("pr-marks", UNRELEASED, ADVANCED,
             note="Mark PRs in the PRs pane as in the inbox (Ctrl+click, Shift+click, Ctrl+Space, Shift+Up/Down) and act "
                  "on them all; Close closes a PR unmerged, asked first, as Merge is."),
+    Feature("pr-action-states", UNRELEASED, ADVANCED,
+            note="A PR's buttons that can't apply are greyed, and say why on hover (Merge on a PR awaiting review, "
+                 "say), and Mark ready or Make draft switches a PR between draft and ready for review."),
     Feature("session-steps", UNRELEASED, ADVANCED,
             note="The wheelhouse tells a session before it ends or resumes (and, in SDK mode, compacts), so its own "
                  "instructions can act, and can keep a handoff doc for it. Session steps, in the command palette, "
@@ -273,11 +280,18 @@ FEATURES: tuple[Feature, ...] = (
             note="Every key has a modifier, so a letter typed in the answer box is always just typed, and the "
                  "app's own keys work from there: Ctrl+Q quits, F1 lists the keys, Alt+N is New session."),
     Feature("mcp-reauth", UNRELEASED, ADVANCED, when="sdk",
-            note="An MCP server that needs signing in again, or has failed, gets a question with its sign-in link; "
-                 "reply on it and the wheelhouse reconnects the server."),
+            note="When a session needs an MCP server that wants signing in, or has failed, it asks you, with the "
+                 "sign-in link; the question closes once the server is connected. Relaunch a session started "
+                 "before this to stop it asking about every server."),
+    Feature("mcp-servers", UNRELEASED, ADVANCED, when="sdk",
+            note="Alt+Shift+M lists the MCP servers of the session in context, with a button to sign in to or "
+                 "reconnect each; a claude.ai connector reconnects in every session that has it."),
     Feature("all-conversations", UNRELEASED, ADVANCED,
             note="With no session selected, the inbox lists each session's conversation (💬, named after the "
                  "session) under the items waiting on you."),
+    Feature("emoji-pick", UNRELEASED, ADVANCED,
+            note="Emoji suggestions take a click: type :star and click the one you want, or choose it with Up "
+                 "and Down and take it with Tab or Enter."),
 
 )
 

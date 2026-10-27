@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from rich.cells import cell_len
 from rich.color import Color
 from rich.style import Style
 from rich.text import Text
@@ -22,7 +23,7 @@ from textual.strip import Strip
 from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
-from claude_wheelhouse import features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
+from claude_wheelhouse import emoji, features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
 from claude_wheelhouse.host import NO_NOTES
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
@@ -2365,6 +2366,76 @@ async def test_a_new_reply_in_a_long_thread_in_detail(store, sid, up, own, desc,
             assert scroll.scroll_y == scroll.max_scroll_y, desc
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("view, shrink, desc", [
+    ("conversation", "emoji", "a conversation, emoji suggestions wrapping under the box as a code is typed"),
+    ("conversation", "splitter", "a conversation, its answer box made taller with the splitter"),
+    ("thread", "emoji", "an item's thread, emoji suggestions wrapping under the box"),
+    ("thread", "splitter", "an item's thread, its answer box made taller with the splitter"),
+    ("full", "splitter", "an item full screen, its answer box made taller"),
+    ("thread", "narrower", "an item's thread, the pane narrower: its text wraps taller"),
+    ("thread", "up", "an item's thread scrolled up to read, then shorter: what shows stays put"),
+])
+async def test_detail_at_its_end_stays_there_when_its_view_shrinks(store, sid, tmp_path, monkeypatch, view, shrink,
+                                                                     desc):
+    """#200: Detail at its end, its view made shorter by what's under it (the hint's emoji
+    suggestions, the answer box's splitter): its last line stays in view, and what's new
+    after, a reply, still shows at the end."""
+    folder = tmp_path / "projects/-home-u-repo"
+    folder.mkdir(parents=True)
+    path = folder.joinpath(f"{sid}.jsonl")
+    path.write_text("".join(json.dumps({"type": "user", "timestamp": "2026-10-07T21:30:00Z",
+                                        "message": {"content": f"turn {i}"}}) + "\n" for i in range(60)))
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    ref = store.post_item(sid, "question", "q", body="\n\n".join(f"para {i}" for i in range(80)), status="open")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await laid(pilot)
+        scroll, box = app.detail_scroll, app.answer
+        if view == "conversation":
+            app.follow(sid)
+        elif view == "thread":
+            app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{ref}"))
+        else:
+            app.push_screen(ThreadView(sid, ref))
+        await laid(pilot)
+        if view == "full":
+            scroll, box = app.screen.query_one("#thread-scroll"), app.screen.box
+        scroll.scroll_end(animate=False, immediate=True)
+        if shrink == "up":
+            scroll.scroll_to(y=scroll.max_scroll_y - 10, animate=False, immediate=True)
+        await laid(pilot)
+        size, y = scroll.size, scroll.scroll_y
+        assert scroll.max_scroll_y > 0 and (shrink == "up") == (y < scroll.max_scroll_y), f"{desc}: at the end, or not"
+        box.focus()
+        if shrink == "emoji":
+            await pilot.press("colon", "s", "t")
+        elif shrink == "narrower":
+            await pilot.resize_terminal(80, 30)
+        else:
+            box.styles.height = box.size.height + 4
+        await laid(pilot)
+        assert scroll.size != size, f"{desc}: the view another size"
+        if shrink == "up":
+            assert scroll.scroll_y == y, desc
+            return
+        assert scroll.scroll_y == scroll.max_scroll_y, f"{desc}: its last line still in view"
+        if view == "conversation":
+            say_in(path, "a reply\n\n" * 4)
+        else:
+            store.reply(sid, ref, "a reply\n\n" * 4, status="open")
+        app.refresh_data()
+        await laid(pilot)
+        assert scroll.scroll_y == scroll.max_scroll_y, f"{desc}: the reply shows at the end"
+
+
+def say_in(path, text: str) -> None:
+    """A reply of Claude's at the end of a session's transcript."""
+    with open(path, "a") as f:
+        f.write(json.dumps({"type": "assistant", "timestamp": "2026-10-07T21:31:00Z",
+                            "message": {"content": [{"type": "text", "text": text}]}}) + "\n")
+
+
 class OneTranscript(App):
     """A Transcript alone in its scroll: blocks laid out and changed, nothing else."""
     def compose(self) -> ComposeResult:
@@ -2704,6 +2775,9 @@ async def test_typing_survives_refresh_ticks_even_when_items_arrive_above(store,
     (["colon", "t", "h", "u", "enter"], "👍", "so does Enter"),
     (["o", "k", "space", "colon", "t", "a", "d", "a", "colon"], "ok 🎉", "a closed code turns into its emoji"),
     (["o", "k", "enter", "x"], "ok\nx", "Enter with no suggestion is a new line"),
+    (["colon", "s", "t", "a", "r", "down", "down", "tab"], "🌠", "Down chooses the next suggestion, Tab takes it"),
+    (["colon", "s", "t", "a", "r", "up", "enter"], "✡", "Up from the first wraps to the last, Enter takes it"),
+    (["o", "k", "enter", "x", "up", "y"], "oyk\nx", "Up with no suggestion moves up a line"),
 ])
 @pytest.mark.anyio
 async def test_emoji_codes_in_the_answer_box(store, sid, keys, expected, desc):
@@ -2716,6 +2790,59 @@ async def test_emoji_codes_in_the_answer_box(store, sid, keys, expected, desc):
         await pilot.press(*keys)
         await pilot.pause()
         assert app.answer.text == expected, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("at, chose, desc", [
+    (0, [], "the first"),
+    (1, [], "the second"),
+    (4, [], "the last"),
+    (0, ["down"], "the first, though Down chose the second"),
+])
+async def test_a_click_on_an_emoji_suggestion_takes_it(store, sid, at, chose, desc):
+    """#201: the code typed so far becomes the emoji clicked, focus stays in the box and the
+    cursor goes after the emoji, so typing carries on."""
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(200, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=0)
+        await pilot.click("#answer")
+        await pilot.press(*"go ", "colon", *"star", *chose)
+        await pilot.pause()
+        hint = app.query_one("#detail-pane .answer-hint", Hint)
+        found = emoji.suggest("star")
+        x = sum(cell_len(f"{g} :{c}:  ") for c, g in found[:at]) + 1   # inside the suggestion, past its first cell
+        await pilot.click(hint, offset=(x, 0))
+        await pilot.pause()
+        assert app.answer.text == f"go {found[at][1]}", f"{desc}: the code replaced by the emoji clicked"
+        assert app.focused is app.answer, f"{desc}: focus still in the box"
+        await pilot.press("x")
+        assert app.answer.text == f"go {found[at][1]}x", f"{desc}: the cursor after the emoji"
+        assert hint.suggesting is None, f"{desc}: the suggestions gone"
+
+
+@pytest.mark.anyio
+async def test_emoji_suggestions_go_once_the_cursor_moves_off_the_code(store, sid):
+    """#201: moved off the code typed, the hint is the keys' again, so nothing out of date is
+    clicked or taken, and Up and Down move between lines, even onto a line holding a code."""
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(200, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=0)
+        await pilot.click("#answer")
+        await pilot.press("colon", *"star")
+        hint = app.query_one("#detail-pane .answer-hint", Hint)
+        assert hint.suggesting is not None, "suggested as typed"
+        await pilot.press("down", "left", "left")
+        await pilot.pause()
+        assert hint.suggesting is None, "moved off the code: the suggestions gone"
+        assert app.answer.suggestions() == (None, []), "and none to take"
+        app.answer.text = "top\nsee :sta\nbottom"
+        app.answer.move_cursor((2, 6))
+        await pilot.press("up", "up")
+        assert app.answer.cursor_location[0] == 0, "Up goes up past a line holding a code"
 
 
 @pytest.mark.anyio
@@ -4234,6 +4361,8 @@ async def test_typing_redraws_the_hint_only_when_it_changes(store, sid, monkeypa
         assert drawn == [], "a key that changes no suggestion leaves the hint alone"
         await pilot.press(*" :smi")
         assert drawn and all(x != y for x, y in zip(drawn, drawn[1:])), "suggestions redraw only as they change"
+        assert all(a[0] != app.query_one("#detail-pane .answer-hint", Hint).base for a in drawn), \
+            "a key typed in a code never flickers the keys' hint back (#201)"
 
 
 @pytest.mark.anyio
@@ -5850,6 +5979,8 @@ async def test_parked_sessions_stay_in_the_list_after_the_rest(store, sid, tmp_p
     first = store.create_session(str(tmp_path), name="first")
     other = store.create_session(str(tmp_path), name="other")
     store.set_parked(sid, True)
+    for s in (sid, first):
+        store.post_item(s, "question", "which db?")
     same_second(store)   # in creation order under * (T114), however slowly they were made
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -5857,6 +5988,10 @@ async def test_parked_sessions_stay_in_the_list_after_the_rest(store, sid, tmp_p
         t = app.query_one("#session-list", DataTable)
         assert [r.key.value for r in t.ordered_rows if not r.key.value.startswith(BLANK)] == [first, other, sid]
         assert "dim" in str(t.get_row(sid)[1].style)
+        # #210: a parked session's question count is dimmed and still; an active one's flashes
+        parked_q, active_q = str(t.get_row(sid)[3].style), str(t.get_row(first)[3].style)
+        assert "dim" in parked_q and "blink" not in parked_q, parked_q
+        assert "blink" in active_q and "dim" not in active_q, active_q
 
 
 def test_the_keys_overlay_has_relaunch_and_no_tabs():
@@ -6063,6 +6198,7 @@ async def test_a_long_prompt_wraps_in_its_dialog(store, sid, dialog, height, des
     (lambda app, sid, cwd: tui.PickDirectory(cwd), "the folder picker"),
     (lambda app, sid, cwd: RenameSession("demo"), "Rename"),
     (lambda app, sid, cwd: tui.ChooseModel("demo", None), "the model"),
+    (lambda app, sid, cwd: tui.McpServers(sid), "MCP servers"),
     (lambda app, sid, cwd: tui.AdoptSession([]), "Adopt"),
     (lambda app, sid, cwd: tui.ForkSession(app.client.fork_plan(sid)), "Fork"),
     (lambda app, sid, cwd: CompactSession("demo"), "Compact: was top-left"),
@@ -6108,6 +6244,7 @@ OPEN = object()   # the dialog still open: Enter was its focus's own (a list's, 
     (lambda app, sid, cwd: RenameSession("demo"), None, None, "demo", ["new-name", "ok", "cancel"], "Rename"),
     (lambda app, sid, cwd: tui.ChooseModel("demo", None), None, None, models.MODELS[0].id, ["models", "ok", "cancel"],
      "the model: Enter takes the highlighted one"),
+    (lambda app, sid, cwd: tui.McpServers(sid), None, None, None, ["cancel"], "MCP servers: nothing asked"),
     (lambda app, sid, cwd: tui.AdoptSession([]), None, None, OPEN, ["adopt-list", "adopt-name", "adopt", "cancel"],
      "Adopt, with nothing to adopt"),
     (lambda app, sid, cwd: tui.ForkSession(app.client.fork_plan(sid)), None, None, {"refs": [], "branch": None},
@@ -7720,6 +7857,31 @@ async def rendered_off_loop(app, pilot) -> None:
 
 
 @pytest.mark.anyio
+async def test_a_long_doc_read_to_its_end_stays_there_through_a_rewrite(store, sid, tmp_path):
+    """#200: rendered again off the loop and longer, a doc read to its end is still at its end,
+    not short of it by the proportion kept for a place mid-way."""
+    doc = tmp_path / "plan.md"
+    doc.write_text("\n".join(f"## Section {i}\n\nprose **bold**\n\n- a\n- b\n" for i in range(300)))
+    m = store.post_doc(sid, "the plan", str(doc))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=item_row(app, f"└ {m}"))
+        await pilot.pause()
+        await rendered_off_loop(app, pilot)
+        scroll = app.detail_scroll
+        scroll.scroll_end(animate=False, immediate=True)
+        await pilot.pause()
+        lines = scroll.max_scroll_y
+        doc.write_text(doc.read_text() + "\n".join(f"## More {i}\n\nprose\n" for i in range(40)))
+        app.refresh_data()
+        await pilot.pause()
+        await rendered_off_loop(app, pilot)
+        await pilot.pause()
+        assert scroll.max_scroll_y > lines and scroll.scroll_y == scroll.max_scroll_y, "at the end of the longer doc"
+
+
+@pytest.mark.anyio
 async def test_a_long_doc_keeps_its_reading_place_through_a_rewrite_and_a_resize(store, sid, tmp_path, monkeypatch):
     doc = tmp_path / "plan.md"
     doc.write_text("\n".join(f"## Section {i}\n\nprose **bold**\n\n- a\n- b\n" for i in range(300)))
@@ -8951,3 +9113,98 @@ async def test_a_lists_alt_key_is_not_typed_in_the_answer_box(store, sid):
         app.post_message(events.Key("alt+r", "r"))   # the session list's Rename, as a terminal sends it
         await pilot.pause()
         assert box.text == "" and app.screen is app.screen_stack[0], "dropped: neither typed nor acted on"
+
+
+MCP_SEEN = [{"name": "sentry", "status": "disabled", "kind": "stdio"},
+            {"name": "claude.ai Clay", "status": "connected", "kind": "claudeai-proxy"},
+            {"name": "local-oauth", "status": "needs-auth", "kind": "http"},
+            {"name": "claude.ai Slack", "status": "needs-auth", "kind": "claudeai-proxy"},
+            {"name": "github", "status": "failed", "kind": "stdio", "error": "ECONNREFUSED"}]
+
+
+@pytest.mark.parametrize("server, press, desc", [
+    ({"status": "disabled", "kind": "stdio"}, None, "disabled: no button (Q3)"),
+    ({"status": "needs-auth", "kind": "claudeai-proxy"}, ("Sign in", "signin"), "a connector to sign in"),
+    ({"status": "needs-auth", "kind": "claudeai-proxy", "link": "https://x"}, ("Reconnect", "reconnect"),
+     "a connector with its link out: reconnect once authorised"),
+    ({"status": "needs-auth", "kind": "http", "link": "https://x"}, ("Sign in", "signin"),
+     "a local OAuth server: Claude Code connects it, so Sign in again for a fresh link"),
+    ({"status": "failed", "kind": "stdio"}, ("Reconnect", "reconnect"), "failed: reconnect (a restart)"),
+    ({"status": "connected", "kind": "claudeai-proxy"}, ("Reconnect", "reconnect"), "connected: reconnect"),
+])
+def test_mcp_press(server, press, desc):
+    assert tui.mcp_press(server) == press, desc
+
+
+@pytest.mark.anyio
+async def test_mcp_servers_dialog_lists_and_presses(store, tmp_path, monkeypatch):
+    monkeypatch.setattr(features, "_flag", True)
+    sid, app = await hosted_app(store, tmp_path, monkeypatch, "sdk")
+    store.set_mcp_status(sid, MCP_SEEN)
+    opened = []
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        monkeypatch.setattr(app, "open_url", lambda url, **kw: opened.append(url))
+        app.session_list.focus()
+        await pilot.press("alt+shift+m")
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, tui.McpServers)
+        assert [a["do"] for a in store.take_mcp_asks(sid)] == ["check"], "opening it asks the host to look again"
+        texts = [str(w.content).split(" · ")[0] for w in dialog.query(".mcp-text")]
+        assert texts == ["claude.ai Slack", "local-oauth", "github", "claude.ai Clay", "sentry"], \
+            "those that need you first"
+        assert "ECONNREFUSED" in str(list(dialog.query(".mcp-text"))[2].content)
+        buttons = {b.mcp[1]: str(b.label) for b in dialog.query(".mcp-row Button")}
+        assert buttons == {"claude.ai Slack": "Sign in", "local-oauth": "Sign in", "github": "Reconnect",
+                           "claude.ai Clay": "Reconnect"}, "disabled has none"
+        slack = next(b for b in dialog.query(".mcp-row Button") if b.mcp[1] == "claude.ai Slack")
+        slack.press()
+        await pilot.pause()
+        assert store.take_mcp_asks(sid) == [{"do": "signin", "server": "claude.ai Slack"}]
+        seen = [dict(s, **({"link": "https://claude.ai/start", "note": "Authorise it"} if s["name"] == "claude.ai Slack"
+                           else {"link": "https://auth/x", "waits": True} if s["name"] == "local-oauth" else {}))
+                for s in MCP_SEEN]
+        store.set_mcp_status(sid, seen)
+        app.refresh_data()
+        await pilot.pause()
+        assert opened == ["https://claude.ai/start"], "the link pressed for opens once the host has it"
+        buttons = {b.mcp[1]: str(b.label) for b in dialog.query(".mcp-row Button")}
+        assert buttons["claude.ai Slack"] == "Reconnect"
+        paste = dialog.query_one("#mcp-rows Input", Input)
+        paste.value = "http://localhost:4321/callback?code=C"
+        paste.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert store.take_mcp_asks(sid) == [{"do": "callback", "server": "local-oauth",
+                                             "url": "http://localhost:4321/callback?code=C"}]
+        for note in ("Still reconnecting", "Sign-in failed: x"):   # the host answers with the box still showing
+            store.set_mcp_status(sid, [dict(s, note=note) if s["name"] == "local-oauth" else s for s in seen])
+            app.refresh_data()
+            await pilot.pause()
+        assert len(dialog.query("#mcp-rows Input")) == 1 and "Sign-in failed: x" in " ".join(
+            str(w.content) for w in dialog.query(".mcp-text")), "repainted in place, twice, with no clash"
+        assert opened == ["https://claude.ai/start"], "opened once"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("runner_, live, says, desc", [
+    ("tab", True, tui.MCP_TAB, "a tab: /mcp there (Q4)"),
+    ("sdk", False, "Not running", "a hosted session not running: the last look, no buttons"),
+])
+async def test_mcp_servers_dialog_without_a_running_host(store, tmp_path, monkeypatch, runner_, live, says, desc):
+    monkeypatch.setattr(features, "_flag", True)
+    sid, app = await hosted_app(store, tmp_path, monkeypatch, runner_)
+    if not live:
+        from claude_wheelhouse import liveness
+        monkeypatch.setattr(liveness, "status", lambda s, waking=False: "dead")
+    store.set_mcp_status(sid, MCP_SEEN)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.session_list.focus()
+        await pilot.press("alt+shift+m")
+        await pilot.pause()
+        dialog = app.screen
+        assert says in str(dialog.query_one("#mcp-when", Label).content), desc
+        assert list(dialog.query(".mcp-row Button")) == [], desc
+        assert store.take_mcp_asks(sid) == [], f"{desc}: no host to ask"

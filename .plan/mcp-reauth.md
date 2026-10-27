@@ -1,5 +1,9 @@
 # MCP reconnect and re-auth (#179)
 
+Superseded in part by [mcp-on-demand.md](mcp-on-demand.md) (#199): the host no longer asks
+about every server unprompted, the session asks for the one it needs, and a dialog lists
+them all. The reconnect plumbing below stays.
+
 A hosted (SDK) session has no `/mcp`, so an MCP server that needs signing in again (Slack,
 a claude.ai connector, just did) leaves the session without its tools. Tab sessions are
 not the problem: their terminal has `/mcp`.
