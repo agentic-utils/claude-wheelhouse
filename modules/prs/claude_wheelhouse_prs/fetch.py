@@ -272,7 +272,7 @@ class Fetcher:
         self.last = self.cache.fetched_at()   # a restart keeps the GAP
         self.lock = threading.Lock()
         self.details: dict[str, tuple[float, dict]] = {}   # each PR's detail as last fetched (detail), and when
-        self.results: dict[str, dict] = {}   # what each merge or close came to, until asked (pane's result route)
+        self.results: dict[str, dict] = {}   # what each merge, close, ready or draft came to, until asked (pane's result route)
         self.error: str | None = None     # gh unavailable: shown in place of the table
         self.warning: str | None = None   # the last fetch failed otherwise: the cache shown, and why
 
@@ -349,18 +349,37 @@ class Fetcher:
     def close(self, url: str) -> dict:
         """A PR closed unmerged by `gh pr close` (#146): {"closed": True}, its row marked
         closed so the pane drops it; {"error"} with why not, as gh says it."""
+        if (failed := self.pr_command(["close"], url)) is not None:
+            return failed
+        self.ended(url, "CLOSED")
+        return {"closed": True}
+
+    def ready(self, url: str, draft: bool = False) -> dict:
+        """A draft marked ready for review by `gh pr ready`, or with draft a PR made a draft
+        again by `gh pr ready --undo` (#212): {"draft": bool}, its row and its item's status
+        with it; {"error"} with why not, as gh says it."""
+        if (failed := self.pr_command(["ready", "--undo"] if draft else ["ready"], url)) is not None:
+            return failed
+        rows = {r["url"]: r for r in self.cache.rows()}
+        if url in rows:
+            self.cache.update({**rows[url], "draft": draft})
+        if self.ctx.set_pr_states is not None and url in self.items():
+            self.ctx.set_pr_states({url: "draft" if draft else "open"})
+        return {"draft": draft}
+
+    def pr_command(self, verb: list[str], url: str) -> dict | None:
+        """`gh pr <verb> -- <url>` run: None once it's done, else {"error"} with why not."""
         if not isinstance(url, str) or api.pr_url(url) != url:   # the whole of it, nothing gh could take as a flag
             raise api.Refused(400, f"not a pull request URL: {url!r}")
         try:
-            code, out, err = self.runner(["gh", "pr", "close", "--", url])
+            code, out, err = self.runner(["gh", "pr", *verb, "--", url])
         except Unavailable as e:
             return {"error": str(e)}
         except (RuntimeError, OSError, subprocess.SubprocessError) as e:
             return {"error": str(e) or type(e).__name__}
         if code != 0:
             return {"error": last_line(err or out) or f"gh exited {code}"}
-        self.ended(url, "CLOSED")
-        return {"closed": True}
+        return None
 
     def ended(self, url: str, state: str) -> None:
         """A PR merged or closed from here: its row so marked, and its item's status with it."""

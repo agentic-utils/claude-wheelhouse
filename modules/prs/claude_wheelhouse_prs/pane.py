@@ -6,8 +6,9 @@ PR for its detail. The pane shows a PR item in the Detail pane (Context.show_ite
 PR as a card of its own, and opens a PR in the browser on Enter or a click on its card's link.
 Under the table, the PRs marked (#146), or else the one the cursor is on, have buttons, which
 a right-click on a row gives as a menu too (#138): Open (the browser), Merge (asked first,
-the way its repo allows), Request review (the session that made it asked to post the request
-on Slack) and Close (asked first). Detail, while it shows a PR listed here, has the same
+the way its repo allows), Mark ready or Make draft (#212), Request review (the session that
+made it asked to post the request on Slack) and Close (asked first). One that can't apply is
+off, its tooltip saying why (#212). Detail, while it shows a PR listed here, has the same
 buttons for it, and its checks, description, history and comments (#145)."""
 
 import json
@@ -42,14 +43,18 @@ LOOKS = {"red": "#ff3b30", "orange": "#ff9500", "yellow": "#ffd300", "green": "#
 SCOPES = ("mine", "all")
 RUNNER: fetch.Runner = fetch.gh          # gh itself; the tests put a stub here
 CLOCK = time.time                        # the route's clock; the tests move it on
-SHORT = {"review": ("Request review", "Review")}   # a caption's shorter form, where a bar is too narrow for its own
+SHORT = {"Request review": "Review", "Mark ready": "Ready", "Make draft": "Draft"}   # a caption's shorter form, where a bar is too narrow for its own
 TARGETS = "prs.review_targets"           # settings: Request review's past targets, most recent first, a JSON list
 KEEP = 10                                # how many of them are kept
-# the PR actions (#138), as buttons under the table and as a row's menu: id, caption, tooltip
+# the PR actions (#138), as buttons under the table and as a row's menu: id, caption, tooltip.
+# Draft/Ready (#212) is one button, its caption and tooltip as it acts (entries: READY, DRAFT)
 ACTIONS = (("open", "Open", "Open the PR in the browser"),
            ("merge", "Merge", "Merge the PR, the way its repo allows: asked first"),
+           ("ready", "Mark ready", "Mark the draft ready for review"),
            ("review", "Request review", "Ask the session that made the PR to post a review request on Slack"),
            ("close", "Close", "Close the PR without merging it: asked first"))
+READY = ("Mark ready", "Marking ready…", "Mark the draft ready for review")
+DRAFT = ("Make draft", "Making draft…", "Turn the PR back into a draft")
 OVERRAN = 0                              # seconds a command runs before its answer is kept for result: any, as the hub's 10 s wait counts from the queue, not the run
 KEEP_RESULTS = 50                        # commands' answers kept for the result route
 WAIT_BUSY = 60                           # seconds a bulk action waits on the module's command thread, a PR
@@ -107,7 +112,9 @@ def routes(ctx: api.Context) -> list[api.Route]:
         return (fetcher.results.pop(token, None) if token else None) or {"pending": True}
     return [api.Route("list", listed), api.Route("detail", detailed), api.Route("result", result),
             api.Route("merge", done(fetcher.merge), method="POST"),
-            api.Route("close", done(fetcher.close), method="POST")]
+            api.Route("close", done(fetcher.close), method="POST"),
+            api.Route("ready", done(fetcher.ready), method="POST"),
+            api.Route("draft", done(lambda url: fetcher.ready(url, draft=True)), method="POST")]
 
 
 # the order a header click gives (as the inbox's: ordering.next_item_sort)
@@ -196,17 +203,48 @@ def request(r: dict, target: str) -> str:
 
 
 def blockers(r: dict) -> list[str]:
-    """What GitHub last said stands in a PR's way, as the pane fetched it."""
+    """What GitHub last said stands in a PR's way, as the pane fetched it. Mergeability not
+    yet worked out isn't one: GitHub may yet say it can merge."""
     out = []
     if r.get("draft"):
         out.append("it's a draft")
     if r.get("review") in ("REVIEW_REQUIRED", "CHANGES_REQUESTED"):
-        out.append("a review is required" if r["review"] == "REVIEW_REQUIRED" else "changes are requested")
+        out.append("it needs an approving review" if r["review"] == "REVIEW_REQUIRED" else "changes are requested")
     if r.get("mergeable") == "CONFLICTING":
         out.append("it has conflicts")
     if r.get("checks") in fetch.FAILED:
         out.append("checks are failing")
+    elif r.get("checks") in fetch.RUNNING:
+        out.append("checks are still running")
     return out
+
+
+def unreviewable(r: dict) -> str | None:
+    """Why Request review doesn't apply to a PR, if it doesn't: no session made it to ask, a
+    draft, or already approved."""
+    if r["item"] is None:
+        return "No session made it, so there's none to ask"
+    if r.get("draft"):
+        return "Still a draft: mark it ready first"
+    if r.get("review") == "APPROVED":
+        return "Already approved"
+    return None
+
+
+def why_not(action: str, rows: list[dict]) -> str | None:
+    """Why an action doesn't apply to any of rows (#212), in plain words for its tooltip; None
+    while it applies to one at least. Merge and Request review only: Open always applies, and
+    Close and Draft/Ready are off only while busy (entries)."""
+    reasons = {"merge": lambda r: "; ".join(blockers(r)), "review": unreviewable}.get(action)
+    if reasons is None or not rows:
+        return None
+    said = [reasons(r) for r in rows]
+    if not all(said):
+        return None
+    if len(rows) == 1:
+        return f"Can't merge: {said[0]}" if action == "merge" else said[0]
+    return "None of these can " + ("merge" if action == "merge" else "be asked for a review") + ":\n" + "\n".join(
+        f"PR{r['number']}: {why}" for r, why in zip(rows, said))
 
 
 def when(stamp: str) -> str:
@@ -298,14 +336,14 @@ def head(out: Text, title: str, said: str = "") -> None:
         out.append(f": {said}", style=GREY)
 
 
-def captions(entries: list[tuple[str, bool, str]], room: int) -> tuple[list[str], str]:
+def captions(entries: list[tuple[str, bool, str, str]], room: int) -> tuple[list[str], str]:
     """A bar of buttons `room` cells wide: (captions, layout). In a row ("") with their own
     captions if they fit, else with the short ones (SHORT), a cell of padding either side
     of the bar; else short, two to a line ("grid", no padding), or one ("stacked")."""
     def width(cs: list[str]) -> int:
         return sum(len(c) + 3 for c in cs) - 1   # a cell either side of each, a gap between
-    own = [c for _, _, c in entries]
-    short = [c.replace(*SHORT[i]) if i in SHORT else c for i, _, c in entries]
+    own = [c for _, _, c, _ in entries]
+    short = [SHORT.get(c, c) for c in own]
     if width(own) <= room - 2:
         return own, ""
     if width(short) <= room - 2:
@@ -316,7 +354,7 @@ def captions(entries: list[tuple[str, bool, str]], room: int) -> tuple[list[str]
 class ActionBar(Horizontal):
     """The PR actions as buttons (ACTIONS): under the table, for the PRs marked or the one
     the cursor is on; in the Detail pane, for the PR it shows. `chosen` is called with the
-    action pressed."""
+    action pressed. A button off says why on hover (entries, #212)."""
 
     DEFAULT_CSS = """
     ActionBar { height: auto; padding: 0 1; }
@@ -329,7 +367,7 @@ class ActionBar(Horizontal):
     def __init__(self, prefix: str, chosen: Callable[[str], None], **kwargs):
         super().__init__(**kwargs)
         self.prefix, self.chosen = prefix, chosen
-        self.entries: list[tuple[str, bool, str]] = []
+        self.entries: list[tuple[str, bool, str, str]] = []
 
     def compose(self):
         for id_, caption, tip_ in ACTIONS:
@@ -337,16 +375,16 @@ class ActionBar(Horizontal):
             button.can_focus = False   # a click leaves the focus where it was, and the buttons with it
             yield button
 
-    def paint(self, entries: list[tuple[str, bool, str]]) -> None:
+    def paint(self, entries: list[tuple[str, bool, str, str]]) -> None:
         self.entries = entries
         if not self.is_mounted or self.parent is None:
             return
         shown, layout = captions(entries, self.parent.content_size.width)
         self.set_class(layout == "grid", "grid")
         self.set_class(layout == "stacked", "stacked")
-        for (id_, disabled, _), caption in zip(entries, shown):
+        for (id_, disabled, _, tip_), caption in zip(entries, shown):
             button = self.query_one(f"#{self.prefix}-{id_}", Button)
-            button.disabled, button.label = disabled, caption
+            button.disabled, button.label, button.tooltip = disabled, caption, tip_
 
     def on_resize(self) -> None:
         self.paint(self.entries)
@@ -499,7 +537,7 @@ class Prs(Vertical):
         self.lit = True                      # the orange lights' flash, on or off (animate)
         self.shown: str | None = None        # the URL last shown from here
         self.drawn: tuple | None = None      # what the table was last built from
-        self.busy: dict[str, str] = {}       # the PRs an action is under way on, by URL: "merge" or "close"
+        self.busy: dict[str, str] = {}       # the PRs an action is under way on, by URL: "merge", "close", "ready" or "draft"
         # what the last actions came to, a line a PR by URL (#156: actions on different PRs
         # at once each keep theirs), until the next action, m or r
         self.outcomes: dict[str, str] = {}
@@ -746,14 +784,26 @@ class Prs(Vertical):
         r = self.row(self.key_at(table)) if table.show_cursor else None
         return [r] if r else []
 
-    def entries(self, rows: list[dict]) -> list[tuple[str, bool, str]]:
-        """Each action for some PRs: (id, disabled, caption). Merge and Close are off while an
-        action is under way on any of them; Request review without a session to ask (none
-        made any of them). How many they act on, the pane's bottom border says (show_scope)."""
+    def entries(self, rows: list[dict]) -> list[tuple[str, bool, str, str]]:
+        """Each action for some PRs: (id, disabled, caption, tooltip), the tooltip saying why
+        when it's off (#212). Merge, Draft/Ready and Close are off while an action is under
+        way on any of them; Merge and Request review where they apply to none of them
+        (why_not). Draft/Ready reads Mark ready while any is a draft, else Make draft. How
+        many they act on, the pane's bottom border says (show_scope)."""
         doing = {self.busy[r["url"]] for r in rows if r["url"] in self.busy}
-        return [("open", False, "Open"), ("merge", bool(doing), "Merging…" if "merge" in doing else "Merge"),
-                ("review", not any(self.asked(r)[0] for r in rows), "Request review"),
-                ("close", bool(doing), "Closing…" if "close" in doing else "Close")]
+        tips, busy = {id_: tip_ for id_, _, tip_ in ACTIONS}, "Under way: wait for it to finish"
+
+        def off(id_: str) -> tuple[bool, str]:
+            why = why_not(id_, rows)
+            return why is not None, why or tips[id_]
+        flip = READY if any(r.get("draft") for r in rows) else DRAFT
+        flipping = READY[1] if "ready" in doing else DRAFT[1] if "draft" in doing else flip[0]
+        (merge_off, merge_tip), (review_off, review_tip) = (True, busy) if doing else off("merge"), off("review")
+        return [("open", False, "Open", tips["open"]),
+                ("merge", merge_off, "Merging…" if "merge" in doing else "Merge", merge_tip),
+                ("ready", bool(doing), flipping, busy if doing else flip[2]),
+                ("review", review_off, "Request review", review_tip),
+                ("close", bool(doing), "Closing…" if "close" in doing else "Close", busy if doing else tips["close"])]
 
     def asked(self, r: dict) -> tuple[str | None, str | None]:
         """Who Request review asks, and about which item: the session that made the PR and
@@ -772,7 +822,7 @@ class Prs(Vertical):
         if self.outcome:
             self.outcome = None
             self.paint_note()
-        dict(open=self.open_prs, merge=self.merge, review=self.review, close=self.close)[action](rows)
+        dict(open=self.open_prs, merge=self.merge, ready=self.ready, review=self.review, close=self.close)[action](rows)
 
     def open_prs(self, rows: list[dict]) -> None:
         for r in rows:
@@ -788,7 +838,7 @@ class Prs(Vertical):
             ask = f"Merge {name(rows[0])}? The way the repo allows: {how}"
         else:
             ask = (f"Merge these {len(rows)} PRs, each the way its repo allows: {how}\n\n"
-                   + "\n".join(f"• {name(r)}" for r in rows))
+                   + "\n".join(f"• {name(r)}" + (f": {why}" if (why := '; '.join(blockers(r))) else "") for r in rows))
         self.ctx.confirm(ask, lambda yes: yes and self.each("merge", rows))
 
     def close(self, rows: list[dict]) -> None:
@@ -801,8 +851,16 @@ class Prs(Vertical):
             ask = f"Close these {len(rows)} PRs without merging them?\n\n" + "\n".join(f"• {name(r)}" for r in rows)
         self.ctx.confirm(ask, lambda yes: yes and self.each("close", rows))
 
+    def ready(self, rows: list[dict]) -> None:
+        """Draft/Ready (#212), not asked first, as it's undone as easily: with a draft among
+        them, the drafts marked ready (`gh pr ready`); else each made a draft (`--undo`)."""
+        if any(r["url"] in self.busy for r in rows):
+            return
+        drafts = [r for r in rows if r.get("draft")]
+        self.each("ready", drafts) if drafts else self.each("draft", rows)
+
     def each(self, action: str, rows: list[dict]) -> None:
-        """An action the route does (merge, close), on each PR in turn, on a worker thread."""
+        """An action the route does (merge, close, ready, draft), on each PR in turn, on a worker thread."""
         for r in rows:
             self.busy[r["url"]] = action
             self.outcomes.pop(r["url"], None)
@@ -876,9 +934,9 @@ class Prs(Vertical):
     def review(self, rows: list[dict]) -> None:
         """A Slack channel or name asked for once, past ones offered, most recent first; then
         each PR's session asked to post its request (Context.send), and the target
-        remembered. A PR no session made is skipped, and said so."""
-        asked = [(r, *self.asked(r)) for r in rows]
-        asking = [(r, sid, ref) for r, sid, ref in asked if sid is not None]
+        remembered. A PR it doesn't apply to (no session made it, a draft, already approved:
+        unreviewable) is skipped, and said so."""
+        asking = [(r, *self.asked(r)) for r in rows if unreviewable(r) is None]
         if not asking or self.ctx.ask is None or self.ctx.send is None:
             return
         past = targets(self.ctx.setting(TARGETS) if self.ctx.setting else None)
@@ -890,9 +948,9 @@ class Prs(Vertical):
                 self.ctx.set_setting(TARGETS, json.dumps(remembered(past, target)))
             for r, sid, ref in asking:
                 self.ctx.send(sid, ref, request(r, target))
-            skipped = [f"PR{r['number']}" for r, sid, _ in asked if sid is None]
+            skipped = [f"PR{r['number']}: {why.lower()}" for r in rows if (why := unreviewable(r))]
             if skipped:
-                self.outcomes["review"] = f"Not asked for {', '.join(skipped)}: no session made it."
+                self.outcomes["review"] = "Not asked for " + "; ".join(skipped) + "."
                 self.paint_note()
         what = f"PR{rows[0]['number']} ({clean(rows[0]['title'])})" if len(rows) == 1 \
             else f"{len(asking)} PRs ({', '.join('PR' + str(r['number']) for r, _, _ in asking)})"
@@ -912,9 +970,8 @@ class Prs(Vertical):
         if (r := self.row(self.key_at(table))) is None:
             return None
         rows = self.targets() if r["url"] in table.marked else [r]
-        tips = {id_: tip_ for id_, _, tip_ in ACTIONS}
         title = tip(r) if len(rows) == 1 else f"{len(rows)} marked PRs"
-        return api.Menu(title, [(id_, caption, disabled, tips[id_]) for id_, disabled, caption in self.entries(rows)],
+        return api.Menu(title, [(id_, caption, disabled, tip_) for id_, disabled, caption, tip_ in self.entries(rows)],
                         y, lambda chosen: self.act(chosen, rows))
 
     def paint_note(self) -> None:
@@ -1095,15 +1152,17 @@ def name(r: dict) -> str:
 
 def said(action: str, r: dict, got: dict) -> str:
     """What an action on a PR came to, as a line under the table."""
-    verb = {"merge": "merge", "close": "close"}[action]
+    pr = f"PR{r['number']}"
+    verb = {"merge": f"merge {pr}", "close": f"close {pr}", "ready": f"mark {pr} ready", "draft": f"make {pr} a draft"}[action]
     if "failed" in got:
-        return f"Couldn't {verb} PR{r['number']}: {got['failed']}"
+        return f"Couldn't {verb}: {got['failed']}"
     if "error" in got:
         why = blockers(r) if action == "merge" else []
-        return f"Couldn't {verb} PR{r['number']}: {'; '.join(why) + '. ' if why else ''}gh says: {got['error']}"
+        return f"Couldn't {verb}: {'; '.join(why) + '. ' if why else ''}gh says: {got['error']}"
     if action == "merge":
         return f"Merged PR{r['number']} ({got.get('method', 'merge')})."
-    return f"Closed PR{r['number']}."
+    return {"close": f"Closed PR{r['number']}.", "ready": f"Marked PR{r['number']} ready for review.",
+            "draft": f"Made PR{r['number']} a draft."}[action]
 
 
 module = api.Module(

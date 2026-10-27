@@ -353,14 +353,20 @@ session.
   `Shift+click` (or `Alt+click`) takes the range, `Ctrl+Space` and `Shift+Up`/`Shift+Down` do
   the same from the keyboard, and a plain click or `Esc` drops the marks; the pane's
   bottom border counts them. Under the table, the PRs marked (or else the one selected)
-  have four buttons, which a right-click on a row gives as a menu too (for every PR marked
+  have five buttons, which a right-click on a row gives as a menu too (for every PR marked
   if the row is one of them, else for that row alone): **Open** (the browser); **Merge**,
   asked first, with `gh pr merge` the way the repo allows (a merge commit where it can,
-  else squash, else rebase); **Request review**, which asks once for a Slack channel or
+  else squash, else rebase); **Mark ready** or **Make draft** (`gh pr ready`, or with
+  `--undo`), not asked first: Mark ready while any PR it acts on is a draft, for the drafts
+  alone; **Request review**, which asks once for a Slack channel or
   name (`#channel`, `@name`, past ones offered most recent first) and sends each PR's
-  session a message asking it to post the request on Slack (greyed, or the PR skipped and
-  said so, where no session made it); and **Close**, asked first, with `gh pr close`. Merge
-  and Close name every PR in their question, and say under the table what came of each:
+  session a message asking it to post the request on Slack; and **Close**, asked first,
+  with `gh pr close`. A button that can't apply to any of the PRs is greyed, and resting
+  the pointer on it says why: Merge for a draft, a review still required or changes
+  requested, a conflict, failing checks or checks still running (not while GitHub is still
+  working out whether it can merge); Request review for a draft, a PR already approved or
+  one no session made (a PR among several it doesn't apply to is skipped, and said so). Merge
+  and Close name every PR in their question (Merge with what blocks each), and say under the table what came of each:
   done, or what stood in its way (a review required, conflicts, failing checks, as `gh`
   says). While Detail shows a PR the pane lists (a session's PR item, or one no session
   made, picked here), it has the same buttons for that PR, and under its thread the PR's
