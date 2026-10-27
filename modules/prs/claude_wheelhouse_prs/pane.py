@@ -985,6 +985,8 @@ class Prs(Vertical):
         sid, ref = self.in_detail[1:] if self.in_detail is not None else (None, None)
         url = next((r["url"] for r in self.rows if r["item"] is not None
                     and (r["item"]["session_id"], r["item"]["ref"]) == (sid, ref)), None)
+        if url is not None and table.show_cursor and url == self.shown:
+            return   # already on it: a list landing doesn't scroll back a table the person scrolled
         with table.prevent(DataTable.RowHighlighted):
             if url is not None and url in table.rows:
                 table.move_cursor(row=table.get_row_index(url), animate=False)
