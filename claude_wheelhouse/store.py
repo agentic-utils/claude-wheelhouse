@@ -1195,10 +1195,15 @@ class Store:
     def give_back_mcp_asks(self, sid: str, asks: list[dict], tries: int = 3) -> None:
         """Asks a host took but couldn't carry out (Claude Code didn't answer): back for its
         next poll, each at most `tries` times."""
-        for a in asks:
-            if a.get("tries", 0) + 1 < tries:
-                self.ask_mcp(sid, a["do"], a.get("server") or "",
-                             **{k: v for k, v in a.items() if k not in ("do", "server")}, tries=a.get("tries", 0) + 1)
+        with self.tx() as db:
+            row = db.execute("SELECT mcp_asks FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if row is None:
+                return
+            waiting = json.loads(row[0] or "[]")
+            newer = {(a.get("do"), a.get("server")) for a in waiting}   # asked again meanwhile: the new one stands
+            waiting += [{**a, "tries": a.get("tries", 0) + 1} for a in asks
+                        if a.get("tries", 0) + 1 < tries and (a.get("do"), a.get("server")) not in newer]
+            db.execute("UPDATE sessions SET mcp_asks = ? WHERE id = ?", (json.dumps(waiting) if waiting else None, sid))
 
     def take_mcp_asks(self, sid: str) -> list[dict]:
         """The host takes what it is asked to do about its MCP servers, once."""

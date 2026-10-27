@@ -225,12 +225,8 @@ def request_mcp_signin(server: str, why: str) -> str:
         needy = [n for n, s in servers.items() if s.get("status") in MCP_NEEDY]
         raise ValueError(f"no MCP server named {server!r}" +
                          (f"; these need signing in or have failed: {', '.join(needy)}" if needy else ""))
-    status = (servers or {}).get(name, {}).get("status")
-    if status is not None and status not in MCP_NEEDY:
-        return {"connected": f"{name} is connected: its tools should work now",
-                "pending": f"{name} is connecting now: try its tools again shortly",
-                "disabled": f"{name} is disabled: the person turned it off, so carry on without it",
-                }.get(status, f"{name} is {status}")
+    if (servers or {}).get(name, {}).get("status") == "disabled":
+        return f"{name} is disabled: the person turned it off, so carry on without it"
     if ref := _store.open_mcp_question(_sid, name):
         return f"already asked: {ref} is the person's question about {name}"
     _store.ask_mcp(_sid, "ask", name, why=why.strip())

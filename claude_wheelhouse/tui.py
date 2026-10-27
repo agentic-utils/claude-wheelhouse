@@ -3021,7 +3021,6 @@ class McpServers(Dialog):
         super().__init__()
         self.sid = sid
         self.shown: tuple | None = None
-        self.presses: dict[str, tuple[str, str]] = {}   # button id: (what it asks, server)
         self.signing: set[str] = set()   # servers whose Sign in was pressed here, their link not yet opened
 
     def compose(self) -> ComposeResult:
@@ -3059,8 +3058,7 @@ class McpServers(Dialog):
                 f"Not running: as its host last saw them, at {at[:16].replace('T', ' ')}Z. Relaunch it to act on them.")
         self.query_one("#mcp-when", Label).update(when)
         rows = self.query_one("#mcp-rows", VerticalScroll)
-        rows.remove_children()
-        self.presses = {}
+        rows.remove_children()   # removed later, so the new rows carry no ids to clash with them
         for i, server in enumerate(sorted((servers or {}).values(),
                                           key=lambda v: (MCP_ORDER.get(v.get("status"), 2), v["name"].lower()))):
             name, status = server["name"], (server.get("status") or "unknown").replace("-", " ")
@@ -3072,12 +3070,13 @@ class McpServers(Dialog):
             row.mount(Label(Text(f"{name} · {kind} · {status}" + "".join(f"\n  {x}" for x in said)),
                             classes="mcp-text"))
             if press:
-                self.presses[f"mcp-{i}"] = (press[1], name)
-                row.mount(Button(press[0], id=f"mcp-{i}", compact=True))
+                button = Button(press[0], compact=True)
+                button.mcp = (press[1], name)
+                row.mount(button)
             if live and server.get("waits") and server.get("status") == "needs-auth":
-                self.presses[f"mcp-paste-{i}"] = ("callback", name)
-                rows.mount(Input(placeholder=f"{name}: the address the browser ended on, then Enter",
-                                 id=f"mcp-paste-{i}"))
+                paste = Input(placeholder=f"{name}: the address the browser ended on, then Enter")
+                paste.mcp = ("callback", name)
+                rows.mount(paste)
             if name in self.signing and server.get("link"):
                 self.signing.discard(name)
                 self.app.open_url(server["link"])
@@ -3085,7 +3084,7 @@ class McpServers(Dialog):
     @on(Button.Pressed, ".mcp-row Button")
     def pressed(self, event: Button.Pressed) -> None:
         event.stop()
-        do, name = self.presses[event.button.id]
+        do, name = event.button.mcp
         if do == "signin":
             self.signing.add(name)
         self.app.told(self.app.client.mcp(self.sid, do, name))
@@ -3095,7 +3094,7 @@ class McpServers(Dialog):
         event.stop()
         url = event.value.strip()
         if url:
-            self.app.told(self.app.client.mcp(self.sid, "callback", self.presses[event.input.id][1], url))
+            self.app.told(self.app.client.mcp(self.sid, "callback", event.input.mcp[1], url))
             event.input.value = ""
 
     @on(Button.Pressed, "#cancel")
@@ -7475,7 +7474,10 @@ class WheelhouseApp(App):
         if self.under_dialog():
             return
         if sid := self.context_session():
-            s = self.row(sid)
+            try:
+                s = self.row(sid)
+            except SessionGone:
+                return
             if runner(s) == "sdk" and not s["shell"] and self.client.running(sid):
                 self.client.mcp(sid, "check")
             self.push_screen(McpServers(sid))

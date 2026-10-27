@@ -8995,10 +8995,10 @@ async def test_mcp_servers_dialog_lists_and_presses(store, tmp_path, monkeypatch
         assert texts == ["claude.ai Slack", "local-oauth", "github", "claude.ai Clay", "sentry"], \
             "those that need you first"
         assert "ECONNREFUSED" in str(list(dialog.query(".mcp-text"))[2].content)
-        buttons = {dialog.presses[b.id][1]: str(b.label) for b in dialog.query(".mcp-row Button")}
+        buttons = {b.mcp[1]: str(b.label) for b in dialog.query(".mcp-row Button")}
         assert buttons == {"claude.ai Slack": "Sign in", "local-oauth": "Sign in", "github": "Reconnect",
                            "claude.ai Clay": "Reconnect"}, "disabled has none"
-        slack = next(b for b in dialog.query(".mcp-row Button") if dialog.presses[b.id][1] == "claude.ai Slack")
+        slack = next(b for b in dialog.query(".mcp-row Button") if b.mcp[1] == "claude.ai Slack")
         slack.press()
         await pilot.pause()
         assert store.take_mcp_asks(sid) == [{"do": "signin", "server": "claude.ai Slack"}]
@@ -9009,7 +9009,7 @@ async def test_mcp_servers_dialog_lists_and_presses(store, tmp_path, monkeypatch
         app.refresh_data()
         await pilot.pause()
         assert opened == ["https://claude.ai/start"], "the link pressed for opens once the host has it"
-        buttons = {dialog.presses[b.id][1]: str(b.label) for b in dialog.query(".mcp-row Button")}
+        buttons = {b.mcp[1]: str(b.label) for b in dialog.query(".mcp-row Button")}
         assert buttons["claude.ai Slack"] == "Reconnect"
         paste = dialog.query_one("#mcp-rows Input", Input)
         paste.value = "http://localhost:4321/callback?code=C"
@@ -9018,8 +9018,12 @@ async def test_mcp_servers_dialog_lists_and_presses(store, tmp_path, monkeypatch
         await pilot.pause()
         assert store.take_mcp_asks(sid) == [{"do": "callback", "server": "local-oauth",
                                              "url": "http://localhost:4321/callback?code=C"}]
-        app.refresh_data()
-        await pilot.pause()
+        for note in ("Still reconnecting", "Sign-in failed: x"):   # the host answers with the box still showing
+            store.set_mcp_status(sid, [dict(s, note=note) if s["name"] == "local-oauth" else s for s in seen])
+            app.refresh_data()
+            await pilot.pause()
+        assert len(dialog.query("#mcp-rows Input")) == 1 and "Sign-in failed: x" in " ".join(
+            str(w.content) for w in dialog.query(".mcp-text")), "repainted in place, twice, with no clash"
         assert opened == ["https://claude.ai/start"], "opened once"
 
 

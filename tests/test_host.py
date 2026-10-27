@@ -2758,8 +2758,8 @@ SEEN = [{"name": "claude.ai Slack", "status": "needs-auth", "kind": "claudeai-pr
     ("sdk", SEEN, "claude.ai Slack", "asked:", "claude.ai Slack", "needs signing in: asked"),
     ("sdk", SEEN, "slack", "asked:", "claude.ai Slack", "named without its prefix or case"),
     ("sdk", None, "claude.ai Slack", "asked:", "claude.ai Slack", "the host hasn't looked yet: asked, the host decides"),
-    ("sdk", SEEN, "claude.ai Clay", "is connected", None, "connected: nothing to ask"),
-    ("sdk", SEEN, "local-oauth", "connecting now", None, "pending: nothing to ask yet"),
+    ("sdk", SEEN, "claude.ai Clay", "asked:", "claude.ai Clay",
+     "connected at the last look, which may be a turn old: asked, the host looks afresh"),
     ("sdk", SEEN, "sentry", "disabled", None, "disabled: the person's choice"),
     ("sdk", SEEN, "Zapier", "no MCP server named 'Zapier'; these need signing in or have failed: claude.ai Slack",
      None, "unknown: refused, naming those that need the person"),
@@ -2884,3 +2884,11 @@ def test_mcp_asks_left_for_a_gone_claude_code_are_dropped(store, sid):
     store.ask_mcp(sid, "callback", "local-oauth", url="http://localhost/cb?code=SECRET")
     Host(store, sid, client_factory=McpClient, person="doug").deny_stale()
     assert store.take_mcp_asks(sid) == []
+
+
+def test_mcp_ask_given_back_never_overwrites_a_newer_one(store, sid):
+    old = {"do": "callback", "server": "s", "url": "old"}
+    store.ask_mcp(sid, "callback", "s", url="new")
+    store.give_back_mcp_asks(sid, [old, {"do": "check", "server": "", "tries": 2}])
+    assert store.take_mcp_asks(sid) == [{"do": "callback", "server": "s", "url": "new"}], \
+        "the newer paste stands; one out of tries goes"

@@ -46,7 +46,7 @@ Unproven, so nothing depends on them:
 - `request_mcp_signin(server, why)`, a wheelhouse tool for a hosted session only, shaped
   like `request_compact`. It reads the host's last look at the servers
   (`sessions.mcp_status`): an unknown name is refused, naming the servers that need the
-  person; one connected, pending or disabled is said so and nothing is asked; one with an
+  person; one disabled is said so and nothing is asked (one connected or pending is asked about all the same: the look may be a turn old, and the host reads it afresh); one with an
   open question gets its ref. Otherwise it leaves an ask (`do: ask`) in `sessions.mcp_asks`
   (JSON list, taken whole by the host's next poll; the same ask about the same server
   replaces the one waiting). With no look yet, the host matches the name when it takes the
