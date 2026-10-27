@@ -632,6 +632,8 @@ class Prs(Vertical):
             self.rows = got.get("prs", [])
         self.paint()
         self.paint_detail()
+        if self.in_detail is not None and self.in_detail[0] == "item":   # not a card picked here
+            self.follow_detail()
 
     def on_resize(self) -> None:
         self.paint()
@@ -971,9 +973,16 @@ class Prs(Vertical):
         here, which is what showed it."""
         self.in_detail = ("item", sid, ref) if sid and ref else None
         self.paint_detail()
+        self.follow_detail()
+
+    def follow_detail(self) -> None:
+        """The highlight on Detail's item if it's a PR listed, else hidden (showing). Also as
+        the list lands (got): an item Detail showed before its PR was listed is highlighted
+        once it is, whichever comes first (#214)."""
         table = self.query_one(PrTable)
         if table.has_focus and table.show_cursor:
             return
+        sid, ref = self.in_detail[1:] if self.in_detail is not None else (None, None)
         url = next((r["url"] for r in self.rows if r["item"] is not None
                     and (r["item"]["session_id"], r["item"]["ref"]) == (sid, ref)), None)
         with table.prevent(DataTable.RowHighlighted):

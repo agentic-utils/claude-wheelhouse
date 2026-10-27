@@ -5,6 +5,7 @@ Skipped when the module isn't installed."""
 import asyncio
 import dataclasses
 import json
+import threading
 import time
 
 import pytest
@@ -19,6 +20,7 @@ from textual.pilot import _get_mouse_message_arguments
 
 prs = pytest.importorskip("claude_wheelhouse_prs", reason="installed without the prs module")
 from claude_wheelhouse_prs import fetch, pane  # noqa: E402
+from conftest import Clock  # noqa: E402
 
 URL = "https://github.com/two-inc/wheelhouse/pull/{}"
 
@@ -39,6 +41,7 @@ class Gh:
         self.closes, self.closed = [], {}        # gh pr close's calls, and what it answers for a URL (code, stderr)
         self.details = []                        # the detail query's calls, by number (#145)
         self.detail = {"body": "Why: [b]bold[/b] isn't markup", "timelineItems": {"nodes": []}, "commits": {"nodes": []}}
+        self.gate = None                         # an Event the list's query waits on, if set (#214)
 
     def __call__(self, argv):
         if argv[1:3] == ["repo", "view"]:
@@ -54,6 +57,8 @@ class Gh:
             self.details.append(int(argv[-1].removeprefix("number=")))
             return 0, json.dumps({"data": {"repository": {"pullRequest": self.detail}}}), ""
         self.calls += 1
+        if self.gate is not None:
+            self.gate.wait(10)
         if self.fail:
             raise self.fail
         data = {f"p{i}": {"pullRequest": n} for i, n in enumerate(self.tracked)}
@@ -86,6 +91,40 @@ async def settled(app, pilot):
     await pilot.pause()
 
 
+async def until(pilot, check, desc, seconds=10.0):
+    """Paused until check holds: the condition a step needs waited on, not a guess at how
+    long it takes under load (#214)."""
+    deadline = time.monotonic() + seconds
+    while not check():
+        assert time.monotonic() < deadline, f"timed out: {desc}"
+        await pilot.pause(0.02)
+
+
+async def on_first(app, pilot):
+    """Settled, and the item the app shows first in Detail reached the PRs pane (showing),
+    which under load can be after the list lands (#214)."""
+    await settled(app, pilot)
+    p = app.query_one("#prs")
+    await until(pilot, lambda: app.selected is not None and p.in_detail == ("item", *app.selected), "Detail's first item")
+    return p
+
+
+async def pick_in_inbox(app, pilot, key):
+    """A click on the inbox's row for key (under its header)."""
+    await pilot.click("#items", offset=(4, 1 + app.items_table.get_row_index(key)))
+    await pilot.pause()
+
+
+async def none_picked(app, pilot, sid, q):
+    """The PRs pane's highlight hidden on PR109: PR109 picked in the inbox, then question q,
+    which the pane doesn't list (#148)."""
+    p = await on_first(app, pilot)
+    for ref in ("PR109", q):
+        await pick_in_inbox(app, pilot, f"{sid}|{ref}")
+        await until(pilot, lambda: p.in_detail == ("item", sid, ref), f"Detail on {ref}")
+    return p
+
+
 def cells(app, column=0) -> list[str]:
     table = app.query_one("#pr-list")
     return [str(table.get_row_at(i)[column]) for i in range(table.row_count)]
@@ -115,33 +154,34 @@ async def test_the_pane_lists_the_sessions_prs_then_all(store, sid, github):
 
 @pytest.mark.anyio
 async def test_selecting_shows_an_item_or_a_card_and_enter_opens(store, sid, github, monkeypatch):
+    q = store.post_item(sid, "question", "Which way?", status="open")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await settled(app, pilot)
-        p = app.query_one("#prs")
+        p = await none_picked(app, pilot, sid, q)
         shown, opened = [], []
         p.ctx = dataclasses.replace(p.ctx, show_item=lambda s, ref: shown.append((s, ref)))
         monkeypatch.setattr(app, "open_url", lambda url, **kw: opened.append(url))
         p.action_scope()
         await settled(app, pilot)
         table = app.query_one("#pr-list")
+        assert not table.show_cursor and cells(app) == ["PR108", "PR7", "PR109"], "all, none picked"
         table.focus()
         await pilot.pause()
         await pilot.press("down")   # none picked here yet: the first key brings the highlight back where it is
         await pilot.pause()
-        assert table.show_cursor and shown == [(sid, "PR108")], "the first key: the first row picked"
-        await pilot.press("down")
+        assert table.show_cursor and shown == [(sid, "PR109")], "the first key: the hidden highlight's row picked"
+        await pilot.press("up")
         await pilot.pause()
         card = app.query_one("#prs-card")
         text = str(app.query_one("#prs-card-text").render())
         assert card.display and "doug/7" in text and "success" in text, \
             "a PR that isn't an item: a card with its branch and checks"
-        assert shown == [(sid, "PR108")], "nothing more in Detail"
+        assert shown == [(sid, "PR109")], "nothing more in Detail"
         await pilot.press("enter")
         await pilot.pause()
-        await pilot.press("down")
+        await pilot.press("up")
         await pilot.pause()
-        assert shown == [(sid, "PR108"), (sid, "PR109")], "an item: shown in Detail"
+        assert shown == [(sid, "PR109"), (sid, "PR108")], "an item: shown in Detail"
         assert not app.query_one("#prs-card").display, "no card for an item"
         assert opened == ["https://github.com/doug/mizpah/pull/7"], "Enter: the browser"
 
@@ -154,9 +194,10 @@ async def test_selecting_shows_an_item_or_a_card_and_enter_opens(store, sid, git
 async def test_the_tooltip_is_the_hovered_prs(store, sid, github, picked, desc):
     """#184: Doug, "the tooltip on the PR window always shows the description of the first
     PR in the list, even when I hover over other ones"."""
+    q = store.post_item(sid, "question", "Which way?", status="open")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await settled(app, pilot)
+        await none_picked(app, pilot, sid, q)
         table = app.query_one("#pr-list")
         if picked:
             table.reveal(0)
@@ -166,6 +207,22 @@ async def test_the_tooltip_is_the_hovered_prs(store, sid, github, picked, desc):
             await pilot.hover(table, offset=(2, table.header_height + row))
             await pilot.pause()
             assert str(table.tooltip) == f"two-inc/wheelhouse #{n}: Change {n}", f"{desc}: row {row}'s PR"
+
+
+@pytest.mark.anyio
+async def test_detail_s_pr_is_highlighted_though_the_list_lands_after_it(store, sid, github):
+    """#214: Detail showing a PR item before the list landed left the highlight hidden, where
+    landing first it showed: which came first decided it."""
+    github.gate = threading.Event()   # the list held until Detail shows its PR
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await until(pilot, lambda: app.query("#prs") and app.query_one("#prs").in_detail == ("item", sid, "PR109"),
+                    "Detail on PR109, the list not landed")
+        table = app.query_one("#pr-list")
+        assert not table.show_cursor and not table.row_count, "nothing listed to highlight yet"
+        github.gate.set()
+        await settled(app, pilot)
+        assert table.show_cursor and pane.Prs.key_at(table) == URL.format(109), "highlighted once listed"
 
 
 @pytest.mark.anyio
@@ -541,12 +598,6 @@ async def test_request_review_shows_a_title_and_past_targets_as_text_not_markup(
         assert "[b]#eng[/b]" in listed, f"the past target as written: {listed!r}"
 
 
-async def pick_in_inbox(app, pilot, key):
-    """A click on the inbox's row for key (under its header)."""
-    await pilot.click("#items", offset=(4, 1 + app.items_table.get_row_index(key)))
-    await pilot.pause()
-
-
 @pytest.mark.anyio
 @pytest.mark.parametrize("size", [(160, 40), (100, 30)])
 @pytest.mark.parametrize("pick, inbox_lit, prs_lit, shown, desc", [
@@ -784,16 +835,22 @@ async def test_arrowing_past_prs_fetches_only_the_one_it_rests_on_and_a_failure_
         github.found.append(node(n))
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await settled(app, pilot)
-        await landed(app, pilot)
+        await on_first(app, pilot)
         p = await on_pr(app, pilot, URL.format(108))
+        await until(pilot, lambda: URL.format(108) in p.detail_asked and p.detail_timer is None and not p.detail_asking,
+                    "PR108's detail fetched, none other waited on")
         github.details.clear()
-        monkeypatch.setattr(pane, "SETTLE", 1.0)   # longer than six key presses take here
+        clock = Clock()   # the highlight's rest on the test's own time, however long six keys take
+        monkeypatch.setattr(p, "set_timer", clock.after)
         out, real = [], p.ctx.call
         monkeypatch.setattr(p, "ctx", dataclasses.replace(p.ctx, call=lambda path, body: out.append(path) or real(path, body)))
         for _ in range(6):
             await pilot.press("down")
-        await landed(app, pilot)
+        await pilot.pause()
+        assert github.details == [] and len([t for t in clock.timers if not t.stopped]) == 1, \
+            "passing PRs: none asked, one wait left"
+        clock.advance(pane.SETTLE)
+        await until(pilot, lambda: github.details and not p.detail_asking, "the rested PR's detail landed")
         at = p.detail_row()["number"]
         assert github.details == [at] and at != 108, f"the PR it rested on alone: {github.details}"
         assert sum(path.startswith("detail") for path in out) == 1, "one detail asked"
@@ -805,13 +862,16 @@ async def test_arrowing_past_prs_fetches_only_the_one_it_rests_on_and_a_failure_
         p.ctx = dataclasses.replace(p.ctx, call=refuse)
         p.detail_asked.clear()   # none fetched yet
         await pilot.press("down")
-        await landed(app, pilot)
+        await pilot.pause()
+        clock.advance(pane.SETTLE)
         url = p.detail_row()["url"]
+        await until(pilot, lambda: "error" in p.details.get(url, {}) and not p.detail_asking, "the refusal landed")
         assert url not in p.detail_asked and "busy" in p.details[url]["error"], "a failure isn't counted as fetched"
         p.ctx = dataclasses.replace(p.ctx, call=real)
         monkeypatch.setattr(pane, "RETRY", 0)
         p.want_detail()
-        await landed(app, pilot)
+        clock.advance(pane.SETTLE)
+        await until(pilot, lambda: url in p.detail_asked, "tried again")
         assert url in p.detail_asked and "error" not in p.details[url], "tried again, and kept"
 
 
