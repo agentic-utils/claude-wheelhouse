@@ -2715,7 +2715,7 @@ class Hint(Label):
         shown = (tuple(found), chosen) if found else None
         if shown != self.suggesting:
             self.suggesting, self.box = shown, box
-            self.update(self.base if shown is None else Content.from_markup("  ".join(   # codes are [a-z0-9_+-]
+            self.update(self.base if shown is None else Content.from_markup("  ".join(   # no code holds [ or ]
                 f"[{'reverse ' * (i == chosen)}@click=take({i})]{g} :{c}:[/]" for i, (c, g) in enumerate(found))
                 + "   ↑↓ choose · Tab, Enter or a click takes it"))
 
