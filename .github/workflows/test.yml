@@ -3,7 +3,7 @@ name: test
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, 'batch/**']   # a batch branch's merges are pushed from a local merge (AGENTS.md)
 
 concurrency:
   group: test-${{ github.ref }}

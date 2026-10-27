@@ -9,8 +9,9 @@ Bash, no edits, no web, no MCP servers (so no `wheelhouse` server and nothing th
 session), none of the person's settings, hooks or plugins, no transcript written, and no
 WHEELHOUSE_* variable that could find the daemon. Anything that would need permission is
 denied (dontAsk, no one to ask). A chat quiet for IDLE seconds stops its claude, and the next
-question starts another, told the chat so far. Each answer streams in as events, delivered
-on the helper's reader thread to the callback it was given."""
+question starts another, told the chat so far. Each answer streams in as events to the
+callback it was given, on the helper's reader thread, or on the asker's own for a claude that
+couldn't start: the callback must hand them to its own loop either way."""
 
 import contextlib
 import importlib.metadata
@@ -59,7 +60,8 @@ button or pane does, how to do something, why something behaves as it does.
 - British English."""
 TABS = ("The person runs sessions as Windows Terminal tabs: SDK mode is off. Never describe SDK-only "
         "features (host.py, the effort slider, Interrupt, Compact, Model, the permission buttons).")
-SDK = "The person has SDK mode on (features.py): its features apply too."
+SDK = ("The person has SDK mode on (features.py). The fact sheet answers for tabs; for sessions run in the "
+       "wheelhouse (host.py) the source has the rest: Interrupt, Compact, Model, the permission buttons.")
 
 
 @dataclass(frozen=True)
@@ -130,7 +132,7 @@ def plainly(text: str) -> str:
 
 class Helper:
     """One chat. ask() a question; its answer comes to on_event as Events, on a thread of the
-    helper's own. One question at a time: ask while busy is refused (False). The claude
+    helper's own (a claude that can't start: on the asker's). One question at a time: ask while busy is refused (False). The claude
     starts at the first ask and stops on stop(), on reset() (New chat, the history
     cleared too) or on idle() past IDLE, the history kept for the next."""
 
@@ -241,6 +243,9 @@ class Helper:
                     answer, said = [], False
         except (OSError, ValueError):
             pass
+        with contextlib.suppress(OSError, ValueError, subprocess.TimeoutExpired):
+            proc.stdout.close()
+            proc.wait(5)   # reaped: it has closed its stdout, so it is going or gone
         with self.lock:
             mine = self.proc is proc
             died = mine and self.busy   # mid-answer
@@ -293,10 +298,10 @@ class Helper:
             self.busy = False
 
     def halt(self) -> None:
-        """Under the lock: the claude and its children ended, if one runs."""
+        """Under the lock: the claude and its children ended, if one runs, off the caller's thread."""
         proc, self.proc = self.proc, None
-        if proc is not None:
-            plan_usage.kill(proc)
+        if proc is not None:   # on a thread: a kill can take seconds, and the caller is the app's loop
+            threading.Thread(target=plan_usage.kill, args=(proc,), daemon=True, name="helper-kill").start()
 
 
 def reading(block: dict) -> str:

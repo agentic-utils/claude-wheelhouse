@@ -278,7 +278,10 @@ with GitHub's merge button: in a worktree of the batch branch, `git merge --no-f
 branch, run `make facts` while the sheet is still conflicted (it drops both stamps for one a
 version past them, regenerates its part and stages it; only a conflict in the guide needs a
 person), commit the merge, and push. GitHub marks each PR merged once its head is in the
-base, and each PR's own CI stays green, its stamp matching its own tree.
+base. A PR's CI runs on its own tree until another lands first; from then on it conflicts
+with the batch, and GitHub runs no PR checks on a conflicting PR. The pushed batch branch
+runs the tests itself (`test.yml` runs on a push to `batch/**`), so that is the check that
+counts once merging starts.
 
 ## Docs kept in step
 
