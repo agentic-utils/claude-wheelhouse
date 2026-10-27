@@ -101,6 +101,13 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   repo beside it, #191; `decision_dirs` pairs each with the repo that looks there).
   Never imports Textual.
 - `models.py`: the models and effort levels offered. A new model is a row here.
+- `helper.py`: the helper chat (#198, `.plan/helper-chat.md`): how-to questions answered by
+  Haiku through the person's own login, one sandboxed `claude -p` over stream-json per chat,
+  started at the first question (read-only tools, no MCP servers, settings, transcript or
+  `WHEELHOUSE_*` variables). Never imports Textual.
+- `facts.py` and `helper_facts.md`: the helper's fact sheet, a hand-written guide above
+  the part `make facts` generates from the code, stamped for the source (below, The helper's
+  fact sheet).
 - `tutorial.py`: the tutorial's demo session: its directory, its brief (`BRIEF`, a line in
   capitals to the person first), New session's fields for it (`form`) and what the store
   records of it (`facts`).
@@ -243,6 +250,31 @@ Sessions keep running the code they started with, against the same database.
   trigger must stay harmless when older and newer versions fire together. To retire one,
   match it in a `RETIRED_*` pattern so every version is dropped on open.
 
+## The helper's fact sheet
+
+`claude_wheelhouse/helper_facts.md` is what the helper chat knows before it reads any source.
+Its first line is a stamp: a version, a UTC time, and a hash of the source as git's index
+holds it (the package's `.py` and `.md` files, the modules' `.py` files but their tests,
+and the README; not the sheet, the tests, `.plan/` or this file). The pre-commit hook and
+`test_facts.py` fail when the hash isn't the source's, so on every commit:
+
+1. `git add` your change.
+2. Check the sheet's guide (above its `generated` line) against it: a pane, a word, a file
+   the guide names. Fix what it describes wrongly or leaves out. Never edit below that line.
+3. `make facts`: the generated part (keys, buttons, palette, settings, features) written
+   again from the code, and the sheet restamped and added. Run it even when the guide needed
+   nothing: a commit that changes no source still gets a new version.
+4. Commit. It says which source you changed but didn't add, which the stamp leaves out.
+
+`make hooks` installs the hook (`.githooks/pre-commit`, through `core.hooksPath`), once per
+clone. It runs `python3 claude_wheelhouse/facts.py check`, needing no venv.
+
+Two branches stamped apart conflict on the stamp line, and their merge has a hash neither
+had. A merge or rebase resolves it with `make facts` (it takes a version past both stamps,
+and regenerates its part; a conflict in the guide is the one thing to resolve by hand). A
+batch merge restamps: once the batch's PRs are in, `make facts` on the batch branch and
+commit `#<issue>/chore restamp the helper's fact sheet`, so the promotion PR's tests pass.
+
 ## Docs kept in step
 
 Update these in the same commit as the behaviour they describe:
@@ -265,6 +297,7 @@ Update these in the same commit as the behaviour they describe:
   has none), `BUTTONS` (each button's tooltip and overlay line), `SEND_RULES` and `MOUSE`.
 - `README.md`: anything a user sees or does.
 - The matching `.plan/` doc when a design decision changes.
+- `helper_facts.md`'s guide, then `make facts`: every commit (The helper's fact sheet).
 
 ## Commits
 
