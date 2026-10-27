@@ -5920,6 +5920,8 @@ async def test_parked_sessions_stay_in_the_list_after_the_rest(store, sid, tmp_p
     first = store.create_session(str(tmp_path), name="first")
     other = store.create_session(str(tmp_path), name="other")
     store.set_parked(sid, True)
+    for s in (sid, first):
+        store.post_item(s, "question", "which db?")
     same_second(store)   # in creation order under * (T114), however slowly they were made
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -5927,6 +5929,10 @@ async def test_parked_sessions_stay_in_the_list_after_the_rest(store, sid, tmp_p
         t = app.query_one("#session-list", DataTable)
         assert [r.key.value for r in t.ordered_rows if not r.key.value.startswith(BLANK)] == [first, other, sid]
         assert "dim" in str(t.get_row(sid)[1].style)
+        # #210: a parked session's question count is dimmed and still; an active one's flashes
+        parked_q, active_q = str(t.get_row(sid)[3].style), str(t.get_row(first)[3].style)
+        assert "dim" in parked_q and "blink" not in parked_q, parked_q
+        assert "blink" in active_q and "dim" not in active_q, active_q
 
 
 def test_the_keys_overlay_has_relaunch_and_no_tabs():
