@@ -13,7 +13,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from . import docroots, liveness, steps
-from .store import GONE_TEXT, SessionGone, Store, redacted, runner
+from .store import GONE_TEXT, SessionGone, Store, mcp_named, mcp_servers, redacted, runner
 
 HEARTBEAT_SECONDS = 30
 STOP_AFTER = 1   # seconds after park_session or end_session replies before its Claude Code is stopped
@@ -200,6 +200,39 @@ def request_compact(keep: str) -> str:
                          "this one runs in a terminal tab, where the person can type /compact")
     _store.request_compact(_sid, keep.strip())
     return "compaction requested: it runs once this turn ends, with your keep text as its instructions"
+
+
+MCP_NEEDY = ("needs-auth", "failed")   # host.MCP_ASK: the statuses a sign-in question is asked about
+
+
+@wheelhouse_tool
+def request_mcp_signin(server: str, why: str) -> str:
+    """Ask the person to sign in to an MCP server your work needs: one Claude Code lists as
+    requiring authentication, or one that has failed. `server` is its name as Claude Code
+    gives it (claude.ai Slack, say), `why` one short line on what you need it for, shown at
+    the top of the person's question. The wheelhouse posts that question with the sign-in
+    link and closes it once the server is connected, when its tools work. Carry on with what
+    you can meanwhile. Don't ask about a server you don't need. Only in a session run inside
+    the wheelhouse (SDK mode), not a terminal tab, where the person uses /mcp."""
+    if not why.strip():
+        raise ValueError("why must say what you need the server for")
+    if not hosted_here(_store):
+        raise ValueError("request_mcp_signin works only in a session run inside the wheelhouse (SDK mode); "
+                         "this one runs in a terminal tab, where the person can sign in with /mcp")
+    servers = mcp_servers(_store.session(_sid))
+    name = server.strip() if servers is None else mcp_named(server, servers)
+    if name is None:
+        needy = [n for n, s in servers.items() if s.get("status") in MCP_NEEDY]
+        raise ValueError(f"no MCP server named {server!r}" +
+                         (f"; these need signing in or have failed: {', '.join(needy)}" if needy else ""))
+    if (servers or {}).get(name, {}).get("status") == "disabled":
+        return f"{name} is disabled: the person turned it off, so carry on without it"
+    if ref := _store.open_mcp_question(_sid, name):
+        return f"already asked: {ref} is the person's question about {name}"
+    _store.ask_mcp(_sid, "ask", name, why=why.strip())
+    return (f"asked: unless {name} turns out not to need them, or they have closed a question about it "
+            f"already, the person gets a question about it shortly, which closes once {name} is connected. "
+            "Carry on with what you can")
 
 
 @wheelhouse_tool

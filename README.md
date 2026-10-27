@@ -528,7 +528,7 @@ along with the launch command.
 
 Keys, shown in upper case as usual (Alt+V means Alt and the v key, not Shift+V). Every one has a modifier (or is `F1`), so each works from the answer box too: `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `Alt+V` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `Alt+N` new session, `Alt+A` adopt, `Alt+Shift+L` relaunch all, `Alt+K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
+highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `Alt+N` new session, `Alt+A` adopt, `Alt+Shift+L` relaunch all, `Alt+Shift+M` the MCP servers of the session in context, `Alt+K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode), `Alt+S` send this one answer now (the queue and mode left as they are),
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
@@ -741,15 +741,26 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   [Settings](#settings)), sets another limit; fractions are allowed and 0
   turns it off. Each message costs one request, which reads the cached context: for a
   quiet session that is much cheaper than writing the cache again when you come back.
-- A session run in the wheelhouse has no `/mcp`, so the wheelhouse watches its MCP servers
-  for it, as it starts and after every turn. One that needs signing in again (a claude.ai
-  connector such as Slack, or a server of your own with OAuth) gets a question carrying its
-  sign-in link; one that failed gets a question with its error. For a claude.ai connector,
-  open the link, authorise it, then reply anything on the question: the wheelhouse
-  reconnects the server. For a server of your own, Claude Code waits for the browser to
-  come back and reconnects it itself; if the browser can't reach it, paste the address the
-  browser ends on as your reply. The question closes once the server is connected. Shell
-  closes them, as `/mcp` in the tab does the same.
+- A session run in the wheelhouse has no `/mcp`. When its work needs an MCP server that
+  wants signing in (a claude.ai connector such as Slack, or a server of your own with
+  OAuth) or has failed, the session asks for it (`request_mcp_signin`), and you get a
+  question saying what it needs the server for, with its sign-in link or its error.
+  Servers it doesn't need are never asked about. For a claude.ai connector, open the link
+  and authorise it: the wheelhouse reconnects it every few minutes for two hours, so the
+  question closes by itself, or reply anything to reconnect it at once. For a server of
+  your own, Claude Code waits for the browser to come back and connects it itself; if the
+  browser can't reach it, paste the address the browser ends on as your reply. Shell
+  closes these questions, as `/mcp` in the tab does the same.
+- `Alt+Shift+M` lists the MCP servers of the session in context, as its host last saw
+  them (it looks again as the dialog opens), those that need you first, each with its
+  error or sign-in link. Sign in starts a server's sign-in and opens its link; for a
+  claude.ai connector, press Reconnect once you've authorised it. A server of your own
+  connects once the browser comes back, or paste the address the browser ends on into
+  the box under it. Reconnect on a claude.ai connector reconnects it in every session run
+  in the wheelhouse that has it, as its sign-in is your account's; a local server's is
+  this session's alone (a stdio server's process restarts). Disabled servers have no
+  button: `/mcp` or the settings turn them on. A session not running shows its last look;
+  a tab session says to use `/mcp` there.
 - After a compaction, the session is told its open tasks and questions, with their titles,
   once. A session run in the wheelhouse has a Compact button, and past 200k of context a
   question suggesting it, answered with buttons (Compact, Leave it); both take optional
