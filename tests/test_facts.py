@@ -112,6 +112,12 @@ def test_the_hook_refuses_a_commit_with_a_stale_stamp(repo):
     said = facts.make(repo, now=AT, regenerate=False)
     assert "not added" not in said
     subprocess.run([*GIT, "commit", "-qm", "stamped"], cwd=repo, check=True, capture_output=True)
+    (repo / "AGENTS.md").write_text("three\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    refused = subprocess.run([*GIT, "commit", "-qm", "no source"], cwd=repo, capture_output=True, text=True)
+    assert refused.returncode != 0 and "doesn't" in refused.stderr, "a commit with no source change restamps too"
+    facts.make(repo, now=AT, regenerate=False)
+    subprocess.run([*GIT, "commit", "-qm", "restamped"], cwd=repo, check=True, capture_output=True)
 
 
 def test_make_says_what_the_stamp_leaves_out(repo):

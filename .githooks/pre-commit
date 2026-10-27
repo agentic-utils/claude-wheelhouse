@@ -2,4 +2,4 @@
 # Refuses a commit whose helper fact sheet isn't stamped for the source it holds (AGENTS.md,
 # The helper's fact sheet). Installed by make hooks. Run as a script, standard library only:
 # no venv needed, and never another checkout's copy.
-exec python3 claude_wheelhouse/facts.py check
+exec python3 claude_wheelhouse/facts.py check --commit

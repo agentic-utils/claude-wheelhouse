@@ -70,9 +70,14 @@ def read_stamp(text: str) -> tuple[int, str] | None:
     return (int(m[1]), m[3]) if m else None
 
 
-def check(root: Path = ROOT, sheet: Path | None = None) -> None:
-    """Stale if the sheet's stamp isn't for the source in git's index."""
+def check(root: Path = ROOT, sheet: Path | None = None, commit: bool = False) -> None:
+    """Stale if the sheet's stamp isn't for the source in git's index; for a commit (the
+    hook), also if the sheet isn't part of it: every commit restamps, source or not."""
     sheet = sheet or root / SHEET.relative_to(ROOT)
+    rel = str(sheet.relative_to(root))
+    if commit and git(root, "rev-parse", "--verify", "-q", "HEAD").strip() and \
+            rel not in git(root, "diff", "--cached", "--name-only", "--", rel).split():
+        raise Stale(f"every commit restamps the fact sheet, and this one doesn't: {FIX}")
     text = sheet.read_text() if sheet.exists() else ""
     stamp = read_stamp(text)
     if stamp is None:
@@ -161,6 +166,9 @@ def make(root: Path = ROOT, sheet: Path | None = None, now: datetime | None = No
     git's index and added to it. What it says: the stamp, and any source changed but not
     added, which the stamp doesn't cover."""
     sheet = sheet or root / SHEET.relative_to(ROOT)
+    if unmerged := git(root, "ls-files", "-u", "--", *SOURCE).strip():
+        raise ValueError("the source has unresolved conflicts, which the stamp can't cover: resolve them, "
+                         f"git add them, then make facts ({unmerged.split()[-1]})")
     text = restamp(sheet.read_text() if sheet.exists() else "", source_hash(root), now or datetime.now(UTC),
                    generated() if regenerate else None)
     sheet.write_text(text)
@@ -177,7 +185,7 @@ def main(argv: list[str]) -> int:
     try:
         root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel").strip())
         if what == "check":
-            check(root)
+            check(root, commit="--commit" in argv)
             return 0
         if what == "make":
             print(make(root))

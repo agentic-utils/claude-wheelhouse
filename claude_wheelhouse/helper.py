@@ -165,8 +165,10 @@ class Helper:
                 if proc is None or proc.poll() is not None:
                     proc = self.start()
                     text = opening(question, self.history)
-                proc.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n")
-                proc.stdin.flush()
+                # on a thread: the first message (about 90 KB) outgrows the pipe, and the caller
+                # is the app's loop, which mustn't wait for claude to start reading
+                line = json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n"
+                threading.Thread(target=self.send, args=(proc, line), daemon=True, name="helper-send").start()
             except FileNotFoundError:
                 why = "Claude Code isn't installed, or `claude` isn't on your PATH: the helper runs it."
             except (OSError, ValueError) as e:
@@ -178,13 +180,27 @@ class Helper:
             self.on_event(Event("error", why))
         return True
 
+    @staticmethod
+    def send(proc: subprocess.Popen, line: str) -> None:
+        """A message written to the claude. One that can't take it is ended, so its reader
+        sees it go and says why, from what it said on stderr."""
+        try:
+            proc.stdin.write(line)
+            proc.stdin.flush()
+        except (OSError, ValueError):
+            plan_usage.kill(proc)
+
     def start(self) -> subprocess.Popen:
         """Under the lock: the claude, with a thread reading what it says. Raises OSError if
         it can't start."""
         err = tempfile.TemporaryFile("w+")
-        proc = subprocess.Popen(self.command or command(self.sdk), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=err, cwd=PACKAGE, env=environment(), text=True, close_fds=True,
-                                start_new_session=True)
+        try:
+            proc = subprocess.Popen(self.command or command(self.sdk), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=err, cwd=PACKAGE, env=environment(), text=True, close_fds=True,
+                                    start_new_session=True)
+        except OSError:
+            err.close()
+            raise
         self.proc = proc
         threading.Thread(target=self.read, args=(proc, err), daemon=True, name="helper").start()
         return proc
@@ -214,7 +230,7 @@ class Helper:
                 elif kind == "assistant":
                     message = msg.get("message") or {}
                     usage = message.get("usage") or {}
-                    if usage:
+                    if usage and self.proc is proc:   # not a claude stopped since (New chat)
                         self.tokens = sum(usage.get(k) or 0 for k in
                                           ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
                     for block in message.get("content") or []:
@@ -237,7 +253,9 @@ class Helper:
 
     def emit(self, proc: subprocess.Popen, event: Event) -> None:
         """An event from this claude, unless it has been stopped since (New chat)."""
-        if self.proc is proc:
+        with self.lock:
+            current = self.proc is proc
+        if current:   # outside the lock, as every event is
             self.on_event(event)
 
     def finish(self, proc: subprocess.Popen, result: dict, streamed: str) -> None:

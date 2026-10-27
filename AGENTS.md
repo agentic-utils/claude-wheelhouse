@@ -264,10 +264,13 @@ and the README; not the sheet, the tests, `.plan/` or this file). The pre-commit
 3. `make facts`: the generated part (keys, buttons, palette, settings, features) written
    again from the code, and the sheet restamped and added. Run it even when the guide needed
    nothing: a commit that changes no source still gets a new version.
-4. Commit. It says which source you changed but didn't add, which the stamp leaves out.
+   It names any source you changed but didn't add, which the stamp leaves out.
+4. Commit. The hook refuses a commit whose stamp isn't for its source, or that doesn't
+   include the sheet.
 
 `make hooks` installs the hook (`.githooks/pre-commit`, through `core.hooksPath`), once per
-clone. It runs `python3 claude_wheelhouse/facts.py check`, needing no venv.
+clone. It runs `python3 claude_wheelhouse/facts.py check --commit`, needing no venv. A
+rebase's picks don't run it: after a rebase, `make facts` and commit, or CI's test catches it.
 
 Two branches stamped apart conflict on the stamp line, and their merge has a hash neither
 had. A merge or rebase resolves it with `make facts` (it takes a version past both stamps,
