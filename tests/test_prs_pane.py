@@ -23,7 +23,7 @@ from claude_wheelhouse_prs import fetch, pane  # noqa: E402
 URL = "https://github.com/two-inc/wheelhouse/pull/{}"
 
 
-def node(n, checks="SUCCESS", review="APPROVED", draft=False, updated="2026-10-20T10:00:00Z", repo="two-inc/wheelhouse"):
+def node(n, checks="SUCCESS", review=None, draft=False, updated="2026-10-20T10:00:00Z", repo="two-inc/wheelhouse"):
     return {"number": n, "title": f"Change {n}", "url": f"https://github.com/{repo}/pull/{n}", "isDraft": draft,
             "state": "OPEN", "updatedAt": updated, "headRefName": f"doug/{n}", "reviewDecision": review,
             "mergeable": "MERGEABLE", "repository": {"nameWithOwner": repo},
@@ -37,6 +37,7 @@ class Gh:
         self.tracked, self.found, self.fail, self.calls = tracked, found, fail, 0
         self.merges, self.merged = [], (0, "")   # gh pr merge's calls, and what it answers (code, stderr)
         self.closes, self.closed = [], {}        # gh pr close's calls, and what it answers for a URL (code, stderr)
+        self.readies, self.ready = [], (0, "")   # gh pr ready's calls (#212), and what it answers (code, stderr)
         self.details = []                        # the detail query's calls, by number (#145)
         self.detail = {"body": "Why: [b]bold[/b] isn't markup", "timelineItems": {"nodes": []}, "commits": {"nodes": []}}
 
@@ -46,6 +47,9 @@ class Gh:
         if argv[1:3] == ["pr", "merge"]:
             self.merges.append(argv[3:])
             return *self.merged[:1], "", self.merged[1]
+        if argv[1:3] == ["pr", "ready"]:
+            self.readies.append(argv[3:])
+            return self.ready[0], "", self.ready[1]
         if argv[1:3] == ["pr", "close"]:
             self.closes.append(argv[3:])
             code, err = self.closed.get(argv[-1], (0, ""))
@@ -360,7 +364,8 @@ async def test_the_selected_pr_has_its_actions_and_open_opens_it(store, sid, git
         assert not app.query_one("#prs-actions").display, "no PR selected: no buttons"
         await on_pr(app, pilot, URL.format(109))
         bar = app.query_one("#prs-actions")
-        assert bar.display and [str(b.label) for b in bar.query(Button)] == ["Open", "Merge", "Request review", "Close"]
+        assert bar.display and [str(b.label) for b in bar.query(Button)] in (
+            ["Open", "Merge", "Make draft", "Request review", "Close"], ["Open", "Merge", "Draft", "Review", "Close"])
         await pilot.click("#pr-open")
         await pilot.pause()
         assert opened == [URL.format(109)], "the full URL, the app's opener"
@@ -371,8 +376,8 @@ async def test_the_selected_pr_has_its_actions_and_open_opens_it(store, sid, git
 @pytest.mark.parametrize("n, answer, merged, said, desc", [
     (109, "alt+n", None, None, "No: nothing merged"),
     (109, "alt+y", (0, ""), "Merged PR109 (squash).", "Yes: merged the way the repo allows, gone from the list"),
-    (108, "alt+y", (1, "X Pull request #108 is not mergeable: the base branch policy prohibits the merge."),
-     "Couldn't merge PR108: checks are failing. gh says: X Pull request #108 is not mergeable", "a failure says why"),
+    (109, "alt+y", (1, "X Pull request #109 is not mergeable: the base branch policy prohibits the merge."),
+     "Couldn't merge PR109: gh says: X Pull request #109 is not mergeable", "a failure says why"),
 ])
 async def test_merge_asks_first_and_says_what_came_of_it(store, sid, github, n, answer, merged, said, desc):
     app = WheelhouseApp(store)
@@ -393,6 +398,88 @@ async def test_merge_asks_first_and_says_what_came_of_it(store, sid, github, n, 
         assert (said in note) if said else not p.outcome, f"{desc}: {note!r}"
         if merged == (0, ""):
             assert cells(app) == ["PR108"], f"{desc}: gone from the list, the others still in it"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("draft, button, ready, argv, caption, said, desc", [
+    (True, "#pr-ready", (0, ""), ["--", URL.format(109)], "Make draft", "Marked PR109 ready", "a draft: marked ready"),
+    (False, "#pr-ready", (0, ""), ["--undo", "--", URL.format(109)], "Mark ready", "Made PR109 a draft", "made a draft"),
+    (True, "#prd-ready", (1, "X not allowed"), ["--", URL.format(109)], "Mark ready",
+     "Couldn't mark PR109 ready: gh says: X not allowed", "from Detail; gh's refusal said, the caption kept"),
+])
+async def test_draft_ready_runs_gh_pr_ready_busy_then_refreshed(store, sid, github, draft, button, ready,
+                                                               argv, caption, said, desc):
+    """#212: one button, not asked first; busy while it runs, the PR as it now is afterwards."""
+    github.tracked[1] = github.found[1] = node(109, draft=draft)
+    github.ready = ready
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p = await on_pr(app, pilot, URL.format(109))
+        await landed(app, pilot)
+        started = []
+        p.run_worker = lambda work, **kw: started.append(work) if kw.get("group") == "prs-act" else None   # held, to see it busy
+        await pilot.click(button)
+        await pilot.pause()
+        assert not isinstance(app.screen, tui.Confirm), f"{desc}: not asked first"
+        b = app.query_one(button, Button)
+        assert b.disabled and str(b.label).endswith("…"), f"{desc}: busy, {b.label}"
+        del p.run_worker
+        await asyncio.to_thread(started[0])
+        await settled(app, pilot)
+        assert github.readies == [argv], desc
+        assert said in (p.outcome or "") or said in str(app.query_one("#prs-note").render()), f"{desc}: {p.outcome!r}"
+        assert str(app.query_one("#pr-ready", Button).label) in (caption, pane.SHORT[caption]), f"{desc}: refreshed"
+
+
+@pytest.mark.anyio
+async def test_a_merge_that_cant_apply_is_off_and_its_tooltip_says_why(store, sid, github):
+    """#212: PR108 fails its checks, so Merge is off, in the bar and the menu, saying why."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        await on_pr(app, pilot, URL.format(108))
+        merge = app.query_one("#pr-merge", Button)
+        assert merge.disabled and merge.tooltip == "Can't merge: checks are failing", merge.tooltip
+        await pilot.click("#pr-merge")
+        await pilot.pause()
+        assert not isinstance(app.screen, tui.Confirm), "off: a click does nothing"
+        table = app.query_one("#pr-list")
+        box = table.content_region
+        menu = app.query_one("#prs").menu_at(box.x + 1, box.y + table.header_height + table.get_row_index(URL.format(108)))
+        assert ("merge", "Merge", True, "Can't merge: checks are failing") in menu.entries, menu.entries
+        await landed(app, pilot)
+        detail = app.query_one("#prd-merge", Button)
+        assert detail.disabled and detail.tooltip == "Can't merge: checks are failing", f"Detail's: {detail.tooltip}"
+
+
+@pytest.mark.anyio
+async def test_draft_ready_on_marked_prs_acts_on_the_drafts_alone_and_review_skips_them(store, sid, github, monkeypatch):
+    """#212: PR108 a draft, PR109 not, both marked: Mark ready, for PR108 alone; Request
+    review asks for PR109 alone and says why it skipped PR108."""
+    github.tracked[0] = github.found[0] = node(108, draft=True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p = await on_pr(app, pilot, URL.format(108))
+        app.query_one("#pr-list").set_marks({URL.format(108), URL.format(109)})   # the draft's grey sorts it after PR109
+        p.marks_changed()
+        await pilot.pause()
+        button = app.query_one("#pr-ready", Button)
+        assert str(button.label) in ("Mark ready", "Ready") and "the others are left" in button.tooltip, "a draft among them"
+        await pilot.click("#pr-ready")
+        await landed(app, pilot)
+        await settled(app, pilot)
+        assert github.readies == [["--", URL.format(108)]], "the draft alone"
+        github.readies.clear()
+        sent = []
+        p.ctx = dataclasses.replace(p.ctx, ask=lambda q, past, then: then("#reviews"),
+                                    send=lambda s, ref, text: sent.append(ref))
+        p.rows = [{**r, "draft": r["number"] == 108} for r in p.rows]   # as before the refresh: PR108 still a draft
+        p.act("review", [r for r in p.rows])
+        await pilot.pause()
+        assert sent == ["PR109"], sent
+        assert "Not asked for PR108 (still a draft: mark it ready first)." in p.outcome, p.outcome
 
 
 @pytest.mark.anyio
@@ -466,7 +553,7 @@ async def test_a_right_click_on_a_pr_opens_its_actions_below_the_row(store, sid,
         line = table.region.y + table.header_height + row
         box = menu.query_one("#dialog").region
         assert box.y == line + 1 or box.bottom == line, f"{size}: {box} below or above line {line}"
-        assert [str(b.label) for b in menu.query(Button)] == ["Open", "Merge", "Request review", "Close"]
+        assert [str(b.label) for b in menu.query(Button)] == ["Open", "Merge", "Make draft", "Request review", "Close"]
         await pilot.press("enter")
         await pilot.pause()
         assert opened == [URL.format(109)], f"{size}: Open, on the row clicked"
@@ -497,7 +584,7 @@ async def test_the_buttons_fit_the_pane_and_each_click_acts(store, sid, github, 
                 f"{size}: {b.id} {b.region} {str(b.label)!r} inside {pane_box}"
             await pilot.click(f"#{b.id}")
             await pilot.pause()
-        assert acted == [(a, [109]) for a in ("open", "merge", "review", "close")], f"{size}: every click acts"
+        assert acted == [(a, [109]) for a in ("open", "merge", "ready", "review", "close")], f"{size}: every click acts"
 
 
 @pytest.mark.anyio
@@ -768,6 +855,8 @@ async def test_merge_and_the_menu_act_on_every_pr_marked(store, sid, github):
         await pilot.click(f"#{next(b.id for b in menu.query(Button) if str(b.label) == 'Merge')}")
         await pilot.pause()
         assert isinstance(app.screen, tui.Confirm) and "Merge these 2 PRs" in app.screen.prompt, "asked first"
+        assert "PR108 (Change 108) in wheelhouse: checks are failing" in app.screen.prompt \
+            and "are tried too" in app.screen.prompt, f"what blocks each named: {app.screen.prompt}"
         await pilot.press("alt+y")
         await landed(app, pilot)
         await settled(app, pilot)

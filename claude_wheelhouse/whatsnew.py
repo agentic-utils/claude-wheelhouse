@@ -205,6 +205,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("pr-marks", UNRELEASED, ADVANCED,
             note="Mark PRs in the PRs pane as in the inbox (Ctrl+click, Shift+click, Ctrl+Space, Shift+Up/Down) and act "
                  "on them all; Close closes a PR unmerged, asked first, as Merge is."),
+    Feature("pr-action-states", UNRELEASED, ADVANCED,
+            note="A PR's buttons that can't apply are greyed, and say why on hover (Merge on a PR awaiting review, "
+                 "say), and Mark ready or Make draft switches a PR between draft and ready for review."),
     Feature("session-steps", UNRELEASED, ADVANCED,
             note="The wheelhouse tells a session before it ends or resumes (and, in SDK mode, compacts), so its own "
                  "instructions can act, and can keep a handoff doc for it. Session steps, in the command palette, "

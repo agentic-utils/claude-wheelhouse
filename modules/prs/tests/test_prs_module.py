@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -442,14 +443,84 @@ def test_a_failing_checks_web_link_opens_it():
 
 
 @pytest.mark.parametrize("room, want, layout, desc", [
-    (62, ["Open", "Merge", "Request review", "Close"], "", "room: their own captions"),
-    (40, ["Open", "Merge", "Review", "Close"], "", "a cell short of their own: the short ones"),
-    (17, ["Open", "Merge", "Review", "Close"], "grid", "too narrow for a row: two to a line, short"),
-    (16, ["Open", "Merge", "Review", "Close"], "stacked", "too narrow for two: one to a line"),
+    (54, ["Open", "Merge", "Mark ready", "Request review", "Close"], "", "room: their own captions"),
+    (53, ["Open", "Merge", "Ready", "Review", "Close"], "", "a cell short of their own: the short ones"),
+    (17, ["Open", "Merge", "Ready", "Review", "Close"], "grid", "too narrow for a row: two to a line, short"),
+    (16, ["Open", "Merge", "Ready", "Review", "Close"], "stacked", "too narrow for two: one to a line"),
 ])
 def test_captions_fit_the_bar(room, want, layout, desc):
-    entries = [(i, False, c) for i, c, _ in pane.ACTIONS]
+    entries = [(i, False, c, t) for i, c, t in pane.ACTIONS]
     assert pane.captions(entries, room) == (want, layout), desc
+
+
+# #212: an action that can't apply is off, and says why
+
+def listed_row(n=1, item=True, **kw):
+    return {**fetch.row(node(n, **kw)), "item": {"session_id": "s1", "ref": f"PR{n}"} if item else None}
+
+
+@pytest.mark.parametrize("rows, busy, action, off, why, desc", [
+    ([{}], {}, "merge", False, None, "approved, checks passed, mergeable: Merge on"),
+    ([{"draft": True}], {}, "merge", True, "Can't merge: it's a draft", "a draft"),
+    ([{"review": "REVIEW_REQUIRED"}], {}, "merge", True, "Can't merge: it needs an approving review", "a review required"),
+    ([{"review": "CHANGES_REQUESTED"}], {}, "merge", True, "Can't merge: changes are requested", "changes requested"),
+    ([{"mergeable": "CONFLICTING"}], {}, "merge", True, "Can't merge: it has conflicts", "a conflict"),
+    ([{"checks": "FAILURE"}], {}, "merge", True, "Can't merge: checks are failing", "failed checks"),
+    ([{"checks": "PENDING"}], {}, "merge", True, "Can't merge: checks are still running", "checks running"),
+    ([{"mergeable": "UNKNOWN"}], {}, "merge", False, None, "mergeability unknown: left on"),
+    ([{"draft": True}, {}], {}, "merge", False, None, "one of two marked can merge: on, the confirm names the rest"),
+    ([{"draft": True}, {"checks": "FAILURE"}], {}, "merge", True,
+     "None of these can merge:\nPR1: it's a draft\nPR2: checks are failing", "none of two can: each PR's reason"),
+    ([{}], {1: "close"}, "merge", True, "Under way: wait for it to finish", "busy"),
+    ([{"review": None}], {}, "review", False, None, "no review yet: Request review on"),
+    ([{"draft": True, "review": None}], {}, "review", True, "Still a draft: mark it ready first", "a draft"),
+    ([{}], {}, "review", True, "Already approved", "already approved"),
+    ([{"review": None, "item": False}], {}, "review", True, "No session made it, so there's none to ask", "no session"),
+    ([{}, {"review": None}], {}, "review", False, None, "one of two can be asked: on"),
+    ([{"draft": True}], {}, "ready", False, "Mark the draft ready for review", "a draft: Mark ready"),
+    ([{}], {}, "ready", False, "Turn the PR back into a draft", "ready: Make draft"),
+    ([{}], {1: "draft"}, "ready", True, "Under way: wait for it to finish", "busy"),
+    ([{"checks": "FAILURE", "draft": True}], {}, "close", False, "Close the PR without merging it: asked first",
+     "Close keeps its rule: on whatever GitHub says"),
+    ([{"checks": "FAILURE", "draft": True}], {}, "open", False, "Open the PR in the browser", "Open always on"),
+])
+def test_an_action_that_cant_apply_is_off_and_says_why(rows, busy, action, off, why, desc):
+    listed = [listed_row(n, **kw) for n, kw in enumerate(rows, 1)]
+    prs = SimpleNamespace(busy={URL.format(n): a for n, a in busy.items()})
+    got = {id_: (disabled, tip) for id_, disabled, _, tip in pane.Prs.entries(prs, listed)}
+    assert got[action][0] is off, desc
+    assert why is None or got[action][1] == why, f"{desc}: {got[action][1]!r}"
+
+
+@pytest.mark.parametrize("drafts, busy, caption, desc", [
+    ((True,), None, "Mark ready", "a draft"),
+    ((False,), None, "Make draft", "ready for review"),
+    ((False, True), None, "Mark ready", "any draft among those marked: Mark ready"),
+    ((True,), "ready", "Marking ready…", "marking ready"),
+    ((False,), "draft", "Making draft…", "making a draft"),
+])
+def test_draft_ready_is_one_button_whose_caption_flips(drafts, busy, caption, desc):
+    listed = [listed_row(n, draft=d) for n, d in enumerate(drafts, 1)]
+    prs = SimpleNamespace(busy={URL.format(1): busy} if busy else {})
+    assert next(c for id_, _, c, _ in pane.Prs.entries(prs, listed) if id_ == "ready") == caption, desc
+
+
+@pytest.mark.parametrize("draft, answer, want, argv, state, desc", [
+    (False, (0, ""), {"draft": False}, ["gh", "pr", "ready", "--", URL.format(1)], "open", "marked ready"),
+    (True, (0, ""), {"draft": True}, ["gh", "pr", "ready", "--undo", "--", URL.format(1)], "draft", "made a draft"),
+    (False, (1, "X not allowed"), {"error": "X not allowed"}, ["gh", "pr", "ready", "--", URL.format(1)], None,
+     "gh's refusal: nothing changed"),
+])
+def test_ready_runs_gh_pr_ready_and_keeps_the_row_in_step(tmp_path, draft, answer, want, argv, state, desc):
+    f, fetcher = listing(tmp_path, 1)
+    f.states.clear()   # the fetch's own
+    calls = []
+    fetcher.runner = lambda a: calls.append(a) or (answer[0], "", answer[1])
+    assert fetcher.ready(URL.format(1), draft=draft) == want, desc
+    assert calls == [argv], desc
+    row = next(r for r in fetcher.cache.rows() if r["url"] == URL.format(1))
+    assert row["draft"] is (draft if state else False), f"{desc}: the cached row"
+    assert f.states.get(URL.format(1)) == state, f"{desc}: the item's status"
 
 
 @pytest.mark.parametrize("slow, token, ask, want, desc", [
