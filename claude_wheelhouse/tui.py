@@ -769,7 +769,9 @@ class Transcript(Widget, can_focus=False):
         y = scroll.scroll_y if isinstance(scroll, VerticalScroll) else 0
         self._laid = None   # at another width, laid out again, which asks for this one
         self.refresh(layout=True)
-        if y and before:   # the reading place kept, in proportion if the doc's length changed
+        if y and before and y >= scroll.max_scroll_y - 1:   # read to its end: kept there (#200)
+            self.call_after_refresh(scroll.scroll_end, animate=False)
+        elif y and before:   # the reading place kept, in proportion if the doc's length changed
             after = len(self._layout(self.size.width)[0])
             target = round(y * after / before)
             self.call_after_refresh(scroll.scroll_to, y=target, animate=False)

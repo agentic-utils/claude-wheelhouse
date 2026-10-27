@@ -2371,6 +2371,7 @@ async def test_a_new_reply_in_a_long_thread_in_detail(store, sid, up, own, desc,
     ("conversation", "splitter", "a conversation, its answer box made taller with the splitter"),
     ("thread", "emoji", "an item's thread, emoji suggestions wrapping under the box"),
     ("thread", "splitter", "an item's thread, its answer box made taller with the splitter"),
+    ("full", "splitter", "an item full screen, its answer box made taller"),
 ])
 async def test_detail_at_its_end_stays_there_when_its_view_shrinks(store, sid, tmp_path, monkeypatch, view, shrink,
                                                                      desc):
@@ -2387,21 +2388,25 @@ async def test_detail_at_its_end_stays_there_when_its_view_shrinks(store, sid, t
     app = WheelhouseApp(store)
     async with app.run_test(size=(100, 30)) as pilot:
         await laid(pilot)
-        scroll = app.detail_scroll
+        scroll, box = app.detail_scroll, app.answer
         if view == "conversation":
             app.follow(sid)
-        else:
+        elif view == "thread":
             app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{ref}"))
-            await laid(pilot)
-            scroll.scroll_end(animate=False, immediate=True)
+        else:
+            app.push_screen(ThreadView(sid, ref))
+        await laid(pilot)
+        if view == "full":
+            scroll, box = app.screen.query_one("#thread-scroll"), app.screen.box
+        scroll.scroll_end(animate=False, immediate=True)
         await laid(pilot)
         height = scroll.size.height
         assert scroll.scroll_y == scroll.max_scroll_y > 0, f"{desc}: at the end"
-        app.answer.focus()
+        box.focus()
         if shrink == "emoji":
             await pilot.press("colon", "s", "t")
         else:
-            app.answer.styles.height = app.answer.size.height + 4
+            box.styles.height = box.size.height + 4
         await laid(pilot)
         assert scroll.size.height < height, f"{desc}: the view shorter"
         assert scroll.scroll_y == scroll.max_scroll_y, f"{desc}: its last line still in view"
@@ -7773,6 +7778,31 @@ async def rendered_off_loop(app, pilot) -> None:
         if not app.detail.warming:
             break
     await pilot.pause()
+
+
+@pytest.mark.anyio
+async def test_a_long_doc_read_to_its_end_stays_there_through_a_rewrite(store, sid, tmp_path):
+    """#200: rendered again off the loop and longer, a doc read to its end is still at its end,
+    not short of it by the proportion kept for a place mid-way."""
+    doc = tmp_path / "plan.md"
+    doc.write_text("\n".join(f"## Section {i}\n\nprose **bold**\n\n- a\n- b\n" for i in range(300)))
+    m = store.post_doc(sid, "the plan", str(doc))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=item_row(app, f"└ {m}"))
+        await pilot.pause()
+        await rendered_off_loop(app, pilot)
+        scroll = app.detail_scroll
+        scroll.scroll_end(animate=False, immediate=True)
+        await pilot.pause()
+        lines = scroll.max_scroll_y
+        doc.write_text(doc.read_text() + "\n".join(f"## More {i}\n\nprose\n" for i in range(40)))
+        app.refresh_data()
+        await pilot.pause()
+        await rendered_off_loop(app, pilot)
+        await pilot.pause()
+        assert scroll.max_scroll_y > lines and scroll.scroll_y == scroll.max_scroll_y, "at the end of the longer doc"
 
 
 @pytest.mark.anyio
