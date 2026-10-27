@@ -133,8 +133,8 @@ def plainly(text: str) -> str:
 class Helper:
     """One chat. ask() a question; its answer comes to on_event as Events, on a thread of the
     helper's own (a claude that can't start: on the asker's), mostly under its lock: the
-    callback hands each to its own loop and returns, never calling back in. One question at a time: ask while busy is refused (False). The claude
-    starts at the first ask and stops on stop(), on reset() (New chat, the history
+    callback hands each to its own loop and returns, never calling back in. One question at
+    a time: ask while busy is refused (False). The claude starts at the first ask and stops on stop(), on reset() (New chat, the history
     cleared too) or on idle() past IDLE, the history kept for the next."""
 
     def __init__(self, on_event, sdk: bool = False, command_=None, clock=time.monotonic):
@@ -233,9 +233,11 @@ class Helper:
                 elif kind == "assistant":
                     message = msg.get("message") or {}
                     usage = message.get("usage") or {}
-                    if usage and self.proc is proc:   # not a claude stopped since (New chat)
-                        self.tokens = sum(usage.get(k) or 0 for k in
-                                          ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+                    if usage:
+                        with self.lock:
+                            if self.proc is proc:   # not a claude stopped since (New chat)
+                                self.tokens = sum(usage.get(k) or 0 for k in ("input_tokens",
+                                                  "cache_creation_input_tokens", "cache_read_input_tokens"))
                     for block in message.get("content") or []:
                         if isinstance(block, dict) and block.get("type") == "tool_use":
                             self.emit(proc, Event("tool", reading(block)))
@@ -252,9 +254,9 @@ class Helper:
             died = mine and self.busy   # mid-answer
             if mine:
                 self.proc, self.busy = None, False
-        if died:
-            err.seek(0)
-            self.on_event(Event("error", plainly(err.read()[-2000:])))
+            if died:   # under the lock, as every event from the reader is
+                err.seek(0)
+                self.on_event(Event("error", plainly(err.read()[-2000:])))
         err.close()
 
     def emit(self, proc: subprocess.Popen, event: Event) -> None:
