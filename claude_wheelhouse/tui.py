@@ -3745,7 +3745,7 @@ DESCRIBE = {
     "adopt": "Adopt: pick a Claude Code session that isn't in the wheelhouse yet, from those on disk",
     "relaunch_all": "Relaunch all: every Available session (not running, not parked)",
     "mcp_servers": ("MCP servers: the session in context's, as its host last saw them, each with a button to sign in "
-                    "or reconnect it (a claude.ai connector in every session run in the wheelhouse); a tab's: /mcp there"),
+                    "or reconnect it (a claude.ai connector in every session the wheelhouse hosts); a tab's: /mcp there"),
     "clear_filter": "Clear a text selection first, then the marks, else show every session's items again",
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
