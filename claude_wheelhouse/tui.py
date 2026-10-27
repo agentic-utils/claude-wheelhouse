@@ -668,6 +668,7 @@ class Transcript(Widget, can_focus=False):
         self.refresh(layout=True)
         if top and isinstance(scroll, VerticalScroll):   # now, while the old blocks' height stands (#177):
             scroll.scroll_home(animate=False, immediate=True)   # left to a shrink's clamp, the thumb stays put
+            scroll.at_end = False   # nor sent to its end by a resize as it lands (ConversationScroll, #200)
             return
         if not laid or not isinstance(scroll, VerticalScroll) or scroll.scroll_y >= scroll.max_scroll_y - 1:
             return
@@ -769,7 +770,9 @@ class Transcript(Widget, can_focus=False):
         y = scroll.scroll_y if isinstance(scroll, VerticalScroll) else 0
         self._laid = None   # at another width, laid out again, which asks for this one
         self.refresh(layout=True)
-        if y and before:   # the reading place kept, in proportion if the doc's length changed
+        if y and before and y >= scroll.max_scroll_y - 1:   # read to its end: kept there (#200)
+            self.call_after_refresh(scroll.scroll_end, animate=False)
+        elif y and before:   # the reading place kept, in proportion if the doc's length changed
             after = len(self._layout(self.size.width)[0])
             target = round(y * after / before)
             self.call_after_refresh(scroll.scroll_to, y=target, animate=False)
@@ -1705,7 +1708,23 @@ def under_way(button: str, s, status: str, relaunching: bool) -> bool:
 class ConversationScroll(VerticalScroll, can_focus=False):
     """The conversation pane's scroll, or a full-screen item's thread's, never a Tab stop: a
     click in it puts focus in the answer box (#77), where PgUp and PgDn scroll it; on a doc,
-    which has no box, in the doc, whose keys scroll it."""
+    which has no box, in the doc, whose keys scroll it. At its end (within a line), it stays
+    there when its view changes size (#200): shorter (emoji suggestions wrapping under the box,
+    the box's splitter, a button row shown) or narrower, its text wrapping taller. Left to
+    itself the last lines go under, and once more than a line is hidden, what's new no longer
+    follows (paint_detail's test)."""
+    _seen_size: tuple[int, int] | None = None   # the view's size as last laid out
+    at_end = False   # at its end (within a line), as last laid out or scrolled; not once it shows something else
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_y(old_value, new_value)
+        self.at_end = new_value >= self.max_scroll_y - 1
+
+    def on_resize(self) -> None:
+        before, self._seen_size = self._seen_size, tuple(self.container_size)
+        if self.at_end and before is not None and self._seen_size != before:   # its own size, not only its content's
+            self.scroll_end(animate=False, immediate=True)
+        self.at_end = self.scroll_y >= self.max_scroll_y - 1
 
     def on_mouse_down(self) -> None:
         self.app.focus_answer()
