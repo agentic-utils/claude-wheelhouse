@@ -85,6 +85,17 @@ def state(status: str, parked) -> str:
     return "parked" if parked else "available"
 
 
+def waking(s) -> str:
+    """What bringing a session that isn't running back is called: a parked one is unparked,
+    any other relaunched (VERBS)."""
+    return "unparking" if s["parked"] else "relaunching"
+
+
+def wake_verb(s) -> str:
+    """The button a session that isn't running comes back by: Unpark or Relaunch (VERBS)."""
+    return "Unpark" if s["parked"] else "Relaunch"
+
+
 def requested(s) -> str | None:
     """The request (end or park) a session's row says it has been asked to act on, if any."""
     return next((what for what in PENDING if s[f"{what}_requested_at"]), None)
@@ -361,6 +372,22 @@ class Hub:
             self.store.set_parked(sid, False)
             done.say("relaunching")
         return done
+
+    def wake_and_send(self, sid: str, item_ref: str | None = None, text: str | None = None,
+                      may_tab: bool = True) -> Done:
+        """Ctrl+S or Alt+S on a session that isn't running, confirmed (#221): Unpark or Relaunch
+        it, and send its queue, with text (Alt+S's) after it, as its first prompt on waking.
+        They go behind the resume notice its launch leaves (launch.tell_joined), so the session
+        reads the wheelhouse's context first and the person's words after, all in the one
+        batch its monitor or host claims at start. Nothing is sent if it doesn't come back:
+        the queue stays queued, and the text stays the person's."""
+        s = self.row(sid)
+        verb = waking(s)
+        done = self.relaunch(sid, may_tab)
+        if not done.ok:
+            return done
+        n = self.store.dispatch_last(sid, text, item_ref)
+        return Done().say(f"{verb} {display_name(s)}" + (f": {n} sent with it" if n else ""))
 
     def host_gone(self, sid: str, s, may_tab: bool) -> Done:
         """Relaunch of a host that has gone meanwhile: it comes back as a dead session does
@@ -824,8 +851,8 @@ class Hub:
         else:
             self.store.queue(target[0], text, target[1])
             if self.dead(target[0]):   # aimed names the item, so say whose queue isn't running
-                done.say(f"queued for {aimed(target)}, but the session isn't running: "
-                         "Relaunch it, then Ctrl+S or Send sends its queue")
+                done.say(f"queued for {aimed(target)}, but the session isn't running: Ctrl+S "
+                         f"{'unparks' if s['parked'] else 'relaunches'} it and sends its queue")
             else:
                 done.say(f"queued for {aimed(target)}: Ctrl+S or Send sends the session's queue")
         return done
@@ -841,7 +868,10 @@ class Hub:
 
     def late(self, sid: str) -> str:
         """What a send to a session that isn't running adds: when it will be delivered."""
-        return "" if self.running(sid) else " (not running: delivered when it's relaunched)"
+        if self.running(sid):
+            return ""
+        s = self.store.session(sid)
+        return f" (not running: delivered when it's {'unparked' if s and s['parked'] else 'relaunched'})"
 
     def sent_note(self, sid: str, n: int) -> str:
         s = self.store.session(sid)
@@ -851,7 +881,8 @@ class Hub:
     def send_queue(self, sid: str) -> Done:
         """A session's queue, sent as one message; a dead one's stays queued (#62)."""
         if self.dead(sid):
-            return Done(False).say(f"{display_name(self.row(sid))} isn't running: Relaunch it first", "warning")
+            s = self.row(sid)
+            return Done(False).say(f"{display_name(s)} isn't running: {wake_verb(s)} it first", "warning")
         n = self.store.dispatch(sid)
         return Done(bool(n)).say(f"sent {self.sent_note(sid, n)}" if n else "nothing queued for that session")
 

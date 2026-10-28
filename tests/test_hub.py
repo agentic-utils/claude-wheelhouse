@@ -238,8 +238,8 @@ def queues(store, sid):
 @pytest.mark.parametrize("kind, mode, status, now, queued, sent, said, desc", [
     ("question", "queued", "live", False, ["yes"], [], "queued for Q1: Ctrl+S or Send sends the session's queue",
      "queued, by default"),
-    ("question", "queued", "dead", False, ["yes"], [], "queued for Q1, but the session isn't running: Relaunch it, "
-     "then Ctrl+S or Send sends its queue", "a dead session's queue waits"),
+    ("question", "queued", "dead", False, ["yes"], [], "queued for Q1, but the session isn't running: Ctrl+S "
+     "relaunches it and sends its queue", "a dead session's queue waits"),
     ("question", "immediate", "live", False, [], ["yes"], "sent to Q1", "immediate mode sends at once"),
     (None, "queued", "live", False, ["yes"], [], "queued for the session: Ctrl+S or Send sends the session's queue",
      "a general message, to the session"),
@@ -308,12 +308,15 @@ def test_a_permission_answered_meanwhile_is_not_submitted(hub, store, sid, heard
     assert told(done)[-1][1] == "warning"
 
 
-@pytest.mark.parametrize("status, left, said, desc", [
-    ("dead", ["a"], "demo isn't running: Relaunch it first", "a dead session's queue stays queued (#62)"),
-    ("live", [], "sent 1 to demo", "a live one's goes, as one message"),
+@pytest.mark.parametrize("status, parked, left, said, desc", [
+    ("dead", False, ["a"], "demo isn't running: Relaunch it first", "a dead session's queue stays queued (#62)"),
+    ("dead", True, ["a"], "demo isn't running: Unpark it first", "a parked one's says Unpark, not Relaunch (#218)"),
+    ("live", False, [], "sent 1 to demo", "a live one's goes, as one message"),
 ])
-def test_send_queue_leaves_a_dead_sessions_queue(hub, store, sid, heard, monkeypatch, status, left, said, desc):
+def test_send_queue_leaves_a_dead_sessions_queue(hub, store, sid, heard, monkeypatch, status, parked, left, said,
+                                                 desc):
     monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
+    store.set_parked(sid, parked)
     store.queue(sid, "a")
     hub.refresh()
     done = hub.send_queue(sid)
@@ -1504,3 +1507,44 @@ def test_a_pasted_sign_in_address_is_never_served(store, sid):
     hub.refresh()
     view = Daemon.session_view(SimpleNamespace(hub=hub), hub.listed(sid))
     assert "mcp_asks" not in view and "SECRET" not in json.dumps(view, default=str)
+
+
+@pytest.mark.parametrize("parked, alt_s, said, desc", [
+    (True, True, "unparking demo: 3 sent with it", "Alt+S on a parked session: unparked, the answer after the queue"),
+    (False, True, "relaunching demo: 3 sent with it", "Alt+S on a dead one: relaunched, the same"),
+    (True, False, "unparking demo: 2 sent with it", "Ctrl+S on a parked one: its queue alone"),
+    (False, False, "relaunching demo: 2 sent with it", "Ctrl+S on a dead one: the same"),
+])
+def test_wake_and_send_makes_the_queue_its_first_prompt(hub, store, sid, monkeypatch, parked, alt_s, said, desc):
+    """#221: the wheelhouse's resume notice first, then the person's words, each once, in the
+    one turn the woken session's host types, and the queue emptied."""
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "dead")
+    monkeypatch.setattr(launch, "restore_session", lambda st, i, **kw: st.notice(i, "RESUME CONTEXT"))
+    store.set_parked(sid, parked)
+    q = store.post_item(sid, "question", "which db?")
+    store.queue(sid, "first", q)
+    store.queue(sid, "second")
+    hub.refresh()
+    done = hub.wake_and_send(sid, q, "ship it" if alt_s else None)
+    assert [t for t, _ in told(done)] == [said], desc
+    assert store.drafts(sid) == [], f"{desc}: the queue emptied"
+    assert store.session(sid)["parked"] == 0, f"{desc}: unparked"
+    turn = host_mod.format_turn(store.claim(sid, mcp="with"), "doug")
+    words = ["RESUME CONTEXT", "first", "second"] + (["ship it"] if alt_s else [])
+    assert [turn.index(w) for w in words] == sorted(turn.index(w) for w in words), f"{desc}: in order, {turn}"
+    assert all(turn.count(w) == 1 for w in words), f"{desc}: each once, {turn}"
+
+
+def test_wake_and_send_that_fails_sends_nothing(hub, store, sid, monkeypatch):
+    def refuse(*a, **kw):
+        raise RuntimeError("already running")
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "dead")
+    monkeypatch.setattr(launch, "restore_session", refuse)
+    store.set_parked(sid, True)
+    store.queue(sid, "first")
+    hub.refresh()
+    done = hub.wake_and_send(sid, None, "ship it")
+    assert not done.ok
+    assert [m["body"] for m in store.drafts(sid)] == ["first"], "the queue stays queued"
+    assert store.pending(sid) == [], "nothing sent, the answer kept in the box"
+    assert store.session(sid)["parked"] == 1

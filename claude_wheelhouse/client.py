@@ -795,6 +795,9 @@ class RemoteClient:
     def send_queue(self, sid: str) -> Done:
         return self.done(f"/sessions/{sid}/dispatch")
 
+    def wake_and_send(self, sid: str, item_ref: str | None = None, text: str | None = None) -> Done:
+        return self.done(f"/sessions/{sid}/wake", {"ref": item_ref, "text": text})
+
     def send_all(self) -> Done:
         return self.done("/dispatch")
 

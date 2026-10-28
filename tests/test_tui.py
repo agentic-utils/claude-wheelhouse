@@ -25,7 +25,7 @@ from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, S
 
 from claude_wheelhouse import emoji, features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
 from claude_wheelhouse.host import NO_NOTES
-from claude_wheelhouse.hub import Done, Hub
+from claude_wheelhouse.hub import Done, Hub, wake_verb
 from claude_wheelhouse.store import PROTOCOL_VERSION
 
 # the stats pane's tests among these, and the slots' defaults, need the stats module
@@ -673,7 +673,6 @@ def by_name(monkeypatch, statuses: dict[str, str]) -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("status, left, note, desc", [
-    ("dead", ["a"], "demo isn't running: Relaunch it first", "a dead session refuses, as its hidden Send, its drafts kept"),
     ("live", [], "sent 1 to demo", "a live session sends its queue"),
     ("stalled", [], "sent 1 to demo", "a stalled session is still running, so it sends too"),
 ])
@@ -735,28 +734,29 @@ async def test_send_all_skips_dead_sessions(store, sid, tmp_path, monkeypatch, s
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("status, ctrl_s, desc", [
-    ("dead", False, "a dead session's hint leaves Ctrl+S out: it would refuse"),
-    ("live", True, "a live session's hint has it"),
-    ("stalled", True, "as does a stalled one's: it's still running"),
+@pytest.mark.parametrize("status, parked, ctrl_s, desc", [
+    ("dead", False, "Ctrl+S: relaunch and send queue", "a dead session's hint says Ctrl+S relaunches it first"),
+    ("dead", True, "Ctrl+S: unpark and send queue", "a parked one's says Unpark (#218)"),
+    ("live", False, "Ctrl+S: send queue", "a live session's hint just sends"),
+    ("stalled", False, "Ctrl+S: send queue", "as does a stalled one's: it's still running"),
 ])
-async def test_the_hint_mentions_ctrl_s_only_where_it_sends(store, sid, monkeypatch, status, ctrl_s, desc):
+async def test_the_hint_says_what_ctrl_s_does(store, sid, monkeypatch, status, parked, ctrl_s, desc):
     by_name(monkeypatch, {"demo": status})
     store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))
+    store.set_parked(sid, parked)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pick(app, pilot, sid)
         base = app.screen.query_one(Hint).base
-    assert base == hint("queue", status == "dead"), f"{desc}: {base}"
-    assert ("Ctrl+S" in base) is ctrl_s, f"{desc}: {base}"
+    assert ctrl_s in base, f"{desc}: {base}"
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("status, down, note, desc", [
-    ("dead", 1, "queued for Q1, but the session isn't running: Relaunch it, then Ctrl+S or Send sends its queue",
+    ("dead", 1, "queued for Q1, but the session isn't running: Ctrl+S relaunches it and sends its queue",
      "an answer queued for a dead session's question says its queue isn't running"),
-    ("dead", 0, "queued for the session, but the session isn't running: Relaunch it, then Ctrl+S or Send sends "
-     "its queue", "a general message queued for a dead session says the same"),
+    ("dead", 0, "queued for the session, but the session isn't running: Ctrl+S relaunches it and sends its queue",
+     "a general message queued for a dead session says the same"),
     ("live", 1, "queued for Q1: Ctrl+S or Send sends the session's queue", "a live session's queue just waits"),
 ])
 async def test_queueing_for_a_dead_session_says_to_restore_it(store, sid, monkeypatch, status, down, note, desc):
@@ -777,6 +777,49 @@ async def test_queueing_for_a_dead_session_says_to_restore_it(store, sid, monkey
         await pilot.pause()
     assert notes == [note], f"{desc}: the notice"
     assert [m["body"] for m in store.drafts(sid)] == ["ship it"], f"{desc}: queued"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("parked, key, yes, prompt, drafts, sent, box, desc", [
+    (True, "ctrl+s", True, "Unpark demo and send?", [], ["queued"], "ship it", "Ctrl+S, parked: unparked with its queue"),
+    (False, "ctrl+s", True, "Relaunch demo and send?", [], ["queued"], "ship it", "Ctrl+S, dead: relaunched with it"),
+    (True, "alt+s", True, "Unpark demo and send?", [], ["queued", "ship it"], "", "Alt+S, parked: the answer too"),
+    (False, "alt+s", True, "Relaunch demo and send?", [], ["queued", "ship it"], "", "Alt+S, dead: the same"),
+    (True, "ctrl+s", False, "Unpark demo and send?", ["queued"], [], "ship it", "Ctrl+S, No: nothing sent"),
+    (False, "ctrl+s", False, "Relaunch demo and send?", ["queued"], [], "ship it", "Ctrl+S, No on a dead one"),
+    (True, "alt+s", False, "Unpark demo and send?", ["queued"], [], "ship it", "Alt+S, No: the box keeps its text"),
+    (False, "alt+s", False, "Relaunch demo and send?", ["queued"], [], "ship it", "Alt+S, No on a dead one"),
+])
+async def test_sending_to_a_session_not_running_offers_to_wake_it(store, sid, monkeypatch, parked, key, yes, prompt,
+                                                                   drafts, sent, box, desc):
+    """#221: Ctrl+S or Alt+S on a parked or dead session asks to Unpark or Relaunch it and
+    send; Yes wakes it with its queue (and Alt+S's answer) as its first prompt, behind the
+    resume notice; No sends nothing."""
+    by_name(monkeypatch, {"demo": "dead"})
+    monkeypatch.setattr(launch, "restore_session", lambda st, i, **kw: st.notice(i, "RESUME"))
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))
+    store.set_parked(sid, parked)
+    store.queue(sid, "queued")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)
+        await pilot.pause()
+        app.answer.focus()
+        app.answer.text = "ship it"
+        if key == "alt+s":   # as a terminal sends it (ESC s)
+            app.post_message(events.Key("alt+s", "s"))
+        else:
+            await pilot.press(key)
+        await pilot.pause()
+        assert isinstance(app.screen, Confirm) and app.screen.prompt == prompt, f"{desc}: the dialog"
+        await pilot.press("alt+y" if yes else "alt+n")
+        await pilot.pause()
+        assert app.answer.text == box, f"{desc}: the box"
+    assert [m["body"] for m in store.drafts(sid)] == drafts, f"{desc}: the queue"
+    assert [m["body"] for m in store.pending(sid)] == (["RESUME", *sent] if yes else []), \
+        f"{desc}: the resume notice, then the person's words, each once"
+    assert store.session(sid)["parked"] == (parked and not yes), f"{desc}: unparked only on Yes"
 
 
 def test_a_general_message_cut_short_shows_whole_in_the_conversation(store, sid, tmp_path, monkeypatch):
@@ -1082,9 +1125,9 @@ def assert_one_current(app, desc):
     nudged = bool(item) and item["status"] == "open" and item["answer"] == COMPACT_QUESTION
     s = app.row(app.bar_session(app.screen)) if app.bar_session(app.screen) else None
     sends = "send" if s and (mode(s) == "immediate" or app.sends_now(s["id"])) else "queue"
-    dead = bool(s) and app.dead(s["id"])
+    wake = wake_verb(s) if s and app.dead(s["id"]) else None
     assert [h.base for h in app.screen.query(Hint)] == [PERMISSION_HINT if asking else COMPACT_HINT if nudged
-                                                        else hint(sends, dead)], f"{desc}: the hint"
+                                                        else hint(sends, wake)], f"{desc}: the hint"
     assert [p.display for p in app.screen.query(PermissionButtons)] == [asking], f"{desc}: the permission buttons"
     if not thread:
         buttons = [(b.id, str(b.label), b.disabled, b.display) for b in app.conversation_buttons.query(Button)]
