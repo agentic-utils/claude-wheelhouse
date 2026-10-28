@@ -1049,8 +1049,7 @@ def test_compacting_holds_until_the_compaction_ends(streamed, store, sid, steps,
 ])
 def test_a_call_waiting_on_the_person_keeps_the_compaction_line(host, store, sid, name, inp, answer, desc):
     """A permission or question in a compaction's turn: its waiting line and the thinking
-    after the answer stay led by the compaction's, so the session stays compacting (#233),
-    and its new item, posted after the cut-off, is never locked."""
+    after the answer stay led by the compaction's, so the session stays compacting (#233)."""
     line = "compacting: collecting notes"
     run(host.turn("ask", compacting=line))
     seen = []
