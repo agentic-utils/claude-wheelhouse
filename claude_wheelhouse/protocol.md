@@ -58,4 +58,6 @@ anything here seems to conflict with them, follow yours.
   is doing, set early and updated when its focus shifts.
 - If this project keeps its design decisions (ADRs) somewhere other than `docs/adr`, say where
   once with `set_doc_dirs(paths)`, so the wheelhouse lists them: relative to the git root, or
-  in another repo (such as a sibling docs repo) as `../<repo>/<dir>` or an absolute path.
+  in another repo (such as a sibling docs repo) as `../<repo>/<dir>` or an absolute path. If
+  your working directory is in no git repo, give an absolute path or one relative to that
+  directory (`myproj-docs/decisions` for a repo under it, `..` beside it).
