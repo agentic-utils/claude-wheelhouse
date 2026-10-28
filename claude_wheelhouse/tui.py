@@ -7181,6 +7181,8 @@ class WheelhouseApp(App):
                        made: threading.Event) -> None:
         """delete_off_thread's calls done, on the UI thread: each said, the acts that acted
         given to landed, and the inbox read again, the rows of any that failed back in it."""
+        if not self.is_running:   # posted as the app closed (on_unmount waited for the calls): nothing to paint
+            return
         done, failed = [], 0
         for item, _ in acts:   # moved at once as it lands, as it would have by the call in place (D33)
             self.item_sink.jump()
