@@ -8,7 +8,7 @@ import pytest
 
 from claude_wheelhouse import away
 from claude_wheelhouse.hub import Hub
-from claude_wheelhouse.tui import AwayCard, WheelhouseApp
+from claude_wheelhouse.tui import AwayCard, KeysHelp, WheelhouseApp
 
 NOW = datetime(2026, 10, 28, 17, 0, tzinfo=timezone.utc)
 START, END = NOW - timedelta(hours=3), NOW   # the window
@@ -160,6 +160,23 @@ async def test_an_esc_that_wakes_the_screen_leaves_the_card_up(store, sid, monke
         await pilot.press("escape")
         await pilot.pause()
         assert not app.query_one("#away-card").display, "the next Esc does"
+        t[0] = NOW + timedelta(hours=4)   # card dismissed; seen again over a second gap with a dialog up
+        await pilot.press("f1")
+        await pilot.pause()
+        assert isinstance(app.screen, KeysHelp)
+        seed(store, sid, "question", "which port?", "open", NOW + timedelta(hours=5))
+        t[0] = NOW + timedelta(hours=8)
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.pause()
+        assert not isinstance(app.screen, KeysHelp), "the waking Esc still closes the dialog it was aimed at"
+        assert app.query_one("#away-card").display, "and leaves the card up"
+        seed(store, sid, "question", "which host?", "open", NOW + timedelta(hours=9))
+        t[0] = NOW + timedelta(hours=12)   # a third gap with the card still up: the waking Esc keeps it
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.pause()
+        assert app.query_one("#away-card").display, "an Esc over a second gap doesn't dismiss the refreshed card"
 
 
 @pytest.mark.anyio

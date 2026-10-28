@@ -4348,6 +4348,7 @@ class WheelhouseApp(App):
         # since you were away (#223): the last input, when it was last kept, the card's window,
         # its Needs-you lines as first shown, what QUIET held then, and its lines as drawn
         self.last_input = self.input_kept = self.away_window = self.away_shown = None
+        self.away_woken = False   # the key in hand is the Esc that brought the card: it leaves the card up
         self.away_needs, self.away_quiet = [], {}
         self.started = 0.0   # when the animation's time starts (animate)
         self.half_frame = 0   # the frame // 2 the eyes and panes last moved on (animate)
@@ -4618,14 +4619,17 @@ class WheelhouseApp(App):
                 and not event.is_forwarded:
             shown = self.away_window
             self.touched()
-            if isinstance(event, events.Key) and event.key == "escape" and shown is None and self.away_window is not None:
-                return   # an Esc that woke the screen shows the card, rather than dismissing it unseen
+            woke = isinstance(event, events.Key) and event.key == "escape" and self.away_window not in (None, shown)
         if isinstance(event, (events.MouseDown, events.MouseUp)) and event.button == 3 and not event.is_forwarded:
             if isinstance(event, events.MouseDown) and not (self.session_menu(event) or self.pane_menu(event)):
                 self.right_click(event)
             return
         if isinstance(event, events.Key) and not event.is_forwarded:
-            await self.take_key(event)
+            self.away_woken = woke
+            try:
+                await self.take_key(event)   # an Esc that woke the screen acts where it was aimed, but not on the card
+            finally:
+                self.away_woken = False
             return
         await super().on_event(event)
 
@@ -4972,7 +4976,8 @@ class WheelhouseApp(App):
         card.call_after_refresh(setattr, card, "highlighted", index)   # once laid out: before, it takes the first
 
     def action_dismiss_away(self) -> None:
-        self.dismiss_away()
+        if not self.away_woken:
+            self.dismiss_away()
 
     def dismiss_away(self) -> None:
         """The card gone (Esc, its close control, or every Needs-you line dealt with)."""
@@ -6998,7 +7003,8 @@ class WheelhouseApp(App):
             self.items_table.set_marks(set())
             return
         if self.away_window is not None:   # then the card of what happened while away, before the filter
-            self.dismiss_away()
+            if not self.away_woken:   # but not by the Esc that brought it
+                self.dismiss_away()
             return
         self.unfilter()
 
