@@ -4615,6 +4615,7 @@ class WheelhouseApp(App):
         elsewhere it copies the selection, or with none pastes. The press never reaches
         the widgets: an answer box would move its cursor and drop its selection, and the
         screen would take it for a click and clear its own."""
+        woke = False
         if isinstance(event, (events.Key, events.MouseDown, events.MouseScrollDown, events.MouseScrollUp)) \
                 and not event.is_forwarded:
             shown = self.away_window
@@ -7002,9 +7003,8 @@ class WheelhouseApp(App):
         if self.items_table.marked:   # Esc drops a multi-selection first
             self.items_table.set_marks(set())
             return
-        if self.away_window is not None:   # then the card of what happened while away, before the filter
-            if not self.away_woken:   # but not by the Esc that brought it
-                self.dismiss_away()
+        if self.away_window is not None and not self.away_woken:   # then the card of what happened while away, before
+            self.dismiss_away()                                     # the filter; the Esc that brought it goes on to the filter
             return
         self.unfilter()
 

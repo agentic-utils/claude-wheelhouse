@@ -177,6 +177,18 @@ async def test_an_esc_that_wakes_the_screen_leaves_the_card_up(store, sid, monke
         await pilot.pause()
         await pilot.pause()
         assert app.query_one("#away-card").display, "an Esc over a second gap doesn't dismiss the refreshed card"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not app.query_one("#away-card").display
+        app.follow(sid)   # one session's inbox, then a gap: the waking Esc shows the card and goes on to All sessions
+        await pilot.pause()
+        assert app.filter_sid == sid
+        seed(store, sid, "question", "which user?", "open", NOW + timedelta(hours=13))
+        t[0] = NOW + timedelta(hours=16)
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.pause()
+        assert app.query_one("#away-card").display and app.filter_sid is None, "the waking Esc still clears the filter"
 
 
 @pytest.mark.anyio
