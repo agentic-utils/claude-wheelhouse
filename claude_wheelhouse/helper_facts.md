@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 32, 2026-10-28T12:33:28Z, source 5239cc8d923b62d4 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 33, 2026-10-28T12:33:53Z, source ac1f2c2004896596 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -92,7 +92,7 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **Alt+Shift+M**: MCP servers: the session in context's, as its host last saw them, each with a button to sign in or reconnect it (a claude.ai connector in every session the wheelhouse hosts); a tab's: /mcp there
 
-- **Esc**: Clear a text selection first, then the marks, else show every session's items again
+- **Esc**: Clear a text selection first, then the marks, then dismiss the card of what happened while you were away, else show every session's items again
 
 - **Alt+V**: Show or hide finished items
 
@@ -160,6 +160,12 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **Shift+Down**: Extend the marks down
 
+### The card of what happened while you were away
+
+- **Enter**: Jump to the line's item, or its session, as an inbox row does (seeing the card marks nothing seen)
+
+- **Esc**: Dismiss the card of what happened while you were away
+
 ### An answer box
 
 - **Ctrl+Enter or Ctrl+J**: Submit what's typed: queued, or sent at once, by the session's mode
@@ -208,11 +214,11 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 ### Tab order
 
-Tab goes round the session list, the items, the answer box, a tour box's Next while one shows, then every button shown, in reading order, then the stats pane's zoom's - and + (Enter or Space presses the one with the focus), and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus where it was, and each has a key. An item opened full screen goes the same way: its answer box, then its buttons; a click in its thread puts focus in the box, where PgUp and PgDn scroll the thread. A doc shown in the inbox takes the answer box's place, and a click on it focuses it: Up, Down, PgUp, PgDn, Home and End scroll it. A focused button that is disabled or hidden (Send, once sent) gives focus to the answer box. Send from a list leaves focus in the list.
+Tab goes round the session list, the card of what happened while you were away while it shows, the items, the answer box, a tour box's Next while one shows, then every button shown, in reading order, then the stats pane's zoom's - and + (Enter or Space presses the one with the focus), and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus where it was, and each has a key. An item opened full screen goes the same way: its answer box, then its buttons; a click in its thread puts focus in the box, where PgUp and PgDn scroll the thread. A doc shown in the inbox takes the answer box's place, and a click on it focuses it: Up, Down, PgUp, PgDn, Home and End scroll it. A focused button that is disabled or hidden (Send, once sent) gives focus to the answer box. Send from a list leaves focus in the list.
 
 ### Mouse
 
-Click selects a row; in the session list, a click on the selected session or the list's title past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may keep Shift+click for itself: Ctrl+Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or Backspace closes them together, the highlight going to the row above the topmost one taken, and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the right-hand end of its row: a click there hides them, and the + it becomes shows them again. A click on a doc opens its editor below it there, as a click on it moves it while it's open. A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. A click on an emoji suggestion under the answer box takes it in place of the code typed. Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. Drag the lines between the panes to resize them (they light up under the pointer); the sizes are kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; Session steps there has what the wheelhouse tells a session at each event.
+Click selects a row; in the session list, a click on the selected session or the list's title past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may keep Shift+click for itself: Ctrl+Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or Backspace closes them together, the highlight going to the row above the topmost one taken, and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the right-hand end of its row: a click there hides them, and the + it becomes shows them again. A click on a doc opens its editor below it there, as a click on it moves it while it's open. A click on a line of the card of what happened while you were away jumps to it, and its ✕ dismisses it. A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. A click on an emoji suggestion under the answer box takes it in place of the code typed. Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. Drag the lines between the panes to resize them (they light up under the pointer); the sizes are kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; Session steps there has what the wheelhouse tells a session at each event.
 
 ### Buttons
 
@@ -279,6 +285,9 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 --animation-fps N  (env WHEELHOUSE_ANIMATION_FPS, .env ANIMATION_FPS=)
     animate the title, the eyes and the stats bars N frames a second (default 10, or
     WHEELHOUSE_ANIMATION_FPS, or ANIMATION_FPS= in a .env; 0 turns animation off)
+--away-hours N  (env WHEELHOUSE_AWAY_HOURS, .env AWAY_HOURS=)
+    after N hours with no key press, click or scroll, show what happened meanwhile
+    (default 2, or WHEELHOUSE_AWAY_HOURS, or AWAY_HOURS= in a .env; 0 turns it off)
 --local
     run the hub in this process, without the daemon (the wheelhouse as it was before the
     daemon)
@@ -339,3 +348,4 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Every key has a modifier, so a letter typed in the answer box is always just typed, and the app's own keys work from there: Ctrl+Q quits, F1 lists the keys, Alt+N is New session.
 - With no session selected, the inbox lists each session's conversation (💬, named after the session) under the items waiting on you.
 - Emoji suggestions take a click: type :star and click the one you want, or choose it with Up and Down and take it with Tab or Enter.
+- Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it.

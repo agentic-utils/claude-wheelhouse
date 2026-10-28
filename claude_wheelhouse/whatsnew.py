@@ -297,6 +297,10 @@ FEATURES: tuple[Feature, ...] = (
     Feature("emoji-pick", UNRELEASED, ADVANCED,
             note="Emoji suggestions take a click: type :star and click the one you want, or choose it with Up "
                  "and Down and take it with Tab or Enter."),
+    # notes only: the inbox's dialog has its MAX_TIPS already
+    Feature("since-away", UNRELEASED, ADVANCED,
+            note="Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: "
+                 "what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it."),
 
 )
 

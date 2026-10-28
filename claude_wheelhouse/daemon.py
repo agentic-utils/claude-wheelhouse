@@ -54,7 +54,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import api, auth, docroots, features, fingerprint, liveness, models, served, steps, transcript_usage, tutorial
+from . import api, auth, away, docroots, features, fingerprint, liveness, models, served, steps, transcript_usage, tutorial
 from .hub import Done, Event, Hub, host_context
 from .host import MCP_DOS
 from .store import COMPACT_QUESTION, NOTES_SEEN, THEN, TOUR_AT, SessionGone, Store, inbox_rank, mode, runner, standing
@@ -461,6 +461,8 @@ class Daemon:
             Route("/tutorial/offer", self.command(self.answer_offer), methods=["POST"]),
             Route("/tour/seen", self.command(self.tour_seen), methods=["POST"]),
             Route("/tour/at", self.command(self.tour_at), methods=["POST"]),
+            Route("/away", self.query(lambda request: self.hub.away())),
+            Route("/away/input", self.command(self.note_input), methods=["POST"]),
             Route("/shutdown", self.command(self.shutdown_requested), methods=["POST"]),
             # the modules' (served.py): a doc under a doc root, and each module's own routes
             Route("/docs", self.query(self.doc)),
@@ -1013,6 +1015,14 @@ class Daemon:
             self.store.clear_setting(TOUR_AT)
         else:
             self.store.set_setting(TOUR_AT, at)
+        return Done()
+
+    def note_input(self, request: Request, body: dict) -> Done:
+        """The app's last input (Hub.note_input), {"at": a UTC time}."""
+        at = text(body, "at")
+        if away.parse(at) is None:
+            raise Refused(400, "at must be a time, such as 2026-10-28T12:00:00+00:00")
+        self.hub.note_input(at)
         return Done()
 
     def shutdown_requested(self, request: Request, body: dict) -> Done:

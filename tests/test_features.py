@@ -150,6 +150,7 @@ ARGS_LISTED = [
     ("--keepalive-hours N", "KEEPALIVE_HOURS", "the keepalive"),
     ("--step EVENT.SWITCH=on|off", None, "a session step's switch"),
     ("--animation-fps N", "ANIMATION_FPS", "the animation rate"),
+    ("--away-hours N", "AWAY_HOURS", "the gap before the away card"),
     ("--local", None, "the hub in process"),
     ("--connect HOST:PORT", None, "another machine's daemon"),
     ("--token-file PATH", None, "that daemon's token"),
@@ -425,6 +426,29 @@ def test_animation_fps(tmp_path, monkeypatch, capsys, flag, install_env, config_
     assert [features.animation_fps(), features.animation_fps()] == [fps, fps], desc
     err = capsys.readouterr().err
     assert err.count("frames a second:") == (1 if warns else 0), f"{desc}: said once at most: {err!r}"
+
+
+@pytest.mark.parametrize("flag, env, hours, warns, desc", [
+    (None, None, 2, False, "nothing given: 2"),
+    ("4", None, 4, False, "the flag"),
+    (None, "AWAY_HOURS=0.5", 0.5, False, "the install directory's .env, a fraction"),
+    ("env", "AWAY_HOURS=5", 3, False, "WHEELHOUSE_AWAY_HOURS before .env"),
+    ("0", None, 0, False, "0: never"),
+    (None, "AWAY_HOURS=soon", 2, True, "a bad value: said once, and 2"),
+    ("-1", None, 2, True, "a negative flag: said once, and 2"),
+])
+def test_away_hours(tmp_path, monkeypatch, capsys, flag, env, hours, warns, desc):
+    install = tmp_path / "install.env"
+    monkeypatch.setattr(features, "env_files", lambda: [install, tmp_path / "config.env"])
+    if env:
+        install.write_text(env + "\n")
+    if flag == "env":
+        monkeypatch.setenv("WHEELHOUSE_AWAY_HOURS", "3")
+    elif flag:
+        features.set_away_hours(flag)
+    assert [features.away_hours(), features.away_hours()] == [hours, hours], desc
+    err = capsys.readouterr().err
+    assert err.count("a gap is 2") == (1 if warns else 0), f"{desc}: said once at most: {err!r}"
 
 
 @pytest.mark.parametrize("argv, fps, desc", [

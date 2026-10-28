@@ -239,6 +239,17 @@ session.
   question yellow, a decision purple, a PR light blue, a doc the theme's text colour, a
   subagent grey and a permission orange. Resting the pointer on a row shows its full title
   (a PR's with its repo), and on a session its full name and synopsis.
+- **Since you were away.** Back after a gap (two hours with no key press, click or scroll in
+  the app, `AWAY_HOURS`; starting the app counts, measured from its last input), a card at
+  the top of the inbox says what happened in every session meanwhile: **Needs you** (open
+  questions, approval prompts, tasks blocked or waiting on you), **Landed** (PRs merged,
+  tasks done), **Went quiet** (sessions that parked, ended or stopped and haven't come back)
+  and **Decided without you** (a count, then the titles). Each group shows three lines, then
+  `+N more`; an empty group is left out, and with nothing to say there's no card. `Enter` or
+  a click on a line jumps to its item or session as an inbox row does. `Esc` in the card, or
+  its `✕`, dismisses it, and it goes by itself once every Needs-you line is dealt with.
+  Seeing it marks nothing seen. A session going quiet is noticed by the daemon (or a
+  `--local` app) as it happens; one that went while neither ran is noticed at the next start.
 - **Pins.** The inbox's first column pins an item (📌): a click there, or `Alt+P` in the item
   list, pins the row or clears its pin. A doc comes pinned (a session can post a scratch
   report unpinned), anything else unpinned, and a doc posted again keeps the pin you set.
@@ -817,6 +828,7 @@ a key spelt any other way isn't read.
 | `USAGE_MODE` | `WHEELHOUSE_USAGE_MODE` | `--usage-mode oneshot\|persistent` | `oneshot` |
 | `KEEPALIVE_HOURS` | `WHEELHOUSE_KEEPALIVE_HOURS` | `--keepalive-hours N` | 8 (0 turns it off) |
 | `ANIMATION_FPS` | `WHEELHOUSE_ANIMATION_FPS` | `--animation-fps N` | 10 (0 turns animation off) |
+| `AWAY_HOURS` | `WHEELHOUSE_AWAY_HOURS` | `--away-hours N` | 2 (0 turns the card off) |
 | `SESSION_DIR` | `WHEELHOUSE_SESSION_DIR` | none | the parent of the wheelhouse's clone |
 
 `SESSION_DIR` is the directory the New session dialog (`Alt+N`) starts in. `~` is allowed, and a

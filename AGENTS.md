@@ -43,7 +43,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   usage mode, `usage_mode()` (`USAGE_MODE`), the daemon's port, `port()` (`PORT`), and how
   long a quiet session is kept warm, `keepalive_hours()` (`KEEPALIVE_HOURS`; 8 by default,
   0 for off), and the app's animation rate, `animation_fps()` (`ANIMATION_FPS`; 10 by
-  default, 0 for off; `WheelhouseApp.pace` rests it while unfocused with nothing busy). The README's Settings table lists them.
+  default, 0 for off; `WheelhouseApp.pace` rests it while unfocused with nothing busy), and the gap
+  after which the app says what happened meanwhile, `away_hours()` (`AWAY_HOURS`; 2 by default, 0 for off). The README's Settings table lists them.
 - `launch.py`: Windows Terminal tabs (`wt.exe` through `cmd.exe`, in the user's own
   window, `window_name`), the `claude` command line, and the protocol text injected into
   a session. Every launch passes `clean_env()`, which drops a parent Claude Code
@@ -102,6 +103,11 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   repo beside it, #191; `decision_dirs` pairs each with the repo that looks there). A session in no git repo
   may still name one, absolute or relative to its directory (#220), listed under the repo the directory is in.
   Never imports Textual.
+- `away.py`: the card of what happened while the person was away (#223,
+  `.plan/since-you-were-away.md`): its groups read from the items (`card`), and the sessions
+  that went quiet, which `Hub.note_quiet` notes as each refresh sees them (`observe`, the
+  `away.quiet` setting, compared at a hub's start with the last hub's, `away.seen`). The app measures the gap (`features.away_hours`) and keeps its last
+  input in `away.last_input`, both through the daemon's `/away` routes. Never imports Textual.
 - `models.py`: the models and effort levels offered. A new model is a row here.
 - `helper.py`: the helper chat (#198, `.plan/helper-chat.md`): how-to questions answered by
   Haiku through the person's own login, one sandboxed `claude -p` over stream-json per chat,
