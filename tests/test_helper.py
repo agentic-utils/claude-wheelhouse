@@ -7,13 +7,15 @@ import os
 import queue
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 
 from claude_wheelhouse import helper, plan_usage
 
 # Claude Code, faked: argv[1] says how it answers. It notes each run's pid, cwd, environment
-# and every message it is sent, one JSON line each, in argv[2]
+# and every message it is sent, one JSON line each, in argv[2]; and argv past those, a real
+# command line's when started as the helper's claude (claude_md_canary)
 FAKE = textwrap.dedent('''
     import json, os, sys
     how, log = sys.argv[1], sys.argv[2]
@@ -24,7 +26,7 @@ FAKE = textwrap.dedent('''
         print(json.dumps(msg), flush=True)
     def delta(text):
         say(type="stream_event", event={"type": "content_block_delta", "delta": {"type": "text_delta", "text": text}})
-    note(pid=os.getpid(), cwd=os.getcwd(), env=sorted(os.environ))
+    note(pid=os.getpid(), cwd=os.getcwd(), env=sorted(os.environ), argv=sys.argv[3:])
     say(type="system", subtype="init")
     for line in sys.stdin:
         content = json.loads(line)["message"]["content"]
@@ -132,6 +134,32 @@ def test_the_environment_holds_nothing_that_finds_the_daemon():
             "WHEELHOUSE_PORT": "1", "CLAUDECODE": "1"}
     env = helper.environment(base)
     assert env == {"PATH": "/bin", "HOME": "/h"}, "no WHEELHOUSE_ variable, nor a parent Claude Code's"
+
+
+def test_no_claude_md_reaches_the_helper(tmp_path, monkeypatch):
+    """#208: the helper's claude as a question really starts it (its own command line, cwd and
+    environment, through a fake binary) is given no way to load a CLAUDE.md: no setting
+    source (user, project or local, each of which would load that scope's), nothing in its
+    environment that loads one from an --add-dir directory, even when the person's shell sets
+    it, and none in the directories it starts in or is given."""
+    fake, log, claude = tmp_path / "fake_claude.py", tmp_path / "log.jsonl", tmp_path / "claude"
+    fake.write_text(FAKE)
+    claude.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake}" answer "{log}" "$@"\n')
+    claude.chmod(0o755)
+    monkeypatch.setenv(plan_usage.CLAUDE_ENV, str(claude))
+    monkeypatch.setenv("CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD", "1")
+    events = queue.Queue()
+    h = helper.Helper(events.put)
+    try:
+        assert h.ask("How do I pin an item?")
+        assert until_end(events)[-1].kind == "done"
+    finally:
+        h.stop()
+    [argv], [cwd], [env] = noted(log, "argv"), noted(log, "cwd"), noted(log, "env")
+    assert [a for a in argv if a.startswith("--setting-sources")] == ["--setting-sources="], "no setting source"
+    assert "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD" not in env, "none from the --add-dir directories"
+    dirs = [cwd, *argv[argv.index("--add-dir") + 1:]]
+    assert not [d for d in dirs for name in ("CLAUDE.md", "CLAUDE.local.md") if (Path(d) / name).exists()]
 
 
 def test_the_briefing_is_the_fact_sheet_readme_and_protocol():
