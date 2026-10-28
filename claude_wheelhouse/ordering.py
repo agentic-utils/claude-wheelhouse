@@ -170,8 +170,9 @@ def arrange(spec: str, raw: dict) -> dict:
     placed (new, or its status changed since) put in by status: straight before the first
     placed row of its own tier; else straight after the last placed row of a more urgent
     one; else at the head of the band. Rows going into one spot keep the sort's own order
-    there (by session name, then newest first). So the newest of a status shows first, as without a drag, and a
-    low row dragged to the top never pulls later urgent ones above the more urgent.
+    there (by session name, then newest first). So the newest of a status shows first, as
+    without a drag, and a low row dragged to the top never pulls later urgent ones above the
+    more urgent.
     The ranks hold for any subset (one session's view), as they go by the placed rows of the
     whole list. Other sorts: their ranks as they are."""
     if spec != ITEMS_DEFAULT:
