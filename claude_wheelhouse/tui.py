@@ -129,6 +129,22 @@ def completed(item, busy=frozenset()) -> bool:
     return closable(item) and not pinned(item) and standing(item, busy) != "active"
 
 
+def under_way_parents(items, busy=frozenset()) -> set[str]:
+    """The row keys of every item among `items` with a child, at any depth, not completed: kept
+    in sight by autocleanse, and by Ctrl+Delete, so the child never shows without its parent (#235)."""
+    by_key = {item_key(it): it for it in items}
+    held: set[str] = set()
+    for it in items:
+        if completed(it, busy):
+            continue
+        seen, ref = set(), parent_of(it)
+        while ref and (key := f"{it['session_id']}|{ref}") in by_key and key not in seen:
+            seen.add(key)
+            held.add(key)
+            ref = parent_of(by_key[key])
+    return held
+
+
 def slot(name: str) -> "Slot":
     """One of the seven places a pane goes (api.SLOTS, .plan/modules.md), found by its name.
     Its splitters size it, not the pane in it. Empty, it collapses (WheelhouseApp.collapse)."""
@@ -4417,6 +4433,9 @@ class WheelhouseApp(App):
         # minutes a completed (settled) item stays in sight before it's hidden as the finished are
         # (completed_hidden, #235), read once: the setting comes from the flag or a .env
         self.autocleanse = features.autocleanse_minutes()
+        # when Ctrl+Z or Ctrl+R last brought each row back, by key: its minutes start again from
+        # then, kept here, not as updated_at, which places it among the settled (#70)
+        self.brought_back: dict[str, datetime] = {}
         self.collapsed: set[str] = set()   # the parent rows whose children are hidden, for this run alone
         # each list's sort (ordering.py), kept per TUI under layout.sort.*: read as the app starts
         self.item_sort, self.session_sort = ordering.ITEMS_DEFAULT, ordering.SESSIONS_DEFAULT
@@ -5307,8 +5326,8 @@ class WheelhouseApp(App):
         if self.going:   # a Delete under way: its rows gone already (#234)
             found = [it for it in found if item_key(it) not in self.going]
         if self.autocleanse and not self.show_finished:   # completed a while ago: off until Alt+V (#235)
-            at = datetime.now(timezone.utc)
-            found = [it for it in found if not self.completed_hidden(it, busy, at)]
+            at, held = datetime.now(timezone.utc), under_way_parents(found, busy)
+            found = [it for it in found if item_key(it) in held or not self.completed_hidden(it, busy, at)]
         compacting = self.compacting()
         keyed = self.ranked_keyed(found, processing, busy, names)
         cuts = self.cutoffs()
@@ -5431,7 +5450,8 @@ class WheelhouseApp(App):
             return False
         if self.selected and self.selected[1] and (item["session_id"], item["ref"]) == tuple(self.selected[:2]):
             return False
-        return (at - datetime.fromisoformat(item["updated_at"])).total_seconds() >= self.autocleanse * 60
+        since = max(datetime.fromisoformat(item["updated_at"]), self.brought_back.get(item_key(item), datetime.min.replace(tzinfo=timezone.utc)))
+        return (at - since).total_seconds() >= self.autocleanse * 60
 
     def ranked(self, items, processing, busy=frozenset()) -> list:
         """Items in inbox order (ranked_keyed)."""
@@ -7327,6 +7347,8 @@ class WheelhouseApp(App):
         self.repin.add(item_key(item))
         if closed:
             self.deleted.add(item_key(item))
+        else:   # Ctrl+R: in sight for autocleanse's minutes afresh
+            self.brought_back[item_key(item)] = datetime.now(timezone.utc)
         return self.told(self.client.close(item["session_id"], item["ref"], closed, status))
 
     def undoable(self, said: str, rows: list) -> None:
@@ -7337,8 +7359,10 @@ class WheelhouseApp(App):
     def restore(self, item) -> None:
         """Ctrl+Z: an item put back as it stood, from its row read before the act. Undeleted,
         reopened as the status it had (a question open again, not answered), finished again if
-        it was, its pin as it was. A running child Delete orphaned stays at the top level."""
+        it was, its pin as it was. A running child Delete orphaned stays at the top level. Back in
+        sight for autocleanse's minutes afresh (brought_back)."""
         sid, ref = item["session_id"], item["ref"]
+        self.brought_back[item_key(item)] = datetime.now(timezone.utc)
         now = self.client.item(sid, ref)
         if now is None:
             return
@@ -7435,8 +7459,15 @@ class WheelhouseApp(App):
         picked = [it for it in found if completed(it, busy) and standing(it, busy) == "settled"
                   and item_key(it) not in self.going]
         families = {item_key(it): self.family(it) for it in picked}
+        by_key = {item_key(it): it for it in found}
+
+        def depth(it) -> int:
+            n, ref = 0, parent_of(it)
+            while ref and (up := by_key.get(f"{it['session_id']}|{ref}")) is not None and n < len(by_key):
+                n, ref = n + 1, parent_of(up)
+            return n
         acts, taken, kept = [], set(), 0
-        for it in sorted(picked, key=lambda it: not families[item_key(it)]):   # parents first: they take their children
+        for it in sorted(picked, key=depth):   # the outermost first: each takes its children, which then go once
             family = families[item_key(it)]
             if item_key(it) in taken:
                 continue
