@@ -253,7 +253,8 @@ session.
 - **Pins.** The inbox's first column pins an item (📌): a click there, or `Alt+P` in the item
   list, pins the row or clears its pin. A doc comes pinned (a session can post a scratch
   report unpinned), anything else unpinned, and a doc posted again keeps the pin you set.
-  Clearing the inbox never takes a pinned item: `Ctrl+A` never marks one, a `Delete` on
+  Clearing the inbox never takes a pinned item: `Ctrl+A` never marks one, `Ctrl+Delete` and
+  autocleanse leave it, a `Delete` on
   marked rows leaves them (and says so: `1 pinned kept`), a parent's `Delete` leaves its
   pinned children, and `Alt+V` never hides one. `Delete` on a pinned item asks first ("Delete
   pinned M2? The file stays on disk.", No by default), saying so too if a comment of
@@ -615,7 +616,13 @@ Closing several questions or decisions at once: in the item list, `Ctrl`+click m
 and `Shift`+click or `Alt`+click marks the range from the last one marked (Windows Terminal keeps
 `Shift`+click for its own text selection, so use `Alt` there); from the keyboard, `Ctrl+Space`
 marks or unmarks the highlighted row, `Shift+Up`/`Shift+Down` extend the range, and `Ctrl+A`
-marks every finished (dimmed) row shown, never a pinned one. A `Ctrl`+, `Shift`+ or `Alt`+click never starts a drag. `Delete` or `Backspace` then closes the marked
+marks every finished (dimmed) row shown, never a pinned one. `Ctrl+Delete` in the item list deletes every
+completed item in the inbox (in the session selected, or every session's) at once, with no question: a task done or
+dropped, a subagent done or failed, a PR merged or closed, a question answered, a decision seen, a doc read, those
+autocleanse has hidden included, never a pinned one. It says how many went, and `Ctrl+Z` brings them all back. One
+with a child still under way stays (and it says so). Autocleanse hides a completed item from the inbox 5 minutes after
+it completed (`AUTOCLEANSE_MINUTES`, below; 0 turns it off), timed from its last change; it isn't deleted, and `Alt+V`
+shows it again with the finished ones. A `Ctrl`+, `Shift`+ or `Alt`+click never starts a drag. `Delete` or `Backspace` then closes the marked
 questions and decisions and dismisses the done tasks and subagents, leaving any pinned one among them, `Ctrl+R` brings back the finished ones, `Esc` clears the marks, and a plain click
 starts afresh. Marked rows that include an open question ask once first, naming them. Once `Delete` has taken the highlighted row (one row, or several marked), the
 highlight goes to the row immediately above the topmost row it took, or to the new first row
@@ -829,6 +836,7 @@ a key spelt any other way isn't read.
 | `KEEPALIVE_HOURS` | `WHEELHOUSE_KEEPALIVE_HOURS` | `--keepalive-hours N` | 8 (0 turns it off) |
 | `ANIMATION_FPS` | `WHEELHOUSE_ANIMATION_FPS` | `--animation-fps N` | 10 (0 turns animation off) |
 | `AWAY_HOURS` | `WHEELHOUSE_AWAY_HOURS` | `--away-hours N` | 2 (0 turns the card off) |
+| `AUTOCLEANSE_MINUTES` | `WHEELHOUSE_AUTOCLEANSE_MINUTES` | `--autocleanse-minutes N` | 5 (0 turns autocleanse off) |
 | `SESSION_DIR` | `WHEELHOUSE_SESSION_DIR` | none | the parent of the wheelhouse's clone |
 
 `SESSION_DIR` is the directory the New session dialog (`Alt+N`) starts in. `~` is allowed, and a

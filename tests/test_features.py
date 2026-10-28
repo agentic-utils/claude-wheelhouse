@@ -151,6 +151,7 @@ ARGS_LISTED = [
     ("--step EVENT.SWITCH=on|off", None, "a session step's switch"),
     ("--animation-fps N", "ANIMATION_FPS", "the animation rate"),
     ("--away-hours N", "AWAY_HOURS", "the gap before the away card"),
+    ("--autocleanse-minutes N", "AUTOCLEANSE_MINUTES", "how long a completed item stays in the inbox"),
     ("--local", None, "the hub in process"),
     ("--connect HOST:PORT", None, "another machine's daemon"),
     ("--token-file PATH", None, "that daemon's token"),
@@ -449,6 +450,30 @@ def test_away_hours(tmp_path, monkeypatch, capsys, flag, env, hours, warns, desc
     assert [features.away_hours(), features.away_hours()] == [hours, hours], desc
     err = capsys.readouterr().err
     assert err.count("a gap is 2") == (1 if warns else 0), f"{desc}: said once at most: {err!r}"
+
+
+@pytest.mark.parametrize("flag, env, minutes, warns, desc", [
+    (None, None, 5, False, "nothing given: 5, on by default (#235)"),
+    ("10", None, 10, False, "the flag"),
+    (None, "AUTOCLEANSE_MINUTES=0.5", 0.5, False, "the install directory's .env, a fraction"),
+    ("env", "AUTOCLEANSE_MINUTES=9", 3, False, "WHEELHOUSE_AUTOCLEANSE_MINUTES before .env"),
+    ("0", None, 0, False, "0: off"),
+    (None, "AUTOCLEANSE_MINUTES=soon", 5, True, "a bad value: said once, and 5"),
+    ("-1", None, 5, True, "a negative flag: said once, and 5"),
+])
+def test_autocleanse_minutes(tmp_path, monkeypatch, capsys, flag, env, minutes, warns, desc):
+    monkeypatch.setattr(features, "_autocleanse_minutes", None)   # conftest's off, for the rest
+    install = tmp_path / "install.env"
+    monkeypatch.setattr(features, "env_files", lambda: [install, tmp_path / "config.env"])
+    if env:
+        install.write_text(env + "\n")
+    if flag == "env":
+        monkeypatch.setenv("WHEELHOUSE_AUTOCLEANSE_MINUTES", "3")
+    elif flag:
+        features.set_autocleanse_minutes(flag)
+    assert [features.autocleanse_minutes(), features.autocleanse_minutes()] == [minutes, minutes], desc
+    err = capsys.readouterr().err
+    assert err.count("hidden after 5") == (1 if warns else 0), f"{desc}: said once at most: {err!r}"
 
 
 @pytest.mark.parametrize("argv, fps, desc", [

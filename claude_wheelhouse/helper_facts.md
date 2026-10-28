@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 40, 2026-10-28T15:12:41Z, source bb6efe9c23097a9e (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 41, 2026-10-28T15:12:59Z, source dde40355fea38224 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -32,7 +32,8 @@ daemon running.
 - Forget: the session leaves the wheelhouse (its data deleted); Adopt brings one back.
 - Relaunch: start a session again where it left off.
 - Fork: a new session carrying on from another's conversation.
-- Pin: an item kept through Delete and Ctrl+A.
+- Pin: an item kept through Delete, Ctrl+A, Ctrl+Delete and autocleanse.
+- Completed: an item done with (a task done or dropped, a subagent done or failed, a PR merged or closed, a question answered, a decision seen, a doc read). Ctrl+Delete deletes them all at once (Ctrl+Z undoes it); autocleanse hides each 5 minutes after it completed (AUTOCLEANSE_MINUTES, 0 off) until Alt+V shows it.
 - Session steps: what the wheelhouse tells a session at compaction, ending, resuming or a
   merged PR (command palette, Session steps).
 - Tour: the guided tour, resumed with Alt+T while the title bar shows its badge.
@@ -153,6 +154,8 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 - **Ctrl+Space**: Mark or unmark the highlighted row
 
 - **Ctrl+A**: Mark every finished (dimmed) row shown but the pinned, for Delete to clear them together
+
+- **Ctrl+Delete**: Delete every completed item in the inbox (done, answered, seen, merged), those hidden after a while included, but the pinned, at once with no question: Ctrl+Z brings them all back. One with a child still under way is kept
 
 - **Alt+P**: Pin the highlighted item (📌), or clear its pin: Ctrl+A and Delete leave a pinned item
 
@@ -288,6 +291,10 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 --away-hours N  (env WHEELHOUSE_AWAY_HOURS, .env AWAY_HOURS=)
     after N hours with no key press, click or scroll, show what happened meanwhile
     (default 2, or WHEELHOUSE_AWAY_HOURS, or AWAY_HOURS= in a .env; 0 turns it off)
+--autocleanse-minutes N  (env WHEELHOUSE_AUTOCLEANSE_MINUTES, .env AUTOCLEANSE_MINUTES=)
+    hide a completed inbox item N minutes after it completed, until Alt+V shows it
+    (default 5, or WHEELHOUSE_AUTOCLEANSE_MINUTES, or AUTOCLEANSE_MINUTES= in a .env; 0
+    turns it off)
 --local
     run the hub in this process, without the daemon (the wheelhouse as it was before the
     daemon)
@@ -348,4 +355,6 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Every key has a modifier, so a letter typed in the answer box is always just typed, and the app's own keys work from there: Ctrl+Q quits, F1 lists the keys, Alt+N is New session.
 - With no session selected, the inbox lists each session's conversation (💬, named after the session) under the items waiting on you.
 - Emoji suggestions take a click: type :star and click the one you want, or choose it with Up and Down and take it with Tab or Enter.
+- Ctrl+Delete in the inbox deletes every completed item at once, but the pinned, with no question: Ctrl+Z brings them all back.
+- A completed item leaves the inbox 5 minutes after it completed (AUTOCLEANSE_MINUTES in a .env, 0 for never); Alt+V shows it again.
 - Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it.
