@@ -1043,6 +1043,24 @@ def test_compacting_holds_until_the_compaction_ends(streamed, store, sid, steps,
     assert store.session(sid)["activity"] == activity, desc
 
 
+@pytest.mark.parametrize("line, desc", [
+    ("compacting before it stops", "Park's compact first"),
+    ("compacting after 8 quiet hours: collecting notes", "the 8 hour mark's ask"),
+    ("compacting: no notes came back, so without them", "the 8 hour mark's bare /compact"),
+])
+def test_every_compaction_turn_leads_the_line(host, store, sid, line, desc):
+    """Whichever path sends a compaction's turn, its line leads what the turn shows, and the
+    host's own writes (an answer passed on) alike, until the turn ends."""
+    key = run(host.turn("/compact", compacting=line))
+    assert store.session(sid)["activity"] == line, desc
+    host.show("running Bash: ls")
+    assert store.session(sid)["activity"] == f"{line} · running Bash: ls", desc
+    assert host.led("thinking") == f"{line} · thinking", desc
+    host.sent.pop(key)   # its turn has ended
+    host.show("thinking")
+    assert store.session(sid)["activity"] == "thinking", desc
+
+
 def other_owner(s, i):
     """A Restore's host: registered as a live process, shell flag cleared, its own activity."""
     s.register(i, 1, liveness_start(1), host_mod.liveness.boot_id())

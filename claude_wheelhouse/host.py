@@ -497,6 +497,11 @@ class Host:
         """The activity line of the compaction whose turn is to come or running, if any."""
         return self.compact_line if self.compact_turn in self.sent else None
 
+    def led(self, activity: str) -> str:
+        """activity, led by the line of a compaction whose turn is to come or running."""
+        line = self.compacting()
+        return f"{line} · {activity}" if line and not activity.startswith(line) else activity
+
     # model and effort, changed live (.plan/model-effort.md)
 
     async def control(self, request: dict) -> dict:
@@ -578,7 +583,7 @@ class Host:
         finally:
             self.asking.discard(ref)
         await self.taken(ref, "permission")
-        self.store.set_activity(self.sid, "thinking")
+        self.store.set_activity(self.sid, self.led("thinking"))   # its compaction's, if one is under way
         answer = json.loads(item["answer"] or "{}") if item else {}
         if answer.get("decision") in ("allow", "always"):
             keep = list(ctx.suggestions or []) if answer["decision"] == "always" else None
@@ -604,7 +609,7 @@ class Host:
         if reply is None:
             return PermissionResultDeny(message=CLOSED_UNANSWERED)
         self.store.reply(self.sid, ref, "Passed to Claude as the answer.", status="answered")
-        self.store.set_activity(self.sid, "thinking")
+        self.store.set_activity(self.sid, self.led("thinking"))   # its compaction's, if one is under way
         return PermissionResultAllow(updated_input={**inp, "answers": question_answers(inp, reply)})
 
     async def taken(self, ref: str, kind: str) -> None:
@@ -1024,9 +1029,7 @@ class Host:
         While a compaction's turn is to come or runs, its line goes first (compacting): the
         turns before it and its own are part of the compaction, never the session free (#233)."""
         if not (self.taken_up and all(k in self.sent and self.sent[k].keepalive for k in self.taken_up)):
-            line = self.compacting()
-            if line and not activity.startswith(line):
-                activity = f"{line} · {activity}"
+            activity = self.led(activity)
             if self.parking_after and PARKS_AFTER_TURN not in activity:
                 activity = f"{activity} · {PARKS_AFTER_TURN}"
             self.store.set_activity(self.sid, activity)
