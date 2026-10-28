@@ -239,6 +239,7 @@ async def keeps_colours(pilot, table, desc) -> list[str | None]:
             await pilot.pause()
         now = colours(table, 0)
         assert [bg for _, bg in now] != [bg for _, bg in plain], f"{desc}: row 0 shaded {how}"
+        assert len(now) == len(plain), f"{desc}: row 0 drawn in the same runs {how}"
         own = [(fg, was) for (fg, _), (was, _) in zip(now, plain) if was != tui.MATRIX]
         assert own and all(fg == was for fg, was in own), f"{desc}: every cell's own colour kept {how}: {own}"
     return [fg for fg, _ in plain]

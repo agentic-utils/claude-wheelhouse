@@ -3155,6 +3155,11 @@ class McpServers(Dialog):
         self.action_answer(None)
 
 
+class AdoptList(KeepColours, DataTable):
+    """The sessions Adopt offers: a running one's amber mark kept under the mouse and the
+    cursor (#217)."""
+
+
 class AdoptSession(Dialog):
     """Pick a session to bring into the wheelhouse. A running one must be /exit-ed first:
     the wheelhouse never kills it, and only launches once it has gone."""
@@ -3167,7 +3172,7 @@ class AdoptSession(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog", classes="wide"):
             yield Label("ADOPT A SESSION", classes="dialog-title")
-            yield DataTable(id="adopt-list", cursor_type="row")
+            yield AdoptList(id="adopt-list", cursor_type="row")
             yield Input(placeholder="name in the wheelhouse", id="adopt-name")
             yield Label("", id="adopt-hint")
             with Horizontal(classes="buttons"):
