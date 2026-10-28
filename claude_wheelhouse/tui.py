@@ -4616,7 +4616,10 @@ class WheelhouseApp(App):
         screen would take it for a click and clear its own."""
         if isinstance(event, (events.Key, events.MouseDown, events.MouseScrollDown, events.MouseScrollUp)) \
                 and not event.is_forwarded:
+            shown = self.away_window
             self.touched()
+            if isinstance(event, events.Key) and event.key == "escape" and shown is None and self.away_window is not None:
+                return   # an Esc that woke the screen shows the card, rather than dismissing it unseen
         if isinstance(event, (events.MouseDown, events.MouseUp)) and event.button == 3 and not event.is_forwarded:
             if isinstance(event, events.MouseDown) and not (self.session_menu(event) or self.pane_menu(event)):
                 self.right_click(event)

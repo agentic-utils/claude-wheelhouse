@@ -144,6 +144,26 @@ async def test_the_card_shows_after_a_gap_and_esc_dismisses_it(store, sid, monke
 
 @pytest.mark.anyio
 @pytest.mark.both
+async def test_an_esc_that_wakes_the_screen_leaves_the_card_up(store, sid, monkeypatch):
+    t = [NOW]
+    monkeypatch.setattr(away, "now", lambda: t[0])
+    store.set_setting(away.LAST_INPUT, away.stamp(NOW - timedelta(minutes=10)))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        seed(store, sid, "question", "which db?", "open", NOW + timedelta(hours=1))
+        t[0] = NOW + timedelta(hours=3)
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.pause()
+        assert app.query_one("#away-card").display, "the Esc that brought the card doesn't dismiss it"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not app.query_one("#away-card").display, "the next Esc does"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
 async def test_a_start_after_a_gap_shows_the_card_and_a_line_jumps(store, sid, monkeypatch):
     monkeypatch.setattr(away, "now", lambda: NOW)
     store.set_setting(away.LAST_INPUT, away.stamp(START))
