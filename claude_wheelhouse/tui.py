@@ -3790,12 +3790,12 @@ HELPER_FULL = "This chat is long, and a long chat costs more per question: New c
 
 
 class HelperDrawer(Dialog):
-    """Alt+G: the helper chat (helper.py, .plan/helper-chat.md), a drawer down the right-hand
+    """Alt+Q: the helper chat (helper.py, .plan/helper-chat.md), a drawer down the right-hand
     side, the screen behind showing through. The chat is the app's (WheelhouseApp.helper_log),
-    so Esc, Alt+G or a click outside closes the drawer and the next Alt+G finds it as it was,
+    so Esc, Alt+Q or a click outside closes the drawer and the next Alt+Q finds it as it was,
     an answer still coming included. Enter asks; Alt+N starts a new chat."""
     ACTION = "helper-ask"
-    BINDINGS = [Binding("alt+g", "close_helper", show=False), Binding("alt+n", "new_chat", show=False)]
+    BINDINGS = [Binding("alt+q", "close_helper", show=False), Binding("alt+n", "new_chat", show=False)]
 
     def compose(self) -> ComposeResult:
         with Vertical(id="helper"):
@@ -3895,7 +3895,7 @@ DESCRIBE = {
     "app.toggle_pinned": "Pin the highlighted item (📌), or clear its pin: Ctrl+A and Delete leave a pinned item",
     "help": "This list",
     "helper": ("Ask the wheelhouse: a chat that answers how-to questions about it, from its help and its source "
-               "(Haiku, on your Claude Code login). Alt+G again, or Esc, closes it; the chat is kept until you quit"),
+               "(Haiku, on your Claude Code login). Alt+Q again, or Esc, closes it; the chat is kept until you quit"),
     "close_helper": "Close the helper, keeping the chat",
     "new_chat": "New chat: the helper forgets this one",
     "doc_layout": "With a doc shown: its thread under it (split), or Doc and Thread as tabs (tabbed); kept",
@@ -4088,7 +4088,7 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
                 ("An item opened full screen", ThreadView.BINDINGS),
                 ("A doc opened full screen", DocView.BINDINGS),
                 ("A doc's editor", DocEditor.BINDINGS),
-                ("The helper (Alt+G)", HelperDrawer.BINDINGS),
+                ("The helper (Alt+Q)", HelperDrawer.BINDINGS),
                 *[(w.KEYS_HELP[0], w.BINDINGS) for w in panes
                   if (keys := getattr(w, "KEYS_HELP", None)) and (sdk or not keys[1])]]
     # a module's pane says what its own keys do: core's DESCRIBE can't know them (#154)
@@ -4293,7 +4293,7 @@ class WheelhouseApp(App):
         Binding("alt+v", "show_finished(True)", "Show finished", key_display="Alt+V"),
         Binding("alt+v", "show_finished(False)", "Hide finished", key_display="Alt+V"),
         Binding("f1", "help", "Keys", key_display="F1"),
-        Binding("alt+g", "helper", "Ask", key_display="Alt+G"),   # the helper chat (HelperDrawer)
+        Binding("alt+q", "helper", "Ask", key_display="Alt+Q"),   # the helper chat (HelperDrawer)
         # a doc item in Detail (.plan/docs-section.md): split or tabbed, and the tabs
         Binding("ctrl+l", "doc_layout", "Doc layout", show=False, key_display="Ctrl+L"),
         # priority: a scrolling container's own (page left and right) would take them first; they
@@ -4384,7 +4384,7 @@ class WheelhouseApp(App):
         self.ctx = api.Context(state_dir, self.module_sessions, self.stats_sid, usage=self.client.usage,
                                set_effort=self.set_effort)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
-        # the helper chat (Alt+G): its driver, made at the first question, and the chat, kept for the run
+        # the helper chat (Alt+Q): its driver, made at the first question, and the chat, kept for the run
         self.helper: helper.Helper | None = None
         self.helper_log: list[dict] = []
         self.helper_reading = ""   # what it's reading as it answers (a tool event), for the status line
@@ -5950,7 +5950,7 @@ class WheelhouseApp(App):
     def get_system_commands(self, screen: Screen):
         yield from super().get_system_commands(screen)
         yield SystemCommand("Ask the wheelhouse", "A chat that answers how-to questions about the wheelhouse, "
-                            "from its help and its source (Alt+G)", self.action_helper)
+                            "from its help and its source (Alt+Q)", self.action_helper)
         yield SystemCommand("Reset layout", "Put every pane back in its default place, and the dividers at their default sizes",
                             self.action_reset_layout)
         yield SystemCommand("Session steps", "What the wheelhouse tells a session when it compacts, ends, resumes or "
@@ -7150,7 +7150,7 @@ class WheelhouseApp(App):
         self.refresh_data()
 
     def action_helper(self) -> None:
-        """Alt+G: the helper's drawer, or closed if it's in front. Over another dialog, nothing."""
+        """Alt+Q: the helper's drawer, or closed if it's in front. Over another dialog, nothing."""
         if isinstance(self.screen, HelperDrawer):
             self.screen.action_cancel()
         elif not self.under_dialog():
@@ -7194,7 +7194,7 @@ class WheelhouseApp(App):
             if drawer.is_mounted:   # one pushed but not yet composed paints itself on mounting
                 drawer.paint(last_only=event.kind == "text")
         elif event.kind in ("done", "error"):
-            self.notify("The helper has answered: Alt+G" if event.kind == "done" else "The helper couldn't answer: Alt+G")
+            self.notify("The helper has answered: Alt+Q" if event.kind == "done" else "The helper couldn't answer: Alt+Q")
 
     def helper_status(self) -> str:
         """The drawer's status line: what the helper is reading, or that it's thinking."""

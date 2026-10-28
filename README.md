@@ -539,7 +539,7 @@ selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued o
 `Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
 as answered, a decision as seen), `Ctrl+Z` undo the last delete, pin or reopen in the inbox (the rows back as they
-stood, an open question open again; in a text box, its own undo), `F1` list every key and button, `Alt+G` ask the wheelhouse how to do something (the helper, below), `Ctrl+Q` quit, `Alt+T` resume the tour while the title bar's badge shows. `Alt+Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
+stood, an open question open again; in a text box, its own undo), `F1` list every key and button, `Alt+Q` ask the wheelhouse how to do something (the helper, below), `Ctrl+Q` quit, `Alt+T` resume the tour while the title bar's badge shows. `Alt+Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
 Every dialog opens centred over the screen (the helper's drawer docks right), which stays in sight behind it. `Esc`, or a click outside the box, cancels it (on the tutorial's invite, that is Later, never Never), though not a click outside in the moment a dialog opens (a double-click's second). `Enter` presses the focused button; with focus on a one-line box or a checkbox it takes the dialog's one action (Launch, Rename, Fork, Park and the like), while in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices (Stop & Forget's, Relaunch's) answers `Enter` only on the focused button. `Tab` and `Shift+Tab` go round its boxes and buttons. A dialog asking yes or no takes `Alt+Y` or `Alt+N` (`Esc` is no, and so is `Enter`, as No has the focus). The `F1` list closes on `Esc`, `Enter`, `F1` or a click outside.
 
 `Tab` goes round the session list, the items, the Decisions list, the answer box, the tour's Next while a tour box
@@ -560,7 +560,7 @@ dialog's answer go to the screen it uncovers.
 
 ### Asking the wheelhouse
 
-`Alt+G` (or Ask the wheelhouse, in the command palette) opens the helper: a drawer down the right-hand side
+`Alt+Q` (or Ask the wheelhouse, in the command palette) opens the helper: a drawer down the right-hand side
 where you ask how to do something ("how do I pin an item?") and get a short answer naming the keys and
 buttons. It answers from a fact sheet generated from the code (every key, button, setting and feature), this
 README and what sessions are told, and reads the wheelhouse's own source when it needs to, saying which file
@@ -568,7 +568,7 @@ an answer came from. It runs Claude Haiku through your own Claude Code login, so
 (or API spend, on an API-key login); nothing starts until your first question. What leaves the machine: your
 questions, the help and the source it reads. Your sessions, items and transcripts don't, and it can't act on
 anything: its Claude Code has only the read-only file tools, no MCP servers, none of your settings or hooks,
-and writes no transcript. `Esc`, `Alt+G` again or a click outside closes the drawer and keeps the chat, an
+and writes no transcript. `Esc`, `Alt+Q` again or a click outside closes the drawer and keeps the chat, an
 answer still coming included (a notification says when it lands); `Alt+N` in the drawer starts a new chat,
 which it offers once a chat gets long. The chat lasts until you quit. A chat quiet for ten minutes lets its
 Claude Code go, and the next question starts another, told the chat so far.
