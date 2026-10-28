@@ -163,7 +163,7 @@ def test_no_claude_md_reaches_the_helper(tmp_path, monkeypatch):
     [argv], [cwd], [env] = noted(log, "argv"), noted(log, "cwd"), noted(log, "env")
     assert [a for a in argv if a.startswith("--setting-sources")] == ["--setting-sources="], \
         "no setting source, in one token (a bare --setting-sources would take the next argument)"
-    assert not {"--append-system-prompt", "--append-system-prompt-file"} & set(argv), "nothing appended"
+    assert not [a for a in argv if a.startswith("--append-system-prompt")], "nothing appended, in any form"
     assert "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD" not in env, "none from the --add-dir directories"
     # kept on purpose (launch.KEPT): the person's login is there; its CLAUDE.md is the user
     # scope's, which the empty --setting-sources= leaves out
