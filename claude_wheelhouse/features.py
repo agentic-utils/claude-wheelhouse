@@ -46,6 +46,11 @@ ANIMATION_FPS= in either .env, else 10 (Doug's Q82, D85). Fractions are allowed 
 taken as 30, and anything else is said once and taken as 10. Whatever the rate, everything
 moves at the same speed: frames are counted from the time elapsed (WheelhouseApp.animate).
 
+The app shows what happened while the person was away (away.py) after away_hours() hours
+with no key press, click or scroll: --away-hours, else WHEELHOUSE_AWAY_HOURS, else
+AWAY_HOURS= in either .env, else 2 (#223). Fractions are allowed, 0 turns the card off, and
+anything else is said once and taken as 2.
+
 The New session dialog starts in session_dir(): WHEELHOUSE_SESSION_DIR, else SESSION_DIR=
 in either .env, else the parent of the install directory (Doug's T123, Q115), as the
 wheelhouse's own clone is rarely where a session works. ~ is expanded and a relative path
@@ -77,10 +82,14 @@ ANIMATION_KEY = "ANIMATION_FPS"
 ANIMATION_FPS = 10.0
 MAX_FPS = 30.0   # above it, said once and taken as it
 _animation_fps: str | None = None   # set by the command line (set_animation_fps)
+AWAY_FLAG = "--away-hours"
+AWAY_KEY = "AWAY_HOURS"
+AWAY_HOURS = 2.0
+_away_hours: str | None = None   # set by the command line (set_away_hours)
 SESSION_DIR_KEY = "SESSION_DIR"
 # each flag's .env key (its environment variable is WHEELHOUSE_<key>), for cli.args_text
 SETTINGS = {FLAG: KEY, USAGE_FLAG: USAGE_KEY, PORT_FLAG: PORT_KEY, KEEPALIVE_FLAG: KEEPALIVE_KEY,
-            ANIMATION_FLAG: ANIMATION_KEY}
+            ANIMATION_FLAG: ANIMATION_KEY, AWAY_FLAG: AWAY_KEY}
 _warned: set[str] = set()
 # the directory the package runs from: the checkout, as uv sync installs it (editable), so
 # the same .env whatever directory the app, the daemon or a tab is started in
@@ -260,6 +269,30 @@ def animation_fps() -> float:
         return MAX_FPS
     _say(f"claude-wheelhouse: {where} is {value!r}, not a number of frames a second: the animation runs at 10")
     return ANIMATION_FPS
+
+
+def set_away_hours(hours: str) -> None:
+    """--away-hours on the command line."""
+    global _away_hours
+    _away_hours = hours
+
+
+def away_hours() -> float:
+    """How long without input in the app is a gap, after which it says what happened
+    meanwhile (away.py), in hours: --away-hours, else WHEELHOUSE_AWAY_HOURS, else AWAY_HOURS=
+    in the install directory's .env, else the user's, else 2. A number of 0 or more,
+    fractions allowed (0: never); anything else is said once, on stderr, and taken as 2."""
+    if (setting := given(_away_hours, AWAY_FLAG, AWAY_KEY)) is None:
+        return AWAY_HOURS
+    value, where = setting
+    try:
+        hours = float(value)
+    except ValueError:
+        hours = -1.0
+    if hours >= 0 and hours != float("inf"):
+        return hours
+    _say(f"claude-wheelhouse: {where} is {value!r}, not a number of hours: a gap is 2")
+    return AWAY_HOURS
 
 
 def session_dir() -> Path:

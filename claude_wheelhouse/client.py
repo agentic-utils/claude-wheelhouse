@@ -728,6 +728,16 @@ class RemoteClient:
         except (Unreachable, Refused, SessionGone, KeyError, ValueError):
             return False
 
+    def away(self) -> dict:
+        """As the hub's (Hub.away), read now: {} when the daemon can't be reached."""
+        try:
+            return self.get("/away")
+        except (Unreachable, Refused, self.httpx.TransportError):
+            return {}
+
+    def note_input(self, at: str) -> None:
+        self.quietly("/away/input", {"at": at})
+
     # the person's commands, as the hub's (hub.Hub)
 
     def relaunch(self, sid: str) -> Done:

@@ -187,6 +187,10 @@ def parser() -> argparse.ArgumentParser:
                      help=f"animate the title, the eyes and the stats bars N frames a second (default "
                      f"{features.ANIMATION_FPS:g}, or WHEELHOUSE_ANIMATION_FPS, or ANIMATION_FPS= in a .env; "
                      "0 turns animation off)")
+    fps.add_argument(features.AWAY_FLAG, dest="away_hours", metavar="N", default=argparse.SUPPRESS,
+                     help=f"after N hours with no key press, click or scroll, show what happened meanwhile "
+                     f"(default {features.AWAY_HOURS:g}, or WHEELHOUSE_AWAY_HOURS, or AWAY_HOURS= in a .env; "
+                     "0 turns it off)")
     p = argparse.ArgumentParser(prog="claude-wheelhouse", description="Sidecar for parallel Claude Code sessions",
                                 parents=[sdk, usage, port, keep, fps])
     client_args(p)
@@ -267,6 +271,8 @@ def main() -> None:
         print(f"claude-wheelhouse: {bad}", file=sys.stderr)
     if getattr(args, "animation_fps", None) is not None:
         features.set_animation_fps(args.animation_fps)
+    if getattr(args, "away_hours", None) is not None:
+        features.set_away_hours(args.away_hours)
 
     if args.cmd == "run":
         from .launch import run as run_session

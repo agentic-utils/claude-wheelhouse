@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import adopt, api, features, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
+from . import adopt, api, away, features, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
 from .docroots import DOC_CAP
 from .host import (AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, NO_NOTES, keepalive_body,
                    waits_on_person)
@@ -196,6 +196,7 @@ class Hub:
         self.wake = liveness.WakeDetector()
         self.waking = False
         self.sessions = []
+        self.seen = None   # each session's (name, parked, alive) at the last refresh (note_quiet)
         self.by_id: dict = {}   # the sessions by id, as the last refresh read them
         self.statuses: dict[str, str] = {}
         # sessions whose host Relaunch has stopped: started again once it has gone. Each has
@@ -284,6 +285,20 @@ class Hub:
         self.sessions = self.store.sessions()
         self.by_id = {s["id"]: s for s in self.sessions}
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
+        self.note_quiet()
+
+    def note_quiet(self) -> None:
+        """A session parked, ended or stopped since the last refresh, kept for the card of
+        what happened while the person was away (away.observe): watched here, as nothing in
+        the store dates them, and whoever's code did it."""
+        seen = {s["id"]: (display_name(s), bool(s["parked"]), self.statuses[s["id"]] in ("live", "stalled"))
+                for s in self.sessions}
+        before, self.seen = self.seen, seen
+        if before is None or before == seen:
+            return
+        quiet = away.kept(self.store.setting(away.QUIET))
+        if (changed := away.observe(before, seen, quiet, away.now())) is not None:
+            self.store.set_setting(away.QUIET, json.dumps(changed))
 
     def row(self, sid: str):
         """The session's row, or SessionGone: it can end at any moment (in-session /wheelhouse end)."""
@@ -984,6 +999,15 @@ class Hub:
                 "pending": pending, "effort_live": hosted and self.sdk}
 
     # items
+
+    def away(self) -> dict:
+        """What the card of what happened while the person was away is read from (away.py):
+        the app's last input, and each session's latest going quiet."""
+        return {"last_input": self.store.setting(away.LAST_INPUT), "quiet": away.kept(self.store.setting(away.QUIET))}
+
+    def note_input(self, at: str) -> None:
+        """The app's last key press, click or scroll (away.LAST_INPUT), UTC."""
+        self.store.set_setting(away.LAST_INPUT, at)
 
     def mark_seen(self, sid: str, ref: str) -> bool:
         """Whether an unseen decision became seen: a no-op for anything else."""

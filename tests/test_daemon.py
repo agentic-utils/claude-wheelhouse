@@ -826,7 +826,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 40 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 42 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 
@@ -944,6 +944,12 @@ NEW_ROUTES = [
      "a tour's place, nothing else"),
     ("POST", "/tour/at", {"at": "topup:stats"}, lambda store, sid, r: store.setting("tour_at") == "topup:stats",
      "where the tour under way resumes"),
+    ("POST", "/away/input", {"at": "2026-10-28T12:00:00+00:00"},
+     lambda store, sid, r: store.setting("away.last_input") == "2026-10-28T12:00:00+00:00", "the app's last input kept"),
+    ("POST", "/away/input", {"at": "soon"}, lambda store, sid, r: r.status_code == 400 and store.setting("away.last_input") is None,
+     "a time, nothing else"),
+    ("GET", "/away", None, lambda store, sid, r: r.json() == {"last_input": None, "quiet": {}},
+     "the away card's inputs: none yet"),
     ("POST", "/shutdown", None, lambda store, sid, r: not r.json()["ok"], "stop: a test's daemon can't"),
 ]
 

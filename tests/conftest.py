@@ -139,6 +139,7 @@ def usage_mode_default(monkeypatch):
     monkeypatch.setattr(features, "_port", None)
     monkeypatch.setattr(features, "_keepalive_hours", None)
     monkeypatch.setattr(features, "_animation_fps", None)
+    monkeypatch.setattr(features, "_away_hours", None)
     monkeypatch.setattr(features, "_warned", set())
 
 
