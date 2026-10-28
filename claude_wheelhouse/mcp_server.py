@@ -161,8 +161,8 @@ def set_doc_dirs(paths: list[str]) -> str:
     """Where this repo keeps its design decisions (ADRs), when that isn't docs/adr: directories
     relative to the git root of your working directory, such as ["docs/decisions"], or in
     another git repo, such as a sibling docs repo (["../myproj-docs/decisions"], or an
-    absolute path; from a working directory in no git repo, only these two, .. taken from
-    it). The wheelhouse then lists the NNNN-*.md files in them instead of
+    absolute path; from a working directory in no git repo, an absolute path, or .. taken
+    from it). The wheelhouse then lists the NNNN-*.md files in them instead of
     docs/adr's, for every session in this repo. Only directories you name are looked in
     (.plan/, say, only if named), never a repo's root itself, and none outside a git repo. An
     empty list goes back to docs/adr."""

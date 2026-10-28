@@ -125,14 +125,14 @@ def checked(paths, cwd) -> list[str]:
     """Directories a session declares (set_doc_dirs), each relative to its git root or
     absolute, under it or in another git repo (allowed), normalised; ValueError for any that
     isn't. A session in no git repo (#220) may still name one in a git repo, absolute or by
-    .. from its own directory, kept resolved since there is no root to resolve it against
+    .. from its own directory, kept absolute since there is no root to resolve it against
     later; any other relative path has no git root to be relative to, so is refused."""
     if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
         raise ValueError("paths must be a list of directory paths")
     if len(paths) > MOST:
         raise ValueError(f"at most {MOST} directories")
     root = git_root(cwd)
-    base = root if root is not None else Path(cwd)
+    base = root if root is not None else Path(os.path.realpath(cwd))   # .. from where it really is
     out = []
     for p in paths:
         if not p.strip() or "\0" in p:
@@ -141,12 +141,12 @@ def checked(paths, cwd) -> list[str]:
         norm = os.path.normpath(p)
         if root is None and not (os.path.isabs(norm) or norm == ".." or norm.startswith("../")):
             raise ValueError(f"{p!r} is relative, but {cwd} is in no git repo to resolve it against: "
-                             "give it absolute, or by .. from there")
+                             "give it absolute (or by .. from there)")
         real = Path(os.path.realpath(base / p))
         if why := allowed(real, root):
             raise ValueError(f"{p!r} {why}")
-        if root is None:   # kept as checked: a link in the cwd would take a textual .. elsewhere
-            norm = str(real)
+        if root is None:   # absolute, with no root to be relative to later
+            norm = os.path.normpath(base / p)
         if norm not in out:
             out.append(norm)
     return out

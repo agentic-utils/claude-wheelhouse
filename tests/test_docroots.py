@@ -1,7 +1,6 @@
 import os
 
 import pytest
-from pathlib import Path
 
 from claude_wheelhouse import docroots
 from claude_wheelhouse.docroots import Outside
@@ -199,9 +198,7 @@ def test_checked_whether_or_not_the_session_is_in_a_repo(repo, cwd, path, kept, 
             docroots.checked([path], str(tmp / cwd))
             pytest.fail(desc)
     else:
-        kept = kept.replace("SIB", sib)
-        kept = str(Path(kept).resolve()) if cwd == "loose" else kept   # kept resolved: no root to be relative to
-        assert docroots.checked([path], str(tmp / cwd)) == [kept], desc
+        assert docroots.checked([path], str(tmp / cwd)) == [kept.replace("SIB", sib)], desc
 
 
 def test_checked_keeps_the_resolved_path_for_a_session_in_no_repo_behind_a_link(repo):
@@ -213,7 +210,7 @@ def test_checked_keeps_the_resolved_path_for_a_session_in_no_repo_behind_a_link(
     (tmp / "real" / "sib" / "d").mkdir()
     (tmp / "home").mkdir()
     (tmp / "home" / "loose").symlink_to(tmp / "real" / "loose")
-    assert docroots.checked(["../sib/d"], str(tmp / "home" / "loose")) == [str((tmp / "real/sib/d").resolve())]
+    assert docroots.checked(["../sib/d"], str(tmp / "home" / "loose")) == [str((tmp / "real").resolve() / "sib/d")]
 
 
 def test_decision_dirs_from_a_session_in_no_repo(repo):
