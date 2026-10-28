@@ -246,7 +246,7 @@ session.
   a click on a line jumps to its item or session as an inbox row does. `Esc` in the card, or
   its `✕`, dismisses it, and it goes by itself once every Needs-you line is dealt with.
   Seeing it marks nothing seen. A session going quiet is noticed by the daemon (or a
-  `--local` app) as it happens, so one that stopped while neither ran isn't listed.
+  `--local` app) as it happens; one that went while neither ran is noticed at the next start.
 - **Pins.** The inbox's first column pins an item (📌): a click there, or `Alt+P` in the item
   list, pins the row or clears its pin. A doc comes pinned (a session can post a scratch
   report unpinned), anything else unpinned, and a doc posted again keeps the pin you set.

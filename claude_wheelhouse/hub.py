@@ -288,13 +288,19 @@ class Hub:
         self.note_quiet()
 
     def note_quiet(self) -> None:
-        """A session parked, ended or stopped since the last refresh, kept for the card of
-        what happened while the person was away (away.observe): watched here, as nothing in
-        the store dates them, and whoever's code did it."""
+        """A session parked, ended or stopped since the last refresh (or, at a hub's first,
+        since the last hub's), kept for the card of what happened while the person was away
+        (away.observe): watched here, as nothing in the store dates them, whoever's code did it."""
         seen = {s["id"]: (display_name(s), bool(s["parked"]), self.statuses[s["id"]] in ("live", "stalled"))
                 for s in self.sessions}
-        before, self.seen = self.seen, seen
-        if before is None or before == seen:
+        # a hub's first read compares with what the last hub saw (SEEN): what went quiet while
+        # none ran is noted at this start, so the card after a night away still lists it
+        before = self.seen if self.seen is not None else away.seen(self.store.setting(away.SEEN))
+        self.seen = seen
+        if before == seen:
+            return
+        self.store.set_setting(away.SEEN, json.dumps(seen))
+        if before is None:
             return
         quiet = away.kept(self.store.setting(away.QUIET))
         if (changed := away.observe(before, seen, quiet, away.now())) is not None:

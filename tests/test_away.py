@@ -104,6 +104,14 @@ def test_the_hub_keeps_what_went_quiet(store, sid, monkeypatch):
     assert hub.away()["quiet"] == quiet
 
 
+def test_a_new_hub_notes_what_went_quiet_while_none_ran(store, sid, monkeypatch):
+    monkeypatch.setattr(away, "now", lambda: NOW)
+    Hub(store).refresh()   # the last hub, before the night
+    store.end(sid)
+    Hub(store).refresh()   # the next start's
+    assert {k: v["how"] for k, v in away.kept(store.setting(away.QUIET)).items()} == {sid: "ended"}
+
+
 def card_lines(app) -> list[str]:
     card = app.query_one("#away", AwayCard)
     return [str(card.get_option_at_index(i).prompt).strip() for i in range(card.option_count)]
@@ -127,13 +135,15 @@ async def test_the_card_shows_after_a_gap_and_esc_dismisses_it(store, sid, monke
         assert app.query_one("#away-card").display, "the first key after the gap shows the card"
         assert card_lines(app) == ["Needs you", f"{ref} which db? · demo"]
         assert store.item(sid, ref)["status"] == "open", "seeing the card marks nothing seen"
-        app.query_one("#away", AwayCard).focus()
+        app.query_one("#answer").focus()
+        await pilot.pause()
         await pilot.press("escape")
         await pilot.pause()
-        assert not app.query_one("#away-card").display, "Esc dismisses it"
+        assert not app.query_one("#away-card").display, "Esc dismisses it, from an empty answer box too"
 
 
 @pytest.mark.anyio
+@pytest.mark.both
 async def test_a_start_after_a_gap_shows_the_card_and_a_line_jumps(store, sid, monkeypatch):
     monkeypatch.setattr(away, "now", lambda: NOW)
     store.set_setting(away.LAST_INPUT, away.stamp(START))

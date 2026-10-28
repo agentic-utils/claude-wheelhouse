@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 LAST_INPUT = "away.last_input"   # settings: the app's last key press, click or scroll (UTC)
 QUIET = "away.quiet"   # settings: {sid: {name, how, at}}, the latest each session went quiet
+SEEN = "away.seen"   # settings: the sessions as a hub last saw them, so a restarted one compares with it
 KEPT = timedelta(days=7)   # a QUIET entry older is dropped
 PER_GROUP = 3   # lines a group shows, then "+N more": the card fits an 80x24 inbox
 NEEDS, LANDED, QUIET_GROUP, DECIDED = "Needs you", "Landed", "Went quiet", "Decided without you"
@@ -106,6 +107,15 @@ def kept(raw: str | None) -> dict:
     except ValueError:
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def seen(raw: str | None) -> dict | None:
+    """SEEN as stored, each session's (name, parked, alive): None when there's none or it doesn't parse."""
+    try:
+        value = json.loads(raw) if raw else None
+        return {sid: (str(v[0]), bool(v[1]), bool(v[2])) for sid, v in value.items()} if isinstance(value, dict) else None
+    except (ValueError, TypeError, IndexError, AttributeError):
+        return None
 
 
 def observe(before: dict | None, after: dict, quiet: dict, at: datetime) -> dict | None:

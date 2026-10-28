@@ -1798,7 +1798,7 @@ TAB_ORDER = ("session-list", "away", "items", "answer", "detail", "detail-editor
              "docview-answer", "deny-reason")
 INPUT_KEPT = 60   # seconds between writes of the last input (away.LAST_INPUT), as the app closes besides
 LISTS_AFTER = "items"   # where a module's lists (TAB_LIST) come in TAB_ORDER: after it
-ANSWER_BOXES = TAB_ORDER[2:]
+ANSWER_BOXES = TAB_ORDER[TAB_ORDER.index("answer"):]
 
 
 def reading_order(button: Button) -> tuple:
@@ -4651,6 +4651,8 @@ class WheelhouseApp(App):
             return
         if event.key == "escape" and self.esc_ends_tour():
             return
+        if event.key == "escape" and self.esc_dismisses_away():
+            return
         if self.type_to_thread(event):
             return
         if not (await self._check_bindings(event.key, priority=True) or await self._check_bindings(event.key)):
@@ -4970,6 +4972,16 @@ class WheelhouseApp(App):
         ids = [o.id for o in options]
         index = ids.index(at) if at is not None and at in ids else next((i for i, o in enumerate(options) if not o.disabled), None)
         card.call_after_refresh(setattr, card, "highlighted", index)   # once laid out: before, it takes the first
+
+    def esc_dismisses_away(self) -> bool:
+        """Esc on the main screen while the card shows dismisses it, wherever the focus is,
+        but in a text box with something typed, whose Esc stays its own. Whether it did."""
+        if self.away_window is None or self.screen is not self.main_screen:
+            return False
+        if isinstance(self.focused, TextArea) and self.focused.text or isinstance(self.focused, Input) and self.focused.value:
+            return False
+        self.dismiss_away()
+        return True
 
     def action_dismiss_away(self) -> None:
         self.dismiss_away()

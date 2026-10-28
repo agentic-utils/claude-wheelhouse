@@ -104,7 +104,7 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `away.py`: the card of what happened while the person was away (#223,
   `.plan/since-you-were-away.md`): its groups read from the items (`card`), and the sessions
   that went quiet, which `Hub.note_quiet` notes as each refresh sees them (`observe`, the
-  `away.quiet` setting). The app measures the gap (`features.away_hours`) and keeps its last
+  `away.quiet` setting, compared at a hub's start with the last hub's, `away.seen`). The app measures the gap (`features.away_hours`) and keeps its last
   input in `away.last_input`, both through the daemon's `/away` routes. Never imports Textual.
 - `models.py`: the models and effort levels offered. A new model is a row here.
 - `helper.py`: the helper chat (#198, `.plan/helper-chat.md`): how-to questions answered by
