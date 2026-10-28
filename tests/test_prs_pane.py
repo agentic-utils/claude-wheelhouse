@@ -1033,6 +1033,9 @@ async def test_a_hub_without_the_result_route_says_the_outcome_is_unknown_at_onc
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         p = await on_pr(app, pilot, URL.format(109))
+        # its detail fetched first: the highlight reaches PR109 from the 💬 row (#236), so later
+        await until(pilot, lambda: URL.format(109) in p.detail_asked and p.detail_timer is None and not p.detail_asking,
+                    "PR109's detail fetched")
         monkeypatch.setattr(pane, "PAUSE", 0)
         asked = []
 
