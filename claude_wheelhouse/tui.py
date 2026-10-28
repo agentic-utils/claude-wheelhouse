@@ -4425,7 +4425,7 @@ class WheelhouseApp(App):
         # counted, as two Deletes under way may both hold a row (a family and a marked child)
         self.going: collections.Counter[str] = collections.Counter()
         self.calls: list[threading.Event] = []   # each Delete's calls, set once made: the app's close waits for them
-        self.deleting = 0   # those Deletes, counted: Ctrl+Z, Ctrl+R and a pin wait for them (behind_deletes)
+        self.deleting = 0   # those Deletes and Ctrl+Zs, counted: Ctrl+Z, Ctrl+R and a pin wait for them (behind_deletes)
         self.behind: list[Callable[[], None]] = []   # what waits, in the order asked
         self.undo: tuple[str, list] | None = None   # what Ctrl+Z undoes, said, and the rows as they stood (undoable)
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
@@ -5691,7 +5691,7 @@ class WheelhouseApp(App):
     def show_item(self, sid: str, ref: str) -> bool:
         """A module's pick of an item (api.Context.show_item, the PRs pane's row that is one):
         shown in Detail with its thread and answer box, and highlighted in the inbox if listed
-        there; if not, the inbox's highlight hidden, not left on another item (#148). An item
+        there (one autocleanse hid back in sight, as selected); if not, the inbox's highlight hidden, not left on another item (#148). An item
         of a compacting session isn't picked, as its inbox row isn't: Detail keeps what it
         showed, and False said (#165)."""
         key, table = f"{sid}|{ref}", self.items_table
@@ -5699,6 +5699,9 @@ class WheelhouseApp(App):
             self.notify(COMPACTING_LOCKED, severity="warning")
             return False
         self.shown_doc = None
+        if key not in table.rows:   # autocleanse hid it (a Landed line, a merged PR): selected, it's back (#235)
+            self.select_row(key)
+            self.paint_items()
         if key in table.rows:
             with table.prevent(DataTable.RowHighlighted):
                 table.move_cursor(row=table.get_row_index(key), animate=False)
@@ -7254,13 +7257,18 @@ class WheelhouseApp(App):
                 landed(done)
         finally:
             self.going -= collections.Counter(keys)   # drops those no other Delete holds
-            self.deleting -= 1
-            self.calls.remove(made)
-            self.refresh_data()
-            if not self.deleting:
-                behind, self.behind = self.behind, []
-                for act in behind:
-                    act()
+            self.writes_landed(made)
+
+    def writes_landed(self, made: threading.Event) -> None:
+        """A Delete's or Ctrl+Z's calls landed (delete_off_thread, action_undo): counted off,
+        the inbox read again, and once none is under way, the writes that waited (behind_deletes)."""
+        self.deleting -= 1
+        self.calls.remove(made)
+        self.refresh_data()
+        if not self.deleting:
+            behind, self.behind = self.behind, []
+            for act in behind:
+                act()
 
     def behind_deletes(self, act: Callable[[], None]) -> bool:
         """A write to the inbox asked while a Delete is landing (delete_off_thread): True, and act
@@ -7356,29 +7364,32 @@ class WheelhouseApp(App):
         changed as it stood before (restore). One step: the next act replaces it."""
         self.undo = (said, rows)
 
-    def restore(self, item) -> None:
-        """Ctrl+Z: an item put back as it stood, from its row read before the act. Undeleted,
-        reopened as the status it had (a question open again, not answered), finished again if
-        it was, its pin as it was. A running child Delete orphaned stays at the top level. Back in
-        sight for autocleanse's minutes afresh (brought_back)."""
+    def restore(self, item, acted: list) -> None:
+        """Ctrl+Z, on its worker thread (action_undo): an item put back as it stood, from its row
+        read before the act. Undeleted, reopened as the status it had (a question open again, not
+        answered), finished again if it was, its pin as it was. A running child Delete orphaned
+        stays at the top level. Each hub call's result added to acted as (item, closed, Done),
+        closed None for a pin, for undo_landed to apply on the UI thread as close would."""
         sid, ref = item["session_id"], item["ref"]
-        self.brought_back[item_key(item)] = datetime.now(timezone.utc)
         now = self.client.item(sid, ref)
         if now is None:
             return
         was = standing(item) == "finished"
         if standing(now) == "finished" and item["dismissed"] != DELETED:   # one deleted before stays so
-            self.close(item, False, item["status"] if item["kind"] in CLOSABLE else None)
+            status = item["status"] if item["kind"] in CLOSABLE else None
+            acted.append((item, False, self.client.close(sid, ref, False, status)))
             if was:
-                self.close(item, True)
+                acted.append((item, True, self.client.close(sid, ref, True)))
         elif was:   # Ctrl+R undone
-            self.close(item, True)
+            acted.append((item, True, self.client.close(sid, ref, True)))
         if pinned(now) != pinned(item):
-            self.told(self.client.set_pinned(sid, ref, pinned(item)))
+            acted.append((item, None, self.client.set_pinned(sid, ref, pinned(item))))
 
     def action_undo(self) -> None:
         """Ctrl+Z: the last delete, pin or reopen in the inbox undone, once. A text box's own
-        Ctrl+Z (TextArea's undo) comes first, and a dialog in front has its own keys."""
+        Ctrl+Z (TextArea's undo) comes first, and a dialog in front has its own keys. The hub's
+        calls go on a worker thread, as Delete's do (delete_off_thread): Ctrl+Delete's rows come
+        back in one go without a stall, and a write asked meanwhile waits for them (behind_deletes)."""
         self.settle()
         if isinstance(self.focused, (TextArea, Input)) or self.screen is not self.screen_stack[0]:
             return
@@ -7389,13 +7400,44 @@ class WheelhouseApp(App):
             self.notify("nothing to undo")
             return
         (said, rows), self.undo = self.undo, None
-        for item in rows:
+        at = datetime.now(timezone.utc)
+        for item in rows:   # back in sight for autocleanse's minutes afresh
+            self.brought_back[item_key(item)] = at
+        self.deleting += 1
+        made = threading.Event()
+        self.calls.append(made)
+
+        def work() -> None:
+            acted, errors = [], []
             try:
-                self.restore(item)
-            except (SessionGone, KeyError) as e:   # ended or gone meanwhile: the rest still come back
+                for item in rows:
+                    try:
+                        self.restore(item, acted)
+                    except Exception as e:   # ended or gone meanwhile: the rest still come back
+                        errors.append(e)
+            finally:
+                made.set()
+            self.post(lambda: self.undo_landed(said, acted, errors, made))
+        self.run_worker(work, thread=True, group="delete", exit_on_error=False)
+
+    def undo_landed(self, said: str, acted: list, errors: list, made: threading.Event) -> None:
+        """action_undo's calls done, on the UI thread: each row moved as close moves it, what
+        went wrong said, and the inbox read again."""
+        if not self.is_running:
+            return
+        try:
+            for item, closed, done in acted:
+                if closed is not None:
+                    self.item_sink.jump()
+                    self.repin.add(item_key(item))
+                    if closed:
+                        self.deleted.add(item_key(item))
+                self.told(done)
+            for e in errors:
                 self.notify(str(e), severity="warning")
-        self.notify(f"undone: {said}")
-        self.refresh_data()
+            self.notify(f"undone: {said}")
+        finally:
+            self.writes_landed(made)
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's Allow, Always or Deny: an explicit act, as Delete is, so selected, the
@@ -7456,8 +7498,9 @@ class WheelhouseApp(App):
             return
         found, _, queued, awaiting = self.client.inbox(self.filter_sid)
         busy = queued | awaiting
+        cuts = self.cutoffs()   # a compacting session's rows are locked, its keys ignored (#150)
         picked = [it for it in found if completed(it, busy) and standing(it, busy) == "settled"
-                  and item_key(it) not in self.going]
+                  and item_key(it) not in self.going and not self.locks(it, cuts)]
         families = {item_key(it): self.family(it) for it in picked}
         by_key = {item_key(it): it for it in found}
 

@@ -8930,7 +8930,7 @@ async def test_ctrl_z_undoes_the_last_inbox_act(store, sid, shape, keys, want, s
         app.notify = lambda text, **kw: notes.append(text)
         for key in keys:
             await pilot.press(key)
-            await pilot.pause()
+            await landed(app, pilot)   # Delete's and Ctrl+Z's calls on their worker thread
     got = [(it["status"], tui.standing(it) == "finished", tui.pinned(it)) for it in map(lambda r: store.item(sid, r), refs)]
     assert got == want, desc
     assert all(s in notes for s in said), f"{desc}: {notes}"
@@ -8966,7 +8966,7 @@ def held_calls(app, fail=None):
         real = getattr(app.client, name)
 
         def held(*a, real=real, **kw):
-            if threading.current_thread() is threading.main_thread():   # Ctrl+R or Ctrl+Z: not held
+            if threading.current_thread() is threading.main_thread():   # Ctrl+R: not held (Ctrl+Z waits for the gate too)
                 return real(*a, **kw)
             assert gate.wait(10), "the test never let the call through"
             if isinstance(fail, Exception):
@@ -8977,7 +8977,7 @@ def held_calls(app, fail=None):
 
 
 async def landed(app, pilot) -> None:
-    """Every Delete under way landed (delete_off_thread)."""
+    """Every Delete and Ctrl+Z under way landed (delete_off_thread, action_undo)."""
     for _ in range(500):
         if not app.deleting:
             break
@@ -9133,6 +9133,27 @@ async def test_ctrl_delete_takes_a_nested_family_once(store, sid):
 
 
 @pytest.mark.anyio
+async def test_ctrl_delete_leaves_a_compacting_sessions_rows(store, tmp_path, monkeypatch):
+    """#235 with #150 and #233: a compacting session's rows are locked, keys ignored, so
+    Ctrl+Delete passes them by and deletes the rest."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    busy = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    locked = store.post_item(busy, "task", "done", status="done")
+    free = store.create_session(str(tmp_path), name="other")
+    other = store.post_item(free, "task", "done", status="done")
+    store.set_activity(busy, "compacting: collecting notes")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        await pilot.press("ctrl+delete")
+        await landed(app, pilot)
+    assert tui.standing(store.item(busy, locked)) == "settled", "the compacting session's row kept"
+    assert tui.standing(store.item(free, other)) == "finished", "the other deleted"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("child_status, parent_shown, desc", [
     ("todo", True, "a child still to do keeps its done parent in sight"),
     ("done", False, "a done child: the parent goes, with it"),
@@ -9169,6 +9190,24 @@ async def test_autocleanse_never_hides_the_selected_item(store, sid):
         app.refresh_data()
         await pilot.pause()
         assert f"{sid}|{ref}" not in app.items_table.rows, "the selection moved on: hidden"
+
+
+@pytest.mark.anyio
+async def test_show_item_brings_back_a_row_autocleanse_hid(store, sid):
+    """#235 with #223 and the PRs pane: a pick of an item autocleanse hid (a Landed line, a
+    merged PR) shows it in the inbox under the highlight, so Delete acts on it."""
+    store.post_item(sid, "question", "anchor")
+    ref = store.post_item(sid, "task", "done a while ago", status="done")
+    aged(store, sid, ref, 30)
+    app = WheelhouseApp(store)
+    app.autocleanse = 5
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert f"{sid}|{ref}" not in app.items_table.rows, "hidden to begin with"
+        assert app.show_item(sid, ref)
+        await pilot.pause()
+        assert f"{sid}|{ref}" in app.items_table.rows, "picked: back in the inbox"
+        assert app.items_table.show_cursor and app.items_cursor == f"{sid}|{ref}", "and highlighted"
 
 
 def test_ctrl_delete_reaches_the_app_from_windows_terminal():
