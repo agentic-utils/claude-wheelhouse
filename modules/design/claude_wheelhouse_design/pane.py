@@ -67,7 +67,7 @@ def sorted_by(rows: list[dict], spec: str) -> list[dict]:
     return sorted(rows, key=key, reverse=mark == DOWN)
 
 
-class DecisionTable(DataTable):
+class DecisionTable(api.KeepColours, DataTable):
     """The decisions, a row each. A list, so a Tab stop after the inbox's (tui.tab_stops)."""
     TAB_LIST = True
 

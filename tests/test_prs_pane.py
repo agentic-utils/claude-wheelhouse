@@ -20,7 +20,7 @@ from textual.pilot import _get_mouse_message_arguments
 
 prs = pytest.importorskip("claude_wheelhouse_prs", reason="installed without the prs module")
 from claude_wheelhouse_prs import fetch, pane  # noqa: E402
-from conftest import Clock  # noqa: E402
+from conftest import Clock, keeps_colours  # noqa: E402
 
 URL = "https://github.com/two-inc/wheelhouse/pull/{}"
 
@@ -211,6 +211,25 @@ async def test_the_tooltip_is_the_hovered_prs(store, sid, github, picked, desc):
             await pilot.hover(table, offset=(2, table.header_height + row))
             await pilot.pause()
             assert str(table.tooltip) == f"two-inc/wheelhouse #{n}: Change {n}", f"{desc}: row {row}'s PR"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("list_id, desc", [
+    ("#pr-list", "the PRs pane"),
+    ("#items", "the inbox"),
+    ("#session-list", "the session list"),
+])
+async def test_a_hovered_or_highlighted_row_keeps_its_colours(store, sid, github, tmp_path, list_id, desc):
+    """#217: Doug, "when I hover over items in the PR list, their status shows green regardless
+    of what the status actually is. Hovering should not change status colour"."""
+    store.create_session(str(tmp_path), name="other", ticket="#8", brief="another thing")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        table = app.query_one(list_id)
+        kept = await keeps_colours(pilot, table, desc)
+        if list_id == "#pr-list":
+            assert pane.LOOKS["red"] in kept, f"{desc}: PR108's light red"
 
 
 @pytest.mark.anyio
