@@ -125,7 +125,7 @@ def checked(paths, cwd) -> list[str]:
     """Directories a session declares (set_doc_dirs), each relative to its git root or
     absolute, under it or in another git repo (allowed), normalised; ValueError for any that
     isn't. A session in no git repo (#220) may still name one in a git repo, absolute or by
-    .. from its own directory, kept absolute since there is no root to resolve it against
+    .. from its own directory, kept resolved since there is no root to resolve it against
     later; any other relative path has no git root to be relative to, so is refused."""
     if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
         raise ValueError("paths must be a list of directory paths")
@@ -142,10 +142,11 @@ def checked(paths, cwd) -> list[str]:
         if root is None and not (os.path.isabs(norm) or norm == ".." or norm.startswith("../")):
             raise ValueError(f"{p!r} is relative, but {cwd} is in no git repo to resolve it against: "
                              "give it absolute, or by .. from there")
-        if why := allowed(Path(os.path.realpath(base / p)), root):
+        real = Path(os.path.realpath(base / p))
+        if why := allowed(real, root):
             raise ValueError(f"{p!r} {why}")
-        if root is None:
-            norm = os.path.normpath(base / p)
+        if root is None:   # kept as checked: a link in the cwd would take a textual .. elsewhere
+            norm = str(real)
         if norm not in out:
             out.append(norm)
     return out

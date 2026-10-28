@@ -1,6 +1,7 @@
 import os
 
 import pytest
+from pathlib import Path
 
 from claude_wheelhouse import docroots
 from claude_wheelhouse.docroots import Outside
@@ -198,7 +199,21 @@ def test_checked_whether_or_not_the_session_is_in_a_repo(repo, cwd, path, kept, 
             docroots.checked([path], str(tmp / cwd))
             pytest.fail(desc)
     else:
-        assert docroots.checked([path], str(tmp / cwd)) == [kept.replace("SIB", sib)], desc
+        kept = kept.replace("SIB", sib)
+        kept = str(Path(kept).resolve()) if cwd == "loose" else kept   # kept resolved: no root to be relative to
+        assert docroots.checked([path], str(tmp / cwd)) == [kept], desc
+
+
+def test_checked_keeps_the_resolved_path_for_a_session_in_no_repo_behind_a_link(repo):
+    """#220: a cwd reached through a link, .. taken from where it really is: kept resolved, so
+    what is kept is what was checked (a textual .. would name a directory that isn't there)."""
+    tmp = repo.parent
+    (tmp / "real" / "loose").mkdir(parents=True)
+    (tmp / "real" / "sib" / ".git").mkdir(parents=True)
+    (tmp / "real" / "sib" / "d").mkdir()
+    (tmp / "home").mkdir()
+    (tmp / "home" / "loose").symlink_to(tmp / "real" / "loose")
+    assert docroots.checked(["../sib/d"], str(tmp / "home" / "loose")) == [str((tmp / "real/sib/d").resolve())]
 
 
 def test_decision_dirs_from_a_session_in_no_repo(repo):

@@ -59,4 +59,5 @@ anything here seems to conflict with them, follow yours.
 - If this project keeps its design decisions (ADRs) somewhere other than `docs/adr`, say where
   once with `set_doc_dirs(paths)`, so the wheelhouse lists them: relative to the git root, or
   in another repo (such as a sibling docs repo) as `../<repo>/<dir>` or an absolute path. If
-  your working directory is in no git repo, only the last two work, `..` taken from it.
+  your working directory is in no git repo, give an absolute path (`..` is taken from that
+  directory, not a git root).
