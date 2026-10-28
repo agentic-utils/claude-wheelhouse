@@ -705,7 +705,7 @@ ALL_KEPT = {"demo": ["a"], "gone": ["b", "c"], "slow": ["d"]}
     (ALL_DEAD, True, "Send all (0)", ALL_KEPT, "Send all (0): nothing to do",
      "only dead sessions have drafts: Shift+A finds nothing to do"),
     (ALL_DEAD, False, "Send all (0)", ALL_KEPT,
-     "nothing queued for a running session: a dead one's queue waits until it's relaunched",
+     "nothing queued for a running session: a dead or parked one's queue waits until it's relaunched or unparked",
      "only dead sessions have drafts, pressed before the bar repainted: nothing sent, and it says why"),
 ])
 async def test_send_all_skips_dead_sessions(store, sid, tmp_path, monkeypatch, statuses, by_key, label, left, note,

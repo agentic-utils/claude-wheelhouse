@@ -379,7 +379,9 @@ class Hub:
         it, and send its queue, with text (Alt+S's) after it, as its first prompt on waking.
         They go behind the resume notice its launch leaves (launch.tell_joined), so the session
         reads the wheelhouse's context first and the person's words after, all in the one
-        batch its monitor or host claims at start. Nothing is sent if it doesn't come back:
+        batch its monitor or host claims at start. The launch returns before the session has
+        started (a detached host, a tab's Claude), and the queue follows the notice within the
+        same call, long before either can claim anything. Nothing is sent if it doesn't come back:
         the queue stays queued, and the text stays the person's."""
         s = self.row(sid)
         verb = waking(s)
@@ -880,6 +882,8 @@ class Hub:
 
     def send_queue(self, sid: str) -> Done:
         """A session's queue, sent as one message; a dead one's stays queued (#62)."""
+        if self.dead(sid) and not self.store.drafts(sid):
+            return Done(False).say("nothing queued for that session")
         if self.dead(sid):
             s = self.row(sid)
             return Done(False).say(f"{display_name(s)} isn't running: {wake_verb(s)} it first", "warning")
@@ -887,14 +891,15 @@ class Hub:
         return Done(bool(n)).say(f"sent {self.sent_note(sid, n)}" if n else "nothing queued for that session")
 
     def send_all(self) -> Done:
-        """Every queue but a dead session's, which stays queued until it's relaunched (#62)."""
+        """Every queue but a dead or parked session's, which stays queued until it's relaunched
+        or unparked (#62)."""
         queued = dict.fromkeys(m["session_id"] for m in self.store.drafts())
         sent = [(sid, n) for sid in queued if not self.dead(sid) and (n := self.store.dispatch(sid))]
         if sent:
             return Done().say("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent))
         if any(self.dead(sid) for sid in queued):
-            return Done(False).say("nothing queued for a running session: a dead one's queue waits until "
-                                   "it's relaunched", "warning")
+            return Done(False).say("nothing queued for a running session: a dead or parked one's queue waits "
+                                   "until it's relaunched or unparked", "warning")
         return Done(False).say("nothing queued")
 
     def toggle_mode(self, sid: str) -> Done:

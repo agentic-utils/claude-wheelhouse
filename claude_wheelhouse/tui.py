@@ -3938,7 +3938,7 @@ DESCRIBE = {
     "press('deny')": "Deny it, with an optional reason (Enter denies); on the question suggesting Compact, just compact after",
     "press('compact-then-send')": "On the question suggesting Compact: send the queued answers after, in the same prompt",
     "press('compact-then-park')": "On the question suggesting Compact: park the session after, sending nothing",
-    "press('send-all')": "Send all: every running session's queue (a dead one's waits until it's relaunched)",
+    "press('send-all')": "Send all: every running session's queue (a dead or parked one's waits until it's relaunched or unparked)",
     "cursor_up": "Up a row",
     "cursor_down": "Down a row",
     "page_up": "Up a page",
@@ -3952,7 +3952,7 @@ DESCRIBE = {
 BUTTONS = {
     "mode": "Mode (Ctrl+T): the session's send mode, Queued or Immediate",
     "send": "Send (Ctrl+S): send the session's queued answers as one message; its caption counts them",
-    "send-all": "Send all (Alt+Shift+A), above the footer: send every running session's queue; a dead one's waits until it's relaunched",
+    "send-all": "Send all (Alt+Shift+A), above the footer: send every running session's queue; a dead or parked one's waits until it's relaunched or unparked",
     "allow": "Allow (Alt+Y; over the answer box, on a permission item): let the tool call run, at once",
     "always": "Always (Alt+W): allow it, and keep the rule Claude Code suggests",
     "deny": ("Deny (Alt+D): refuse it, with a reason if you like: typed in the line that opens, the session reads "

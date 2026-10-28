@@ -189,7 +189,7 @@ FEATURES: tuple[Feature, ...] = (
     Feature("send-now", UNRELEASED, "send",
             note="Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits.",
             tip="Alt+S allows you to send the answer you have just typed, bypassing the queue."),
-    Feature("send-wakes", UNRELEASED, "send",
+    Feature("send-wakes", UNRELEASED, ADVANCED,
             note="Ctrl+S or Alt+S on a session that isn't running asks to Unpark (a parked one) or Relaunch it "
                  "and send: it wakes with your message and its queue as its first prompt."),
     Feature("pr-actions", UNRELEASED, "prs",
