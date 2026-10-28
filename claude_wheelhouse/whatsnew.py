@@ -169,7 +169,7 @@ FEATURES: tuple[Feature, ...] = (
     Feature("pins", UNRELEASED, "inbox",
             note="Pin any inbox item (📌, a click on its first column or Alt+P) and clearing the inbox leaves it; "
                  "docs come pinned.",
-            tip="Ctrl+A / Delete remove all finished items except those that are pinned (📌). Pin an item with Alt+P, "
+            tip="Ctrl+Delete removes all completed items except those that are pinned (📌). Pin an item with Alt+P, "
                 "or click the first column."),
     Feature("doc-threads", UNRELEASED, "docs",
             note="A doc has a thread of its own: comment on it below the doc (split) or on a Thread tab (tabbed); "
@@ -298,6 +298,12 @@ FEATURES: tuple[Feature, ...] = (
             note="Emoji suggestions take a click: type :star and click the one you want, or choose it with Up "
                  "and Down and take it with Tab or Enter."),
     # notes only: the inbox's dialog has its MAX_TIPS already
+    Feature("delete-completed", UNRELEASED, ADVANCED,
+            note="Ctrl+Delete in the inbox deletes every completed item at once, but the pinned, with no question: "
+                 "Ctrl+Z brings them all back."),
+    Feature("autocleanse", UNRELEASED, ADVANCED,
+            note="A completed item leaves the inbox 5 minutes after it completed (AUTOCLEANSE_MINUTES in a .env, 0 "
+                 "for never); Alt+V shows it again."),
     Feature("since-away", UNRELEASED, ADVANCED,
             note="Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: "
                  "what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it."),

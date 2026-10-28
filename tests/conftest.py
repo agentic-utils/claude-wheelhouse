@@ -74,7 +74,7 @@ def isolated_db(tmp_path, monkeypatch):
     monkeypatch.delenv("WHEELHOUSE_SESSION_ID", raising=False)
     monkeypatch.delenv("WHEELHOUSE_TOKEN", raising=False)
     monkeypatch.delenv("WHEELHOUSE_PORT", raising=False)   # a test that wants one sets it (features.port)
-    for setting in ("ENABLE_SDK", "USAGE_MODE", "KEEPALIVE_HOURS", "ANIMATION_FPS"):   # features.given's
+    for setting in ("ENABLE_SDK", "USAGE_MODE", "KEEPALIVE_HOURS", "ANIMATION_FPS", "AUTOCLEANSE_MINUTES"):   # features.given's
         monkeypatch.delenv(f"WHEELHOUSE_{setting}", raising=False)
     return path
 
@@ -140,6 +140,8 @@ def usage_mode_default(monkeypatch):
     monkeypatch.setattr(features, "_keepalive_hours", None)
     monkeypatch.setattr(features, "_animation_fps", None)
     monkeypatch.setattr(features, "_away_hours", None)
+    # autocleanse off (#235): many tests post items a second, or an hour, back; a test of it sets app.autocleanse
+    monkeypatch.setattr(features, "_autocleanse_minutes", "0")
     monkeypatch.setattr(features, "_warned", set())
 
 

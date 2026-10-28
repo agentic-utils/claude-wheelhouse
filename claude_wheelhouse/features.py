@@ -86,10 +86,14 @@ AWAY_FLAG = "--away-hours"
 AWAY_KEY = "AWAY_HOURS"
 AWAY_HOURS = 2.0
 _away_hours: str | None = None   # set by the command line (set_away_hours)
+AUTOCLEANSE_FLAG = "--autocleanse-minutes"
+AUTOCLEANSE_KEY = "AUTOCLEANSE_MINUTES"
+AUTOCLEANSE_MINUTES = 5.0
+_autocleanse_minutes: str | None = None   # set by the command line (set_autocleanse_minutes)
 SESSION_DIR_KEY = "SESSION_DIR"
 # each flag's .env key (its environment variable is WHEELHOUSE_<key>), for cli.args_text
 SETTINGS = {FLAG: KEY, USAGE_FLAG: USAGE_KEY, PORT_FLAG: PORT_KEY, KEEPALIVE_FLAG: KEEPALIVE_KEY,
-            ANIMATION_FLAG: ANIMATION_KEY, AWAY_FLAG: AWAY_KEY}
+            ANIMATION_FLAG: ANIMATION_KEY, AWAY_FLAG: AWAY_KEY, AUTOCLEANSE_FLAG: AUTOCLEANSE_KEY}
 _warned: set[str] = set()
 # the directory the package runs from: the checkout, as uv sync installs it (editable), so
 # the same .env whatever directory the app, the daemon or a tab is started in
@@ -293,6 +297,32 @@ def away_hours() -> float:
         return hours
     _say(f"claude-wheelhouse: {where} is {value!r}, not a number of hours: a gap is 2")
     return AWAY_HOURS
+
+
+def set_autocleanse_minutes(minutes: str) -> None:
+    """--autocleanse-minutes on the command line."""
+    global _autocleanse_minutes
+    _autocleanse_minutes = minutes
+
+
+def autocleanse_minutes() -> float:
+    """How long a completed item (settled: a task done, a subagent finished, a PR merged) stays
+    in the inbox before it is hidden, as finished ones are, until Alt+V shows them (#235), in
+    minutes: --autocleanse-minutes, else WHEELHOUSE_AUTOCLEANSE_MINUTES, else
+    AUTOCLEANSE_MINUTES= in the install directory's .env, else the user's, else 5. A number of
+    0 or more, fractions allowed (0: never hidden); anything else is said once, on stderr, and
+    taken as 5."""
+    if (setting := given(_autocleanse_minutes, AUTOCLEANSE_FLAG, AUTOCLEANSE_KEY)) is None:
+        return AUTOCLEANSE_MINUTES
+    value, where = setting
+    try:
+        minutes = float(value)
+    except ValueError:
+        minutes = -1.0
+    if minutes >= 0 and minutes != float("inf"):
+        return minutes
+    _say(f"claude-wheelhouse: {where} is {value!r}, not a number of minutes: completed items are hidden after 5")
+    return AUTOCLEANSE_MINUTES
 
 
 def session_dir() -> Path:

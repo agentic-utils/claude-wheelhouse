@@ -9025,6 +9025,160 @@ async def test_delete_takes_rows_at_once_and_the_hub_call_lands_after(store, sid
         assert any(said in n for n in notes), f"{desc}: {notes}"
 
 
+def aged(store, sid, ref, minutes: float) -> None:
+    """An item last changed `minutes` ago."""
+    at = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    store.db.execute("UPDATE items SET updated_at = ? WHERE session_id = ? AND ref = ?", (at, sid, ref))
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("kind, status, age, pin, setting, show, shown, desc", [
+    ("task", "done", 6, False, 5, False, False, "a task done 6 minutes ago: hidden"),
+    ("task", "done", 4, False, 5, False, True, "done 4 minutes ago: still shown"),
+    ("agent", "failed", 6, False, 5, False, False, "a subagent failed a while ago: hidden"),
+    ("pr", "merged", 6, False, 5, False, False, "a PR merged a while ago: hidden"),
+    ("question", "answered", 6, False, 5, False, False, "a question answered a while ago: hidden"),
+    ("decision", "seen", 6, False, 5, False, False, "a decision seen a while ago: hidden"),
+    ("task", "todo", 60, False, 5, False, True, "a task still to do: never hidden"),
+    ("task", "done", 60, True, 5, False, True, "pinned: never hidden"),
+    ("task", "done", 60, False, 0, False, True, "the setting 0: off"),
+    ("task", "done", 60, False, 5, True, True, "Alt+V shows the hidden ones"),
+])
+async def test_autocleanse_hides_completed_items_after_a_while(store, sid, kind, status, age, pin, setting, show,
+                                                                 shown, desc):
+    """#235, Doug: "an autocleanse option, on by default, that hides completed items after 5
+    minutes". Hidden, not deleted: Alt+V shows them, as it shows the finished."""
+    store.post_item(sid, "question", "anchor")   # something else in the inbox to select
+    extra = {"why": "local"} if kind == "decision" else {}
+    ref = (store.post_pr(sid, "https://github.com/o/r/pull/5", "it") if kind == "pr" else
+           store.post_item(sid, kind, "it", **extra))
+    store.db.execute("UPDATE items SET status = ? WHERE session_id = ? AND ref = ?", (status, sid, ref))
+    if pin:
+        store.set_pinned(sid, ref, True)
+    aged(store, sid, ref, age)
+    app = WheelhouseApp(store)
+    app.autocleanse = setting
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if show:
+            await pilot.press("alt+v")
+        app.refresh_data()
+        await pilot.pause()
+        assert (f"{sid}|{ref}" in app.items_table.rows) == shown, desc
+    assert store.item(sid, ref)["dismissed"] is None, f"{desc}: hidden, never deleted"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+async def test_ctrl_delete_deletes_every_completed_item_and_ctrl_z_brings_them_back(store, sid):
+    """#235, Doug: "a 'delete all completed' option (Ctrl+Del?) for me to delete all completed
+    inbox items without having to select them first". Hidden ones too, never an active or a
+    pinned one, no dialog, through #234's fast path; a parent with a child under way is kept."""
+    done = [store.post_item(sid, "task", f"d{i}", status="done") for i in range(3)]
+    aged(store, sid, done[2], 30)   # hidden by autocleanse, deleted all the same
+    answered = store.post_item(sid, "question", "q", status="answered")
+    active = store.post_item(sid, "task", "still going", status="todo")
+    pin = store.post_item(sid, "task", "kept", status="done")
+    store.set_pinned(sid, pin, True)
+    parent = store.post_item(sid, "task", "parent", status="done")
+    child = store.post_item(sid, "question", "open child")
+    store.db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ?", (parent, sid, child))
+    gone = [*done, answered]
+    app = WheelhouseApp(store)
+    app.autocleanse = 5
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        notes = []
+        app.notify = lambda text, **kw: notes.append(text)
+        app.items_table.focus()
+        await pilot.press("ctrl+delete")
+        await pilot.pause()
+        assert [type(s).__name__ for s in app.screen_stack] == ["Screen"], "no dialog"
+        await landed(app, pilot)
+        assert [store.item(sid, r)["dismissed"] or store.item(sid, r)["status"] for r in gone] == \
+            ["done", "done", "done", "closed"], "every completed one deleted"
+        assert all(f"{sid}|{r}" not in app.items_table.rows for r in gone), "and off the inbox"
+        assert [tui.standing(store.item(sid, r)) for r in (active, pin, parent, child)] == \
+            ["active", "settled", "settled", "active"], "the active, the pinned and a parent of an open child kept"
+        assert "deleted 4 completed items: Ctrl+Z to undo; 1 kept: its children are still under way" in notes, notes
+        await pilot.press("ctrl+z")
+        await landed(app, pilot)
+        assert all(tui.standing(store.item(sid, r)) == "settled" for r in gone), "Ctrl+Z brings them all back"
+        assert all(f"{sid}|{r}" in app.items_table.rows for r in gone), "in sight: one aged out too, its minutes afresh"
+
+
+@pytest.mark.anyio
+async def test_ctrl_delete_takes_a_nested_family_once(store, sid):
+    """#235 review: a done parent, a done child and its done grandchild go in one delete_family
+    call, counted once each, whichever of them settled first."""
+    grand = store.post_item(sid, "task", "grandchild", status="done")
+    mid = store.post_item(sid, "task", "child", status="done")
+    top = store.post_item(sid, "task", "parent", status="done")
+    for child, parent in ((grand, mid), (mid, top)):
+        store.db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ?", (parent, sid, child))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        notes, calls = [], []
+        app.notify = lambda text, **kw: notes.append(text)
+        real = app.client.delete_family
+        app.client.delete_family = lambda s_, r: calls.append(r) or real(s_, r)
+        app.items_table.focus()
+        await pilot.press("ctrl+delete")
+        await landed(app, pilot)
+    assert calls == [top], calls
+    assert "deleted 3 completed items: Ctrl+Z to undo" in notes, notes
+    assert all(tui.standing(store.item(sid, r)) == "finished" for r in (top, mid, grand))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("child_status, parent_shown, desc", [
+    ("todo", True, "a child still to do keeps its done parent in sight"),
+    ("done", False, "a done child: the parent goes, with it"),
+])
+async def test_autocleanse_keeps_a_parent_with_a_child_under_way(store, sid, child_status, parent_shown, desc):
+    """#235 review: never a child shown without its parent."""
+    parent = store.post_item(sid, "task", "parent", status="done")
+    child = store.post_item(sid, "task", "child", status=child_status)
+    store.db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ?", (parent, sid, child))
+    for r in (parent, child):
+        aged(store, sid, r, 30)
+    app = WheelhouseApp(store)
+    app.autocleanse = 5
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert (f"{sid}|{parent}" in app.items_table.rows) == parent_shown, desc
+
+
+@pytest.mark.anyio
+async def test_autocleanse_never_hides_the_selected_item(store, sid):
+    """#235: the selected row stays under the cursor; it goes once the selection moves on."""
+    other = store.post_item(sid, "question", "anchor")
+    ref = store.post_item(sid, "task", "done a while ago", status="done")
+    app = WheelhouseApp(store)
+    app.autocleanse = 5
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.select_row(f"{sid}|{ref}")
+        aged(store, sid, ref, 30)
+        app.refresh_data()
+        await pilot.pause()
+        assert f"{sid}|{ref}" in app.items_table.rows, "selected: kept"
+        app.select_row(f"{sid}|{other}")
+        app.refresh_data()
+        await pilot.pause()
+        assert f"{sid}|{ref}" not in app.items_table.rows, "the selection moved on: hidden"
+
+
+def test_ctrl_delete_reaches_the_app_from_windows_terminal():
+    """#235: Windows Terminal sends Ctrl+Delete as CSI 3;5~, which Textual's parser reads as
+    ctrl+delete, the key the item list binds."""
+    from textual._ansi_sequences import ANSI_SEQUENCES_KEYS
+    assert [k.value for k in ANSI_SEQUENCES_KEYS["\x1b[3;5~"]] == ["ctrl+delete"]
+    assert any(b.key == "ctrl+delete" for b in tui.ItemList.BINDINGS)
+
+
 @pytest.mark.anyio
 @pytest.mark.both
 @pytest.mark.parametrize("keys, desc", [
