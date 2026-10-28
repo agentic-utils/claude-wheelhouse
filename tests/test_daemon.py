@@ -1305,11 +1305,7 @@ def moduled(store, monkeypatch, tmp_path):
                                               api.Loaded("off", probe([out], id="off"))])
     d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True)
     yield d, tmp_path
-    d.pool.shutdown()
-    d.worker.shutdown()
-    for lane in d.lanes.values():
-        lane.shutdown()
-    d.watch.close()
+    close(d)
 
 
 @pytest.mark.parametrize("method, desc", [("GET", "a module's query"), ("POST", "a module's command")])
@@ -1414,10 +1410,14 @@ def lanes_daemon(store, monkeypatch, release):
 
 
 def close(d):
+    """The daemon's threads stopped, a lane's waited on too: a stuck command, released, still
+    keeps its answer in the store, which must be done before the test's teardown closes it
+    (a write racing the close segfaults in sqlite, #207)."""
     d.pool.shutdown()
     d.worker.shutdown()
     for lane in d.lanes.values():
-        lane.shutdown()
+        lane.commands.shutdown()
+        lane.queries.shutdown()
     d.watch.close()
 
 
