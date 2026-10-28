@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 23, 2026-10-28T11:21:47Z, source 8f614d95d568671b (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 26, 2026-10-28T11:23:32Z, source 8f614d95d568671b (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -74,9 +74,9 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **Ctrl+Enter or Ctrl+J**: Submit what's typed: queued, or sent at once, by the session's mode
 
-- **Alt+S**: Send what's typed at once, whatever the mode, leaving the mode and the rest of the queue as they are
+- **Alt+S**: Send what's typed at once, whatever the mode, leaving the mode and the rest of the queue as they are (one not running: Unpark or Relaunch it and send it with the queue, asked first)
 
-- **Ctrl+S**: Send the current session's queue (a dead one's waits: Relaunch it first)
+- **Ctrl+S**: Send the current session's queue (one not running: Unpark or Relaunch it and send, asked first)
 
 - **Ctrl+T**: Switch the session between Queued and Immediate
 
@@ -112,7 +112,7 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 ### The buttons
 
-- **Alt+Shift+A**: Send all: every running session's queue (a dead one's waits until it's relaunched)
+- **Alt+Shift+A**: Send all: every running session's queue (a dead or parked one's waits until it's relaunched or unparked)
 
 ### Moving between panes
 
@@ -222,7 +222,7 @@ The buttons under the session list act on the session highlighted there, and onl
 
 - Send (Ctrl+S): send the session's queued answers as one message; its caption counts them
 
-- Send all (Alt+Shift+A), above the footer: send every running session's queue; a dead one's waits until it's relaunched
+- Send all (Alt+Shift+A), above the footer: send every running session's queue; a dead or parked one's waits until it's relaunched or unparked
 
 - Relaunch / Unpark (Alt+L in the session list): start the session again where it left off, stopping it first if it's running (asked only if it's mid-turn); on a parked one, Unpark (Alt+P too)
 
@@ -236,7 +236,7 @@ The buttons under the session list act on the session highlighted there, and onl
 
 ### Sending
 
-**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the session's queue as one message, so related answers arrive together; ✉ counts what's queued. A dead session's queue waits: Ctrl+S and Send all leave it until the session is relaunched. Alt+S sends just the answer in the box at once, leaving the queue and the mode as they are. **Immediate**: Ctrl+Enter (or Alt+S) sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a queued answer back to edit.
+**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the session's queue as one message, so related answers arrive together; ✉ counts what's queued. A session not running: Ctrl+S or Alt+S asks to Unpark (a parked one) or Relaunch it and send, its queue and the box's answer its first prompt; Send all leaves its queue. Alt+S sends just the answer in the box at once, leaving the queue and the mode as they are. **Immediate**: Ctrl+Enter (or Alt+S) sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a queued answer back to edit.
 
 ### Dialogs
 
@@ -316,6 +316,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - The PRs pane lists the open PRs your sessions made, or with M every open PR you authored, each with a traffic light for checks, review and conflicts; with a session selected, its PRs alone.
 - Right-click a session in the session list for a menu of its buttons, acting on that session.
 - Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits.
+- Ctrl+S or Alt+S on a session that isn't running asks to Unpark (a parked one) or Relaunch it and send: it wakes with your message and its queue as its first prompt.
 - A PR in the PRs pane has Open, Merge and Request review buttons, and a right-click on its row gives them as a menu: Merge asks first and says what stood in its way, and Request review asks the session that made the PR to post the request on Slack.
 - Ctrl+Z in the inbox undoes the last delete, pin or reopen, an open question coming back open; Delete on an open question asks first.
 - Detail, showing a PR, has its Open, Merge, Request review and Close buttons, and its failing checks, description, history and comments.

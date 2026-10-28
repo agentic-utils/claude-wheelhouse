@@ -308,16 +308,18 @@ def test_a_permission_answered_meanwhile_is_not_submitted(hub, store, sid, heard
     assert told(done)[-1][1] == "warning"
 
 
-@pytest.mark.parametrize("status, parked, left, said, desc", [
-    ("dead", False, ["a"], "demo isn't running: Relaunch it first", "a dead session's queue stays queued (#62)"),
-    ("dead", True, ["a"], "demo isn't running: Unpark it first", "a parked one's says Unpark, not Relaunch (#218)"),
-    ("live", False, [], "sent 1 to demo", "a live one's goes, as one message"),
+@pytest.mark.parametrize("status, parked, queued, left, said, desc", [
+    ("dead", False, ["a"], ["a"], "demo isn't running: Relaunch it first", "a dead session's queue stays queued (#62)"),
+    ("dead", True, ["a"], ["a"], "demo isn't running: Unpark it first", "a parked one's says Unpark, not Relaunch (#218)"),
+    ("dead", False, [], [], "nothing queued for that session", "a dead one with nothing queued: nothing to wake it for"),
+    ("live", False, ["a"], [], "sent 1 to demo", "a live one's goes, as one message"),
 ])
-def test_send_queue_leaves_a_dead_sessions_queue(hub, store, sid, heard, monkeypatch, status, parked, left, said,
-                                                 desc):
+def test_send_queue_leaves_a_dead_sessions_queue(hub, store, sid, heard, monkeypatch, status, parked, queued, left,
+                                                 said, desc):
     monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
     store.set_parked(sid, parked)
-    store.queue(sid, "a")
+    for body in queued:
+        store.queue(sid, body)
     hub.refresh()
     done = hub.send_queue(sid)
     assert [m["body"] for m in store.drafts(sid)] == left, desc

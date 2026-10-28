@@ -674,12 +674,15 @@ def by_name(monkeypatch, statuses: dict[str, str]) -> None:
 @pytest.mark.anyio
 @pytest.mark.parametrize("status, left, note, desc", [
     ("live", [], "sent 1 to demo", "a live session sends its queue"),
+    ("dead", None, "nothing queued for that session", "a dead one with nothing queued: no offer to wake it"),
     ("stalled", [], "sent 1 to demo", "a stalled session is still running, so it sends too"),
 ])
 async def test_ctrl_s_on_a_dead_session_says_restore_it_first(store, sid, monkeypatch, status, left, note, desc):
     by_name(monkeypatch, {"demo": status})
     store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))
-    store.queue(sid, "a")
+    if left is not None:   # None: nothing queued, and none left
+        store.queue(sid, "a")
+    left = left or []
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pick(app, pilot, sid)
