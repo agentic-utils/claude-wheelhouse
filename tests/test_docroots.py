@@ -166,8 +166,49 @@ def test_decision_dirs_lists_a_shared_directory_once_with_the_repo_that_declared
     (["docs/adr"], "a directory in it, declared"),
 ])
 def test_no_doc_dirs_outside_a_git_repo(tmp_path, dirs, desc):
-    """A session in ~, say, with no .git above: nothing of it is a doc root, and a declaration is refused."""
+    """A session in ~, say, with no .git above: nothing of it is a doc root, and a declaration
+    of anything in it is refused."""
     (tmp_path / "docs/adr").mkdir(parents=True)
     assert docroots.doc_dirs([{"cwd": str(tmp_path), "doc_dirs": dirs}]) == [], desc
-    with pytest.raises(ValueError, match="in no git repo"):
-        docroots.checked(dirs or [], str(tmp_path))
+    if dirs:
+        with pytest.raises(ValueError, match="in no git repo"):
+            docroots.checked(dirs, str(tmp_path))
+
+
+@pytest.mark.parametrize("cwd, path, kept, refused, desc", [
+    ("repo/src", "SIB/decisions", "SIB/decisions", None, "in a repo: absolute, into a sibling repo"),
+    ("repo/src", "../sib/decisions", "../sib/decisions", None, "in a repo: by .., from its git root"),
+    ("repo/src", "docs/decisions", "docs/decisions", None, "in a repo: plain relative, from its git root"),
+    ("loose", "SIB/decisions", "SIB/decisions", None, "in no repo: absolute, into a repo (#220)"),
+    ("loose", "../sib/decisions", "SIB/decisions", None, "in no repo: by .., from its own directory, kept absolute"),
+    ("loose", "sib/decisions", None, "no git repo to resolve it against", "in no repo: plain relative has no root"),
+    ("loose", "SIB", None, "is the root of sib", "in no repo: a repo's root itself"),
+    ("loose", "../elsewhere", None, "is in no git repo", "in no repo: by .., into no repo"),
+    ("loose", "", None, "absolute, or by .. from here", "in no repo: an empty path"),
+])
+def test_checked_whether_or_not_the_session_is_in_a_repo(repo, cwd, path, kept, refused, desc):
+    """#220: a session whose directory is in no git repo (a projects folder, say) may name
+    decisions in one, absolute or by ..; only a plain relative path needs its git root."""
+    tmp = repo.parent
+    (tmp / "loose").mkdir()
+    sib = str(tmp / "sib")
+    path = path.replace("SIB", sib)
+    if refused:
+        with pytest.raises(ValueError, match=refused):
+            docroots.checked([path], str(tmp / cwd))
+            pytest.fail(desc)
+    else:
+        assert docroots.checked([path], str(tmp / cwd)) == [kept.replace("SIB", sib)], desc
+
+
+def test_decision_dirs_from_a_session_in_no_repo(repo):
+    """#220: a session in no git repo lists the directories it declared (absolute, as checked
+    keeps them), under the repo each is in; a declared one it shares with a repo's session
+    lists once, under the root that sorts first."""
+    loose = repo.parent / "loose"
+    loose.mkdir()
+    sib = (repo.parent / "sib" / "decisions").resolve()
+    alone = [{"cwd": str(loose), "doc_dirs": [str(sib), "stale/relative", str(repo.parent / "elsewhere")]}]
+    assert docroots.decision_dirs(alone) == [(sib, sib.parent)], "its own repo's root, the rest left out"
+    shared = alone + [{"cwd": str(repo / "src"), "doc_dirs": ["../sib/decisions"]}]
+    assert docroots.decision_dirs(shared) == [(sib, repo.resolve())], "once, under repo (sorts before sib)"

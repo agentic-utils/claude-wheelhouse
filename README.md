@@ -379,7 +379,9 @@ session.
   in: each `NNNN-*.md` file in the repo's `docs/adr`, or in the directories a session there
   named with `set_doc_dirs` instead (`.plan/`, say, only if named, or a directory in another
   repo, such as a sibling docs repo; listed once, under the repo that
-  named it, or the first by path when several did), read again every 10
+  named it, or the first by path when several did). A session started outside any git repo
+  (a projects folder, say) may name one too, absolute or by `..`, listed under the repo it
+  is in. Read again every 10
   seconds and whenever a session starts in another repo or names its directories. A row is
   its number, status and title, and its repo when the pane lists more than one. The status is the doc's front matter `status:`, else
   a `Status:` line or `## Status` section, else its file name's (`0042-ACCEPTED-slug.md`),

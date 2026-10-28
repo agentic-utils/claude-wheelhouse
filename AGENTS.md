@@ -98,7 +98,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   and kept to a `.md` file under a root; stage 8 writes through it too), and where a repo's
   decisions are (`doc_dirs`: `docs/adr` under its git root, a linked worktree's main
   repository's (`main_root`), unless a session declared others with `set_doc_dirs`, Q114, which may be in another git
-  repo beside it, #191; `decision_dirs` pairs each with the repo that looks there).
+  repo beside it, #191; `decision_dirs` pairs each with the repo that looks there, or for a
+  session in no git repo, which may still name one absolute or by `..`, #220, the repo it is in).
   Never imports Textual.
 - `models.py`: the models and effort levels offered. A new model is a row here.
 - `helper.py`: the helper chat (#198, `.plan/helper-chat.md`): how-to questions answered by
