@@ -1414,10 +1414,14 @@ def lanes_daemon(store, monkeypatch, release):
 
 
 def close(d):
+    """The daemon's threads stopped, a lane's waited on too: a stuck command, released, still
+    keeps its answer in the store, which must be done before the test's teardown closes it
+    (a write racing the close segfaults in sqlite, #207)."""
     d.pool.shutdown()
     d.worker.shutdown()
     for lane in d.lanes.values():
-        lane.shutdown()
+        lane.commands.shutdown()
+        lane.queries.shutdown()
     d.watch.close()
 
 
