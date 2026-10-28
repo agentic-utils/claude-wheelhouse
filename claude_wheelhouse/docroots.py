@@ -115,7 +115,7 @@ def allowed(real: Path, root: Path | None) -> str | None:
             return None
     tree = work_tree(real)
     if tree is None:
-        return f"is outside the git root, {root}, and in no other git repo" if root else "is in no git repo"
+        return "is in no git repo" if root is None else f"is outside the git root, {root}, and in no other git repo"
     if real == tree:
         return f"is the root of {tree.name}: name the directory the decisions are in"
     return None
@@ -124,24 +124,21 @@ def allowed(real: Path, root: Path | None) -> str | None:
 def checked(paths, cwd) -> list[str]:
     """Directories a session declares (set_doc_dirs), each relative to its git root or
     absolute, under it or in another git repo (allowed), normalised; ValueError for any that
-    isn't. A session in no git repo (#220) may still name one in a git repo, absolute or by
-    .. from its own directory, kept absolute since there is no root to resolve it against
-    later; any other relative path has no git root to be relative to, so is refused."""
+    isn't. A session in no git repo (#220) may still name one in a git repo, absolute or
+    relative to its own directory (a repo under it, or by .. beside it), kept absolute since
+    there is no root to resolve it against later."""
     if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
         raise ValueError("paths must be a list of directory paths")
     if len(paths) > MOST:
         raise ValueError(f"at most {MOST} directories")
     root = git_root(cwd)
-    base = root if root is not None else Path(os.path.realpath(cwd))   # .. from where it really is
+    base = root if root is not None else Path(os.path.realpath(cwd))   # from where it really is
     out = []
     for p in paths:
         if not p.strip() or "\0" in p:
-            where = f"relative to the git root ({root}) or absolute" if root else "absolute, or by .. from here"
+            where = f"relative to the git root ({root}) or absolute" if root else "relative to here or absolute"
             raise ValueError(f"{p!r}: give a directory, {where}")
         norm = os.path.normpath(p)
-        if root is None and not (os.path.isabs(norm) or norm == ".." or norm.startswith("../")):
-            raise ValueError(f"{p!r} is relative, but {cwd} is in no git repo to resolve it against: "
-                             "give it absolute (or by .. from there)")
         real = Path(os.path.realpath(base / p))
         if why := allowed(real, root):
             raise ValueError(f"{p!r} {why}")

@@ -181,14 +181,15 @@ def test_no_doc_dirs_outside_a_git_repo(tmp_path, dirs, desc):
     ("repo/src", "docs/decisions", "docs/decisions", None, "in a repo: plain relative, from its git root"),
     ("loose", "SIB/decisions", "SIB/decisions", None, "in no repo: absolute, into a repo (#220)"),
     ("loose", "../sib/decisions", "SIB/decisions", None, "in no repo: by .., from its own directory, kept absolute"),
-    ("loose", "sib/decisions", None, "no git repo to resolve it against", "in no repo: plain relative has no root"),
+    (".", "sib/decisions", "SIB/decisions", None, "in no repo: plain relative, into a repo under it, kept absolute"),
+    ("loose", "sib/decisions", None, "is in no git repo", "in no repo: plain relative, into no repo"),
     ("loose", "SIB", None, "is the root of sib", "in no repo: a repo's root itself"),
     ("loose", "../elsewhere", None, "is in no git repo", "in no repo: by .., into no repo"),
-    ("loose", "", None, "absolute, or by .. from here", "in no repo: an empty path"),
+    ("loose", "", None, "relative to here or absolute", "in no repo: an empty path"),
 ])
 def test_checked_whether_or_not_the_session_is_in_a_repo(repo, cwd, path, kept, refused, desc):
     """#220: a session whose directory is in no git repo (a projects folder, say) may name
-    decisions in one, absolute or by ..; only a plain relative path needs its git root."""
+    decisions in one, absolute or relative to its own directory (by .., or a repo under it)."""
     tmp = repo.parent
     (tmp / "loose").mkdir()
     sib = str(tmp / "sib")
