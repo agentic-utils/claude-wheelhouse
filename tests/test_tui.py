@@ -751,7 +751,7 @@ async def test_the_hint_says_what_ctrl_s_does(store, sid, monkeypatch, status, p
     async with app.run_test(size=(160, 40)) as pilot:
         await pick(app, pilot, sid)
         base = app.screen.query_one(Hint).base
-    assert ctrl_s in base, f"{desc}: {base}"
+    assert ctrl_s in base and base == hint("queue"), f"{desc}: {base}"
 
 
 @pytest.mark.anyio
