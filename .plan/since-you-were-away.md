@@ -28,7 +28,8 @@ hub's, kept in `away.seen`, so what went while neither ran is noted, dated at th
 ## The query
 
 `away.card(items, quiet, running, start, end)`, pure, over `client.all_items()` and that
-setting, so it is the same in process and through the daemon (no route added):
+setting (the daemon's `/away`, which `/away/input` keeps the last input for), the same in
+process and through the daemon:
 
 | Group | Rows |
 |---|---|
@@ -46,7 +47,8 @@ left out, and with every group empty there is no card.
 A title line with the window (`While you were away, 14:05 to 17:30`) and a `✕` close
 control; a heading per group, then its lines as options. Enter or a click on a line jumps as
 an inbox row does: an item through `show_item`, a session through `follow`. Esc in the card
-or `✕` dismisses it, as does Esc anywhere on the main screen but a text box with text in it.
+or `✕` dismisses it, as does the app's Esc (`clear_filter`) from anywhere, once the Esc steps
+before it (a selection, marks, a quote) have nothing to do.
 Shown, it takes the focus unless a text box has it (typing is never
 redirected), and is a Tab stop before the inbox while it shows. Each refresh drops Needs-you lines dealt with (no longer
 open, blocked or waiting); when the last goes, so does the card. Showing it marks nothing seen.

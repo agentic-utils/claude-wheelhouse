@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 24, 2026-10-28T12:04:56Z, source 5af47bcd0955a200 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 25, 2026-10-28T12:18:56Z, source 2e8d5337dac6e9e8 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -95,7 +95,7 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **Alt+Shift+M**: MCP servers: the session in context's, as its host last saw them, each with a button to sign in or reconnect it (a claude.ai connector in every session the wheelhouse hosts); a tab's: /mcp there
 
-- **Esc**: Clear a text selection first, then the marks, else show every session's items again
+- **Esc**: Clear a text selection first, then the marks, then dismiss the card of what happened while you were away, else show every session's items again
 
 - **Alt+V**: Show or hide finished items
 

@@ -3906,7 +3906,8 @@ DESCRIBE = {
     "relaunch_all": "Relaunch all: every Available session (not running, not parked)",
     "mcp_servers": ("MCP servers: the session in context's, as its host last saw them, each with a button to sign in "
                     "or reconnect it (a claude.ai connector in every session the wheelhouse hosts); a tab's: /mcp there"),
-    "clear_filter": "Clear a text selection first, then the marks, else show every session's items again",
+    "clear_filter": ("Clear a text selection first, then the marks, then dismiss the card of what happened while you "
+                     "were away, else show every session's items again"),
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
     "app.close_question": ("Close the highlighted question or decision, or dismiss a done task or subagent, or a doc "
@@ -4651,8 +4652,6 @@ class WheelhouseApp(App):
             return
         if event.key == "escape" and self.esc_ends_tour():
             return
-        if event.key == "escape" and self.esc_dismisses_away():
-            return
         if self.type_to_thread(event):
             return
         if not (await self._check_bindings(event.key, priority=True) or await self._check_bindings(event.key)):
@@ -4972,16 +4971,6 @@ class WheelhouseApp(App):
         ids = [o.id for o in options]
         index = ids.index(at) if at is not None and at in ids else next((i for i, o in enumerate(options) if not o.disabled), None)
         card.call_after_refresh(setattr, card, "highlighted", index)   # once laid out: before, it takes the first
-
-    def esc_dismisses_away(self) -> bool:
-        """Esc on the main screen while the card shows dismisses it, wherever the focus is,
-        but in a text box with something typed, whose Esc stays its own. Whether it did."""
-        if self.away_window is None or self.screen is not self.main_screen:
-            return False
-        if isinstance(self.focused, TextArea) and self.focused.text or isinstance(self.focused, Input) and self.focused.value:
-            return False
-        self.dismiss_away()
-        return True
 
     def action_dismiss_away(self) -> None:
         self.dismiss_away()
@@ -7008,6 +6997,9 @@ class WheelhouseApp(App):
         self.settle()
         if self.items_table.marked:   # Esc drops a multi-selection first
             self.items_table.set_marks(set())
+            return
+        if self.away_window is not None:   # then the card of what happened while away, before the filter
+            self.dismiss_away()
             return
         self.unfilter()
 
