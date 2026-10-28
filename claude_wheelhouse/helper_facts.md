@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 23, 2026-10-28T11:19:19Z, source 326c961b99c7eda4 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 24, 2026-10-28T11:23:57Z, source fa38e6a948abe6d0 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -307,6 +307,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Drag a pane by its title onto another to swap the two; Reset layout, in the command palette, puts them back.
 - A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered. Saving comes next.
 - Alt+Q asks the wheelhouse how to do something: a chat that answers from its help and its source, through Haiku on your own Claude Code login.
+- The helper chat moved from Alt+G, which opens Gemini on some desktops, to Alt+Q (Q for question).
 - After an update, the tour shows only what's new, pane by pane, with no demo; Esc ends it at any time, and after quitting mid-tour, Alt+T or the title bar's badge resumes it.
 - A pressed button (Compact, Interrupt, Relaunch, Park, Fork...) stays off, dark grey, until what it started has finished, or for 30 seconds with no word from the session.
 - Pin any inbox item (📌, a click on its first column or Alt+P) and clearing the inbox leaves it; docs come pinned.

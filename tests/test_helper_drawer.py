@@ -210,7 +210,7 @@ async def test_the_tick_stops_an_idle_helper_and_quitting_stops_it(store, fake_h
 
 
 @pytest.mark.anyio
-async def test_alt_g_over_another_dialog_does_nothing(store):
+async def test_alt_q_over_another_dialog_does_nothing(store):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()

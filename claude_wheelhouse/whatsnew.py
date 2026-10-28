@@ -156,6 +156,8 @@ FEATURES: tuple[Feature, ...] = (
             note="Alt+Q asks the wheelhouse how to do something: a chat that answers from its help and its source, "
                  "through Haiku on your own Claude Code login.",
             tip="Stuck? Alt+Q asks the wheelhouse how to do something."),
+    Feature("helper-alt-q", UNRELEASED, ADVANCED,
+            note="The helper chat moved from Alt+G, which opens Gemini on some desktops, to Alt+Q (Q for question)."),
     Feature("tour-topups", UNRELEASED, "principles",
             note="After an update, the tour shows only what's new, pane by pane, with no demo; Esc ends it at any "
                  "time, and after quitting mid-tour, Alt+T or the title bar's badge resumes it.",
