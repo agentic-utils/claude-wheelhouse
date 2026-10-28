@@ -101,6 +101,7 @@ DWELL = 1.0
 QUIET = 0.6
 NOTHING_SELECTED = "Select an item, or a session to follow its conversation."
 COMPACTING_LOCKED = "That session is compacting: its items open once it's done"   # a pick of a locked item (#150)
+UNDO_LANDING = "{key}: the undo is still putting rows back, try again in a moment"   # Delete asked mid-undo (#235)
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8"}
@@ -4425,7 +4426,7 @@ class WheelhouseApp(App):
         # counted, as two Deletes under way may both hold a row (a family and a marked child)
         self.going: collections.Counter[str] = collections.Counter()
         self.calls: list[threading.Event] = []   # each Delete's calls, set once made: the app's close waits for them
-        self.undoing = False   # a Ctrl+Z's calls under way (action_undo): Delete and Ctrl+Delete wait for them
+        self.undoing = False   # a Ctrl+Z's calls under way (action_undo): Delete and Ctrl+Delete refused meanwhile
         self.deleting = 0   # those Deletes and Ctrl+Zs, counted: Ctrl+Z, Ctrl+R and a pin wait for them (behind_deletes)
         self.behind: list[Callable[[], None]] = []   # what waits, in the order asked
         self.undo: tuple[str, list] | None = None   # what Ctrl+Z undoes, said, and the rows as they stood (undoable)
@@ -7138,8 +7139,8 @@ class WheelhouseApp(App):
             return
         if self.screen is self.screen_stack[0] and not self.items_table.show_cursor:
             return   # the highlight hidden (#148): nothing in the inbox is picked, so nothing to close
-        if self.undoing and self.screen is self.screen_stack[0]:   # its family read once the rows are back
-            self.after_undo(self.action_close_question, "Delete")
+        if self.undoing and self.screen is self.screen_stack[0]:   # rows half back: its family not read yet
+            self.notify(UNDO_LANDING.format(key="Delete"), severity="warning")
             return
         if self.items_table.marked and self.screen is self.screen_stack[0]:
             self.close_marked()
@@ -7274,13 +7275,6 @@ class WheelhouseApp(App):
             behind, self.behind = self.behind, []
             for act in behind:
                 act()
-
-    def after_undo(self, act: Callable[[], None], key: str) -> None:
-        """Delete or Ctrl+Delete asked while a Ctrl+Z's rows are coming back (undoing): done once
-        they have, as behind_deletes holds a write, and once however often it was pressed."""
-        if act not in self.behind:
-            self.behind_deletes(act)
-        self.notify(f"{key}: once the undo under way lands")
 
     def behind_deletes(self, act: Callable[[], None]) -> bool:
         """A write to the inbox asked while a Delete is landing (delete_off_thread): True, and act
@@ -7511,8 +7505,8 @@ class WheelhouseApp(App):
         self.settle()
         if isinstance(self.focused, (TextArea, Input)) or self.screen is not self.screen_stack[0]:
             return
-        if self.undoing:   # the inbox read once the rows are back
-            self.after_undo(self.action_delete_completed, "Ctrl+Delete")
+        if self.undoing:   # rows half back: the inbox not read yet
+            self.notify(UNDO_LANDING.format(key="Ctrl+Delete"), severity="warning")
             return
         found, _, queued, awaiting = self.client.inbox(self.filter_sid)
         busy = queued | awaiting

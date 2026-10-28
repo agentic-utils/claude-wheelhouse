@@ -9233,9 +9233,9 @@ async def test_show_item_leaves_a_hidden_row_of_a_compacting_session_unpicked(st
 
 
 @pytest.mark.anyio
-async def test_ctrl_delete_waits_for_an_undo_still_landing(store, sid):
-    """#235 batch review: Ctrl+Delete asked while a Ctrl+Z's calls are held reads the inbox only
-    once they land, so the rows put back are deleted whole and the next undo holds them all."""
+async def test_ctrl_delete_is_refused_while_an_undo_lands(store, sid):
+    """#235 batch review: Ctrl+Delete asked while a Ctrl+Z's calls are held is refused, said,
+    so it never reads a half-restored inbox."""
     refs = [store.post_item(sid, "task", f"t{i}", status="done") for i in range(3)]
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -9247,20 +9247,21 @@ async def test_ctrl_delete_waits_for_an_undo_still_landing(store, sid):
         await pilot.press("ctrl+z")
         await pilot.pause()
         assert app.undoing, "the undo held"
+        notes = []
+        app.notify = lambda text, **kw: notes.append(text)
         await pilot.press("ctrl+delete")
         await pilot.pause()
-        assert all(tui.standing(store.item(sid, r)) == "finished" for r in refs), "nothing read mid-undo"
+        assert tui.UNDO_LANDING.format(key="Ctrl+Delete") in notes, notes
+        assert not app.behind, "nothing held to act later"
         gate.set()
         await landed(app, pilot)
-        assert all(tui.standing(store.item(sid, r)) == "finished" for r in refs), "then all deleted again"
-        assert {it["ref"] for it in app.undo[1]} == set(refs), "and the next undo holds every one"
+    assert all(tui.standing(store.item(sid, r)) == "settled" for r in refs), "the undo's rows back, none deleted"
 
 
 @pytest.mark.anyio
-async def test_delete_waits_for_an_undo_still_landing(store, sid):
-    """#235 batch review: Delete asked while a Ctrl+Z's calls are held reads its row and family
-    only once they land (a parent back before its children would otherwise go alone), said,
-    and held once however often it is pressed."""
+async def test_delete_is_refused_while_an_undo_lands(store, sid):
+    """#235 batch review: Delete asked while a Ctrl+Z's calls are held is refused, said: its row
+    and family read mid-undo could be half back (a parent before its children)."""
     refs = undo_setup(store, sid, "family")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -9277,12 +9278,13 @@ async def test_delete_waits_for_an_undo_still_landing(store, sid):
         app.notify = lambda text, **kw: notes.append(text)
         await pilot.press("delete", "delete")
         await pilot.pause()
-        assert notes.count("Delete: once the undo under way lands") == 2, notes
-        assert app.behind == [app.action_close_question], "held once"
+        assert notes.count(tui.UNDO_LANDING.format(key="Delete")) == 2, notes
+        assert not app.behind, "nothing held to act later"
         assert [type(s).__name__ for s in app.screen_stack] == ["Screen"], "no dialog asked mid-undo"
         gate.set()
         await landed(app, pilot)
-        assert not app.behind and not app.undoing
+        assert not app.undoing
+    assert all(tui.standing(store.item(sid, r)) != "finished" for r in refs), "the family back, none deleted"
 
 def test_ctrl_delete_reaches_the_app_from_windows_terminal():
     """#235: Windows Terminal sends Ctrl+Delete as CSI 3;5~, which Textual's parser reads as
