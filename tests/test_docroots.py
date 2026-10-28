@@ -212,6 +212,9 @@ def test_checked_keeps_the_resolved_path_for_a_session_in_no_repo_behind_a_link(
     (tmp / "home").mkdir()
     (tmp / "home" / "loose").symlink_to(tmp / "real" / "loose")
     assert docroots.checked(["../sib/d"], str(tmp / "home" / "loose")) == [str((tmp / "real").resolve() / "sib/d")]
+    (tmp / "real" / "loose" / "l").symlink_to(tmp / "real" / "sib" / "d")
+    with pytest.raises(ValueError, match="is in no git repo"):   # kept as loose/d, so checked as that
+        docroots.checked(["l/../d"], str(tmp / "home" / "loose"))
 
 
 def test_decision_dirs_from_a_session_in_no_repo(repo):

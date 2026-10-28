@@ -138,12 +138,12 @@ def checked(paths, cwd) -> list[str]:
         if not p.strip() or "\0" in p:
             where = f"relative to the git root ({root}) or absolute" if root else "relative to here or absolute"
             raise ValueError(f"{p!r}: give a directory, {where}")
-        norm = os.path.normpath(p)
-        real = Path(os.path.realpath(base / p))
+        # with no root to be relative to later, kept absolute, and checked as kept: a link
+        # before a .. would otherwise check one directory and keep another
+        norm = os.path.normpath(p if root is not None else base / p)
+        real = Path(os.path.realpath(base / p if root is not None else norm))
         if why := allowed(real, root):
             raise ValueError(f"{p!r} {why}")
-        if root is None:   # absolute, with no root to be relative to later
-            norm = os.path.normpath(base / p)
         if norm not in out:
             out.append(norm)
     return out
