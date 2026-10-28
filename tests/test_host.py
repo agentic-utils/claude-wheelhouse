@@ -1043,22 +1043,24 @@ def test_compacting_holds_until_the_compaction_ends(streamed, store, sid, steps,
     assert store.session(sid)["activity"] == activity, desc
 
 
-@pytest.mark.parametrize("line, desc", [
-    ("compacting before it stops", "Park's compact first"),
-    ("compacting after 8 quiet hours: collecting notes", "the 8 hour mark's ask"),
-    ("compacting: no notes came back, so without them", "the 8 hour mark's bare /compact"),
+@pytest.mark.parametrize("name, inp, answer, desc", [
+    ("Bash", {"command": "ls"}, lambda s, sid, ref: s.answer_permission(sid, ref, "allow"), "a permission"),
+    ("AskUserQuestion", ONE, lambda s, sid, ref: s.send(sid, "CSV", ref), "a question"),
 ])
-def test_every_compaction_turn_leads_the_line(host, store, sid, line, desc):
-    """Whichever path sends a compaction's turn, its line leads what the turn shows, and the
-    host's own writes (an answer passed on) alike, until the turn ends."""
-    key = run(host.turn("/compact", compacting=line))
-    assert store.session(sid)["activity"] == line, desc
-    host.show("running Bash: ls")
-    assert store.session(sid)["activity"] == f"{line} · running Bash: ls", desc
-    assert host.led("thinking") == f"{line} · thinking", desc
-    host.sent.pop(key)   # its turn has ended
-    host.show("thinking")
-    assert store.session(sid)["activity"] == "thinking", desc
+def test_a_call_waiting_on_the_person_keeps_the_compaction_line(host, store, sid, name, inp, answer, desc):
+    """A permission or question in a compaction's turn: its waiting line and the thinking
+    after the answer stay led by the compaction's, so the session stays compacting (#233),
+    and its new item, posted after the cut-off, is never locked."""
+    line = "compacting: collecting notes"
+    run(host.turn("ask", compacting=line))
+    seen = []
+
+    def answered(s, i, ref):
+        seen.append(s.session(i)["activity"])
+        answer(s, i, ref)
+    _, item = run(ask_and_answer(host, store, sid, name, inp, answered))
+    assert seen == [f"{line} · waiting on {item['ref']}"], desc
+    assert store.session(sid)["activity"] == f"{line} · thinking", desc
 
 
 def other_owner(s, i):

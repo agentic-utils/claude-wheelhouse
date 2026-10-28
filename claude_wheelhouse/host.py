@@ -569,7 +569,7 @@ class Host:
             return await self.ask_question(inp)
         from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
         ref = self.store.post_item(self.sid, "permission", tool_summary(name, inp), permission_body(name, inp, ctx))
-        self.store.set_activity(self.sid, f"waiting on {ref}")
+        self.store.set_activity(self.sid, self.led(f"waiting on {ref}"))
         self.asking.add(ref)
         try:
             while True:
@@ -595,7 +595,7 @@ class Host:
         title, body = question_item(inp)
         ref = self.store.post_item(self.sid, "question", title, body)
         self.store.set_answer(self.sid, ref, HOST_QUESTION)
-        self.store.set_activity(self.sid, f"waiting on {ref}")
+        self.store.set_activity(self.sid, self.led(f"waiting on {ref}"))
         fut = asyncio.get_running_loop().create_future()
         self.waiting[ref] = fut
         try:
