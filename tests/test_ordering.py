@@ -101,7 +101,11 @@ NAMES = {"s1": "zeta", "s2": "alpha", "s3": "s10", "s4": "s2"}
     ("status*", [item(1, "T1", "done", sid="s1"), item(2, "T2", "done", sid="s2")],
      ["T2", "T1"], "*: the settled by name too, then the latest to settle lowest"),
     ("status▲", [item(1, "T1", "running", sid="s2"), item(2, "T2", "running", sid="s1")],
-     ["T2", "T1"], "▲: no name tie-break, newest first"),
+     ["T2", "T1"], "▲: the active newest first, by no name"),
+    ("status▲", [item(1, "T1", "done", sid="s1"), item(2, "T2", "done", sid="s2")],
+     ["T2", "T1"], "▲: the settled as * has them, by name"),
+    ("title▲", [item(1, "T1", "running", sid="s2", title="a"), item(2, "T2", "running", sid="s1", title="a")],
+     ["T2", "T1"], "a column sort's ties as the inbox has them, by no name"),
 ])
 def test_item_order_by_session_name(spec, rows, want, desc):
     assert order(spec, rows, NAMES)[0] == want, desc

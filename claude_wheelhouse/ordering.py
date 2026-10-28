@@ -132,22 +132,26 @@ def item_key(spec: str, item, processing=frozenset(), busy=frozenset(), names=No
         return keyed(item, MANUAL, 0, 0, rank)
     band = band_of(rank)
     col, mark = parse(spec)
-    tie = rank
-    if col == "status" and mark == STAR:   # then by session name (#236), then as the inbox has it
+    # the inbox's own order within a status: by session name (#236), then as the inbox has it
+    tie = (natural_name((names or {}).get(item["session_id"], "")), item["session_id"], rank)
+    if col == "status" and mark == STAR:
         value = rank[0]
-        tie = (natural_name((names or {}).get(item["session_id"], "")), item["session_id"], rank)
     elif col == "status":
         status = "processing" if item["status"] == "open" and (item["session_id"], item["ref"]) in processing \
             else ranked_status(item)
         value = URGENCY.get(status, URGENCY["answered"]) if band == 0 else 0
-        # newest first; the settled and finished as the inbox has them, the latest to settle lowest
-        tie = (_neg_time(item["updated_at"]), -item["id"]) if band == 0 else rank
+        # newest first; the settled and finished as the inbox has them (by session name, then the
+        # latest to settle lowest)
+        if band == 0:
+            tie = (_neg_time(item["updated_at"]), -item["id"])
     elif col == "session":
         value = ((names or {}).get(item["session_id"], "").casefold(), item["session_id"])
     elif col == "ref":
         value = natural(item["ref"])
+        tie = rank
     else:
         value = item["title"].casefold()
+        tie = rank
     token = f"{spec}|{band}|{value!r}"
     return keyed(item, token, band, Desc(value) if mark == DOWN else value, tie)
 
@@ -166,7 +170,7 @@ def arrange(spec: str, raw: dict) -> dict:
     placed (new, or its status changed since) put in by status: straight before the first
     placed row of its own tier; else straight after the last placed row of a more urgent
     one; else at the head of the band. Rows going into one spot keep the sort's own order
-    there (newest first). So the newest of a status shows first, as without a drag, and a
+    there (by session name, then newest first). So the newest of a status shows first, as without a drag, and a
     low row dragged to the top never pulls later urgent ones above the more urgent.
     The ranks hold for any subset (one session's view), as they go by the placed rows of the
     whole list. Other sorts: their ranks as they are."""

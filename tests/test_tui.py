@@ -3262,7 +3262,7 @@ async def dwell_steps(pilot, app, keys, steps, clock) -> None:
             app.refresh_data()
         elif how in ("blur", "focus"):   # the terminal window loses focus, or gets it back
             app.post_message(events.AppBlur() if how == "blur" else events.AppFocus())
-        elif how in ("gone", "late"):   # before startup: the item is closed, or B's posted above D
+        elif how in ("gone", "late", "sorted"):   # before startup: the item closed, B's posted above D, a column sort
             continue
         elif how == "answer":
             app.answer.text = "noted"
@@ -3293,6 +3293,8 @@ async def dwell_steps(pilot, app, keys, steps, clock) -> None:
     (("on D", "answer"), "seen", "answering it: seen at once"),
     (("follow A", "on D", "short", "session B", "rest"), "unseen", "a switch to another session mid-dwell"),
     (("gone E", "rest"), "unseen", "the conversation tops the inbox at startup (#236): D not looked at"),
+    (("sorted ▲", "gone E", "at D", "short"), "unseen", "under a column sort D tops it: the app's selection, not at once"),
+    (("sorted ▲", "gone E", "at D", "rest"), "seen", "but seen after the dwell all the same"),
     # B's above D, so D comes under the cursor as it goes, not demo's conversation row (#192)
     (("late B's", "on B's", "end B", "at D", "rest"), "seen",
      "the next item, selected as a session ends: seen after the dwell"),
@@ -3315,6 +3317,8 @@ async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_p
     keys = {"D": f"{sid}|{d}", "E": f"{sid}|{e}", "A": sid, "B": other, "B's": f"{other}|{b}"}
     if "gone E" in steps:
         store.update_item(sid, e, status="closed")
+    if "sorted ▲" in steps:   # the conversations under the active items, so D the top row (#236)
+        store.set_setting("layout.sort.items", "status▲")
     if "late B's" in steps:
         keys["B's"] = f"{other}|{store.post_item(other, 'decision', 'B late', **DECIDED)}"
     app = WheelhouseApp(store)
@@ -7824,6 +7828,8 @@ async def test_delete_takes_agent_children_and_leaves_docs(store, sid, tmp_path)
         store.agent_status(sid, "agent-1", "done", "finished")   # as the transcript says it ended
         store.post_doc(sid, "the plan, v2", str(tmp_path / "plan.md"))
         await refresh(pilot, sid)
+        # sorted: the highlight lands on the 💬 row above (#236), so neither is pinned, and their order
+        # then varies with the client (in process or through the daemon)
         assert sorted(r[1] for r in item_list_rows(app)) == [f"└ {agent}", f"└ {doc}"], \
             "the pinned doc still there, at its session's level"
 
@@ -7860,6 +7866,8 @@ async def test_delete_on_marked_rows_asks_once_and_takes_the_children(store, sid
         await pilot.pause()
         store.agent_status(sid, "agent-1", "done", "finished")
         await refresh(pilot, sid)
+        # sorted: the highlight lands on the 💬 row above (#236), so neither is pinned, and their order
+        # then varies with the client (in process or through the daemon)
         assert sorted(r[1] for r in item_list_rows(app)) == [f"└ {agent}", f"└ {doc}"], \
             "both rows gone, the running subagent and the pinned doc kept, at their session's level"
 
