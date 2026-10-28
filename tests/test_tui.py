@@ -8956,6 +8956,131 @@ async def test_ctrl_z_in_the_answer_box_is_its_own_undo(store, sid):
     assert store.item(sid, q)["status"] == "closed", "and the delete stays"
 
 
+def held_calls(app, fail=None):
+    """The app's hub calls that Delete makes (close, delete_family) held on their worker thread
+    until the returned event is set, then made, or failed with `fail`: an exception raised, or
+    a Done returned (#234)."""
+    import threading
+    gate = threading.Event()
+    for name in ("close", "delete_family"):
+        real = getattr(app.client, name)
+
+        def held(*a, real=real, **kw):
+            if threading.current_thread() is threading.main_thread():   # Ctrl+R or Ctrl+Z: not held
+                return real(*a, **kw)
+            assert gate.wait(10), "the test never let the call through"
+            if isinstance(fail, Exception):
+                raise fail
+            return fail if fail is not None else real(*a, **kw)
+        setattr(app.client, name, held)
+    return gate
+
+
+async def landed(app, pilot) -> None:
+    """Every Delete under way landed (delete_off_thread)."""
+    for _ in range(500):
+        if not app.deleting:
+            break
+        await pilot.pause(0.01)
+    assert not app.deleting, "the delete never landed"
+    await pilot.pause()
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("marked, fail, gone, said, desc", [
+    (False, None, True, "dismissed T1", "one row: gone at once, and stays gone once the call lands"),
+    (True, None, True, "dismissed T1, T2, T3", "Ctrl+A's rows: all gone at once, together"),
+    (False, KeyError("no item T1 in this session"), False, "no item T1", "the call fails: the row comes back, said"),
+    (True, Done(False).say("the wheelhouse daemon can't be reached", "error"), False, "can't be reached",
+     "the daemon lost: the rows come back, said"),
+])
+async def test_delete_takes_rows_at_once_and_the_hub_call_lands_after(store, sid, marked, fail, gone, said, desc):
+    """#234, Doug: "when I request deletion, remove the visual element immediately, then delegate
+    deletion to a background thread so that the UI remains responsive." A refresh while the call
+    is held never brings the rows back; a failed call does, and says why."""
+    refs = [store.post_item(sid, "task", f"t{i}", status="done") for i in range(3)]
+    keys = [f"{sid}|{r}" for r in (refs if marked else refs[:1])]
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        notes = []
+        app.notify = lambda text, **kw: notes.append(text)
+        app.items_table.focus()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(keys[0]))
+        await pilot.pause()
+        gate = held_calls(app, fail)
+        if marked:
+            await pilot.press("ctrl+a")
+        await pilot.press("delete")
+        await pilot.pause()
+        assert not set(keys) & set(app.items_table.rows), f"{desc}: gone before the call lands"
+        assert all(store.item(sid, k.split("|")[1])["dismissed"] is None for k in keys), f"{desc}: not landed yet"
+        app.refresh_data()   # a refresh racing the call
+        await pilot.pause()
+        assert not set(keys) & set(app.items_table.rows), f"{desc}: no flash back on a refresh meanwhile"
+        gate.set()
+        await landed(app, pilot)
+        assert (not set(keys) & set(app.items_table.rows)) == gone, f"{desc}: {list(app.items_table.rows)}"
+        assert any(said in n for n in notes), f"{desc}: {notes}"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("keys, desc", [
+    (["delete", "ctrl+z"], "Ctrl+Z pressed before the delete lands undoes it once it has"),
+    (["ctrl+a", "delete", "ctrl+z"], "Ctrl+A's rows, the same: all back"),
+    (["alt+v", "delete", "ctrl+r"], "Ctrl+R straight after Delete, finished shown: reopened once the delete lands"),
+])
+async def test_ctrl_z_waits_for_a_delete_still_landing(store, sid, keys, desc):
+    """#234: Ctrl+Z (#151) acts on the last act, so one asked while a Delete's call is held waits
+    for it, then puts every row back."""
+    refs = [store.post_item(sid, "task", f"t{i}", status="done") for i in range(2)]
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{refs[0]}"))
+        await pilot.pause()
+        gate = held_calls(app)
+        for key in keys:
+            await pilot.press(key)
+        await pilot.pause()
+        gate.set()
+        await landed(app, pilot)
+        await pilot.pause()
+        took = refs if "ctrl+a" in keys else refs[:1]
+        assert all(f"{sid}|{r}" in app.items_table.rows for r in took), f"{desc}: {list(app.items_table.rows)}"
+    assert all(store.item(sid, r)["dismissed"] is None for r in refs), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("fail, pinned_after, desc", [
+    (None, False, "confirmed: the row goes at once, its pin cleared and it closed off the UI thread"),
+    (KeyError("no item T1 in this session"), True, "the delete fails: it comes back, its pin kept"),
+])
+async def test_delete_on_a_pinned_item_goes_at_once_too(store, sid, fail, pinned_after, desc):
+    """#234: Delete on a pinned item asks first, then goes as any other: the pin cleared on the
+    worker thread with the delete, never waited for on the UI thread."""
+    ref = store.post_item(sid, "task", "kept", status="done")
+    store.set_pinned(sid, ref, True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{ref}"))
+        await pilot.pause()
+        gate = held_calls(app, fail)
+        await pilot.press("delete", "alt+y")
+        await pilot.pause()
+        assert f"{sid}|{ref}" not in app.items_table.rows, f"{desc}: gone before the call lands"
+        gate.set()
+        await landed(app, pilot)
+        assert (f"{sid}|{ref}" in app.items_table.rows) == pinned_after, desc
+    assert tui.pinned(store.item(sid, ref)) == pinned_after, desc
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("size", [(160, 40), (100, 30)])
 async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size):
