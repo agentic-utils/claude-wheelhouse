@@ -1075,6 +1075,9 @@ class Daemon:
             if want is not None and want == mode(hub.row(sid)):
                 return Done(False)   # last write wins: it's that already
             return hub.toggle_mode(sid)
+        if action == "wake":   # Ctrl+S or Alt+S on one not running, confirmed: it comes back sending
+            self.remote_needs_sdk(request)
+            return hub.wake_and_send(sid, text(body, "ref", False), text(body, "text", False), this_machine(request))
         if action in ("send", "send-now"):
             return hub.submit((sid, text(body, "ref", False)), text(body, "text"), now=action == "send-now")
         if action == "rename":

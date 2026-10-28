@@ -169,8 +169,11 @@ session.
   same session, and a bar above the footer
   always shows Send all (n), every running session's queue; each Send is greyed out while its
   queue is empty. Send all's key is `Alt+Shift+A`: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S
-  as plain Ctrl+S. A dead session's queue waits for it: Ctrl+S on one says to Relaunch it first,
-  its hint leaves Ctrl+S out, and Send all skips it and doesn't count it. Ctrl+R takes a queued answer
+  as plain Ctrl+S. On a session that isn't running, Ctrl+S or Alt+S asks "Unpark <session> and
+  send?" (a parked one) or "Relaunch <session> and send?" (any other): Yes brings it back with its
+  queue, and Alt+S's answer after it, as its first prompt, behind what the wheelhouse tells a
+  session on resume; No sends nothing and leaves the box as it was. With nothing queued, Ctrl+S
+  says so. Send all skips it and doesn't count it. Ctrl+R takes a queued answer
   back to edit or drop. A sent answer shows as `you · sending`, as a queued one shows as
   `you · queued`, until the session takes it up: in an item's thread until the wheelhouse
   has passed it on, and in the conversation until the session has it, which may wait for
@@ -538,7 +541,7 @@ Keys, shown in upper case as usual (Alt+V means Alt and the v key, not Shift+V).
 session list), `Alt+V` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
 highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `Alt+N` new session, `Alt+A` adopt, `Alt+Shift+L` relaunch all, `Alt+Shift+M` the MCP servers of the session in context, `Alt+K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode), `Alt+S` send this one answer now (the queue and mode left as they are),
-`Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
+`Ctrl+S` send the session's queue (one not running: Unpark or Relaunch it and send, asked first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
 as answered, a decision as seen), `Ctrl+Z` undo the last delete, pin or reopen in the inbox (the rows back as they
 stood, an open question open again; in a text box, its own undo), `F1` list every key and button, `Alt+Q` ask the wheelhouse how to do something (the helper, below), `Ctrl+Q` quit, `Alt+T` resume the tour while the title bar's badge shows. `Alt+Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.

@@ -65,7 +65,7 @@ from .rows import KIND_COLOUR, KeepColours, RowTips, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import AWAITING_NOTES, HOLD_EXPIRED, MCP_CONNECTOR, NUDGE_TOKENS, SHELL_OPENING
-from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, compacting_now, state as hub_state, Event, aimed, display_name, host_context, short
+from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, wake_verb, compacting_now, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
@@ -2650,11 +2650,11 @@ COMPACT_HINT = ("1 Compact or 2 Leave it, then 3 just compact, 4 send the queue 
                 "Ctrl+Enter compacts with them")
 
 
-def hint(sends: str, dead: bool = False) -> str:
+def hint(sends: str) -> str:
     """The line under an answer box. sends: what Ctrl+Enter does for the session in context
-    by its mode, queue or send. dead: it isn't running, so Ctrl+S refuses (#62) and goes
-    unmentioned."""
-    ctrl_s = "" if dead else " · Ctrl+S: send queue"
+    by its mode, queue or send. Ctrl+S and Alt+S on one that isn't running ask first to
+    Unpark or Relaunch it (#221): the dialog says which, so the line stays short."""
+    ctrl_s = " · Ctrl+S: send queue"
     alt_s = " · Alt+S: send" if sends == "queue" else ""
     return f"Ctrl+Enter: {sends}{alt_s}{ctrl_s} · Ctrl+R: edit last queued"
 
@@ -3867,8 +3867,9 @@ def key_name(key: str) -> str:
 DESCRIBE = {
     "submit": "Submit what's typed: queued, or sent at once, by the session's mode",
     "app.submit": "Submit what's typed: queued, or sent at once, by the session's mode",
-    "submit(True)": "Send what's typed at once, whatever the mode, leaving the mode and the rest of the queue as they are",
-    "send_session": "Send the current session's queue (a dead one's waits: Relaunch it first)",
+    "submit(True)": ("Send what's typed at once, whatever the mode, leaving the mode and the rest of the queue as they "
+                     "are (one not running: Unpark or Relaunch it and send it with the queue, asked first)"),
+    "send_session": "Send the current session's queue (one not running: Unpark or Relaunch it and send, asked first)",
     "toggle_mode": "Switch the session between Queued and Immediate",
     "recall": ("Take this item's latest queued answer back into the box; with none queued, in the item list, "
                "reopen the highlighted finished item (or every marked one)"),
@@ -3930,7 +3931,7 @@ DESCRIBE = {
     "press('deny')": "Deny it, with an optional reason (Enter denies); on the question suggesting Compact, just compact after",
     "press('compact-then-send')": "On the question suggesting Compact: send the queued answers after, in the same prompt",
     "press('compact-then-park')": "On the question suggesting Compact: park the session after, sending nothing",
-    "press('send-all')": "Send all: every running session's queue (a dead one's waits until it's relaunched)",
+    "press('send-all')": "Send all: every running session's queue (a dead or parked one's waits until it's relaunched or unparked)",
     "cursor_up": "Up a row",
     "cursor_down": "Down a row",
     "page_up": "Up a page",
@@ -3944,7 +3945,7 @@ DESCRIBE = {
 BUTTONS = {
     "mode": "Mode (Ctrl+T): the session's send mode, Queued or Immediate",
     "send": "Send (Ctrl+S): send the session's queued answers as one message; its caption counts them",
-    "send-all": "Send all (Alt+Shift+A), above the footer: send every running session's queue; a dead one's waits until it's relaunched",
+    "send-all": "Send all (Alt+Shift+A), above the footer: send every running session's queue; a dead or parked one's waits until it's relaunched or unparked",
     "allow": "Allow (Alt+Y; over the answer box, on a permission item): let the tool call run, at once",
     "always": "Always (Alt+W): allow it, and keep the rule Claude Code suggests",
     "deny": ("Deny (Alt+D): refuse it, with a reason if you like: typed in the line that opens, the session reads "
@@ -4014,7 +4015,8 @@ TABS = ("Tab goes round the session list, the items, the answer box, a tour box'
 SEND_RULES = (
     "**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the "
     "session's queue as one message, so related answers arrive together; ✉ counts what's queued. "
-    "A dead session's queue waits: Ctrl+S and Send all leave it until the session is relaunched. "
+    "A session not running: Ctrl+S or Alt+S asks to Unpark (a parked one) or Relaunch it and send, its queue "
+    "and the box's answer its first prompt; Send all leaves its queue. "
     "Alt+S sends just the answer in the box at once, leaving the queue and the mode as they are. "
     "**Immediate**: Ctrl+Enter (or Alt+S) sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
@@ -6203,7 +6205,7 @@ class WheelhouseApp(App):
         sends = "send" if s is not None and (mode(s) == "immediate" or self.sends_now(s["id"])) else "queue"
         for h in hints:
             h.set_base(DENY_HINT if denying else PERMISSION_HINT if asking else COMPACT_HINT if nudged
-                       else hint(sends, s is not None and self.dead(s["id"])))
+                       else hint(sends))
         thread = boxed(self.screen)   # a full-screen item's own box: a ThreadView's, a doc item's DocView's
         if isinstance(self.screen, DocView):
             doc = reading = self.screen.panes is not None and not self.screen.panes.box_shown(self.doc_layout)
@@ -7261,11 +7263,19 @@ class WheelhouseApp(App):
         if not box:
             return
         quote = self.doc_quotes.get(target)   # Detail's box or a full-screen doc's: a doc's alone has one
+        if now and self.dead(target[0]) and not self.asking(target):   # it comes back to take it (#221)
+            self.offer_wake(target[0], lambda: self.wake(target[0], box, target, quoted(quote, text)))
+            return
         done = self.told(self.client.submit(target, quoted(quote, text), now))   # an open permission is denied, never queued (#53)
         if not done.ok:   # a permission answered meanwhile
             return
         if done.denied:   # an explicit act, as Delete is: selected, the item moves at once (ranked)
             self.repin.add(f"{target[0]}|{target[1]}")
+        self.submitted(box, target)
+
+    def submitted(self, box, target) -> None:
+        """What was typed has gone: the box cleared, its quote said, the thread at its end."""
+        quote = self.doc_quotes.get(target)
         box.text = ""
         if quote:   # said: the next comment is general, unless another block is clicked
             self.doc_quotes.pop(target, None)
@@ -7340,11 +7350,36 @@ class WheelhouseApp(App):
         return sid
 
     def action_send_session(self) -> None:
+        """Ctrl+S: the session's queue sent; one that isn't running is offered Unpark or
+        Relaunch first, the queue its first prompt on waking (#221)."""
         self.settle()
         if sid := self.context_session():
             focused = self.focused
+            if self.dead(sid) and self.client.drafts(sid):
+                self.offer_wake(sid, lambda: (self.wake(sid), self.after_send(focused)))
+                return
             self.send_session(sid)
             self.after_send(focused)
+
+    @session_action
+    def offer_wake(self, sid: str, then) -> None:
+        """Ctrl+S or Alt+S on a session that isn't running: Unpark (a parked one) or Relaunch
+        it and send? then, on Yes; on No nothing is sent, and the box keeps its text."""
+        s = self.row(sid)
+        self.push_screen(Confirm(f"{wake_verb(s)} {self.display_name(s)} and send?"),
+                         lambda yes: yes and then())
+
+    @session_action
+    def wake(self, sid: str, box=None, target=None, text: str | None = None) -> None:
+        """Bring the session back with its queue, and text if given, as its first prompt
+        (Hub.wake_and_send): the box cleared only once it has come back."""
+        done = self.told(self.client.wake_and_send(sid, target and target[1], text))
+        if done.ok:
+            self.press(sid, "relaunch")
+            if box is not None:
+                self.submitted(box, target)
+                return
+        self.refresh_data()
 
     @session_action
     def send_session(self, sid: str) -> None:
