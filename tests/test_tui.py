@@ -9030,6 +9030,7 @@ async def test_delete_takes_rows_at_once_and_the_hub_call_lands_after(store, sid
 @pytest.mark.parametrize("keys, desc", [
     (["delete", "ctrl+z"], "Ctrl+Z pressed before the delete lands undoes it once it has"),
     (["ctrl+a", "delete", "ctrl+z"], "Ctrl+A's rows, the same: all back"),
+    (["alt+v", "delete", "ctrl+r"], "Ctrl+R straight after Delete, finished shown: reopened once the delete lands"),
 ])
 async def test_ctrl_z_waits_for_a_delete_still_landing(store, sid, keys, desc):
     """#234: Ctrl+Z (#151) acts on the last act, so one asked while a Delete's call is held waits
@@ -9051,6 +9052,33 @@ async def test_ctrl_z_waits_for_a_delete_still_landing(store, sid, keys, desc):
         took = refs if "ctrl+a" in keys else refs[:1]
         assert all(f"{sid}|{r}" in app.items_table.rows for r in took), f"{desc}: {list(app.items_table.rows)}"
     assert all(store.item(sid, r)["dismissed"] is None for r in refs), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("fail, pinned_after, desc", [
+    (None, False, "confirmed: the row goes at once, its pin cleared and it closed off the UI thread"),
+    (KeyError("no item T1 in this session"), True, "the delete fails: it comes back, its pin kept"),
+])
+async def test_delete_on_a_pinned_item_goes_at_once_too(store, sid, fail, pinned_after, desc):
+    """#234: Delete on a pinned item asks first, then goes as any other: the pin cleared on the
+    worker thread with the delete, never waited for on the UI thread."""
+    ref = store.post_item(sid, "task", "kept", status="done")
+    store.set_pinned(sid, ref, True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{ref}"))
+        await pilot.pause()
+        gate = held_calls(app, fail)
+        await pilot.press("delete", "alt+y")
+        await pilot.pause()
+        assert f"{sid}|{ref}" not in app.items_table.rows, f"{desc}: gone before the call lands"
+        gate.set()
+        await landed(app, pilot)
+        assert (f"{sid}|{ref}" in app.items_table.rows) == pinned_after, desc
+    assert tui.pinned(store.item(sid, ref)) == pinned_after, desc
 
 
 @pytest.mark.anyio

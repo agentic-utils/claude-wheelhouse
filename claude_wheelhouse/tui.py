@@ -3,6 +3,7 @@ daemon's hub, over HTTP and SSE, or with --local a hub of its own, in process.""
 
 import asyncio
 import bisect
+import collections
 import dataclasses
 import difflib
 import functools
@@ -14,6 +15,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 import weakref
 from datetime import datetime, timezone
@@ -105,6 +107,7 @@ VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
 # a doc block (doc_blocks) longer than this is rendered on a thread (Transcript._layout): a
 # 42 KB one takes Rich a second or two, which the loop would otherwise stall for
 RENDER_OFF_LOOP = 2000
+CALLS_WAIT = 10   # seconds the app's close waits for a Delete's calls under way (delete_off_thread)
 RENDERING = ("note", "_rendering…_")
 CLOSABLE = {"question": "answered", "decision": "seen"}   # what Delete closes, and what Ctrl+R reopening makes it
 
@@ -4389,7 +4392,9 @@ class WheelhouseApp(App):
         self.deleted: set[str] = set()
         # the rows a Delete has taken whose hub call hasn't landed yet (delete_off_thread): kept off
         # the inbox by every paint meanwhile, so a refresh racing the call never brings them back
-        self.going: set[str] = set()
+        # counted, as two Deletes under way may both hold a row (a family and a marked child)
+        self.going: collections.Counter[str] = collections.Counter()
+        self.calls: list[threading.Event] = []   # each Delete's calls, set once made: the app's close waits for them
         self.deleting = 0   # those Deletes, counted: Ctrl+Z, Ctrl+R and a pin wait for them (behind_deletes)
         self.behind: list[Callable[[], None]] = []   # what waits, in the order asked
         self.undo: tuple[str, list] | None = None   # what Ctrl+Z undoes, said, and the rows as they stood (undoable)
@@ -4571,6 +4576,8 @@ class WheelhouseApp(App):
         helper's claude, if one runs, stopped. The last input kept, for the next start's card."""
         if self.last_input is not None and self.last_input != self.input_kept:
             self.client.note_input(away.stamp(self.last_input))
+        for made in self.calls:   # a Delete's calls under way finish first: the rows went from sight
+            made.wait(CALLS_WAIT)
         self.client.disconnect()
         if self.helper is not None:
             self.helper.stop()
@@ -7136,25 +7143,42 @@ class WheelhouseApp(App):
             # where a finished row stays in sight: it moves as the call lands
             if not self.show_finished:
                 keys |= {item_key(it) for it in [item, *family] if it is item or not spared(it)}
-        self.going |= keys
+        self.going.update(keys)
         self.deleting += 1
+        made = threading.Event()
+        self.calls.append(made)
         self.paint_items()
 
         def call(item, family):
+            """A pinned one (close_pinned) has its pin cleared first, and put back if the delete fails."""
             sid, ref = item["session_id"], item["ref"]
-            return self.client.delete_family(sid, ref) if family else self.client.close(sid, ref, True)
+            if pinned(item) and not (unpinned := self.client.set_pinned(sid, ref, False)).ok:
+                return unpinned
+            try:
+                done = self.client.delete_family(sid, ref) if family else self.client.close(sid, ref, True)
+            except Exception:
+                if pinned(item):
+                    self.client.set_pinned(sid, ref, True)
+                raise
+            if pinned(item) and not done.ok and done.notices:
+                self.client.set_pinned(sid, ref, True)
+            return done
 
         def work() -> None:
             results = []
-            for item, family in acts:
-                try:
-                    results.append(call(item, family))
-                except Exception as e:   # ended or gone meanwhile, or the daemon lost: that row comes back
-                    results.append(e)
-            self.post(lambda: self.deletes_landed(keys, acts, results, landed))
+            try:
+                for item, family in acts:
+                    try:
+                        results.append(call(item, family))
+                    except Exception as e:   # ended or gone meanwhile, or the daemon lost: that row comes back
+                        results.append(e)
+            finally:
+                made.set()
+            self.post(lambda: self.deletes_landed(keys, acts, results, landed, made))
         self.run_worker(work, thread=True, group="delete", exit_on_error=False)
 
-    def deletes_landed(self, keys: set, acts: list, results: list, landed: Callable[[list], None]) -> None:
+    def deletes_landed(self, keys: set, acts: list, results: list, landed: Callable[[list], None],
+                       made: threading.Event) -> None:
         """delete_off_thread's calls done, on the UI thread: each said, the acts that acted
         given to landed, and the inbox read again, the rows of any that failed back in it."""
         done, failed = [], 0
@@ -7176,13 +7200,14 @@ class WheelhouseApp(App):
             if failed < len(acts):
                 landed(done)
         finally:
-            self.going -= keys
+            self.going -= collections.Counter(keys)   # drops those no other Delete holds
             self.deleting -= 1
+            self.calls.remove(made)
             self.refresh_data()
-        if not self.deleting:
-            behind, self.behind = self.behind, []
-            for act in behind:
-                act()
+            if not self.deleting:
+                behind, self.behind = self.behind, []
+                for act in behind:
+                    act()
 
     def behind_deletes(self, act: Callable[[], None]) -> bool:
         """A write to the inbox asked while a Delete is landing (delete_off_thread): True, and act
@@ -7195,12 +7220,8 @@ class WheelhouseApp(App):
 
     def close_pinned(self, item, family: list) -> None:
         """Delete confirmed on a pinned item (its children with it, in the same dialog): its pin
-        cleared only now, then it deleted as any other, a doc's file left be."""
-        try:
-            self.told(self.client.set_pinned(item["session_id"], item["ref"], False))
-        except (SessionGone, KeyError) as e:   # ended or gone meanwhile
-            self.notify(str(e), severity="warning")
-            return
+        cleared only now, with the delete on the worker thread (delete_off_thread), then it deleted
+        as any other, a doc's file left be."""
         if family:
             self.close_family(item, family)
             return
@@ -7305,6 +7326,7 @@ class WheelhouseApp(App):
         if isinstance(self.focused, (TextArea, Input)) or self.screen is not self.screen_stack[0]:
             return
         if self.behind_deletes(self.action_undo):   # its act isn't the last until it lands
+            self.notify("Ctrl+Z: once the delete under way lands")
             return
         if self.undo is None:
             self.notify("nothing to undo")
