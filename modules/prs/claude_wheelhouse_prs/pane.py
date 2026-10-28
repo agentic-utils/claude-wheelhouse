@@ -405,7 +405,7 @@ class PrDetail(Static):
         super().__init__(markup=False, **kwargs)
 
 
-class PrTable(api.RowTips, DataTable):
+class PrTable(api.RowTips, api.KeepColours, DataTable):
     """The PRs, a row each, the full title on hover. A list, so a Tab stop after the inbox's.
     Its highlight is hidden while Detail shows an item it doesn't list (Prs.showing, #148),
     until a click, Enter or a moving key brings it back, that row shown. PRs are marked to act

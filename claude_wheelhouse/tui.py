@@ -61,7 +61,7 @@ from textual.widgets import (
 )
 
 from . import api, callout, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
-from .rows import KIND_COLOUR, RowTips, marked, plain
+from .rows import KIND_COLOUR, KeepColours, RowTips, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import AWAITING_NOTES, HOLD_EXPIRED, MCP_CONNECTOR, NUDGE_TOKENS, SHELL_OPENING
@@ -913,7 +913,7 @@ class Sink:
             self.sunk = None
 
 
-class SinkList(RowTips, DataTable):
+class SinkList(RowTips, KeepColours, DataTable):
     """A list a Sink lays. Every key that moves its cursor (Up, Down, PageUp, PageDown,
     Ctrl+Home, Ctrl+End, the item list's Shift+Up and Shift+Down) acts in its final order
     (final), never a moving frame's, so keys typed during a move act as they would after it;
@@ -1126,25 +1126,14 @@ class SinkList(RowTips, DataTable):
     def action_scroll_bottom(self) -> None:
         self.go(lambda i, n: n - 1)
 
-    @functools.lru_cache(maxsize=32)
-    def _get_styles_to_render_cell(self, is_header_cell: bool, is_row_label_cell: bool, is_fixed_style_cell: bool,
-                                   hover: bool, cursor: bool, *rest) -> tuple[Style, Style]:
-        """DataTable's, but the mouse's row and the cursor's keep their cells' own colours (a
-        session's status dot, an item's status) on the hover's or the cursor's background: the
-        hover style takes the table's colour (MATRIX) and the cursor's white, and with the
-        foreground's priority on the CSS, DataTable laid it over every cell, so every status
-        went green under the mouse and white under the cursor. A cell with no colour of its own
-        still takes theirs. Cached as DataTable's is, which it clears by this name when its
-        looks change: DataTable's own, unwrapped, so there is the one cache to clear. With the
-        cursor hidden (the session list with none selected, #16) no row is the cursor's, but the
-        mouse's is still shaded, where DataTable would shade none."""
+    def cell_styles(self, is_header_cell: bool, is_row_label_cell: bool, is_fixed_style_cell: bool,
+                    hover: bool, cursor: bool, *rest) -> tuple[Style, Style]:
+        """With the cursor hidden (the session list with none selected, #16) no row is the
+        cursor's, but the mouse's is still shaded, where DataTable would shade none. Its cells
+        keep their own colours under either (KeepColours)."""
         if not rest[0]:   # show_cursor
             cursor, rest = False, (True, *rest[1:])
-        style, post = DataTable._get_styles_to_render_cell.__wrapped__(
-            self, is_header_cell, is_row_label_cell, is_fixed_style_cell, hover, cursor, *rest)
-        if hover or cursor:
-            post = Style.from_color(bgcolor=post.bgcolor)
-        return style, post
+        return super().cell_styles(is_header_cell, is_row_label_cell, is_fixed_style_cell, hover, cursor, *rest)
 
     def blank(self, row: int) -> bool:
         return 0 <= row < self.row_count and self.ordered_rows[row].key.value.startswith(BLANK)
@@ -3166,6 +3155,11 @@ class McpServers(Dialog):
         self.action_answer(None)
 
 
+class AdoptList(KeepColours, DataTable):
+    """The sessions Adopt offers: a running one's amber mark kept under the mouse and the
+    cursor (#217)."""
+
+
 class AdoptSession(Dialog):
     """Pick a session to bring into the wheelhouse. A running one must be /exit-ed first:
     the wheelhouse never kills it, and only launches once it has gone."""
@@ -3178,7 +3172,7 @@ class AdoptSession(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog", classes="wide"):
             yield Label("ADOPT A SESSION", classes="dialog-title")
-            yield DataTable(id="adopt-list", cursor_type="row")
+            yield AdoptList(id="adopt-list", cursor_type="row")
             yield Input(placeholder="name in the wheelhouse", id="adopt-name")
             yield Label("", id="adopt-hint")
             with Horizontal(classes="buttons"):

@@ -1,7 +1,9 @@
 """A list's rows as the person sees them, shared by the core's lists and the modules' (through
-api.py's re-exports): each item kind's colour, and a row's full text on hover (#111,
-.plan/pr-pane.md part 1). Imports no Textual, so the daemon's api import stays light.
+api.py's re-exports): each item kind's colour, a row's full text on hover (#111,
+.plan/pr-pane.md part 1), and its cells' own colours under the mouse and the cursor (#217). Imports no Textual, so the daemon's api import stays light.
 """
+
+import functools
 
 from rich.style import Style
 from rich.text import Text
@@ -36,6 +38,27 @@ def plain(cell):
     """A cell as its own text, never markup: a DataTable parses a str cell as markup, so a
     session's title or name holding [@click=...] ran an action when clicked (#139)."""
     return Text(cell) if isinstance(cell, str) else cell
+
+
+class KeepColours:
+    """A DataTable mixin: the mouse's row and the cursor's keep their cells' own colours (a
+    session's status dot, an item's status, a PR's light) on the hover's or the cursor's
+    background. The hover style takes the table's colour (MATRIX) and the cursor's white, and
+    with the foreground's priority on the CSS, DataTable laid it over every cell, so every
+    status went green under the mouse and white under the cursor (#217). A
+    cell with no colour of its own still takes theirs. Cached as DataTable's is, which it
+    clears by this name when its looks change: DataTable's own, unwrapped, so there is the one
+    cache to clear, shared by every list as DataTable's is, so sized for several. A list
+    changes what DataTable is asked through cell_styles (SinkList)."""
+
+    @functools.lru_cache(maxsize=128)
+    def _get_styles_to_render_cell(self, *args) -> tuple[Style, Style]:
+        style, post = self.cell_styles(*args)
+        return style, Style.from_color(bgcolor=post.bgcolor)
+
+    def cell_styles(self, *args) -> tuple[Style, Style]:
+        """DataTable's styles for a cell, uncached."""
+        return super()._get_styles_to_render_cell.__wrapped__(self, *args)
 
 
 class RowTips:

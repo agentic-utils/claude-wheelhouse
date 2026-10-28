@@ -31,6 +31,7 @@ from claude_wheelhouse.store import PROTOCOL_VERSION
 # the stats pane's tests among these, and the slots' defaults, need the stats module
 stats = pytest.importorskip("claude_wheelhouse_stats.stats", reason="installed without the stats module")
 from claude_wheelhouse.splitter import Splitter
+from conftest import keeps_colours
 from claude_wheelhouse.store import COMPACT_QUESTION, Store, mode
 from claude_wheelhouse.tui import (BLANK, COMPACT_HINT, DENY_HINT, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice,
                                    CompactButtons, CompactSession, Confirm, ForgetChoice, ParkSession,
@@ -292,6 +293,19 @@ async def test_adopt(store, monkeypatch, alive_on_adopt, launched, stack, desc):
         await pilot.pause()
         assert got == launched, desc
         assert [type(s).__name__ for s in app.screen_stack] == stack, desc
+
+
+@pytest.mark.anyio
+async def test_a_hovered_or_highlighted_adoptable_keeps_its_running_mark_amber(store, monkeypatch):
+    """#217: hovering a row, or the cursor on it, left its colours in the table's."""
+    from claude_wheelhouse import adopt
+    monkeypatch.setattr(adopt, "candidates", lambda store: [adoptable(pid=4242), adoptable("adopt-too")])
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.press("alt+a")
+        await pilot.pause()
+        kept = await keeps_colours(pilot, app.screen.query_one("#adopt-list"), "Adopt's list")
+        assert "#ffd300" in kept, "the running session's mark amber"
 
 
 @pytest.mark.anyio

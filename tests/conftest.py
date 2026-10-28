@@ -211,6 +211,40 @@ def sid(store, tmp_path):
     return store.create_session(str(tmp_path), name="demo", ticket="#7", brief="do the thing")
 
 
+def colours(table, row) -> list[tuple[str | None, str | None]]:
+    """A list's row as drawn: each run of text's foreground and background."""
+    strip = table.render_line((table.header_height if table.show_header else 0) + row - round(table.scroll_y))
+    return [(s.style and s.style.color and s.style.color.name, s.style and s.style.bgcolor and s.style.bgcolor.name)
+            for s in strip if s.text.strip()]
+
+
+async def keeps_colours(pilot, table, desc) -> list[str | None]:
+    """Row 0 of a list hovered, then under the cursor (#217): shaded each time, its cells'
+    own colours kept (a cell in the table's, MATRIX, takes the cursor's white). Row 0's
+    foregrounds, as asserted."""
+    last = table.row_count - 1
+    assert last >= 1, f"{desc}: a row to hover besides the cursor's"
+    table.show_cursor = True
+    table.move_cursor(row=last, animate=False)
+    await pilot.hover(table, offset=(4, table.header_height + last))   # the pointer on the cursor's row
+    await pilot.pause()
+    plain = colours(table, 0)
+    await pilot.hover(table, offset=(4, table.header_height))
+    await pilot.pause()
+    assert table.hover_row == 0 and table.cursor_row == last, f"{desc}: row 0 hovered, the cursor elsewhere"
+    for how in ("hovered", "under the cursor"):
+        if how == "under the cursor":
+            table.move_cursor(row=0, animate=False)
+            await pilot.hover(table, offset=(4, table.header_height + last))
+            await pilot.pause()
+        now = colours(table, 0)
+        assert [bg for _, bg in now] != [bg for _, bg in plain], f"{desc}: row 0 shaded {how}"
+        assert len(now) == len(plain), f"{desc}: row 0 drawn in the same runs {how}"
+        own = [(fg, was) for (fg, _), (was, _) in zip(now, plain) if was != tui.MATRIX]
+        assert own and all(fg == was for fg, was in own), f"{desc}: every cell's own colour kept {how}: {own}"
+    return [fg for fg, _ in plain]
+
+
 class Clock:
     """The app's timers on a clock of the test's own, so what a test asserts of a move or a
     dwell holds however slowly a loaded run goes: a Sink's moves (Sink.now), the one-shot

@@ -73,8 +73,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   slot, kept as `layout.weights`; a splitter, `splitter.SlotSplitter`, between neighbouring
   weighted slots; the old splitter shares deleted on start). `WheelhouseApp.lay_columns` applies
   it. Never imports Textual.
-- `rows.py`: each item kind's colour (`KIND_COLOUR`) and a list row's full text on hover
-  (`RowTips`), shared with the modules through `api.py`. Never imports Textual.
+- `rows.py`: each item kind's colour (`KIND_COLOUR`), a list row's full text on hover
+  (`RowTips`), and its cells' own colours kept under the mouse and the cursor (`KeepColours`,
+  #217), shared with the modules through `api.py`. Never imports Textual.
 - `transcript.py`: a session's conversation, read from its Claude Code transcript.
 - `transcript_usage.py`: a session's token use, read from its transcripts (`parse`,
   `UsageFollower`, `follower`, `Snapshot`, `current`, `carry`), for the session list's
