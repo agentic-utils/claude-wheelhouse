@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import adopt, api, features, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
+from . import adopt, api, away, features, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
 from .docroots import DOC_CAP
 from .host import (AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, NO_NOTES, keepalive_body,
                    waits_on_person)
@@ -83,6 +83,17 @@ def state(status: str, parked) -> str:
     if status in RUNNING:
         return "active"
     return "parked" if parked else "available"
+
+
+def waking(s) -> str:
+    """What bringing a session that isn't running back is called: a parked one is unparked,
+    any other relaunched (VERBS)."""
+    return "unparking" if s["parked"] else "relaunching"
+
+
+def wake_verb(s) -> str:
+    """The button a session that isn't running comes back by: Unpark or Relaunch (VERBS)."""
+    return "Unpark" if s["parked"] else "Relaunch"
 
 
 def requested(s) -> str | None:
@@ -196,6 +207,7 @@ class Hub:
         self.wake = liveness.WakeDetector()
         self.waking = False
         self.sessions = []
+        self.seen = None   # each session's (name, parked, alive) at the last refresh (note_quiet)
         self.by_id: dict = {}   # the sessions by id, as the last refresh read them
         self.statuses: dict[str, str] = {}
         # sessions whose host Relaunch has stopped: started again once it has gone. Each has
@@ -284,6 +296,26 @@ class Hub:
         self.sessions = self.store.sessions()
         self.by_id = {s["id"]: s for s in self.sessions}
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
+        self.note_quiet()
+
+    def note_quiet(self) -> None:
+        """A session parked, ended or stopped since the last refresh (or, at a hub's first,
+        since the last hub's), kept for the card of what happened while the person was away
+        (away.observe): watched here, as nothing in the store dates them, whoever's code did it."""
+        seen = {s["id"]: (display_name(s), bool(s["parked"]), self.statuses[s["id"]] in ("live", "stalled"))
+                for s in self.sessions}
+        # a hub's first read compares with what the last hub saw (SEEN): what went quiet while
+        # none ran is noted at this start, so the card after a night away still lists it
+        before = self.seen if self.seen is not None else away.seen(self.store.setting(away.SEEN))
+        self.seen = seen
+        if before == seen:
+            return
+        self.store.set_setting(away.SEEN, json.dumps(seen))
+        if before is None:
+            return
+        quiet = away.kept(self.store.setting(away.QUIET))
+        if (changed := away.observe(before, seen, quiet, away.now())) is not None:
+            self.store.set_setting(away.QUIET, json.dumps(changed))
 
     def row(self, sid: str):
         """The session's row, or SessionGone: it can end at any moment (in-session /wheelhouse end)."""
@@ -361,6 +393,24 @@ class Hub:
             self.store.set_parked(sid, False)
             done.say("relaunching")
         return done
+
+    def wake_and_send(self, sid: str, item_ref: str | None = None, text: str | None = None,
+                      may_tab: bool = True) -> Done:
+        """Ctrl+S or Alt+S on a session that isn't running, confirmed (#221): Unpark or Relaunch
+        it, and send its queue, with text (Alt+S's) after it, as its first prompt on waking.
+        They go behind the resume notice its launch leaves (launch.tell_joined), so the session
+        reads the wheelhouse's context first and the person's words after, all in the one
+        batch its monitor or host claims at start. The launch returns before the session has
+        started (a detached host, a tab's Claude), and the queue follows the notice within the
+        same call, long before either can claim anything. Nothing is sent if it doesn't come back:
+        the queue stays queued, and the text stays the person's."""
+        s = self.row(sid)
+        verb = waking(s)
+        done = self.relaunch(sid, may_tab)
+        if not done.ok:
+            return done
+        n = self.store.dispatch_last(sid, text, item_ref)
+        return Done().say(f"{verb} {display_name(s)}" + (f": {n} sent with it" if n else ""))
 
     def host_gone(self, sid: str, s, may_tab: bool) -> Done:
         """Relaunch of a host that has gone meanwhile: it comes back as a dead session does
@@ -824,8 +874,8 @@ class Hub:
         else:
             self.store.queue(target[0], text, target[1])
             if self.dead(target[0]):   # aimed names the item, so say whose queue isn't running
-                done.say(f"queued for {aimed(target)}, but the session isn't running: "
-                         "Relaunch it, then Ctrl+S or Send sends its queue")
+                done.say(f"queued for {aimed(target)}, but the session isn't running: Ctrl+S "
+                         f"{'unparks' if s['parked'] else 'relaunches'} it and sends its queue")
             else:
                 done.say(f"queued for {aimed(target)}: Ctrl+S or Send sends the session's queue")
         return done
@@ -841,7 +891,10 @@ class Hub:
 
     def late(self, sid: str) -> str:
         """What a send to a session that isn't running adds: when it will be delivered."""
-        return "" if self.running(sid) else " (not running: delivered when it's relaunched)"
+        if self.running(sid):
+            return ""
+        s = self.store.session(sid)
+        return f" (not running: delivered when it's {'unparked' if s and s['parked'] else 'relaunched'})"
 
     def sent_note(self, sid: str, n: int) -> str:
         s = self.store.session(sid)
@@ -850,20 +903,24 @@ class Hub:
 
     def send_queue(self, sid: str) -> Done:
         """A session's queue, sent as one message; a dead one's stays queued (#62)."""
+        if self.dead(sid) and not self.store.drafts(sid):
+            return Done(False).say("nothing queued for that session")
         if self.dead(sid):
-            return Done(False).say(f"{display_name(self.row(sid))} isn't running: Relaunch it first", "warning")
+            s = self.row(sid)
+            return Done(False).say(f"{display_name(s)} isn't running: {wake_verb(s)} it first", "warning")
         n = self.store.dispatch(sid)
         return Done(bool(n)).say(f"sent {self.sent_note(sid, n)}" if n else "nothing queued for that session")
 
     def send_all(self) -> Done:
-        """Every queue but a dead session's, which stays queued until it's relaunched (#62)."""
+        """Every queue but a dead or parked session's, which stays queued until it's relaunched
+        or unparked (#62)."""
         queued = dict.fromkeys(m["session_id"] for m in self.store.drafts())
         sent = [(sid, n) for sid in queued if not self.dead(sid) and (n := self.store.dispatch(sid))]
         if sent:
             return Done().say("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent))
         if any(self.dead(sid) for sid in queued):
-            return Done(False).say("nothing queued for a running session: a dead one's queue waits until "
-                                   "it's relaunched", "warning")
+            return Done(False).say("nothing queued for a running session: a dead or parked one's queue waits "
+                                   "until it's relaunched or unparked", "warning")
         return Done(False).say("nothing queued")
 
     def toggle_mode(self, sid: str) -> Done:
@@ -984,6 +1041,15 @@ class Hub:
                 "pending": pending, "effort_live": hosted and self.sdk}
 
     # items
+
+    def away(self) -> dict:
+        """What the card of what happened while the person was away is read from (away.py):
+        the app's last input, and each session's latest going quiet."""
+        return {"last_input": self.store.setting(away.LAST_INPUT), "quiet": away.kept(self.store.setting(away.QUIET))}
+
+    def note_input(self, at: str) -> None:
+        """The app's last key press, click or scroll (away.LAST_INPUT), UTC."""
+        self.store.set_setting(away.LAST_INPUT, at)
 
     def mark_seen(self, sid: str, ref: str) -> bool:
         """Whether an unseen decision became seen: a no-op for anything else."""

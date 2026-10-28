@@ -54,7 +54,7 @@ def test_a_command_answers_as_the_hub_did(store, sid, served, no_launch):
         c.refresh()
         done = c.submit((sid, None), "hello")
         assert (done.ok, [n.text for n in done.notices]) == (True, [
-            "queued for the session, but the session isn't running: Relaunch it, then Ctrl+S or Send sends its queue"])
+            "queued for the session, but the session isn't running: Ctrl+S relaunches it and sends its queue"])
         assert [m["body"] for m in store.drafts(sid)] == ["hello"]
         assert [d["item_ref"] for d in c.drafts(sid)] == [None], "a command's change is read at once, no refresh needed"
         p = store.post_item(sid, "permission", "Bash: ls")
@@ -426,3 +426,21 @@ def test_an_order_refused_says_why(raised, said, desc):
     done = RemoteClient.order(stub, "/order/items", {})
     assert (done.ok, [n.text for n in done.notices]) == (False, [said]), desc
     assert "older code" in client_mod.OLD_DAEMON_ORDER and "start" in client_mod.OLD_DAEMON_ORDER
+
+
+def test_wake_and_send_goes_through_the_daemon(store, sid, served, no_launch):
+    """#221: Ctrl+S or Alt+S on a session not running, through the daemon: it comes back with
+    the queue and the answer sent, the queue emptied."""
+    store.set_parked(sid, True)
+    store.queue(sid, "first")
+    d = served(store.path)
+    c = d.client()
+    try:
+        c.refresh()
+        done = c.wake_and_send(sid, None, "ship it")
+        assert (done.ok, [n.text for n in done.notices]) == (True, ["unparking demo: 2 sent with it"])
+        assert store.drafts(sid) == []
+        assert [m["body"] for m in store.pending(sid)] == ["first", "ship it"]
+        assert store.session(sid)["parked"] == 0
+    finally:
+        c.disconnect()

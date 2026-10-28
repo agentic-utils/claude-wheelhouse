@@ -43,7 +43,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   usage mode, `usage_mode()` (`USAGE_MODE`), the daemon's port, `port()` (`PORT`), and how
   long a quiet session is kept warm, `keepalive_hours()` (`KEEPALIVE_HOURS`; 8 by default,
   0 for off), and the app's animation rate, `animation_fps()` (`ANIMATION_FPS`; 10 by
-  default, 0 for off; `WheelhouseApp.pace` rests it while unfocused with nothing busy). The README's Settings table lists them.
+  default, 0 for off; `WheelhouseApp.pace` rests it while unfocused with nothing busy), and the gap
+  after which the app says what happened meanwhile, `away_hours()` (`AWAY_HOURS`; 2 by default, 0 for off). The README's Settings table lists them.
 - `launch.py`: Windows Terminal tabs (`wt.exe` through `cmd.exe`, in the user's own
   window, `window_name`), the `claude` command line, and the protocol text injected into
   a session. Every launch passes `clean_env()`, which drops a parent Claude Code
@@ -73,8 +74,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   slot, kept as `layout.weights`; a splitter, `splitter.SlotSplitter`, between neighbouring
   weighted slots; the old splitter shares deleted on start). `WheelhouseApp.lay_columns` applies
   it. Never imports Textual.
-- `rows.py`: each item kind's colour (`KIND_COLOUR`) and a list row's full text on hover
-  (`RowTips`), shared with the modules through `api.py`. Never imports Textual.
+- `rows.py`: each item kind's colour (`KIND_COLOUR`), a list row's full text on hover
+  (`RowTips`), and its cells' own colours kept under the mouse and the cursor (`KeepColours`,
+  #217), shared with the modules through `api.py`. Never imports Textual.
 - `transcript.py`: a session's conversation, read from its Claude Code transcript.
 - `transcript_usage.py`: a session's token use, read from its transcripts (`parse`,
   `UsageFollower`, `follower`, `Snapshot`, `current`, `carry`), for the session list's
@@ -98,8 +100,14 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   and kept to a `.md` file under a root; stage 8 writes through it too), and where a repo's
   decisions are (`doc_dirs`: `docs/adr` under its git root, a linked worktree's main
   repository's (`main_root`), unless a session declared others with `set_doc_dirs`, Q114, which may be in another git
-  repo beside it, #191; `decision_dirs` pairs each with the repo that looks there).
+  repo beside it, #191; `decision_dirs` pairs each with the repo that looks there). A session in no git repo
+  may still name one, absolute or relative to its directory (#220), listed under the repo the directory is in.
   Never imports Textual.
+- `away.py`: the card of what happened while the person was away (#223,
+  `.plan/since-you-were-away.md`): its groups read from the items (`card`), and the sessions
+  that went quiet, which `Hub.note_quiet` notes as each refresh sees them (`observe`, the
+  `away.quiet` setting, compared at a hub's start with the last hub's, `away.seen`). The app measures the gap (`features.away_hours`) and keeps its last
+  input in `away.last_input`, both through the daemon's `/away` routes. Never imports Textual.
 - `models.py`: the models and effort levels offered. A new model is a row here.
 - `helper.py`: the helper chat (#198, `.plan/helper-chat.md`): how-to questions answered by
   Haiku through the person's own login, one sandboxed `claude -p` over stream-json per chat,
@@ -319,6 +327,9 @@ Update these in the same commit as the behaviour they describe:
   The issue must be a real GitHub issue on agentic-utils/claude-wheelhouse; open one first
   if none fits. Types: feat, fix, docs, test, refactor, perf, chore, build, revert.
 - The description is plain lower-case prose saying what now holds, not what was done.
+- A subject starts with `#`, which git reads as a comment line wherever it opens the message
+  in an editor (a rebase, a commit without `-m`), dropping it: pass `-c core.commentChar=';'`,
+  as `git -c core.commentChar=';' commit` or `rebase`.
 - Branches: `doug/<issue>-<slug>`.
 
 ## Writing

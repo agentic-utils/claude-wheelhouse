@@ -1703,6 +1703,24 @@ class Store:
                               (sid,)).fetchall()
         return len(sent)
 
+    def dispatch_last(self, sid: str, body: str | None = None, item_ref: str | None = None) -> int:
+        """Send the session's drafts, and body if given, behind every message sent before them,
+        in one transaction: a session woken to send them (Hub.wake_and_send) reads the resume
+        notice its launch left first, then the person's words, oldest first, in the one batch
+        the monitor or host claims. The drafts are sent as new rows, so their order follows the
+        notice's; each keeps its text, item and time. Returns how many went."""
+        with self.tx() as db:
+            self._require(db, sid)
+            moved = db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, kind) "
+                               "SELECT session_id, item_ref, author, body, created_at, kind FROM messages "
+                               "WHERE session_id = ? AND draft = 1 ORDER BY id", (sid,)).rowcount
+            db.execute("DELETE FROM messages WHERE session_id = ? AND draft = 1", (sid,))
+            if body is not None:
+                self._mark_seen(db, sid, item_ref)
+                db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at) "
+                           "VALUES (?, ?, 'person', ?, ?)", (sid, item_ref, body, now()))
+        return moved + (body is not None)
+
     def awaiting(self) -> set[tuple[str, str]]:
         """Items whose latest word is the person's: sent to the session, with no reply since.
         The ball is in the session's court; the session's reply says where the item stands."""

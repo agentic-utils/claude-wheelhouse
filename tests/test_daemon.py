@@ -87,8 +87,8 @@ ROUTES = [
     ("POST", "/sessions/{sid}/send-now", {"text": "hello", "ref": "{ref}"},
      lambda store, sid, r: ([m["body"] for m in store.pending(sid)], store.drafts(sid), store.session(sid)["send_mode"])
      == (["hello"], [], None), "send-now (Alt+S): at once, the mode left as it was (#124)"),
-    ("POST", "/sessions/{sid}/dispatch", None, lambda store, sid, r: "isn't running" in told(r)[0],
-     "a session's queue: a dead one's waits"),
+    ("POST", "/sessions/{sid}/dispatch", None, lambda store, sid, r: told(r) == ["nothing queued for that session"],
+     "a session's queue: a dead one with nothing queued has nothing to wake it for"),
     ("POST", "/dispatch", None, lambda store, sid, r: told(r) == ["nothing queued"], "Send all"),
     ("POST", "/sessions/{sid}/park", {"how": "now"}, lambda store, sid, r: store.session(sid)["parked"],
      "park a dead session now"),
@@ -826,7 +826,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 40 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 42 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 
@@ -944,6 +944,12 @@ NEW_ROUTES = [
      "a tour's place, nothing else"),
     ("POST", "/tour/at", {"at": "topup:stats"}, lambda store, sid, r: store.setting("tour_at") == "topup:stats",
      "where the tour under way resumes"),
+    ("POST", "/away/input", {"at": "2026-10-28T12:00:00+00:00"},
+     lambda store, sid, r: store.setting("away.last_input") == "2026-10-28T12:00:00+00:00", "the app's last input kept"),
+    ("POST", "/away/input", {"at": "soon"}, lambda store, sid, r: r.status_code == 400 and store.setting("away.last_input") is None,
+     "a time, nothing else"),
+    ("GET", "/away", None, lambda store, sid, r: r.json() == {"last_input": None, "quiet": {}},
+     "the away card's inputs: none yet"),
     ("POST", "/shutdown", None, lambda store, sid, r: not r.json()["ok"], "stop: a test's daemon can't"),
 ]
 
@@ -1305,11 +1311,7 @@ def moduled(store, monkeypatch, tmp_path):
                                               api.Loaded("off", probe([out], id="off"))])
     d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True)
     yield d, tmp_path
-    d.pool.shutdown()
-    d.worker.shutdown()
-    for lane in d.lanes.values():
-        lane.shutdown()
-    d.watch.close()
+    close(d)
 
 
 @pytest.mark.parametrize("method, desc", [("GET", "a module's query"), ("POST", "a module's command")])
@@ -1414,10 +1416,14 @@ def lanes_daemon(store, monkeypatch, release):
 
 
 def close(d):
+    """The daemon's threads stopped, a lane's waited on too: a stuck command, released, still
+    keeps its answer in the store, which must be done before the test's teardown closes it
+    (a write racing the close segfaults in sqlite, #207)."""
     d.pool.shutdown()
     d.worker.shutdown()
     for lane in d.lanes.values():
-        lane.shutdown()
+        lane.commands.shutdown()
+        lane.queries.shutdown()
     d.watch.close()
 
 

@@ -203,3 +203,13 @@ ROWS = [{"number": "0002", "status": "PROPOSED", "title": "b", "repo": "z", "pat
 ])
 def test_sorted_by(spec, order, desc):
     assert [r["path"] for r in pane.sorted_by(ROWS, spec)] == order, desc
+
+
+def test_route_lists_a_docs_repos_decisions_for_a_session_in_no_repo(tmp_path):
+    """#220: a session started in a projects folder (no git repo) declares a docs repo's
+    decisions by absolute path; they list under the docs repo and read through /docs."""
+    docs = repo(tmp_path / "app-docs", {"0001-ACCEPTED-loose.md": "# ADR-0001: Loose\n"}, "decisions")
+    rows = sessions((tmp_path, [str(docs)]))
+    assert listed(rows) == [("app-docs", "0001", "ACCEPTED")]
+    s = served.Served([api.Loaded("design", design.module)], api.Context(Path("/tmp"), lambda: rows, lambda: None))
+    assert "Loose" in s.read(str(docs / "0001-ACCEPTED-loose.md"))["text"]

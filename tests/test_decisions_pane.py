@@ -5,6 +5,7 @@ import pytest
 
 from claude_wheelhouse import api
 from claude_wheelhouse.tui import LAYOUT, DocView, WheelhouseApp, tab_stops
+from conftest import keeps_colours
 from test_tui import INBOX_STOPS, assert_one_current, by_name, pane_widget, pick, stop_id
 
 design = pytest.importorskip("claude_wheelhouse_design", reason="installed without the design module")
@@ -74,6 +75,16 @@ async def test_the_pane_lists_and_shows_decisions(store, sid, decisions):
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, DocView)
+
+
+@pytest.mark.anyio
+async def test_a_hovered_or_highlighted_decision_keeps_its_status_colour(store, sid, decisions):
+    """#217: hovering a row, or the cursor on it, left its status in the table's colour."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        kept = await keeps_colours(pilot, app.query_one("#decision-list"), "the Decisions pane")
+        assert pane.LOOKS["PROPOSED"] in kept, "0002's PROPOSED in its own colour"
 
 
 @pytest.mark.anyio

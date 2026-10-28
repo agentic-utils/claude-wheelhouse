@@ -153,9 +153,11 @@ FEATURES: tuple[Feature, ...] = (
     Feature("doc-editor", UNRELEASED, ADVANCED,
             note="A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered. Saving comes next."),
     Feature("helper-chat", UNRELEASED, "principles",
-            note="Alt+G asks the wheelhouse how to do something: a chat that answers from its help and its source, "
+            note="Alt+Q asks the wheelhouse how to do something: a chat that answers from its help and its source, "
                  "through Haiku on your own Claude Code login.",
-            tip="Stuck? Alt+G asks the wheelhouse how to do something."),
+            tip="Stuck? Alt+Q asks the wheelhouse how to do something."),
+    Feature("helper-alt-q", UNRELEASED, ADVANCED,
+            note="The helper chat moved from Alt+G, which opens Gemini on some desktops, to Alt+Q (Q for question)."),
     Feature("tour-topups", UNRELEASED, "principles",
             note="After an update, the tour shows only what's new, pane by pane, with no demo; Esc ends it at any "
                  "time, and after quitting mid-tour, Alt+T or the title bar's badge resumes it.",
@@ -189,6 +191,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("send-now", UNRELEASED, "send",
             note="Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits.",
             tip="Alt+S allows you to send the answer you have just typed, bypassing the queue."),
+    Feature("send-wakes", UNRELEASED, ADVANCED,
+            note="Ctrl+S or Alt+S on a session that isn't running asks to Unpark (a parked one) or Relaunch it "
+                 "and send: it wakes with your message and its queue as its first prompt."),
     Feature("pr-actions", UNRELEASED, "prs",
             note="A PR in the PRs pane has Open, Merge and Request review buttons, and a right-click on its row gives "
                  "them as a menu: Merge asks first and says what stood in its way, and Request review asks the "
@@ -292,6 +297,10 @@ FEATURES: tuple[Feature, ...] = (
     Feature("emoji-pick", UNRELEASED, ADVANCED,
             note="Emoji suggestions take a click: type :star and click the one you want, or choose it with Up "
                  "and Down and take it with Tab or Enter."),
+    # notes only: the inbox's dialog has its MAX_TIPS already
+    Feature("since-away", UNRELEASED, ADVANCED,
+            note="Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: "
+                 "what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it."),
 
 )
 

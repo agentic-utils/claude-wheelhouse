@@ -41,6 +41,7 @@ from textual.selection import SELECT_ALL, Selection
 from textual.strip import Strip
 from textual.suggester import SuggestFromList
 from textual.widget import Widget
+from textual.widgets.option_list import Option
 from textual.widgets.text_area import Selection as Span
 from textual.worker import get_current_worker
 from textual.widgets import (
@@ -60,12 +61,12 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, callout, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
-from .rows import KIND_COLOUR, RowTips, marked, plain
+from . import api, away, callout, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
+from .rows import KIND_COLOUR, KeepColours, RowTips, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import AWAITING_NOTES, HOLD_EXPIRED, MCP_CONNECTOR, NUDGE_TOKENS, SHELL_OPENING
-from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, compacting_now, state as hub_state, Event, aimed, display_name, host_context, short
+from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, wake_verb, compacting_now, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
@@ -913,7 +914,7 @@ class Sink:
             self.sunk = None
 
 
-class SinkList(RowTips, DataTable):
+class SinkList(RowTips, KeepColours, DataTable):
     """A list a Sink lays. Every key that moves its cursor (Up, Down, PageUp, PageDown,
     Ctrl+Home, Ctrl+End, the item list's Shift+Up and Shift+Down) acts in its final order
     (final), never a moving frame's, so keys typed during a move act as they would after it;
@@ -1126,25 +1127,14 @@ class SinkList(RowTips, DataTable):
     def action_scroll_bottom(self) -> None:
         self.go(lambda i, n: n - 1)
 
-    @functools.lru_cache(maxsize=32)
-    def _get_styles_to_render_cell(self, is_header_cell: bool, is_row_label_cell: bool, is_fixed_style_cell: bool,
-                                   hover: bool, cursor: bool, *rest) -> tuple[Style, Style]:
-        """DataTable's, but the mouse's row and the cursor's keep their cells' own colours (a
-        session's status dot, an item's status) on the hover's or the cursor's background: the
-        hover style takes the table's colour (MATRIX) and the cursor's white, and with the
-        foreground's priority on the CSS, DataTable laid it over every cell, so every status
-        went green under the mouse and white under the cursor. A cell with no colour of its own
-        still takes theirs. Cached as DataTable's is, which it clears by this name when its
-        looks change: DataTable's own, unwrapped, so there is the one cache to clear. With the
-        cursor hidden (the session list with none selected, #16) no row is the cursor's, but the
-        mouse's is still shaded, where DataTable would shade none."""
+    def cell_styles(self, is_header_cell: bool, is_row_label_cell: bool, is_fixed_style_cell: bool,
+                    hover: bool, cursor: bool, *rest) -> tuple[Style, Style]:
+        """With the cursor hidden (the session list with none selected, #16) no row is the
+        cursor's, but the mouse's is still shaded, where DataTable would shade none. Its cells
+        keep their own colours under either (KeepColours)."""
         if not rest[0]:   # show_cursor
             cursor, rest = False, (True, *rest[1:])
-        style, post = DataTable._get_styles_to_render_cell.__wrapped__(
-            self, is_header_cell, is_row_label_cell, is_fixed_style_cell, hover, cursor, *rest)
-        if hover or cursor:
-            post = Style.from_color(bgcolor=post.bgcolor)
-        return style, post
+        return super().cell_styles(is_header_cell, is_row_label_cell, is_fixed_style_cell, hover, cursor, *rest)
 
     def blank(self, row: int) -> bool:
         return 0 <= row < self.row_count and self.ordered_rows[row].key.value.startswith(BLANK)
@@ -1394,6 +1384,23 @@ class SessionList(SinkList):
         # a click's selection, as Enter's (select_now): handled as the app's next callback,
         # which land runs before the next key acts, not posted to reach the app behind them
         self.app.call_next(select_now, self)
+
+
+class AwayClose(Static):
+    """The away card's close control (✕)."""
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        self.app.dismiss_away()
+
+
+class AwayCard(OptionList):
+    """What happened while the person was away (away.py, #223), above the inbox: a heading
+    per group, then its lines, each picked (Enter or a click) to jump to it as an inbox row
+    does. Esc, or the close control above it, dismisses it."""
+
+    BINDINGS = [Binding("enter", "select", "Jump", show=False),
+                Binding("escape", "app.dismiss_away", "Dismiss", show=False)]
 
 
 class ItemList(SinkList):
@@ -1776,10 +1783,11 @@ class BarButton(Button):
 # Decisions pane's), then whichever answer box shows (Deny's reason in its place, or a doc shown
 # in the detail pane, which has no box: focusable only then, so its keys scroll it); a
 # full-screen item's box. Any other pane is no stop
-TAB_ORDER = ("session-list", "items", "answer", "detail", "detail-editor", "thread-answer", "docview", "docview-editor",
+TAB_ORDER = ("session-list", "away", "items", "answer", "detail", "detail-editor", "thread-answer", "docview", "docview-editor",
              "docview-answer", "deny-reason")
+INPUT_KEPT = 60   # seconds between writes of the last input (away.LAST_INPUT), as the app closes besides
 LISTS_AFTER = "items"   # where a module's lists (TAB_LIST) come in TAB_ORDER: after it
-ANSWER_BOXES = TAB_ORDER[2:]
+ANSWER_BOXES = TAB_ORDER[TAB_ORDER.index("answer"):]
 
 
 def reading_order(button: Button) -> tuple:
@@ -2661,11 +2669,11 @@ COMPACT_HINT = ("1 Compact or 2 Leave it, then 3 just compact, 4 send the queue 
                 "Ctrl+Enter compacts with them")
 
 
-def hint(sends: str, dead: bool = False) -> str:
+def hint(sends: str) -> str:
     """The line under an answer box. sends: what Ctrl+Enter does for the session in context
-    by its mode, queue or send. dead: it isn't running, so Ctrl+S refuses (#62) and goes
-    unmentioned."""
-    ctrl_s = "" if dead else " · Ctrl+S: send queue"
+    by its mode, queue or send. Ctrl+S and Alt+S on one that isn't running ask first to
+    Unpark or Relaunch it (#221): the dialog says which, so the line stays short."""
+    ctrl_s = " · Ctrl+S: send queue"
     alt_s = " · Alt+S: send" if sends == "queue" else ""
     return f"Ctrl+Enter: {sends}{alt_s}{ctrl_s} · Ctrl+R: edit last queued"
 
@@ -3166,6 +3174,11 @@ class McpServers(Dialog):
         self.action_answer(None)
 
 
+class AdoptList(KeepColours, DataTable):
+    """The sessions Adopt offers: a running one's amber mark kept under the mouse and the
+    cursor (#217)."""
+
+
 class AdoptSession(Dialog):
     """Pick a session to bring into the wheelhouse. A running one must be /exit-ed first:
     the wheelhouse never kills it, and only launches once it has gone."""
@@ -3178,7 +3191,7 @@ class AdoptSession(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog", classes="wide"):
             yield Label("ADOPT A SESSION", classes="dialog-title")
-            yield DataTable(id="adopt-list", cursor_type="row")
+            yield AdoptList(id="adopt-list", cursor_type="row")
             yield Input(placeholder="name in the wheelhouse", id="adopt-name")
             yield Label("", id="adopt-hint")
             with Horizontal(classes="buttons"):
@@ -3790,12 +3803,12 @@ HELPER_FULL = "This chat is long, and a long chat costs more per question: New c
 
 
 class HelperDrawer(Dialog):
-    """Alt+G: the helper chat (helper.py, .plan/helper-chat.md), a drawer down the right-hand
+    """Alt+Q: the helper chat (helper.py, .plan/helper-chat.md), a drawer down the right-hand
     side, the screen behind showing through. The chat is the app's (WheelhouseApp.helper_log),
-    so Esc, Alt+G or a click outside closes the drawer and the next Alt+G finds it as it was,
+    so Esc, Alt+Q or a click outside closes the drawer and the next Alt+Q finds it as it was,
     an answer still coming included. Enter asks; Alt+N starts a new chat."""
     ACTION = "helper-ask"
-    BINDINGS = [Binding("alt+g", "close_helper", show=False), Binding("alt+n", "new_chat", show=False)]
+    BINDINGS = [Binding("alt+q", "close_helper", show=False), Binding("alt+n", "new_chat", show=False)]
 
     def compose(self) -> ComposeResult:
         with Vertical(id="helper"):
@@ -3871,10 +3884,13 @@ def key_name(key: str) -> str:
 
 # what each key does, by its action, for the F1 overlay; every binding must have one
 DESCRIBE = {
+    "select": "Jump to the line's item, or its session, as an inbox row does (seeing the card marks nothing seen)",
+    "app.dismiss_away": "Dismiss the card of what happened while you were away",
     "submit": "Submit what's typed: queued, or sent at once, by the session's mode",
     "app.submit": "Submit what's typed: queued, or sent at once, by the session's mode",
-    "submit(True)": "Send what's typed at once, whatever the mode, leaving the mode and the rest of the queue as they are",
-    "send_session": "Send the current session's queue (a dead one's waits: Relaunch it first)",
+    "submit(True)": ("Send what's typed at once, whatever the mode, leaving the mode and the rest of the queue as they "
+                     "are (one not running: Unpark or Relaunch it and send it with the queue, asked first)"),
+    "send_session": "Send the current session's queue (one not running: Unpark or Relaunch it and send, asked first)",
     "toggle_mode": "Switch the session between Queued and Immediate",
     "recall": ("Take this item's latest queued answer back into the box; with none queued, in the item list, "
                "reopen the highlighted finished item (or every marked one)"),
@@ -3885,7 +3901,8 @@ DESCRIBE = {
     "relaunch_all": "Relaunch all: every Available session (not running, not parked)",
     "mcp_servers": ("MCP servers: the session in context's, as its host last saw them, each with a button to sign in "
                     "or reconnect it (a claude.ai connector in every session the wheelhouse hosts); a tab's: /mcp there"),
-    "clear_filter": "Clear a text selection first, then the marks, else show every session's items again",
+    "clear_filter": ("Clear a text selection first, then the marks, then dismiss the card of what happened while you "
+                     "were away, else show every session's items again"),
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
     "app.close_question": ("Close the highlighted question or decision, or dismiss a done task or subagent, or a doc "
@@ -3895,7 +3912,7 @@ DESCRIBE = {
     "app.toggle_pinned": "Pin the highlighted item (📌), or clear its pin: Ctrl+A and Delete leave a pinned item",
     "help": "This list",
     "helper": ("Ask the wheelhouse: a chat that answers how-to questions about it, from its help and its source "
-               "(Haiku, on your Claude Code login). Alt+G again, or Esc, closes it; the chat is kept until you quit"),
+               "(Haiku, on your Claude Code login). Alt+Q again, or Esc, closes it; the chat is kept until you quit"),
     "close_helper": "Close the helper, keeping the chat",
     "new_chat": "New chat: the helper forgets this one",
     "doc_layout": "With a doc shown: its thread under it (split), or Doc and Thread as tabs (tabbed); kept",
@@ -3936,7 +3953,7 @@ DESCRIBE = {
     "press('deny')": "Deny it, with an optional reason (Enter denies); on the question suggesting Compact, just compact after",
     "press('compact-then-send')": "On the question suggesting Compact: send the queued answers after, in the same prompt",
     "press('compact-then-park')": "On the question suggesting Compact: park the session after, sending nothing",
-    "press('send-all')": "Send all: every running session's queue (a dead one's waits until it's relaunched)",
+    "press('send-all')": "Send all: every running session's queue (a dead or parked one's waits until it's relaunched or unparked)",
     "cursor_up": "Up a row",
     "cursor_down": "Down a row",
     "page_up": "Up a page",
@@ -3950,7 +3967,7 @@ DESCRIBE = {
 BUTTONS = {
     "mode": "Mode (Ctrl+T): the session's send mode, Queued or Immediate",
     "send": "Send (Ctrl+S): send the session's queued answers as one message; its caption counts them",
-    "send-all": "Send all (Alt+Shift+A), above the footer: send every running session's queue; a dead one's waits until it's relaunched",
+    "send-all": "Send all (Alt+Shift+A), above the footer: send every running session's queue; a dead or parked one's waits until it's relaunched or unparked",
     "allow": "Allow (Alt+Y; over the answer box, on a permission item): let the tool call run, at once",
     "always": "Always (Alt+W): allow it, and keep the rule Claude Code suggests",
     "deny": ("Deny (Alt+D): refuse it, with a reason if you like: typed in the line that opens, the session reads "
@@ -4006,7 +4023,7 @@ LIST_KEYS = [Binding(key, action) for key, action in (
     ("up", "cursor_up"), ("down", "cursor_down"), ("pageup", "page_up"), ("pagedown", "page_down"),
     ("ctrl+home", "scroll_top"), ("ctrl+end", "scroll_bottom"))]
 SLIDER_TAB = "effort slider (while it shows) and its "   # SDK mode's alone (keys_help)
-TABS = ("Tab goes round the session list, the items, the answer box, a tour box's Next while one shows, then "
+TABS = ("Tab goes round the session list, the card of what happened while you were away while it shows, the items, the answer box, a tour box's Next while one shows, then "
         "every button shown, in reading "
         "order, then the stats pane's {slider}zoom's - and + (Enter or Space presses the one with the focus), "
         "and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter "
@@ -4020,7 +4037,8 @@ TABS = ("Tab goes round the session list, the items, the answer box, a tour box'
 SEND_RULES = (
     "**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the "
     "session's queue as one message, so related answers arrive together; ✉ counts what's queued. "
-    "A dead session's queue waits: Ctrl+S and Send all leave it until the session is relaunched. "
+    "A session not running: Ctrl+S or Alt+S asks to Unpark (a parked one) or Relaunch it and send, its queue "
+    "and the box's answer its first prompt; Send all leaves its queue. "
     "Alt+S sends just the answer in the box at once, leaving the queue and the mode as they are. "
     "**Immediate**: Ctrl+Enter (or Alt+S) sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
@@ -4031,6 +4049,8 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the "
          "right-hand end of its row: a click there hides them, and the + it becomes shows them again. "
          "A click on a doc opens its editor below it there, as a click on it moves it while it's open. "
+         "A click on a line of the card of what happened while you were away jumps to it, and its ✕ "
+         "dismisses it. "
          "A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. "
          "A click on an emoji suggestion under the answer box takes it in place of the code typed. "
          "Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; "
@@ -4084,11 +4104,12 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
                 ("Moving between panes", TAB_KEYS), ("Either list", LIST_KEYS),
                 ("The session list", SessionList.BINDINGS),
                 ("The item list", ItemList.BINDINGS),
+                ("The card of what happened while you were away", AwayCard.BINDINGS),
                 ("An answer box", Compose.BINDINGS), ("The conversation pane", Transcript.BINDINGS),
                 ("An item opened full screen", ThreadView.BINDINGS),
                 ("A doc opened full screen", DocView.BINDINGS),
                 ("A doc's editor", DocEditor.BINDINGS),
-                ("The helper (Alt+G)", HelperDrawer.BINDINGS),
+                ("The helper (Alt+Q)", HelperDrawer.BINDINGS),
                 *[(w.KEYS_HELP[0], w.BINDINGS) for w in panes
                   if (keys := getattr(w, "KEYS_HELP", None)) and (sdk or not keys[1])]]
     # a module's pane says what its own keys do: core's DESCRIBE can't know them (#154)
@@ -4172,6 +4193,12 @@ class WheelhouseApp(App):
     .panel {{ border-title-color: #05d9e8; }}   /* each pane's title, in its top border, its drag handle (Slot) */
     .slot.-swap-target > * {{ outline: round #05d9e8; }}   /* where a pane dragged by its title would go: teal */
     #items {{ height: 1fr; min-height: 3; }}
+    /* what happened while the person was away (#223): at most half the inbox, scrolling past it */
+    #away-card {{ height: auto; max-height: 50%; border-bottom: solid #7b61ff; }}
+    #away-head {{ height: 1; background: #12122a; }}
+    #away-title {{ width: 1fr; color: #ffd300; text-style: bold; }}
+    #away-close {{ width: 3; content-align: center middle; color: #ff2a6d; }}
+    #away {{ height: auto; max-height: 100%; border: none; padding: 0; background: #000000; color: {MATRIX}; }}
     #detail-scroll {{ height: 1fr; min-height: 3; scrollbar-gutter: stable; }}   /* its width the same, scrolling or not */
     #detail-more, #detail-bar {{ height: auto; }}
     #docview-scroll {{ height: 1fr; scrollbar-gutter: stable; }}
@@ -4293,7 +4320,7 @@ class WheelhouseApp(App):
         Binding("alt+v", "show_finished(True)", "Show finished", key_display="Alt+V"),
         Binding("alt+v", "show_finished(False)", "Hide finished", key_display="Alt+V"),
         Binding("f1", "help", "Keys", key_display="F1"),
-        Binding("alt+g", "helper", "Ask", key_display="Alt+G"),   # the helper chat (HelperDrawer)
+        Binding("alt+q", "helper", "Ask", key_display="Alt+Q"),   # the helper chat (HelperDrawer)
         # a doc item in Detail (.plan/docs-section.md): split or tabbed, and the tabs
         Binding("ctrl+l", "doc_layout", "Doc layout", show=False, key_display="Ctrl+L"),
         # priority: a scrolling container's own (page left and right) would take them first; they
@@ -4318,6 +4345,11 @@ class WheelhouseApp(App):
         self.frame = 0
         self.eye_frame = 0   # the frame the busy sessions' eyes last moved on (animate)
         self.animation = None   # animate's timer: none at 0 fps (features.animation_fps)
+        # since you were away (#223): the last input, when it was last kept, the card's window,
+        # its Needs-you lines as first shown, what QUIET held then, and its lines as drawn
+        self.last_input = self.input_kept = self.away_window = self.away_shown = None
+        self.away_woken = False   # the key in hand is the Esc that brought the card: it leaves the card up
+        self.away_needs, self.away_quiet = [], {}
         self.started = 0.0   # when the animation's time starts (animate)
         self.half_frame = 0   # the frame // 2 the eyes and panes last moved on (animate)
         self.blink = False   # whether the busy dots were last dimmed (animate, dot_dimmed)
@@ -4384,7 +4416,7 @@ class WheelhouseApp(App):
         self.ctx = api.Context(state_dir, self.module_sessions, self.stats_sid, usage=self.client.usage,
                                set_effort=self.set_effort)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
-        # the helper chat (Alt+G): its driver, made at the first question, and the chat, kept for the run
+        # the helper chat (Alt+Q): its driver, made at the first question, and the chat, kept for the run
         self.helper: helper.Helper | None = None
         self.helper_log: list[dict] = []
         self.helper_reading = ""   # what it's reading as it answers (a tool event), for the status line
@@ -4436,6 +4468,11 @@ class WheelhouseApp(App):
                 with slot("middle.top"):
                     with Vertical(id="items-pane", classes="panel") as pane:
                         pane.border_title = "Inbox"
+                        with hidden(Vertical(id="away-card")):   # after a gap (away.py, #223)
+                            with Horizontal(id="away-head"):
+                                yield Static(id="away-title")
+                                yield AwayClose("✕", id="away-close")
+                            yield AwayCard(id="away")
                         yield ItemList(id="items", cursor_type="row")
                 # each splitter between the two slots it moves rows between (columns.pairs)
                 yield SlotSplitter("middle-middle", "col-middle")
@@ -4521,10 +4558,14 @@ class WheelhouseApp(App):
             self.push_screen(TourInvite(), self.offer_answered)
         elif kind == TOPUP:   # Q120 C: only when a tour dialog has new tips; else the badge alone
             self.push_screen(TourInvite(upgrade_text(found)), self.topup_answered)
+        # a start is a return too, from the last input kept (away.LAST_INPUT); none kept, no card
+        self.touched(away.parse(self.client.away().get("last_input")))
 
     def on_unmount(self) -> None:
         """The daemon's stream let go as the app closes: nothing posts to it after. The
-        helper's claude, if one runs, stopped."""
+        helper's claude, if one runs, stopped. The last input kept, for the next start's card."""
+        if self.last_input is not None and self.last_input != self.input_kept:
+            self.client.note_input(away.stamp(self.last_input))
         self.client.disconnect()
         if self.helper is not None:
             self.helper.stop()
@@ -4574,12 +4615,22 @@ class WheelhouseApp(App):
         elsewhere it copies the selection, or with none pastes. The press never reaches
         the widgets: an answer box would move its cursor and drop its selection, and the
         screen would take it for a click and clear its own."""
+        woke = False
+        if isinstance(event, (events.Key, events.MouseDown, events.MouseScrollDown, events.MouseScrollUp)) \
+                and not event.is_forwarded:
+            shown = self.away_window
+            self.touched()
+            woke = isinstance(event, events.Key) and event.key == "escape" and self.away_window not in (None, shown)
         if isinstance(event, (events.MouseDown, events.MouseUp)) and event.button == 3 and not event.is_forwarded:
             if isinstance(event, events.MouseDown) and not (self.session_menu(event) or self.pane_menu(event)):
                 self.right_click(event)
             return
         if isinstance(event, events.Key) and not event.is_forwarded:
-            await self.take_key(event)
+            self.away_woken = woke
+            try:
+                await self.take_key(event)   # an Esc that woke the screen acts where it was aimed, but not on the card
+            finally:
+                self.away_woken = False
             return
         await super().on_event(event)
 
@@ -4837,6 +4888,7 @@ class WheelhouseApp(App):
         self.client.background()   # in process, the hub's reading: the daemon's hub does its own
         self.paint_sessions()
         self.paint_items()
+        self.paint_away()
         self.paint_compacting()
         self.each_pane("tick")
         self.client.finish_relaunches()
@@ -4846,6 +4898,118 @@ class WheelhouseApp(App):
         self.paint_badge()
         if isinstance(self.screen, (ThreadView, DocView, McpServers)) and self.screen.is_mounted:   # not before its widgets exist
             self.screen.paint()   # an action here (queue, take back) shows at once
+
+    # since you were away (away.py, #223)
+
+    def touched(self, before: datetime | None = None) -> None:
+        """A key press, click or scroll (or the start, with before the last input kept): the
+        first after a gap (features.away_hours) shows the card of what happened since the
+        input before it. The last input kept at most once a minute (INPUT_KEPT), and as the
+        app closes."""
+        at, before = away.now(), before or self.last_input
+        gap = features.away_hours()
+        if before is not None and gap and (at - before).total_seconds() >= gap * 3600:
+            self.show_away(before, at)
+        self.last_input = at
+        if self.input_kept is None or (at - self.input_kept).total_seconds() >= INPUT_KEPT:
+            self.input_kept = at
+            self.client.note_input(away.stamp(at))
+
+    @property
+    def main_screen(self) -> Screen:
+        """The screen the card is on, under any dialog or full-screen item."""
+        return self.screen_stack[0]
+
+    def show_away(self, start: datetime, end: datetime) -> None:
+        """The card for start to end, if anything happened; it takes the focus unless a text
+        box has it, after the input that brought it, which acts where it was aimed."""
+        if not hasattr(self, "items_table") or not self.screen_stack:   # before the widgets exist, or as it shuts down
+            return
+        self.client.refresh()   # what the store holds now, not the last tick's
+        self.away_quiet = self.client.away().get("quiet") or {}
+        groups = away.card(self.client.all_items(), self.away_quiet, self.client.running, start, end)
+        if not groups:
+            return
+        self.away_window = (start, end)
+        self.away_needs = next((g.lines for g in groups if g.title == away.NEEDS), [])
+        self.away_shown = None
+        local = lambda t: t.astimezone().strftime("%a %H:%M" if start.date() != end.date() else "%H:%M")
+        self.main_screen.query_one("#away-title", Static).update(f" While you were away, {local(start)} to {local(end)}")
+        self.main_screen.query_one("#away-card").display = True
+        self.paint_away(groups)
+        self.call_later(self.focus_away)
+
+    def focus_away(self) -> None:
+        card = self.main_screen.query_one("#away", AwayCard)
+        if self.away_window is not None and not isinstance(self.focused, (TextArea, Input)) and self.screen is card.screen:
+            card.focus()
+
+    def paint_away(self, groups: list | None = None) -> None:
+        """The card's lines, read again at each refresh over the same window: a Needs-you line
+        dealt with drops out, and the card goes once they all have. Drawn only when they change."""
+        if self.away_window is None:
+            return
+        items = self.client.all_items()
+        if self.away_needs and away.dealt_with(self.away_needs, items):
+            self.dismiss_away()
+            return
+        if groups is None:
+            groups = away.card(items, self.away_quiet, self.client.running, *self.away_window)
+        if not groups:
+            self.dismiss_away()
+            return
+        options = []
+        for g in groups:
+            options.append(Option(Text(g.title, style="bold #05d9e8"), disabled=True))
+            options += [Option(f"  {ln.text}", id=f"{ln.sid}|{ln.ref or ''}") for ln in g.shown()]
+            if more := g.more():
+                options.append(Option(Text(f"  +{more} more", style="#777777"), disabled=True))
+        shown = [(str(o.prompt), o.id) for o in options]
+        if shown == self.away_shown:
+            return
+        self.away_shown = shown
+        card = self.main_screen.query_one("#away", AwayCard)
+        at = card.highlighted_option.id if card.highlighted_option is not None else None
+        card.clear_options()
+        card.add_options(options)
+        ids = [o.id for o in options]
+        index = ids.index(at) if at is not None and at in ids else next((i for i, o in enumerate(options) if not o.disabled), None)
+        card.call_after_refresh(setattr, card, "highlighted", index)   # once laid out: before, it takes the first
+
+    def action_dismiss_away(self) -> None:
+        if not self.away_woken:
+            self.dismiss_away()
+
+    def dismiss_away(self) -> None:
+        """The card gone (Esc, its close control, or every Needs-you line dealt with)."""
+        if self.away_window is None:
+            return
+        self.away_window, self.away_needs, self.away_shown = None, [], None
+        card = self.main_screen.query_one("#away-card")
+        had_focus = self.focused is not None and self.focused in card.query("*")
+        card.display = False
+        if had_focus:
+            self.items_table.focus()
+
+    @on(OptionList.OptionSelected, "#away")
+    def away_picked(self, event: OptionList.OptionSelected) -> None:
+        """A line of the card picked: its item shown and highlighted in the inbox, or its
+        session followed, as the inbox's and the session list's rows do."""
+        event.stop()
+        sid, ref = (event.option.id or "|").split("|")
+        if not sid:
+            return
+        if ref:
+            if self.filter_sid not in (None, sid):
+                self.clear_filter()
+                self.paint_items()
+            if self.show_item(sid, ref):
+                self.items_table.focus()
+        elif any(s["id"] == sid for s in self.sessions):
+            self.follow(sid)
+            self.session_list.focus()
+        else:
+            self.notify("That session has gone: nothing to show", severity="warning")
 
     @property
     def selected(self) -> tuple[str, str | None] | None:
@@ -5950,7 +6114,7 @@ class WheelhouseApp(App):
     def get_system_commands(self, screen: Screen):
         yield from super().get_system_commands(screen)
         yield SystemCommand("Ask the wheelhouse", "A chat that answers how-to questions about the wheelhouse, "
-                            "from its help and its source (Alt+G)", self.action_helper)
+                            "from its help and its source (Alt+Q)", self.action_helper)
         yield SystemCommand("Reset layout", "Put every pane back in its default place, and the dividers at their default sizes",
                             self.action_reset_layout)
         yield SystemCommand("Session steps", "What the wheelhouse tells a session when it compacts, ends, resumes or "
@@ -6209,7 +6373,7 @@ class WheelhouseApp(App):
         sends = "send" if s is not None and (mode(s) == "immediate" or self.sends_now(s["id"])) else "queue"
         for h in hints:
             h.set_base(DENY_HINT if denying else PERMISSION_HINT if asking else COMPACT_HINT if nudged
-                       else hint(sends, s is not None and self.dead(s["id"])))
+                       else hint(sends))
         thread = boxed(self.screen)   # a full-screen item's own box: a ThreadView's, a doc item's DocView's
         if isinstance(self.screen, DocView):
             doc = reading = self.screen.panes is not None and not self.screen.panes.box_shown(self.doc_layout)
@@ -6839,6 +7003,9 @@ class WheelhouseApp(App):
         if self.items_table.marked:   # Esc drops a multi-selection first
             self.items_table.set_marks(set())
             return
+        if self.away_window is not None and not self.away_woken:   # then the card of what happened while away, before
+            self.dismiss_away()                                     # the filter; the Esc that brought it goes on to the filter
+            return
         self.unfilter()
 
     def deny_back(self) -> bool:
@@ -7150,7 +7317,7 @@ class WheelhouseApp(App):
         self.refresh_data()
 
     def action_helper(self) -> None:
-        """Alt+G: the helper's drawer, or closed if it's in front. Over another dialog, nothing."""
+        """Alt+Q: the helper's drawer, or closed if it's in front. Over another dialog, nothing."""
         if isinstance(self.screen, HelperDrawer):
             self.screen.action_cancel()
         elif not self.under_dialog():
@@ -7194,7 +7361,7 @@ class WheelhouseApp(App):
             if drawer.is_mounted:   # one pushed but not yet composed paints itself on mounting
                 drawer.paint(last_only=event.kind == "text")
         elif event.kind in ("done", "error"):
-            self.notify("The helper has answered: Alt+G" if event.kind == "done" else "The helper couldn't answer: Alt+G")
+            self.notify("The helper has answered: Alt+Q" if event.kind == "done" else "The helper couldn't answer: Alt+Q")
 
     def helper_status(self) -> str:
         """The drawer's status line: what the helper is reading, or that it's thinking."""
@@ -7267,11 +7434,19 @@ class WheelhouseApp(App):
         if not box:
             return
         quote = self.doc_quotes.get(target)   # Detail's box or a full-screen doc's: a doc's alone has one
+        if now and self.dead(target[0]) and not self.asking(target):   # it comes back to take it (#221)
+            self.offer_wake(target[0], lambda: self.wake(target[0], box, target, quoted(quote, text)))
+            return
         done = self.told(self.client.submit(target, quoted(quote, text), now))   # an open permission is denied, never queued (#53)
         if not done.ok:   # a permission answered meanwhile
             return
         if done.denied:   # an explicit act, as Delete is: selected, the item moves at once (ranked)
             self.repin.add(f"{target[0]}|{target[1]}")
+        self.submitted(box, target)
+
+    def submitted(self, box, target) -> None:
+        """What was typed has gone: the box cleared, its quote said, the thread at its end."""
+        quote = self.doc_quotes.get(target)
         box.text = ""
         if quote:   # said: the next comment is general, unless another block is clicked
             self.doc_quotes.pop(target, None)
@@ -7346,11 +7521,36 @@ class WheelhouseApp(App):
         return sid
 
     def action_send_session(self) -> None:
+        """Ctrl+S: the session's queue sent; one that isn't running is offered Unpark or
+        Relaunch first, the queue its first prompt on waking (#221)."""
         self.settle()
         if sid := self.context_session():
             focused = self.focused
+            if self.dead(sid) and self.client.drafts(sid):
+                self.offer_wake(sid, lambda: (self.wake(sid), self.after_send(focused)))
+                return
             self.send_session(sid)
             self.after_send(focused)
+
+    @session_action
+    def offer_wake(self, sid: str, then) -> None:
+        """Ctrl+S or Alt+S on a session that isn't running: Unpark (a parked one) or Relaunch
+        it and send? then, on Yes; on No nothing is sent, and the box keeps its text."""
+        s = self.row(sid)
+        self.push_screen(Confirm(f"{wake_verb(s)} {self.display_name(s)} and send?"),
+                         lambda yes: yes and then())
+
+    @session_action
+    def wake(self, sid: str, box=None, target=None, text: str | None = None) -> None:
+        """Bring the session back with its queue, and text if given, as its first prompt
+        (Hub.wake_and_send): the box cleared only once it has come back."""
+        done = self.told(self.client.wake_and_send(sid, target and target[1], text))
+        if done.ok:
+            self.press(sid, "relaunch")
+            if box is not None:
+                self.submitted(box, target)
+                return
+        self.refresh_data()
 
     @session_action
     def send_session(self, sid: str) -> None:
@@ -7882,3 +8082,4 @@ class WheelhouseApp(App):
         current, its pinned conversation row selected, so Unpark is one press away."""
         if what == "park":
             self.follow(sid)
+

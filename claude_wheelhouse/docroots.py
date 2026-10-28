@@ -101,19 +101,21 @@ def main_root(root: Path) -> Path:
     return common.parent if common.name == ".git" and common.is_dir() else root
 
 
-def allowed(real: Path, root: Path) -> str | None:
-    """Why real, a resolved directory declared from a session whose git root is root, can't
-    hold its decisions, None if it can: under root but not root itself, or in another git
-    work tree (a sibling repo kept for docs) but not that tree's root. Anything in no git
-    repo is refused, so a session can't point the wheelhouse at arbitrary files by mistake: a
-    guard, not a security boundary (a repo at ~ would admit everything under it)."""
-    if real == root:
-        return "is the git root itself: name the directory the decisions are in"
-    if real.is_relative_to(root):
-        return None
+def allowed(real: Path, root: Path | None) -> str | None:
+    """Why real, a resolved directory declared from a session whose git root is root (None for
+    a session in no git repo), can't hold its decisions, None if it can: under root but not
+    root itself, or in another git work tree (a sibling repo kept for docs) but not that
+    tree's root. Anything in no git repo is refused, so a session can't point the wheelhouse
+    at arbitrary files by mistake: a guard, not a security boundary (a repo at ~ would admit
+    everything under it)."""
+    if root is not None:
+        if real == root:
+            return "is the git root itself: name the directory the decisions are in"
+        if real.is_relative_to(root):
+            return None
     tree = work_tree(real)
     if tree is None:
-        return f"is outside the git root, {root}, and in no other git repo"
+        return "is in no git repo" if root is None else f"is outside the git root, {root}, and in no other git repo"
     if real == tree:
         return f"is the root of {tree.name}: name the directory the decisions are in"
     return None
@@ -122,21 +124,27 @@ def allowed(real: Path, root: Path) -> str | None:
 def checked(paths, cwd) -> list[str]:
     """Directories a session declares (set_doc_dirs), each relative to its git root or
     absolute, under it or in another git repo (allowed), normalised; ValueError for any that
-    isn't."""
+    isn't. A session in no git repo (#220) may still name one in a git repo, absolute or
+    relative to its own directory (a repo under it, or by .. beside it), kept absolute since
+    there is no root to resolve it against later."""
     if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
         raise ValueError("paths must be a list of directory paths")
     if len(paths) > MOST:
         raise ValueError(f"at most {MOST} directories")
     root = git_root(cwd)
-    if root is None:
-        raise ValueError(f"{cwd} is in no git repo: doc dirs are only looked for in one")
+    base = root if root is not None else Path(os.path.realpath(cwd))   # from where it really is
     out = []
     for p in paths:
         if not p.strip() or "\0" in p:
-            raise ValueError(f"{p!r}: give a directory, relative to the git root ({root}) or absolute")
-        if why := allowed(Path(os.path.realpath(root / p)), root):
+            where = f"relative to the git root ({root}) or absolute" if root else "relative to here or absolute"
+            raise ValueError(f"{p!r}: give a directory, {where}")
+        # with no root to be relative to later, kept absolute, and checked as kept: a link
+        # before a .. would otherwise check one directory and keep another
+        norm = os.path.normpath(p if root is not None else base / p)
+        real = Path(os.path.realpath(base / p if root is not None else norm))
+        if why := allowed(real, root):
             raise ValueError(f"{p!r} {why}")
-        if (norm := os.path.normpath(p)) not in out:
+        if norm not in out:
             out.append(norm)
     return out
 
@@ -158,10 +166,13 @@ def decision_dirs(sessions) -> list[tuple[Path, Path]]:
     per git root, every directory the sessions there declared, else DEFAULT. Each resolved,
     and left out if it isn't a directory or isn't allowed (since it was declared, a link may
     have moved). A directory several repos look in is listed once, with the one whose root sorts first.
-    A session in no git repo adds none."""
+    A session in no git repo adds the absolute directories it declared (#220), each with the
+    git root of the repo it is in, as it has none of its own."""
     repos: dict[Path, set[str]] = {}
+    loose: set[str] = set()
     for s in sessions:
         if (root := git_root(s["cwd"])) is None:
+            loose.update(d for d in s.get("doc_dirs") or () if os.path.isabs(d))
             continue
         repos.setdefault(root, set()).update(s.get("doc_dirs") or ())
     out: dict[Path, Path] = {}
@@ -170,4 +181,9 @@ def decision_dirs(sessions) -> list[tuple[Path, Path]]:
             real = Path(os.path.realpath(root / d))
             if real not in out and allowed(real, root) is None and real.is_dir():
                 out[real] = root
+    for d in loose:
+        real = Path(os.path.realpath(d))
+        if allowed(real, None) is None and real.is_dir():
+            own = git_root(real)
+            out[real] = min(out.get(real, own), own)
     return sorted(out.items())

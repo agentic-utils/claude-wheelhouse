@@ -169,8 +169,11 @@ session.
   same session, and a bar above the footer
   always shows Send all (n), every running session's queue; each Send is greyed out while its
   queue is empty. Send all's key is `Alt+Shift+A`: Windows Terminal sends Ctrl+Shift+S and Ctrl+Alt+S
-  as plain Ctrl+S. A dead session's queue waits for it: Ctrl+S on one says to Relaunch it first,
-  its hint leaves Ctrl+S out, and Send all skips it and doesn't count it. Ctrl+R takes a queued answer
+  as plain Ctrl+S. On a session that isn't running, Ctrl+S or Alt+S asks "Unpark <session> and
+  send?" (a parked one) or "Relaunch <session> and send?" (any other): Yes brings it back with its
+  queue, and Alt+S's answer after it, as its first prompt, behind what the wheelhouse tells a
+  session on resume; No sends nothing and leaves the box as it was. With nothing queued, Ctrl+S
+  says so. Send all skips it and doesn't count it. Ctrl+R takes a queued answer
   back to edit or drop. A sent answer shows as `you · sending`, as a queued one shows as
   `you · queued`, until the session takes it up: in an item's thread until the wheelhouse
   has passed it on, and in the conversation until the session has it, which may wait for
@@ -236,6 +239,17 @@ session.
   question yellow, a decision purple, a PR light blue, a doc the theme's text colour, a
   subagent grey and a permission orange. Resting the pointer on a row shows its full title
   (a PR's with its repo), and on a session its full name and synopsis.
+- **Since you were away.** Back after a gap (two hours with no key press, click or scroll in
+  the app, `AWAY_HOURS`; starting the app counts, measured from its last input), a card at
+  the top of the inbox says what happened in every session meanwhile: **Needs you** (open
+  questions, approval prompts, tasks blocked or waiting on you), **Landed** (PRs merged,
+  tasks done), **Went quiet** (sessions that parked, ended or stopped and haven't come back)
+  and **Decided without you** (a count, then the titles). Each group shows three lines, then
+  `+N more`; an empty group is left out, and with nothing to say there's no card. `Enter` or
+  a click on a line jumps to its item or session as an inbox row does. `Esc` in the card, or
+  its `✕`, dismisses it, and it goes by itself once every Needs-you line is dealt with.
+  Seeing it marks nothing seen. A session going quiet is noticed by the daemon (or a
+  `--local` app) as it happens; one that went while neither ran is noticed at the next start.
 - **Pins.** The inbox's first column pins an item (📌): a click there, or `Alt+P` in the item
   list, pins the row or clears its pin. A doc comes pinned (a session can post a scratch
   report unpinned), anything else unpinned, and a doc posted again keeps the pin you set.
@@ -379,7 +393,9 @@ session.
   in: each `NNNN-*.md` file in the repo's `docs/adr`, or in the directories a session there
   named with `set_doc_dirs` instead (`.plan/`, say, only if named, or a directory in another
   repo, such as a sibling docs repo; listed once, under the repo that
-  named it, or the first by path when several did), read again every 10
+  named it, or the first by path when several did). A session started outside any git repo
+  (a projects folder, say) may name one too, absolute or relative to that folder, listed under the repo it
+  is in. Read again every 10
   seconds and whenever a session starts in another repo or names its directories. A row is
   its number, status and title, and its repo when the pane lists more than one. The status is the doc's front matter `status:`, else
   a `Status:` line or `## Status` section, else its file name's (`0042-ACCEPTED-slug.md`),
@@ -536,10 +552,10 @@ Keys, shown in upper case as usual (Alt+V means Alt and the v key, not Shift+V).
 session list), `Alt+V` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
 highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `Alt+N` new session, `Alt+A` adopt, `Alt+Shift+L` relaunch all, `Alt+Shift+M` the MCP servers of the session in context, `Alt+K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode), `Alt+S` send this one answer now (the queue and mode left as they are),
-`Ctrl+S` send the session's queue (not a dead one's: Relaunch it first), `Ctrl+T` switch the session between Queued and
+`Ctrl+S` send the session's queue (one not running: Unpark or Relaunch it and send, asked first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
 as answered, a decision as seen), `Ctrl+Z` undo the last delete, pin or reopen in the inbox (the rows back as they
-stood, an open question open again; in a text box, its own undo), `F1` list every key and button, `Alt+G` ask the wheelhouse how to do something (the helper, below), `Ctrl+Q` quit, `Alt+T` resume the tour while the title bar's badge shows. `Alt+Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
+stood, an open question open again; in a text box, its own undo), `F1` list every key and button, `Alt+Q` ask the wheelhouse how to do something (the helper, below), `Ctrl+Q` quit, `Alt+T` resume the tour while the title bar's badge shows. `Alt+Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.
 Every dialog opens centred over the screen (the helper's drawer docks right), which stays in sight behind it. `Esc`, or a click outside the box, cancels it (on the tutorial's invite, that is Later, never Never), though not a click outside in the moment a dialog opens (a double-click's second). `Enter` presses the focused button; with focus on a one-line box or a checkbox it takes the dialog's one action (Launch, Rename, Fork, Park and the like), while in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices (Stop & Forget's, Relaunch's) answers `Enter` only on the focused button. `Tab` and `Shift+Tab` go round its boxes and buttons. A dialog asking yes or no takes `Alt+Y` or `Alt+N` (`Esc` is no, and so is `Enter`, as No has the focus). The `F1` list closes on `Esc`, `Enter`, `F1` or a click outside.
 
 `Tab` goes round the session list, the items, the Decisions list, the answer box, the tour's Next while a tour box
@@ -560,7 +576,7 @@ dialog's answer go to the screen it uncovers.
 
 ### Asking the wheelhouse
 
-`Alt+G` (or Ask the wheelhouse, in the command palette) opens the helper: a drawer down the right-hand side
+`Alt+Q` (or Ask the wheelhouse, in the command palette) opens the helper: a drawer down the right-hand side
 where you ask how to do something ("how do I pin an item?") and get a short answer naming the keys and
 buttons. It answers from a fact sheet generated from the code (every key, button, setting and feature), this
 README and what sessions are told, and reads the wheelhouse's own source when it needs to, saying which file
@@ -568,7 +584,7 @@ an answer came from. It runs Claude Haiku through your own Claude Code login, so
 (or API spend, on an API-key login); nothing starts until your first question. What leaves the machine: your
 questions, the help and the source it reads. Your sessions, items and transcripts don't, and it can't act on
 anything: its Claude Code has only the read-only file tools, no MCP servers, none of your settings or hooks,
-and writes no transcript. `Esc`, `Alt+G` again or a click outside closes the drawer and keeps the chat, an
+and writes no transcript. `Esc`, `Alt+Q` again or a click outside closes the drawer and keeps the chat, an
 answer still coming included (a notification says when it lands); `Alt+N` in the drawer starts a new chat,
 which it offers once a chat gets long. The chat lasts until you quit. A chat quiet for ten minutes lets its
 Claude Code go, and the next question starts another, told the chat so far.
@@ -812,6 +828,7 @@ a key spelt any other way isn't read.
 | `USAGE_MODE` | `WHEELHOUSE_USAGE_MODE` | `--usage-mode oneshot\|persistent` | `oneshot` |
 | `KEEPALIVE_HOURS` | `WHEELHOUSE_KEEPALIVE_HOURS` | `--keepalive-hours N` | 8 (0 turns it off) |
 | `ANIMATION_FPS` | `WHEELHOUSE_ANIMATION_FPS` | `--animation-fps N` | 10 (0 turns animation off) |
+| `AWAY_HOURS` | `WHEELHOUSE_AWAY_HOURS` | `--away-hours N` | 2 (0 turns the card off) |
 | `SESSION_DIR` | `WHEELHOUSE_SESSION_DIR` | none | the parent of the wheelhouse's clone |
 
 `SESSION_DIR` is the directory the New session dialog (`Alt+N`) starts in. `~` is allowed, and a

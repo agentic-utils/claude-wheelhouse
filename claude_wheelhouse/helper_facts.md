@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 20, 2026-10-27T16:12:48Z, source 1a4cd58a768869d5 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 37, 2026-10-28T12:59:24Z, source ed1957191c981756 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -74,9 +74,9 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **Ctrl+Enter or Ctrl+J**: Submit what's typed: queued, or sent at once, by the session's mode
 
-- **Alt+S**: Send what's typed at once, whatever the mode, leaving the mode and the rest of the queue as they are
+- **Alt+S**: Send what's typed at once, whatever the mode, leaving the mode and the rest of the queue as they are (one not running: Unpark or Relaunch it and send it with the queue, asked first)
 
-- **Ctrl+S**: Send the current session's queue (a dead one's waits: Relaunch it first)
+- **Ctrl+S**: Send the current session's queue (one not running: Unpark or Relaunch it and send, asked first)
 
 - **Ctrl+T**: Switch the session between Queued and Immediate
 
@@ -92,13 +92,13 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **Alt+Shift+M**: MCP servers: the session in context's, as its host last saw them, each with a button to sign in or reconnect it (a claude.ai connector in every session the wheelhouse hosts); a tab's: /mcp there
 
-- **Esc**: Clear a text selection first, then the marks, else show every session's items again
+- **Esc**: Clear a text selection first, then the marks, then dismiss the card of what happened while you were away, else show every session's items again
 
 - **Alt+V**: Show or hide finished items
 
 - **F1**: This list
 
-- **Alt+G**: Ask the wheelhouse: a chat that answers how-to questions about it, from its help and its source (Haiku, on your Claude Code login). Alt+G again, or Esc, closes it; the chat is kept until you quit
+- **Alt+Q**: Ask the wheelhouse: a chat that answers how-to questions about it, from its help and its source (Haiku, on your Claude Code login). Alt+Q again, or Esc, closes it; the chat is kept until you quit
 
 - **Ctrl+L**: With a doc shown: its thread under it (split), or Doc and Thread as tabs (tabbed); kept
 
@@ -112,7 +112,7 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 ### The buttons
 
-- **Alt+Shift+A**: Send all: every running session's queue (a dead one's waits until it's relaunched)
+- **Alt+Shift+A**: Send all: every running session's queue (a dead or parked one's waits until it's relaunched or unparked)
 
 ### Moving between panes
 
@@ -160,6 +160,12 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **Shift+Down**: Extend the marks down
 
+### The card of what happened while you were away
+
+- **Enter**: Jump to the line's item, or its session, as an inbox row does (seeing the card marks nothing seen)
+
+- **Esc**: Dismiss the card of what happened while you were away
+
 ### An answer box
 
 - **Ctrl+Enter or Ctrl+J**: Submit what's typed: queued, or sent at once, by the session's mode
@@ -194,9 +200,9 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **Esc**: Close the editor, asking first with unsaved edits: Close and keep them, Discard or Keep editing
 
-### The helper (Alt+G)
+### The helper (Alt+Q)
 
-- **Alt+G**: Close the helper, keeping the chat
+- **Alt+Q**: Close the helper, keeping the chat
 
 - **Alt+N**: New chat: the helper forgets this one
 
@@ -208,11 +214,11 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 ### Tab order
 
-Tab goes round the session list, the items, the answer box, a tour box's Next while one shows, then every button shown, in reading order, then the stats pane's zoom's - and + (Enter or Space presses the one with the focus), and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus where it was, and each has a key. An item opened full screen goes the same way: its answer box, then its buttons; a click in its thread puts focus in the box, where PgUp and PgDn scroll the thread. A doc shown in the inbox takes the answer box's place, and a click on it focuses it: Up, Down, PgUp, PgDn, Home and End scroll it. A focused button that is disabled or hidden (Send, once sent) gives focus to the answer box. Send from a list leaves focus in the list.
+Tab goes round the session list, the card of what happened while you were away while it shows, the items, the answer box, a tour box's Next while one shows, then every button shown, in reading order, then the stats pane's zoom's - and + (Enter or Space presses the one with the focus), and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus where it was, and each has a key. An item opened full screen goes the same way: its answer box, then its buttons; a click in its thread puts focus in the box, where PgUp and PgDn scroll the thread. A doc shown in the inbox takes the answer box's place, and a click on it focuses it: Up, Down, PgUp, PgDn, Home and End scroll it. A focused button that is disabled or hidden (Send, once sent) gives focus to the answer box. Send from a list leaves focus in the list.
 
 ### Mouse
 
-Click selects a row; in the session list, a click on the selected session or the list's title past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may keep Shift+click for itself: Ctrl+Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or Backspace closes them together, the highlight going to the row above the topmost one taken, and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the right-hand end of its row: a click there hides them, and the + it becomes shows them again. A click on a doc opens its editor below it there, as a click on it moves it while it's open. A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. A click on an emoji suggestion under the answer box takes it in place of the code typed. Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. Drag the lines between the panes to resize them (they light up under the pointer); the sizes are kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; Session steps there has what the wheelhouse tells a session at each event.
+Click selects a row; in the session list, a click on the selected session or the list's title past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may keep Shift+click for itself: Ctrl+Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or Backspace closes them together, the highlight going to the row above the topmost one taken, and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the right-hand end of its row: a click there hides them, and the + it becomes shows them again. A click on a doc opens its editor below it there, as a click on it moves it while it's open. A click on a line of the card of what happened while you were away jumps to it, and its ✕ dismisses it. A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. A click on an emoji suggestion under the answer box takes it in place of the code typed. Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. Drag the lines between the panes to resize them (they light up under the pointer); the sizes are kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; Session steps there has what the wheelhouse tells a session at each event.
 
 ### Buttons
 
@@ -222,7 +228,7 @@ The buttons under the session list act on the session highlighted there, and onl
 
 - Send (Ctrl+S): send the session's queued answers as one message; its caption counts them
 
-- Send all (Alt+Shift+A), above the footer: send every running session's queue; a dead one's waits until it's relaunched
+- Send all (Alt+Shift+A), above the footer: send every running session's queue; a dead or parked one's waits until it's relaunched or unparked
 
 - Relaunch / Unpark (Alt+L in the session list): start the session again where it left off, stopping it first if it's running (asked only if it's mid-turn); on a parked one, Unpark (Alt+P too)
 
@@ -236,7 +242,7 @@ The buttons under the session list act on the session highlighted there, and onl
 
 ### Sending
 
-**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the session's queue as one message, so related answers arrive together; ✉ counts what's queued. A dead session's queue waits: Ctrl+S and Send all leave it until the session is relaunched. Alt+S sends just the answer in the box at once, leaving the queue and the mode as they are. **Immediate**: Ctrl+Enter (or Alt+S) sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a queued answer back to edit.
+**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the session's queue as one message, so related answers arrive together; ✉ counts what's queued. A session not running: Ctrl+S or Alt+S asks to Unpark (a parked one) or Relaunch it and send, its queue and the box's answer its first prompt; Send all leaves its queue. Alt+S sends just the answer in the box at once, leaving the queue and the mode as they are. **Immediate**: Ctrl+Enter (or Alt+S) sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a queued answer back to edit.
 
 ### Dialogs
 
@@ -250,7 +256,7 @@ Esc, Enter, F1 or a click outside closes this list.
 
 ## The command palette (Ctrl+P)
 
-- **Ask the wheelhouse**: A chat that answers how-to questions about the wheelhouse, from its help and its source (Alt+G)
+- **Ask the wheelhouse**: A chat that answers how-to questions about the wheelhouse, from its help and its source (Alt+Q)
 
 - **Reset layout**: Put every pane back in its default place, and the dividers at their default sizes
 
@@ -279,6 +285,9 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 --animation-fps N  (env WHEELHOUSE_ANIMATION_FPS, .env ANIMATION_FPS=)
     animate the title, the eyes and the stats bars N frames a second (default 10, or
     WHEELHOUSE_ANIMATION_FPS, or ANIMATION_FPS= in a .env; 0 turns animation off)
+--away-hours N  (env WHEELHOUSE_AWAY_HOURS, .env AWAY_HOURS=)
+    after N hours with no key press, click or scroll, show what happened meanwhile
+    (default 2, or WHEELHOUSE_AWAY_HOURS, or AWAY_HOURS= in a .env; 0 turns it off)
 --local
     run the hub in this process, without the daemon (the wheelhouse as it was before the
     daemon)
@@ -306,7 +315,8 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - A Decisions pane under the inbox lists every repo's design decisions (docs/adr), shown in Detail.
 - Drag a pane by its title onto another to swap the two; Reset layout, in the command palette, puts them back.
 - A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered. Saving comes next.
-- Alt+G asks the wheelhouse how to do something: a chat that answers from its help and its source, through Haiku on your own Claude Code login.
+- Alt+Q asks the wheelhouse how to do something: a chat that answers from its help and its source, through Haiku on your own Claude Code login.
+- The helper chat moved from Alt+G, which opens Gemini on some desktops, to Alt+Q (Q for question).
 - After an update, the tour shows only what's new, pane by pane, with no demo; Esc ends it at any time, and after quitting mid-tour, Alt+T or the title bar's badge resumes it.
 - A pressed button (Compact, Interrupt, Relaunch, Park, Fork...) stays off, dark grey, until what it started has finished, or for 30 seconds with no word from the session.
 - Pin any inbox item (📌, a click on its first column or Alt+P) and clearing the inbox leaves it; docs come pinned.
@@ -316,6 +326,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - The PRs pane lists the open PRs your sessions made, or with M every open PR you authored, each with a traffic light for checks, review and conflicts; with a session selected, its PRs alone.
 - Right-click a session in the session list for a menu of its buttons, acting on that session.
 - Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits.
+- Ctrl+S or Alt+S on a session that isn't running asks to Unpark (a parked one) or Relaunch it and send: it wakes with your message and its queue as its first prompt.
 - A PR in the PRs pane has Open, Merge and Request review buttons, and a right-click on its row gives them as a menu: Merge asks first and says what stood in its way, and Request review asks the session that made the PR to post the request on Slack.
 - Ctrl+Z in the inbox undoes the last delete, pin or reopen, an open question coming back open; Delete on an open question asks first.
 - Detail, showing a PR, has its Open, Merge, Request review and Close buttons, and its failing checks, description, history and comments.
@@ -337,3 +348,4 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Every key has a modifier, so a letter typed in the answer box is always just typed, and the app's own keys work from there: Ctrl+Q quits, F1 lists the keys, Alt+N is New session.
 - With no session selected, the inbox lists each session's conversation (💬, named after the session) under the items waiting on you.
 - Emoji suggestions take a click: type :star and click the one you want, or choose it with Up and Down and take it with Tab or Enter.
+- Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it.
