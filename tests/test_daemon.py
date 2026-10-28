@@ -1305,11 +1305,7 @@ def moduled(store, monkeypatch, tmp_path):
                                               api.Loaded("off", probe([out], id="off"))])
     d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True)
     yield d, tmp_path
-    d.pool.shutdown()
-    d.worker.shutdown()
-    for lane in d.lanes.values():
-        lane.shutdown()
-    d.watch.close()
+    close(d)
 
 
 @pytest.mark.parametrize("method, desc", [("GET", "a module's query"), ("POST", "a module's command")])
