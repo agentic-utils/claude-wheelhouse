@@ -425,7 +425,8 @@ def compacting_now(s) -> bool:
     """Whether a session run in the wheelhouse is being compacted, as its host records it in
     the store: from Compact asked (host_command compact, written as Compact, the question's
     Compact now or Relaunch's compact first is pressed), through the turn collecting its notes
-    and the /compact turn (an activity line starting "compacting"), until that turn ends and
+    and the /compact turn (an activity line starting "compacting", which the host keeps in
+    front of whatever those turns show, Host.show, #233), until that turn ends and
     its host says so (COMPACTED, NO_NOTES, interrupted). Not while it sits idle waiting for
     notes that didn't come (AWAITING_NOTES): the session is free then. Not liveness: a host
     that died mid-way leaves its line, so a surface asks whether it's running too."""

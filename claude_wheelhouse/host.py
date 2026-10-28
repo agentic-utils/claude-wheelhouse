@@ -337,6 +337,11 @@ class Host:
         self.cold_for: float | None = None
         self.cold_nonce: str | None = None
         self.compact_key: str | None = None
+        # a compaction's own turn (its ask for notes, or /compact) and its activity line: while
+        # that turn is to come or runs, every line the session's turns show keeps it in front,
+        # so the session reads as compacting throughout (#233), until that turn ends
+        self.compact_turn: str | None = None
+        self.compact_line: str | None = None
         self.park_told: float | None = None   # when the park request went to the session (monotonic)
         self.parked_it = False   # parked after its compaction: Stop & Forget before it stops still wins
         self.parking_after = False   # parked mid-turn: the activity line says it parks once the turn ends
@@ -457,14 +462,24 @@ class Host:
         """Turns sent and not yet ended."""
         return len(self.sent)
 
-    async def turn(self, text: str, keepalive: bool = False, refs: dict[str, int] | None = None) -> str:
+    async def turn(self, text: str, keepalive: bool = False, refs: dict[str, int] | None = None,
+                   compacting: str | None = None) -> str:
         """Send a user turn; Claude Code queues it behind any turn still running, or takes
         it up into that one. Only a keepalive leaves the session quiet, and the activity line
         as it was. What it ends by saying is posted as the reply on refs (ref: the id of the
-        person's newest message on it). Returns the uuid it was sent with."""
+        person's newest message on it). A compaction's turn (compacting: its activity line)
+        writes that line before it goes, so the session never reads as free between the
+        command taken and the turn sent, and keeps it in front until the turn ends (show).
+        Returns the uuid it was sent with."""
         key = str(uuid.uuid4())
         if keepalive:
             self.kept_line = self.store.session(self.sid)["activity"]
+        if compacting:
+            self.compact_turn, self.compact_line = key, compacting
+            try:
+                self.store.set_activity(self.sid, compacting)
+            except sqlite3.OperationalError:   # written again once sent
+                pass
         await self.client.query(user_message(text, key))
         self.sent[key] = Sent(refs or {}, keepalive)
         self.compact_idle = None
@@ -473,10 +488,14 @@ class Host:
         self.quiet_since = None
         self.unsaid = None   # this turn's line replaces one left unwritten
         try:   # sent: a locked database mustn't make the caller think otherwise
-            self.store.set_activity(self.sid, "thinking")
+            self.store.set_activity(self.sid, compacting or "thinking")
         except sqlite3.OperationalError:
             pass
         return key
+
+    def compacting(self) -> str | None:
+        """The activity line of the compaction whose turn is to come or running, if any."""
+        return self.compact_line if self.compact_turn in self.sent else None
 
     # model and effort, changed live (.plan/model-effort.md)
 
@@ -684,9 +703,8 @@ class Host:
             self.end_compact()
             self.drop_plan()
             if unattended:   # the 8 h mark's: a bare /compact, as the alternative is a cold cache
-                self.compact_key = await self.turn("/compact")
+                self.compact_key = await self.turn("/compact", compacting="compacting: no notes came back, so without them")
                 self.compact_sent = time.monotonic()
-                self.store.set_activity(self.sid, "compacting: no notes came back, so without them")
             else:
                 self.store.set_activity(self.sid, NO_NOTES)
         await self.reconcile(session)
@@ -700,9 +718,9 @@ class Host:
             nonce = secrets.token_hex(4)
             self.cold_for, self.cold_nonce = self.quiet_since, nonce
             hours = f"{self.keepalive_for / 3600:g}"
-            await self.turn(compact_ask(self.store, nonce, why=QUIET_COMPACT.format(hours=hours)))
+            await self.turn(compact_ask(self.store, nonce, why=QUIET_COMPACT.format(hours=hours)),
+                            compacting=f"compacting after {hours} quiet hours: collecting notes")
             self.compact_nonce, self.compact_notes = nonce, None
-            self.store.set_activity(self.sid, f"compacting after {hours} quiet hours: collecting notes")
         if not self.pending and self.compact_nonce is None and self.compact_then is None and self.compact_key is None:
             # the session's own request_compact, held until its turn has ended: never sent into one
             self.store.promote_compact_request(self.sid)
@@ -720,14 +738,12 @@ class Host:
             self.compact_key = None
             if notes:   # the person's own instructions: the session isn't asked
                 self.end_compact()
-                self.compact_key = await self.turn(f"/compact {notes}")
+                self.compact_key = await self.turn(f"/compact {notes}", compacting="compacting")
                 self.compact_sent = time.monotonic()
-                self.store.set_activity(self.sid, "compacting")
             else:
                 nonce = secrets.token_hex(4)
-                await self.turn(compact_ask(self.store, nonce))
+                await self.turn(compact_ask(self.store, nonce), compacting="compacting: collecting notes")
                 self.compact_nonce, self.compact_notes = nonce, None
-                self.store.set_activity(self.sid, "compacting: collecting notes")
         elif command == "shell":
             await self.shell()
         return not self.stopping
@@ -810,7 +826,7 @@ class Host:
         (Park's Compact first): the session has parked already, and the host waits it out."""
         if (self.compact_then == "park" and not session["parked"] and self.compact_key in self.sent
                 and time.monotonic() - self.compact_sent > COMPACT_TIMEOUT):
-            self.compact_then = None
+            self.compact_then, self.compact_line = None, None
             self.store.set_activity(self.sid, HOLD_EXPIRED)
 
     async def compact_parked(self, session) -> bool:
@@ -843,9 +859,9 @@ class Host:
         if not (self.store.take_park_compact(self.sid) and asked):
             return False
         self.compact_then = "park"
-        self.compact_key = await self.turn(f"/compact {keep}" if keep else "/compact")
+        self.compact_key = await self.turn(f"/compact {keep}" if keep else "/compact",
+                                           compacting="compacting before it stops")
         self.compact_sent = time.monotonic()
-        self.store.set_activity(self.sid, "compacting before it stops")
         return True
 
     def after_compact(self, driven: bool) -> str:
@@ -927,8 +943,10 @@ class Host:
         self.compact_nonce, self.compact_notes, self.compact_idle = None, None, None
 
     def drop_plan(self) -> None:
-        """The wheelhouse's Compact is over without its /compact turn ending: nothing follows."""
+        """The wheelhouse's Compact is over without its /compact turn ending: nothing follows,
+        and its line no longer leads the activity line."""
         self.compact_then, self.compact_key = None, None
+        self.compact_turn, self.compact_line = None, None
 
     # Claude Code's messages
 
@@ -1002,8 +1020,13 @@ class Host:
 
     def show(self, activity: str) -> None:
         """What the running turn is doing, on the activity line: not a keepalive's, which
-        leaves the line as it found it. Parked mid-turn, it adds that it parks once the turn ends."""
+        leaves the line as it found it. Parked mid-turn, it adds that it parks once the turn ends.
+        While a compaction's turn is to come or runs, its line goes first (compacting): the
+        turns before it and its own are part of the compaction, never the session free (#233)."""
         if not (self.taken_up and all(k in self.sent and self.sent[k].keepalive for k in self.taken_up)):
+            line = self.compacting()
+            if line and not activity.startswith(line):
+                activity = f"{line} · {activity}"
             if self.parking_after and PARKS_AFTER_TURN not in activity:
                 activity = f"{activity} · {PARKS_AFTER_TURN}"
             self.store.set_activity(self.sid, activity)
@@ -1038,9 +1061,8 @@ class Host:
                 notes = keep_notes(m.result, self.compact_nonce)
             if notes is not None:
                 self.end_compact()
-                self.compact_key = await self.turn(f"/compact {notes}".rstrip())
+                self.compact_key = await self.turn(f"/compact {notes}".rstrip(), compacting="compacting")
                 self.compact_sent = time.monotonic()
-                self.store.set_activity(self.sid, "compacting")
                 return
         self.compacted_last = self.compacted_from is not None
         then, driven = None, False

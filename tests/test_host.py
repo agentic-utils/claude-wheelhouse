@@ -943,7 +943,10 @@ def test_compact_waits_out_a_long_turn(streamed, store, sid, monkeypatch, runnin
         for _ in range(3):   # time passes while that turn runs
             await h.poll()
             assert h.compact_nonce == nonce, desc
-            assert store.session(sid)["activity"] == "running Bash: sleep 900", desc
+            # queued behind the long turn, the ask keeps the session compacting (#233); its
+            # turn over without notes, the session is free
+            lead = "compacting: collecting notes · " if running else ""
+            assert store.session(sid)["activity"] == f"{lead}running Bash: sleep 900", desc
         await feed(h, result() if running else own(), *([h.client.replay(1)] if running else []),
                    text(NOTES.format(nonce=nonce)), result() if running else own())
         await feed(h, None)
@@ -973,6 +976,70 @@ def test_compact_abandoned(streamed, store, sid, ending, activity, desc):
         await reader
     run(go())
     assert h.compact_nonce is None, desc
+    assert store.session(sid)["activity"] == activity, desc
+
+
+def boundary():
+    from claude_agent_sdk import SystemMessage
+    return SystemMessage(subtype="compact_boundary", data={"compact_metadata": {"pre_tokens": 150_000}})
+
+
+# each step and whether the session reads as compacting (store.compacting_now) after it
+COMPACT_STEPS = {
+    "press": lambda h, s: s.command(h.sid, "compact"),
+    "press with notes": lambda h, s: s.command(h.sid, "compact", "keep the plan"),
+    "request": lambda h, s: s.request_compact(h.sid, "keep the plan"),
+    "poll": lambda h, s: h.poll(),
+    "interrupt": lambda h, s: (s.command(h.sid, "interrupt"), h.poll())[1],
+    "replay": lambda h, s: feed(h, h.client.replay()),
+    "thinking": lambda h, s: feed(h, text("Saving the plan first.")),
+    "tool": lambda h, s: feed(h, tool("git status")),
+    "notes": lambda h, s: feed(h, text(NOTES.format(nonce=h.compact_nonce))),
+    "boundary": lambda h, s: feed(h, boundary()),
+    "end": lambda h, s: feed(h, result()),
+    "error": lambda h, s: feed(h, result("overloaded", error=True)),
+    "aborted": lambda h, s: feed(h, result(error=True, terminal_reason="aborted_streaming")),
+}
+PREP = [("press", True), ("poll", True), ("replay", True), ("tool", True), ("thinking", True)]
+
+
+@pytest.mark.parametrize("steps, activity, desc", [
+    (PREP + [("notes", True), ("end", True), ("replay", True), ("boundary", True), ("end", False)],
+     "idle · compacted 150k → 1k tokens", "the person's Compact: dimmed through the notes turn and /compact"),
+    ([("press with notes", True), ("poll", True), ("replay", True), ("boundary", True), ("end", False)],
+     "idle · compacted 150k → 1k tokens", "the person's Compact with instructions: /compact alone"),
+    ([("request", False), ("poll", True), ("replay", True), ("thinking", True), ("boundary", True), ("end", False)],
+     "idle · compacted 150k → 1k tokens", "the session's request_compact"),
+    (PREP + [("end", False)], AWAITING_NOTES, "the notes turn ends without notes: the session is free"),
+    (PREP + [("interrupt", False), ("tool", False), ("aborted", False)], "interrupted",
+     "Interrupt mid notes turn: free at once, the turn's last lines included"),
+    (PREP + [("notes", True), ("end", True), ("replay", True), ("error", False)], "error: overloaded",
+     "the /compact turn fails"),
+    (PREP + [("notes", True), ("end", True), ("replay", True), ("interrupt", False), ("aborted", False)],
+     "interrupted", "Interrupt during /compact"),
+])
+def test_compacting_holds_until_the_compaction_ends(streamed, store, sid, steps, activity, desc):
+    """#233: from Compact asked until its compaction's turn ends, the session reads as
+    compacting (the blue eye, its items dimmed), whatever its turns show meanwhile; and never
+    after, however the compaction ends."""
+    from claude_wheelhouse.store import compacting_now
+    store.set_runner(sid, "sdk")
+    h = streamed
+
+    async def go():
+        reader = asyncio.create_task(h.read())
+        seen = []
+        for step, _ in steps:
+            done = COMPACT_STEPS[step](h, store)
+            if asyncio.iscoroutine(done):
+                await done
+            s = store.session(sid)
+            seen.append((step, compacting_now(s), s["activity"]))
+        await feed(h, None)
+        await reader
+        return seen
+    seen = run(go())
+    assert [(step, now) for step, now, _ in seen] == [(step, now) for step, now in steps], f"{desc}: {seen}"
     assert store.session(sid)["activity"] == activity, desc
 
 

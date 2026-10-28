@@ -790,7 +790,8 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   it: just compact, send its queued answers in the same one prompt as that reminder (the
   default), or park it at once, sending nothing more, so nothing writes the compacted context
   to the cache until it is unparked. While a compaction is under way, from Compact pressed
-  until the host says it's compacted (or got no notes, or was interrupted), Compact is off,
+  until the host says it's compacted (or got no notes, failed or was interrupted), through
+  the turn that collects its notes and the `/compact` turn alike, Compact is off,
   the session's inbox items and Detail dim and ignore clicks, and its eye in the session
   list sweeps blue instead of red. The session can also ask for a compaction itself, with
   the `request_compact` tool and the notes it wants kept, for long autonomous runs: the
