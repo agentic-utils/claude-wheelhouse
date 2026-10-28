@@ -9255,6 +9255,35 @@ async def test_ctrl_delete_waits_for_an_undo_still_landing(store, sid):
         assert all(tui.standing(store.item(sid, r)) == "finished" for r in refs), "then all deleted again"
         assert {it["ref"] for it in app.undo[1]} == set(refs), "and the next undo holds every one"
 
+
+@pytest.mark.anyio
+async def test_delete_waits_for_an_undo_still_landing(store, sid):
+    """#235 batch review: Delete asked while a Ctrl+Z's calls are held reads its row and family
+    only once they land (a parent back before its children would otherwise go alone), said,
+    and held once however often it is pressed."""
+    refs = undo_setup(store, sid, "family")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{refs[0]}"))
+        await pilot.pause()
+        await pilot.press("delete", "alt+y")
+        await landed(app, pilot)
+        gate = held_calls(app)
+        await pilot.press("ctrl+z")
+        await pilot.pause()
+        notes = []
+        app.notify = lambda text, **kw: notes.append(text)
+        await pilot.press("delete", "delete")
+        await pilot.pause()
+        assert notes.count("Delete: once the undo under way lands") == 2, notes
+        assert app.behind == [app.action_close_question], "held once"
+        assert [type(s).__name__ for s in app.screen_stack] == ["Screen"], "no dialog asked mid-undo"
+        gate.set()
+        await landed(app, pilot)
+        assert not app.behind and not app.undoing
+
 def test_ctrl_delete_reaches_the_app_from_windows_terminal():
     """#235: Windows Terminal sends Ctrl+Delete as CSI 3;5~, which Textual's parser reads as
     ctrl+delete, the key the item list binds."""

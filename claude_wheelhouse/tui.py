@@ -4425,7 +4425,7 @@ class WheelhouseApp(App):
         # counted, as two Deletes under way may both hold a row (a family and a marked child)
         self.going: collections.Counter[str] = collections.Counter()
         self.calls: list[threading.Event] = []   # each Delete's calls, set once made: the app's close waits for them
-        self.undoing = False   # a Ctrl+Z's calls under way (action_undo): a Delete waits for them
+        self.undoing = False   # a Ctrl+Z's calls under way (action_undo): Delete and Ctrl+Delete wait for them
         self.deleting = 0   # those Deletes and Ctrl+Zs, counted: Ctrl+Z, Ctrl+R and a pin wait for them (behind_deletes)
         self.behind: list[Callable[[], None]] = []   # what waits, in the order asked
         self.undo: tuple[str, list] | None = None   # what Ctrl+Z undoes, said, and the rows as they stood (undoable)
@@ -7138,6 +7138,9 @@ class WheelhouseApp(App):
             return
         if self.screen is self.screen_stack[0] and not self.items_table.show_cursor:
             return   # the highlight hidden (#148): nothing in the inbox is picked, so nothing to close
+        if self.undoing and self.screen is self.screen_stack[0]:   # its family read once the rows are back
+            self.after_undo(self.action_close_question, "Delete")
+            return
         if self.items_table.marked and self.screen is self.screen_stack[0]:
             self.close_marked()
             return
@@ -7190,9 +7193,6 @@ class WheelhouseApp(App):
         whatever a refresh brings (going); then landed(done) on the UI thread, done the acts that
         acted, to say and make undoable, and the inbox read again. One that failed comes back,
         with what went wrong said; with every one failed, landed isn't called."""
-        if self.undoing:   # a Ctrl+Z still putting rows back: this Delete once it has (behind_deletes)
-            self.behind.append(lambda: self.delete_off_thread(acts, landed))
-            return
         keys: set[str] = set()
         for item, family in acts:
             self.item_sink.jump()
@@ -7274,6 +7274,13 @@ class WheelhouseApp(App):
             behind, self.behind = self.behind, []
             for act in behind:
                 act()
+
+    def after_undo(self, act: Callable[[], None], key: str) -> None:
+        """Delete or Ctrl+Delete asked while a Ctrl+Z's rows are coming back (undoing): done once
+        they have, as behind_deletes holds a write, and once however often it was pressed."""
+        if act not in self.behind:
+            self.behind_deletes(act)
+        self.notify(f"{key}: once the undo under way lands")
 
     def behind_deletes(self, act: Callable[[], None]) -> bool:
         """A write to the inbox asked while a Delete is landing (delete_off_thread): True, and act
@@ -7504,7 +7511,8 @@ class WheelhouseApp(App):
         self.settle()
         if isinstance(self.focused, (TextArea, Input)) or self.screen is not self.screen_stack[0]:
             return
-        if self.undoing and self.behind_deletes(self.action_delete_completed):   # read once the rows are back
+        if self.undoing:   # the inbox read once the rows are back
+            self.after_undo(self.action_delete_completed, "Ctrl+Delete")
             return
         found, _, queued, awaiting = self.client.inbox(self.filter_sid)
         busy = queued | awaiting
