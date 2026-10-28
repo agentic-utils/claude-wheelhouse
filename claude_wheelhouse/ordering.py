@@ -133,8 +133,9 @@ def item_key(spec: str, item, processing=frozenset(), busy=frozenset(), names=No
     band = band_of(rank)
     col, mark = parse(spec)
     tie = rank
-    if col == "status" and mark == STAR:
+    if col == "status" and mark == STAR:   # then by session name (#236), then as the inbox has it
         value = rank[0]
+        tie = (natural_name((names or {}).get(item["session_id"], "")), item["session_id"], rank)
     elif col == "status":
         status = "processing" if item["status"] == "open" and (item["session_id"], item["ref"]) in processing \
             else ranked_status(item)

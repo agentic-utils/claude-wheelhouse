@@ -20,7 +20,7 @@ from textual.pilot import _get_mouse_message_arguments
 
 prs = pytest.importorskip("claude_wheelhouse_prs", reason="installed without the prs module")
 from claude_wheelhouse_prs import fetch, pane  # noqa: E402
-from conftest import Clock, keeps_colours  # noqa: E402
+from conftest import Clock, first_item, keeps_colours, to_first_item  # noqa: E402
 
 URL = "https://github.com/two-inc/wheelhouse/pull/{}"
 
@@ -105,9 +105,11 @@ async def until(pilot, check, desc, seconds=10.0):
 
 
 async def on_first(app, pilot):
-    """Settled, and the item the app shows first in Detail reached the PRs pane (showing),
-    which under load can be after the list lands (#214)."""
+    """Settled, the highlight on the first item (the conversation rows head the inbox, #236), and
+    that item in Detail reached the PRs pane (showing), which under load can be after the list
+    lands (#214)."""
     await settled(app, pilot)
+    await to_first_item(app, pilot)
     p = app.query_one("#prs")
     await until(pilot, lambda: app.selected is not None and p.in_detail == ("item", *app.selected), "Detail's first item")
     return p
@@ -227,7 +229,7 @@ async def test_a_hovered_or_highlighted_row_keeps_its_colours(store, sid, github
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         table = app.query_one(list_id)
-        kept = await keeps_colours(pilot, table, desc)
+        kept = await keeps_colours(pilot, table, desc, first_item(app) if list_id == "#items" else 0)
         if list_id == "#pr-list":
             assert pane.LOOKS["red"] in kept, f"{desc}: PR108's light red"
 
@@ -239,6 +241,8 @@ async def test_detail_s_pr_is_highlighted_though_the_list_lands_after_it(store, 
     github.gate = threading.Event()   # the list held until Detail shows its PR
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
+        await until(pilot, lambda: any(not k.endswith("|") for k in app.items_table.keys()), "the inbox listed")
+        await to_first_item(app, pilot)   # PR109, under the conversation row (#236)
         await until(pilot, lambda: app.query("#prs") and app.query_one("#prs").in_detail == ("item", sid, "PR109"),
                     "Detail on PR109, the list not landed")
         table = app.query_one("#pr-list")

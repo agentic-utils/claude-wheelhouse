@@ -142,10 +142,13 @@ async def test_the_pin_column_toggles(store, sid, tmp_path, how, desc):
         await pilot.pause()
         table = app.items_table
         assert str(table.get_row(f"{sid}|{t}")[0]) == UNPINNED, desc
+        row = table.get_row_index(f"{sid}|{t}")   # under the conversation row (#236)
+        table.move_cursor(row=row)
+        await pilot.pause()
         selected, screen = app.selected, app.screen
         for expected in (True, False):   # pinned, then its pin cleared
             if how == "click":
-                await pilot.click(table, offset=(header_x(table, "pin"), table.header_height))
+                await pilot.click(table, offset=(header_x(table, "pin"), table.header_height + row))
             else:
                 table.focus()
                 await pilot.press("alt+p")

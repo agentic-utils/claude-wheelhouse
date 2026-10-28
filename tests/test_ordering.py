@@ -88,6 +88,25 @@ def test_item_order(spec, rows, want, desc):
     assert order(spec, rows)[0] == want, desc
 
 
+NAMES = {"s1": "zeta", "s2": "alpha", "s3": "s10", "s4": "s2"}
+
+
+@pytest.mark.parametrize("spec, rows, want, desc", [
+    ("status*", [item(1, "T1", "running", sid="s1"), item(2, "T2", "running", sid="s2"), item(3, "T3", "running", sid="s1")],
+     ["T2", "T3", "T1"], "*: by session name within a status, then newest first (#236)"),
+    ("status*", [item(1, "Q1", "open", "question", sid="s1"), item(2, "T1", "running", sid="s2")],
+     ["Q1", "T1"], "*: the status first, the name second"),
+    ("status*", [item(1, "T1", "running", sid="s3"), item(2, "T2", "running", sid="s4")],
+     ["T2", "T1"], "*: names in natural order, s2 before s10"),
+    ("status*", [item(1, "T1", "done", sid="s1"), item(2, "T2", "done", sid="s2")],
+     ["T2", "T1"], "*: the settled by name too, then the latest to settle lowest"),
+    ("status▲", [item(1, "T1", "running", sid="s2"), item(2, "T2", "running", sid="s1")],
+     ["T2", "T1"], "▲: no name tie-break, newest first"),
+])
+def test_item_order_by_session_name(spec, rows, want, desc):
+    assert order(spec, rows, NAMES)[0] == want, desc
+
+
 @pytest.mark.parametrize("before, after, moved, group, written, desc", [
     ("A", None, "B", "g1", ["B", "A"], "within its group: the group's new order"),
     (None, "D", "C", "g2", ["D", "C"], "the last of its group"),

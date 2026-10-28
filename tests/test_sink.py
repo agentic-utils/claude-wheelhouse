@@ -409,8 +409,8 @@ async def moving(clock, tmp_path, where, keys, typed, count=3, start=None) -> di
     ("sessions", ("down", "down"), "bravo", None, "Down, Down: bravo, at the foot"),
     ("sessions", ("down", "down", "up"), "charlie", None, "and back up: charlie, never a blank row"),
     ("items", ("down",), None, "three", "Down on two as one sinks: three"),
-    ("items", ("up",), None, "two", "Up on two as one sinks: two is first now, so it stays"),
-    ("items", ("down",) * 5, None, "one", "Down past the three conversations (#192): one, at the foot"),
+    ("items", ("up",), None, "💬 charlie", "Up on two as one sinks: the conversations above it (#236), charlie's last"),
+    ("items", ("down",) * 5, None, "one", "Down to the foot: one, the conversations at the top (#236)"),
 ])
 async def test_keys_typed_during_a_move_end_as_typed_slowly(tmp_path, clock, where, keys, current, selected, desc):
     """Arrows step through the final order, never a frame's, so a burst typed during a move
@@ -424,16 +424,14 @@ async def test_keys_typed_during_a_move_end_as_typed_slowly(tmp_path, clock, whe
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("where, start, keys, current, selected, marked, desc", [
-    ("items", "two", ("shift+up",), None, "two", ["two"], "Shift+Up on two as one sinks: two is first, so only it"),
-    # under four, the three sessions' conversations (#192), never marked, then one as it sinks
-    ("items", "four", ("shift+down",) * 4, None, "one", ["four", "one"],
-     "Shift+Down on four, past the conversations: one, below them now"),
-    ("items", "four", ("shift+down",), None, "💬 alpha", ["four"], "Shift+Down on four: a conversation, unmarked"),
-    ("items", "four", ("down",) * 4 + ("shift+up",) * 4, None, "four", ["four", "one"],
-     "Down to one, then Shift+Up: back to four"),
-    ("items", "three", ("pageup",), None, "two", [], "PageUp on three: two, the top now"),
+    # above two, the three sessions' conversations (#236), never marked
+    ("items", "two", ("shift+up",), None, "💬 charlie", ["two"], "Shift+Up on two as one sinks: a conversation, unmarked"),
+    ("items", "four", ("shift+down",) * 4, None, "one", ["four", "one"], "Shift+Down on four, past the foot: one"),
+    ("items", "four", ("shift+down",), None, "one", ["four", "one"], "Shift+Down on four: one, below it now"),
+    ("items", "four", ("down", "shift+up"), None, "four", ["four", "one"], "Down to one, then Shift+Up: back to four"),
+    ("items", "three", ("pageup",), None, "💬 alpha", [], "PageUp on three: alpha's conversation, the top (#236)"),
     ("items", "two", ("pagedown",), None, "one", [], "PageDown on two: one, the foot now"),
-    ("items", "three", ("ctrl+home",), None, "two", [], "Ctrl+Home: two, the top now"),
+    ("items", "three", ("ctrl+home",), None, "💬 alpha", [], "Ctrl+Home: alpha's conversation, the top (#236)"),
     ("items", "two", ("ctrl+end",), None, "one", [], "Ctrl+End: one, the foot now"),
     ("items", "three", ("home", "end"), None, "three", [], "Home and End scroll sideways, the cursor stays"),
     ("sessions", "alpha", ("ctrl+end",), "bravo", None, [], "Ctrl+End as bravo falls: bravo, at the foot"),

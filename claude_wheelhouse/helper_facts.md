@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 42, 2026-10-28T15:20:44Z, source 4dcca3aefdc4dc79 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 43, 2026-10-28T17:29:34Z, source 8747cfe5c91eade4 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -353,7 +353,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Click a block of a doc and your next comment on it quotes that block.
 - Alt+Up and Alt+Down reorder rows; drag a splitter to resize panes, and double-click it to reset.
 - Every key has a modifier, so a letter typed in the answer box is always just typed, and the app's own keys work from there: Ctrl+Q quits, F1 lists the keys, Alt+N is New session.
-- With no session selected, the inbox lists each session's conversation (💬, named after the session) under the items waiting on you.
+- With no session selected, the inbox lists each session's conversation (💬, named after the session) at the top, and orders its items by session name within each status.
 - Emoji suggestions take a click: type :star and click the one you want, or choose it with Up and Down and take it with Tab or Enter.
 - Ctrl+Delete in the inbox deletes every completed item at once, but the pinned, with no question: Ctrl+Z brings them all back.
 - A completed item leaves the inbox 5 minutes after it completed (AUTOCLEANSE_MINUTES in a .env, 0 for never); Alt+V shows it again.

@@ -221,28 +221,28 @@ def colours(table, row) -> list[tuple[str | None, str | None]]:
             for s in strip if s.text.strip()]
 
 
-async def keeps_colours(pilot, table, desc) -> list[str | None]:
-    """Row 0 of a list hovered, then under the cursor (#217): shaded each time, its cells'
-    own colours kept (a cell in the table's, MATRIX, takes the cursor's white). Row 0's
-    foregrounds, as asserted."""
+async def keeps_colours(pilot, table, desc, row: int = 0) -> list[str | None]:
+    """A list's row (row 0, or the inbox's first item, first_item) hovered, then under the
+    cursor (#217): shaded each time, its cells' own colours kept (a cell in the table's,
+    MATRIX, takes the cursor's white). The row's foregrounds, as asserted."""
     last = table.row_count - 1
-    assert last >= 1, f"{desc}: a row to hover besides the cursor's"
+    assert last > row, f"{desc}: a row to hover besides the cursor's"
     table.show_cursor = True
     table.move_cursor(row=last, animate=False)
     await pilot.hover(table, offset=(4, table.header_height + last))   # the pointer on the cursor's row
     await pilot.pause()
-    plain = colours(table, 0)
-    await pilot.hover(table, offset=(4, table.header_height))
+    plain = colours(table, row)
+    await pilot.hover(table, offset=(4, table.header_height + row))
     await pilot.pause()
-    assert table.hover_row == 0 and table.cursor_row == last, f"{desc}: row 0 hovered, the cursor elsewhere"
+    assert table.hover_row == row and table.cursor_row == last, f"{desc}: row {row} hovered, the cursor elsewhere"
     for how in ("hovered", "under the cursor"):
         if how == "under the cursor":
-            table.move_cursor(row=0, animate=False)
+            table.move_cursor(row=row, animate=False)
             await pilot.hover(table, offset=(4, table.header_height + last))
             await pilot.pause()
-        now = colours(table, 0)
-        assert [bg for _, bg in now] != [bg for _, bg in plain], f"{desc}: row 0 shaded {how}"
-        assert len(now) == len(plain), f"{desc}: row 0 drawn in the same runs {how}"
+        now = colours(table, row)
+        assert [bg for _, bg in now] != [bg for _, bg in plain], f"{desc}: row {row} shaded {how}"
+        assert len(now) == len(plain), f"{desc}: row {row} drawn in the same runs {how}"
         own = [(fg, was) for (fg, _), (was, _) in zip(now, plain) if was != tui.MATRIX]
         assert own and all(fg == was for fg, was in own), f"{desc}: every cell's own colour kept {how}: {own}"
     return [fg for fg, _ in plain]
@@ -597,3 +597,14 @@ def worktree(tmp_path):
     linked = main / ".worktrees" / "feat-x"
     git(main, "worktree", "add", "-q", "-b", "feat/x", str(linked))
     return main, linked
+
+
+def first_item(app) -> int:
+    """The inbox's first item row: unfiltered under its own order, the 💬 conversation rows head it (#236)."""
+    return next(i for i, k in enumerate(app.items_table.keys()) if not k.endswith("|"))
+
+
+async def to_first_item(app, pilot) -> None:
+    """The highlight moved off the conversation rows it starts on (#236) to the first item."""
+    app.items_table.move_cursor(row=first_item(app))
+    await pilot.pause()

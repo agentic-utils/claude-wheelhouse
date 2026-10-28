@@ -293,7 +293,7 @@ FEATURES: tuple[Feature, ...] = (
                  "reconnect each; a claude.ai connector reconnects in every session that has it."),
     Feature("all-conversations", UNRELEASED, ADVANCED,
             note="With no session selected, the inbox lists each session's conversation (💬, named after the "
-                 "session) under the items waiting on you."),
+                 "session) at the top, and orders its items by session name within each status."),
     Feature("emoji-pick", UNRELEASED, ADVANCED,
             note="Emoji suggestions take a click: type :star and click the one you want, or choose it with Up "
                  "and Down and take it with Tab or Enter."),
