@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 21, 2026-10-28T11:17:31Z, source 95efdaf6856f2ac5 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 22, 2026-10-28T11:18:19Z, source 95efdaf6856f2ac5 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -199,6 +199,12 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 - **Alt+G**: Close the helper, keeping the chat
 
 - **Alt+N**: New chat: the helper forgets this one
+
+### The PRs pane
+
+- **Alt+O**: Mine or all
+
+- **Alt+R**: Fetch now
 
 ### Tab order
 
