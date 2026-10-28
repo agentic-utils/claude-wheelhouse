@@ -172,8 +172,8 @@ session.
   as plain Ctrl+S. On a session that isn't running, Ctrl+S or Alt+S asks "Unpark <session> and
   send?" (a parked one) or "Relaunch <session> and send?" (any other): Yes brings it back with its
   queue, and Alt+S's answer after it, as its first prompt, behind what the wheelhouse tells a
-  session on resume; No sends nothing and leaves the box as it was. Its hint says so ("Ctrl+S:
-  unpark and send queue"), and Send all skips it and doesn't count it. Ctrl+R takes a queued answer
+  session on resume; No sends nothing and leaves the box as it was. With nothing queued, Ctrl+S
+  says so. Send all skips it and doesn't count it. Ctrl+R takes a queued answer
   back to edit or drop. A sent answer shows as `you · sending`, as a queued one shows as
   `you · queued`, until the session takes it up: in an item's thread until the wheelhouse
   has passed it on, and in the conversation until the session has it, which may wait for

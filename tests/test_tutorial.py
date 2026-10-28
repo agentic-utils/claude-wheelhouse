@@ -391,6 +391,7 @@ async def test_the_buttons_do_what_each_step_asks(store, monkeypatch, fake_claud
         assert [m["body"] for m in store.drafts(sid)] == [tutorial.ANSWER] * 2, "the answers typed for the person"
         sent = []   # what Send does to the queue is the hub's (a tab's dispatch): here, as it does it
         app.send_session = lambda s: (sent.append(s), store.dispatch(s))
+        app.dead = lambda s: False   # the demo runs, as it would: a dead one is offered a wake first (#221)
         await press(act(app), "reply", "Send: the queue sent")
         assert sent == [sid], "Send pressed for the demo"
         store.reply(sid, q1, "noted", status="answered")

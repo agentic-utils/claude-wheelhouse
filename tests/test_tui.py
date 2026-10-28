@@ -25,7 +25,7 @@ from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, S
 
 from claude_wheelhouse import emoji, features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
 from claude_wheelhouse.host import NO_NOTES
-from claude_wheelhouse.hub import Done, Hub, wake_verb
+from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 
 # the stats pane's tests among these, and the slots' defaults, need the stats module
@@ -738,8 +738,8 @@ async def test_send_all_skips_dead_sessions(store, sid, tmp_path, monkeypatch, s
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("status, parked, ctrl_s, desc", [
-    ("dead", False, "Ctrl+S: relaunch and send queue", "a dead session's hint says Ctrl+S relaunches it first"),
-    ("dead", True, "Ctrl+S: unpark and send queue", "a parked one's says Unpark (#218)"),
+    ("dead", False, "Ctrl+S: send queue", "a dead session's hint has Ctrl+S: it offers a relaunch first (#221)"),
+    ("dead", True, "Ctrl+S: send queue", "as does a parked one's: it offers Unpark"),
     ("live", False, "Ctrl+S: send queue", "a live session's hint just sends"),
     ("stalled", False, "Ctrl+S: send queue", "as does a stalled one's: it's still running"),
 ])
@@ -1128,9 +1128,8 @@ def assert_one_current(app, desc):
     nudged = bool(item) and item["status"] == "open" and item["answer"] == COMPACT_QUESTION
     s = app.row(app.bar_session(app.screen)) if app.bar_session(app.screen) else None
     sends = "send" if s and (mode(s) == "immediate" or app.sends_now(s["id"])) else "queue"
-    wake = wake_verb(s) if s and app.dead(s["id"]) else None
     assert [h.base for h in app.screen.query(Hint)] == [PERMISSION_HINT if asking else COMPACT_HINT if nudged
-                                                        else hint(sends, wake)], f"{desc}: the hint"
+                                                        else hint(sends)], f"{desc}: the hint"
     assert [p.display for p in app.screen.query(PermissionButtons)] == [asking], f"{desc}: the permission buttons"
     if not thread:
         buttons = [(b.id, str(b.label), b.disabled, b.display) for b in app.conversation_buttons.query(Button)]
@@ -2427,6 +2426,7 @@ async def test_detail_at_its_end_stays_there_when_its_view_shrinks(store, sid, t
     """#200: Detail at its end, its view made shorter by what's under it (the hint's emoji
     suggestions, the answer box's splitter): its last line stays in view, and what's new
     after, a reply, still shows at the end."""
+    store.set_mode(sid, "immediate")   # its hint, which the suggestions replace, a line shorter than they are
     folder = tmp_path / "projects/-home-u-repo"
     folder.mkdir(parents=True)
     path = folder.joinpath(f"{sid}.jsonl")

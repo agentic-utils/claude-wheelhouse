@@ -2661,13 +2661,12 @@ COMPACT_HINT = ("1 Compact or 2 Leave it, then 3 just compact, 4 send the queue 
                 "Ctrl+Enter compacts with them")
 
 
-def hint(sends: str, wake: str | None = None) -> str:
+def hint(sends: str) -> str:
     """The line under an answer box. sends: what Ctrl+Enter does for the session in context
-    by its mode, queue or send. wake: for one that isn't running, what brings it back,
-    Unpark or Relaunch (wake_verb), which Ctrl+S and Alt+S offer before they send (#221)."""
-    how = f"{wake.lower()} and send" if wake else "send"
-    ctrl_s = f" · Ctrl+S: {how} queue"
-    alt_s = f" · Alt+S: {how}" if sends == "queue" else ""
+    by its mode, queue or send. Ctrl+S and Alt+S on one that isn't running ask first to
+    Unpark or Relaunch it (#221): the dialog says which, so the line stays short."""
+    ctrl_s = " · Ctrl+S: send queue"
+    alt_s = " · Alt+S: send" if sends == "queue" else ""
     return f"Ctrl+Enter: {sends}{alt_s}{ctrl_s} · Ctrl+R: edit last queued"
 
 
@@ -6212,7 +6211,7 @@ class WheelhouseApp(App):
         sends = "send" if s is not None and (mode(s) == "immediate" or self.sends_now(s["id"])) else "queue"
         for h in hints:
             h.set_base(DENY_HINT if denying else PERMISSION_HINT if asking else COMPACT_HINT if nudged
-                       else hint(sends, wake_verb(s) if s is not None and self.dead(s["id"]) else None))
+                       else hint(sends))
         thread = boxed(self.screen)   # a full-screen item's own box: a ThreadView's, a doc item's DocView's
         if isinstance(self.screen, DocView):
             doc = reading = self.screen.panes is not None and not self.screen.panes.box_shown(self.doc_layout)
