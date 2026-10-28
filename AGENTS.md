@@ -321,6 +321,9 @@ Update these in the same commit as the behaviour they describe:
   The issue must be a real GitHub issue on agentic-utils/claude-wheelhouse; open one first
   if none fits. Types: feat, fix, docs, test, refactor, perf, chore, build, revert.
 - The description is plain lower-case prose saying what now holds, not what was done.
+- A subject starts with `#`, which git reads as a comment line wherever it opens the message
+  in an editor (a rebase, a commit without `-m`), dropping it: pass `-c core.commentChar=';'`,
+  as `git -c core.commentChar=';' commit` or `rebase`.
 - Branches: `doug/<issue>-<slug>`.
 
 ## Writing

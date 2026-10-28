@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 30, 2026-10-28T12:33:15Z, source dde94ae8403e1fd9 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 31, 2026-10-28T12:33:20Z, source 78a5a87148036828 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -98,7 +98,7 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **F1**: This list
 
-- **Alt+G**: Ask the wheelhouse: a chat that answers how-to questions about it, from its help and its source (Haiku, on your Claude Code login). Alt+G again, or Esc, closes it; the chat is kept until you quit
+- **Alt+Q**: Ask the wheelhouse: a chat that answers how-to questions about it, from its help and its source (Haiku, on your Claude Code login). Alt+Q again, or Esc, closes it; the chat is kept until you quit
 
 - **Ctrl+L**: With a doc shown: its thread under it (split), or Doc and Thread as tabs (tabbed); kept
 
@@ -194,9 +194,9 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **Esc**: Close the editor, asking first with unsaved edits: Close and keep them, Discard or Keep editing
 
-### The helper (Alt+G)
+### The helper (Alt+Q)
 
-- **Alt+G**: Close the helper, keeping the chat
+- **Alt+Q**: Close the helper, keeping the chat
 
 - **Alt+N**: New chat: the helper forgets this one
 
@@ -250,7 +250,7 @@ Esc, Enter, F1 or a click outside closes this list.
 
 ## The command palette (Ctrl+P)
 
-- **Ask the wheelhouse**: A chat that answers how-to questions about the wheelhouse, from its help and its source (Alt+G)
+- **Ask the wheelhouse**: A chat that answers how-to questions about the wheelhouse, from its help and its source (Alt+Q)
 
 - **Reset layout**: Put every pane back in its default place, and the dividers at their default sizes
 
@@ -306,7 +306,8 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - A Decisions pane under the inbox lists every repo's design decisions (docs/adr), shown in Detail.
 - Drag a pane by its title onto another to swap the two; Reset layout, in the command palette, puts them back.
 - A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered. Saving comes next.
-- Alt+G asks the wheelhouse how to do something: a chat that answers from its help and its source, through Haiku on your own Claude Code login.
+- Alt+Q asks the wheelhouse how to do something: a chat that answers from its help and its source, through Haiku on your own Claude Code login.
+- The helper chat moved from Alt+G, which opens Gemini on some desktops, to Alt+Q (Q for question).
 - After an update, the tour shows only what's new, pane by pane, with no demo; Esc ends it at any time, and after quitting mid-tour, Alt+T or the title bar's badge resumes it.
 - A pressed button (Compact, Interrupt, Relaunch, Park, Fork...) stays off, dark grey, until what it started has finished, or for 30 seconds with no word from the session.
 - Pin any inbox item (📌, a click on its first column or Alt+P) and clearing the inbox leaves it; docs come pinned.

@@ -31,7 +31,8 @@ change to the fact sheet." Built as below (The fact sheet).
 when it opens again. Passed over: a module pane (competes for room) and a pseudo-session
 (every verb would need a special case).
 
-**Q4. Alt+G** ("guide"), and a command palette entry. Alt+Q was one key from Ctrl+Q, Quit.
+**Q4. Alt+Q** ("question"), and a command palette entry. It was Alt+G ("guide") until #219: Gemini
+takes Alt+G on the desktop. Alt+Q is a modifier away from Ctrl+Q, Quit, and the two are separate bindings.
 
 **Q5. History kept for the app's run**, in memory; New chat clears it.
 
@@ -132,7 +133,7 @@ offers New chat, before a request crosses 100k onto the long-prompt card.
 1. `helper.py` (no Textual): the command line, the briefing and the stream-json driver
    (start at the first question, ask, stream text and tool events, errors said plainly,
    idle stop, New chat). The fact sheet, `facts.py`, the hook, `make facts`, `make hooks`.
-2. The drawer on Alt+G: the palette command, the F1 line, a `whatsnew` feature, a README
+2. The drawer on Alt+Q: the palette command, the F1 line, a `whatsnew` feature, a README
    section.
 3. `make helper-eval`: how-to questions with the key each answer must name, against real
    Haiku, run by hand, never in the suite; and the sandbox checks.

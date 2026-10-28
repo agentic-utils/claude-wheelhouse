@@ -309,7 +309,7 @@ class Helper:
 
 
 def reading(block: dict) -> str:
-    """A tool call, said in a few words: "Read tui.py", "Grep alt+g"."""
+    """A tool call, said in a few words: "Read tui.py", "Grep alt+q"."""
     args = block.get("input") or {}
     what = args.get("file_path") or args.get("pattern") or args.get("path") or ""
     with contextlib.suppress(ValueError):

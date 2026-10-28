@@ -1,4 +1,4 @@
-"""The helper's drawer (tui.HelperDrawer, Alt+G): opened and closed, the chat kept between,
+"""The helper's drawer (tui.HelperDrawer, Alt+Q): opened and closed, the chat kept between,
 an answer streamed in, errors, New chat and the idle stop, with a fake helper.Helper (no
 test runs the real claude: test_helper.py covers the driver)."""
 
@@ -61,14 +61,14 @@ async def ask(app, pilot, question):
 
 
 @pytest.mark.anyio
-async def test_alt_g_opens_the_drawer_and_esc_or_alt_g_closes_it_leaving_focus_where_it_was(store, fake_helper):
+async def test_alt_q_opens_the_drawer_and_esc_or_alt_q_closes_it_leaving_focus_where_it_was(store, fake_helper):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         items = app.query_one("#items", DataTable)
         items.focus()
-        for close in ("escape", "alt+g"):
-            await pilot.press("alt+g")
+        for close in ("escape", "alt+q"):
+            await pilot.press("alt+q")
             await pilot.pause()
             assert isinstance(app.screen, HelperDrawer), close
             assert isinstance(app.focused, Input) and app.focused.id == "helper-question", f"{close}: ready to type"
@@ -76,6 +76,7 @@ async def test_alt_g_opens_the_drawer_and_esc_or_alt_g_closes_it_leaving_focus_w
             await pilot.press(close)
             await pilot.pause()
             assert not isinstance(app.screen, HelperDrawer) and app.focused is items, f"{close}: focus back"
+        assert not app._exit, "Alt+Q is the helper's, not Ctrl+Q's quit"
         assert fake_helper == [] and app.helper is None, "nothing made, let alone started, until a question"
 
 
@@ -84,7 +85,7 @@ async def test_an_answer_streams_in_and_the_chat_is_kept_between_openings(store,
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.press("alt+g")
+        await pilot.press("alt+q")
         await pilot.pause()
         await ask(app, pilot, "how do I pin")
         fake = fake_helper[0]
@@ -102,7 +103,7 @@ async def test_an_answer_streams_in_and_the_chat_is_kept_between_openings(store,
         assert app.helper_log[-1] == {"who": "helper", "text": "Press **Alt+P** in the item list."}
         await pilot.press("escape")
         await pilot.pause()
-        await pilot.press("alt+g")
+        await pilot.press("alt+q")
         await pilot.pause()
         assert app.helper_log[0] == {"who": "you", "text": "how do I pin"}
         assert "how do I pin" in chat_text(app) and len(app.screen.query("#helper-chat Static")) == 2, "the chat as it was"
@@ -120,7 +121,7 @@ async def test_errors(store, fake_helper, events, log, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.press("alt+g")
+        await pilot.press("alt+q")
         await pilot.pause()
         await ask(app, pilot, "q")
         for e in events:
@@ -134,7 +135,7 @@ async def test_new_chat_and_a_long_chat_offering_it(store, fake_helper):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.press("alt+g")
+        await pilot.press("alt+q")
         await pilot.pause()
         await ask(app, pilot, "q")
         fake = fake_helper[0]
@@ -149,8 +150,8 @@ async def test_new_chat_and_a_long_chat_offering_it(store, fake_helper):
 
 
 @pytest.mark.parametrize("event, says, desc", [
-    (Event("done", "a"), "The helper has answered: Alt+G", "an answer"),
-    (Event("error", "gone"), "The helper couldn't answer: Alt+G", "an error"),
+    (Event("done", "a"), "The helper has answered: Alt+Q", "an answer"),
+    (Event("error", "gone"), "The helper couldn't answer: Alt+Q", "an error"),
 ])
 @pytest.mark.anyio
 async def test_an_answer_landing_with_the_drawer_closed_says_so(store, fake_helper, monkeypatch, event, says, desc):
@@ -159,7 +160,7 @@ async def test_an_answer_landing_with_the_drawer_closed_says_so(store, fake_help
     async with app.run_test(size=(160, 40)) as pilot:
         monkeypatch.setattr(app, "notify", lambda text, **kw: said.append(text))
         await pilot.pause()
-        await pilot.press("alt+g")
+        await pilot.press("alt+q")
         await pilot.pause()
         await ask(app, pilot, "q")
         await pilot.press("escape")
@@ -186,7 +187,7 @@ async def test_a_question_while_one_is_answered_stays_in_the_box(store, fake_hel
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.press("alt+g")
+        await pilot.press("alt+q")
         await pilot.pause()
         await ask(app, pilot, "q")
         await ask(app, pilot, "again")
@@ -199,7 +200,7 @@ async def test_the_tick_stops_an_idle_helper_and_quitting_stops_it(store, fake_h
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         app.tick()
-        await pilot.press("alt+g")
+        await pilot.press("alt+q")
         await pilot.pause()
         await ask(app, pilot, "q")
         fake = fake_helper[0]
@@ -209,18 +210,19 @@ async def test_the_tick_stops_an_idle_helper_and_quitting_stops_it(store, fake_h
 
 
 @pytest.mark.anyio
-async def test_alt_g_over_another_dialog_does_nothing(store):
+async def test_alt_q_over_another_dialog_does_nothing(store):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         await pilot.press("f1")
         await pilot.pause()
-        await pilot.press("alt+g")
+        await pilot.press("alt+q")
         await pilot.pause()
         assert isinstance(app.screen, tui.KeysHelp)
 
 
 def test_the_overlay_and_the_palette_list_it():
     text = tui.keys_help()
-    assert "**Alt+G**: Ask the wheelhouse" in text and "## The helper (Alt+G)" in text
+    assert "**Alt+Q**: Ask the wheelhouse" in text and "## The helper (Alt+Q)" in text
+    assert "Alt+G" not in text, "#219: Alt+G opened Gemini, so nothing of the wheelhouse's is on it"
     assert [t for t, _ in facts.palette(tui) if t.startswith("Ask")] == ["Ask the wheelhouse"]
