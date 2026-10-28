@@ -9210,6 +9210,51 @@ async def test_show_item_brings_back_a_row_autocleanse_hid(store, sid):
         assert app.items_table.show_cursor and app.items_cursor == f"{sid}|{ref}", "and highlighted"
 
 
+
+@pytest.mark.anyio
+async def test_show_item_leaves_a_hidden_row_of_a_compacting_session_unpicked(store, tmp_path, monkeypatch):
+    """#235 with #165: a pick of an item autocleanse hid, in a session being compacted, is
+    refused as a listed one is: False, said, and the highlight not put on the locked row."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    busy = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    ref = store.post_item(busy, "task", "done a while ago", status="done")
+    aged(store, busy, ref, 30)
+    store.set_activity(busy, "compacting: collecting notes")
+    app = WheelhouseApp(store)
+    app.autocleanse = 5
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        notes = []
+        app.notify = lambda text, **kw: notes.append(text)
+        assert not app.show_item(busy, ref), "refused"
+        assert tui.COMPACTING_LOCKED in notes, notes
+        assert app.items_cursor != f"{busy}|{ref}", "the highlight not on it"
+
+
+@pytest.mark.anyio
+async def test_ctrl_delete_waits_for_an_undo_still_landing(store, sid):
+    """#235 batch review: Ctrl+Delete asked while a Ctrl+Z's calls are held reads the inbox only
+    once they land, so the rows put back are deleted whole and the next undo holds them all."""
+    refs = [store.post_item(sid, "task", f"t{i}", status="done") for i in range(3)]
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        await pilot.press("ctrl+delete")
+        await landed(app, pilot)
+        gate = held_calls(app)
+        await pilot.press("ctrl+z")
+        await pilot.pause()
+        assert app.undoing, "the undo held"
+        await pilot.press("ctrl+delete")
+        await pilot.pause()
+        assert all(tui.standing(store.item(sid, r)) == "finished" for r in refs), "nothing read mid-undo"
+        gate.set()
+        await landed(app, pilot)
+        assert all(tui.standing(store.item(sid, r)) == "finished" for r in refs), "then all deleted again"
+        assert {it["ref"] for it in app.undo[1]} == set(refs), "and the next undo holds every one"
+
 def test_ctrl_delete_reaches_the_app_from_windows_terminal():
     """#235: Windows Terminal sends Ctrl+Delete as CSI 3;5~, which Textual's parser reads as
     ctrl+delete, the key the item list binds."""
