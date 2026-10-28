@@ -8930,7 +8930,7 @@ async def test_ctrl_z_undoes_the_last_inbox_act(store, sid, shape, keys, want, s
         app.notify = lambda text, **kw: notes.append(text)
         for key in keys:
             await pilot.press(key)
-            await pilot.pause()
+            await landed(app, pilot)   # Delete's and Ctrl+Z's calls on their worker thread
     got = [(it["status"], tui.standing(it) == "finished", tui.pinned(it)) for it in map(lambda r: store.item(sid, r), refs)]
     assert got == want, desc
     assert all(s in notes for s in said), f"{desc}: {notes}"
@@ -8954,6 +8954,400 @@ async def test_ctrl_z_in_the_answer_box_is_its_own_undo(store, sid):
         await pilot.pause()
         assert app.answer.text == "", "the box's own undo took the typing back"
     assert store.item(sid, q)["status"] == "closed", "and the delete stays"
+
+
+def held_calls(app, fail=None):
+    """The app's hub calls that Delete makes (close, delete_family) held on their worker thread
+    until the returned event is set, then made, or failed with `fail`: an exception raised, or
+    a Done returned (#234)."""
+    import threading
+    gate = threading.Event()
+    for name in ("close", "delete_family"):
+        real = getattr(app.client, name)
+
+        def held(*a, real=real, **kw):
+            if threading.current_thread() is threading.main_thread():   # Ctrl+R: not held (Ctrl+Z waits for the gate too)
+                return real(*a, **kw)
+            assert gate.wait(10), "the test never let the call through"
+            if isinstance(fail, Exception):
+                raise fail
+            return fail if fail is not None else real(*a, **kw)
+        setattr(app.client, name, held)
+    return gate
+
+
+async def landed(app, pilot) -> None:
+    """Every Delete and Ctrl+Z under way landed (delete_off_thread, action_undo)."""
+    for _ in range(500):
+        if not app.deleting:
+            break
+        await pilot.pause(0.01)
+    assert not app.deleting, "the delete never landed"
+    await pilot.pause()
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("marked, fail, gone, said, desc", [
+    (False, None, True, "dismissed T1", "one row: gone at once, and stays gone once the call lands"),
+    (True, None, True, "dismissed T1, T2, T3", "Ctrl+A's rows: all gone at once, together"),
+    (False, KeyError("no item T1 in this session"), False, "no item T1", "the call fails: the row comes back, said"),
+    (True, Done(False).say("the wheelhouse daemon can't be reached", "error"), False, "can't be reached",
+     "the daemon lost: the rows come back, said"),
+])
+async def test_delete_takes_rows_at_once_and_the_hub_call_lands_after(store, sid, marked, fail, gone, said, desc):
+    """#234, Doug: "when I request deletion, remove the visual element immediately, then delegate
+    deletion to a background thread so that the UI remains responsive." A refresh while the call
+    is held never brings the rows back; a failed call does, and says why."""
+    refs = [store.post_item(sid, "task", f"t{i}", status="done") for i in range(3)]
+    keys = [f"{sid}|{r}" for r in (refs if marked else refs[:1])]
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        notes = []
+        app.notify = lambda text, **kw: notes.append(text)
+        app.items_table.focus()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(keys[0]))
+        await pilot.pause()
+        gate = held_calls(app, fail)
+        if marked:
+            await pilot.press("ctrl+a")
+        await pilot.press("delete")
+        await pilot.pause()
+        assert not set(keys) & set(app.items_table.rows), f"{desc}: gone before the call lands"
+        assert all(store.item(sid, k.split("|")[1])["dismissed"] is None for k in keys), f"{desc}: not landed yet"
+        app.refresh_data()   # a refresh racing the call
+        await pilot.pause()
+        assert not set(keys) & set(app.items_table.rows), f"{desc}: no flash back on a refresh meanwhile"
+        gate.set()
+        await landed(app, pilot)
+        assert (not set(keys) & set(app.items_table.rows)) == gone, f"{desc}: {list(app.items_table.rows)}"
+        assert any(said in n for n in notes), f"{desc}: {notes}"
+
+
+def aged(store, sid, ref, minutes: float) -> None:
+    """An item last changed `minutes` ago."""
+    at = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    store.db.execute("UPDATE items SET updated_at = ? WHERE session_id = ? AND ref = ?", (at, sid, ref))
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("kind, status, age, pin, setting, show, shown, desc", [
+    ("task", "done", 6, False, 5, False, False, "a task done 6 minutes ago: hidden"),
+    ("task", "done", 4, False, 5, False, True, "done 4 minutes ago: still shown"),
+    ("agent", "failed", 6, False, 5, False, False, "a subagent failed a while ago: hidden"),
+    ("pr", "merged", 6, False, 5, False, False, "a PR merged a while ago: hidden"),
+    ("question", "answered", 6, False, 5, False, False, "a question answered a while ago: hidden"),
+    ("decision", "seen", 6, False, 5, False, False, "a decision seen a while ago: hidden"),
+    ("task", "todo", 60, False, 5, False, True, "a task still to do: never hidden"),
+    ("task", "done", 60, True, 5, False, True, "pinned: never hidden"),
+    ("task", "done", 60, False, 0, False, True, "the setting 0: off"),
+    ("task", "done", 60, False, 5, True, True, "Alt+V shows the hidden ones"),
+])
+async def test_autocleanse_hides_completed_items_after_a_while(store, sid, kind, status, age, pin, setting, show,
+                                                                 shown, desc):
+    """#235, Doug: "an autocleanse option, on by default, that hides completed items after 5
+    minutes". Hidden, not deleted: Alt+V shows them, as it shows the finished."""
+    store.post_item(sid, "question", "anchor")   # something else in the inbox to select
+    extra = {"why": "local"} if kind == "decision" else {}
+    ref = (store.post_pr(sid, "https://github.com/o/r/pull/5", "it") if kind == "pr" else
+           store.post_item(sid, kind, "it", **extra))
+    store.db.execute("UPDATE items SET status = ? WHERE session_id = ? AND ref = ?", (status, sid, ref))
+    if pin:
+        store.set_pinned(sid, ref, True)
+    aged(store, sid, ref, age)
+    app = WheelhouseApp(store)
+    app.autocleanse = setting
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if show:
+            await pilot.press("alt+v")
+        app.refresh_data()
+        await pilot.pause()
+        assert (f"{sid}|{ref}" in app.items_table.rows) == shown, desc
+    assert store.item(sid, ref)["dismissed"] is None, f"{desc}: hidden, never deleted"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+async def test_ctrl_delete_deletes_every_completed_item_and_ctrl_z_brings_them_back(store, sid):
+    """#235, Doug: "a 'delete all completed' option (Ctrl+Del?) for me to delete all completed
+    inbox items without having to select them first". Hidden ones too, never an active or a
+    pinned one, no dialog, through #234's fast path; a parent with a child under way is kept."""
+    done = [store.post_item(sid, "task", f"d{i}", status="done") for i in range(3)]
+    aged(store, sid, done[2], 30)   # hidden by autocleanse, deleted all the same
+    answered = store.post_item(sid, "question", "q", status="answered")
+    active = store.post_item(sid, "task", "still going", status="todo")
+    pin = store.post_item(sid, "task", "kept", status="done")
+    store.set_pinned(sid, pin, True)
+    parent = store.post_item(sid, "task", "parent", status="done")
+    child = store.post_item(sid, "question", "open child")
+    store.db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ?", (parent, sid, child))
+    gone = [*done, answered]
+    app = WheelhouseApp(store)
+    app.autocleanse = 5
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        notes = []
+        app.notify = lambda text, **kw: notes.append(text)
+        app.items_table.focus()
+        await pilot.press("ctrl+delete")
+        await pilot.pause()
+        assert [type(s).__name__ for s in app.screen_stack] == ["Screen"], "no dialog"
+        await landed(app, pilot)
+        assert [store.item(sid, r)["dismissed"] or store.item(sid, r)["status"] for r in gone] == \
+            ["done", "done", "done", "closed"], "every completed one deleted"
+        assert all(f"{sid}|{r}" not in app.items_table.rows for r in gone), "and off the inbox"
+        assert [tui.standing(store.item(sid, r)) for r in (active, pin, parent, child)] == \
+            ["active", "settled", "settled", "active"], "the active, the pinned and a parent of an open child kept"
+        assert "deleted 4 completed items: Ctrl+Z to undo; 1 kept: its children are still under way" in notes, notes
+        await pilot.press("ctrl+z")
+        await landed(app, pilot)
+        assert all(tui.standing(store.item(sid, r)) == "settled" for r in gone), "Ctrl+Z brings them all back"
+        assert all(f"{sid}|{r}" in app.items_table.rows for r in gone), "in sight: one aged out too, its minutes afresh"
+
+
+@pytest.mark.anyio
+async def test_ctrl_delete_takes_a_nested_family_once(store, sid):
+    """#235 review: a done parent, a done child and its done grandchild go in one delete_family
+    call, counted once each, whichever of them settled first."""
+    grand = store.post_item(sid, "task", "grandchild", status="done")
+    mid = store.post_item(sid, "task", "child", status="done")
+    top = store.post_item(sid, "task", "parent", status="done")
+    for child, parent in ((grand, mid), (mid, top)):
+        store.db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ?", (parent, sid, child))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        notes, calls = [], []
+        app.notify = lambda text, **kw: notes.append(text)
+        real = app.client.delete_family
+        app.client.delete_family = lambda s_, r: calls.append(r) or real(s_, r)
+        app.items_table.focus()
+        await pilot.press("ctrl+delete")
+        await landed(app, pilot)
+    assert calls == [top], calls
+    assert "deleted 3 completed items: Ctrl+Z to undo" in notes, notes
+    assert all(tui.standing(store.item(sid, r)) == "finished" for r in (top, mid, grand))
+
+
+@pytest.mark.anyio
+async def test_ctrl_delete_leaves_a_compacting_sessions_rows(store, tmp_path, monkeypatch):
+    """#235 with #150 and #233: a compacting session's rows are locked, keys ignored, so
+    Ctrl+Delete passes them by and deletes the rest."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    busy = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    locked = store.post_item(busy, "task", "done", status="done")
+    free = store.create_session(str(tmp_path), name="other")
+    other = store.post_item(free, "task", "done", status="done")
+    store.set_activity(busy, "compacting: collecting notes")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        await pilot.press("ctrl+delete")
+        await landed(app, pilot)
+    assert tui.standing(store.item(busy, locked)) == "settled", "the compacting session's row kept"
+    assert tui.standing(store.item(free, other)) == "finished", "the other deleted"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("child_status, parent_shown, desc", [
+    ("todo", True, "a child still to do keeps its done parent in sight"),
+    ("done", False, "a done child: the parent goes, with it"),
+])
+async def test_autocleanse_keeps_a_parent_with_a_child_under_way(store, sid, child_status, parent_shown, desc):
+    """#235 review: never a child shown without its parent."""
+    parent = store.post_item(sid, "task", "parent", status="done")
+    child = store.post_item(sid, "task", "child", status=child_status)
+    store.db.execute("UPDATE items SET parent_ref = ? WHERE session_id = ? AND ref = ?", (parent, sid, child))
+    for r in (parent, child):
+        aged(store, sid, r, 30)
+    app = WheelhouseApp(store)
+    app.autocleanse = 5
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert (f"{sid}|{parent}" in app.items_table.rows) == parent_shown, desc
+
+
+@pytest.mark.anyio
+async def test_autocleanse_never_hides_the_selected_item(store, sid):
+    """#235: the selected row stays under the cursor; it goes once the selection moves on."""
+    other = store.post_item(sid, "question", "anchor")
+    ref = store.post_item(sid, "task", "done a while ago", status="done")
+    app = WheelhouseApp(store)
+    app.autocleanse = 5
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.select_row(f"{sid}|{ref}")
+        aged(store, sid, ref, 30)
+        app.refresh_data()
+        await pilot.pause()
+        assert f"{sid}|{ref}" in app.items_table.rows, "selected: kept"
+        app.select_row(f"{sid}|{other}")
+        app.refresh_data()
+        await pilot.pause()
+        assert f"{sid}|{ref}" not in app.items_table.rows, "the selection moved on: hidden"
+
+
+@pytest.mark.anyio
+async def test_show_item_brings_back_a_row_autocleanse_hid(store, sid):
+    """#235 with #223 and the PRs pane: a pick of an item autocleanse hid (a Landed line, a
+    merged PR) shows it in the inbox under the highlight, so Delete acts on it."""
+    store.post_item(sid, "question", "anchor")
+    ref = store.post_item(sid, "task", "done a while ago", status="done")
+    aged(store, sid, ref, 30)
+    app = WheelhouseApp(store)
+    app.autocleanse = 5
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert f"{sid}|{ref}" not in app.items_table.rows, "hidden to begin with"
+        assert app.show_item(sid, ref)
+        await pilot.pause()
+        assert f"{sid}|{ref}" in app.items_table.rows, "picked: back in the inbox"
+        assert app.items_table.show_cursor and app.items_cursor == f"{sid}|{ref}", "and highlighted"
+
+
+
+@pytest.mark.anyio
+async def test_show_item_leaves_a_hidden_row_of_a_compacting_session_unpicked(store, tmp_path, monkeypatch):
+    """#235 with #165: a pick of an item autocleanse hid, in a session being compacted, is
+    refused as a listed one is: False, said, and the highlight not put on the locked row."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    busy = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    ref = store.post_item(busy, "task", "done a while ago", status="done")
+    aged(store, busy, ref, 30)
+    store.set_activity(busy, "compacting: collecting notes")
+    app = WheelhouseApp(store)
+    app.autocleanse = 5
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        notes = []
+        app.notify = lambda text, **kw: notes.append(text)
+        assert not app.show_item(busy, ref), "refused"
+        assert tui.COMPACTING_LOCKED in notes, notes
+        assert app.items_cursor != f"{busy}|{ref}", "the highlight not on it"
+
+
+@pytest.mark.anyio
+async def test_ctrl_delete_is_refused_while_an_undo_lands(store, sid):
+    """#235 batch review: Ctrl+Delete asked while a Ctrl+Z's calls are held is refused, said,
+    so it never reads a half-restored inbox."""
+    refs = [store.post_item(sid, "task", f"t{i}", status="done") for i in range(3)]
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        await pilot.press("ctrl+delete")
+        await landed(app, pilot)
+        gate = held_calls(app)
+        await pilot.press("ctrl+z")
+        await pilot.pause()
+        assert app.undoing, "the undo held"
+        notes = []
+        app.notify = lambda text, **kw: notes.append(text)
+        await pilot.press("ctrl+delete")
+        await pilot.pause()
+        assert tui.UNDO_LANDING.format(key="Ctrl+Delete") in notes, notes
+        assert not app.behind, "nothing held to act later"
+        gate.set()
+        await landed(app, pilot)
+    assert all(tui.standing(store.item(sid, r)) == "settled" for r in refs), "the undo's rows back, none deleted"
+
+
+@pytest.mark.anyio
+async def test_delete_is_refused_while_an_undo_lands(store, sid):
+    """#235 batch review: Delete asked while a Ctrl+Z's calls are held is refused, said: its row
+    and family read mid-undo could be half back (a parent before its children)."""
+    refs = undo_setup(store, sid, "family")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{refs[0]}"))
+        await pilot.pause()
+        await pilot.press("delete", "alt+y")
+        await landed(app, pilot)
+        gate = held_calls(app)
+        await pilot.press("ctrl+z")
+        await pilot.pause()
+        notes = []
+        app.notify = lambda text, **kw: notes.append(text)
+        await pilot.press("delete", "delete")
+        await pilot.pause()
+        assert notes.count(tui.UNDO_LANDING.format(key="Delete")) == 2, notes
+        assert not app.behind, "nothing held to act later"
+        assert [type(s).__name__ for s in app.screen_stack] == ["Screen"], "no dialog asked mid-undo"
+        gate.set()
+        await landed(app, pilot)
+        assert not app.undoing
+    assert all(tui.standing(store.item(sid, r)) != "finished" for r in refs), "the family back, none deleted"
+
+def test_ctrl_delete_reaches_the_app_from_windows_terminal():
+    """#235: Windows Terminal sends Ctrl+Delete as CSI 3;5~, which Textual's parser reads as
+    ctrl+delete, the key the item list binds."""
+    from textual._ansi_sequences import ANSI_SEQUENCES_KEYS
+    assert [k.value for k in ANSI_SEQUENCES_KEYS["\x1b[3;5~"]] == ["ctrl+delete"]
+    assert any(b.key == "ctrl+delete" for b in tui.ItemList.BINDINGS)
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("keys, desc", [
+    (["delete", "ctrl+z"], "Ctrl+Z pressed before the delete lands undoes it once it has"),
+    (["ctrl+a", "delete", "ctrl+z"], "Ctrl+A's rows, the same: all back"),
+    (["alt+v", "delete", "ctrl+r"], "Ctrl+R straight after Delete, finished shown: reopened once the delete lands"),
+])
+async def test_ctrl_z_waits_for_a_delete_still_landing(store, sid, keys, desc):
+    """#234: Ctrl+Z (#151) acts on the last act, so one asked while a Delete's call is held waits
+    for it, then puts every row back."""
+    refs = [store.post_item(sid, "task", f"t{i}", status="done") for i in range(2)]
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{refs[0]}"))
+        await pilot.pause()
+        gate = held_calls(app)
+        for key in keys:
+            await pilot.press(key)
+        await pilot.pause()
+        gate.set()
+        await landed(app, pilot)
+        await pilot.pause()
+        took = refs if "ctrl+a" in keys else refs[:1]
+        assert all(f"{sid}|{r}" in app.items_table.rows for r in took), f"{desc}: {list(app.items_table.rows)}"
+    assert all(store.item(sid, r)["dismissed"] is None for r in refs), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("fail, pinned_after, desc", [
+    (None, False, "confirmed: the row goes at once, its pin cleared and it closed off the UI thread"),
+    (KeyError("no item T1 in this session"), True, "the delete fails: it comes back, its pin kept"),
+])
+async def test_delete_on_a_pinned_item_goes_at_once_too(store, sid, fail, pinned_after, desc):
+    """#234: Delete on a pinned item asks first, then goes as any other: the pin cleared on the
+    worker thread with the delete, never waited for on the UI thread."""
+    ref = store.post_item(sid, "task", "kept", status="done")
+    store.set_pinned(sid, ref, True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{ref}"))
+        await pilot.pause()
+        gate = held_calls(app, fail)
+        await pilot.press("delete", "alt+y")
+        await pilot.pause()
+        assert f"{sid}|{ref}" not in app.items_table.rows, f"{desc}: gone before the call lands"
+        gate.set()
+        await landed(app, pilot)
+        assert (f"{sid}|{ref}" in app.items_table.rows) == pinned_after, desc
+    assert tui.pinned(store.item(sid, ref)) == pinned_after, desc
 
 
 @pytest.mark.anyio

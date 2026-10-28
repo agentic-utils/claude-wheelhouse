@@ -3,6 +3,7 @@ daemon's hub, over HTTP and SSE, or with --local a hub of its own, in process.""
 
 import asyncio
 import bisect
+import collections
 import dataclasses
 import difflib
 import functools
@@ -14,6 +15,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 import weakref
 from datetime import datetime, timezone
@@ -99,12 +101,14 @@ DWELL = 1.0
 QUIET = 0.6
 NOTHING_SELECTED = "Select an item, or a session to follow its conversation."
 COMPACTING_LOCKED = "That session is compacting: its items open once it's done"   # a pick of a locked item (#150)
+UNDO_LANDING = "{key}: the undo is still putting rows back, try again in a moment"   # Delete asked mid-undo (#235)
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8"}
 # a doc block (doc_blocks) longer than this is rendered on a thread (Transcript._layout): a
 # 42 KB one takes Rich a second or two, which the loop would otherwise stall for
 RENDER_OFF_LOOP = 2000
+CALLS_WAIT = 10   # seconds the app's close waits for a Delete's calls under way (delete_off_thread)
 RENDERING = ("note", "_rendering…_")
 CLOSABLE = {"question": "answered", "decision": "seen"}   # what Delete closes, and what Ctrl+R reopening makes it
 
@@ -115,6 +119,31 @@ def closable(item) -> bool:
     dismissed or not."""
     return item["kind"] in CLOSABLE or item["kind"] in ("doc", "pr") or (
         item["kind"] in DISMISSABLE and item["status"] in SETTLED[item["kind"]])
+
+
+def completed(item, busy=frozenset()) -> bool:
+    """What the inbox counts as completed (#235): an item Delete can clear (closable) that is done
+    with, settled or finished (store.standing: a task done or dropped, a subagent done or failed,
+    a PR merged or closed, a question answered or closed, a decision seen, a doc read), with no word
+    of the person's queued or awaiting a reply on it (busy). Never one pinned. The rows Ctrl+A
+    marks, Ctrl+Delete deletes, and autocleanse hides."""
+    return closable(item) and not pinned(item) and standing(item, busy) != "active"
+
+
+def under_way_parents(items, busy=frozenset()) -> set[str]:
+    """The row keys of every item among `items` with a child, at any depth, not completed: kept
+    in sight by autocleanse, and by Ctrl+Delete, so the child never shows without its parent (#235)."""
+    by_key = {item_key(it): it for it in items}
+    held: set[str] = set()
+    for it in items:
+        if completed(it, busy):
+            continue
+        seen, ref = set(), parent_of(it)
+        while ref and (key := f"{it['session_id']}|{ref}") in by_key and key not in seen:
+            seen.add(key)
+            held.add(key)
+            ref = parent_of(by_key[key])
+    return held
 
 
 def slot(name: str) -> "Slot":
@@ -1416,6 +1445,8 @@ class ItemList(SinkList):
                 Binding("ctrl+space", "toggle_mark", "Mark", show=False),
                 Binding("ctrl+@", "toggle_mark", "Mark", show=False),   # Ctrl+Space, as most terminals send it
                 Binding("ctrl+a", "app.mark_finished", "Mark finished", show=False),
+                # Windows Terminal sends it as CSI 3;5~, which Textual reads as ctrl+delete
+                Binding("ctrl+delete", "app.delete_completed", "Delete completed", show=False, key_display="Ctrl+Del"),
                 Binding("alt+p", "app.toggle_pinned", "Pin", show=False),
                 Binding("shift+up", "extend(-1)", "Extend up", show=False),
                 Binding("shift+down", "extend(1)", "Extend down", show=False)]
@@ -3923,6 +3954,9 @@ DESCRIBE = {
     "quit": "Quit the wheelhouse (sessions carry on without it)",
     "toggle_mark": "Mark or unmark the highlighted row",
     "app.mark_finished": "Mark every finished (dimmed) row shown but the pinned, for Delete to clear them together",
+    "app.delete_completed": ("Delete every completed item in the inbox (done, answered, seen, merged), those hidden after "
+                             "a while included, but the pinned, at once with no question: Ctrl+Z brings them all back. "
+                             "One with a child still under way is kept"),
     "extend(-1)": "Extend the marks up",
     "extend(1)": "Extend the marks down",
     "select_all": "Select all of it, to copy",
@@ -4387,9 +4421,23 @@ class WheelhouseApp(App):
         self.repin: set[str] = set()
         # the rows Delete just took, children included: a highlight they took goes above them (above_deleted)
         self.deleted: set[str] = set()
+        # the rows a Delete has taken whose hub call hasn't landed yet (delete_off_thread): kept off
+        # the inbox by every paint meanwhile, so a refresh racing the call never brings them back
+        # counted, as two Deletes under way may both hold a row (a family and a marked child)
+        self.going: collections.Counter[str] = collections.Counter()
+        self.calls: list[threading.Event] = []   # each Delete's calls, set once made: the app's close waits for them
+        self.undoing = False   # a Ctrl+Z's calls under way (action_undo): Delete and Ctrl+Delete refused meanwhile
+        self.deleting = 0   # those Deletes and Ctrl+Zs, counted: Ctrl+Z, Ctrl+R and a pin wait for them (behind_deletes)
+        self.behind: list[Callable[[], None]] = []   # what waits, in the order asked
         self.undo: tuple[str, list] | None = None   # what Ctrl+Z undoes, said, and the rows as they stood (undoable)
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
         self.show_finished = False   # finished items (store.standing), after the rest
+        # minutes a completed (settled) item stays in sight before it's hidden as the finished are
+        # (completed_hidden, #235), read once: the setting comes from the flag or a .env
+        self.autocleanse = features.autocleanse_minutes()
+        # when Ctrl+Z or Ctrl+R last brought each row back, by key: its minutes start again from
+        # then, kept here, not as updated_at, which places it among the settled (#70)
+        self.brought_back: dict[str, datetime] = {}
         self.collapsed: set[str] = set()   # the parent rows whose children are hidden, for this run alone
         # each list's sort (ordering.py), kept per TUI under layout.sort.*: read as the app starts
         self.item_sort, self.session_sort = ordering.ITEMS_DEFAULT, ordering.SESSIONS_DEFAULT
@@ -4566,6 +4614,8 @@ class WheelhouseApp(App):
         helper's claude, if one runs, stopped. The last input kept, for the next start's card."""
         if self.last_input is not None and self.last_input != self.input_kept:
             self.client.note_input(away.stamp(self.last_input))
+        for made in self.calls:   # a Delete's calls under way finish first: the rows went from sight
+            made.wait(CALLS_WAIT)
         self.client.disconnect()
         if self.helper is not None:
             self.helper.stop()
@@ -5275,6 +5325,11 @@ class WheelhouseApp(App):
         names = self.session_names()
         found, processing, queued, awaiting = self.client.inbox(self.filter_sid)
         busy = queued | awaiting
+        if self.going:   # a Delete under way: its rows gone already (#234)
+            found = [it for it in found if item_key(it) not in self.going]
+        if self.autocleanse and not self.show_finished:   # completed a while ago: off until Alt+V (#235)
+            at, held = datetime.now(timezone.utc), under_way_parents(found, busy)
+            found = [it for it in found if item_key(it) in held or not self.completed_hidden(it, busy, at)]
         compacting = self.compacting()
         keyed = self.ranked_keyed(found, processing, busy, names)
         cuts = self.cutoffs()
@@ -5387,6 +5442,18 @@ class WheelhouseApp(App):
         if not took:
             return None
         return next((table.get_row_index(k) for k in reversed(before[:took[0]]) if k in table.rows), 0)
+
+    def completed_hidden(self, item, busy, at: datetime) -> bool:
+        """Whether autocleanse hides an item (#235): completed and settled at least
+        self.autocleanse minutes before `at`, by its updated_at, the store's only time for its
+        last change (its status settling, or a later edit). Never the selected item, which
+        stays under the cursor until the selection moves on."""
+        if not completed(item, busy) or standing(item, busy) != "settled":   # a finished one: Alt+V's already
+            return False
+        if self.selected and self.selected[1] and (item["session_id"], item["ref"]) == tuple(self.selected[:2]):
+            return False
+        since = max(datetime.fromisoformat(item["updated_at"]), self.brought_back.get(item_key(item), datetime.min.replace(tzinfo=timezone.utc)))
+        return (at - since).total_seconds() >= self.autocleanse * 60
 
     def ranked(self, items, processing, busy=frozenset()) -> list:
         """Items in inbox order (ranked_keyed)."""
@@ -5626,14 +5693,18 @@ class WheelhouseApp(App):
     def show_item(self, sid: str, ref: str) -> bool:
         """A module's pick of an item (api.Context.show_item, the PRs pane's row that is one):
         shown in Detail with its thread and answer box, and highlighted in the inbox if listed
-        there; if not, the inbox's highlight hidden, not left on another item (#148). An item
+        there (one autocleanse hid back in sight, as selected); if not, the inbox's highlight hidden, not left on another item (#148). An item
         of a compacting session isn't picked, as its inbox row isn't: Detail keeps what it
         showed, and False said (#165)."""
         key, table = f"{sid}|{ref}", self.items_table
-        if key in table.locked:
+        hidden = key not in table.rows and (item := self.client.item(sid, ref)) is not None
+        if key in table.locked or (hidden and self.locks(item, self.cutoffs())):   # one autocleanse hid too
             self.notify(COMPACTING_LOCKED, severity="warning")
             return False
         self.shown_doc = None
+        if hidden:   # autocleanse hid it (a Landed line, a merged PR): selected, it's back (#235)
+            self.select_row(key)
+            self.paint_items()
         if key in table.rows:
             with table.prevent(DataTable.RowHighlighted):
                 table.move_cursor(row=table.get_row_index(key), animate=False)
@@ -7068,6 +7139,9 @@ class WheelhouseApp(App):
             return
         if self.screen is self.screen_stack[0] and not self.items_table.show_cursor:
             return   # the highlight hidden (#148): nothing in the inbox is picked, so nothing to close
+        if self.undoing and self.screen is self.screen_stack[0]:   # rows half back: its family not read yet
+            self.notify(UNDO_LANDING.format(key="Delete"), severity="warning")
+            return
         if self.items_table.marked and self.screen is self.screen_stack[0]:
             self.close_marked()
             return
@@ -7104,32 +7178,131 @@ class WheelhouseApp(App):
         self.dismiss_now(item, verb)
 
     def dismiss_now(self, item, verb: str) -> None:
-        """Delete on an item with nothing to ask first (or asked): closed or dismissed now."""
-        acted = self.close(item, True).ok   # not one finished already, only let go of
-        if acted:
-            self.undoable(f"{verb} {item['ref']}", [item])
-        self.notify(f"{verb} {item['ref']}" + deleted_hint(self.show_finished, acted))
+        """Delete on an item with nothing to ask first (or asked): closed or dismissed now, off
+        the thread (delete_off_thread)."""
+        def landed(done: list) -> None:
+            if done:   # not one finished already, only let go of
+                self.undoable(f"{verb} {item['ref']}", [item])
+            self.notify(f"{verb} {item['ref']}" + deleted_hint(self.show_finished, bool(done)))
+        self.delete_off_thread([(item, [])], landed)
+
+    def delete_off_thread(self, acts: list, landed: Callable[[list], None]) -> None:
+        """Delete's rows off the inbox at once, and the hub's calls on a worker thread, one after
+        another (#234): a call is a daemon round trip, queued behind the hub's tick, so twenty
+        took seconds on the UI thread. acts: each (item, its family, [] for none), deleted as
+        Delete does (Hub.delete_family, else Hub.close). Until they land their rows stay off
+        whatever a refresh brings (going); then landed(done) on the UI thread, done the acts that
+        acted, to say and make undoable, and the inbox read again. One that failed comes back,
+        with what went wrong said; with every one failed, landed isn't called."""
+        keys: set[str] = set()
+        for item, family in acts:
+            self.item_sink.jump()
+            self.repin.add(item_key(item))
+            self.deleted |= {item_key(it) for it in [item, *family]}
+            # a running child stays, at the top level (spared): never hidden. Nor anything with F on,
+            # where a finished row stays in sight: it moves as the call lands
+            if not self.show_finished:
+                keys |= {item_key(it) for it in [item, *family] if it is item or not spared(it)}
+        self.going.update(keys)
+        self.deleting += 1
+        made = threading.Event()
+        self.calls.append(made)
+        self.paint_items()
+
+        def call(item, family):
+            """A pinned one (close_pinned) has its pin cleared first, and put back if the delete fails."""
+            sid, ref = item["session_id"], item["ref"]
+            if pinned(item) and not (unpinned := self.client.set_pinned(sid, ref, False)).ok:
+                return unpinned
+            try:
+                done = self.client.delete_family(sid, ref) if family else self.client.close(sid, ref, True)
+            except Exception:
+                if pinned(item):
+                    self.client.set_pinned(sid, ref, True)
+                raise
+            if pinned(item) and not done.ok and done.notices:
+                self.client.set_pinned(sid, ref, True)
+            return done
+
+        def work() -> None:
+            results = []
+            try:
+                for item, family in acts:
+                    try:
+                        results.append(call(item, family))
+                    except Exception as e:   # ended or gone meanwhile, or the daemon lost: that row comes back
+                        results.append(e)
+            finally:
+                made.set()
+            self.post(lambda: self.deletes_landed(keys, acts, results, landed, made))
+        self.run_worker(work, thread=True, group="delete", exit_on_error=False)
+
+    def deletes_landed(self, keys: set, acts: list, results: list, landed: Callable[[list], None],
+                       made: threading.Event) -> None:
+        """delete_off_thread's calls done, on the UI thread: each said, the acts that acted
+        given to landed, and the inbox read again, the rows of any that failed back in it."""
+        if not self.is_running:   # posted as the app closed (on_unmount waited for the calls): nothing to paint
+            return
+        done, failed = [], 0
+        for item, _ in acts:   # moved at once as it lands, as it would have by the call in place (D33)
+            self.item_sink.jump()
+            self.repin.add(item_key(item))
+        for (item, family), result in zip(acts, results):
+            if isinstance(result, Exception):
+                failed += 1
+                self.notify(str(result) if isinstance(result, (SessionGone, KeyError, ValueError)) else
+                            f"{item['ref']} wasn't deleted: {result}", severity="warning")
+                continue
+            self.told(result)
+            if result.ok:
+                done.append((item, family))
+            elif result.notices:   # couldn't reach the daemon, said by told
+                failed += 1
+        try:
+            if failed < len(acts):
+                landed(done)
+        finally:
+            self.going -= collections.Counter(keys)   # drops those no other Delete holds
+            self.writes_landed(made)
+
+    def writes_landed(self, made: threading.Event) -> None:
+        """A Delete's or Ctrl+Z's calls landed (delete_off_thread, action_undo): counted off,
+        the inbox read again, and once none is under way, the writes that waited (behind_deletes)."""
+        self.deleting -= 1
+        self.calls.remove(made)
         self.refresh_data()
+        if not self.deleting:
+            behind, self.behind = self.behind, []
+            for act in behind:
+                act()
+
+    def behind_deletes(self, act: Callable[[], None]) -> bool:
+        """A write to the inbox asked while a Delete is landing (delete_off_thread): True, and act
+        done once every one has, in the order asked, so it never reaches the hub before the
+        delete it follows (Ctrl+R straight after Delete would otherwise reopen, then be closed)."""
+        if not self.deleting:
+            return False
+        self.behind.append(act)
+        return True
 
     def close_pinned(self, item, family: list) -> None:
         """Delete confirmed on a pinned item (its children with it, in the same dialog): its pin
-        cleared only now, then it deleted as any other, a doc's file left be."""
-        try:
-            self.told(self.client.set_pinned(item["session_id"], item["ref"], False))
-        except (SessionGone, KeyError) as e:   # ended or gone meanwhile
-            self.notify(str(e), severity="warning")
-            return
+        cleared only now, with the delete on the worker thread (delete_off_thread), then it deleted
+        as any other, a doc's file left be."""
         if family:
             self.close_family(item, family)
             return
         verb = "closed" if item["kind"] in CLOSABLE else "dismissed"
-        self.close(item, True)
-        self.undoable(f"{verb} {item['ref']}", [item])   # its pin back too (restore)
-        self.notify(f"{verb} {item['ref']}" + deleted_hint(self.show_finished))
-        self.refresh_data()
+
+        def landed(done: list) -> None:
+            self.undoable(f"{verb} {item['ref']}", [item])   # its pin back too (restore)
+            self.notify(f"{verb} {item['ref']}" + deleted_hint(self.show_finished))
+        self.delete_off_thread([(item, [])], landed)
 
     def toggle_pinned(self, key: str) -> None:
         """The pin column clicked, or Alt+P in the item list: the row's item pinned, or its pin cleared."""
+        if self.behind_deletes(lambda: self.toggle_pinned(key)):
+            return
         sid, _, ref = key.partition("|")
         item = ref and self.client.item(sid, ref)
         if not item:   # the conversation row, or gone meanwhile
@@ -7160,19 +7333,13 @@ class WheelhouseApp(App):
         off the inbox when it changes, except a running one, which stays at the top level
         (store.spared), then it closed as Delete closes it (Hub.delete_family). At once, as
         Delete is (close)."""
-        self.item_sink.jump()
-        self.repin.add(item_key(item))
-        self.deleted |= {item_key(it) for it in [item, *family]}
-        try:
-            self.told(self.client.delete_family(item["session_id"], item["ref"]))
-        except (SessionGone, KeyError) as e:   # ended or gone meanwhile
-            self.notify(str(e), severity="warning")
-            return
         n, kept = sum(not spared(it) for it in family), sum(map(spared, family))
         said = f"deleted {item['ref']}" + (f" and {n} {'child' if n == 1 else 'children'}" if n else "")
-        self.undoable(said, [item, *family])
-        self.notify(said + (f"; {kept} running kept at the top level" if kept else "") + deleted_hint(self.show_finished))
-        self.refresh_data()
+
+        def landed(done: list) -> None:
+            self.undoable(said, [item, *family])
+            self.notify(said + (f"; {kept} running kept at the top level" if kept else "") + deleted_hint(self.show_finished))
+        self.delete_off_thread([(item, family)], landed)
 
     def toggle_children(self, key: str) -> None:
         """A parent's + / - clicked: its children hidden or shown again. A child selected as
@@ -7194,6 +7361,8 @@ class WheelhouseApp(App):
         self.repin.add(item_key(item))
         if closed:
             self.deleted.add(item_key(item))
+        else:   # Ctrl+R: in sight for autocleanse's minutes afresh
+            self.brought_back[item_key(item)] = datetime.now(timezone.utc)
         return self.told(self.client.close(item["session_id"], item["ref"], closed, status))
 
     def undoable(self, said: str, rows: list) -> None:
@@ -7201,41 +7370,83 @@ class WheelhouseApp(App):
         changed as it stood before (restore). One step: the next act replaces it."""
         self.undo = (said, rows)
 
-    def restore(self, item) -> None:
-        """Ctrl+Z: an item put back as it stood, from its row read before the act. Undeleted,
-        reopened as the status it had (a question open again, not answered), finished again if
-        it was, its pin as it was. A running child Delete orphaned stays at the top level."""
+    def restore(self, item, acted: list) -> None:
+        """Ctrl+Z, on its worker thread (action_undo): an item put back as it stood, from its row
+        read before the act. Undeleted, reopened as the status it had (a question open again, not
+        answered), finished again if it was, its pin as it was. A running child Delete orphaned
+        stays at the top level. Each hub call's result added to acted as (item, closed, Done),
+        closed None for a pin, for undo_landed to apply on the UI thread as close would."""
         sid, ref = item["session_id"], item["ref"]
         now = self.client.item(sid, ref)
         if now is None:
             return
         was = standing(item) == "finished"
         if standing(now) == "finished" and item["dismissed"] != DELETED:   # one deleted before stays so
-            self.close(item, False, item["status"] if item["kind"] in CLOSABLE else None)
+            status = item["status"] if item["kind"] in CLOSABLE else None
+            acted.append((item, False, self.client.close(sid, ref, False, status)))
             if was:
-                self.close(item, True)
+                acted.append((item, True, self.client.close(sid, ref, True)))
         elif was:   # Ctrl+R undone
-            self.close(item, True)
+            acted.append((item, True, self.client.close(sid, ref, True)))
         if pinned(now) != pinned(item):
-            self.told(self.client.set_pinned(sid, ref, pinned(item)))
+            acted.append((item, None, self.client.set_pinned(sid, ref, pinned(item))))
 
     def action_undo(self) -> None:
         """Ctrl+Z: the last delete, pin or reopen in the inbox undone, once. A text box's own
-        Ctrl+Z (TextArea's undo) comes first, and a dialog in front has its own keys."""
+        Ctrl+Z (TextArea's undo) comes first, and a dialog in front has its own keys. The hub's
+        calls go on a worker thread, as Delete's do (delete_off_thread): Ctrl+Delete's rows come
+        back in one go without a stall, and a write asked meanwhile waits for them (behind_deletes)."""
         self.settle()
         if isinstance(self.focused, (TextArea, Input)) or self.screen is not self.screen_stack[0]:
+            return
+        if self.behind_deletes(self.action_undo):   # its act isn't the last until it lands
+            self.notify("Ctrl+Z: once the undo under way lands" if self.undoing else "Ctrl+Z: once the delete under way lands")
             return
         if self.undo is None:
             self.notify("nothing to undo")
             return
         (said, rows), self.undo = self.undo, None
-        for item in rows:
+        at = datetime.now(timezone.utc)
+        for item in rows:   # back in sight for autocleanse's minutes afresh
+            self.brought_back[item_key(item)] = at
+        self.deleting += 1
+        self.undoing = True
+        made = threading.Event()
+        self.calls.append(made)
+
+        def work() -> None:
+            acted, errors = [], []
             try:
-                self.restore(item)
-            except (SessionGone, KeyError) as e:   # ended or gone meanwhile: the rest still come back
-                self.notify(str(e), severity="warning")
-        self.notify(f"undone: {said}")
-        self.refresh_data()
+                for item in rows:
+                    try:
+                        self.restore(item, acted)
+                    except Exception as e:   # ended or gone meanwhile: the rest still come back
+                        errors.append(e)
+            finally:
+                made.set()
+            self.post(lambda: self.undo_landed(said, acted, errors, made))
+        self.run_worker(work, thread=True, group="delete", exit_on_error=False)
+
+    def undo_landed(self, said: str, acted: list, errors: list, made: threading.Event) -> None:
+        """action_undo's calls done, on the UI thread: each row moved as close moves it, what
+        went wrong said, and the inbox read again."""
+        if not self.is_running:
+            return
+        try:
+            for item, closed, done in acted:
+                if closed is not None:
+                    self.item_sink.jump()
+                    self.repin.add(item_key(item))
+                    if closed:
+                        self.deleted.add(item_key(item))
+                self.told(done)
+            for e in errors:
+                self.notify(str(e) if isinstance(e, (SessionGone, KeyError, ValueError)) else
+                            f"not undone: {e}", severity="warning")
+            self.notify(f"undone: {said}")
+        finally:
+            self.undoing = False
+            self.writes_landed(made)
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's Allow, Always or Deny: an explicit act, as Delete is, so selected, the
@@ -7278,17 +7489,72 @@ class WheelhouseApp(App):
         self.settle()
         found, _, queued, awaiting = self.client.inbox(self.filter_sid)
         by_key = {item_key(it): it for it in found}
-        marks = {k for k in self.items_table.final() if (it := by_key.get(k)) and closable(it)
-                 and not pinned(it) and standing(it, queued | awaiting) != "active"}   # never a pinned one
+        marks = {k for k in self.items_table.final() if (it := by_key.get(k)) and completed(it, queued | awaiting)}
         if not marks:
             self.notify("no finished rows to mark", severity="warning")
             return
         self.items_table.set_marks(marks)
 
+    def action_delete_completed(self) -> None:
+        """Ctrl+Delete in the item list (#235): every completed item in the inbox as filtered
+        deleted together, those autocleanse hides included, through Delete's own path
+        (delete_off_thread) and with no dialog: the count said, and Ctrl+Z puts them all back.
+        One finished already (shown with Alt+V) has nothing left to delete. A parent goes with
+        its children, as Delete takes them, only when each is completed too or running (spared,
+        left at the top level); one with a child still under way is kept, and said."""
+        self.settle()
+        if isinstance(self.focused, (TextArea, Input)) or self.screen is not self.screen_stack[0]:
+            return
+        if self.undoing:   # rows half back: the inbox not read yet
+            self.notify(UNDO_LANDING.format(key="Ctrl+Delete"), severity="warning")
+            return
+        found, _, queued, awaiting = self.client.inbox(self.filter_sid)
+        busy = queued | awaiting
+        cuts = self.cutoffs()   # a compacting session's rows are locked, its keys ignored (#150)
+        picked = [it for it in found if completed(it, busy) and standing(it, busy) == "settled"
+                  and item_key(it) not in self.going and not self.locks(it, cuts)]
+        families = {item_key(it): self.family(it) for it in picked}
+        by_key = {item_key(it): it for it in found}
+
+        def depth(it) -> int:
+            n, ref = 0, parent_of(it)
+            while ref and (up := by_key.get(f"{it['session_id']}|{ref}")) is not None and n < len(by_key):
+                n, ref = n + 1, parent_of(up)
+            return n
+        acts, taken, kept = [], set(), 0
+        for it in sorted(picked, key=depth):   # the outermost first: each takes its children, which then go once
+            family = families[item_key(it)]
+            if item_key(it) in taken:
+                continue
+            if any(not completed(c, busy) and not spared(c) for c in family):
+                kept += 1
+                continue
+            acts.append((it, family))
+            taken |= {item_key(c) for c in [it, *family] if not spared(c)}
+        why = f"{kept} kept: {'its' if kept == 1 else 'their'} children are still under way" if kept else ""
+        if not acts:
+            self.notify(why or "no completed items to delete", severity="warning")
+            return
+        self.items_table.set_marks(set())
+
+        def landed(done: list) -> None:
+            rows = [r for it, family in done for r in [it, *family]]
+            n = sum(1 for r in rows if not spared(r))
+            said = f"deleted {n} completed {'item' if n == 1 else 'items'}"
+            self.undoable(said, rows)
+            self.notify(said + ": Ctrl+Z to undo" + (f"; {why}" if why else ""))
+        self.delete_off_thread(acts, landed)
+
     def close_picked(self, picked: list, families: dict, closed: bool = True, kept: str = "") -> None:
         """The marked rows closed (or reopened), each with its children deleted if it has any
         (families, by row key, confirmed): as Delete does them one at a time. kept: the marked
-        pinned ones it left, said with the rest ("1 pinned kept")."""
+        pinned ones it left, said with the rest ("1 pinned kept"). Closing, off the thread
+        (delete_off_thread)."""
+        self.items_table.set_marks(set())
+        if closed:
+            self.delete_off_thread([(it, families.get(item_key(it), [])) for it in picked],
+                                   lambda done: self.said_picked([it for it, _ in done], families, True, kept))
+            return
         done = []
         for it in picked:
             try:
@@ -7303,7 +7569,11 @@ class WheelhouseApp(App):
                 continue
             if acted.ok:   # not a child its marked parent took with it already
                 done.append(it)
-        self.items_table.set_marks(set())
+        self.said_picked(done, families, closed, kept)
+        self.refresh_data()
+
+    def said_picked(self, done: list, families: dict, closed: bool, kept: str) -> None:
+        """What close_picked did, said, and made undoable."""
         said = {}   # by verb: a task or subagent is dismissed, not closed
         for it in done:
             verb = ("deleted with its children" if families.get(item_key(it)) else
@@ -7314,7 +7584,6 @@ class WheelhouseApp(App):
             self.undoable(told, [r for it in done for r in [it, *families.get(item_key(it), [])]])
         self.notify("; ".join(([told] if told else []) + ([kept] if kept else []))
                     + (deleted_hint(self.show_finished) if closed and done else ""))
-        self.refresh_data()
 
     def action_helper(self) -> None:
         """Alt+Q: the helper's drawer, or closed if it's in front. Over another dialog, nothing."""
@@ -7467,6 +7736,8 @@ class WheelhouseApp(App):
             return
         drafts = [m for m in self.client.drafts(target[0]) if m["item_ref"] == target[1]]
         if not drafts and self.focused is self.items_table:
+            if self.behind_deletes(self.action_recall):   # reopening what a Delete still landing takes
+                return
             if self.items_table.marked:
                 self.close_marked(False)
                 return

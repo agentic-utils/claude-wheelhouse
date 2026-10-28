@@ -44,7 +44,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   long a quiet session is kept warm, `keepalive_hours()` (`KEEPALIVE_HOURS`; 8 by default,
   0 for off), and the app's animation rate, `animation_fps()` (`ANIMATION_FPS`; 10 by
   default, 0 for off; `WheelhouseApp.pace` rests it while unfocused with nothing busy), and the gap
-  after which the app says what happened meanwhile, `away_hours()` (`AWAY_HOURS`; 2 by default, 0 for off). The README's Settings table lists them.
+  after which the app says what happened meanwhile, `away_hours()` (`AWAY_HOURS`; 2 by default, 0 for off), and how long a
+  completed inbox item stays in sight, `autocleanse_minutes()` (`AUTOCLEANSE_MINUTES`; 5 by default, 0 for off; tests run with
+  it off, conftest, and set `app.autocleanse`). The README's Settings table lists them.
 - `launch.py`: Windows Terminal tabs (`wt.exe` through `cmd.exe`, in the user's own
   window, `window_name`), the `claude` command line, and the protocol text injected into
   a session. Every launch passes `clean_env()`, which drops a parent Claude Code

@@ -191,6 +191,10 @@ def parser() -> argparse.ArgumentParser:
                      help=f"after N hours with no key press, click or scroll, show what happened meanwhile "
                      f"(default {features.AWAY_HOURS:g}, or WHEELHOUSE_AWAY_HOURS, or AWAY_HOURS= in a .env; "
                      "0 turns it off)")
+    fps.add_argument(features.AUTOCLEANSE_FLAG, dest="autocleanse_minutes", metavar="N", default=argparse.SUPPRESS,
+                     help=f"hide a completed inbox item N minutes after it completed, until Alt+V shows it (default "
+                     f"{features.AUTOCLEANSE_MINUTES:g}, or WHEELHOUSE_AUTOCLEANSE_MINUTES, or AUTOCLEANSE_MINUTES= "
+                     "in a .env; 0 turns it off)")
     p = argparse.ArgumentParser(prog="claude-wheelhouse", description="Sidecar for parallel Claude Code sessions",
                                 parents=[sdk, usage, port, keep, fps])
     client_args(p)
@@ -273,6 +277,8 @@ def main() -> None:
         features.set_animation_fps(args.animation_fps)
     if getattr(args, "away_hours", None) is not None:
         features.set_away_hours(args.away_hours)
+    if getattr(args, "autocleanse_minutes", None) is not None:
+        features.set_autocleanse_minutes(args.autocleanse_minutes)
 
     if args.cmd == "run":
         from .launch import run as run_session
