@@ -76,13 +76,15 @@ def claude_md_canary(top: Path, sources: str | None = None) -> tuple[helper.Even
         path.write_text(rule)
     (cwd / "protocol.md").symlink_to(helper.PACKAGE / "protocol.md")
     events: queue.Queue = queue.Queue()
-    package, helper.PACKAGE = helper.PACKAGE, cwd   # where its claude starts (Helper.start)
     argv = [f"--setting-sources={sources}" if a == "--setting-sources=" else a for a in helper.command()]
-    h = helper.Helper(events.put, command_=argv if sources else None)
+    package, h = helper.PACKAGE, None
     try:
+        helper.PACKAGE = cwd   # where its claude starts (Helper.start)
+        h = helper.Helper(events.put, command_=argv if sources else None)
         return ask(h, events, "How do I pin an item?")[0], cwd
     finally:
-        h.stop()
+        if h is not None:
+            h.stop()
         helper.PACKAGE = package
 
 
@@ -130,7 +132,12 @@ def main() -> int:
     print(f"INFO  CLAUDE.md: the debug log mentions it {len(memory)} times; the last context was {event.tokens} "
           "tokens (the briefing alone is about 39k; ~/.claude/CLAUDE.md would add its own size)"
           + "".join(f"\n      {line[:200]}" for line in memory[:5]))
-    # the project and local scopes alone: the canary's CLAUDE.md files, never the person's own
+    # the project and local scopes alone: the canary's CLAUDE.md files, never the person's own,
+    # so none may sit above the scratch directory (a TMPDIR under ~, say)
+    above = [str(d) for d in scratch.parents for name in ("CLAUDE.md", "CLAUDE.local.md") if (d / name).exists()]
+    if above:
+        print(f"FAIL  sandbox: no CLAUDE.md canary run, as the control would load {', '.join(above)}")
+        return 1
     control, control_cwd = claude_md_canary(scratch / "control", "project,local")
     event, canary_cwd = claude_md_canary(scratch / "canary")
     said = MARKER.lower() in control.text.lower()
@@ -140,8 +147,8 @@ def main() -> int:
     print(f"{'PASS' if ok else 'FAIL'}  sandbox: no CLAUDE.md reaches the helper (the canary's code word in the "
           f"answer: {leaked}; in the control's, which loads it: {said}, else the canary proves nothing)")
     if not ok:
-        for e in (control, event):
-            print("      " + e.text.replace("\n", "\n      "))
+        for who, e in (("control", control), ("canary", event)):
+            print(f"      {who}: " + e.text.replace("\n", "\n      "))
     after = {p: p.stat().st_mtime for p in projects_dir().glob("*.jsonl")} if projects_dir().exists() else {}
     written = [p.name for p, m in after.items() if before.get(p) != m]
     written += [p.name for d in (control_cwd, canary_cwd) for p in projects_dir(d).glob("*.jsonl")]
