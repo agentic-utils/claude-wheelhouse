@@ -2057,28 +2057,50 @@ def test_host_posts_the_final_text_as_the_reply(streamed, store, sid, sent, stre
                for ref in replies), f"{desc}: the status is the session's"
 
 
-@pytest.mark.parametrize("stream, replies, desc", [
-    (["A", tool("sleep 9"), "B", text("Both settled."), result()], {"Q1": ["Both settled."], "Q2": ["Both settled."]},
-     "the second taken up into the turn running: one end answers both"),
-    (["A", tool("sleep 9"), result(error=True), "B", text("Q2 settled."), result()], {"Q1": [], "Q2": ["Q2 settled."]},
+MID = "Sent while your turn is running"
+
+
+@pytest.mark.parametrize("sends, stream, replies, notes, desc", [
+    ([[("a", "Q1")]], ["A", text("Q1 settled."), result()], {"Q1": ["Q1 settled."]}, [None], "one turn"),
+    ([[("a", "Q1")], [("b", None)]], ["A", tool("sleep 9"), "B", text("ABN-621: done."), result()],
+     {"Q1": [], "Q2": []}, [None, "reply on no item (it shows in the conversation only); Q1 gets no automatic reply"],
+     "Q1, then a general message taken up mid-turn: the closing text goes on no ref"),
+    ([[("a", "Q2"), ("b", "Q1")]], ["A", text("Both settled."), result()],
+     {"Q1": ["Both settled."], "Q2": ["Both settled."]}, [None], "Q2 and Q1 in one message: one turn, both answered"),
+    ([[("a", "Q1")], [("c", "Q3")]], ["A", tool("sleep 9"), "B", text("Q3 settled."), result()],
+     {"Q1": [], "Q3": ["Q3 settled."]}, [None, "reply on Q3; Q1 gets no automatic reply"],
+     "Q1, then Q3 taken up mid-turn: only Q3 is answered"),
+    ([[("a", "Q1")], [("b", "Q1")]], ["A", tool("sleep 9"), "B", text("Q1 settled."), result()],
+     {"Q1": ["Q1 settled."]}, [None, "reply on Q1."], "a second message on the same ref: answered, nothing to reply"),
+    ([[("a", "Q1")], "keepalive"], ["A", tool("sleep 9"), "B", text("Q1 settled."), result()],
+     {"Q1": ["Q1 settled."]}, [None, None], "a keepalive taken up after Q1: Q1 is still the last message"),
+    (["keepalive", [("a", "Q1")]], ["A", tool("sleep 9"), "B", text("Q1 settled."), result()],
+     {"Q1": ["Q1 settled."]}, [None, None], "Q1 taken up into a keepalive: answered, no note"),
+    ([[("a", "Q1")], [("b", "Q2")]], ["A", tool("sleep 9"), result(error=True), "B", text("Q2 settled."), result()],
+     {"Q1": [], "Q2": ["Q2 settled."]}, [None, "reply on Q2; Q1 gets no automatic reply, so answer it with reply(ref)."],
      "the first interrupted: the second, still queued, runs and answers its own"),
-    (["A", text("Q1 settled."), result(), "B", text("Q2 settled."), result()],
-     {"Q1": ["Q1 settled."], "Q2": ["Q2 settled."]}, "one after the other: each its own"),
+    ([[("a", "Q1")], [("b", "Q2")]], ["A", text("Q1 settled."), result(), "B", text("Q2 settled."), result()],
+     {"Q1": ["Q1 settled."], "Q2": ["Q2 settled."]}, [None, "reply on Q2; Q1 gets no automatic reply, so answer it with reply(ref)."], "one after the other: each its own"),
 ])
-def test_each_turn_end_answers_the_turns_it_took_up(streamed, store, sid, stream, replies, desc):
+def test_a_turn_end_answers_the_last_message_it_took_up(streamed, store, sid, sends, stream, replies, notes, desc):
     """As claude --input-format stream-json was seen to do (#16, round 43): a turn sent while
     one runs is replayed when taken up, into the running turn or after it; an interrupted
-    turn's end lists it alone, and the turns queued behind it still run."""
+    turn's end lists it alone, and the turns queued behind it still run. The closing text
+    answers the last of the person's turns taken up (#243); a turn sent while one is pending
+    says so, naming the earlier refs to answer with reply."""
     h = streamed
-    for title in ("one", "two"):
+    for title in ("one", "two", "three"):
         store.post_item(sid, "question", title)
 
     async def go():
         reader = asyncio.create_task(h.read())
-        store.send(sid, "first", "Q1")
-        await h.poll()
-        store.send(sid, "second", "Q2")
-        await h.poll()
+        for batch in sends:
+            if batch == "keepalive":
+                await h.turn(host_mod.KEEPALIVE_TEXT, keepalive=True)
+                continue
+            for body, ref in batch:
+                store.send(sid, body, ref)
+            await h.poll()
         for m in stream:
             await feed(h, h.client.replay("AB".index(m)) if m in ("A", "B") else m)
         await feed(h, None)
@@ -2086,7 +2108,9 @@ def test_each_turn_end_answers_the_turns_it_took_up(streamed, store, sid, stream
     run(go())
     got = {ref: [m["body"] for m in store.thread(sid, ref) if m["author"] == "claude"] for ref in replies}
     assert got == replies, desc
-    assert h.pending == 0 and store.session(sid)["activity"] == "idle", desc
+    for q, note in zip(h.client.queries, notes):
+        assert (MID in q) == (note is not None) and (note is None or note in q), f"{desc}: {q!r}"
+    assert h.pending == 0, desc
 
 
 def test_the_host_asks_claude_code_to_replay_its_turns(host):
