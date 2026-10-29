@@ -6705,10 +6705,11 @@ def stop_id(app) -> str | None:
 @pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
 @pytest.mark.parametrize("key, order, desc", [
-    ("tab", ["shell", "stats:slider", "stats:zoom-out", "stats:zoom-in", "session-list"],
+    ("tab", ["shell", "stats:slider", "stats:zoom-out", "stats:zoom-in", "stats:info", "session-list"],
      "after the buttons (Shell the last: Send all has nothing to send): the stats pane's effort slider, then "
-     "its zoom's - and + (#77)"),
-    ("shift+tab", ["session-list", "stats:zoom-in", "stats:zoom-out", "stats:slider", "shell"], "and back"),
+     "its zoom's - and + (#77), then its session info's icon (#242)"),
+    ("shift+tab", ["session-list", "stats:info", "stats:zoom-in", "stats:zoom-out", "stats:slider", "shell"],
+     "and back"),
 ])
 async def test_the_stats_panes_stops_follow_the_buttons(store, tmp_path, monkeypatch, key, order, desc):
     sid, app = await hosted_app(store, tmp_path, monkeypatch)
@@ -7197,7 +7198,8 @@ async def test_model_and_effort_are_offered_only_for_a_hosted_session(store, tmp
         app.query_one("#detail").focus()
         await pilot.press("tab")
         await pilot.pause()
-        assert focused_id(app) != "stats", f"{desc}: Tab goes round the inbox's own stops alone (#77)"
+        assert focused_id(app) != "stats" or stop_id(app) == "stats:info", \
+            f"{desc}: Tab goes round the inbox's own stops alone (#77), the stats pane's session info (#242) its one stop"
         app.session_list.focus()
         await pilot.press("alt+m")
         await pilot.pause()

@@ -279,12 +279,12 @@ def pending_line(pending: str | None, width: int) -> Text:
 
 
 INFO = "ⓘ"   # the session info's icon, in the panel's top border near its right corner (#242)
-INFO_ROOM = 4   # the cells it takes from the title: " ⓘ ─" before the corner
+INFO_ROOM = 2   # the cells it takes from the title: "ⓘ─" before the corner
 
 
 def info_x(width: int) -> int | None:
     """Where the session info's icon is drawn in a pane this wide (panel), if it fits."""
-    return width - 4 if width - 2 >= 8 + INFO_ROOM else None
+    return width - 3 if width - 2 >= 8 + INFO_ROOM else None
 
 
 def panel(head: str, rows: list[Text], width: int, info: bool = False, info_focused: bool = False) -> list[Text]:
@@ -301,8 +301,8 @@ def panel(head: str, rows: list[Text], width: int, info: bool = False, info_focu
     name.truncate(inner - 4 - room)
     tail = Text(" " + "─" * (inner - 3 - room - name.cell_len), style=border)
     if info:
-        tail += Text(" ", style=border) + Text(INFO, style=f"bold reverse {hexc(ACCENT)}" if info_focused
-                                               else f"bold {hexc(ACCENT)}") + Text(" ─", style=border)
+        tail += Text(INFO, style=f"bold reverse {hexc(ACCENT)}" if info_focused
+                     else f"bold {hexc(ACCENT)}") + Text("─", style=border)
     out = [Text("╭─ ", style=border) + name + tail + Text("╮", style=border)]
     for row in rows:
         row = row.copy()

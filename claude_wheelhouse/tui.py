@@ -4125,8 +4125,8 @@ LIST_KEYS = [Binding(key, action) for key, action in (
 SLIDER_TAB = "effort slider (while it shows) and its "   # SDK mode's alone (keys_help)
 TABS = ("Tab goes round the session list, the card of what happened while you were away while it shows, the items, the answer box, a tour box's Next while one shows, then "
         "every button shown, in reading "
-        "order, then the stats pane's session info ⓘ (with a session selected), {slider}zoom's - and + (Enter "
-        "or Space presses the one with the focus), "
+        "order, then the stats pane's {slider}zoom's - and + and its session info ⓘ (with a session selected; "
+        "Enter or Space presses the one with the focus), "
         "and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter "
         "leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus "
         "where it was, and each has a key. An item opened full screen goes the same way: its answer box, then "

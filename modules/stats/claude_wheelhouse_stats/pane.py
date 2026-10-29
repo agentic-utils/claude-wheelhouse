@@ -198,11 +198,12 @@ class SessionStats(Widget):
     # Tab's stops in the pane (tui.tab_stops, #77): it is one widget, so it says where they are
 
     def tab_parts(self) -> list[str]:
-        """The pane's Tab stops in reading order: the session info's icon while it shows, the
-        effort slider while it shows and can be set, then the charts' - and + while they show."""
+        """The pane's Tab stops: the effort slider while it shows and can be set, the charts' - and
+        + while they show, then the session info's icon while it shows: last, so the pane's first
+        stop, where focus lands, stays the slider's (at)."""
         slider = self.slider() is not None and self.ctx.set_effort is not None
         zoom = bool(self.charts) and self.size.width - stats.MARGIN >= stats.ZOOM_MIN
-        return ["info"] * self.has_info() + ["slider"] * slider + list(ZOOM_PARTS) * zoom
+        return ["slider"] * slider + list(ZOOM_PARTS) * zoom + ["info"] * self.has_info()
 
     def has_info(self) -> bool:
         """Whether the session info's icon shows: one session in context, the surface able to

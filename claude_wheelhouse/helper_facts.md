@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 50, 2026-10-29T11:18:14Z, source c591553a27762567 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 51, 2026-10-29T11:31:59Z, source 991d5b6b2b3b5e40 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -220,7 +220,7 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 ### Tab order
 
-Tab goes round the session list, the card of what happened while you were away while it shows, the items, the answer box, a tour box's Next while one shows, then every button shown, in reading order, then the stats pane's session info ⓘ (with a session selected), zoom's - and + (Enter or Space presses the one with the focus), and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus where it was, and each has a key. An item opened full screen goes the same way: its answer box, then its buttons; a click in its thread puts focus in the box, where PgUp and PgDn scroll the thread. A doc shown in the inbox takes the answer box's place, and a click on it focuses it: Up, Down, PgUp, PgDn, Home and End scroll it. A focused button that is disabled or hidden (Send, once sent) gives focus to the answer box. Send from a list leaves focus in the list.
+Tab goes round the session list, the card of what happened while you were away while it shows, the items, the answer box, a tour box's Next while one shows, then every button shown, in reading order, then the stats pane's zoom's - and + and its session info ⓘ (with a session selected; Enter or Space presses the one with the focus), and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus where it was, and each has a key. An item opened full screen goes the same way: its answer box, then its buttons; a click in its thread puts focus in the box, where PgUp and PgDn scroll the thread. A doc shown in the inbox takes the answer box's place, and a click on it focuses it: Up, Down, PgUp, PgDn, Home and End scroll it. A focused button that is disabled or hidden (Send, once sent) gives focus to the answer box. Send from a list leaves focus in the list.
 
 ### Mouse
 
