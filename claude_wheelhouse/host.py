@@ -337,7 +337,7 @@ class Cycle:
     ask: str | None = None   # the notes ask's turn key
     key: str | None = None   # the /compact turn's key
     since: float = field(default_factory=time.monotonic)
-    waited: float | None = None   # when the notes turn was taken up, or Keep waiting last pressed
+    waited: float | None = None   # when its turn (the notes ask, then /compact) was taken up, or Keep waiting pressed
     question: str | None = None   # the open Keep waiting or Abort question's ref
 
     def turn(self) -> str | None:
@@ -763,8 +763,11 @@ class Host:
         elif command == "compact":
             notes, then = self.store.compact_plan(self.sid, take=True)
             row = self.store.compaction(self.sid)
-            if self.cycle is None and row is not None and row["state"] == "requested":
-                self.cycle = Cycle(row["id"], row["origin"], then)
+            cid = row["id"] if row is not None and row["state"] == "requested" else None
+            if cid is None and self.cycle is None:   # pressed through a daemon on older code: no cycle written
+                cid = self.store.start_compaction(self.sid, "person", then=then)
+            if self.cycle is None and cid is not None:
+                self.cycle = Cycle(cid, row["origin"] if row is not None and row["id"] == cid else "person", then)
                 if notes:   # the person's own instructions: the session isn't asked
                     await self.send_compact(notes)
                 else:
@@ -981,23 +984,26 @@ class Host:
         """/compact, with notes as its instructions if any: compacting."""
         c = self.cycle
         self.close_wait("the notes came back: compacting now")
-        c.line = line
+        c.line, c.waited = line, None   # the clock again, from /compact taken up
         c.key = await self.turn(f"/compact {notes}".rstrip(), compacting=line)
         self.move("compacting")
 
     def end_cycle(self, state: str, why: str = "") -> None:
         """The cycle ends: completed, failed or cancelled. Its question closes; a /compact turn
         still running is remembered (late_key), so its end is still the wheelhouse's own."""
-        c, self.cycle = self.cycle, None
+        c = self.cycle
         if c is None:   # one the host never took (Interrupt pressed before the host saw Compact)
             row = self.store.compaction(self.sid)
             if row is not None and row["state"] == "requested" and state != "completed":
                 self.store.move_compaction(self.sid, row["id"], state)
             return
-        self.close_wait(why or state, c)
+        # the store first: a locked database leaves the cycle held, for the next pass (cycle_due)
+        self.store.move_compaction(self.sid, c.id, state)
+        self.cycle = None
         if c.key in self.sent:
             self.late_key = c.key
-        self.store.move_compaction(self.sid, c.id, state)
+        with contextlib.suppress(sqlite3.OperationalError):   # a question left open closes at the next start
+            self.close_wait(why or state, c)
 
     async def cycle_due(self) -> None:
         """The cycle's clocks, each poll: the notes turn past NOTES_TIMEOUT asks the person to
@@ -1015,7 +1021,12 @@ class Host:
                 if c.key is not None:
                     self.late_key = c.key
             return
-        if c.state == "compacting" and at - c.since > COMPACT_TIMEOUT:
+        if (c.state == "compacting" and c.origin != "auto" and c.key not in self.sent and not self.pending
+                and c.waited is not None):   # its /compact ended, but the end wasn't written (a locked database)
+            self.end_cycle("completed" if self.compacted_last else "failed", "" if self.compacted_last else
+                           "not compacted")
+        elif c.state == "compacting" and (c.waited or (c.since if c.origin == "auto" else None)) is not None \
+                and at - (c.waited or c.since) > COMPACT_TIMEOUT:   # from /compact taken up, not queued
             self.end_cycle("failed", TIMED_OUT)
             if c.origin != "auto":   # Claude Code's own runs inside a turn whose line is that turn's
                 self.store.set_activity(self.sid, NOT_COMPACTED.format(why=TIMED_OUT))
@@ -1060,7 +1071,7 @@ class Host:
             try:
                 if isinstance(m, UserMessage) and m.uuid in self.sent and m.uuid not in self.taken_up:
                     self.taken_up.append(m.uuid)   # one of ours, replayed as Claude Code takes it up
-                    if self.cycle is not None and m.uuid == self.cycle.ask:   # the notes turn's clock starts
+                    if self.cycle is not None and m.uuid in (self.cycle.ask, self.cycle.key):   # its clock starts
                         self.cycle.waited = time.monotonic()
                 if isinstance(m, (AssistantMessage, UserMessage)):
                     if not self.pending:   # one it started itself: the session isn't quiet

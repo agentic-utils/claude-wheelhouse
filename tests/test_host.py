@@ -969,7 +969,7 @@ def test_compact_abandoned(streamed, store, sid, ending, state, activity, desc):
         if ending == "interrupt":
             store.command(sid, "interrupt")
         else:
-            h.cycle.since -= host_mod.COMPACT_TIMEOUT + 1
+            h.cycle.waited = time.monotonic() - host_mod.COMPACT_TIMEOUT - 1   # taken up that long ago
         await h.poll()
         await feed(h, None)
         await reader
@@ -1842,7 +1842,7 @@ def test_a_parking_compaction_that_never_ends_fails(host, store, sid, how, desc)
         store.send(sid, "one more thing")
     store.notice(sid, "one more thing")   # the wheelhouse's own: not refused, held while it compacts
     assert run(host.poll()) and host.client.queries == [], f"{desc}: held"
-    host.cycle.since -= host_mod.COMPACT_TIMEOUT + 1
+    host.cycle.waited = time.monotonic() - host_mod.COMPACT_TIMEOUT - 1   # taken up that long ago
     assert run(host.poll()), desc
     assert host.cycle is None and store.compaction(sid)["state"] == "failed", desc
     run(host.poll())

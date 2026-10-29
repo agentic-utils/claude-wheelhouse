@@ -95,7 +95,7 @@ def interrupt(h, s):
 
 
 def compact_timeout(h, s):
-    h.cycle.since -= host_mod.COMPACT_TIMEOUT + 1
+    h.cycle.waited = time.monotonic() - host_mod.COMPACT_TIMEOUT - 1   # taken up that long ago
     run(h.poll())
 
 
@@ -317,3 +317,49 @@ def test_a_host_started_again_fails_a_cycle_nothing_will_take(host, store, sid, 
         store.take_command(sid)
     host.lost_cycle()
     assert store.compaction(sid)["state"] == state, desc
+
+
+@pytest.mark.parametrize("taken_up, state, desc", [
+    (None, "compacting", "queued behind a long turn, never taken up: no clock yet, still compacting"),
+    (host_mod.COMPACT_TIMEOUT - 5, "compacting", "taken up, under COMPACT_TIMEOUT: still compacting"),
+    (host_mod.COMPACT_TIMEOUT + 1, "failed", "taken up, past COMPACT_TIMEOUT: failed"),
+])
+def test_compacts_clock_starts_when_it_is_taken_up(host, store, sid, taken_up, state, desc):
+    """Review 2: Compact with notes while a long turn runs queues /compact at once; its 10 minutes
+    count from Claude Code taking it up, so the session stays blue until it has really run."""
+    store.set_runner(sid, "sdk")
+    store.command(sid, "compact", notes="keep Q1")
+    run(host.poll())
+    host.cycle.since -= host_mod.COMPACT_TIMEOUT * 3
+    if taken_up is not None:
+        host.cycle.waited = time.monotonic() - taken_up
+    run(host.poll())
+    assert store.compaction(sid)["state"] == state, desc
+
+
+def test_a_compact_from_older_code_still_starts_a_cycle(host, store, sid):
+    """Review 2: a daemon on code from before #244 writes the command with no cycle: the host
+    starts one itself, so the Compact isn't dropped."""
+    store.set_runner(sid, "sdk")
+    store.db.execute("UPDATE sessions SET host_command = 'compact', compact_plan = NULL")
+    run(host.poll())
+    c = store.compaction(sid)
+    assert (c["state"], c["origin"]) == ("preparing", "person") and host.cycle is not None
+    assert "The person pressed Compact" in host.client.queries[-1]
+
+
+def test_a_locked_database_never_leaves_the_store_closed_with_no_cycle_held(host, store, sid, monkeypatch):
+    """Review 2: the end is written before the host lets the cycle go, so a locked database
+    leaves it held and the next pass ends it."""
+    import sqlite3
+    store.set_runner(sid, "sdk")
+    store.command(sid, "compact")
+    run(host.poll())
+    real = store.move_compaction
+    monkeypatch.setattr(store, "move_compaction", lambda *a: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
+    with pytest.raises(sqlite3.OperationalError):
+        host.end_cycle("cancelled")
+    assert host.cycle is not None and store.compaction(sid)["state"] == "preparing"
+    monkeypatch.setattr(store, "move_compaction", real)
+    host.end_cycle("cancelled")
+    assert host.cycle is None and store.compaction(sid)["state"] == "cancelled"
