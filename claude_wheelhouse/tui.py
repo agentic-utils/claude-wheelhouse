@@ -67,7 +67,7 @@ from . import api, away, callout, columns, docblocks, docroots, emoji, features,
 from .rows import KIND_COLOUR, KeepColours, RowTips, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
-from .host import AWAITING_NOTES, HOLD_EXPIRED, MCP_CONNECTOR, NUDGE_TOKENS, SHELL_OPENING
+from .host import MCP_CONNECTOR, NUDGE_TOKENS, SHELL_OPENING
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, wake_verb, compacting_now, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
@@ -1764,8 +1764,7 @@ def under_way(button: str, s, status: str, relaunching: bool) -> bool:
     question's Compact have no column: their word is a notice, or the question closing."""
     command, activity = models.field(s, "host_command"), models.field(s, "activity") or ""
     if button == "compact":
-        return (command == "compact" or activity == AWAITING_NOTES
-                or activity.startswith("compacting") and activity != HOLD_EXPIRED)
+        return command == "compact" or compacting_now(s)
     if button in ("interrupt", "shell"):
         return command == button or button == "shell" and activity == SHELL_OPENING and not models.field(s, "shell")
     if button == "model":
@@ -2037,6 +2036,16 @@ class CompactButtons(Horizontal):
         radios = then_radios("compact-then")
         radios.can_focus = False   # no Tab stop (tab_stops), and a click leaves the answer box where it was: 3 to 5 press them
         yield radios
+        # on the host's question when a compaction's notes run long (#244), instead of the above
+        yield BarButton("Keep waiting", "success", id="keep-waiting", compact=True, tooltip=BUTTONS["keep-waiting"])
+        yield BarButton("Abort", "error", id="abort-compaction", compact=True, tooltip=BUTTONS["abort-compaction"])
+
+    def waiting(self, on: bool) -> None:
+        """The notes question's buttons (on), or the question suggesting Compact's."""
+        for w in self.children:
+            shown = on == (w.id in ("keep-waiting", "abort-compaction"))
+            if w.display != shown:
+                w.display = shown
 
     @property
     def then(self) -> str:
@@ -4075,6 +4084,10 @@ BUTTONS = {
     "compact-now": ("Compact (Alt+Y, over the answer box, on the question suggesting it): compact the session, with the "
                     "instructions typed in the box if any, else it's asked what to keep; then as chosen beside it: "
                     "Alt+D just compact, Alt+E send the queued answers in the same prompt, Alt+X park it at once"),
+    "keep-waiting": ("Keep waiting (Alt+Y, on the question asking whether to wait for a compaction's notes): "
+                     "the session carries on writing them, and you're asked again if it is still going in 2 minutes"),
+    "abort-compaction": ("Abort (Alt+D, on the same question): interrupt the notes turn and cancel the compaction; "
+                         "nothing is compacted, and queued messages stay queued"),
     "leave-it": "Leave it (Alt+W): close the question; it isn't asked again until the context has been under 200k and passes it again",
     "interrupt": "Interrupt (Alt+I): stop the session's current turn, like Esc in Claude Code",
     "compact": ("Compact (Alt+C): compact the session with instructions of your own, or with what it says to keep; "
@@ -4116,6 +4129,8 @@ BUTTON_KEYS = [
 # the permission keys, Alt+Y, Alt+W and Alt+D, on the question suggesting Compact: Compact,
 # Leave it and the first then-choice; Alt+E and Alt+X (BUTTON_KEYS) the other two
 NUDGE_KEYS = {"allow": "compact-now", "always": "leave-it", "deny": "compact-then-compact"}
+# and on the question whether to wait for a compaction's notes (#244): Keep waiting and Abort
+WAIT_KEYS = {"allow": "keep-waiting", "deny": "abort-compaction"}
 # for the F1 overlay, keys bound elsewhere: Tab and Shift+Tab are every screen's own
 # (app.focus_next, which is cycle_focus), the lists' cursor keys DataTable's
 TAB_KEYS = [Binding("tab", "app.focus_next"), Binding("shift+tab", "app.focus_previous")]
@@ -4176,7 +4191,7 @@ DIALOGS = ("Esc, or a click outside the box, cancels a dialog (not the tutorial 
 # confirmed) or the screen shows them (a host's session, which runs on with it off). Out of
 # it, a key of one that doesn't show says it doesn't apply, as any other button's does
 SDK_BUTTONS = ("interrupt", "compact", "shell", "model", "allow", "always", "deny", "compact-now", "leave-it",
-               "compact-then-send", "compact-then-park")
+               "compact-then-send", "compact-then-park", "keep-waiting", "abort-compaction")
 SDK_WHOSE = (", Model on one run in the wheelhouse; then Mode, Send on one that isn't dead, "
              "and on one run in the wheelhouse Interrupt, Compact and Shell. Its effort is the slider at the top of "
              "the stats pane.")
@@ -6505,7 +6520,10 @@ class WheelhouseApp(App):
             if r.target is not None and not (asking and r.target == self.bar_item(self.screen)):
                 r.target = None
         denying = any(r.target for r in reasons)
-        nudged = self.nudged(self.bar_item(self.screen))
+        waiting = self.notes_waiting(self.bar_item(self.screen))
+        nudged = waiting or self.nudged(self.bar_item(self.screen))
+        for row in compact_rows:
+            row.waiting(waiting)
         sessions = {s["id"]: s for s in self.sessions}
         s = sessions.get(self.bar_session(self.screen))
         if bar.conversation:
@@ -6542,7 +6560,7 @@ class WheelhouseApp(App):
             self.screen.set_focus(self.items_table)
         compacting = s is not None and "compact-now" in self.busy_buttons(s)
         for row in compact_rows:
-            show_button(row, "compact-now", "Compact", compacting)
+            show_button(row, "compact-now", "Compact", compacting, not waiting)
         show_button(bar, "send-all", f"Send all ({total})", not total)
         if s is not None and runner(s) == "sdk":
             bar.activity("in a shell tab" if s["shell"] else (s["activity"] or "") if self.running(s["id"]) else "")
@@ -8005,6 +8023,20 @@ class WheelhouseApp(App):
         else:
             self.compact_now(target)
 
+    @on(Button.Pressed, "#keep-waiting, #abort-compaction")
+    def notes_wait_pressed(self, event: Button.Pressed) -> None:
+        """The question whether to wait for a compaction's notes (#244): Keep waiting, or Abort."""
+        self.settle()
+        target = self.bar_item(event.button.screen)
+        if target and self.notes_waiting(target):
+            self.told(self.client.notes_wait(*target, event.button.id == "abort-compaction"))
+            self.refresh_data()
+
+    def notes_waiting(self, target) -> bool:
+        """Whether the item in context is the host's open question whether to wait for a
+        compaction's notes (NOTES_WAIT)."""
+        return self.client.notes_question(target) is not None
+
     def nudged(self, target) -> bool:
         """Whether the item in context is the question suggesting Compact, of a session whose
         host is running: the conversation's own Compact button shows only then too."""
@@ -8104,7 +8136,9 @@ class WheelhouseApp(App):
         sid = self.current_session() if button_id == "park" else None
         if sid and self.state(self.row(sid)) == "parked":   # P presses Unpark, the Relaunch button there
             button_id = "relaunch"
-        if button_id in NUDGE_KEYS and any(showing(r) for r in self.screen.query(CompactButtons)):
+        if button_id in WAIT_KEYS and any(showing(b) for b in self.screen.query("#keep-waiting")):
+            button_id = WAIT_KEYS[button_id]   # on the question whether to wait for a compaction's notes
+        elif button_id in NUDGE_KEYS and any(showing(r) for r in self.screen.query(CompactButtons)):
             button_id = NUDGE_KEYS[button_id]   # 1 to 3 on the question suggesting Compact: its own
         button = next(iter(self.screen.query(f"#{button_id}")), None)
         if button is None:   # not on this screen (Model, in a full-screen item's bar): said all the same

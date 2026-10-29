@@ -37,12 +37,12 @@ New `sessions` columns (schema bump): `compaction` (state), `compaction_id`, `co
 | State | Entered by | Ends when (next state) | Guard against sticking |
 |---|---|---|---|
 | `requested` | Any start (below), in the same transaction as the request | Host takes it and sends the ask (`preparing`), or sends `/compact` straight away when instructions were given (`compacting`) | Not taken within 30 s and host dead: hub sweep sets `failed`. A running turn is allowed: the ask queues behind it, and the state is still `requested` |
-| `preparing` | Notes ask sent | Turn carrying the notes block ends (`compacting`). Turn ends with no block: bare `/compact`, said in the thread (`compacting`). Error result (`failed`) | 20 min wall clock from the ask: `failed` (no interrupt, see Q3) |
+| `preparing` | Notes ask sent | Turn carrying the notes block ends (`compacting`). Turn ends with no block: bare `/compact`, said in the thread (`compacting`). Error result (`failed`) | `NOTES_TIMEOUT` (120 s) after Claude Code takes the ask up: nothing is cancelled, the host posts a Keep waiting or Abort question (section 5). Keep waiting asks again after another `NOTES_TIMEOUT`; Abort interrupts (`cancelled`). Unanswered, the cycle still ends with the notes turn, an Interrupt or the session's death |
 | `compacting` | `/compact` sent, or Claude Code's PreCompact hook fires (auto) | `/compact`'s result with a `compact_boundary` (`completed`). Result without a boundary, or an error (`failed`) | 10 min (`COMPACT_TIMEOUT`): `failed`. This replaces `hold_expired` |
-| `completed` | | The host runs `then` (`send`, `compact` or `park`), then clears the state | Terminal |
-| `failed` / `cancelled` | Timeouts, errors, host or session death, Interrupt, Stop & Forget "Just stop it" | Host or hub clears the state. Queued drafts stay queued | Terminal |
+| `completed` | | The host runs `then` (`send`, `compact` or `park`) | Terminal: the row keeps it until the next cycle |
+| `failed` / `cancelled` | Timeouts, errors, host or session death, Interrupt, Abort, Stop & Forget "Just stop it" | Queued drafts stay queued | Terminal: the row keeps it until the next cycle |
 
-Every active state also ends on: **Interrupt** (`cancelled`, the client is interrupted), **host exit** (the host's `finally` sets `failed`; the hub's liveness sweep does the same if the host died hard), and **session gone**.
+Every active state also ends on: **Interrupt** (`cancelled`, the client is interrupted), **host exit** (the host's `finally` sets `failed`; the hub's liveness sweep does the same if the host died hard; a host started again fails a cycle past `requested` that the last one was driving, `lost_cycle`), and **session gone**. Only the host that holds the cycle's id moves it, and only while it is active, so an ended cycle stays ended.
 
 The `/compact` turn's end is matched by `compaction_id` and its `turn_key`, not by "the key is no longer in `sent`". With nothing else allowed in during the cycle, the only turns that can merge are Claude Code's own (agent hand-backs and task notifications, which do appear at 10:39:16), and those carry no key of ours.
 
@@ -52,20 +52,24 @@ The `/compact` turn's end is matched by `compaction_id` and its `turn_key`, not 
 - **request_compact** (the model): `promote_compact_request` sets `requested` with origin `model` once the turn has ended. A request made while a cycle is active is refused, as now.
 - **Relaunch, compact first**: `requested` with origin `relaunch`. The relaunch is the cycle's `then`, so it isn't blocked.
 - **Park, compact first**: the park's own turn runs first. `requested` is set when the host takes `park_compact`, with `then` set to `park`. From the press until then the session is in the existing `parking` state, which already holds messages.
-- **The 8 h quiet mark** (`cold_due`): origin `quiet`. The person returning calls it off as now, which ends the cycle as `cancelled`.
-- **Claude Code's own auto-compaction, SDK mode:** the SDK exposes a `PreCompact` hook (`claude_agent_sdk.types.PreCompactHookInput`, with `trigger` set to `auto` or `manual`). The host registers it. An `auto` trigger with no cycle active enters `compacting` directly, with origin `auto`: the eye is blue, sends and queueing are blocked, and stage lines are shown. It ends at that turn's result. It gets no task item (Q2). Today the host only learns of an auto-compaction afterwards, from `compact_boundary`.
-- **Terminal mode:** the wheelhouse starts no compactions there, because Compact is refused for non-SDK sessions. A `/compact` typed in the tab, or Claude Code's own, is seen only afterwards, through the transcript's `compact_boundary`, which already shows "conversation compacted". There is no state and nothing is blocked: the tab is where the person is typing anyway. Q4 covers whether to add a PreCompact hook for tabs.
+- **The 8 h quiet mark** (`cold_due`): origin `quiet`. It is the wheelhouse's own, not the person's, so the person returning calls it off: while it is `requested` or `preparing`, a send, queue or Ctrl+S ends it as `cancelled` in the same transaction (the host then interrupts the notes turn, and nothing is compacted) and goes through as normal. Once `/compact` has gone (`compacting`) it is refused like any other cycle.
+- **Claude Code's own auto-compaction, SDK mode:** the SDK exposes a `PreCompact` hook (`claude_agent_sdk.types.PreCompactHookInput`, with `trigger` set to `auto` or `manual`). The host registers it. An `auto` trigger with no cycle active enters `compacting` directly, with origin `auto`: the eye is blue, sends and queueing are blocked, and stage lines are shown. It ends at that turn's result. It gets the task item too (Q2).
+- **Terminal mode:** the wheelhouse starts no compactions there, because Compact is refused for non-SDK sessions. A wheelhouse PreCompact hook in the tab plugin (Q4, PR 2) gives a tab's compaction, typed `/compact` or Claude Code's own, the blue eye, stage lines and the task item. What a tab can enforce is limited to what the wheelhouse sends: the tab itself is where the person types.
 
 ## 3. What is blocked, and where
 
-The guard is `Store.compacting(db, sid)`, true in `requested`, `preparing` and `compacting`. It raises `Compacting` inside the transaction, the hub turns that into a `Done(False)` warning, and the TUI shows it as a toast. `compacting_now()` changes to read the same state.
+The guard is `Store.refuse_compacting(db, sid, action)`, true in `requested`, `preparing` and `compacting`. It raises `Compacting` inside the transaction, the hub turns that into a `Done(False)` warning (`refusable`), and the TUI shows it as a toast. `compacting_now()` reads the same state.
+
+Park, Unpark, Park now and Relaunch are more than one write (stopping a process, a relaunch's bookkeeping), and the host and the hub's own relaunch flow write `parked` and `relaunch` as a cycle's `then` or after it ends. So these are checked in the hub, first thing, with `Store.check_compacting`, rather than inside `set_parked` and `set_relaunch`. Every person's path to them goes through the hub (the daemon's routes and the in-process client call the same methods). Shell is refused too.
 
 | Action | Enforced in | During the cycle |
 |---|---|---|
 | Send now (Immediate mode, Alt+S) | `Store.send` | Refused |
 | Queue a message | `Store.queue` | Refused (Doug: queueing is blocked too) |
 | Ctrl+S, Send, Send all | `Store.dispatch`, `dispatch_last` | Refused. `send_all` skips the session and names it |
-| Park, Unpark, Relaunch, Relaunch all | `Store.request`, `set_parked`, `set_relaunch` | Refused (a relaunch that is the cycle's own `then` goes through) |
+| Park (asked) | `Store.request` | Refused |
+| Park now, Unpark, Relaunch | Hub: `force`, `unpark`, `stop_host`, `compact_then_relaunch` (`Store.check_compacting`) | Refused (the relaunch that the cycle was started for finishes once it ends) |
+| Shell | `Store.command("shell")` | Refused |
 | Stop & Forget, "Let it know" | `Store.request("end")` | Refused: it would send a turn |
 | Stop & Forget, "Just stop it" | Hub | Allowed: ends the cycle as `cancelled` |
 | Compact again, request_compact | `Store.command`, `request_compact` | Refused ("already compacting") |
@@ -90,6 +94,8 @@ The wheelhouse posts it itself (`Store.post_marked_task`, marked `{"from": "comp
 - `compacting`: running, note "compacting".
 - `completed`: done, note "{before}k → {after}k".
 - `failed`: blocked, note with the reason (for example "no result in 10 minutes", "host stopped", "error: {text}"). It stays in the inbox for the person to dismiss.
+
+**The notes question.** When the notes turn passes `NOTES_TIMEOUT` (120 s, one constant in `host.py`) after Claude Code took the ask up, nothing is cancelled. The host posts a question of its own, marked `NOTES_WAIT` (and, from PR 2, under the compaction task), so the person sees it even away from the app. It has two buttons over the answer box, **Keep waiting** (Alt+Y) and **Abort** (Alt+D); a typed reply is refused like any send. Keep waiting closes it, and the host asks again after another `NOTES_TIMEOUT`. Abort interrupts the notes turn, which ends the cycle as `cancelled` with no `/compact`; the session is unlocked and queued drafts stay queued. Unanswered, the session stays locked and blue, but it can't stick: the cycle still ends when the notes turn ends (the question closes itself as `/compact` goes), on an Interrupt, or when the session dies.
 - `cancelled`: closed, note "cancelled by Interrupt".
 
 The context nudge question, if open, closes on `completed` as now.
@@ -138,15 +144,15 @@ Test plan (parameterised tables in `test_host`, `test_store`, `test_hub` and `te
 
 - **One sequence per start route** (person, model, relaunch, park, quiet, auto): request, ask, notes, `/compact`, completed, `then`. Assert the state and eye at each step, and that nothing else was sent.
 - **Every blocked action × every active state**: refused, toast wording, store unchanged. Allowed actions (Interrupt, "Just stop it", answering a waiting permission or question) succeed.
-- **Each end**: notes turn without a block, error result, the 20 and 10 min caps, host exit, hub sweep, Interrupt in each state. Assert a terminal state, the eye no longer blue, and drafts intact.
+- **Each end**: notes turn without a block, error result, the 2 min notes question (Keep waiting, Abort) and the 10 min cap, host exit, hub sweep, Interrupt in each state. Assert a terminal state, the eye no longer blue, and drafts intact.
 - **Both 29 Oct repros**, made into regression tests: Ctrl+S during `preparing` is refused, and a second Compact during `compacting` is refused with the first cycle completing as `driven`.
 - **Queued and undelivered messages** go out after `completed` with `then=send`, and stay after `failed` or `cancelled`.
 - **Stage blocks** render as Text at 36 and 76 cells, with no Markdown.
 
-## 8. Open questions for Doug
+## 8. Decided
 
-- **Q1. Which art: A, B or C?** This only changes the stage lines. Recommendation: B.
-- **Q2. Does auto-compaction (SDK mode) get a task item?** Yes: every compaction is visible in the inbox, but at about 1M context it may be noisy. No: only blue and stage lines. Recommendation: no, stage lines only.
-- **Q3. When the notes turn passes 20 minutes: fail, or interrupt and compact bare?** Fail: unblocks the session and leaves context as it is. Interrupt: always compacts, but may cut a transcript or handoff mid-write. Recommendation: fail.
-- **Q4. Terminal mode: ship a wheelhouse PreCompact hook so tabs get stage lines and blue too?** Yes: the same look everywhere, but it adds a hook to install. No: the tab is the person's own view. Recommendation: no for now.
-- **Q5. Stop & Forget "Let it know" during a cycle: refuse, or queue it as the cycle's `then`?** Refuse: simpler and matches the rule. Queue it: one less retry for you. Recommendation: refuse.
+- **Q1, art: B, the trash compactor.** While the cycle is preparing or compacting, the conversation also shows short panicked exchanges between the crew (Luke, Leia, Han, Chewie) and the droids (R2-D2, C-3PO), drawn at random from a pool of over 80 original lines (`compactor.py`), with no repeats within a cycle: one every 20 to 30 s, and one at each stage change. Same blue style as the stage lines, each 76 cells or fewer, plain Text, only in the conversation view.
+- **Q2: yes,** auto-compaction gets the task item too, for visibility.
+- **Q3:** the notes turn's cap is 2 minutes, and at that point the person is asked whether to keep waiting or abort, never cancelled unasked (section 5).
+- **Q4: yes,** a wheelhouse PreCompact hook for terminal tabs (PR 2).
+- **Q5: refuse** Stop & Forget's "Let it know" during a cycle; "Just stop it" stays allowed and ends the cycle with the session.

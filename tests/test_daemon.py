@@ -102,6 +102,9 @@ ROUTES = [
      lambda store, sid, r: store.item(sid, "P1")["status"] == "allowed", "a permission allowed"),
     ("POST", "/items/{sid}/{ref}/close", {"closed": True},
      lambda store, sid, r: store.item(sid, "T1")["dismissed"] == "todo", "an item closed"),
+    ("POST", "/items/{sid}/{ref}/notes-wait", {"abort": False},
+     lambda store, sid, r: told(r) == ["that question has closed: the compaction has moved on"],
+     "the notes question's buttons (#244), on an item that isn't it"),
     ("POST", "/items/{sid}/{ref}/delete-family", None,
      lambda store, sid, r: store.item(sid, "T1")["dismissed"] == "todo", "an item deleted with its children"),
     ("GET", "/models", None, lambda store, sid, r: [m["id"] for m in r.json()["models"]] == [
@@ -826,7 +829,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 43 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 44 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 

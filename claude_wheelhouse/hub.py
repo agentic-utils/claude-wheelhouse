@@ -32,9 +32,9 @@ from typing import Callable
 
 from . import adopt, api, away, features, fingerprint, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
 from .docroots import DOC_CAP
-from .host import (AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, NO_NOTES, keepalive_body,
+from .host import (KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, keepalive_body,
                    waits_on_person)
-from .store import (COMPACT_QUESTION, DISMISSABLE, compacting_now, PRS_SINCE, STATUSES, SessionGone, Store, can_queue,
+from .store import (COMPACT_QUESTION, NOTES_WAIT, Compacting, DISMISSABLE, compacting_now, PRS_SINCE, STATUSES, SessionGone, Store, can_queue,
                     PROTOCOL_VERSION, mcp_servers, mode, needs_relaunch, runner, standing)
 
 RUNNING = ("live", "stalled", "starting")
@@ -74,6 +74,18 @@ IDLE_LINES = ("idle", "error", "interrupted")
 
 def short(sid: str) -> str:
     return sid[:6]
+
+
+def refusable(method):
+    """A hub action the store may refuse during a compaction cycle (Compacting, #244): said as a
+    warning, the one wording for every refused action, and nothing done."""
+    @functools.wraps(method)
+    def act(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except Compacting as e:
+            return Done(False).say(str(e), "warning")
+    return act
 
 
 def display_name(s) -> str:
@@ -318,7 +330,17 @@ class Hub:
         self.sessions = self.store.sessions()
         self.by_id = {s["id"]: s for s in self.sessions}
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
+        self.sweep_compactions()
         self.note_quiet()
+
+    def sweep_compactions(self) -> None:
+        """A compaction cycle whose session isn't running (its host died hard, or stopped before
+        its finally could end it) ends as failed, so nothing stays closed and blue (#244)."""
+        for s in self.sessions:
+            if compacting_now(s) and self.statuses[s["id"]] == "dead" and s["compaction_id"]:
+                if self.store.move_compaction(s["id"], s["compaction_id"], "failed"):
+                    print(f"wheelhouse: {display_name(s)}'s compaction failed: its host isn't running",
+                          file=sys.stderr, flush=True)
 
     def note_quiet(self) -> None:
         """A session parked, ended or stopped since the last refresh (or, at a hub's first,
@@ -440,8 +462,9 @@ class Hub:
         return self.relaunch(sid, may_tab,
                              f"{display_name(s)}'s host has stopped: Relaunch it from the daemon's machine")
 
+    @refusable
     def stop_host(self, sid: str, host: tuple, may_tab: bool = True) -> Done:
-        """Stop a running session for Relaunch: a host as SIGTERM does (its own clean stop:
+        """Refused during a compaction cycle (#244). Stop a running session for Relaunch: a host as SIGTERM does (its own clean stop:
         Claude Code is disconnected, and an open permission or question closes as withdrawn,
         or as lost when the new host starts); a tab's Claude Code the same way, its process
         group killed if it hasn't gone within liveness.KILL_AFTER (stop_process). The confirm
@@ -449,6 +472,7 @@ class Hub:
         time), is stopped. finish_relaunches starts it again once the process has gone: a
         tab in a new tab. A host's session out in a shell tab goes back to its waiting host
         as that tab stops, which is its relaunch. Whether anything changed."""
+        self.store.check_compacting(sid, "relaunch")
         s = self.row(sid)
         if not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
             return self.host_gone(sid, s, may_tab)   # gone meanwhile: nothing to stop
@@ -500,17 +524,40 @@ class Hub:
         follower = self.contexts.get(sid)
         return transcript_usage.current(follower.snap, host_context(self.listed(sid))).context if follower and follower.ready else 0
 
+    def notes_question(self, target):
+        """The item in context, if it is the host's open question whether to wait for a
+        compaction's notes (NOTES_WAIT, #244)."""
+        item = target and target[1] and self.store.item(*target)
+        return item if item and item["status"] == "open" and item["answer"] == NOTES_WAIT else None
+
     def compact_question(self, target):
         """The item in context, if it is the host's open question suggesting Compact."""
         item = target and target[1] and self.store.item(*target)
         return item if item and item["status"] == "open" and item["answer"] == COMPACT_QUESTION else None
 
+    @refusable
+    def notes_wait(self, sid: str, ref: str, abort: bool) -> Done:
+        """The host's question when a compaction's notes turn runs long (#244): Keep waiting
+        closes it, and the host asks again after another NOTES_TIMEOUT; Abort interrupts the
+        notes turn, which cancels the cycle (nothing compacted, queued messages stay queued)."""
+        item = self.store.item(sid, ref)
+        if item is None or item["answer"] != NOTES_WAIT or item["status"] != "open":
+            return Done(False).say("that question has closed: the compaction has moved on", "warning")
+        if abort:
+            self.store.command(sid, "interrupt")
+        self.store.update_item(sid, ref, status="closed",
+                               note="Abort: the notes turn is interrupted, and the compaction cancelled" if abort
+                               else "Keep waiting: asked again if the notes are still being written")
+        return Done().say("aborting the compaction" if abort else "waiting for the notes")
+
+    @refusable
     def compact_then_relaunch(self, sid: str, host: tuple, may_tab: bool = True) -> Done:
         """Relaunch, compacting first: the host is asked to Compact (unless a Compact is
         under way already), and once the session is compacted and idle, finish_relaunches
         stops it (stop_host), and starts it again once gone. Only the host the confirm was
-        about, (pid, start time), as stop_host."""
+        about, (pid, start time), as stop_host. Refused during a compaction cycle (#244)."""
         s = self.row(sid)
+        self.store.check_compacting(sid, "relaunch")
         if runner(s) != "sdk" or s["shell"]:   # nothing to compact it: relaunched at once
             return self.stop_host(sid, host, may_tab)
         if not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
@@ -518,8 +565,7 @@ class Hub:
         if (s["claude_pid"], s["claude_start"]) != host:
             return Done(False).say(f"{display_name(s)} started again meanwhile: Relaunch again to stop this host",
                                    "warning")
-        if not (compacting_now(s) or (s["activity"] or "") == AWAITING_NOTES):   # its notes asked for already
-            self.store.command(sid, "compact")
+        self.store.command(sid, "compact", origin="relaunch")
         self.relaunch_under_way(sid, host, asked=time.time(), may_tab=may_tab)
         return Done().say(f"relaunching {display_name(s)}: compacting first (it's asked what to keep)")
 
@@ -575,14 +621,17 @@ class Hub:
         elif compacted_since(s, self.compacting[sid]) and activity.startswith(IDLE_LINES):
             for what in ("compact", "interrupt"):   # either, left untaken, would greet the new host
                 self.store.take_command(sid, what)   # (a Shell stays: the person's, for the new host)
+            row = self.store.compaction(sid)
+            if row is not None and row["state"] == "requested":   # its Compact, untaken: the cycle goes with it
+                self.store.move_compaction(sid, row["id"], "cancelled")
             done = self.stop_host(sid, host, self.store.relaunch_may_tab(sid))
             for notice in done.notices:
                 self.emit(notice)
             if not done.ok:
                 self.relaunch_under_way(sid, None)
             return
-        elif activity == NO_NOTES:
-            why = "Compact got no notes back"
+        elif s["compaction"] == "failed":
+            why = "its compaction failed"
         elif activity == "interrupted":
             why = "Compact was interrupted"
         else:
@@ -816,6 +865,7 @@ class Hub:
 
     # Park and Forget ("end"): a running session is asked; one not running, or one forced, is acted on
 
+    @refusable
     def ask(self, sid: str, what: str, compact: bool = False) -> Done:
         """A running session asked to Park or Forget; a Park, to compact once parked (compact)."""
         self.store.request(sid, what, compact and what == "park")
@@ -833,10 +883,13 @@ class Hub:
             return Done(False).say(f"the session is running again: press {verb} to ask it instead", "warning")
         return self.force(sid, what)
 
+    @refusable
     def force(self, sid: str, what: str) -> Done:
         """Park or Forget now, without the session's own steps: a running one is stopped
         first (stop_process), then parked or its row deleted."""
         s = self.row(sid)
+        if what != "end":   # Stop & Forget's "Just stop it" goes, and the cycle with the session
+            self.store.check_compacting(sid, "park")
         try:
             self.stop_process(s)
         except OSError as e:
@@ -847,7 +900,9 @@ class Hub:
             self.store.set_parked(sid, True)
         return Done()
 
+    @refusable
     def unpark(self, sid: str) -> Done:
+        self.store.check_compacting(sid, "unpark")
         self.store.set_parked(sid, False)
         return Done()
 
@@ -865,6 +920,7 @@ class Hub:
         item = target and target[1] and self.store.item(*target)
         return item if item and item["kind"] == "permission" and item["status"] == "open" else None
 
+    @refusable
     def submit(self, target: tuple, text: str, now: bool = False) -> Done:
         """What the person submitted for a target: an open permission is denied with it at
         once, never queued (#53); otherwise it's queued or sent at once, by the session's mode.
@@ -883,7 +939,7 @@ class Hub:
                 return Done(False).say(str(e.args[0]), "warning")
             done.denied = True
             done.say(f"denied {target[1]}, with your message")
-        elif now or mode(s) == "immediate":
+        elif now or mode(s) == "immediate" or self.store.waits_on(*target):   # a call waiting: never queued (#244)
             self.store.send(target[0], text, target[1])
             done.say(f"sent to {aimed(target)}{self.late(target[0])}")
             if mode(s) == "queued" and (drafts := self.store.drafts(target[0])):
@@ -923,6 +979,7 @@ class Hub:
         name = (s["name"] or short(sid)) if s else short(sid)
         return f"{n} to {name}{self.late(sid)}"
 
+    @refusable
     def send_queue(self, sid: str) -> Done:
         """A session's queue, sent as one message; a dead one's stays queued (#62)."""
         if self.dead(sid) and not self.store.drafts(sid):
@@ -937,9 +994,22 @@ class Hub:
         """Every queue but a dead or parked session's, which stays queued until it's relaunched
         or unparked (#62)."""
         queued = dict.fromkeys(m["session_id"] for m in self.store.drafts())
-        sent = [(sid, n) for sid in queued if not self.dead(sid) and (n := self.store.dispatch(sid))]
+        sent, refused = [], []
+        for sid in queued:
+            if self.dead(sid):
+                continue
+            try:
+                if n := self.store.dispatch(sid):
+                    sent.append((sid, n))
+            except Compacting as e:   # its queue waits for the cycle's end (#244)
+                refused.append(str(e))
         if sent:
-            return Done().say("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent))
+            done = Done().say("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent))
+            for why in refused:
+                done.say(why, "warning")
+            return done
+        if refused:
+            return Done(False).say("; ".join(refused), "warning")
         if any(self.dead(sid) for sid in queued):
             return Done(False).say("nothing queued for a running session: a dead or parked one's queue waits "
                                    "until it's relaunched or unparked", "warning")
@@ -956,6 +1026,7 @@ class Hub:
             done.say(f"{n} answer(s) still queued for {name}: Ctrl+S or Send sends them")
         return done
 
+    @refusable
     def host_command(self, sid: str, what: str, notes: str | None = None, then: str | None = None) -> Done:
         """Interrupt, Compact or Shell, for the session's host to carry out. A Compact may
         carry instructions and what follows it (Store.command). Interrupt also cancels a
