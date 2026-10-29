@@ -200,6 +200,20 @@ def format_turn(msgs, person: str | None = None) -> str:
     return "\n\n".join(parts)
 
 
+def midturn_note(earlier: list[str], refs: list[str]) -> str:
+    """Told with a turn sent while one of ours is running, which Claude Code may take up into
+    it: that turn's closing text answers only the last message taken up (#243), so the
+    earlier ones' refs need a reply of their own."""
+    earlier = list(dict.fromkeys(earlier))
+    goes = f"on {', '.join(refs)}" if refs else "on no item (it shows in the conversation only)"
+    note = (f"[wheelhouse] Sent while your turn is running. If it reaches you mid-turn, the text you end "
+            f"that turn with is posted as the reply {goes}")
+    if earlier:
+        note += (f"; {', '.join(earlier)} {'gets' if len(earlier) == 1 else 'get'} no automatic reply, "
+                 f"so answer {'it' if len(earlier) == 1 else 'each'} with reply(ref)")
+    return note + ". If it starts a turn of its own instead, ignore this note."
+
+
 def keep_notes(text: str | None, nonce: str) -> str | None:
     """The notes in a reply's last complete block for this request: a line `<keep
     id="nonce">`, the notes, and a line `</keep>`, each tag on a line of its own, so prose
@@ -288,10 +302,12 @@ def question_answers(inp: dict, reply: str) -> dict:
 
 @dataclass
 class Sent:
-    """A turn sent: the refs it answers (ref: the person's newest message on it), and
-    whether it is a keepalive."""
+    """A turn sent: the refs it answers (ref: the person's newest message on it), whether
+    it is a keepalive, and whether it carries the person's messages (person), as against the
+    wheelhouse's own (a keepalive, a request, /compact)."""
     refs: dict[str, int]
     keepalive: bool = False
+    person: bool = False
 
 
 async def user_message(text: str, key: str):
@@ -467,7 +483,8 @@ class Host:
         """Send a user turn; Claude Code queues it behind any turn still running, or takes
         it up into that one. Only a keepalive leaves the session quiet, and the activity line
         as it was. What it ends by saying is posted as the reply on refs (ref: the id of the
-        person's newest message on it). A compaction's turn (compacting: its activity line)
+        person's newest message on it); refs given, even empty, marks the turn as the
+        person's messages (Sent.person). A compaction's turn (compacting: its activity line)
         writes that line before it goes, so the session never reads as free between the
         command taken and the turn sent, and keeps it in front until the turn ends (show).
         Returns the uuid it was sent with."""
@@ -481,7 +498,7 @@ class Host:
             except sqlite3.OperationalError:   # written again once sent
                 pass
         await self.client.query(user_message(text, key))
-        self.sent[key] = Sent(refs or {}, keepalive)
+        self.sent[key] = Sent(refs or {}, keepalive, refs is not None)
         self.compact_idle = None
         if keepalive:
             return key
@@ -792,8 +809,12 @@ class Host:
             for m in turn:
                 if m["item_ref"]:
                     refs[m["item_ref"]] = max(refs.get(m["item_ref"], 0), m["id"])
+            text = format_turn(turn, self.person)
+            running = [t for t in self.sent.values() if t.person]
+            if running:   # may be taken up into the person's turn running, and only the last is answered
+                text += "\n\n" + midturn_note([r for t in running for r in t.refs if r not in refs], list(refs))
             try:
-                await self.turn(format_turn(turn, self.person), refs=refs)
+                await self.turn(text, refs=refs)
             except BaseException:   # not sent: left for the next host to deliver
                 self.store.release(turn)
                 raise
@@ -1001,11 +1022,10 @@ class Host:
                         print(f"{now()} a turn ended with none of our turns replayed: taking {oldest} "
                               "as ended (is replay-user-messages still honoured?)", file=sys.stderr, flush=True)
                     self.taken_up = []
-                    refs = {}
-                    for turn in ended:
-                        for ref, after in turn.refs.items():
-                            refs[ref] = max(refs.get(ref, 0), after)
-                    self.answer(refs, m)
+                    # its closing text answers the last of the person's turns it took up
+                    # (#243): one taken up mid-turn was told to answer the earlier ones with reply
+                    said = [t for t in ended if t.person]
+                    self.answer(said[-1].refs if said else {}, m)
                     keepalive = bool(ended) and all(t.keepalive for t in ended)
                     self.turn_text, self.final_text = [], []
                     await self.finished(m, keepalive)
@@ -1035,8 +1055,10 @@ class Host:
             self.store.set_activity(self.sid, activity)
 
     def answer(self, refs: dict[str, int], m) -> None:
-        """A turn that took up the person's messages on refs has ended: what it ended by
-        saying (its text after its last tool call) goes on each as the session's reply, once.
+        """A turn has ended whose last message from the person taken up was on refs: what it
+        ended by saying (its text after its last tool call) goes on each as the session's
+        reply, once. Messages taken up before that one get none (#243): the note sent with a
+        turn that may be taken up mid-turn (midturn_note) asks the session to reply on them.
         Not on a ref the session has replied on itself since the person's message (a
         session copying the reply calls in its history), nor an error's: the session hasn't
         answered, and the item still awaits it."""

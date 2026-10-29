@@ -368,12 +368,18 @@ so an hour's quiet is what turns the cache cold.
   (`replay-user-messages`), which it does as it takes each turn up: a turn's end answers
   the turns replayed in it. As probed on claude 2.1.296: a turn Claude Code starts itself
   (a background task's notification) replays none of ours; a turn sent while one runs is
-  taken up into it at the next tool call, and one end answers both; an interrupted turn's
+  taken up into it at the next tool call, and one end ends both; an interrupted turn's
   end lists it alone, and the turns queued behind it still run. (The result message's own
   `user_message_uuids` say the same, but the SDK drops that field.) Should Claude Code
   stop replaying, a turn's end with no origin (Claude Code's own turns carry one) that
   replayed none of ours takes the oldest sent as ended, unanswered, and says so on stderr,
   so the host never wedges.
+  That end's closing text answers only the last of the person's turns taken up, the
+  wheelhouse's own (keepalives, requests, /compact) aside (#243): pooled, it filed an answer to a `(general)` message as the reply on the
+  question that opened the turn. A turn of the person's sent while another is pending ends with a note
+  (`midturn_note`) saying where the closing text goes if it is taken up mid-turn, and naming
+  the earlier refs, which get no automatic reply, for the session to answer with `reply`.
+  PROTOCOL_VERSION 23.
 - **Slimmer decisions.** A decision's alternative, why and reverse were three required
   fields, each its own labelled paragraph. They are one short line now, `why` ("over
   Postgres: no server to run; undo: swap the DSN"), shown as **Why:** under the detail:

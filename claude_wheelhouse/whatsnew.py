@@ -293,7 +293,7 @@ FEATURES: tuple[Feature, ...] = (
                  "reconnect each; a claude.ai connector reconnects in every session that has it."),
     Feature("all-conversations", UNRELEASED, ADVANCED,
             note="With no session selected, the inbox lists each session's conversation (💬, named after the "
-                 "session) under the items waiting on you."),
+                 "session) at the top, and orders its items by session name within each status."),
     Feature("emoji-pick", UNRELEASED, ADVANCED,
             note="Emoji suggestions take a click: type :star and click the one you want, or choose it with Up "
                  "and Down and take it with Tab or Enter."),
@@ -307,6 +307,10 @@ FEATURES: tuple[Feature, ...] = (
     Feature("since-away", UNRELEASED, ADVANCED,
             note="Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: "
                  "what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it."),
+    # notes only: the stats dialog has its MAX_TIPS already
+    Feature("session-info", UNRELEASED, ADVANCED,
+            note="The ⓘ at the stats pane's top right shows the selected session's info: its id (C copies it), "
+                 "user, machine, branch, model, transcript, and its MCP server's code, flagged when it needs a relaunch."),
 
 )
 

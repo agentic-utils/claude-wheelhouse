@@ -50,7 +50,7 @@ class SessionStats(Widget):
                 Binding("right", "effort(1)", "Higher effort", show=False),
                 Binding("home", "effort_end(0)", "Lowest effort", show=False),
                 Binding("end", "effort_end(-1)", "Highest effort", show=False),
-                Binding("enter,space", "press_zoom", "Zoom", show=False)]
+                Binding("enter,space", "press", "Zoom, or the session info", show=False)]
 
     def __init__(self, ctx: api.Context, **kwargs):
         super().__init__(**kwargs)
@@ -185,7 +185,8 @@ class SessionStats(Widget):
         at = self.has_focus and self.at
         rows, charts = stats.layout(self.view, self.name_, self.note, self.usage, self.now,
                                     self.size.width, self.size.height, self.setting, at == "slider",
-                                    span=self.span, loading=self.filling, more=self.more)
+                                    span=self.span, loading=self.filling, more=self.more,
+                                    info=self.has_info(), info_focused=at == "info")
         for chart in charts:
             chart.zoom_focus = ZOOM_PARTS.index(at) if at in ZOOM_PARTS else None
         if (looks(rows), charts) != (looks(self.rows), self.charts):   # each tick builds them again, mostly the same
@@ -197,11 +198,24 @@ class SessionStats(Widget):
     # Tab's stops in the pane (tui.tab_stops, #77): it is one widget, so it says where they are
 
     def tab_parts(self) -> list[str]:
-        """The pane's Tab stops in reading order: the effort slider while it shows and can be
-        set, then the charts' - and + while they show."""
+        """The pane's Tab stops: the effort slider while it shows and can be set, the charts' - and
+        + while they show, then the session info's icon while it shows: last, so the pane's first
+        stop, where focus lands, stays the slider's (at)."""
         slider = self.slider() is not None and self.ctx.set_effort is not None
         zoom = bool(self.charts) and self.size.width - stats.MARGIN >= stats.ZOOM_MIN
-        return ["slider"] * slider + list(ZOOM_PARTS) * zoom
+        return ["slider"] * slider + list(ZOOM_PARTS) * zoom + ["info"] * self.has_info()
+
+    def has_info(self) -> bool:
+        """Whether the session info's icon shows: one session in context, the surface able to
+        show its info, and room for it (stats.info_x)."""
+        return (self.ctx.session_info is not None and bool(self.name_) and self.ctx.focus() is not None
+                and stats.info_x(self.size.width) is not None)
+
+    def open_info(self) -> None:
+        """The session in context's status info, in the app's dialog (#242)."""
+        sid = self.ctx.focus()
+        if sid is not None and self.ctx.session_info is not None:
+            self.ctx.session_info(sid)
 
     @property
     def at(self) -> str | None:
@@ -243,9 +257,11 @@ class SessionStats(Widget):
         if self.slider() is not None and self.at == "slider":
             self.pick(api.EFFORTS[end])
 
-    def action_press_zoom(self) -> None:
-        """Enter or Space on the zoom's - or +, as a click on it."""
-        if self.at in ZOOM_PARTS:
+    def action_press(self) -> None:
+        """Enter or Space on the session info's icon or the zoom's - or +, as a click on it."""
+        if self.at == "info":
+            self.open_info()
+        elif self.at in ZOOM_PARTS:
             self.zoom_to(stats.zoom_target(self.span, self.more, ZOOM_PARTS.index(self.at)))
 
     def zoom_to(self, span: int | None) -> None:
@@ -262,9 +278,15 @@ class SessionStats(Widget):
     def on_click(self, event: events.Click) -> None:
         """A click on a level picks it, or on an arrow the level it steps to: whichever form
         the slider is drawn in at this width (stats.slider_spans). One on the charts' - or +
-        zooms them both out or in (stats.zoom_spans)."""
+        zooms them both out or in (stats.zoom_spans). One on the session info's icon, in the top
+        border near its right corner, opens the session info (open_info)."""
         content = self.content_region
         x, y = event.screen_x - content.x - 1, event.screen_y - content.y   # 1: the panel's left border
+        at = stats.info_x(self.size.width)
+        if y == 0 and self.has_info() and at is not None and at - 1 <= x + 1 <= at + 1:   # a cell either side
+            self.part = "info"
+            self.open_info()
+            return
         if self.charts and y == self.line_ys(self.size.width)[-1]:   # the hour ticks', under the last chart
             to = next((to for start, end, to in stats.zoom_spans(self.span, self.size.width, self.more)
                        if start <= x + 1 < end), None)
