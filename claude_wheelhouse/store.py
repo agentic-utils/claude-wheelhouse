@@ -90,7 +90,8 @@ DECISION_FIELDS = (("why", "Why"),)
 # the person to sign in to an MCP server it needs (sessions.mcp_asks): the host no longer asks
 # about every server unprompted, and an older host still does.
 # 23: a turn's closing text answers only the last message it took up (#243), and a message sent
-# mid-turn names the earlier refs to answer with reply: an older host posts it on every ref.
+# mid-turn names the earlier refs to answer with reply. A session on older code (its host runs
+# that code) gets no such note and files one closing text on every ref, misfiling answers.
 PROTOCOL_VERSION = 23
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request

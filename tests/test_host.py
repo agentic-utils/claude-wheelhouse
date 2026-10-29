@@ -2110,7 +2110,7 @@ def test_a_turn_end_answers_the_last_message_it_took_up(streamed, store, sid, se
     assert got == replies, desc
     for q, note in zip(h.client.queries, notes):
         assert (MID in q) == (note is not None) and (note is None or note in q), f"{desc}: {q!r}"
-    assert h.pending == 0, desc
+    assert h.pending == 0 and store.session(sid)["activity"] == "idle", desc
 
 
 def test_the_host_asks_claude_code_to_replay_its_turns(host):

@@ -211,7 +211,7 @@ def midturn_note(earlier: list[str], refs: list[str]) -> str:
     if earlier:
         note += (f"; {', '.join(earlier)} {'gets' if len(earlier) == 1 else 'get'} no automatic reply, "
                  f"so answer {'it' if len(earlier) == 1 else 'each'} with reply(ref)")
-    return note + "."
+    return note + ". If it starts a turn of its own instead, ignore this note."
 
 
 def keep_notes(text: str | None, nonce: str) -> str | None:
