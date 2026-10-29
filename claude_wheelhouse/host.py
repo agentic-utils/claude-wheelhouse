@@ -1021,12 +1021,9 @@ class Host:
                 if c.key is not None:
                     self.late_key = c.key
             return
-        if (c.state == "compacting" and c.origin != "auto" and c.key not in self.sent and not self.pending
-                and c.waited is not None):   # its /compact ended, but the end wasn't written (a locked database)
-            self.end_cycle("completed" if self.compacted_last else "failed", "" if self.compacted_last else
-                           "not compacted")
-        elif c.state == "compacting" and (c.waited or (c.since if c.origin == "auto" else None)) is not None \
-                and at - (c.waited or c.since) > COMPACT_TIMEOUT:   # from /compact taken up, not queued
+        if c.state == "compacting" and c.waited is None and (c.origin == "auto" or list(self.sent) == [c.key]):
+            c.waited = at   # running now: Claude Code's own, or /compact with nothing left ahead of it
+        if c.state == "compacting" and c.waited is not None and at - c.waited > COMPACT_TIMEOUT:
             self.end_cycle("failed", TIMED_OUT)
             if c.origin != "auto":   # Claude Code's own runs inside a turn whose line is that turn's
                 self.store.set_activity(self.sid, NOT_COMPACTED.format(why=TIMED_OUT))
@@ -1184,17 +1181,18 @@ class Host:
                 return
             if c.ask not in self.sent:   # the notes turn ended in an error, or interrupted
                 ended = "cancelled" if interrupted else "failed"
-                self.end_cycle(ended, "cancelled by Interrupt" if interrupted else f"error: {(m.result or m.subtype)[:80]}")
+                await self.steady(self.end_cycle, ended,
+                                  "cancelled by Interrupt" if interrupted else f"error: {(m.result or m.subtype)[:80]}")
         self.compacted_last = self.compacted_from is not None
         then, driven = None, False
         if c is not None and c.state == "compacting" and (c.origin == "auto" or c.key not in self.sent):
             driven = c.origin != "auto"   # Claude Code's own is "automatic" to the session
             if self.compacted_last:
                 then, ended = c.then, "completed"
-                self.end_cycle("completed")
+                await self.steady(self.end_cycle, "completed")   # retried: a lost end would skip then
             else:
                 ended = "cancelled" if interrupted else "failed"
-                self.end_cycle(ended, "cancelled by Interrupt" if interrupted else
+                await self.steady(self.end_cycle, ended, "cancelled by Interrupt" if interrupted else
                                f"not compacted: {(m.result or m.subtype or 'no compaction')[:80]}")
         elif self.late_key is not None and self.late_key not in self.sent:   # a /compact its cycle gave up on
             driven, self.late_key = True, None

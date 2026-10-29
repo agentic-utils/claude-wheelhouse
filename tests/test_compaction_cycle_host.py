@@ -363,3 +363,22 @@ def test_a_locked_database_never_leaves_the_store_closed_with_no_cycle_held(host
     monkeypatch.setattr(store, "move_compaction", real)
     host.end_cycle("cancelled")
     assert host.cycle is None and store.compaction(sid)["state"] == "cancelled"
+
+
+@pytest.mark.parametrize("ahead, state, desc", [
+    (False, "failed", "no replay, nothing ahead of /compact: running, so its clock runs and it fails at the cap"),
+    (True, "compacting", "a turn still ahead of /compact: not running yet, no clock"),
+])
+def test_compacts_clock_never_needs_its_replay(host, store, sid, ahead, state, desc):
+    """Review 3: whether or not Claude Code replays /compact, its clock starts once nothing is
+    ahead of it, so a hung /compact always fails at COMPACT_TIMEOUT."""
+    store.set_runner(sid, "sdk")
+    if ahead:
+        run(host.turn("a long turn"))
+    store.command(sid, "compact", notes="keep Q1")
+    run(host.poll())
+    run(host.poll())
+    if host.cycle.waited is not None:
+        host.cycle.waited -= host_mod.COMPACT_TIMEOUT + 1
+    run(host.poll())
+    assert store.compaction(sid)["state"] == state, desc
