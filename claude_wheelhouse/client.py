@@ -664,6 +664,13 @@ class RemoteClient:
             raise hub_error(e) from None
         return fork.Plan(**{**data, "tree": fork.Tree(**data["tree"]), "items": [tuple(i) for i in data["items"]]})
 
+    def session_info(self, sid: str) -> dict:
+        """The stats pane's session info (Hub.session_info). Raises what the daemon answered, or Unreachable."""
+        try:
+            return self.get(f"/sessions/{sid}/info")
+        except Refused as e:
+            raise hub_error(e) from None
+
     def running_pid(self, sid: str) -> int | None:
         try:
             return self.get(f"/adoptable/{sid}/running")["pid"]

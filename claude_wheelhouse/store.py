@@ -364,7 +364,11 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  # its host's last look at its MCP servers (JSON: when, and each server's name, status,
                  # kind, scope and error), and what it is asked to do about them (JSON list, taken
                  # whole): a sign-in the session asked for (request_mcp_signin), .plan/mcp-on-demand.md
-                 ("sessions", "mcp_status", "TEXT"), ("sessions", "mcp_asks", "TEXT")]
+                 ("sessions", "mcp_status", "TEXT"), ("sessions", "mcp_asks", "TEXT"),
+                 # its wheelhouse MCP server as it started (mark_mcp): its pid, the code it loaded
+                 # (fingerprint.code) and when, so the session info shows one stale after a pull (#242)
+                 ("sessions", "mcp_pid", "INTEGER"), ("sessions", "mcp_code", "TEXT"),
+                 ("sessions", "mcp_started_at", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -973,6 +977,12 @@ class Store:
         """Stamp this code's PROTOCOL_VERSION on the session (the monitor, as it starts)."""
         with self.tx() as db:
             db.execute("UPDATE sessions SET code_version = ? WHERE id = ?", (PROTOCOL_VERSION, sid))
+
+    def mark_mcp(self, sid: str, pid: int, code: str) -> None:
+        """The session's wheelhouse MCP server, as it starts: its pid and the code it loaded."""
+        with self.tx() as db:
+            db.execute("UPDATE sessions SET mcp_pid = ?, mcp_code = ?, mcp_started_at = ? WHERE id = ?",
+                       (pid, code, now(), sid))
 
     def set_mode(self, sid: str, mode: str) -> None:
         if mode not in MODES:

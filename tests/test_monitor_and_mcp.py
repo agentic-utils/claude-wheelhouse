@@ -169,6 +169,8 @@ def test_mcp_server_round_trip(store, sid, db_file, tmp_path):
     assert row["claude_pid"] == 999999, "server leaves the pid registered by run() alone (review #4)"
     assert row["heartbeat_at"], "server beats once on start"
     assert row["code_version"] == PROTOCOL_VERSION, "and stamps its code version"
+    from claude_wheelhouse import fingerprint
+    assert row["mcp_pid"] and row["mcp_code"] == fingerprint.code(), "and records its pid and code (#242)"
 
 
 class BrokenOut:

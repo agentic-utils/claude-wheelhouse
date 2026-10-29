@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 51, 2026-10-29T11:48:27Z, source c28071b9854bc34a (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 56, 2026-10-29T11:52:22Z, source cc5c1cbb3b8eb3f4 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -22,6 +22,9 @@ daemon running.
   conversation pane and the answer box with its send bar (Mode, Send).
 - Right and the other slots: the modules' panes (stats, PRs, Decisions) when installed. A
   pane dragged by its title swaps places with another; Reset layout puts them back.
+- Session info: with a session selected, the ⓘ at the stats pane's top right opens its id
+  (C copies it), user, machine, directory, branch, model, mode, start, transcript, and its
+  MCP server's pid and code, flagged when it is stale (relaunch the session after a pull).
 - The footer lists the main keys; F1 lists every key and button.
 
 ## Words the app uses
@@ -217,11 +220,11 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 ### Tab order
 
-Tab goes round the session list, the card of what happened while you were away while it shows, the items, the answer box, a tour box's Next while one shows, then every button shown, in reading order, then the stats pane's zoom's - and + (Enter or Space presses the one with the focus), and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus where it was, and each has a key. An item opened full screen goes the same way: its answer box, then its buttons; a click in its thread puts focus in the box, where PgUp and PgDn scroll the thread. A doc shown in the inbox takes the answer box's place, and a click on it focuses it: Up, Down, PgUp, PgDn, Home and End scroll it. A focused button that is disabled or hidden (Send, once sent) gives focus to the answer box. Send from a list leaves focus in the list.
+Tab goes round the session list, the card of what happened while you were away while it shows, the items, the answer box, a tour box's Next while one shows, then every button shown, in reading order, then the stats pane's zoom's - and + and its session info ⓘ (with a session selected; Enter or Space presses the one with the focus), and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus where it was, and each has a key. An item opened full screen goes the same way: its answer box, then its buttons; a click in its thread puts focus in the box, where PgUp and PgDn scroll the thread. A doc shown in the inbox takes the answer box's place, and a click on it focuses it: Up, Down, PgUp, PgDn, Home and End scroll it. A focused button that is disabled or hidden (Send, once sent) gives focus to the answer box. Send from a list leaves focus in the list.
 
 ### Mouse
 
-Click selects a row; in the session list, a click on the selected session or the list's title past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may keep Shift+click for itself: Ctrl+Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or Backspace closes them together, the highlight going to the row above the topmost one taken, and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the right-hand end of its row: a click there hides them, and the + it becomes shows them again. A click on a doc opens its editor below it there, as a click on it moves it while it's open. A click on a line of the card of what happened while you were away jumps to it, and its ✕ dismisses it. A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. A click on an emoji suggestion under the answer box takes it in place of the code typed. Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. Drag the lines between the panes to resize them (they light up under the pointer); the sizes are kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; Session steps there has what the wheelhouse tells a session at each event.
+Click selects a row; in the session list, a click on the selected session or the list's title past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may keep Shift+click for itself: Ctrl+Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or Backspace closes them together, the highlight going to the row above the topmost one taken, and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the right-hand end of its row: a click there hides them, and the + it becomes shows them again. A click on a doc opens its editor below it there, as a click on it moves it while it's open. A click on a line of the card of what happened while you were away jumps to it, and its ✕ dismisses it. A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. A click on an emoji suggestion under the answer box takes it in place of the code typed. A click on the ⓘ at the stats pane's top right opens the selected session's info: its id (C copies it), user and machine, directory, branch, model, mode, start, transcript and its MCP server, flagged when stale. Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. Drag the lines between the panes to resize them (they light up under the pointer); the sizes are kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; Session steps there has what the wheelhouse tells a session at each event.
 
 ### Buttons
 
@@ -249,7 +252,7 @@ The buttons under the session list act on the session highlighted there, and onl
 
 ### Dialogs
 
-Esc, or a click outside the box, cancels a dialog (not the tutorial offer, which is all but outside). Enter presses the focused button; with focus on a one-line box or a checkbox, or nothing, it takes the dialog's one action (Launch, Rename, Fork, Park and the like), but in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices answers Enter only on the focused button. Tab and Shift+Tab go round its boxes and buttons.
+Esc, or a click outside the box, cancels a dialog (not the tutorial offer, which is all but outside). Enter presses the focused button; with focus on a one-line box or a checkbox, or nothing, it takes the dialog's one action (Launch, Rename, Fork, Park and the like), but in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices answers Enter only on the focused button. Tab and Shift+Tab go round its boxes and buttons. In the session info (the stats pane's ⓘ), C copies the session id.
 
 ### Tour
 
@@ -358,3 +361,4 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Ctrl+Delete in the inbox deletes every completed item at once, but the pinned, with no question: Ctrl+Z brings them all back.
 - A completed item leaves the inbox 5 minutes after it completed (AUTOCLEANSE_MINUTES in a .env, 0 for never); Alt+V shows it again.
 - Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it.
+- The ⓘ at the stats pane's top right shows the selected session's info: its id (C copies it), user, machine, branch, model, transcript, and its MCP server's code, flagged when it needs a relaunch.
