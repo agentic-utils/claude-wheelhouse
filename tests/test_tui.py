@@ -3980,19 +3980,22 @@ async def test_the_zoom_buttons_zoom_both_charts(store, sid, tmp_path, monkeypat
 @pytest.mark.anyio
 @pytest.mark.both
 @pytest.mark.parametrize("size", [(160, 50), (80, 24)])
-@pytest.mark.parametrize("mcp, warns, desc", [
-    (None, None, "no MCP server recorded (older code), not running: nothing to flag"),
-    ("current", None, "its MCP server on the wheelhouse's code"),
-    ("deadbeef00000000", "stale, the wheelhouse runs", "its MCP server on other code: a pull since it started"),
+@pytest.mark.parametrize("mcp, running, warns, desc", [
+    (None, False, None, "no MCP server recorded (older code), not running: nothing to flag"),
+    ("current", True, None, "its MCP server on the wheelhouse's code"),
+    ("deadbeef00000000", True, "stale, the wheelhouse runs", "its MCP server on other code: a pull since it started"),
+    ("deadbeef00000000", False, None, "an ended session's last MCP server: nothing to relaunch, so not flagged"),
 ])
-async def test_the_session_info_icon_shows_the_sessions_info(store, sid, tmp_path, monkeypatch, size, mcp, warns,
-                                                             desc):
+async def test_the_session_info_icon_shows_the_sessions_info(store, sid, tmp_path, monkeypatch, request, size, mcp,
+                                                             running, warns, desc):
     """#242: the stats pane's (i), clicked or reached by Tab and Enter, opens the selected
     session's info: its id (C copies it), user, directory, mode, transcript, and its MCP
     server's pid and code, flagged when that isn't the wheelhouse's. It fits at 80x24."""
     from claude_wheelhouse import fingerprint
     transcript_of(tmp_path / "projects/-home-u-repo", sid, usage_rec("m1", 0, 82_000))
     monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    if running:
+        request.getfixturevalue("live")
     if mcp:
         store.mark_mcp(sid, 4242, fingerprint.code() if mcp == "current" else mcp)
     desc = f"{desc} at {size[0]}x{size[1]}"

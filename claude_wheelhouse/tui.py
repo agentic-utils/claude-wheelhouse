@@ -3216,7 +3216,8 @@ def info_rows(info: dict) -> list[tuple[str, str, bool]]:
         mcp = ("not recorded: started on code from before this was tracked" if info["running"] else "not running")
     else:
         mcp = (f"pid {info['mcp_pid']}, code {info['mcp_code']}, started {when(info['mcp_started'])}"
-               + (f": stale, the wheelhouse runs {info['code']}; relaunch to pick it up" if info["mcp_stale"] else ""))
+               + (f": stale, the wheelhouse runs {info['code']}; relaunch to pick it up"
+                  if info["mcp_stale"] and info["running"] else ""))
     protocol = f"{info['protocol'] or 'none'}, current {info['protocol_now']}" + (
         ": relaunch needed" if info["relaunch"] else "")
     return [("session", info["id"], False), ("name", info["name"], False),
@@ -3226,7 +3227,7 @@ def info_rows(info: dict) -> list[tuple[str, str, bool]]:
             ("transcript", info["transcript"] or "not found", False),
             ("claude", f"pid {info['claude_pid']}" if info["running"] and info["claude_pid"] else
              "running" if info["running"] else "not running", False),
-            ("mcp server", mcp, info["mcp_stale"] or (info["running"] and info["mcp_code"] is None)),
+            ("mcp server", mcp, info["running"] and (info["mcp_stale"] or info["mcp_code"] is None)),
             ("protocol", protocol, info["relaunch"] and info["running"])]
 
 
@@ -8300,8 +8301,6 @@ class WheelhouseApp(App):
         if self.told(self.client.rename(sid, name)).ok:   # not if cancelled, or unchanged
             self.refresh_data()
 
-    @on(Button.Pressed, "#fork")
-    @session_action
     def show_session_info(self, sid: str) -> None:
         """A session's status info (SessionInfo), as the stats pane's (i) asks (#242)."""
         try:
@@ -8313,6 +8312,8 @@ class WheelhouseApp(App):
             return
         self.push_screen(SessionInfo(info))
 
+    @on(Button.Pressed, "#fork")
+    @session_action
     def fork_pressed(self) -> None:
         """Fork: the dialog (ForkSession), then the fork, which the list follows."""
         self.settle()
