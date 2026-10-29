@@ -1,5 +1,6 @@
 import bisect
 import functools
+import getpass
 import html
 import itertools
 import json
@@ -3974,6 +3975,60 @@ async def test_the_zoom_buttons_zoom_both_charts(store, sid, tmp_path, monkeypat
         await click("-")
         await click("-")
         assert pane.span == transcript_usage.SPAN and not zoomable(pane, "-"), f"{desc}: a transcript all in the span: - goes no wider"
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("size", [(160, 50), (80, 24)])
+@pytest.mark.parametrize("mcp, warns, desc", [
+    (None, None, "no MCP server recorded (older code), not running: nothing to flag"),
+    ("current", None, "its MCP server on the wheelhouse's code"),
+    ("deadbeef00000000", "stale, the wheelhouse runs", "its MCP server on other code: a pull since it started"),
+])
+async def test_the_session_info_icon_shows_the_sessions_info(store, sid, tmp_path, monkeypatch, size, mcp, warns,
+                                                             desc):
+    """#242: the stats pane's (i), clicked or reached by Tab and Enter, opens the selected
+    session's info: its id (C copies it), user, directory, mode, transcript, and its MCP
+    server's pid and code, flagged when that isn't the wheelhouse's. It fits at 80x24."""
+    from claude_wheelhouse import fingerprint
+    transcript_of(tmp_path / "projects/-home-u-repo", sid, usage_rec("m1", 0, 82_000))
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    if mcp:
+        store.mark_mcp(sid, 4242, fingerprint.code() if mcp == "current" else mcp)
+    desc = f"{desc} at {size[0]}x{size[1]}"
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        app.follow(sid)
+        app.refresh_data()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        pane = app.query_one("#stats")
+        at = stats.info_x(pane.size.width)
+        assert at is not None and pane.render().plain.split("\n")[0][at] == stats.INFO, f"{desc}: the icon is drawn"
+        top = pane.content_region.offset - pane.region.offset
+        await pilot.click("#stats", offset=(top.x + at, top.y))
+        await pilot.pause()
+        assert isinstance(app.screen, tui.SessionInfo), f"{desc}: a click on the icon opens the info"
+        box = app.screen.query_one("#dialog")
+        assert box.region.right <= size[0] and box.region.bottom <= size[1], f"{desc}: the dialog fits the screen"
+        rows = {label: (value, warn) for label, value, warn in tui.info_rows(app.screen.info)}
+        assert rows["session"] == (sid, False) and rows["directory"][0] == str(tmp_path), desc
+        assert rows["mode"][0] == "terminal tab" and rows["transcript"][0].endswith(f"{sid}.jsonl"), desc
+        assert rows["user"][0].startswith(f"{getpass.getuser()} on "), desc
+        assert ("pid 4242" in rows["mcp server"][0]) == bool(mcp), desc
+        assert rows["mcp server"][1] == bool(warns) and (warns or "") in rows["mcp server"][0], desc
+        await pilot.press("c")
+        assert app.clipboard == sid, f"{desc}: C copies the session id"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, tui.SessionInfo), desc
+        pane.focus()
+        pane.focus_part("info")
+        await pilot.pause()
+        assert pane.at == "info", f"{desc}: the icon is a Tab stop"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, tui.SessionInfo), f"{desc}: Enter on the icon opens the info"
 
 
 async def click_zoom(pilot, pane, button, desc):

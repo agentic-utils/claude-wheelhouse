@@ -3205,6 +3205,71 @@ class McpServers(Dialog):
         self.action_answer(None)
 
 
+def info_rows(info: dict) -> list[tuple[str, str, bool]]:
+    """The session info's rows (Hub.session_info): (label, value, whether it warns)."""
+    def when(at: str | None) -> str:
+        return f"{at[:16].replace('T', ' ')}Z" if at else "not recorded"
+    mode = info["mode"] + (", in a shell tab" if info["shell"] else "")
+    pending = f" ({info['pending']})" if info.get("pending") else ""
+    model = " · ".join(x for x in (models.name(info["model"]) or info["model"], info["effort"]) if x) or "not known"
+    if info["mcp_code"] is None:
+        mcp = ("not recorded: started on code from before this was tracked" if info["running"] else "not running")
+    else:
+        mcp = (f"pid {info['mcp_pid']}, code {info['mcp_code']}, started {when(info['mcp_started'])}"
+               + (f": stale, the wheelhouse runs {info['code']}; relaunch to pick it up" if info["mcp_stale"] else ""))
+    protocol = f"{info['protocol'] or 'none'}, current {info['protocol_now']}" + (
+        ": relaunch needed" if info["relaunch"] else "")
+    return [("session", info["id"], False), ("name", info["name"], False),
+            ("user", f"{info['user']} on {info['machine']}", False), ("directory", info["cwd"], False),
+            ("branch", info["branch"] or "not a git repository", False), ("model", model + pending, False),
+            ("mode", mode, False), ("started", when(info["started"]), False),
+            ("transcript", info["transcript"] or "not found", False),
+            ("claude", f"pid {info['claude_pid']}" if info["running"] and info["claude_pid"] else
+             "running" if info["running"] else "not running", False),
+            ("mcp server", mcp, info["mcp_stale"] or (info["running"] and info["mcp_code"] is None)),
+            ("protocol", protocol, info["relaunch"] and info["running"])]
+
+
+class SessionInfo(Dialog):
+    """A session's status info (#242), opened by the stats pane's (i) (api.Context.session_info):
+    its id, copied by C or Copy id, who and where it runs, its directory, branch, model, mode,
+    start and transcript, and its wheelhouse MCP server's pid and code, flagged when stale.
+    Closes on Esc, a click outside, or Enter on Close, where focus starts."""
+    BINDINGS = [Binding("c", "copy", "Copy the session id", show=False)]
+
+    def __init__(self, info: dict):
+        super().__init__()
+        self.info = info
+
+    def compose(self) -> ComposeResult:
+        text = Text()
+        for i, (label, value, warns) in enumerate(info_rows(self.info)):
+            text.append(("\n" if i else "") + f"{label:<11}", style="#7f7f7f")
+            text.append(value, style="bold #ffd300" if warns else "")
+        with Vertical(id="dialog"):
+            yield Label(f"SESSION INFO · {self.info['name']}", classes="dialog-title", markup=False)
+            yield Label(text, classes="dialog-prompt", id="sinfo-rows")
+            with Horizontal(classes="buttons"):
+                yield Button(Text("Copy id [C]"), id="sinfo-copy")
+                yield Button("Close", id="cancel")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self.set_focus(self.query_one("#cancel", Button))
+
+    def action_copy(self) -> None:
+        self.app.copy_to_clipboard(self.info["id"])
+        self.app.notify("session id copied")
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "sinfo-copy":
+            self.action_copy()
+        else:
+            self.action_answer(None)
+
+
 class AdoptList(KeepColours, DataTable):
     """The sessions Adopt offers: a running one's amber mark kept under the mouse and the
     cursor (#217)."""
@@ -3981,7 +4046,7 @@ DESCRIBE = {
     "effort(1)": "A higher effort, applied live",
     "effort_end(0)": "The lowest effort",
     "effort_end(-1)": "The highest effort",
-    "press_zoom": "On the charts' - or +, zoom them out or in",
+    "press": "On the session info's ⓘ, open it; on the charts' - or +, zoom them out or in",
     "press('allow')": "Allow the permission item in context; on the question suggesting Compact, Compact",
     "press('always')": "Always: allow it, and keep the rule; on the question suggesting Compact, Leave it",
     "press('deny')": "Deny it, with an optional reason (Enter denies); on the question suggesting Compact, just compact after",
@@ -4059,7 +4124,8 @@ LIST_KEYS = [Binding(key, action) for key, action in (
 SLIDER_TAB = "effort slider (while it shows) and its "   # SDK mode's alone (keys_help)
 TABS = ("Tab goes round the session list, the card of what happened while you were away while it shows, the items, the answer box, a tour box's Next while one shows, then "
         "every button shown, in reading "
-        "order, then the stats pane's {slider}zoom's - and + (Enter or Space presses the one with the focus), "
+        "order, then the stats pane's session info ⓘ (with a session selected), {slider}zoom's - and + (Enter "
+        "or Space presses the one with the focus), "
         "and Shift+Tab back. A click in the conversation puts focus in the answer box, and Ctrl+Enter "
         "leaves it there; PgUp and PgDn in the box scroll the conversation. A click on a button leaves focus "
         "where it was, and each has a key. An item opened full screen goes the same way: its answer box, then "
@@ -4087,6 +4153,8 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "dismisses it. "
          "A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. "
          "A click on an emoji suggestion under the answer box takes it in place of the code typed. "
+         "A click on the ⓘ at the stats pane's top right opens the selected session's info: its id (C copies it), "
+         "user and machine, directory, branch, model, mode, start, transcript and its MCP server, flagged when stale. "
          "Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; "
          "elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
@@ -4100,7 +4168,8 @@ TOUR_HELP = ("Esc ends the tour at any time, once you confirm, from any of its b
 DIALOGS = ("Esc, or a click outside the box, cancels a dialog (not the tutorial offer, which is all but outside). Enter presses the focused button; with focus on a "
            "one-line box or a checkbox, or nothing, it takes the dialog's one action (Launch, Rename, Fork, Park and "
            "the like), but in a list, a set of choices or a multi-line box it does what it does there. A dialog of "
-           "several choices answers Enter only on the focused button. Tab and Shift+Tab go round its boxes and buttons.")
+           "several choices answers Enter only on the focused button. Tab and Shift+Tab go round its boxes and buttons. "
+           "In the session info (the stats pane's ⓘ), C copies the session id.")
 # the SDK-only buttons' keys, and those buttons, which the F1 overlay leaves out unless SDK
 # mode is on (features.py, EXPERIMENTAL: the author's alone until Anthropic's terms are
 # confirmed) or the screen shows them (a host's session, which runs on with it off). Out of
@@ -4462,7 +4531,7 @@ class WheelhouseApp(App):
         # the state dir: the database's, for a module that keeps files of its own
         state_dir = self.store.path.parent if self.store else db_path().parent
         self.ctx = api.Context(state_dir, self.module_sessions, self.stats_sid, usage=self.client.usage,
-                               set_effort=self.set_effort)
+                               set_effort=self.set_effort, session_info=self.show_session_info)
         self.panes: list[Widget] = []   # the modules' widgets, mounted in their slots
         # the helper chat (Alt+Q): its driver, made at the first question, and the chat, kept for the run
         self.helper: helper.Helper | None = None
@@ -8233,6 +8302,17 @@ class WheelhouseApp(App):
 
     @on(Button.Pressed, "#fork")
     @session_action
+    def show_session_info(self, sid: str) -> None:
+        """A session's status info (SessionInfo), as the stats pane's (i) asks (#242)."""
+        try:
+            info = self.client.session_info(sid)
+        except SessionGone:
+            return
+        except (OSError, RuntimeError, ValueError) as e:   # the daemon unreachable or refusing
+            self.notify(f"can't show the session info: {e}", severity="error")
+            return
+        self.push_screen(SessionInfo(info))
+
     def fork_pressed(self) -> None:
         """Fork: the dialog (ForkSession), then the fork, which the list follows."""
         self.settle()

@@ -278,16 +278,32 @@ def pending_line(pending: str | None, width: int) -> Text:
     return Text(PENDING_SHORT[pending], style=hexc(WARN))
 
 
-def panel(head: str, rows: list[Text], width: int) -> list[Text]:
-    """The dashboard's panel: a rounded border in its dimmest colour, titled in its accent.
-    Rows are cut or padded to fit inside."""
+INFO = "ⓘ"   # the session info's icon, in the panel's top border near its right corner (#242)
+INFO_ROOM = 4   # the cells it takes from the title: " ⓘ ─" before the corner
+
+
+def info_x(width: int) -> int | None:
+    """Where the session info's icon is drawn in a pane this wide (panel), if it fits."""
+    return width - 4 if width - 2 >= 8 + INFO_ROOM else None
+
+
+def panel(head: str, rows: list[Text], width: int, info: bool = False, info_focused: bool = False) -> list[Text]:
+    """The dashboard's panel: a rounded border in its dimmest colour, titled in its accent,
+    with the session info's icon near its top right corner for one session (info), lit while
+    it has the focus. Rows are cut or padded to fit inside."""
     inner = width - 2
     if inner < 8:
         return rows
     border = hexc(DIM2)
+    info = info and info_x(width) is not None
+    room = INFO_ROOM if info else 0
     name = Text(head, style=f"bold {hexc(ACCENT)}")
-    name.truncate(inner - 4)
-    out = [Text("╭─ ", style=border) + name + Text(" " + "─" * (inner - 3 - name.cell_len) + "╮", style=border)]
+    name.truncate(inner - 4 - room)
+    tail = Text(" " + "─" * (inner - 3 - room - name.cell_len), style=border)
+    if info:
+        tail += Text(" ", style=border) + Text(INFO, style=f"bold reverse {hexc(ACCENT)}" if info_focused
+                                               else f"bold {hexc(ACCENT)}") + Text(" ─", style=border)
+    out = [Text("╭─ ", style=border) + name + tail + Text("╮", style=border)]
     for row in rows:
         row = row.copy()
         row.truncate(inner, pad=True)
@@ -306,16 +322,19 @@ def spaced(rows: list[Text]) -> list[Text]:
 
 def layout(view, name: str, note: str | None, usage: "AccountUsage", now: float, width: int,
            height: int, setting: dict | None = None, focused: bool = False,
-           span: int = SPAN, loading: bool = False, more: bool = True) -> tuple[list[Text], list["Chart"]]:
+           span: int = SPAN, loading: bool = False, more: bool = True, info: bool = False,
+           info_focused: bool = False) -> tuple[list[Text], list["Chart"]]:
     """The pane at a size: a bordered panel of the gauges (a blank line above them and
     under each) and the cache and compaction rows, then as many of the charts as fit under it.
     A session run by a host (setting: Hub.model_state) has the effort slider above the
     gauges, on SLIDER_ROW. The charts cover `span` (zoom), its older part from the history,
-    `loading` while that's still being read, and `more` if there's older history to zoom out to."""
+    `loading` while that's still being read, and `more` if there's older history to zoom out to.
+    One session's (info) has the session info's icon in its top border, lit while focused."""
     if view is None:
         body = said(note or "no sessions running", width - 2) + [Text()] + spaced(gauges(None, usage, now, width - 2))
-        return panel("stats", body, width), []
-    head, says_effort = titled(view, name, setting, width - 6)
+        return panel("stats", body, width, info and bool(name), info_focused), []
+    info = info and isinstance(view, Snapshot)
+    head, says_effort = titled(view, name, setting, width - 6 - INFO_ROOM * (info and info_x(width) is not None))
     effort = effort_of(view, setting)
     if has_slider(view, setting):   # the line under it says while a change is pending: no jump when it's done
         top = [Text(), slider(effort, focused, width - 2), pending_line(setting.get("pending"), width - 2)]
@@ -326,7 +345,7 @@ def layout(view, name: str, note: str | None, usage: "AccountUsage", now: float,
     body = top + spaced(gauges(view, usage, now, width - 2)) + stat_rows(view, now)
     if note:   # beside a view: something went wrong reading it
         body += said(note, width - 2)
-    rows = panel(head, body, width)
+    rows = panel(head, body, width, info, info_focused)
     return rows, charts(view.turns, now, width, height - len(rows), height, span, histories(view), loading, more)
 
 

@@ -343,6 +343,12 @@ session.
   past a week). The pane reads only the last two hours at start; zoomed out further, it reads
   the older history in the background, and the caption says `loading…` until it's in. What
   it has read, and the zoom, last until the wheelhouse closes.
+  With a session selected, the `ⓘ` at the panel's top right (a click, or `Tab` to it and `Enter`)
+  opens its session info: its id (`C` or Copy id copies it), the user and machine it runs as,
+  its directory and branch, model and effort, mode (terminal tab or SDK host), start (UTC),
+  transcript, Claude Code's pid, and its wheelhouse MCP server's pid and the code it started on,
+  flagged in yellow when that isn't the wheelhouse's own (a pull since it started: relaunch it),
+  and the protocol version it runs against the current one.
   A short pane drops the output chart first, then both. With no session selected, every
   session's totals, with no context gauge (each session has its own). The charts' shimmer, and the session list's Cylon eyes, rest while you type in an answer box. The
   colours need 24-bit colour: Windows Terminal draws it but doesn't tell WSL, so the
@@ -561,7 +567,7 @@ stood, an open question open again; in a text box, its own undo), `F1` list ever
 Every dialog opens centred over the screen (the helper's drawer docks right), which stays in sight behind it. `Esc`, or a click outside the box, cancels it (on the tutorial's invite, that is Later, never Never), though not a click outside in the moment a dialog opens (a double-click's second). `Enter` presses the focused button; with focus on a one-line box or a checkbox it takes the dialog's one action (Launch, Rename, Fork, Park and the like), while in a list, a set of choices or a multi-line box it does what it does there. A dialog of several choices (Stop & Forget's, Relaunch's) answers `Enter` only on the focused button. `Tab` and `Shift+Tab` go round its boxes and buttons. A dialog asking yes or no takes `Alt+Y` or `Alt+N` (`Esc` is no, and so is `Enter`, as No has the focus). The `F1` list closes on `Esc`, `Enter`, `F1` or a click outside.
 
 `Tab` goes round the session list, the items, the Decisions list, the answer box, the tour's Next while a tour box
-with one shows, then every button shown, in reading order, then the stats pane's effort slider (while it shows) and its zoom's `-` and `+` (`Enter` or
+with one shows, then every button shown, in reading order, then the stats pane's session info `ⓘ` (with a session selected), effort slider (while it shows) and its zoom's `-` and `+` (`Enter` or
 `Space` presses the one with the focus), and `Shift+Tab` goes back. Nothing else is a stop. A click in the conversation puts focus in the
 answer box, where `PgUp` and `PgDn` scroll the conversation, and `Ctrl+Enter` leaves it there. A click on
 a button leaves focus where it was. A focused button that is disabled or hidden (Send, once it has sent)

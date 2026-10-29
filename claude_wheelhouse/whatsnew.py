@@ -307,6 +307,10 @@ FEATURES: tuple[Feature, ...] = (
     Feature("since-away", UNRELEASED, ADVANCED,
             note="Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: "
                  "what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it."),
+    # notes only: the stats dialog has its MAX_TIPS already
+    Feature("session-info", UNRELEASED, ADVANCED,
+            note="The ⓘ at the stats pane's top right shows the selected session's info: its id (C copies it), "
+                 "user, machine, branch, model, transcript, and its MCP server's code, flagged when it needs a relaunch."),
 
 )
 
