@@ -6531,7 +6531,7 @@ async def test_ctrl_enter_leaves_focus_in_the_box(store, sid, text, focus, desc)
 # lists, the box, then every button shown and enabled in reading order, the session pane's
 # then the send bar's (Model, Mode, Interrupt, Compact and Shell disabled: a wheelhouse-run session's)
 INBOX_STOPS = ["session-list", "items", "answer", "rename", "relaunch", "park", "end", "fork", "send", "send-all",
-               "stats:zoom-out", "stats:zoom-in"]   # then the stats pane's zoom (no slider: a tab session)
+               "stats:zoom-out", "stats:zoom-in", "stats:info"]   # then the stats pane's zoom (no slider: a tab session), and its ⓘ (#242)
 
 
 @pytest.mark.anyio
