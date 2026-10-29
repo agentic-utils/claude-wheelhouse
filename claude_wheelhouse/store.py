@@ -775,6 +775,28 @@ class Store:
         with self.tx() as db:
             self.drop_park_cycle(db, sid)
 
+    def give_up_park_compact(self, sid: str) -> bool:
+        """The park asked for never came in time: its Compact first and its cycle go together, in
+        one transaction, so a locked database can't leave one without the other. Whether it had one."""
+        with self.tx() as db:
+            took = db.execute("UPDATE sessions SET park_compact = 0, park_keep = NULL "
+                              "WHERE id = ? AND park_compact = 1", (sid,)).rowcount == 1
+            self.drop_park_cycle(db, sid)
+        return took
+
+    def expire_park_cycle(self, sid: str, within: float) -> bool:
+        """Park's Compact first has a deadline as every state does: still requested `within`
+        seconds after the press (its park never came), the cycle fails and its Compact first goes,
+        in one transaction, checked by the host and by the hub's sweep. Whether it expired."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=within)).isoformat(timespec="microseconds")
+        with self.tx() as db:
+            expired = db.execute("UPDATE sessions SET compaction = 'failed', compaction_at = ?, park_compact = 0, "
+                                 "park_keep = NULL WHERE id = ? AND compaction = 'requested' AND "
+                                 "compaction_origin = 'park' AND compaction_at < ?", (stamp(), sid, cutoff)).rowcount
+            if expired:
+                db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
+        return bool(expired)
+
     def check_compacting(self, sid: str, action: str) -> None:
         """Compacting if the session is in a compaction cycle: for the hub's actions that are
         more than one write (Relaunch, Unpark, Park now), checked before the first."""

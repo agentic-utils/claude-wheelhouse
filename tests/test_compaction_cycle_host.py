@@ -428,3 +428,69 @@ def test_an_end_its_turn_couldnt_write_is_owed_with_its_then(host, store, sid, m
     monkeypatch.setattr(store, "move_compaction", real)
     run(host.poll())
     assert store.compaction(sid)["state"] == "completed" and host.cycle is None and not store.drafts(sid)
+
+
+def aged(store, sid, seconds):
+    """The cycle's state entered `seconds` ago."""
+    from datetime import datetime, timedelta, timezone
+    at = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat(timespec="microseconds")
+    store.db.execute("UPDATE sessions SET compaction_at = ? WHERE id = ?", (at, sid))
+
+
+@pytest.mark.parametrize("age, state, desc", [
+    (host_mod.PARK_COMPACT_WITHIN - 60, "requested", "within the deadline: still waiting for the park"),
+    (host_mod.PARK_COMPACT_WITHIN + 1, "failed", "past it: failed, unlocked, its Compact first gone"),
+])
+def test_parks_cycle_has_a_deadline_the_host_checks(host, store, sid, age, state, desc):
+    store.set_runner(sid, "sdk")
+    store.request(sid, "park", True)
+    run(host.poll())
+    aged(store, sid, age)
+    run(host.poll())
+    assert store.compaction(sid)["state"] == state, desc
+    assert bool(store.session(sid)["park_compact"]) == (state == "requested"), desc
+
+
+def test_the_hubs_sweep_fails_an_expired_park_cycle_whoever_hosts_it(store, sid, monkeypatch):
+    from claude_wheelhouse import liveness
+    from claude_wheelhouse.hub import Hub
+    store.set_runner(sid, "sdk")
+    store.request(sid, "park", True)
+    aged(store, sid, host_mod.PARK_COMPACT_WITHIN + 1)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    Hub(store).refresh()
+    assert store.compaction(sid)["state"] == "failed" and not compacting_now(store.session(sid))
+
+
+@pytest.mark.parametrize("parked, requested, state, retold, desc", [
+    (False, True, "requested", True, "its request told to the last Claude Code: told again, its clock runs"),
+    (True, False, "requested", False, "parked already: this host compacts it (compact_parked)"),
+    (False, False, "failed", False, "neither asked nor parked: nothing would drive it, so failed"),
+])
+def test_a_restarted_host_redrives_or_fails_a_park_cycle(host, store, sid, parked, requested, state, retold, desc):
+    store.set_runner(sid, "sdk")
+    store.request(sid, "park", True)
+    store.tell_request(sid, "park", store.session(sid)["park_requested_at"])
+    if parked:
+        store.set_parked(sid, True)
+    if not requested:
+        store.db.execute("UPDATE sessions SET park_requested_at = NULL, park_told_at = NULL")
+    host.lost_cycle()
+    assert store.compaction(sid)["state"] == state, desc
+    assert (store.session(sid)["park_told_at"] is None and store.session(sid)["park_requested_at"] is not None) == retold, desc
+
+
+def test_the_park_is_the_cycles_end(host, store, sid):
+    """Doug: the cycle completes when parking completes: parked first, then completed."""
+    store.set_runner(sid, "sdk")
+    store.request(sid, "park", True)
+    run(host.poll())
+    store.set_parked(sid, True)
+    end(host)
+    run(host.poll())
+    order = []
+    real_park, real_move = store.set_parked, store.move_compaction
+    store.set_parked = lambda *a: (order.append("parked"), real_park(*a))[1]
+    store.move_compaction = lambda *a: (order.append(a[2]), real_move(*a))[1]
+    end(host, compacted=True)
+    assert order == ["parked", "completed"] and store.session(sid)["parked"], order

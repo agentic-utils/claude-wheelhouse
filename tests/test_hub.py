@@ -1662,3 +1662,12 @@ def test_an_older_host_is_never_given_a_cycle(hub, store, sid, monkeypatch, act,
     done = act(hub, sid)
     assert store.compaction(sid)["state"] is None and not compacting_now(store.session(sid)), desc
     assert any("older wheelhouse code" in n.text for n in done.notices), f"{desc}: {done.notices}"
+
+
+@pytest.mark.parametrize("runner_, shell, desc", [("tab", None, "a terminal tab"), ("sdk", "tab", "handed to a shell tab")])
+def test_park_with_compact_first_is_refused_in_a_tab(hub, store, sid, monkeypatch, runner_, shell, desc):
+    store.set_runner(sid, runner_)
+    store.db.execute("UPDATE sessions SET shell = ?", (shell,))
+    done = hub.ask(sid, "park", compact=True)
+    assert not done.ok and "compaction isn't offered" in done.notices[0].text, desc
+    assert store.session(sid)["park_requested_at"] is None and store.compaction(sid)["state"] is None, desc

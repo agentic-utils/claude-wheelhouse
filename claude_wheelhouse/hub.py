@@ -32,7 +32,7 @@ from typing import Callable
 
 from . import adopt, api, away, features, fingerprint, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
 from .docroots import DOC_CAP
-from .host import (KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, keepalive_body,
+from .host import (PARK_COMPACT_WITHIN, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, keepalive_body,
                    waits_on_person)
 from .store import (COMPACT_QUESTION, NOTES_WAIT, Compacting, DISMISSABLE, compacting_now, PRS_SINCE, STATUSES, SessionGone, Store, can_queue,
                     PROTOCOL_VERSION, mcp_servers, mode, needs_relaunch, runner, standing)
@@ -341,6 +341,9 @@ class Hub:
                 if self.store.move_compaction(s["id"], s["compaction_id"], "failed"):
                     print(f"wheelhouse: {display_name(s)}'s compaction failed: its host isn't running",
                           file=sys.stderr, flush=True)
+            elif self.store.expire_park_cycle(s["id"], PARK_COMPACT_WITHIN):   # whoever's host, or none
+                print(f"wheelhouse: {display_name(s)}'s Park with Compact first failed: it didn't park within "
+                      f"{PARK_COMPACT_WITHIN // 60} minutes", file=sys.stderr, flush=True)
 
     def note_quiet(self) -> None:
         """A session parked, ended or stopped since the last refresh (or, at a hub's first,
@@ -872,8 +875,12 @@ class Hub:
     @refusable
     def ask(self, sid: str, what: str, compact: bool = False) -> Done:
         """A running session asked to Park or Forget; a Park, to compact once parked (compact)."""
+        s = self.row(sid)
+        if compact and what == "park" and (runner(s) != "sdk" or s["shell"]):   # compaction isn't offered there
+            return Done(False).say(f"{display_name(s)} runs in a terminal tab, where compaction isn't offered: "
+                                   "Park it without Compact first", "warning")
         # a host on older code would never end the cycle: its park compacts as it always has
-        self.store.request(sid, what, compact and what == "park", cycle=runner(self.row(sid)) == "sdk" and not needs_relaunch(self.row(sid)))
+        self.store.request(sid, what, compact and what == "park", cycle=not needs_relaunch(s))
         return Done().say(f"asked the session to {what}" + (", then compact" if compact and what == "park" else ""))
 
     def cancel_request(self, sid: str, what: str) -> Done:

@@ -731,14 +731,15 @@ class Host:
             self.show((session["activity"] or "").replace(f" · {PARKS_AFTER_TURN}", "") or "thinking")
         if self.park_told is not None and time.monotonic() - self.park_told > PARK_COMPACT_WITHIN:
             self.park_told = None   # the park asked for never came: its Compact first goes
-            self.store.take_park_compact(self.sid)
-            self.store.cancel_park_cycle(self.sid)
+            self.store.give_up_park_compact(self.sid)
         if self.unsaid is not None:   # a locked database kept it from the line: written now
             self.store.set_activity(self.sid, self.unsaid)
             self.unsaid = None
         # during a compaction cycle, turns and requests sent before it began are held until it
         # ends (#244): only what a call waiting on the person takes goes
         await self.cycle_due()
+        if self.cycle is None and self.store.expire_park_cycle(self.sid, PARK_COMPACT_WITHIN):
+            self.park_told = None   # its park never came: unlocked, the session as it was
         # Park with Compact first: its cycle runs from the press, so the person's messages are
         # held while the park request still goes to the session
         parking = self.cycle is None and compacting_now(session) and session["compaction_origin"] == "park"
@@ -1227,8 +1228,11 @@ class Host:
             driven = c.origin != "auto"   # Claude Code's own is "automatic" to the session
             if self.compacted_last:
                 then, ended = c.then, "completed"
-                if not await self.close_cycle("completed", then=then):   # its then waits for the end
-                    then = "end" if then == "park" else None   # parking: nothing said meanwhile
+                if then == "park":   # the park is the cycle's end: parked first, then completed
+                    self.store.set_parked(self.sid, True)
+                    self.parked_it, then = True, "end"   # nothing more said or sent
+                if not await self.close_cycle("completed", then=None if then == "end" else then):
+                    then = "end" if then == "end" else None   # its then waits for the end (owed)
             else:
                 ended = "cancelled" if interrupted else "failed"
                 await self.close_cycle(ended, "cancelled by Interrupt" if interrupted else
@@ -1600,6 +1604,7 @@ class Host:
         self.sent, self.taken_up, self.turn_text, self.final_text = {}, [], [], []
         self.end_cycle("cancelled", "handed to a shell tab")
         self.late_key = None
+        self.lost_cycle()   # a park told in the tab and never done there: told again here, or failed
         self.tokens = None   # the tab ran turns this host never saw: its cache is the tab's
         self.reader.cancel()
         await self.steady(self.deny_stale)
@@ -1690,7 +1695,14 @@ class Host:
         with its Compact command waiting is this host's to take."""
         row = self.store.compaction(self.sid)
         s = self.store.session(self.sid)
-        taken = s["host_command"] == "compact" or (row is not None and row["origin"] == "park" and s["park_compact"])
+        parking = row is not None and row["origin"] == "park" and row["state"] == "requested" and s["park_compact"]
+        if parking and not s["parked"] and s["park_requested_at"]:
+            # Park's Compact first, its request told to a Claude Code now gone: told again, so this
+            # host's clock (park_told) runs, under the cycle's own deadline (expire_park_cycle)
+            self.store.untell_request(self.sid, "park")
+        elif parking and not s["parked"]:
+            parking = False   # neither asked nor parked: nothing would drive it
+        taken = s["host_command"] == "compact" or parking
         if row is not None and (row["state"] in ("preparing", "compacting")
                                 or row["state"] == "requested" and not taken):   # nothing will take it
             self.store.move_compaction(self.sid, row["id"], "failed")
