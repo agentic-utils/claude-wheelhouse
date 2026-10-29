@@ -186,6 +186,9 @@ class Context:
     confirm: Callable[[str, Callable[[bool], None]], None] | None = None
     # a line of text asked for: (question, suggestions, called with it, or None if cancelled). None daemon side
     ask: Callable[[str, list[str], Callable[[str | None], None]], None] | None = None
+    # a session's status info shown in a dialog (#242): id (copyable), user and machine, directory and
+    # branch, model, mode, start, transcript, and its MCP server's code, flagged when stale. None daemon side
+    session_info: Callable[[str], None] | None = None
 
 
 @dataclass

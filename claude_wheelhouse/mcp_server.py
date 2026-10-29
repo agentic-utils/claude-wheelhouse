@@ -12,7 +12,7 @@ import time
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import docroots, liveness, steps
+from . import docroots, fingerprint, liveness, steps
 from .store import GONE_TEXT, SessionGone, Store, mcp_named, mcp_servers, redacted, runner
 
 HEARTBEAT_SECONDS = 30
@@ -345,5 +345,6 @@ def main() -> None:
     _sid = os.environ["WHEELHOUSE_SESSION_ID"]
     _store = Store()
     _store.heartbeat(_sid)
+    _store.mark_mcp(_sid, os.getpid(), fingerprint.code())
     threading.Thread(target=_heartbeat, daemon=True).start()
     server.run("stdio")

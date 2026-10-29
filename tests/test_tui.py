@@ -1,5 +1,6 @@
 import bisect
 import functools
+import getpass
 import html
 import itertools
 import json
@@ -3976,6 +3977,63 @@ async def test_the_zoom_buttons_zoom_both_charts(store, sid, tmp_path, monkeypat
         assert pane.span == transcript_usage.SPAN and not zoomable(pane, "-"), f"{desc}: a transcript all in the span: - goes no wider"
 
 
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("size", [(160, 50), (80, 24)])
+@pytest.mark.parametrize("mcp, running, warns, desc", [
+    (None, False, None, "no MCP server recorded (older code), not running: nothing to flag"),
+    ("current", True, None, "its MCP server on the wheelhouse's code"),
+    ("deadbeef00000000", True, "stale, the wheelhouse runs", "its MCP server on other code: a pull since it started"),
+    ("deadbeef00000000", False, None, "an ended session's last MCP server: nothing to relaunch, so not flagged"),
+])
+async def test_the_session_info_icon_shows_the_sessions_info(store, sid, tmp_path, monkeypatch, request, size, mcp,
+                                                             running, warns, desc):
+    """#242: the stats pane's (i), clicked or reached by Tab and Enter, opens the selected
+    session's info: its id (C copies it), user, directory, mode, transcript, and its MCP
+    server's pid and code, flagged when that isn't the wheelhouse's. It fits at 80x24."""
+    from claude_wheelhouse import fingerprint
+    transcript_of(tmp_path / "projects/-home-u-repo", sid, usage_rec("m1", 0, 82_000))
+    monkeypatch.setattr(transcript, "PROJECTS", tmp_path / "projects")
+    if running:
+        request.getfixturevalue("live")
+    if mcp:
+        store.mark_mcp(sid, 4242, fingerprint.code() if mcp == "current" else mcp)
+    desc = f"{desc} at {size[0]}x{size[1]}"
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        app.follow(sid)
+        app.refresh_data()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        pane = app.query_one("#stats")
+        at = stats.info_x(pane.size.width)
+        assert at is not None and pane.render().plain.split("\n")[0][at] == stats.INFO, f"{desc}: the icon is drawn"
+        top = pane.content_region.offset - pane.region.offset
+        await pilot.click("#stats", offset=(top.x + at, top.y))
+        await pilot.pause()
+        assert isinstance(app.screen, tui.SessionInfo), f"{desc}: a click on the icon opens the info"
+        box = app.screen.query_one("#dialog")
+        assert box.region.right <= size[0] and box.region.bottom <= size[1], f"{desc}: the dialog fits the screen"
+        rows = {label: (value, warn) for label, value, warn in tui.info_rows(app.screen.info)}
+        assert rows["session"] == (sid, False) and rows["directory"][0] == str(tmp_path), desc
+        assert rows["mode"][0] == "terminal tab" and rows["transcript"][0].endswith(f"{sid}.jsonl"), desc
+        assert rows["user"][0].startswith(f"{getpass.getuser()} on "), desc
+        assert ("pid 4242" in rows["mcp server"][0]) == bool(mcp), desc
+        assert rows["mcp server"][1] == bool(warns) and (warns or "") in rows["mcp server"][0], desc
+        await pilot.press("c")
+        assert app.clipboard == sid, f"{desc}: C copies the session id"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, tui.SessionInfo), desc
+        pane.focus()
+        pane.focus_part("info")
+        await pilot.pause()
+        assert pane.at == "info", f"{desc}: the icon is a Tab stop"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, tui.SessionInfo), f"{desc}: Enter on the icon opens the info"
+
+
 async def click_zoom(pilot, pane, button, desc):
     """A click on the charts' zoom's - or +, where it's drawn."""
     await pilot.pause()   # drawn, so where the buttons are is known
@@ -6473,7 +6531,7 @@ async def test_ctrl_enter_leaves_focus_in_the_box(store, sid, text, focus, desc)
 # lists, the box, then every button shown and enabled in reading order, the session pane's
 # then the send bar's (Model, Mode, Interrupt, Compact and Shell disabled: a wheelhouse-run session's)
 INBOX_STOPS = ["session-list", "items", "answer", "rename", "relaunch", "park", "end", "fork", "send", "send-all",
-               "stats:zoom-out", "stats:zoom-in"]   # then the stats pane's zoom (no slider: a tab session)
+               "stats:zoom-out", "stats:zoom-in", "stats:info"]   # then the stats pane's zoom (no slider: a tab session), and its ⓘ (#242)
 
 
 @pytest.mark.anyio
@@ -6647,10 +6705,11 @@ def stop_id(app) -> str | None:
 @pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
 @pytest.mark.parametrize("key, order, desc", [
-    ("tab", ["shell", "stats:slider", "stats:zoom-out", "stats:zoom-in", "session-list"],
+    ("tab", ["shell", "stats:slider", "stats:zoom-out", "stats:zoom-in", "stats:info", "session-list"],
      "after the buttons (Shell the last: Send all has nothing to send): the stats pane's effort slider, then "
-     "its zoom's - and + (#77)"),
-    ("shift+tab", ["session-list", "stats:zoom-in", "stats:zoom-out", "stats:slider", "shell"], "and back"),
+     "its zoom's - and + (#77), then its session info's icon (#242)"),
+    ("shift+tab", ["session-list", "stats:info", "stats:zoom-in", "stats:zoom-out", "stats:slider", "shell"],
+     "and back"),
 ])
 async def test_the_stats_panes_stops_follow_the_buttons(store, tmp_path, monkeypatch, key, order, desc):
     sid, app = await hosted_app(store, tmp_path, monkeypatch)
@@ -7139,7 +7198,8 @@ async def test_model_and_effort_are_offered_only_for_a_hosted_session(store, tmp
         app.query_one("#detail").focus()
         await pilot.press("tab")
         await pilot.pause()
-        assert focused_id(app) != "stats", f"{desc}: Tab goes round the inbox's own stops alone (#77)"
+        assert focused_id(app) != "stats" or stop_id(app) == "stats:info", \
+            f"{desc}: Tab goes round the inbox's own stops alone (#77), the stats pane's session info (#242) its one stop"
         app.session_list.focus()
         await pilot.press("alt+m")
         await pilot.pause()

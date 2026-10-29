@@ -422,6 +422,7 @@ class Daemon:
             Route("/sessions/{sid}/conversation", self.query(self.conversation)),
             Route("/sessions/{sid}/fork", self.query(
                 lambda request: dataclasses.asdict(self.hub.fork_plan(request.path_params["sid"])))),
+            Route("/sessions/{sid}/info", self.query(lambda request: self.hub.session_info(request.path_params["sid"]))),
             Route("/sessions/{sid}/{action}", self.command(self.session_command), methods=["POST"]),
             Route("/dispatch", self.command(lambda request, body: self.hub.send_all()), methods=["POST"]),
             Route("/items", self.query(self.items)),

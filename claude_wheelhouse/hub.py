@@ -16,9 +16,12 @@ surface that gave it alone. One on a session that has gone raises SessionGone (r
 a surface reports; the dialogs that ask first, and their wording, are the surface's."""
 
 import functools
+import getpass
 import json
 import os
+import platform
 import signal
+import socket
 import stat
 import sqlite3
 import sys
@@ -27,12 +30,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import adopt, api, away, features, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
+from . import adopt, api, away, features, fingerprint, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
 from .docroots import DOC_CAP
 from .host import (AWAITING_NOTES, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, NO_NOTES, keepalive_body,
                    waits_on_person)
 from .store import (COMPACT_QUESTION, DISMISSABLE, compacting_now, PRS_SINCE, STATUSES, SessionGone, Store, can_queue,
-                    mcp_servers, mode, needs_relaunch, runner, standing)
+                    PROTOCOL_VERSION, mcp_servers, mode, needs_relaunch, runner, standing)
 
 RUNNING = ("live", "stalled", "starting")
 # a hosted session's activity when nothing is under way: errored and stopped count as resting
@@ -141,6 +144,25 @@ def compacted_since(s, asked: float) -> bool:
     the epoch second `asked`: a compaction's end, which no later activity line hides."""
     at = transcript_usage.epoch(s["context_at"] or "")
     return at is not None and at >= asked and (s["context_tokens"] or 0) < COMPACT_FIRST_TOKENS
+
+
+def machine() -> str:
+    """This machine's name, and its WSL distro or OS release where it says."""
+    try:
+        release = platform.freedesktop_os_release().get("PRETTY_NAME")
+    except OSError:
+        release = None
+    where = os.environ.get("WSL_DISTRO_NAME") or release
+    return f"{socket.gethostname()} ({where})" if where else socket.gethostname()
+
+
+def branch(cwd: str) -> str | None:
+    """The branch checked out in cwd, "detached at <sha>" off one, None out of a git repository."""
+    name = fork.git(cwd, "symbolic-ref", "--quiet", "--short", "HEAD")
+    if name:
+        return name
+    sha = fork.git(cwd, "rev-parse", "--short", "HEAD")
+    return f"detached at {sha}" if sha else None
 
 
 @dataclass(frozen=True)
@@ -1039,6 +1061,25 @@ class Hub:
         # where a host's session runs on as it was set (features.py)
         return {"model": want[0] or (got[0] if hosted else None), "effort": want[1] or (got[1] if hosted else None),
                 "pending": pending, "effort_live": hosted and self.sdk}
+
+    def session_info(self, sid: str) -> dict:
+        """What the stats pane's session info shows (#242), all JSON: who and where the session
+        runs (the hub's user and machine, which launch it), its directory and branch, model,
+        effort and mode, when it started, its transcript and Claude Code's pid, and its
+        wheelhouse MCP server: the pid and code it started on (mark_mcp), stale when that
+        isn't this hub's (a pull since, with no relaunch), None when it never said (older code).
+        And the protocol version it stamped against this store's. SessionGone if it has gone."""
+        s = self.row(sid)
+        path = transcript.locate(sid)
+        code = s["mcp_code"]
+        return {"id": sid, "name": display_name(s), "user": getpass.getuser(), "machine": machine(),
+                "cwd": s["cwd"], "branch": branch(s["cwd"]), **self.model_state(s),
+                "mode": "SDK host" if runner(s) == "sdk" else "terminal tab", "shell": bool(s["shell"]),
+                "started": s["launched_at"] or s["created_at"], "transcript": str(path) if path else None,
+                "running": self.running(sid), "claude_pid": s["claude_pid"],
+                "mcp_pid": s["mcp_pid"], "mcp_code": code, "mcp_started": s["mcp_started_at"],
+                "code": fingerprint.code(), "mcp_stale": code is not None and code != fingerprint.code(),
+                "protocol": s["code_version"], "protocol_now": PROTOCOL_VERSION, "relaunch": needs_relaunch(s)}
 
     # items
 
