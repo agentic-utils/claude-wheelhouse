@@ -67,8 +67,8 @@ STEPS = {"poll": lambda h, s: run(h.poll()), "notes": lambda h, s: notes(h),
      "request_compact: promoted once the turn has ended, its keep text the instructions"),
     ("relaunch", ["poll", "notes", "compacted"], ["requested", "preparing", "compacting", "completed"],
      ["The person pressed Compact", "/compact keep Q1"], "Relaunch compacting first: as the person's"),
-    ("park", ["poll", "compacted"], [None, "compacting", "completed"], ["/compact"],
-     "Park's Compact first: /compact once parked, then nothing"),
+    ("park", ["poll", "compacted"], ["requested", "compacting", "completed"], ["/compact"],
+     "Park's Compact first: requested from the press (round 4), /compact once parked, then nothing"),
     ("quiet", ["poll", "notes", "compacted"], [None, "preparing", "compacting", "completed"],
      ["This session has been quiet 8 hours", "/compact keep Q1"], "the quiet mark: asked, then compacted"),
     ("auto", ["compacted"], ["compacting", "completed"], [], "Claude Code's own: blue from PreCompact, nothing sent"),
@@ -382,3 +382,49 @@ def test_compacts_clock_never_needs_its_replay(host, store, sid, ahead, state, d
         host.cycle.waited -= host_mod.COMPACT_TIMEOUT + 1
     run(host.poll())
     assert store.compaction(sid)["state"] == state, desc
+
+
+def test_park_with_compact_first_closes_the_session_from_the_press(host, store, sid):
+    """Review 4: Park with Compact first is a compaction Doug starts: blue and closed from the
+    press, while the park request itself still goes to the session."""
+    store.set_runner(sid, "sdk")
+    store.send(sid, "sent before the press")
+    store.request(sid, "park", True)
+    assert compacting_now(store.session(sid)), "blue at the press"
+    with pytest.raises(Compacting):
+        store.queue(sid, "after the press")
+    run(host.poll())
+    assert len(host.client.queries) == 1 and "sent before the press" not in host.client.queries[0], \
+        f"the park request alone goes; the earlier message is held: {host.client.queries}"
+
+
+@pytest.mark.parametrize("how, desc", [
+    (lambda h, s: s.cancel_request(h.sid, "park"), "the park request cancelled"),
+    (lambda h, s: (s.set_parked(h.sid, True), s.take_park_compact(h.sid), h.sent.clear(), run(h.poll())),
+     "parked, its Compact first gone meanwhile: the host lets the cycle go"),
+    (lambda h, s: s.park(h.sid, hosted=False), "parked where nothing compacts"),
+])
+def test_parks_cycle_is_called_off_with_its_compact_first(host, store, sid, how, desc):
+    store.set_runner(sid, "sdk")
+    store.request(sid, "park", True)
+    run(host.poll())
+    how(host, store)
+    assert store.compaction(sid)["state"] == "cancelled" and not compacting_now(store.session(sid)), desc
+
+
+def test_an_end_its_turn_couldnt_write_is_owed_with_its_then(host, store, sid, monkeypatch):
+    """Review 4: /compact ends while the database stays locked past steady's tries: the end
+    is owed, and the next pass writes it and sends the queue (then send)."""
+    import sqlite3
+    store.set_runner(sid, "sdk")
+    store.queue(sid, "queued")
+    store.command(sid, "compact", notes="keep Q1", then="send")
+    run(host.poll())
+    real = store.move_compaction
+    monkeypatch.setattr(host_mod, "STEADY_TRIES", ())
+    monkeypatch.setattr(store, "move_compaction", lambda *a: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
+    end(host, compacted=True)
+    assert host.cycle is not None and host.owed == ("completed", "", "send") and store.drafts(sid)
+    monkeypatch.setattr(store, "move_compaction", real)
+    run(host.poll())
+    assert store.compaction(sid)["state"] == "completed" and host.cycle is None and not store.drafts(sid)

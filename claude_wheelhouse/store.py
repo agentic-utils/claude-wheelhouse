@@ -763,6 +763,18 @@ class Store:
         elif compacting_now(s):
             raise Compacting(session_name(s), action)
 
+    @staticmethod
+    def drop_park_cycle(db, sid: str) -> None:
+        """Park's Compact first called off before its /compact (the request cancelled, the park
+        never coming, or parked without compacting): its cycle, still requested, is cancelled."""
+        db.execute("UPDATE sessions SET compaction = 'cancelled', compaction_at = ? WHERE id = ? "
+                   "AND compaction = 'requested' AND compaction_origin = 'park'", (stamp(), sid))
+        db.execute("DELETE FROM settings WHERE key = ? AND changes() > 0", (COMPACT_CUTOFF + sid,))
+
+    def cancel_park_cycle(self, sid: str) -> None:
+        with self.tx() as db:
+            self.drop_park_cycle(db, sid)
+
     def check_compacting(self, sid: str, action: str) -> None:
         """Compacting if the session is in a compaction cycle: for the hub's actions that are
         more than one write (Relaunch, Unpark, Park now), checked before the first."""
@@ -1014,7 +1026,7 @@ class Store:
     def request_park(self, sid: str) -> None:
         self.request(sid, "park")
 
-    def request(self, sid: str, what: str, compact: bool = False) -> None:
+    def request(self, sid: str, what: str, compact: bool = False, cycle: bool = True) -> None:
         """The person pressed End or Park on a running session; its monitor passes this on.
         Nothing happens to the data until the session acts, or the person forces it. A Park
         may ask a host to compact the session once it has parked, before it stops (compact)."""
@@ -1027,6 +1039,8 @@ class Store:
             if what == "park":
                 db.execute("UPDATE sessions SET park_compact = ?, park_keep = NULL WHERE id = ?",
                            (int(compact), sid))
+                if compact and cycle:   # Park with Compact first starts the cycle at the press (#244)
+                    self.begin_cycle(db, sid, "park", "requested", "park")
 
     def take_park_compact(self, sid: str) -> bool:
         """The host takes the Park's Compact first (request, or park), once: to compact, or to
@@ -1057,6 +1071,7 @@ class Store:
                        "WHERE id = ?", (sid,))
             if what == "park":
                 db.execute("UPDATE sessions SET park_compact = 0, park_keep = NULL WHERE id = ?", (sid,))
+                self.drop_park_cycle(db, sid)
             if told:
                 db.execute(
                     "INSERT INTO messages (session_id, author, body, created_at) VALUES (?, 'person', ?, ?)",
@@ -1124,6 +1139,8 @@ class Store:
             db.execute("UPDATE sessions SET parked = 1, park_requested_at = NULL, park_told_at = NULL, "
                        "park_compact = ?, park_keep = ? WHERE id = ?", (int(compact), keep if compact else None, sid))
             self.unrequest_compact(db, sid)
+            if not compact:
+                self.drop_park_cycle(db, sid)
         return compact
 
     def end(self, sid: str) -> None:

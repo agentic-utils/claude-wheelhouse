@@ -872,7 +872,8 @@ class Hub:
     @refusable
     def ask(self, sid: str, what: str, compact: bool = False) -> Done:
         """A running session asked to Park or Forget; a Park, to compact once parked (compact)."""
-        self.store.request(sid, what, compact and what == "park")
+        # a host on older code would never end the cycle: its park compacts as it always has
+        self.store.request(sid, what, compact and what == "park", cycle=runner(self.row(sid)) == "sdk" and not needs_relaunch(self.row(sid)))
         return Done().say(f"asked the session to {what}" + (", then compact" if compact and what == "park" else ""))
 
     def cancel_request(self, sid: str, what: str) -> Done:

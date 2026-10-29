@@ -35,7 +35,7 @@ from pathlib import Path
 from . import features, liveness, models, plan_usage, steps, transcript, transcript_usage
 from .launch import PROTOCOL_SDK, after_compaction, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT, request_text
-from .store import (CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, HOST_QUESTION, NOTES_WAIT, SessionGone, Store, callback_url, db_path,
+from .store import (CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, HOST_QUESTION, NOTES_WAIT, SessionGone, compacting_now, Store, callback_url, db_path,
                     mcp_named, mcp_question, mcp_server, now, runner, wheelhouse_question)
 
 POLL_SECONDS = 1.0
@@ -372,6 +372,9 @@ class Host:
         # the compaction cycle under way (#244), if any; and a /compact turn whose cycle ended
         # before it did (timed out): its end is still the wheelhouse's own, never "automatic"
         self.cycle: Cycle | None = None
+        # a cycle's end its turn couldn't write (a database locked past steady's tries): (state,
+        # why, then), written by the next pass, then its then carried out (cycle_due)
+        self.owed: tuple[str, str, str | None] | None = None
         self.late_key: str | None = None
         self.cold_for: float | None = None   # the quiet the quiet mark's compaction was for (cold_due)
         self.park_told: float | None = None   # when the park request went to the session (monotonic)
@@ -729,13 +732,17 @@ class Host:
         if self.park_told is not None and time.monotonic() - self.park_told > PARK_COMPACT_WITHIN:
             self.park_told = None   # the park asked for never came: its Compact first goes
             self.store.take_park_compact(self.sid)
+            self.store.cancel_park_cycle(self.sid)
         if self.unsaid is not None:   # a locked database kept it from the line: written now
             self.store.set_activity(self.sid, self.unsaid)
             self.unsaid = None
         # during a compaction cycle, turns and requests sent before it began are held until it
         # ends (#244): only what a call waiting on the person takes goes
         await self.cycle_due()
-        await self.deliver(session, hold=self.cycle is not None)
+        # Park with Compact first: its cycle runs from the press, so the person's messages are
+        # held while the park request still goes to the session
+        parking = self.cycle is None and compacting_now(session) and session["compaction_origin"] == "park"
+        await self.deliver(session, hold=self.cycle is not None or parking, tell=parking or None)
         await self.reconcile(session)
         asks = self.store.take_mcp_asks(self.sid)
         if asks or (self.mcp_items and time.monotonic() - self.mcp_checked > MCP_RECHECK):
@@ -777,10 +784,11 @@ class Host:
             await self.shell()
         return not self.stopping
 
-    async def deliver(self, session, hold: bool = False) -> None:
+    async def deliver(self, session, hold: bool = False, tell: bool | None = None) -> None:
         """The person's messages, as one turn (or to the call waiting on one), and End and
         Park requests. Held (hold): only what a call waiting on the person takes goes; the
-        rest is left unclaimed, and no request is told."""
+        rest is left unclaimed, and no request is told, unless tell (Park's Compact first,
+        whose park request is its cycle's first step)."""
         mcp, msgs = self.store.take_mcp_replies(self.sid, self.store.claim(self.sid, mcp="with"))
         self.forget_delivered()
         handed = {m["id"]: ref for ref, m in self.handed.items()}
@@ -828,7 +836,7 @@ class Host:
             await self.confirm(turn)
             for m in turn:
                 self.person_back(m)
-        for what in () if hold else REQUEST_TEXT:
+        for what in () if (hold if tell is None else not tell) else REQUEST_TEXT:
             asked = session[f"{what}_requested_at"]
             if asked and session[f"{what}_told_at"] != asked and self.store.tell_request(self.sid, what, asked):
                 await self.turn(request_text(self.store, what))
@@ -873,7 +881,8 @@ class Host:
                 self.show(session["activity"] or "thinking")
             return True
         self.parking_after = False
-        if not session["park_compact"]:
+        if not session["park_compact"]:   # parked without compacting: Park's cycle, if any, is off
+            self.store.cancel_park_cycle(self.sid)
             return False
         # only a park this host asked for, lately, or one park_session settled as compacting
         # (park_keep): a request left unanswered, then a park set some other way (by force,
@@ -882,8 +891,13 @@ class Host:
         asked = keep is not None or (self.park_told is not None
                                      and time.monotonic() - self.park_told <= PARK_COMPACT_WITHIN)
         if not (self.store.take_park_compact(self.sid) and asked):
+            self.store.cancel_park_cycle(self.sid)
             return False
-        cid = self.store.start_compaction(self.sid, "park", then="park")
+        row = self.store.compaction(self.sid)
+        if row is not None and row["state"] == "requested" and row["origin"] == "park":   # started at the press
+            cid = row["id"]
+        else:   # the session parked itself (park_session)
+            cid = self.store.start_compaction(self.sid, "park", then="park")
         if cid is None:   # one under way already (it can't be, parked): nothing more
             return False
         self.cycle = Cycle(cid, "park", "park")
@@ -1005,9 +1019,33 @@ class Host:
         with contextlib.suppress(sqlite3.OperationalError):   # a question left open closes at the next start
             self.close_wait(why or state, c)
 
+    async def close_cycle(self, state: str, why: str = "", then: str | None = None) -> bool:
+        """end_cycle from a turn's end, retried through a locked database; still locked, it is
+        owed to the next pass (cycle_due), with what follows. Whether it was written now."""
+        try:
+            await self.steady(self.end_cycle, state, why)
+            return True
+        except sqlite3.OperationalError:
+            self.owed = (state, why, then)
+            return False
+
+    def follow(self, then: str | None) -> None:
+        """What follows a completed cycle that its turn's end couldn't carry out."""
+        if then == "send":
+            self.store.dispatch(self.sid)
+        elif then == "park":
+            self.store.set_parked(self.sid, True)
+            self.parked_it = True
+
     async def cycle_due(self) -> None:
         """The cycle's clocks, each poll: the notes turn past NOTES_TIMEOUT asks the person to
-        keep waiting or abort (never cancelled unasked); /compact past COMPACT_TIMEOUT fails."""
+        keep waiting or abort (never cancelled unasked); /compact past COMPACT_TIMEOUT fails.
+        First, an end owed (close_cycle) is written, and its then carried out."""
+        if self.owed is not None and self.cycle is not None:
+            state, why, then = self.owed
+            self.end_cycle(state, why)   # still locked: raised, and the next pass tries again
+            self.owed = None
+            self.follow(then)
         c, at = self.cycle, time.monotonic()
         if c is None:
             return
@@ -1181,18 +1219,19 @@ class Host:
                 return
             if c.ask not in self.sent:   # the notes turn ended in an error, or interrupted
                 ended = "cancelled" if interrupted else "failed"
-                await self.steady(self.end_cycle, ended,
-                                  "cancelled by Interrupt" if interrupted else f"error: {(m.result or m.subtype)[:80]}")
+                await self.close_cycle(ended, "cancelled by Interrupt" if interrupted else
+                                       f"error: {(m.result or m.subtype)[:80]}")
         self.compacted_last = self.compacted_from is not None
         then, driven = None, False
         if c is not None and c.state == "compacting" and (c.origin == "auto" or c.key not in self.sent):
             driven = c.origin != "auto"   # Claude Code's own is "automatic" to the session
             if self.compacted_last:
                 then, ended = c.then, "completed"
-                await self.steady(self.end_cycle, "completed")   # retried: a lost end would skip then
+                if not await self.close_cycle("completed", then=then):   # its then waits for the end
+                    then = "end" if then == "park" else None   # parking: nothing said meanwhile
             else:
                 ended = "cancelled" if interrupted else "failed"
-                await self.steady(self.end_cycle, ended, "cancelled by Interrupt" if interrupted else
+                await self.close_cycle(ended, "cancelled by Interrupt" if interrupted else
                                f"not compacted: {(m.result or m.subtype or 'no compaction')[:80]}")
         elif self.late_key is not None and self.late_key not in self.sent:   # a /compact its cycle gave up on
             driven, self.late_key = True, None
@@ -1650,9 +1689,10 @@ class Host:
         that Claude Code's: it ends as failed, and its question closes. Only one still requested
         with its Compact command waiting is this host's to take."""
         row = self.store.compaction(self.sid)
-        command = self.store.session(self.sid)["host_command"]
+        s = self.store.session(self.sid)
+        taken = s["host_command"] == "compact" or (row is not None and row["origin"] == "park" and s["park_compact"])
         if row is not None and (row["state"] in ("preparing", "compacting")
-                                or row["state"] == "requested" and command != "compact"):   # nothing will take it
+                                or row["state"] == "requested" and not taken):   # nothing will take it
             self.store.move_compaction(self.sid, row["id"], "failed")
         for item in self.store.items(self.sid, include_closed=False):
             if item["kind"] == "question" and item["answer"] == NOTES_WAIT and item["status"] not in CLOSED:
