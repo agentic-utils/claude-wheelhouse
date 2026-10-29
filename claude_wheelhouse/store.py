@@ -89,7 +89,10 @@ DECISION_FIELDS = (("why", "Why"),)
 # 22: request_mcp_signin (.plan/mcp-on-demand.md), with which a session run in the wheelhouse asks
 # the person to sign in to an MCP server it needs (sessions.mcp_asks): the host no longer asks
 # about every server unprompted, and an older host still does.
-PROTOCOL_VERSION = 22
+# 23: a turn's closing text answers only the last message it took up (#243), and a message sent
+# mid-turn names the earlier refs to answer with reply. A session on older code (its host runs
+# that code) gets no such note and files one closing text on every ref, misfiling answers.
+PROTOCOL_VERSION = 23
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60

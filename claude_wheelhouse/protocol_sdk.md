@@ -14,6 +14,10 @@ to a session: launch.protocol_file drops it. -->
   itself in chat: the wheelhouse posts your text after your last tool call in that item's
   thread as your reply, so make that text the answer, not a recap or a note that you
   updated the item, and don't repeat it with `reply`.
+- A message can reach you mid-turn, taken up into the turn running. Your closing text then
+  answers only the last message taken up (none if it was `(general)`). Such a message ends
+  with a `[wheelhouse]` note naming the earlier messages' refs: answer each of those with
+  `reply(ref)`, and end the turn with the answer to the last one.
 - Tool calls that need the person's approval, and the questions you ask with
   AskUserQuestion, reach the wheelhouse inbox by themselves: don't also post them as items.
 - The wheelhouse may ask you to park or end (Stop & Forget), in a `[wheelhouse]` message.
