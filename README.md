@@ -551,8 +551,8 @@ along with the launch command.
 ## Using it
 
 Keys, shown in upper case as usual (Alt+V means Alt and the v key, not Shift+V). Every one has a modifier (or is `F1`), so each works from the answer box too: `Enter` open an item's thread (or follow a session's conversation, in the
-session list), `Alt+V` show or hide finished items (the footer says which it will do), `Delete` or `Backspace` in the item list close the
-highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `Alt+N` new session, `Alt+A` adopt, `Alt+Shift+L` relaunch all, `Alt+Shift+M` the MCP servers of the session in context, `Alt+K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
+session list), `Alt+V` show or hide finished items and those autocleanse hid (the footer says which it will do), `Delete` or `Backspace` in the item list close the
+highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `Ctrl+Delete` delete every completed item at once (`Ctrl+Z` brings them back), `Alt+N` new session, `Alt+A` adopt, `Alt+Shift+L` relaunch all, `Alt+Shift+M` the MCP servers of the session in context, `Alt+K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode), `Alt+S` send this one answer now (the queue and mode left as they are),
 `Ctrl+S` send the session's queue (one not running: Unpark or Relaunch it and send, asked first), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
@@ -799,7 +799,8 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   it: just compact, send its queued answers in the same one prompt as that reminder (the
   default), or park it at once, sending nothing more, so nothing writes the compacted context
   to the cache until it is unparked. While a compaction is under way, from Compact pressed
-  until the host says it's compacted (or got no notes, or was interrupted), Compact is off,
+  until the host says it's compacted (or got no notes, failed or was interrupted), through
+  the turn that collects its notes and the `/compact` turn alike, Compact is off,
   the session's inbox items and Detail dim and ignore clicks, and its eye in the session
   list sweeps blue instead of red. The session can also ask for a compaction itself, with
   the `request_compact` tool and the notes it wants kept, for long autonomous runs: the
