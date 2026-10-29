@@ -31,7 +31,7 @@ from claude_wheelhouse.store import PROTOCOL_VERSION
 # the stats pane's tests among these, and the slots' defaults, need the stats module
 stats = pytest.importorskip("claude_wheelhouse_stats.stats", reason="installed without the stats module")
 from claude_wheelhouse.splitter import Splitter
-from conftest import keeps_colours
+from conftest import first_item, keeps_colours, to_first_item
 from claude_wheelhouse.store import COMPACT_QUESTION, Store, mode
 from claude_wheelhouse.tui import (BLANK, COMPACT_HINT, DENY_HINT, MATRIX, NOTHING_SELECTED, PERMISSION_HINT, VOICE, WheelhouseApp, Choice,
                                    CompactButtons, CompactSession, Confirm, ForgetChoice, ParkSession,
@@ -50,15 +50,15 @@ async def test_answer_reaches_the_session(store, sid, live):
         await pilot.pause()
         items = app.query_one("#items", DataTable)
         assert items.row_count == 3, "the two items and the session's conversation"
-        assert str(items.get_row_at(0)[2]) == q, "open question first"
-        items.move_cursor(row=0)
+        assert str(items.get_row_at(first_item(app))[2]) == q, "open question first"
+        items.move_cursor(row=first_item(app))
         await pilot.pause()
         assert app.selected == (sid, q)
         app.query_one("#answer", TextArea).text = "SQLite, it's local"
         await pilot.press("ctrl+enter")
         await pilot.pause()
         assert store.pending(sid) == [], "Ctrl+Enter queues: sessions start in queued mode"
-        assert str(items.get_row_at(0)[3]) == "queued", "the item list shows the queued answer"
+        assert str(items.get_row_at(first_item(app))[3]) == "queued", "the item list shows the queued answer"
         assert str(app.query_one("#session-list", DataTable).get_row_at(0)[5]) == "1"
         await pilot.press("ctrl+s")
         await pilot.pause()
@@ -118,8 +118,7 @@ async def test_subagents_sit_under_their_session(store, sid, tmp_path):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        items = app.query_one("#items", DataTable)
-        rows = [[str(c) for c in items.get_row_at(i)][1:3] for i in range(items.row_count)]
+        rows = item_list_rows(app)   # the conversation rows above them (#236) left out
     assert rows[0] == ["demo", q], "tasks and questions first, in inbox order"
     assert [r[1] for r in rows[1:4]] == ["└ A2", "└ A1", "└ A1"]
     assert [r[0] for r in rows[1:4]] == ["demo", "", "other"], "each session's agents grouped under its name"
@@ -135,10 +134,10 @@ async def test_finished_items_toggle_in_and_take_a_message(store, sid):
         await pilot.pause()
         items = app.query_one("#items", DataTable)
         refs = lambda: [str(items.get_row_at(i)[2]) for i in range(items.row_count)]
-        assert refs() == [t, "💬", done], "a done task stays, settled, at the foot; a closed question is hidden (T71)"
+        assert refs() == ["💬", t, done], "a done task stays, settled, at the foot; a closed question is hidden (T71)"
         await pilot.press("alt+v")
         await pilot.pause()
-        assert refs() == [t, "💬", done, closed], "finished items after the rest"
+        assert refs() == ["💬", t, done, closed], "finished items after the rest"
         items.move_cursor(row=refs().index(closed))
         await pilot.pause()
         app.query_one("#answer", TextArea).text = "the punchline"
@@ -179,7 +178,7 @@ async def test_sending_to_an_ended_session_does_not_crash(store, sid):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        app.query_one("#items", DataTable).move_cursor(row=0)
+        app.query_one("#items", DataTable).move_cursor(row=first_item(app))
         await pilot.pause()
         assert app.selected == (sid, q)
         store.end(sid)
@@ -541,6 +540,7 @@ async def test_thread_view_holds_the_conversation(store, sid):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
+        await to_first_item(app, pilot)
         items = app.query_one("#items", DataTable)
         items.focus()
         await pilot.press("enter")
@@ -934,8 +934,9 @@ async def test_an_unfiltered_conversation_row_acts_on_no_item(store, sid, tmp_pa
 
 @pytest.mark.anyio
 async def test_the_unfiltered_inbox_has_every_sessions_conversation(store, sid, tmp_path):
-    """No session selected: each unparked session's conversation row, named after it, under the
-    active items (#192). Picking one shows its conversation, the session list's highlight still off."""
+    """No session selected: each unparked session's conversation row, named after it, at the top
+    under the inbox's own order (#236, once under the active items, #192). Picking one shows its
+    conversation, the session list's highlight still off."""
     other = store.create_session(str(tmp_path), name="other")
     parked = store.create_session(str(tmp_path), name="napping")
     store.park(parked, compact=False, hosted=False)
@@ -946,11 +947,11 @@ async def test_the_unfiltered_inbox_has_every_sessions_conversation(store, sid, 
         items = app.query_one("#items", DataTable)
         rows = [(items.coordinate_to_cell_key((i, 0)).row_key.value, str(items.get_row_at(i)[2]),
                  str(items.get_row_at(i)[-1])) for i in range(items.row_count)]
-        assert rows == [(f"{sid}|Q1", "Q1", "which db?"), (f"{sid}|", "💬", "demo"), (f"{other}|", "💬", "other")], \
-            "the items, then a conversation row per unparked session, named after it"
-        assert items.cursor_row == 0 and app.viewing is None, "the question still first, and highlighted"
+        assert rows == [(f"{sid}|", "💬", "demo"), (f"{other}|", "💬", "other"), (f"{sid}|Q1", "Q1", "which db?")], \
+            "a conversation row per unparked session, named after it, then the items"
+        assert items.cursor_row == 0 and app.viewing == sid, "the first conversation highlighted, as the top row"
         items.focus()
-        await pilot.press("down", "down")
+        await pilot.press("down")
         await pilot.pause()
         assert app.viewing == other and app.filter_sid is None, "its conversation, the inbox still every session's"
         assert "other · conversation" in app._detail_text
@@ -1369,9 +1370,10 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
     action settles the lists' cursors first. With "typed" in the box for A's permission,
     Down moves the box off it, so Ctrl+Enter has nothing to send and nothing is denied.
     Unfiltered (#16), Down in the session list picks the first session, A, and in the items
-    there is no current session: the keys act on the item's."""
+    there is no current session: the keys act on the item's. Unfiltered, the inbox orders by
+    session name (#236), so B, named first, sits above A's permission and Up goes to it."""
     store.set_mode(sid, "queued")
-    other = store.create_session(str(tmp_path), name="other")
+    other = store.create_session(str(tmp_path), name="aardvark")
     store.set_mode(other, "queued")
     perm = store.post_item(sid, "permission", "Bash: rm -rf build")
     theirs = store.post_item(other, "question", "B's")
@@ -1397,18 +1399,19 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
         lst.focus()
         await pilot.pause()
         before = burst_state(store, (sid, other))
+        arrow = "up" if (where, filtered) == ("items", False) else "down"   # to B's question (#236)
         if burst == "allow":   # a button has no key: the arrow moved, its highlight not handled, then Allow
-            lst.action_cursor_down()
+            getattr(lst, f"action_cursor_{arrow}")()
             app.permission_pressed(Button.Pressed(app.query_one("#allow", Button)))
         else:
-            raw_keys(app, "down", *burst)
+            raw_keys(app, arrow, *burst)
         for _ in range(3):
             await pilot.pause()
         if isinstance(app.screen, Confirm):   # Delete on an open question asks first (#151): yes
             await pilot.press("alt+y")
             await pilot.pause()
-        desc = f"Down, {burst} from the {where} list, {'following A' if filtered else 'unfiltered'}"
-        # the session acted on: following A, Down goes to B; unfiltered, the list's Down picks A
+        desc = f"{arrow.title()}, {burst} from the {where} list, {'following A' if filtered else 'unfiltered'}"
+        # the session acted on: following A, Down goes to A's question; unfiltered, Up goes to B and the list's Down picks A
         ctx = sid if (where, filtered) in (("items", True), ("sessions", False)) else other
         if (where, burst) == ("sessions", ("delete",)):   # Stop & Forget on it, its answers queued: asked first
             queued = 2 if ctx == other else 1
@@ -1854,7 +1857,7 @@ async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch,
         await pilot.pause()
         b = Burst(app, store, sids, refs)
         table = app.items_table
-        assert [b.keys.get(k, "💬") for k in table.keys()] == ["qa", "qb", "pa", "💬", "💬"], desc
+        assert [b.keys.get(k, "💬") for k in table.keys()] == ["💬", "💬", "qa", "pa", "qb"], desc   # by session name, then newest (#236)
         if burst[0] in ("alt+r", "alt+p", "delete", "alt+i", "alt+c", "alt+h"):   # a session's keys: alpha selected first (#16)
             await pick(app, pilot, sids["alpha"])
         table.move_cursor(row=table.get_row_index(next(k for k, name in b.keys.items() if name == at)))
@@ -2789,7 +2792,7 @@ async def test_restored_text_is_typed_onto_at_the_end(store, sid):
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         items = app.query_one("#items", DataTable)
-        items.move_cursor(row=0)
+        items.move_cursor(row=first_item(app))
         await pilot.pause()
         await pilot.click("#answer")
         await pilot.press(*"SQL")
@@ -2816,7 +2819,7 @@ async def test_typing_survives_refresh_ticks_even_when_items_arrive_above(store,
         if conversation:
             app.follow(sid)
         else:
-            app.query_one("#items", DataTable).move_cursor(row=0)
+            app.query_one("#items", DataTable).move_cursor(row=first_item(app))
         await pilot.pause()
         await pilot.click("#answer")
         await pilot.press(*"SQL")
@@ -2945,7 +2948,7 @@ async def test_the_detail_pane_selects_and_copies(store, sid, select, expected, 
     app.copy_to_clipboard = copied.append
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        app.query_one("#items", DataTable).move_cursor(row=0)
+        app.query_one("#items", DataTable).move_cursor(row=first_item(app))
         await pilot.pause()
         await select(pilot, app.query_one("#detail", Transcript))
         await pilot.pause()
@@ -3082,7 +3085,7 @@ async def test_the_item_list_shows_a_question_awaiting_the_session(store, sid, k
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        assert str(app.items_table.get_row_at(0)[3]) == shown, desc
+        assert str(app.items_table.get_row_at(first_item(app))[3]) == shown, desc
         assert str(app.query_one("#session-list", DataTable).get_row_at(0)[3]) == count, f"{desc}: the Q count"
 
 
@@ -3259,7 +3262,7 @@ async def dwell_steps(pilot, app, keys, steps, clock) -> None:
             app.refresh_data()
         elif how in ("blur", "focus"):   # the terminal window loses focus, or gets it back
             app.post_message(events.AppBlur() if how == "blur" else events.AppFocus())
-        elif how in ("gone", "late"):   # before startup: the item is closed, or B's posted above D
+        elif how in ("gone", "late", "sorted"):   # before startup: the item closed, B's posted above D, a column sort
             continue
         elif how == "answer":
             app.answer.text = "noted"
@@ -3289,8 +3292,9 @@ async def dwell_steps(pilot, app, keys, steps, clock) -> None:
     (("on D", "delete"), "closed", "Delete: at once"),
     (("on D", "answer"), "seen", "answering it: seen at once"),
     (("follow A", "on D", "short", "session B", "rest"), "unseen", "a switch to another session mid-dwell"),
-    (("gone E", "at D", "short"), "unseen", "the top row at startup, the app's selection: not at once"),
-    (("gone E", "at D", "rest"), "seen", "but seen after the dwell all the same"),
+    (("gone E", "rest"), "unseen", "the conversation tops the inbox at startup (#236): D not looked at"),
+    (("sorted ▲", "gone E", "at D", "short"), "unseen", "under a column sort D tops it: the app's selection, not at once"),
+    (("sorted ▲", "gone E", "at D", "rest"), "seen", "but seen after the dwell all the same"),
     # B's above D, so D comes under the cursor as it goes, not demo's conversation row (#192)
     (("late B's", "on B's", "end B", "at D", "rest"), "seen",
      "the next item, selected as a session ends: seen after the dwell"),
@@ -3313,6 +3317,8 @@ async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_p
     keys = {"D": f"{sid}|{d}", "E": f"{sid}|{e}", "A": sid, "B": other, "B's": f"{other}|{b}"}
     if "gone E" in steps:
         store.update_item(sid, e, status="closed")
+    if "sorted ▲" in steps:   # the conversations under the active items, so D the top row (#236)
+        store.set_setting("layout.sort.items", "status▲")
     if "late B's" in steps:
         keys["B's"] = f"{other}|{store.post_item(other, 'decision', 'B late', **DECIDED)}"
     app = WheelhouseApp(store)
@@ -3502,28 +3508,28 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         items, sessions = app.items_table, app.query_one("#session-list", DataTable)
-        assert [str(items.get_row_at(i)[2]) for i in range(items.row_count)] == [q, d, "💬"], \
-            "the question ranks first, the session's conversation under the items"
-        assert str(items.get_row_at(1)[3]) == "unseen"
+        assert [str(items.get_row_at(i)[2]) for i in range(items.row_count)] == ["💬", q, d], \
+            "the session's conversation on top (#236), then the question ranks first"
+        assert str(items.get_row_at(2)[3]) == "unseen"
         assert str(sessions.get_row_at(0)[4]) == "1", "the session list counts unseen decisions"
         assert store.item(sid, d)["status"] == "unseen", "not seen until the person looks"
         items.focus()
-        items.move_cursor(row=1)
+        items.move_cursor(row=items.get_row_index(f"{sid}|{d}"))
         await refresh(pilot, sid)
         assert store.item(sid, d)["status"] == "unseen", "not seen until the person has rested on it"
         dwell(app)
         await refresh(pilot, sid)
         assert store.item(sid, d)["status"] == "seen", "viewing it for the dwell marks it seen"
         assert str(sessions.get_row_at(0)[4]) == ""
-        items.move_cursor(row=0)
+        items.move_cursor(row=first_item(app))
         await refresh(pilot, sid)
-        assert [str(items.get_row(k)[2]) for k in items.final() if k] == [q, "💬", d], \
-            "moving on, it sinks (once the move ends): settled, under the conversation"
+        assert [str(items.get_row(k)[2]) for k in items.final() if k] == ["💬", q, d], \
+            "moving on, it sinks (once the move ends): settled, under the question"
         items.move_cursor(row=items.get_row_index(f"{sid}|{d}"))
         await pilot.press("delete")
         await pilot.pause()
         assert store.item(sid, d)["status"] == "closed", "Delete closes it"
-        assert [str(items.get_row_at(i)[2]) for i in range(items.row_count)] == [q, "💬"], "then it's finished"
+        assert [str(items.get_row_at(i)[2]) for i in range(items.row_count)] == ["💬", q], "then it's finished"
 
 
 @pytest.mark.anyio
@@ -3572,11 +3578,12 @@ async def test_marking_rows(store, sid, steps, marked, desc):
         await pilot.pause()
         items = app.items_table
         items.focus()
+        await to_first_item(app, pilot)
         for how, arg in steps:
             if how == "key":
                 await pilot.press(arg)
             else:
-                await pilot.click("#items", offset=(20, 1 + arg), control=how == "ctrl", shift=how == "shift",
+                await pilot.click("#items", offset=(20, 1 + first_item(app) + arg), control=how == "ctrl", shift=how == "shift",
                                 meta=how == "alt")
             await pilot.pause()
         assert sorted(k.split("|")[1] for k in items.marked) == marked, desc
@@ -3591,11 +3598,12 @@ async def five_questions(store, sid, pilot, steps) -> None:
     app = pilot.app
     await pilot.pause()
     app.items_table.focus()
+    await to_first_item(app, pilot)
     for how, arg in steps:
         if how == "key":
             await pilot.press(arg)
         else:
-            await pilot.click("#items", offset=(20, 1 + arg), control=how == "ctrl", shift=how == "shift",
+            await pilot.click("#items", offset=(20, 1 + first_item(app) + arg), control=how == "ctrl", shift=how == "shift",
                               meta=how == "alt")
         await pilot.pause()
         if isinstance(app.screen, Confirm):   # Delete on an open question asks first (#151): yes
@@ -3611,11 +3619,11 @@ def post_five(store, sid) -> None:
 
 @pytest.mark.parametrize("steps, lands, desc", [
     ([("click", 1), ("ctrl", 2), ("key", "delete")], "Q1", "Q2 and Q3 marked: the row above Q2, not Q5 in Q3's place"),
-    ([("shift", 2), ("key", "delete")], "Q4", "Q1-Q3 marked from the top: the new first row"),
+    ([("shift", 2), ("key", "delete")], "💬", "Q1-Q3 marked from the top: the conversation row above (#236)"),
     ([("click", 1), ("ctrl", 3), ("key", "delete")], "Q1", "Q2 and Q4 marked: above the topmost, Q2"),
     ([("click", 3), ("ctrl", 1), ("key", "delete")], "Q1", "marked bottom first: still above the topmost"),
     ([("click", 2), ("key", "delete")], "Q2", "one row, unmarked: the row above it"),
-    ([("key", "delete")], "Q2", "the first row: the new first row"),
+    ([("key", "delete")], "💬", "the first item: the conversation row above it (#236)"),
     ([("key", "alt+v"), ("click", 2), ("key", "delete")], "Q3", "Alt+V on: the row stays in sight, the highlight with it"),
 ])
 @pytest.mark.anyio
@@ -3627,7 +3635,8 @@ async def test_delete_puts_the_highlight_above_the_topmost_row_it_took(store, si
         await pilot.pause()
         refs = {k: str(app.items_table.get_row(k)[2]) for k in app.items_table.rows}
         assert refs[app.items_table.cursor_key()] == lands, desc
-        assert app.selected == tuple(app.items_table.cursor_key().split("|")), f"{desc}: selected there too"
+        sid_, ref = app.items_table.cursor_key().split("|")
+        assert app.selected == (sid_, ref or None), f"{desc}: selected there too"
 
 
 @pytest.mark.parametrize("finished, focus, marked, desc", [
@@ -3849,10 +3858,11 @@ async def test_delete_closes_the_marked_questions_and_ctrl_r_reopens_them(store,
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
+        await to_first_item(app, pilot)
         items = app.items_table
         items.focus()
-        await pilot.click("#items", offset=(20, 3), control=True)   # Q1 and Q3
-        await pilot.click("#items", offset=(20, 4), control=True)   # and the task
+        await pilot.click("#items", offset=(20, 3 + first_item(app)), control=True)   # Q1 and Q3
+        await pilot.click("#items", offset=(20, 4 + first_item(app)), control=True)   # and the task
         d = store.post_item(sid, "question", "d")   # a rebuild: the marks are by key
         await refresh(pilot, sid)
         assert f"{sid}|{d}" in items.rows, "rebuilt"
@@ -4612,6 +4622,7 @@ async def test_permission_buttons(store, tmp_path, press, status, decision, desc
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
         await pilot.pause()
+        await to_first_item(app, pilot)
         assert {"allow", "always", "deny"} <= shown_buttons(app), desc
         await pilot.click(press)
         await pilot.pause()
@@ -4639,6 +4650,7 @@ async def test_denys_optional_reason(store, tmp_path, where, press, typed, then,
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
         await pilot.pause()
+        await to_first_item(app, pilot)
         if where == "thread":
             app.push_screen(ThreadView(sid, ref))
             await pilot.pause()
@@ -4671,6 +4683,7 @@ async def test_deny_reason_esc_without_focus(store, tmp_path, where, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
         await pilot.pause()
+        await to_first_item(app, pilot)
         if where == "thread":
             app.push_screen(ThreadView(sid, ref))
             await pilot.pause()
@@ -4711,6 +4724,7 @@ async def test_what_shows_over_the_answer_box(store, tmp_path, monkeypatch, kind
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
         await pilot.pause()
+        await to_first_item(app, pilot)
         assert app.selected == (sid, ref), desc
         shown = (app.answer.display, app.query_one(PermissionButtons).display, app.query_one(CompactButtons).display)
         assert shown == (box, permission, compact), desc
@@ -4740,6 +4754,7 @@ async def test_the_compact_question(store, tmp_path, monkeypatch, typed, then, p
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
         await pilot.pause()
+        await to_first_item(app, pilot)
         app.answer.text = typed
         if then:
             await pilot.click(then)
@@ -5057,7 +5072,7 @@ async def test_the_hint_says_what_ctrl_enter_does(store, sid, mode, sends_now, e
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        app.items_table.move_cursor(row=0)
+        app.items_table.move_cursor(row=first_item(app))
         await refresh(pilot, sid)
         assert str(app.screen.query_one(Hint).content).startswith(expected + " · "), desc
         app.items_table.focus()
@@ -5274,7 +5289,7 @@ async def test_right_click_copies_or_pastes(store, sid, monkeypatch, select, sys
     got = []
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        app.query_one("#items", DataTable).move_cursor(row=0)
+        app.query_one("#items", DataTable).move_cursor(row=first_item(app))
         await pilot.pause()
         app._clipboard = "earlier copy"
         app.copy_to_clipboard = got.append
@@ -6410,8 +6425,8 @@ async def test_answer_one_then_the_next_from_the_keyboard(store, sid, keys, desc
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        first, second = app.items_table.keys()[:2]
-        app.items_table.move_cursor(row=0)
+        first, second = app.items_table.keys()[first_item(app):][:2]
+        app.items_table.move_cursor(row=first_item(app))
         await pilot.pause()
         app.answer.focus()
         await pilot.pause()
@@ -6479,6 +6494,7 @@ async def test_the_tab_order(store, sid, monkeypatch, screen, key, order, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 60)) as pilot:   # the stats' charts, so their zoom: none at 40 rows
         await pilot.pause()
+        await to_first_item(app, pilot)
         if screen == "thread":
             app.push_screen(ThreadView(sid, q))
         else:
@@ -6683,6 +6699,7 @@ async def test_a_click_in_the_conversation_focuses_the_answer_box(store, sid, tm
             app.follow(sid)
             await scroll_by(pilot, [])
         else:
+            await to_first_item(app, pilot)
             app.detail_scroll.scroll_to(y=30, animate=False)
         await pilot.pause()
         before, y = painted(app), app.detail_scroll.scroll_y
@@ -6741,6 +6758,7 @@ async def test_the_button_keys(store, keyed, key, button, where, pressed):
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
         await pilot.pause()
+        await to_first_item(app, pilot)
         assert app.selected == (sid, ref), desc
         await pick(app, pilot, sid)   # selected, for its buttons (#16), then its permission again
         app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{ref}"))
@@ -7592,19 +7610,20 @@ async def test_children_sit_under_their_parent_and_its_control_hides_them(store,
         items = app.query_one("#items", DataTable)
         assert item_list_rows(app) == [["demo", t], ["", "└ A2"], ["", "└ A1"], ["demo", "└ A3"]], \
             "children under their parent; the orphan in its session's group"
-        line = items.render_line(1).text   # the header is line 0
+        n = first_item(app)   # the conversation rows above (#236)
+        line = items.render_line(1 + n).text   # the header is line 0
         assert line.endswith("-"), "an expanded parent ends with its -"
-        assert not items.render_line(2).text.endswith(("-", "+")), "a child has no control"
-        app.items_table.move_cursor(row=3)   # the orphan selected
+        assert not items.render_line(2 + n).text.endswith(("-", "+")), "a child has no control"
+        app.items_table.move_cursor(row=3 + n)   # the orphan selected
         await pilot.pause()
         selected = app.selected
-        await pilot.click("#items", offset=(items.size.width - 1, 1))
+        await pilot.click("#items", offset=(items.size.width - 1, 1 + n))
         await pilot.pause()
         assert item_list_rows(app) == [["demo", t], ["demo", "└ A3"]], "collapsed: its children hidden"
-        assert items.render_line(1).text.endswith("+"), "a collapsed parent ends with its +"
+        assert items.render_line(1 + n).text.endswith("+"), "a collapsed parent ends with its +"
         assert app.selected == selected and isinstance(app.screen, type(app.screen_stack[0])), \
             "the click neither selects nor opens the row"
-        await pilot.click("#items", offset=(items.size.width - 1, 1))
+        await pilot.click("#items", offset=(items.size.width - 1, 1 + n))
         await pilot.pause()
         assert len(item_list_rows(app)) == 4, "expanded again"
 
@@ -7711,7 +7730,7 @@ async def test_a_doc_sits_under_its_parent_and_opens_rendered(store, sid, tmp_pa
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         assert item_list_rows(app) == [["demo", t], ["", f"└ {m}"]], "the doc under its parent"
-        app.items_table.move_cursor(row=1)
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|{m}"))
         await pilot.pause()
         assert app.selected == (sid, m)
         assert app.query_one("#answer").display, "the answer box under a doc, for a comment (split)"
@@ -7736,7 +7755,7 @@ async def test_a_doc_sits_under_its_parent_and_opens_rendered(store, sid, tmp_pa
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, tui.DocView)
-        app.items_table.move_cursor(row=0)
+        app.items_table.move_cursor(row=first_item(app))
         await pilot.pause()
         assert app.query_one("#answer").display, "the box back on a task"
 
@@ -7750,7 +7769,7 @@ async def test_a_doc_with_no_parent_sits_in_its_sessions_group(store, sid, tmp_p
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         assert item_list_rows(app) == [["demo", q], ["demo", f"└ {m}"]]
-        assert str(app.query_one("#items", DataTable).get_row_at(1)[3]) == "new"
+        assert str(app.items_table.get_row(f"{sid}|{m}")[3]) == "new"
 
 
 @pytest.mark.anyio
@@ -7795,7 +7814,7 @@ async def test_delete_takes_agent_children_and_leaves_docs(store, sid, tmp_path)
         await pilot.pause()
         assert item_list_rows(app) == [["demo", q], ["", f"└ {agent}"], ["", f"└ {doc}"]]
         app.items_table.focus()
-        app.items_table.move_cursor(row=0)
+        app.items_table.move_cursor(row=first_item(app))
         await pilot.pause()
         await pilot.press("delete")
         await pilot.pause()
@@ -7809,7 +7828,9 @@ async def test_delete_takes_agent_children_and_leaves_docs(store, sid, tmp_path)
         store.agent_status(sid, "agent-1", "done", "finished")   # as the transcript says it ended
         store.post_doc(sid, "the plan, v2", str(tmp_path / "plan.md"))
         await refresh(pilot, sid)
-        assert [r[1] for r in item_list_rows(app)] == [f"└ {agent}", f"└ {doc}"], \
+        # sorted: the highlight lands on the 💬 row above (#236), so neither is pinned, and their order
+        # then varies with the client (in process or through the daemon)
+        assert sorted(r[1] for r in item_list_rows(app)) == [f"└ {agent}", f"└ {doc}"], \
             "the pinned doc still there, at its session's level"
 
 
@@ -7845,7 +7866,9 @@ async def test_delete_on_marked_rows_asks_once_and_takes_the_children(store, sid
         await pilot.pause()
         store.agent_status(sid, "agent-1", "done", "finished")
         await refresh(pilot, sid)
-        assert [r[1] for r in item_list_rows(app)] == [f"└ {agent}", f"└ {doc}"], \
+        # sorted: the highlight lands on the 💬 row above (#236), so neither is pinned, and their order
+        # then varies with the client (in process or through the daemon)
+        assert sorted(r[1] for r in item_list_rows(app)) == [f"└ {agent}", f"└ {doc}"], \
             "both rows gone, the running subagent and the pinned doc kept, at their session's level"
 
 
@@ -8070,12 +8093,13 @@ async def test_drag_within_the_band_keeps_the_sort_and_across_turns_it_off(store
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         table = app.items_table
+        n = first_item(app)   # the conversation row above the items (#236)
         assert item_refs(app) == [q, t3, t2, t1, done], "today's order: newest first within each status"
         selected = app.selected
-        await drag_row(pilot, table, 3, 1)
+        await drag_row(pilot, table, 3 + n, 1 + n)
         assert item_refs(app) == [q, t1, t3, t2, done], "t1 dragged to the head of its status"
         assert app.selected == selected, "the click after the drag selects nothing"
-        await drag_row(pilot, table, 2, 0)
+        await drag_row(pilot, table, 2 + n, 0 + n)
         assert item_refs(app) == [t3, q, t1, t2, done], "t3 above the question: still within the band"
         assert "status *" in [str(c.label) for c in table.ordered_columns], "the sort stays"
         store.update_item(sid, t3, status="blocked")
@@ -8086,7 +8110,7 @@ async def test_drag_within_the_band_keeps_the_sort_and_across_turns_it_off(store
         app.refresh_data()
         await pilot.pause()
         assert item_refs(app) == [q, t3, t1, t2, done], "back to running: at the head of running, not above q"
-        await drag_row(pilot, table, 2, 5)   # onto d: row 4 is the session's conversation (#192)
+        await drag_row(pilot, table, 2 + n, 4 + n)   # t1 onto d
         assert item_refs(app) == [q, t3, t2, done, t1], "t1 into the settled band: across"
         assert [str(c.label) for c in table.ordered_columns] == ["", "session", "ref", "status", "title"], "no marker"
         assert store.setting("layout.sort.items") == ""
@@ -8103,14 +8127,15 @@ async def test_drag_esc_cancels_and_alt_keys_move(store, sid):
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         table = app.items_table
-        await drag_row(pilot, table, 0, 2, release=False)
-        assert table.drop_line == (2, False), "the line under the row it would take the place of"
+        n = first_item(app)   # the conversation row above the items (#236)
+        await drag_row(pilot, table, 0 + n, 2 + n, release=False)
+        assert table.drop_line == (2 + n, False), "the line under the row it would take the place of"
         await pilot.press("escape")
         await pilot.pause()
         assert table.dragging is None and item_refs(app) == [t3, t2, t1], "Esc: nothing moved"
         assert store.item(sid, t3)["pos"] is None
         table.focus()
-        table.move_cursor(row=0)
+        table.move_cursor(row=first_item(app))
         await pilot.press("alt+down")
         await pilot.pause()
         assert item_refs(app) == [t2, t3, t1], "Alt+Down: one place down"
@@ -8219,11 +8244,12 @@ async def test_drag_past_the_selected_row_shows_at_once(store, sid):
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         table = app.items_table
+        n = first_item(app)   # the conversation row above the items (#236)
         assert item_refs(app) == [b, a]
-        table.move_cursor(row=0)
+        table.move_cursor(row=first_item(app))
         await pilot.pause()
         assert app.selected == (sid, b)
-        await drag_row(pilot, table, 1, 0)
+        await drag_row(pilot, table, 1 + n, 0 + n)
         assert item_refs(app) == [a, b], "the selected row moved down past at once"
         assert [store.item(sid, r)["pos"] for r in (a, b)] == [0, 1]
 
@@ -8238,9 +8264,10 @@ async def test_a_drag_not_written_changes_nothing(store, sid):
     said = []
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
+        n = first_item(app)   # the conversation row above the items (#236)
         app.client.reorder_items = lambda group, keys: Done(False).say("too old", "error")
         app.told = lambda done: said.extend(n.text for n in done.notices)
-        await drag_row(pilot, app.items_table, 1, 0)
+        await drag_row(pilot, app.items_table, 1 + n, 0 + n)
         assert said == ["too old"]
         assert "status *" in [str(c.label) for c in app.items_table.ordered_columns]
         assert app.item_sort == "status*" and store.setting("layout.sort.items") is None
@@ -8344,15 +8371,16 @@ async def test_a_drop_beside_the_pinned_item_goes_by_what_shows(store, sid):
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         table = app.items_table
+        n = first_item(app)   # the conversation row above the items (#236)
         assert item_refs(app) == [c, b, a]
-        table.move_cursor(row=1)
+        table.move_cursor(row=1 + n)
         await pilot.pause()
         assert app.selected == (sid, b)
         store.update_item(sid, b, status="blocked")
         app.refresh_data()
         await pilot.pause()
         assert item_refs(app) == [c, b, a], "b held by its pin"
-        await drag_row(pilot, table, 2, 1)
+        await drag_row(pilot, table, 2 + n, 1 + n)
         assert item_refs(app) == [c, a, b], "a swap, as it showed"
         assert "status *" in [str(col.label) for col in table.ordered_columns], "the sort stays"
 

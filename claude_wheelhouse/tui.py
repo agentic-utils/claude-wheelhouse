@@ -5347,8 +5347,8 @@ class WheelhouseApp(App):
         table.toggles = {key: key in self.collapsed for key in counts}
         sunk = {key_of[id(it)] for it, _, n in rows if n}
         # the session's own conversation, pinned first; unfiltered, every unparked session's, as
-        # their items show, named after them, in the session list's order under the active items,
-        # so the top of the inbox stays what's waiting on the person (#192)
+        # their items show, named after them, in the session list's order: at the top under the
+        # inbox's own order (#236, reversing D193), else under the active items (#192)
         conversations = []
         for conv in [self.filter_sid] if self.filter_sid else self.conversation_sids():
             general = (conv, None) in queued
@@ -5393,8 +5393,9 @@ class WheelhouseApp(App):
                 cells = faded(cells)
             rows_out.append((key_of[id(it)], cells))
             tips[key_of[id(it)]] = item_tip(it)
-        if not self.filter_sid:   # between the active band and the settled
-            at = next((i for i, (_, _, band) in enumerate(rows) if band), len(rows))
+        if not self.filter_sid:   # under the inbox's own order, at the top (#236); else between the active and settled
+            at = 0 if self.item_sort == ordering.ITEMS_DEFAULT else \
+                next((i for i, (_, _, band) in enumerate(rows) if band), len(rows))
             rows_out[at:at] = conversations
         if self.filter_sid:   # the session column goes: the inbox follows the one session
             rows_out = [(k, cells[:1] + cells[2:]) for k, cells in rows_out]

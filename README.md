@@ -306,8 +306,9 @@ session.
 - **Follow a session.** Click a session in the inbox's list (or move to it, or Enter on it): its items
   list gains a pinned first row, 💬 Conversation, highlighted, and drops its session column (it shows
   only while the list has every session's items, after `Esc` or a click on the selected session, which
-  unselects it; there every unparked session has its 💬 row, named after it, under the active items, in the
-  session list's order, or at the bottom while a column sort is on), and the right-hand pane
+  unselects it; there every unparked session has its 💬 row, named after it, in the session list's order: at the
+  top under the inbox's own order (where the highlight starts), under the active items under another sort,
+  or at the bottom with ordering off), and the right-hand pane
   follows its conversation, read live from its transcript: your prompts and general
   messages (in green, line breaks kept, without the `[wheelhouse] from …` prefix, and in
   full even when the notification that delivered one was cut short) and Claude's replies
@@ -591,8 +592,9 @@ which it offers once a chat gets long. The chat lasts until you quit. A chat qui
 Claude Code go, and the next question starts another, told the chat so far.
 
 Ordering the lists: click a column header in the inbox to sort by it. Status cycles `*`
-(the inbox's own order: open questions first, then blocked, running and the rest, newest
-first, settled and finished below), `▲` (by urgency: blocked, waiting, open, running, todo,
+(the inbox's own order: open questions first, then blocked, running and the rest, each by
+session name, then newest first, settled and finished below; with no session selected, every
+session's 💬 conversation row at the top), `▲` (by urgency: blocked, waiting, open, running, todo,
 newest first, then the settled and finished as `*` has them) and `▼` (the reverse). The other
 columns cycle `▲`, `▼`, then back to Status `*`. The marker shows on the column in force.
 The session list starts sorted: running sessions first, then by their latest activity (`*`
