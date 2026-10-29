@@ -11,7 +11,7 @@ import pytest
 
 from claude_wheelhouse import fork as fork_mod, host as host_mod, hub as hub_mod, launch, liveness, models, plan_usage, subagents, transcript, transcript_usage, tutorial, whatsnew
 from claude_wheelhouse.hub import Hub
-from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone, mode as store_mode
+from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone, compacting_now, mode as store_mode
 
 real_open_session = launch.open_session   # before any test stubs it
 
@@ -61,6 +61,7 @@ def test_shown_status(hub, store, sid, monkeypatch, status, requested, relaunchi
 def host(store, sid, pid=4242):
     store.set_runner(sid, "sdk")
     store.db.execute("UPDATE sessions SET claude_pid = ?, claude_start = 1, boot_id = 'b'", (pid,))
+    store.mark_version(sid)   # on current code: an older host can't compact (#244)
 
 
 @pytest.mark.parametrize("asked, stops, wait, launched, said, desc", [
@@ -1645,3 +1646,19 @@ def test_notes_wait_buttons(hub, store, sid, abort, command, desc):
     assert hub.notes_wait(sid, ref, abort).ok, desc
     assert store.item(sid, ref)["status"] == "closed" and store.session(sid)["host_command"] == command, desc
     assert not hub.notes_wait(sid, ref, abort).ok, f"{desc}: once"
+
+
+@pytest.mark.parametrize("act, desc", [
+    (lambda h, sid: h.host_command(sid, "compact"), "Compact: refused, its host would never end the cycle"),
+    (lambda h, sid: h.compact_then_relaunch(sid, (4242, 1)), "Relaunch, compact first: relaunched without compacting"),
+])
+def test_an_older_host_is_never_given_a_cycle(hub, store, sid, monkeypatch, act, desc):
+    host(store, sid)
+    store.db.execute("UPDATE sessions SET code_version = 23")
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    monkeypatch.setattr(hub_mod.os, "kill", lambda *a: None)
+    hub.refresh()
+    done = act(hub, sid)
+    assert store.compaction(sid)["state"] is None and not compacting_now(store.session(sid)), desc
+    assert any("older wheelhouse code" in n.text for n in done.notices), f"{desc}: {done.notices}"

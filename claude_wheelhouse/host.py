@@ -1017,7 +1017,8 @@ class Host:
             return
         if c.state == "compacting" and at - c.since > COMPACT_TIMEOUT:
             self.end_cycle("failed", TIMED_OUT)
-            self.store.set_activity(self.sid, NOT_COMPACTED.format(why=TIMED_OUT))
+            if c.origin != "auto":   # Claude Code's own runs inside a turn whose line is that turn's
+                self.store.set_activity(self.sid, NOT_COMPACTED.format(why=TIMED_OUT))
         elif c.state == "preparing" and c.question is not None:
             item = self.store.item(self.sid, c.question)
             if item is None or item["status"] in CLOSED:   # Keep waiting (Abort interrupts too): the clock again
@@ -1089,6 +1090,8 @@ class Host:
                 elif isinstance(m, SystemMessage) and m.subtype == "compact_boundary":
                     meta = m.data.get("compact_metadata") or m.data.get("compactMetadata") or {}
                     self.compacted_from = meta.get("pre_tokens") or meta.get("preTokens") or 0
+                    if self.cycle is not None and self.cycle.origin == "auto":   # Claude Code's own, mid-turn: done now
+                        self.end_cycle("completed")
                 elif isinstance(m, ResultMessage):
                     ended = [self.sent.pop(k) for k in self.taken_up if k in self.sent]
                     if not ended and self.sent and getattr(m, "origin", None) is None:
@@ -1634,11 +1637,13 @@ class Host:
                 self.close_quietly(item["ref"], "question", MCP_GONE)
 
     def lost_cycle(self) -> None:
-        """At start: a cycle a previous host was driving (past requested) can't be carried on,
-        as its turns were that Claude Code's: it ends as failed, and its question closes. One
-        still requested is this host's to take."""
+        """At start: a cycle a previous host was driving can't be carried on, as its turns were
+        that Claude Code's: it ends as failed, and its question closes. Only one still requested
+        with its Compact command waiting is this host's to take."""
         row = self.store.compaction(self.sid)
-        if row is not None and row["state"] in ("preparing", "compacting"):
+        command = self.store.session(self.sid)["host_command"]
+        if row is not None and (row["state"] in ("preparing", "compacting")
+                                or row["state"] == "requested" and command != "compact"):   # nothing will take it
             self.store.move_compaction(self.sid, row["id"], "failed")
         for item in self.store.items(self.sid, include_closed=False):
             if item["kind"] == "question" and item["answer"] == NOTES_WAIT and item["status"] not in CLOSED:

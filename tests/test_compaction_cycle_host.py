@@ -283,3 +283,37 @@ def test_writing_in_once_the_quiet_marks_compact_has_gone_is_refused(host, store
     with pytest.raises(Compacting):
         store.queue(sid, "I'm back")
     assert store.compaction(sid)["state"] == "compacting" and not store.messages(sid)
+
+
+def test_claude_codes_own_compaction_ends_its_cycle_at_the_boundary_mid_turn(streamed, store, sid):
+    """Review 1: auto-compaction fires mid-turn; the cycle ends at its compact_boundary, not at
+    the end of a long turn, so the session isn't closed for the rest of it."""
+    from test_host import boundary
+    store.set_runner(sid, "sdk")
+    h = streamed
+    states = []
+
+    async def go():
+        await h.turn("work")
+        await h.pre_compact({"trigger": "auto"}, None, None)
+        states.append(store.compaction(sid)["state"])
+        for m in (h.client.replay(0), boundary(), text("carrying on")):
+            h.client.feed.put_nowait(m)
+        h.client.feed.put_nowait(None)
+        await h.read()
+        states.append(store.compaction(sid)["state"])
+    run(go())
+    assert states == ["compacting", "completed"] and h.cycle is None and h.pending == 1, states
+    store.queue(sid, "queued while the turn still runs")   # no longer refused
+
+
+@pytest.mark.parametrize("command, state, desc", [
+    ("compact", "requested", "its Compact still waiting: the new host takes it"),
+    (None, "failed", "requested, its command taken by the host that died: nothing would take it, so failed"),
+])
+def test_a_host_started_again_fails_a_cycle_nothing_will_take(host, store, sid, command, state, desc):
+    store.command(sid, "compact")
+    if command is None:
+        store.take_command(sid)
+    host.lost_cycle()
+    assert store.compaction(sid)["state"] == state, desc

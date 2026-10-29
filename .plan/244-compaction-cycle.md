@@ -62,6 +62,8 @@ The guard is `Store.refuse_compacting(db, sid, action)`, true in `requested`, `p
 
 Park, Unpark, Park now and Relaunch are more than one write (stopping a process, a relaunch's bookkeeping), and the host and the hub's own relaunch flow write `parked` and `relaunch` as a cycle's `then` or after it ends. So these are checked in the hub, first thing, with `Store.check_compacting`, rather than inside `set_parked` and `set_relaunch`. Every person's path to them goes through the hub (the daemon's routes and the in-process client call the same methods). Shell is refused too.
 
+**Older hosts.** A host on code before PROTOCOL_VERSION 24 never moves the state on, so a cycle given to it would stay blue and closed (and refuse the Relaunch that would cure it). The hub therefore refuses Compact for a session that needs a relaunch ("runs older wheelhouse code: Relaunch it, then Compact"), and Relaunch compacting first relaunches it at once, without compacting, and says so. A host started again fails a cycle it can't carry on: one past `requested`, or one still `requested` whose Compact command the dead host had already taken.
+
 | Action | Enforced in | During the cycle |
 |---|---|---|
 | Send now (Immediate mode, Alt+S) | `Store.send` | Refused |

@@ -565,6 +565,10 @@ class Hub:
         if (s["claude_pid"], s["claude_start"]) != host:
             return Done(False).say(f"{display_name(s)} started again meanwhile: Relaunch again to stop this host",
                                    "warning")
+        if needs_relaunch(s):   # its host would never end the cycle (#244): relaunched without compacting
+            done = self.stop_host(sid, host, may_tab)
+            return done.say(f"{display_name(s)} ran older wheelhouse code, so it wasn't compacted first", "warning") \
+                if done.ok else done
         self.store.command(sid, "compact", origin="relaunch")
         self.relaunch_under_way(sid, host, asked=time.time(), may_tab=may_tab)
         return Done().say(f"relaunching {display_name(s)}: compacting first (it's asked what to keep)")
@@ -1039,6 +1043,8 @@ class Hub:
             return Done(False)
         if what == "compact" and (runner(s) != "sdk" or s["shell"] or not self.running(sid)):
             return Done(False).say(f"{display_name(s)} isn't running in the wheelhouse: nothing to {what}", "warning")
+        if what == "compact" and needs_relaunch(s):   # its host would never end the cycle (#244)
+            return Done(False).say(f"{display_name(s)} runs older wheelhouse code: Relaunch it, then Compact", "warning")
         try:
             self.store.command(sid, what, notes, then)
         except SessionGone:

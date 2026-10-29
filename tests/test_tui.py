@@ -4806,6 +4806,7 @@ async def test_the_compact_question(store, tmp_path, monkeypatch, typed, then, p
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.mark_version(sid)   # on current code: an older host is never given a cycle (#244)
     ref = store.post_item(sid, "question", "context 220k: compact?")
     store.set_answer(sid, ref, COMPACT_QUESTION)
     app = WheelhouseApp(store)
@@ -4928,6 +4929,7 @@ async def test_the_compact_button_asks_how(store, tmp_path, monkeypatch, typed, 
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.mark_version(sid)   # on current code: an older host is never given a cycle (#244)
     store.post_item(sid, "task", "work")
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
