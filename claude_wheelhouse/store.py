@@ -975,9 +975,11 @@ class Store:
         """The session's active op of this kind (and id, given one), in one of `since`, enters state;
         an active state with a new deadline (within), else the old one stands. Whether it moved."""
         assert state in OP_ACTIVE + OP_ENDS
-        # op_at is when its last active state was entered: an end keeps it, so a told op's stays its tell (refuse_late)
+        # op_at is when its last active state was entered: an end keeps it, so a told op's stays its tell (refuse_late).
+        # An end clears the deadline: only an aborted launch's sets one again, its mark (abort_launch)
+        ended = state in OP_ENDS
         return db.execute(f"UPDATE sessions SET op_state = ?, op_at = CASE WHEN ? IN {OP_ENDS} THEN op_at ELSE ? END, "
-                          f"op_deadline = coalesce(?, op_deadline) "
+                          f"op_deadline = CASE WHEN {int(ended)} THEN NULL ELSE coalesce(?, op_deadline) END "
                           f"WHERE id = ? AND op = ? AND op_state IN ({', '.join('?' * len(since))}) "
                           f"AND (? IS NULL OR op_id = ?)",
                           (state, state, stamp(), None if within is None else due(within), sid, kind, *since, oid, oid)
@@ -1107,8 +1109,8 @@ class Store:
                 db.execute("UPDATE messages SET draft = 1 WHERE session_id = ? AND draft = 0 AND author = 'person' "
                            "AND id BETWEEN ? AND ? AND claimed_at IS NULL AND delivered_at IS NULL", (sid, first, last))
             self.move_op(db, sid, op[0], "cancelled")
-            if op[1] == "stopping":   # no process to stop: the mark is a deadline kept only by a starting one
-                db.execute("UPDATE sessions SET op_deadline = NULL WHERE id = ?", (sid,))
+            if op[1] == "starting":   # the mark of a process to stop once it registers: only this end sets it
+                db.execute("UPDATE sessions SET op_deadline = ? WHERE id = ?", (due(STARTING_WITHIN), sid))
             return op
 
     @staticmethod

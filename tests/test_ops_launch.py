@@ -280,3 +280,19 @@ def test_interrupt_requeues_only_the_wakes_own_send(hub, store, sid, monkeypatch
     assert hub.host_command(sid, "interrupt").ok
     assert [m["body"] for m in store.drafts(sid)] == ["queued for the wake", "and this"]
     assert [m["body"] for m in store.pending(sid)] == ["sent before the crash", "[wheelhouse] PR 7 merged"]
+
+
+def test_interrupt_on_a_compact_first_relaunch_leaves_the_host_running(hub, store, sid, monkeypatch):
+    """Review 4: section 4, "live on its old host": nothing marks it to be stopped."""
+    hosted(store, sid)
+    store.register(sid, 4242, 1, "b")
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: pid == 4242)
+    status(monkeypatch, "live")
+    stopped = []
+    monkeypatch.setattr(Hub, "stop_process", staticmethod(lambda s: stopped.append(s["claude_pid"]) or True))
+    hub.relaunch_under_way(sid, (4242, 1), asked=time.time())
+    assert kind_state(store, sid) == ("relaunch", "requested")
+    assert hub.host_command(sid, "interrupt").ok
+    hub.refresh()
+    hub.refresh()
+    assert kind_state(store, sid) == ("relaunch", "cancelled") and stopped == [] and store.op(sid)["deadline"] is None
