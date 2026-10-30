@@ -4881,6 +4881,7 @@ async def test_a_refused_send_keeps_the_text_and_says_why(store, tmp_path, monke
     store.set_mode(sid, mode_)
     store.post_item(sid, "question", "which db?")
     store.command(sid, "compact")
+    store.db.execute("DELETE FROM items WHERE answer = '{\"from\": \"compaction\"}'")   # its task: refused apart
     app = WheelhouseApp(store)
     toasts = []
     monkeypatch.setattr(app, "notify", lambda text, **kw: toasts.append(text))
