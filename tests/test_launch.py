@@ -289,3 +289,40 @@ def test_run_refusing_exits_with_its_reason():
     with pytest.raises(SystemExit) as e:
         launch.run("no-such-session")
     assert "no session no-such-session" in e.value.code
+
+
+@pytest.mark.parametrize("mac, cwd, command, want, desc", [
+    (False, "/home/u/repo", None,
+     ["cmd.exe", "/c", "wt.exe", "-w", "wheelhouse-u", "new-tab", "--title", "⌁ demo", "wsl.exe", "-d", "Ubuntu",
+      "-u", "u", "--cd", "/home/u/repo", "--", "/bin/bash", "-li"], "WSL: the login shell, nothing of ours but the directory"),
+    (False, "/home/u/a;b", None,
+     ["cmd.exe", "/c", "wt.exe", "-w", "wheelhouse-u", "new-tab", "--title", "⌁ demo", "wsl.exe", "-d", "Ubuntu",
+      "-u", "u", "--cd", r"/home/u/a\;b", "--", "/bin/bash", "-li"], "a ; in the directory escaped for wt"),
+    (False, "/home/u/repo", ["/usr/bin/python3", "-m", "claude_wheelhouse", "shell", "k1"],
+     ["cmd.exe", "/c", "wt.exe", "-w", "wheelhouse-u", "new-tab", "--title", "⌁ demo", "wsl.exe", "-d", "Ubuntu",
+      "-u", "u", "--cd", "/home/u/repo", "--", "/usr/bin/python3", "-m", "claude_wheelhouse", "shell", "k1"],
+     "a command in the shell's place, an id its only text"),
+    (True, "/Users/u/my repo", None,
+     ["osascript", "-e", launch.ITERM, "/bin/bash -lc 'cd '\"'\"'/Users/u/my repo'\"'\"' && exec /bin/bash -li'", "⌁ demo"],
+     "macOS: iTerm, the directory quoted"),
+])
+def test_shell_argv(mac, cwd, command, want, desc):
+    """#257: a quick shell's tab, in the session's window, titled with the shell mark."""
+    got = launch.shell_argv(cwd, "⌁ demo", mac=mac, shell="/bin/bash", distro="Ubuntu", user="u", command=command)
+    assert got == want, desc
+
+
+@pytest.mark.parametrize("cwd, command, desc", [
+    ("/home/u/a&b", None, "a cmd metacharacter in the directory"),
+    ("/home/u/repo", ["/bin/x", "a|b"], "or in the command"),
+])
+def test_shell_argv_refuses_cmd_metacharacters(cwd, command, desc):
+    with pytest.raises(ValueError):
+        launch.shell_argv(cwd, "t", mac=False, shell="/bin/bash", distro="Ubuntu", user="u", command=command)
+
+
+def test_shell_env_drops_the_wheelhouses_and_claudes_variables():
+    """#257: a runner that did inherit hands no WHEELHOUSE_* or CLAUDE* variable on."""
+    base = {"PATH": "/bin", "WHEELHOUSE_DB": "x", "WHEELHOUSE_SESSION_ID": "s", "WHEELHOUSE_TOKEN": "t",
+            "CLAUDECODE": "1", "CLAUDE_CONFIG_DIR": "/c", "HOME": "/h"}
+    assert launch.shell_env(base) == {"PATH": "/bin", "CLAUDE_CONFIG_DIR": "/c", "HOME": "/h"}

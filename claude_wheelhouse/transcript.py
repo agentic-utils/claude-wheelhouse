@@ -76,6 +76,17 @@ def locate(sid: str, projects: Path | None = None) -> Path | None:
     return next((projects or PROJECTS).glob(f"*/{sid}.jsonl"), None)
 
 
+def live_cwd(sid: str, projects: Path | None = None) -> str | None:
+    """Where a session works now (#257): the cwd of the newest record in its transcript that
+    has one, since a session that cds into a worktree works there. None without a transcript
+    or a record naming one."""
+    path = locate(sid, projects)
+    if path is None:
+        return None
+    return next((rec["cwd"] for rec in reversed(tail_records(path, sidechain=True))
+                 if isinstance(rec.get("cwd"), str) and rec["cwd"]), None)
+
+
 def tail_records(path: Path, limit: int | None = None, sidechain: bool = False) -> list[dict]:
     """The last records of a transcript, in its last limit bytes (TAIL_BYTES). A session's
     leaves out its subagents' (sidechain) records; a subagent's own transcript is nothing

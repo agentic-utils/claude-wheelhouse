@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 85, 2026-10-30T15:13:25Z, source bc974a4eeab9bb90 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 86, 2026-10-30T16:23:28Z, source 2c4279fe7ec0a300 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -36,6 +36,7 @@ daemon running.
 - Relaunch: start a session again where it left off.
 - Dead: a session not running and not parked (an Available one), red in the session list; its rows dim in every pane (session list, inbox, PRs, Decisions) until it runs again.
 - Fork: a new session carrying on from another's conversation.
+- Shell (Alt+H): a quick shell, the person's login shell in a new terminal tab titled ⌁ <session>, in the session in context's live directory (home with none). Untracked; exit closes it. Not the old Shell: handing a session run in the wheelhouse to a Claude Code tab is Handover to Claude Code in a shell, in the session's right-click menu only, no key.
 - Pin: an item kept through Delete, Ctrl+A, Ctrl+Delete and autocleanse.
 - Completed: an item done with (a task done or dropped, a subagent done or failed, a PR merged or closed, a question answered, a decision seen, a doc read). Ctrl+Delete deletes them all at once (Ctrl+Z undoes it); autocleanse hides each 5 minutes after it completed (AUTOCLEANSE_MINUTES, 0 off) until Alt+V shows it.
 - Session steps: what the wheelhouse tells a session at compaction, ending, resuming or a
@@ -119,6 +120,8 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 - **Ctrl+Q**: Quit the wheelhouse (sessions carry on without it)
 
 ### The buttons
+
+- **Alt+H**: Shell: a quick shell in a new terminal tab, in the session's directory (home with none)
 
 - **Alt+Shift+A**: Send all: every running session's queue (a dead or parked one's waits until it's relaunched or unparked)
 
@@ -232,13 +235,15 @@ Click selects a row; in the session list, a click on the selected session or the
 
 ### Buttons
 
-The buttons under the session list act on the session highlighted there, and only those that apply show: Rename on a running one, Relaunch (Unpark on a parked one), Forget (Stop & Forget on a running one) and Fork on any, and Park on one that isn't parked; then Mode, and Send on one that isn't dead. Hover over one for what it does, and its key is in brackets below. New, Adopt and Relaunch all are keys in the footer. An item opened full screen has Mode, Send and the rest in its bar, for its own session. Ctrl+S and Ctrl+T act on the same session: highlighting an item highlights its session there.
+The buttons under the session list act on the session highlighted there, and only those that apply show: Rename on a running one, Relaunch (Unpark on a parked one), Forget (Stop & Forget on a running one) and Fork on any, and Park on one that isn't parked; then Mode, and Send on one that isn't dead. Hover over one for what it does, and its key is in brackets below. New, Adopt and Relaunch all are keys in the footer. An item opened full screen has Mode, Send and the rest in its bar, for its own session. Ctrl+S and Ctrl+T act on the same session: highlighting an item highlights its session there. Shell shows always, and with none selected opens in your home directory.
 
 - Mode (Ctrl+T): the session's send mode, Queued or Immediate
 
 - Send (Ctrl+S): send the session's queued answers as one message; its caption counts them
 
 - Send all (Alt+Shift+A), above the footer: send every running session's queue; a dead or parked one's waits until it's relaunched or unparked
+
+- Shell (Alt+H, from anywhere): a quick shell in a new terminal tab, in the session in context's directory (where it works now), or home with none; exit or Ctrl+D closes it
 
 - Relaunch / Unpark (Alt+L in the session list): start the session again where it left off, stopping it first if it's running (asked only if it's mid-turn); on a parked one, Unpark (Alt+P too)
 
@@ -369,3 +374,4 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - The ⓘ at the stats pane's top right shows the selected session's info: its id (C copies it), user, machine, branch, model, transcript, and its MCP server's code, flagged when it needs a relaunch.
 - Every compaction, in a tab too, is a task in the inbox that follows it to done, failed or dropped, and the conversation shows its stages as the trash compactor's walls closing in, with the crew and the droids panicking while it runs.
 - A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at.
+- Shell (Alt+H, from anywhere) opens a quick shell in a new terminal tab, in the directory the session in context works in now, or home. Handing a session run in the wheelhouse to a Claude Code tab is now Handover to Claude Code in a shell, in its right-click menu.

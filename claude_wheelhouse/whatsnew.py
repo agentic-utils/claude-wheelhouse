@@ -325,6 +325,10 @@ FEATURES: tuple[Feature, ...] = (
     Feature("dead-dim", UNRELEASED, ADVANCED,
             note="A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, "
                  "its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at."),
+    Feature("quick-shell", UNRELEASED, ADVANCED,
+            note="Shell (Alt+H, from anywhere) opens a quick shell in a new terminal tab, in the directory the "
+                 "session in context works in now, or home. Handing a session run in the wheelhouse to a Claude Code "
+                 "tab is now Handover to Claude Code in a shell, in its right-click menu."),
 
 )
 

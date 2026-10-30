@@ -829,6 +829,9 @@ class RemoteClient:
     def host_command(self, sid: str, what: str, notes: str | None = None, then: str | None = None) -> Done:
         return self.done(f"/sessions/{sid}/{what}", {"notes": notes, "then": then} if what == "compact" else None)
 
+    def open_shell(self, sid: str | None) -> Done:
+        return self.done("/shell", {"sid": sid})
+
     def mcp(self, sid: str, do: str, server: str = "", url: str | None = None) -> Done:
         return self.done(f"/sessions/{sid}/mcp", {"do": do, "server": server, "url": url})
 
