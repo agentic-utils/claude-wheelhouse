@@ -1089,18 +1089,26 @@ class Store:
             for kind in ("relaunch", "start"):
                 self.move_op(db, sid, kind, "failed", since=("starting",))
 
-    def abort_launch(self, sid: str) -> str | None:
-        """Interrupt while a launch's op is starting (#249): cancelled, and what was sent with it (a
-        wake's send) and not yet claimed goes back to the queue as drafts, in one transaction. The
-        launched process is stopped once it registers (Hub.sweep_ops). Its kind, or None."""
+    def abort_launch(self, sid: str) -> tuple[str, str] | None:
+        """Interrupt during a Relaunch stopping the host, or a launch starting (#249, section 4), decided
+        and done in one transaction. Stopping: the signal can't be taken back, so its payload goes and
+        the new process is never started. Starting: what was sent with it (a wake's send) and not yet
+        claimed goes back to the queue as drafts, and the op keeps a deadline, which marks its process
+        as one to stop once it registers (Hub.stop_aborted_launch); a Relaunch's payload goes too. The
+        (kind, state) aborted, or None for neither."""
         with self.tx() as db:
             s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
-            if s is None or s["op"] not in ("relaunch", "start") or s["op_state"] != "starting":
+            op = None if s is None else (s["op"], s["op_state"])
+            if op not in (("relaunch", "stopping"), ("relaunch", "starting"), ("start", "starting")):
                 return None
-            db.execute("UPDATE messages SET draft = 1 WHERE session_id = ? AND draft = 0 AND author = 'person' "
-                       "AND kind IS NULL AND claimed_at IS NULL AND delivered_at IS NULL", (sid,))
-            self.move_op(db, sid, s["op"], "cancelled")
-            return s["op"]
+            db.execute("UPDATE sessions SET relaunch = NULL WHERE id = ?", (sid,))
+            if op[1] == "starting":
+                db.execute("UPDATE messages SET draft = 1 WHERE session_id = ? AND draft = 0 AND author = 'person' "
+                           "AND kind IS NULL AND claimed_at IS NULL AND delivered_at IS NULL", (sid,))
+            self.move_op(db, sid, op[0], "cancelled")
+            if op[1] == "stopping":   # no process to stop: the mark is a deadline kept only by a starting one
+                db.execute("UPDATE sessions SET op_deadline = NULL WHERE id = ?", (sid,))
+            return op
 
     @staticmethod
     def begin_cycle(db, sid: str, origin: str, state: str, then: str | None = None, tokens: int | None = None) -> str:

@@ -322,7 +322,7 @@ class Hub:
         # with the epoch second Compact was asked for
         self.compacting: dict[str, float] = {sid: asked for sid, (*_, asked) in under_way.items()
                                              if asked is not None}
-        self.stopped_launches: set[str] = set()   # launches Interrupt aborted, their process stopped (#249)
+        self.stopped_launches: set[str] = set()   # launches Interrupt aborted (op ids), their process stopped (#249)
         self.followers: dict[str, transcript.Follower] = {}
         # each session's context size for the session list: read on workers, by a follower
         # shared with the stats pane (transcript_usage.follower), so each transcript is read once
@@ -465,10 +465,10 @@ class Hub:
     def stop_aborted_launch(self, s, status: str) -> None:
         """A launch Interrupt aborted while it was starting: its process, once it has registered, is
         stopped, once (#249, section 4). The session ends Available, to Relaunch."""
-        if (s["op"] in ("relaunch", "start") and s["op_state"] == "cancelled" and status in RUNNING
-                and s["id"] not in self.stopped_launches and liveness.registered_this_launch(s)
-                and (s["launched_at"] or "")[:19] >= (s["op_at"] or "~")[:19]):
-            self.stopped_launches.add(s["id"])
+        if (s["op"] in ("relaunch", "start") and s["op_state"] == "cancelled" and s["op_deadline"]
+                and status in RUNNING and s["op_id"] not in self.stopped_launches
+                and liveness.registered_this_launch(s)):
+            self.stopped_launches.add(s["op_id"])
             try:
                 self.stop_process(s)
             except OSError as e:
@@ -1224,17 +1224,16 @@ class Hub:
         here, never left as a command for a later host. Stopping: the signal can't be taken back, so
         the new process is never started. Starting: the launch's op cancelled, its wake's send back
         in the queue, and the new process stopped once it registers (sweep_ops). None for any other."""
-        op = operating(s)
-        if op == ("relaunch", "stopping"):
-            self.relaunch_under_way(sid, None, ends="cancelled")
+        if (op := self.store.abort_launch(sid)) is None:   # decided in the store, never on a stale row
+            return None
+        self.relaunching.pop(sid, None)   # the hub's memory of it goes with the store's
+        self.compacting.pop(sid, None)
+        self.lapsed.discard(sid)
+        if op[1] == "stopping":
             return Done().say(f"{display_name(s)}'s Relaunch aborted: its host had been asked to stop, so it "
                               "stays stopped")
-        if op is not None and op[0] in ("relaunch", "start") and op[1] == "starting":
-            self.relaunch_under_way(sid, None, ends="cancelled")
-            self.store.abort_launch(sid)
-            return Done().say(f"{display_name(s)}'s {'Relaunch' if op[0] == 'relaunch' else 'start'} aborted: "
-                              "it stops as soon as it has started")
-        return None
+        return Done().say(f"{display_name(s)}'s {'Relaunch' if op[0] == 'relaunch' else 'start'} aborted: "
+                          "it stops as soon as it has started")
 
     # model and effort (.plan/model-effort.md)
 

@@ -41,7 +41,7 @@ def launches(store, monkeypatch):
 
 
 def registered(store, sid, pid=5151):
-    store.register(sid, pid, 2, "b")
+    store.register(sid, pid, pid, "b")   # its start time differs per process
 
 
 def overdue(store, sid):
@@ -236,3 +236,34 @@ def test_a_launch_that_fails_fails_its_op_at_once(hub, store, sid, monkeypatch):
     monkeypatch.setattr(launch, "restore_session", lambda store_, sid_, **kw: broken(store_, sid_))
     done = hub.relaunch(sid)
     assert not done.ok and kind_state(store, sid) == ("start", "failed")
+
+
+def test_interrupt_decides_from_the_store_not_the_last_refresh(hub, store, sid, monkeypatch, launches):
+    """Review 1: a wake launched since the last refresh is still aborted, with nothing left for the new host."""
+    hosted(store, sid)
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: False)
+    hub.refresh()
+    assert hub.wake_and_send(sid).ok
+    done = hub.host_command(sid, "interrupt")   # no refresh between
+    assert done.ok and "aborted" in done.notices[0].text
+    assert kind_state(store, sid) == ("relaunch", "cancelled") and store.session(sid)["host_command"] is None
+
+
+def test_each_aborted_launch_is_stopped_once(hub, store, sid, monkeypatch, launches):
+    """Review 2: a second launch aborted the same way is stopped too."""
+    hosted(store, sid)
+    alive = set()
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: pid in alive)
+    stopped = []
+    monkeypatch.setattr(Hub, "stop_process", staticmethod(lambda s: stopped.append(s["claude_pid"]) or True))
+    status(monkeypatch, "live")
+    for pid in (5151, 6161):
+        alive.clear()
+        store.db.execute("UPDATE sessions SET claude_pid = NULL")   # the last one stopped
+        store.mark_launched(sid)
+        assert hub.host_command(sid, "interrupt").ok
+        registered(store, sid, pid)
+        alive.add(pid)
+        hub.refresh()
+        hub.refresh()
+    assert stopped == [5151, 6161]
