@@ -83,7 +83,7 @@ def live_cwd(sid: str, projects: Path | None = None) -> str | None:
     path = locate(sid, projects)
     if path is None:
         return None
-    return next((rec["cwd"] for rec in reversed(tail_records(path, sidechain=True))
+    return next((rec["cwd"] for rec in reversed(tail_records(path))   # never a subagent's (sidechain)
                  if isinstance(rec.get("cwd"), str) and rec["cwd"]), None)
 
 

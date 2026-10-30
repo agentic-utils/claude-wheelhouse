@@ -1779,6 +1779,8 @@ def test_a_wake_never_sends_on_a_compaction_task(hub, store, sid, opened):
     ([{"type": "user", "cwd": "WT"}], True, "WT", None, "the transcript's newest cwd: a worktree it cd'd into"),
     ([{"type": "user", "cwd": "START"}, {"type": "assistant", "cwd": "WT"}, {"type": "x"}], True, "WT", None,
      "the newest record that has one"),
+    ([{"type": "user", "cwd": "WT"}, {"type": "assistant", "cwd": "GONE", "isSidechain": True}], True, "WT", None,
+     "a subagent's record, elsewhere, never counts"),
     (None, True, "START", None, "no transcript: where it started"),
     ([{"type": "user", "cwd": "GONE"}], True, "HOME", "GONE is gone", "its directory gone: home, said"),
     (None, False, "HOME", "START is gone", "where it started gone too"),
