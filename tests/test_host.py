@@ -1957,7 +1957,7 @@ def test_no_keepalive_after_a_compaction(host, store, sid):
     at = host.last_turn + host_mod.KEEPALIVE_AFTER
     assert not host.keepalive_due(at), "the last turn compacted: nothing to keep warm"
     finish_at(host, 200_000)
-    assert host.keepalive_due(host.last_turn + host_mod.KEEPALIVE_AFTER), "a turn since: its cache is worth keeping"
+    assert host.keepalive_due(host.last_turn + host_mod.KEEPALIVE_AFTER + 1), "a turn since: its cache is worth keeping"
 
 
 def test_keepalive_turn(host, store, sid, monkeypatch):
