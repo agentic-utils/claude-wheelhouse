@@ -818,6 +818,7 @@ class Store:
                                  (stamp(), sid, cid, cutoff)).rowcount
             if expired:
                 db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
+                self.drop_compact_command(db, sid)
         return bool(expired)
 
     def drop_park_request(self, sid: str) -> None:
@@ -858,11 +859,21 @@ class Store:
         cycle the hub's sweep has ended stays ended. Whether it moved. An end lets the cut-off go."""
         assert state in COMPACTION_ACTIVE + COMPACTION_ENDS
         with self.tx() as db:
+            was = db.execute("SELECT compaction FROM sessions WHERE id = ? AND compaction_id = ?", (sid, cid)).fetchone()
             moved = db.execute(f"UPDATE sessions SET compaction = ?, compaction_at = ? WHERE id = ? AND compaction_id = ? "
                                f"AND compaction IN {COMPACTION_ACTIVE}", (state, stamp(), sid, cid)).rowcount
             if moved and state in COMPACTION_ENDS:
                 db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
+                if was[0] == "requested":
+                    self.drop_compact_command(db, sid)
         return bool(moved)
+
+    @staticmethod
+    def drop_compact_command(db, sid: str) -> None:
+        """A requested cycle has ended unclaimed: its Compact command goes with it, so nothing is
+        left behind for a host to take later (the cycle row is the only trigger, Q233)."""
+        db.execute("UPDATE sessions SET host_command = NULL, compact_plan = NULL "
+                   "WHERE id = ? AND host_command = 'compact'", (sid,))
 
     def compaction(self, sid: str) -> sqlite3.Row | None:
         """The session's cycle as the store holds it: state, id, origin, then, at, item."""

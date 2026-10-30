@@ -774,12 +774,14 @@ class Host:
             self.store.set_activity(self.sid, "interrupted")
         elif command == "compact":
             notes, then = self.store.compact_plan(self.sid, take=True)
+            # the cycle row is the only trigger (Q233): a Compact command with no requested cycle
+            # (one that failed or expired, or one written by a daemon on code before PROTOCOL_VERSION
+            # 24, which writes no cycle) starts nothing. So after a pull, until the daemon restarts,
+            # Compact through an older daemon does nothing on a host on this code
             row = self.store.compaction(self.sid)
-            cid = row["id"] if row is not None and row["state"] == "requested" else None
-            if cid is None and self.cycle is None:   # pressed through a daemon on older code: no cycle written
-                cid = self.store.start_compaction(self.sid, "person", then=then)
-            if self.cycle is None and cid is not None:
-                self.cycle = Cycle(cid, row["origin"] if row is not None and row["id"] == cid else "person", then)
+            if (self.cycle is None and row is not None and row["state"] == "requested"
+                    and row["origin"] != "park"):   # Park's is claimed once parked (compact_parked)
+                self.cycle = Cycle(row["id"], row["origin"], then)
                 if notes:   # the person's own instructions: the session isn't asked
                     await self.send_compact(notes)
                 else:
@@ -986,18 +988,19 @@ class Host:
 
     # the compaction cycle (#244, .plan/244-compaction-cycle.md)
 
-    def move(self, state: str) -> None:
-        """The cycle to its next active state, here and in the store."""
+    async def move(self, state: str) -> None:
+        """The cycle to its next active state, here and in the store, retried through a locked
+        database (steady): leaving requested is the host's claim, which CLAIM_WITHIN waits for."""
         c = self.cycle
         c.state, c.since = state, time.monotonic()
-        self.store.move_compaction(self.sid, c.id, state)
+        await self.steady(self.store.move_compaction, self.sid, c.id, state)
 
     async def ask_notes(self, why: str = PRESSED_COMPACT) -> None:
         """The Before Compact step and the keep ask, as the notes turn: preparing."""
         c = self.cycle
         c.nonce, c.notes = secrets.token_hex(4), None
         c.ask = await self.turn(compact_ask(self.store, c.nonce, why=why), compacting=c.line)
-        self.move("preparing")
+        await self.move("preparing")
 
     async def send_compact(self, notes: str, line: str = "compacting") -> None:
         """/compact, with notes as its instructions if any: compacting."""
@@ -1005,7 +1008,7 @@ class Host:
         self.close_wait("the notes came back: compacting now")
         c.line, c.waited = line, None   # the clock again, from /compact taken up
         c.key = await self.turn(f"/compact {notes}".rstrip(), compacting=line)
-        self.move("compacting")
+        await self.move("compacting")
 
     def end_cycle(self, state: str, why: str = "") -> None:
         """The cycle ends: completed, failed or cancelled. Its question closes; a /compact turn

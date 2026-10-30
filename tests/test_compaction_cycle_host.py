@@ -337,15 +337,29 @@ def test_compacts_clock_starts_when_it_is_taken_up(host, store, sid, taken_up, s
     assert store.compaction(sid)["state"] == state, desc
 
 
-def test_a_compact_from_older_code_still_starts_a_cycle(host, store, sid):
-    """Review 2: a daemon on code from before #244 writes the command with no cycle: the host
-    starts one itself, so the Compact isn't dropped."""
+@pytest.mark.parametrize("ended, desc", [
+    ("expired", "unclaimed past CLAIM_WITHIN: its command goes with it"),
+    ("swept", "failed by the hub's dead-host sweep: likewise"),
+    (None, "a command with no cycle row (a daemon on code before 24): ignored"),
+])
+def test_a_compact_command_with_no_requested_cycle_starts_nothing(host, store, sid, ended, desc):
+    """Q233: the cycle row is the only trigger. A failed or expired requested cycle leaves no
+    command behind, and a stray command starts no cycle, so nothing locks again or compacts."""
     store.set_runner(sid, "sdk")
-    store.db.execute("UPDATE sessions SET host_command = 'compact', compact_plan = NULL")
+    if ended:
+        store.command(sid, "compact")
+        cid = store.compaction(sid)["id"]
+        if ended == "expired":
+            aged(store, sid, 120)
+            assert store.expire_requested(sid, cid, 60), desc
+        else:
+            store.move_compaction(sid, cid, "failed")
+        assert store.session(sid)["host_command"] is None, f"{desc}: the command cleared"
+    else:
+        store.db.execute("UPDATE sessions SET host_command = 'compact', compact_plan = NULL")
     run(host.poll())
-    c = store.compaction(sid)
-    assert (c["state"], c["origin"]) == ("preparing", "person") and host.cycle is not None
-    assert "The person pressed Compact" in host.client.queries[-1]
+    assert host.cycle is None and not compacting_now(store.session(sid)) and not host.client.queries, desc
+
 
 
 def test_a_locked_database_never_leaves_the_store_closed_with_no_cycle_held(host, store, sid, monkeypatch):
@@ -518,3 +532,22 @@ def test_interrupt_during_parks_requested_cycle_drops_the_park_too(host, store, 
     s = store.session(sid)
     assert store.compaction(sid)["state"] == "cancelled" and not compacting_now(s)
     assert (s["park_requested_at"], s["park_compact"]) == (None, 0)
+
+
+def test_the_claim_is_retried_through_a_locked_database(host, store, sid, monkeypatch):
+    """Round 7: leaving requested is the host's claim; one locked write mustn't leave it
+    unclaimed for CLAIM_WITHIN to fail while the notes turn runs."""
+    import sqlite3
+    store.set_runner(sid, "sdk")
+    store.command(sid, "compact")
+    real, tries = store.move_compaction, []
+    monkeypatch.setattr(host_mod, "STEADY_TRIES", (0,))
+
+    def flaky(*a):
+        tries.append(a[2])
+        if len(tries) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real(*a)
+    monkeypatch.setattr(store, "move_compaction", flaky)
+    run(host.poll())
+    assert tries == ["preparing", "preparing"] and store.compaction(sid)["state"] == "preparing"
