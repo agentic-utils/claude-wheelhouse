@@ -222,6 +222,7 @@ def test_abort_on_the_notes_question_cancels(host, store, sid):
 # the 29 Oct repros (design section 1), as regression tests
 
 def test_ctrl_s_mid_prep_is_refused(host, store, sid):
+    store.set_runner(sid, "sdk")
     ref = store.post_item(sid, "question", "which db?")
     store.queue(sid, "use Postgres", ref)
     store.command(sid, "compact")
@@ -282,7 +283,8 @@ def test_writing_in_once_the_quiet_marks_compact_has_gone_is_refused(host, store
         store.send(sid, "I'm back")
     with pytest.raises(Compacting):
         store.queue(sid, "I'm back")
-    assert store.compaction(sid)["state"] == "compacting" and not store.messages(sid)
+    assert store.compaction(sid)["state"] == "compacting"
+    assert not [m for m in store.messages(sid) if m["author"] == "person"]
 
 
 def test_claude_codes_own_compaction_ends_its_cycle_at_the_boundary_mid_turn(streamed, store, sid):
@@ -438,7 +440,7 @@ def test_an_end_its_turn_couldnt_write_is_owed_with_its_then(host, store, sid, m
     monkeypatch.setattr(host_mod, "STEADY_TRIES", ())
     monkeypatch.setattr(store, "move_compaction", lambda *a: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
     end(host, compacted=True)
-    assert host.cycle is not None and host.owed == ("completed", "", "send") and store.drafts(sid)
+    assert host.cycle is not None and host.owed[0::2] == ("completed", "send") and store.drafts(sid)
     monkeypatch.setattr(store, "move_compaction", real)
     run(host.poll())
     assert store.compaction(sid)["state"] == "completed" and host.cycle is None and not store.drafts(sid)
@@ -593,7 +595,7 @@ def test_a_claim_locked_past_steady_is_owed_to_the_next_pass(host, store, sid, m
     monkeypatch.setattr(host_mod, "STEADY_TRIES", ())
     monkeypatch.setattr(store, "move_compaction", lambda *a: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
     run(host.poll())
-    assert host.owed_move == "preparing" and store.compaction(sid)["state"] == "requested"
+    assert host.owed_move == ("preparing", "") and store.compaction(sid)["state"] == "requested"
     monkeypatch.setattr(store, "move_compaction", real)
     run(host.poll())
     assert host.owed_move is None and store.compaction(sid)["state"] == "preparing"
@@ -617,3 +619,35 @@ def test_interrupt_after_the_notes_came_never_compacts(host, store, sid):
     run(host.poll())
     assert not any(q.startswith("/compact") for q in host.client.queries), host.client.queries
     assert store.compaction(sid)["state"] == "cancelled" and host.cycle is None and host.late_key is None
+
+
+def test_claude_codes_own_compaction_says_its_size_on_its_task(streamed, store, sid):
+    """PR 2 review: an auto cycle ends at its boundary, its task's note giving the size before."""
+    from claude_agent_sdk import SystemMessage
+    store.set_runner(sid, "sdk")
+    h = streamed
+    boundary = SystemMessage(subtype="compact_boundary", data={"compact_metadata": {"preTokens": 950_000,
+                                                                                  "postTokens": 31_000}})
+
+    async def go():
+        await h.turn("work")
+        await h.pre_compact({"trigger": "auto"}, None, None)
+        for m in (h.client.replay(0), boundary, None):
+            h.client.feed.put_nowait(m)
+        await h.read()
+    run(go())
+    c = store.compaction(sid)
+    assert c["state"] == "completed" and store.item(sid, c["item"])["status"] == "done"
+    assert store.thread(sid, c["item"])[-1]["body"] == "950k → 31k", "before and after, from its boundary"
+    assert store.item(sid, c["item"])["title"] == "Compact demo: 950k context"
+
+
+def test_a_locked_context_write_never_stops_a_cycle_ending(host, store, sid, monkeypatch):
+    """PR 2 review: the context size is a nicety; a lock on it mustn't keep the cycle open."""
+    import sqlite3
+    store.set_runner(sid, "sdk")
+    store.command(sid, "compact", notes="keep Q1")
+    run(host.poll())
+    monkeypatch.setattr(store, "set_context", lambda *a: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
+    end(host, compacted=True)
+    assert store.compaction(sid)["state"] == "completed" and host.cycle is None

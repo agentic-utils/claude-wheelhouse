@@ -4881,6 +4881,7 @@ async def test_a_refused_send_keeps_the_text_and_says_why(store, tmp_path, monke
     store.set_mode(sid, mode_)
     store.post_item(sid, "question", "which db?")
     store.command(sid, "compact")
+    store.db.execute("DELETE FROM items WHERE answer = '{\"from\": \"compaction\"}'")   # its task: refused apart
     app = WheelhouseApp(store)
     toasts = []
     monkeypatch.setattr(app, "notify", lambda text, **kw: toasts.append(text))
@@ -9539,6 +9540,9 @@ async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size)
         cid = store.compaction(sid)["id"]
         store.move_compaction(sid, cid, "preparing")   # as the host writes it
         store.set_activity(sid, "compacting: collecting notes")
+        # its task item (#244 PR 2), posted after the cut-off, is never locked: put aside here, so
+        # the keys below are about the session's own rows
+        store.db.execute("DELETE FROM items WHERE answer = '{\"from\": \"compaction\"}'")
         await again()
         compact = app.query_one("#compact", Button)
         assert compact.disabled, f"{size}: Compact off while compacting"
@@ -9835,3 +9839,21 @@ async def test_mcp_servers_dialog_without_a_running_host(store, tmp_path, monkey
 def test_a_call_the_turn_waits_on_is_never_locked_by_a_compaction(kind, status, mark, locked, desc):
     it = {"session_id": "s1", "id": 3, "kind": kind, "status": status, **mark}
     assert WheelhouseApp.locks(it, {"s1": 5}) == locked, desc
+
+
+@pytest.mark.parametrize("width", [36, 76])
+@pytest.mark.parametrize("who, text", [
+    ("stage", "▐█          █▌ walls closing in\nasked for by you (Compact) · 10:39Z"),
+    ("stage", "▐████████████▌ compacted\n220k → 40k · 10:41Z"),
+    ("crew", "Han: I've got a bad feeling about these walls.\nC-3PO: Sir, the odds of survival are rather poor!"),
+])
+def test_stage_blocks_render_as_plain_text_never_markdown(width, who, text):
+    """#244: Markdown would turn the art into rules and bullets; each line is cut, never wrapped."""
+    from rich.console import Console
+    from rich.segment import Segment
+    console = Console(width=width, color_system=None)   # rendered as the app renders a block (_block_lines)
+    rendered = console.render(tui.stage_text(who, text), console.options.update_width(width))
+    shown = ["".join(seg.text for seg in line) for line in Segment.split_lines(rendered)]
+    assert len(shown) == len(text.split("\n")), shown
+    for line, want in zip(shown, text.split("\n")):
+        assert line.rstrip() == want or (line.rstrip().endswith("…") and want.startswith(line.rstrip()[:-1])), (line, want)

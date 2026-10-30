@@ -9,7 +9,7 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 
 - `cli.py`: the `claude-wheelhouse` entry point and its subcommands (`tui`, the default;
   `tutorial`, `notes`, `run`, `host`, `mcp`, `monitor`, `protocol`, `daemon`, `token`,
-  `open-items`, `modules`).
+  `open-items`, `compaction-start` (the tab plugin's PreCompact hook, #244), `modules`).
   The app takes `--local`, or `--connect HOST:PORT` with `--token-file`; it and `daemon`
   take `--port`, `--usage-mode`, `--keepalive-hours` and `--enable-sdk` (`features.py`);
   `daemon` adds `--address`, `--name` (repeatable) and `--stop`; `tutorial` takes `--yes`.
@@ -143,6 +143,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   (`tui.DocEditor`: opened by a click on a doc, in Detail and `DocView`; saving is stage 8's).
   A doc item's thread and layout there, split or tabbed (`tui.DocPanes`, Ctrl+L):
   `.plan/docs-section.md`.
+  Never imports Textual.
+- `compactor.py`: a compaction's stage lines (art B, the trash compactor) and the crew's
+  excerpts, drawn per cycle without repeats (`schedule`, seeded by the cycle's id) (#244).
   Never imports Textual.
 - `splitter.py`, `knurl.py`, `emoji.py`, `unsent.py`: TUI pieces (dividers, scrollbars,
   emoji shortcodes, unsent text).

@@ -13,7 +13,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from . import docroots, fingerprint, liveness, steps
-from .store import GONE_TEXT, SessionGone, Store, mcp_named, mcp_servers, redacted, runner
+from .store import GONE_TEXT, SessionGone, Store, mcp_named, mcp_servers, redacted, runner, wheelhouse_item
 
 HEARTBEAT_SECONDS = 30
 STOP_AFTER = 1   # seconds after park_session or end_session replies before its Claude Code is stopped
@@ -277,7 +277,7 @@ def get_input(ref: str | None = None, message_id: int | None = None) -> str:
 @wheelhouse_tool
 def list_items(include_closed: bool = False) -> str:
     """This session's items, one per line."""
-    rows = _store.items(_sid, include_closed=include_closed)
+    rows = [r for r in _store.items(_sid, include_closed=include_closed) if not wheelhouse_item(r["answer"])]
     return "\n".join(f"{r['ref']} [{r['status']}] {r['title']}" for r in rows) or "no items"
 
 

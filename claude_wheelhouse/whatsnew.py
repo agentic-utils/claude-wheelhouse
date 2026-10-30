@@ -315,6 +315,10 @@ FEATURES: tuple[Feature, ...] = (
             note="A compaction, however it starts, closes the session until /compact has ended: sends, queueing, Park "
                  "and Relaunch wait, its eye stays blue throughout, and notes still being written after 2 minutes "
                  "bring a question: Keep waiting or Abort."),
+    Feature("compaction-task", UNRELEASED, ADVANCED,
+            note="Every compaction, in a tab too, is a task in the inbox that follows it to done, failed or "
+                 "dropped, and the conversation shows its stages as the trash compactor's walls closing in, "
+                 "with the crew and the droids panicking while it runs."),
 
 )
 

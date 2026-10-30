@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 71, 2026-10-30T12:36:48Z, source 787135b8bfe88205 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 80, 2026-10-30T12:37:05Z, source 69a41bd6b70a0f2b (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -39,6 +39,9 @@ daemon running.
 - Completed: an item done with (a task done or dropped, a subagent done or failed, a PR merged or closed, a question answered, a decision seen, a doc read). Ctrl+Delete deletes them all at once (Ctrl+Z undoes it); autocleanse hides each 5 minutes after it completed (AUTOCLEANSE_MINUTES, 0 off) until Alt+V shows it.
 - Session steps: what the wheelhouse tells a session at compaction, ending, resuming or a
   merged PR (command palette, Session steps).
+- Compaction: in a tab, Claude Code compacting (by itself, or `/compact` typed there) shows as a
+  task in the inbox ("Compact <name>: <k>k context", done once compacted) and blue lines in the
+  conversation, and the session's eye is blue meanwhile; what you send it waits until it's done.
 - Tour: the guided tour, resumed with Alt+T while the title bar shows its badge.
 
 ## Where to look in the source
@@ -362,3 +365,4 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - A completed item leaves the inbox 5 minutes after it completed (AUTOCLEANSE_MINUTES in a .env, 0 for never); Alt+V shows it again.
 - Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it.
 - The ⓘ at the stats pane's top right shows the selected session's info: its id (C copies it), user, machine, branch, model, transcript, and its MCP server's code, flagged when it needs a relaunch.
+- Every compaction, in a tab too, is a task in the inbox that follows it to done, failed or dropped, and the conversation shows its stages as the trash compactor's walls closing in, with the crew and the droids panicking while it runs.

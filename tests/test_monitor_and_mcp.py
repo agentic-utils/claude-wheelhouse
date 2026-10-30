@@ -542,3 +542,44 @@ def test_parking_itself_drops_a_pending_compact_request(store, sid):
     store.park(sid, keep="the plan")
     s = store.session(sid)
     assert (s["compact_request"], s["compact_requested_at"]) == (None, None), "the park's compaction replaces it"
+
+
+@pytest.mark.parametrize("trigger, origin, desc", [
+    ("auto", "auto", "Claude Code's own, at full context"),
+    ("manual", "person", "/compact typed in the tab: the person's"),
+])
+def test_a_tabs_compaction_is_a_cycle_from_its_hooks(store, sid, monkeypatch, capsys, trigger, origin, desc):
+    """#244, Q4: the plugin's PreCompact hook starts the cycle at compacting (blue, the wheelhouse's
+    sends held, the task item); its SessionStart after compaction completes it."""
+    import json
+    from claude_wheelhouse import cli
+    from claude_wheelhouse.store import compacting_now
+    monkeypatch.setenv("WHEELHOUSE_SESSION_ID", sid)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"hook_event_name": "PreCompact", "trigger": trigger})))
+    monkeypatch.setattr("claude_wheelhouse.store.db_path", lambda: store.path)
+    cli.compaction_hook()
+    c = store.compaction(sid)
+    assert (c["state"], c["origin"]) == ("compacting", origin) and compacting_now(store.session(sid)), desc
+    assert store.item(sid, c["item"])["status"] == "running", desc
+    cli.open_items()
+    assert store.compaction(sid)["state"] == "completed", desc
+    assert store.item(sid, c["item"])["status"] == "done", f"{desc}: its task done with it"
+
+
+def test_a_tabs_compaction_says_its_sizes_from_its_transcript(store, sid, tmp_path, monkeypatch):
+    """#244: a tab's task title and note match a host's: its context from the last turn's usage,
+    then "{before}k → {after}k" from the compact_boundary the transcript records."""
+    import json
+    from claude_wheelhouse import cli
+    path = tmp_path / "t.jsonl"
+    usage = {"input_tokens": 2_000, "cache_read_input_tokens": 400_000, "cache_creation_input_tokens": 10_000}
+    path.write_text(json.dumps({"type": "assistant", "message": {"usage": usage}}) + "\n")
+    cli.tab_compaction(store, sid, hook={"trigger": "manual", "transcript_path": str(path)})
+    c = store.compaction(sid)
+    assert store.item(sid, c["item"])["title"] == "Compact demo: 412k context"
+    with path.open("a") as f:
+        f.write(json.dumps({"type": "system", "subtype": "compact_boundary",
+                            "compactMetadata": {"preTokens": 415_195, "postTokens": 10_838}}) + "\n")
+    cli.tab_compaction(store, sid, end=True, hook={"transcript_path": str(path)})
+    assert store.thread(sid, c["item"])[-1]["body"] == "415k → 10k"
+    assert store.item(sid, c["item"])["title"] == "Compact demo: 415k context"

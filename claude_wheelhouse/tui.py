@@ -104,7 +104,8 @@ COMPACTING_LOCKED = "That session is compacting: its items open once it's done" 
 UNDO_LANDING = "{key}: the undo is still putting rows back, try again in a moment"   # Delete asked mid-undo (#235)
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
-         "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8"}
+         "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8",
+         "stage": "#2f8cff", "crew": "#2f8cff"}   # a compaction's stage lines and crew (#244): its eye's blue
 # a doc block (doc_blocks) longer than this is rendered on a thread (Transcript._layout): a
 # 42 KB one takes Rich a second or two, which the loop would otherwise stall for
 RENDER_OFF_LOOP = 2000
@@ -552,8 +553,18 @@ def _block_lines(who: str, md: str, width: int, console) -> list:
     """A block's rendered segments at one width: rendered once, though Textual measures a
     widget's height and then draws it, and a new turn leaves every older block as it was."""
     r = Text(md.strip("`"), style=VOICE[who]) if who == "tool" else pr_text(md) if who == "pr" \
-        else RichMarkdown(md, style=VOICE[who])
+        else stage_text(who, md) if who in ("stage", "crew") else RichMarkdown(md, style=VOICE[who])
     return list(console.render(r, console.options.update_width(width)))
+
+
+def stage_text(who: str, text: str) -> Text:
+    """A compaction's stage lines or crew excerpt (#244) as plain Text, never Markdown (which
+    would turn its art into rules and bullets): each line cut with an ellipsis, not wrapped; a
+    stage's lines after its first dim."""
+    out = Text(no_wrap=True, overflow="ellipsis")
+    for i, line in enumerate(text.split("\n")):
+        out.append(("\n" if i else "") + line, style=VOICE[who] + (" dim" if who == "stage" and i else ""))
+    return out
 
 
 def pr_text(md: str) -> Text | RichMarkdown:

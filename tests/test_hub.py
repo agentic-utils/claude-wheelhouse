@@ -1715,3 +1715,61 @@ def test_a_waiting_calls_answer_goes_at_once_only_during_a_cycle(hub, store, sid
         store.command(sid, "compact")
     assert hub.submit((sid, ref), "the first").ok, desc
     assert bool(store.drafts(sid)) == queued and bool(store.pending(sid)) == (not queued), desc
+
+
+def test_compaction_entries_place_stage_lines_and_the_crew(store, sid):
+    """#244: each stage's art and its dim detail, and while it runs the crew's excerpts, seeded by
+    the cycle so every refresh shows the same, one at each stage change."""
+    from datetime import datetime, timezone
+    from claude_wheelhouse.hub import compaction_entries
+    store.command(sid, "compact")
+    cid = store.compaction(sid)["id"]
+    store.move_compaction(sid, cid, "preparing")
+    t0 = datetime.fromisoformat(store.stages(sid)[-1]["at"]).timestamp()
+    stages = store.stages(sid)
+    later = compaction_entries(stages, True, t0 + 65)
+    assert later == compaction_entries(stages, True, t0 + 65), "the same at every refresh"
+    whos = [e.who for e in later]
+    assert whos.count("stage") == 1 and 3 <= whos.count("crew") <= 4, whos   # requested shows no line
+    assert later[0].text.startswith("▐█          █▌ walls closing in\n"), later[0].text
+    assert all(e.at <= datetime.fromtimestamp(t0 + 65, timezone.utc).isoformat() for e in later)
+    store.move_compaction(sid, cid, "compacting")
+    store.move_compaction(sid, cid, "completed", "220k → 40k")
+    ended = datetime.fromisoformat(store.stages(sid)[-1]["at"]).timestamp()
+    done = compaction_entries(store.stages(sid), False, t0 + 3600)
+    last = [e for e in done if e.who == "stage"][-1]
+    assert last.text.startswith("▐████████████▌ compacted\n220k → 40k · "), last
+    assert all(datetime.fromisoformat(e.at).timestamp() <= ended for e in done if e.who == "crew"), \
+        "no crew once it has ended, however long after"
+
+
+@pytest.mark.parametrize("status, why", [("dead", "its host stopped"), ("stalled", "its host stalled")])
+def test_the_sweep_says_why_on_the_task(hub, store, sid, monkeypatch, status, why):
+    store.command(sid, "compact")
+    store.take_command(sid)
+    store.move_compaction(sid, store.compaction(sid)["id"], "preparing")
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
+    hub.refresh()
+    ref = store.compaction(sid)["item"]
+    assert store.item(sid, ref)["status"] == "blocked"
+    assert store.thread(sid, ref)[-1]["body"] == f"failed: {why}"
+
+
+def test_nothing_is_sent_on_a_compaction_task_and_fork_never_moves_it(hub, store, sid):
+    store.command(sid, "compact")
+    ref = store.compaction(sid)["item"]
+    store.move_compaction(sid, store.compaction(sid)["id"], "failed", "its host stopped")   # blocked: MOVABLE's
+    done = hub.submit((sid, ref), "why?", now=True)
+    assert not done.ok and "the wheelhouse's own record of a compaction" in done.notices[0].text
+    assert not store.pending(sid) and not store.drafts(sid)
+    assert ref not in [r[0] for r in hub.fork_plan(sid).items], "Fork never offers it"
+
+
+def test_a_wake_never_sends_on_a_compaction_task(hub, store, sid, opened):
+    store.command(sid, "compact")
+    ref = store.compaction(sid)["item"]
+    store.move_compaction(sid, store.compaction(sid)["id"], "failed", "its host stopped")
+    done = hub.wake_and_send(sid, ref, "why did it fail?")
+    assert not done.ok and "own record of a compaction" in done.notices[0].text
+    assert not opened and not store.pending(sid), "not woken, nothing sent"
+

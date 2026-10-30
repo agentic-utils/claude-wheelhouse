@@ -1054,7 +1054,8 @@ def test_a_docs_new_replies(store, sid, tmp_path, kind, replies, seen, left, des
      "the host's own compaction: its first line marks it"),
     ([("command",), ("post",), ("activity", "compacting: collecting notes"), ("activity", "compacting")], "1",
      "kept through the compaction's lines"),
-    ([("command",), ("post",), ("cancelled",), ("command",)], "2", "pressed again after a cycle: from then"),
+    ([("command",), ("post",), ("cancelled",), ("command",)], "3",
+     "pressed again after a cycle: from then (its task item, T2, and Q1 posted before)"),
     ([("command",), ("cancelled",)], None, "a cycle's end: let go"),
     ([("command",), ("activity", "idle · compacted")], None, "compacted: let go"),
     ([("command",), ("activity", "interrupted")], None, "interrupted: let go"),
@@ -1148,6 +1149,7 @@ REFUSED = [
 @pytest.mark.parametrize("act, action, desc", REFUSED)
 def test_a_compaction_cycle_refuses_every_write(store, sid, state, act, action, desc):
     from claude_wheelhouse.store import Compacting
+    store.set_runner(sid, "sdk")   # a host's: a tab's is waited out, worded without Interrupt
     store.queue(sid, "queued before")
     cycle_in(store, sid, state)
     before = ([dict(m) for m in store.messages(sid)], dict(store.session(sid)))
@@ -1234,4 +1236,53 @@ def test_the_person_writing_in_calls_off_the_quiet_marks_cycle(store, sid, state
     else:
         with pytest.raises(Compacting):
             write(store, sid)
-        assert store.compaction(sid)["state"] == state and not store.messages(sid), desc
+        assert store.compaction(sid)["state"] == state, desc
+        assert not [m for m in store.messages(sid) if m["author"] == "person"], f"{desc}: nothing of the person's"
+
+
+# the compaction cycle's task item and stages (#244, PR 2)
+
+@pytest.mark.parametrize("moves, status, note, desc", [
+    ([], "running", "asked for by you (Compact)", "pressed: running, who asked"),
+    (["preparing"], "running", "collecting notes", "the notes asked for"),
+    (["preparing", "compacting"], "running", "compacting", "/compact sent"),
+    (["preparing", "compacting", ("completed", "220k → 40k")], "done", "220k → 40k", "completed: before and after"),
+    (["preparing", ("failed", "no result in 10 minutes")], "blocked", "failed: no result in 10 minutes",
+     "failed: blocked, with why, left for the person to dismiss"),
+    ([("cancelled", "cancelled by Interrupt")], "dropped", "cancelled by Interrupt", "cancelled: dropped"),
+])
+def test_the_cycles_task_item_follows_it(store, sid, moves, status, note, desc):
+    from claude_wheelhouse.store import COMPACTION_TASK
+    store.set_context(sid, 220_000, 1_000_000)
+    store.command(sid, "compact")
+    c = store.compaction(sid)
+    for m in moves:
+        state, why = m if isinstance(m, tuple) else (m, "")
+        store.move_compaction(sid, c["id"], state, why)
+    item = store.item(sid, c["item"])
+    assert (item["kind"], item["title"], item["answer"]) == ("task", "Compact demo: 220k context", COMPACTION_TASK), desc
+    assert item["status"] == status, desc
+    assert [m["body"] for m in store.thread(sid, c["item"])][-1] == note, desc
+    assert [s["state"] for s in store.stages(sid)] == ["requested", *[m[0] if isinstance(m, tuple) else m for m in moves]], desc
+    assert store.setting("compact.cutoff." + sid) is None or int(store.setting("compact.cutoff." + sid)) < int(
+        item["id"]), f"{desc}: posted after the cut-off, never locked"
+
+
+def test_the_session_never_sees_its_compaction_task(store, sid):
+    from claude_wheelhouse import mcp_server
+    store.post_item(sid, "task", "real work", status="running")
+    store.command(sid, "compact")
+    ref = store.compaction(sid)["item"]
+    assert ref not in [r["ref"] for r in store.open_items(sid)]
+    mcp_server._store, mcp_server._sid = store, sid
+    assert ref not in mcp_server.list_items() and "real work" in mcp_server.list_items()
+    store.db.execute("UPDATE items SET created_at = '2000-01-01', session_at = '2000-01-01'")
+    store.mark_version(sid)
+    assert not [d for d in store.in_doubt(sid) if d.startswith(ref + " ")], "never a keepalive's check"
+
+
+def test_a_tabs_refusal_never_offers_interrupt(store, sid):
+    from claude_wheelhouse.store import Compacting
+    store.start_compaction(sid, "auto", "compacting")   # its PreCompact hook
+    with pytest.raises(Compacting, match="^demo is compacting in its tab: send once it's done.$"):
+        store.send(sid, "hi")

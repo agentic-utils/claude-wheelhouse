@@ -27,14 +27,15 @@ import sqlite3
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import adopt, api, away, features, fingerprint, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
+from . import adopt, api, away, compactor, features, fingerprint, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
 from .docroots import DOC_CAP
-from .host import (PARK_COMPACT_WITHIN, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, keepalive_body,
+from .host import (COMPACT_TIMEOUT, PARK_COMPACT_WITHIN, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, keepalive_body,
                    waits_on_person)
-from .store import (COMPACT_QUESTION, NOTES_WAIT, Compacting, DISMISSABLE, compacting_now, PRS_SINCE, STATUSES, SessionGone, requested_expired, Store, can_queue,
+from .store import (COMPACT_QUESTION, NOTES_WAIT, ORIGIN_WORDS, Refused, wheelhouse_item, Compacting, DISMISSABLE, compacting_now, PRS_SINCE, STATUSES, SessionGone, requested_expired, Store, can_queue,
                     PROTOCOL_VERSION, mcp_servers, mode, needs_relaunch, runner, standing)
 
 RUNNING = ("live", "stalled", "starting")
@@ -76,6 +77,38 @@ def short(sid: str) -> str:
     return sid[:6]
 
 
+def compaction_entries(stages, active: bool, at: float | None = None) -> list:
+    """A session's compaction stages as conversation entries (#244): each stage's lines (art B,
+    then dim who asked or what came of it, with its time), and while a cycle is preparing or
+    compacting the crew's excerpts (compactor.schedule), those due by now (at, epoch). Placed
+    by time among the transcript's entries (transcript.blocks); the task item's thread has the
+    stages' notes, never the excerpts."""
+    at = time.time() if at is None else at
+    out, cycles = [], {}
+    for st in stages:
+        if (text := compactor.stage_text(st["state"], ORIGIN_WORDS.get(st["origin"]), st["note"])) is not None:
+            art, *rest = text.split("\n")
+            out.append(transcript.Entry("stage", "\n".join([art, " · ".join([*rest, st["at"][11:16] + "Z"])]), st["at"]))
+        cycles.setdefault(st["cycle_id"], []).append(st)
+    last = stages[-1]["cycle_id"] if stages else None
+    for cid, run in cycles.items():
+        windows = []
+        for i, st in enumerate(run):
+            if st["state"] not in compactor.SHOWN:
+                continue
+            end = (epoch(run[i + 1]["at"]) if i + 1 < len(run) else at if active and cid == last else epoch(st["at"]))
+            windows.append((epoch(st["at"]), min(end, at)))
+        for when, excerpt in compactor.schedule(cid, windows):
+            if when <= at:
+                stamp_ = datetime.fromtimestamp(when, timezone.utc).isoformat(timespec="microseconds")
+                out.append(transcript.Entry("crew", "\n".join(excerpt), stamp_))
+    return out
+
+
+def epoch(iso: str) -> float:
+    return datetime.fromisoformat(iso).timestamp()
+
+
 def refusable(method):
     """A hub action the store may refuse during a compaction cycle (Compacting, #244): said as a
     warning, the one wording for every refused action, and nothing done."""
@@ -83,7 +116,7 @@ def refusable(method):
     def act(self, *args, **kwargs):
         try:
             return method(self, *args, **kwargs)
-        except Compacting as e:
+        except Refused as e:
             return Done(False).say(str(e), "warning")
     return act
 
@@ -341,9 +374,16 @@ class Hub:
         its cycle ended, and lets it go (cycle_due)."""
         for s in self.sessions:
             if compacting_now(s) and self.statuses[s["id"]] in ("dead", "stalled") and s["compaction_id"]:
-                if self.store.move_compaction(s["id"], s["compaction_id"], "failed"):
+                why = "its host stalled" if self.statuses[s["id"]] == "stalled" else "its host stopped"
+                if self.store.move_compaction(s["id"], s["compaction_id"], "failed", why):
                     print(f"wheelhouse: {display_name(s)}'s compaction failed: its host "
                           f"{'stalled' if self.statuses[s['id']] == 'stalled' else 'is not running'}",
+                          file=sys.stderr, flush=True)
+            elif (s["compaction"] == "compacting" and (runner(s) != "sdk" or s["shell"]) and s["compaction_at"]
+                  and time.time() - epoch(s["compaction_at"]) > COMPACT_TIMEOUT):   # a tab's, its end never heard
+                if self.store.move_compaction(s["id"], s["compaction_id"], "failed",
+                                              f"no word of its end in {COMPACT_TIMEOUT // 60} minutes"):
+                    print(f"wheelhouse: {display_name(s)}'s compaction in its tab failed: no word of its end",
                           file=sys.stderr, flush=True)
             elif (within := requested_expired(s, PARK_COMPACT_WITHIN)) is not None:   # read first: no lock
                 if self.store.expire_requested(s["id"], s["compaction_id"], within):
@@ -446,6 +486,7 @@ class Hub:
             done.say("relaunching")
         return done
 
+    @refusable
     def wake_and_send(self, sid: str, item_ref: str | None = None, text: str | None = None,
                       may_tab: bool = True) -> Done:
         """Ctrl+S or Alt+S on a session that isn't running, confirmed (#221): Unpark or Relaunch
@@ -456,6 +497,7 @@ class Hub:
         started (a detached host, a tab's Claude), and the queue follows the notice within the
         same call, long before either can claim anything. Nothing is sent if it doesn't come back:
         the queue stays queued, and the text stays the person's."""
+        self.store.check_sendable(sid, item_ref if text is not None else None)   # before waking it
         s = self.row(sid)
         verb = waking(s)
         done = self.relaunch(sid, may_tab)
@@ -635,7 +677,7 @@ class Hub:
                 self.store.take_command(sid, what)   # (a Shell stays: the person's, for the new host)
             row = self.store.compaction(sid)
             if row is not None and row["state"] == "requested":   # its Compact, untaken: the cycle goes with it
-                self.store.move_compaction(sid, row["id"], "cancelled")
+                self.store.move_compaction(sid, row["id"], "cancelled", "the relaunch went ahead before it began")
             done = self.stop_host(sid, host, self.store.relaunch_may_tab(sid))
             for notice in done.notices:
                 self.emit(notice)
@@ -747,7 +789,7 @@ class Hub:
         s = self.row(sid)
         t = fork.tree(s["cwd"])
         items = [(r["ref"], r["kind"], r["status"], r["title"]) for r in self.store.items(sid, include_closed=False)
-                 if r["status"] in fork.MOVABLE.get(r["kind"], ())]
+                 if r["status"] in fork.MOVABLE.get(r["kind"], ()) and not wheelhouse_item(r["answer"])]
         return fork.Plan(f"{display_name(s)} (fork)", s["cwd"], t, fork.default_branch(t, s["cwd"]) if t.can_branch else "",
                          items)
 
@@ -765,7 +807,7 @@ class Hub:
             return Done(False).say(f"{name} would open in a tab: fork it from the daemon's machine", "warning")
         refs = list(dict.fromkeys(refs))
         bad = [r for r in refs if (i := self.store.item(sid, r)) is None
-               or i["status"] not in fork.MOVABLE.get(i["kind"], ())]
+               or i["status"] not in fork.MOVABLE.get(i["kind"], ()) or wheelhouse_item(i["answer"])]
         if bad:
             return Done(False).say(f"{', '.join(bad)} can't move: only a todo or blocked task, or an open "
                                    "question", "error")
@@ -1339,7 +1381,7 @@ class Hub:
             sid = s["id"]
             follower = self.contexts.get(sid)
             snap = follower.snap if follower is not None and follower.ready else None
-            if snap is None or snap.last_at is None or runner(s) != "tab":
+            if snap is None or snap.last_at is None or runner(s) != "tab" or compacting_now(s):   # never mid-cycle (#244)
                 self.warmth.pop(sid, None)
                 continue
             w = self.warmth.setdefault(sid, Warmth(snap.last_at, snap.last_at))
@@ -1472,10 +1514,11 @@ class Hub:
         # sent, not yet passed on: the wheelhouse's own notices aren't the person's words
         sending = tuple(m["body"] for m in self.store.pending(sid) if m["item_ref"] is None and m["kind"] != "notice")
         tab = None if runner(s) == "sdk" and not s["shell"] else launch.tab_title(s)
-        key = (s["name"] or short(sid), tab, follower.seen, queued, sending)
+        stages = compaction_entries(self.store.stages(sid), compacting_now(s))
+        key = (s["name"] or short(sid), tab, follower.seen, queued, sending, tuple(stages))
         if follower.blocks_key != key:   # parsed once per change, not on every refresh tick
             follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued, functools.partial(self.sent, sid),
-                                                                          sending)
+                                                                          sending, tuple(stages))
         return follower.blocks
 
     def agent_conversation(self, sid: str, ref: str) -> list[tuple[str, str]] | None:

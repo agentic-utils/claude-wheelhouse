@@ -1464,3 +1464,23 @@ async def test_slow_module_queries_are_bounded_and_the_daemons_own_stay_quick(st
     finally:
         release.set()
         close(d)
+
+
+def test_a_compacting_conversation_is_republished_as_the_crew_comes_due(daemon, store, sid, monkeypatch):
+    """#244: through the daemon, a followed session mid-cycle has its conversation published as
+    each crew excerpt comes due, not only when its transcript grows."""
+    from claude_wheelhouse import daemon as daemon_mod, transcript
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    store.command(sid, "compact")
+    store.take_command(sid)
+    store.move_compaction(sid, store.compaction(sid)["id"], "preparing")
+    daemon.tick()
+    daemon.hub.followers[sid] = transcript.Follower(sid)
+    published = []
+    monkeypatch.setattr(daemon, "publish", lambda kind, sid_=None: published.append((kind, sid_)))
+    due = iter([1, 1, 2])
+    monkeypatch.setattr(daemon_mod, "compaction_entries", lambda *a: [None] * next(due))
+    daemon.publish_grown()
+    daemon.publish_grown()
+    daemon.publish_grown()
+    assert published.count(("conversation", sid)) == 2, f"first seen, then the next excerpt due: {published}"
