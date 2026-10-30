@@ -102,6 +102,9 @@ ROUTES = [
      lambda store, sid, r: store.item(sid, "P1")["status"] == "allowed", "a permission allowed"),
     ("POST", "/items/{sid}/{ref}/close", {"closed": True},
      lambda store, sid, r: store.item(sid, "T1")["dismissed"] == "todo", "an item closed"),
+    ("POST", "/items/{sid}/{ref}/notes-wait", {"abort": False},
+     lambda store, sid, r: told(r) == ["that question has closed: the compaction has moved on"],
+     "the notes question's buttons (#244), on an item that isn't it"),
     ("POST", "/items/{sid}/{ref}/delete-family", None,
      lambda store, sid, r: store.item(sid, "T1")["dismissed"] == "todo", "an item deleted with its children"),
     ("GET", "/models", None, lambda store, sid, r: [m["id"] for m in r.json()["models"]] == [
@@ -781,6 +784,7 @@ async def test_a_hosted_sessions_model_and_effort_are_set_and_served(daemon, sto
 ])
 async def test_relaunch_can_compact_first(daemon, store, sid, monkeypatch, body, command, said, desc):
     store.set_runner(sid, "sdk")
+    store.mark_version(sid)   # on current code: an older host can't compact (#244)
     store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b', context_tokens = 200000")
     monkeypatch.setattr(liveness, "is_alive", lambda *a: True)
     monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
@@ -826,7 +830,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 43 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 44 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 
@@ -1263,6 +1267,7 @@ def test_shutdown_takes_away_a_fork_whose_last_part_never_runs(daemon, monkeypat
 async def test_compact_and_park_carry_their_options(daemon, store, sid, monkeypatch, path, body, status, plan,
                                                    park_compact, desc):
     store.set_runner(sid, "sdk")
+    store.mark_version(sid)   # on current code: an older host can't compact (#244)
     monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
     daemon.tick()
     r = await call(daemon, "POST", f"/sessions/{sid}/{path}", body)
@@ -1286,6 +1291,7 @@ async def test_the_compact_question_is_marked_in_the_inbox(daemon, store, sid):
 ])
 async def test_compact_needs_a_running_host(daemon, store, sid, monkeypatch, runner_, live, ok, desc):
     store.set_runner(sid, runner_)
+    store.mark_version(sid)   # on current code: an older host can't compact (#244)
     monkeypatch.setattr(liveness, "status", lambda s, **kw: "live" if live else "dead")
     daemon.tick()
     r = await call(daemon, "POST", f"/sessions/{sid}/compact", {"notes": None, "then": "send"})

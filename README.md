@@ -771,8 +771,8 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   whole), and with an item in doubt it is the check, `Check: T1 running, Q2 reply owed`,
   which the session answers by correcting what's finished. It stops once the session has
   been quiet 8 hours. Then a session run in the wheelhouse is compacted while its cache is
-  still warm (asked first, as Compact asks, and compacted without notes if none come back
-  in 10 minutes), and a tab idle-compacts by itself about 54 minutes later (the wheelhouse
+  still warm (asked first, as Compact asks, and compacted without notes if its notes turn
+  ends without them; writing to it before its `/compact` goes calls that off), and a tab idle-compacts by itself about 54 minutes later (the wheelhouse
   launches tabs to do so past 150k tokens). `--keepalive-hours N` (on the app or `claude-wheelhouse daemon`), or
   `WHEELHOUSE_KEEPALIVE_HOURS=N`, or `KEEPALIVE_HOURS=N` in a `.env` (see
   [Settings](#settings)), sets another limit; fractions are allowed and 0
@@ -804,11 +804,20 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   instructions for the compaction (none: the session is asked what to keep) and what follows
   it: just compact, send its queued answers in the same one prompt as that reminder (the
   default), or park it at once, sending nothing more, so nothing writes the compacted context
-  to the cache until it is unparked. While a compaction is under way, from Compact pressed
-  until the host says it's compacted (or got no notes, failed or was interrupted), through
-  the turn that collects its notes and the `/compact` turn alike, Compact is off,
-  the session's inbox items and Detail dim and ignore clicks, and its eye in the session
-  list sweeps blue instead of red. The session can also ask for a compaction itself, with
+  to the cache until it is unparked. A compaction is one cycle, however it starts (Compact,
+  the question's Compact, Relaunch or Park compacting first, the session's own request, the
+  8-hour mark, or Claude Code compacting by itself at full context): from the press until
+  `/compact` has ended, or the cycle fails or is cancelled, the session is closed. Sending
+  (now or with Ctrl+S), queueing, Park, Unpark, Relaunch, Shell, Stop & Forget's "Let it
+  know" and a second Compact are refused with one message ("demo is compacting: send once
+  it's done, or Interrupt to cancel the compaction."), and the answer box keeps your text;
+  Interrupt, "Just stop it" and an answer to a permission or question the notes turn is
+  waiting on still go. Throughout, Compact is off, the session's inbox items and Detail dim
+  and ignore clicks, and its eye in the session list sweeps blue instead of red. If the
+  session is still writing its notes after 2 minutes, a question asks whether to keep
+  waiting (asked again 2 minutes later) or abort (the notes turn is interrupted, nothing is
+  compacted, and queued answers stay queued); `/compact` itself has 10 minutes before the
+  cycle fails. The session can also ask for a compaction itself, with
   the `request_compact` tool and the notes it wants kept, for long autonomous runs: the
   wheelhouse compacts it once its turn ends, never during it, as if you had pressed Compact
   with those instructions (then just compact). One request at a time, none within 30

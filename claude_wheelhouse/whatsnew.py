@@ -311,6 +311,10 @@ FEATURES: tuple[Feature, ...] = (
     Feature("session-info", UNRELEASED, ADVANCED,
             note="The ⓘ at the stats pane's top right shows the selected session's info: its id (C copies it), "
                  "user, machine, branch, model, transcript, and its MCP server's code, flagged when it needs a relaunch."),
+    Feature("compaction-cycle", UNRELEASED, ADVANCED, when="sdk",
+            note="A compaction, however it starts, closes the session until /compact has ended: sends, queueing, Park "
+                 "and Relaunch wait, its eye stays blue throughout, and notes still being written after 2 minutes "
+                 "bring a question: Keep waiting or Abort."),
 
 )
 

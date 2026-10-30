@@ -469,7 +469,7 @@ def test_request_compact(store, sid, runner, before, keep, said, desc):
             db.execute("UPDATE sessions SET compact_requested_at = ?, compact_request = ? WHERE id = ?",
                        ((datetime.now(timezone.utc) - ago).isoformat(), "first" if before == "pending" else None, sid))
     elif before == "compacting":
-        store.set_activity(sid, "compacting")
+        store.start_compaction(sid, "person")   # a cycle under way (#244)
     held = store.session(sid)["compact_request"]
     if said.startswith("compaction requested"):
         assert mcp_server.request_compact(keep).startswith(said), desc

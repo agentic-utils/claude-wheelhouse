@@ -25,7 +25,6 @@ from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
 from claude_wheelhouse import emoji, features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
-from claude_wheelhouse.host import NO_NOTES
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 
@@ -4807,6 +4806,7 @@ async def test_the_compact_question(store, tmp_path, monkeypatch, typed, then, p
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.mark_version(sid)   # on current code: an older host is never given a cycle (#244)
     ref = store.post_item(sid, "question", "context 220k: compact?")
     store.set_answer(sid, ref, COMPACT_QUESTION)
     app = WheelhouseApp(store)
@@ -4832,6 +4832,70 @@ async def test_the_compact_question(store, tmp_path, monkeypatch, typed, then, p
     assert store.item(sid, ref)["status"] == status, desc
     assert store.drafts(sid) == [] and store.pending(sid) == [], f"{desc}: nothing queued or sent to the session"
     assert left == ("" if command and typed else typed), f"{desc}: the instructions leave the box"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("press, abort, desc", [
+    ("#keep-waiting", False, "Keep waiting: closed, nothing interrupted"),
+    ("#abort-compaction", True, "Abort: the notes turn interrupted, which cancels the compaction"),
+    ("keys:alt+y", False, "Alt+Y: Keep waiting"),
+    ("keys:alt+d", True, "Alt+D: Abort"),
+])
+@pytest.mark.both
+async def test_the_notes_wait_question(store, tmp_path, monkeypatch, press, abort, desc):
+    """#244: past NOTES_TIMEOUT the host asks whether to keep waiting for a compaction's notes;
+    its buttons over the answer box, in place of the question suggesting Compact's."""
+    from claude_wheelhouse import liveness
+    from claude_wheelhouse.store import NOTES_WAIT
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.command(sid, "compact")
+    store.take_command(sid)
+    ref = store.post_marked_question(sid, "notes: keep waiting?", "", NOTES_WAIT)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        await to_first_item(app, pilot)
+        await pilot.pause()
+        assert app.query_one(CompactButtons).display, desc
+        assert [b.id for b in app.query_one(CompactButtons).query(Button) if b.display] == \
+            ["keep-waiting", "abort-compaction"], f"{desc}: only its own buttons"
+        if press.startswith("#"):
+            await pilot.click(press)
+        else:
+            app.items_table.focus()
+            await pilot.press(press[5:])
+        await pilot.pause()
+    assert store.item(sid, ref)["status"] == "closed", desc
+    assert store.session(sid)["host_command"] == ("interrupt" if abort else None), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode_, desc", [("queued", "queued mode"), ("immediate", "Immediate mode")])
+async def test_a_refused_send_keeps_the_text_and_says_why(store, tmp_path, monkeypatch, mode_, desc):
+    """#244: during a compaction cycle a submit is refused, said in the one wording, and the
+    box keeps what was typed."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.set_mode(sid, mode_)
+    store.post_item(sid, "question", "which db?")
+    store.command(sid, "compact")
+    app = WheelhouseApp(store)
+    toasts = []
+    monkeypatch.setattr(app, "notify", lambda text, **kw: toasts.append(text))
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        await to_first_item(app, pilot)
+        app.answer.text = "use Postgres"
+        app.answer.focus()
+        await pilot.press("ctrl+enter")
+        await pilot.pause()
+        left = app.answer.text
+    assert left == "use Postgres", f"{desc}: the box keeps the text"
+    assert "hosted is compacting: send once it's done, or Interrupt to cancel the compaction." in toasts, \
+        f"{desc}: {toasts}"
+    assert not store.drafts(sid) and not store.pending(sid), desc
 
 
 @pytest.mark.anyio
@@ -4865,6 +4929,7 @@ async def test_the_compact_button_asks_how(store, tmp_path, monkeypatch, typed, 
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.mark_version(sid)   # on current code: an older host is never given a cycle (#244)
     store.post_item(sid, "task", "work")
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
@@ -8771,14 +8836,13 @@ class Presses:
 
 BUSY_ROW = {"id": "s1", "name": "demo", "host_command": None, "activity": "idle", "model": "opus",
             "applied_model": "opus", "park_requested_at": None, "end_requested_at": None, "interrupted_at": None,
-            "shell": None}
+            "shell": None, "compaction": None}
 
 
 @pytest.mark.parametrize("button, status, starts, lands, desc", [
     ("interrupt", "live", {"host_command": "interrupt"}, {"host_command": None, "interrupted_at": "9999"}, "Interrupt: until the host stamps it"),
     ("interrupt", "live", {}, {"interrupted_at": "9999"}, "Interrupt taken before a refresh saw it: its stamp lands it"),
     ("compact", "live", {"host_command": "compact"}, {"host_command": None, "activity": "idle · compacted 300k → 40k tokens"}, "Compact: until compacted"),
-    ("compact", "live", {"activity": "compacting: collecting notes"}, {"activity": NO_NOTES}, "Compact: through the notes, until it stops"),
     ("compact", "live", {"host_command": "compact"}, {"_status": "dead"}, "Compact: the host dying ends it"),
     ("shell", "live", {"host_command": "shell"}, {"host_command": None, "activity": "", "shell": "tab"}, "Shell: until handed over"),
     ("model", "live", {"model": "sonnet"}, {"applied_model": "sonnet"}, "Model: until applied"),
@@ -8787,7 +8851,7 @@ BUSY_ROW = {"id": "s1", "name": "demo", "host_command": None, "activity": "idle"
     ("relaunch", "live", {"_relaunching": True}, {"_relaunching": False}, "Relaunch a running one: until it's back"),
     ("relaunch", "dead", {"_status": "starting"}, {"_status": "live"}, "Relaunch or Unpark a dead one: until it runs"),
     ("fork", "live", {}, {"_notice": True}, "Fork: until the hub's word of it, with the parent's id"),
-    ("compact-now", "live", {"host_command": "compact"}, {"host_command": None, "activity": NO_NOTES, "_closed": True}, "the question's Compact: until it closes"),
+    ("compact-now", "live", {"host_command": "compact"}, {"host_command": None, "compaction": "cancelled", "_closed": True}, "the question's Compact: until it closes"),
 ])
 def test_a_pressed_button_stays_off_until_its_action_lands(monkeypatch, button, status, starts, lands, desc):
     now = [100.0]
@@ -9230,7 +9294,7 @@ async def test_ctrl_delete_leaves_a_compacting_sessions_rows(store, tmp_path, mo
     locked = store.post_item(busy, "task", "done", status="done")
     free = store.create_session(str(tmp_path), name="other")
     other = store.post_item(free, "task", "done", status="done")
-    store.set_activity(busy, "compacting: collecting notes")
+    store.command(busy, "compact")   # its compaction cycle (#244)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -9308,7 +9372,7 @@ async def test_show_item_leaves_a_hidden_row_of_a_compacting_session_unpicked(st
     busy = store.create_session(str(tmp_path), name="hosted", runner="sdk")
     ref = store.post_item(busy, "task", "done a while ago", status="done")
     aged(store, busy, ref, 30)
-    store.set_activity(busy, "compacting: collecting notes")
+    store.command(busy, "compact")   # its compaction cycle (#244)
     app = WheelhouseApp(store)
     app.autocleanse = 5
     async with app.run_test(size=(160, 40)) as pilot:
@@ -9444,7 +9508,7 @@ async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size)
     """#150: while its host records a compaction (the question's Compact now, say), Compact is
     off, the session's inbox rows dim and ignore clicks and keys, Detail dims on one of them,
     and its eye in the session list is blue; an item it posts meanwhile is never locked; all
-    back once the host says it's compacted, and never while it only waits for notes."""
+    back once the cycle ends (#244), and blue throughout it, from the press to /compact's end."""
     from claude_wheelhouse import host as host_mod, liveness
     from claude_wheelhouse.tui import EYE_BLUE, ItemList, SessionList
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
@@ -9468,7 +9532,13 @@ async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size)
         await click(t1)
         assert app.selected == (sid, "T1"), f"{size}: picked by a click"
 
-        store.set_activity(sid, "compacting: collecting notes")   # as the host writes it
+        store.command(sid, "compact")   # pressed: blue from here, before the host takes it
+        await again()
+        assert sid in app.query_one(SessionList).blue, f"{size}: blue at the press"
+        store.take_command(sid)
+        cid = store.compaction(sid)["id"]
+        store.move_compaction(sid, cid, "preparing")   # as the host writes it
+        store.set_activity(sid, "compacting: collecting notes")
         await again()
         compact = app.query_one("#compact", Button)
         assert compact.disabled, f"{size}: Compact off while compacting"
@@ -9496,12 +9566,14 @@ async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size)
         await click(q2)
         assert app.selected == (sid, "Q2"), f"{size}: and can be picked"
 
-        store.set_activity(sid, host_mod.AWAITING_NOTES)   # its notes' turn ended without them
+        store.set_activity(sid, "idle")   # a line between turns: the cycle, not the line, says compacting
         await again()
-        assert not table.locked and sid not in sessions.blue, f"{size}: waiting for notes isn't compacting"
+        assert sid in sessions.blue and q1 in table.locked, f"{size}: still blue between the notes and /compact"
 
+        store.move_compaction(sid, cid, "compacting")
         store.set_activity(sid, "compacting")
         await again()
+        store.move_compaction(sid, cid, "completed")
         store.set_activity(sid, "idle · compacted")
         await again()
         assert not compact.disabled and not table.locked, f"{size}: Compact and the rows back"
@@ -9750,3 +9822,16 @@ async def test_mcp_servers_dialog_without_a_running_host(store, tmp_path, monkey
         assert says in str(dialog.query_one("#mcp-when", Label).content), desc
         assert list(dialog.query(".mcp-row Button")) == [], desc
         assert store.take_mcp_asks(sid) == [], f"{desc}: no host to ask"
+
+
+@pytest.mark.parametrize("kind, status, mark, locked, desc", [
+    ("task", "running", {}, True, "an item before the press: locked while compacting (#150)"),
+    ("permission", "open", {}, False, "a permission the turn waits on: answerable, or the cycle never moves (#244)"),
+    ("permission", "allowed", {}, True, "a permission already answered: locked as any other"),
+    ("question", "open", {"answer": '{"from": "AskUserQuestion"}'}, False, "the host's AskUserQuestion, in process"),
+    ("question", "open", {"host_question": True}, False, "the same through the daemon, which serves no answers"),
+    ("question", "open", {"answer": None}, True, "the session's own question: locked"),
+])
+def test_a_call_the_turn_waits_on_is_never_locked_by_a_compaction(kind, status, mark, locked, desc):
+    it = {"session_id": "s1", "id": 3, "kind": kind, "status": status, **mark}
+    assert WheelhouseApp.locks(it, {"s1": 5}) == locked, desc

@@ -11,7 +11,7 @@ import pytest
 
 from claude_wheelhouse import fork as fork_mod, host as host_mod, hub as hub_mod, launch, liveness, models, plan_usage, subagents, transcript, transcript_usage, tutorial, whatsnew
 from claude_wheelhouse.hub import Hub
-from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone, mode as store_mode
+from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone, compacting_now, mode as store_mode
 
 real_open_session = launch.open_session   # before any test stubs it
 
@@ -61,6 +61,7 @@ def test_shown_status(hub, store, sid, monkeypatch, status, requested, relaunchi
 def host(store, sid, pid=4242):
     store.set_runner(sid, "sdk")
     store.db.execute("UPDATE sessions SET claude_pid = ?, claude_start = 1, boot_id = 'b'", (pid,))
+    store.mark_version(sid)   # on current code: an older host can't compact (#244)
 
 
 @pytest.mark.parametrize("asked, stops, wait, launched, said, desc", [
@@ -645,6 +646,8 @@ def compacted_to(store, sid, tokens, activity):
     """The host records a context since Compact was asked for, and an activity line."""
     store.set_context(sid, tokens, 1_000_000)
     store.set_activity(sid, activity)
+    if (c := store.compaction(sid)) is not None and c["state"] == "requested":   # the host ends its cycle
+        store.move_compaction(sid, c["id"], "completed")
 
 
 @pytest.mark.parametrize("then, stopped, said, desc", [
@@ -661,8 +664,8 @@ def compacted_to(store, sid, tokens, activity):
     (lambda st, sid: st.set_activity(sid, "thinking"), False, None, "still collecting notes: it waits"),
     (lambda st, sid: st.set_activity(sid, "interrupted"), False, "Compact was interrupted",
      "interrupted: given up, and said so"),
-    (lambda st, sid: st.set_activity(sid, host_mod.NO_NOTES), False, "Compact got no notes back",
-     "no notes: given up, and said so"),
+    (lambda st, sid: st.move_compaction(sid, st.compaction(sid)["id"], "failed"), False, "its compaction failed",
+     "the cycle failed: given up, and said so"),
     (lambda st, sid: (st.set_interrupted(sid), st.set_activity(sid, "error: error_during_execution")), False,
      "Compact was interrupted", "interrupted by an older wheelhouse, its line since written over: given up all the same"),
     ("timeout", False, "wasn't compacted within 30 minutes", "too long: given up, and said so"),
@@ -734,26 +737,29 @@ def test_another_machines_compacting_relaunch_never_comes_back_as_a_tab(hub, sto
     assert any("host has stopped: Relaunch it from the daemon's machine" in text for text, _ in heard), heard
 
 
-@pytest.mark.parametrize("activity, command, sent, desc", [
-    ("idle", None, True, "idle: Compact is asked for"),
-    ("compacting: collecting notes", None, False, "a Compact under way: not a second one"),
-    (host_mod.AWAITING_NOTES, None, False, "a Compact waiting for its notes: not a second one"),
-    ("compacting", None, False, "/compact running: not a second one"),
-    ("thinking", "compact", False, "Compact pressed, not yet taken: not a second one"),
+@pytest.mark.parametrize("state, sent, desc", [
+    (None, True, "no cycle: Compact is asked for, as the relaunch's"),
+    ("requested", False, "Compact pressed, not yet taken: refused, never a second"),
+    ("preparing", False, "its notes being written: refused"),
+    ("compacting", False, "/compact running: refused"),
+    ("completed", True, "the last cycle over: asked for"),
 ])
-def test_compact_first_never_asks_twice(hub, store, sid, monkeypatch, activity, command, sent, desc):
+def test_compact_first_never_asks_twice(hub, store, sid, monkeypatch, state, sent, desc):
     host(store, sid)
     monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
-    store.set_activity(sid, activity)
-    if command:
-        store.command(sid, command)
+    if state:
+        store.command(sid, "compact")
+        store.take_command(sid)
+        if state != "requested":
+            store.move_compaction(sid, store.compaction(sid)["id"], state)
     hub.refresh()
-    asked = []
-    real = store.command
-    monkeypatch.setattr(store, "command", lambda s, what: (asked.append(what), real(s, what)))
-    assert hub.compact_then_relaunch(sid, (4242, 1)).ok, desc
-    assert asked == (["compact"] if sent else []), desc
-    assert sid in hub.compacting, desc
+    done = hub.compact_then_relaunch(sid, (4242, 1))
+    assert done.ok == sent, desc
+    assert (sid in hub.compacting) == sent, desc
+    if sent:
+        assert store.compaction(sid)["origin"] == "relaunch", desc
+    else:
+        assert "is compacting: relaunch once it's done" in done.notices[0].text, desc
 
 
 def test_interrupt_cancels_compact_first_in_every_wheelhouse(store, sid, monkeypatch):
@@ -1550,3 +1556,162 @@ def test_wake_and_send_that_fails_sends_nothing(hub, store, sid, monkeypatch):
     assert [m["body"] for m in store.drafts(sid)] == ["first"], "the queue stays queued"
     assert store.pending(sid) == [], "nothing sent, the answer kept in the box"
     assert store.session(sid)["parked"] == 1
+
+
+# the compaction cycle (#244)
+
+def in_cycle(store, sid, state="preparing"):
+    store.command(sid, "compact")
+    store.take_command(sid)
+    store.move_compaction(sid, store.compaction(sid)["id"], state)
+
+
+@pytest.mark.parametrize("act, desc", [
+    (lambda h, sid: h.submit((sid, None), "hi"), "a queued answer"),
+    (lambda h, sid: h.submit((sid, None), "hi", now=True), "Alt+S"),
+    (lambda h, sid: h.send_queue(sid), "Ctrl+S"),
+    (lambda h, sid: h.host_command(sid, "compact"), "Compact again"),
+    (lambda h, sid: h.ask(sid, "park"), "Park"),
+    (lambda h, sid: h.ask(sid, "end"), "Stop & Forget, Let it know"),
+    (lambda h, sid: h.force(sid, "park"), "Park now"),
+    (lambda h, sid: h.unpark(sid), "Unpark"),
+    (lambda h, sid: h.stop_host(sid, (4242, 1)), "Relaunch"),
+    (lambda h, sid: h.compact_then_relaunch(sid, (4242, 1)), "Relaunch, compact first"),
+])
+def test_a_refused_action_is_said_as_one_warning(hub, store, sid, monkeypatch, act, desc):
+    host(store, sid)
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    store.queue(sid, "queued before")
+    in_cycle(store, sid)
+    hub.refresh()
+    done = act(hub, sid)
+    assert not done.ok and done.notices[0].severity == "warning", desc
+    assert "demo is compacting: " in done.notices[0].text and "or Interrupt to cancel the compaction." in \
+        done.notices[0].text, desc
+    assert len(store.drafts(sid)) == 1 and not store.pending(sid), f"{desc}: the queue as it was"
+
+
+def test_interrupt_and_just_stop_it_go_during_a_cycle(hub, store, sid, monkeypatch):
+    host(store, sid)
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    in_cycle(store, sid)
+    hub.refresh()
+    assert hub.host_command(sid, "interrupt").ok
+    monkeypatch.setattr(Hub, "stop_process", staticmethod(lambda s: True))
+    assert hub.force(sid, "end").ok and store.session(sid) is None, "Just stop it: the session, cycle and all"
+
+
+def test_send_all_skips_a_compacting_session_and_names_it(hub, store, sid, tmp_path, monkeypatch):
+    other = store.create_session(str(tmp_path), name="other")
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    for s in (sid, other):
+        store.queue(s, "go")
+    in_cycle(store, sid)
+    hub.refresh()
+    done = hub.send_all()
+    assert done.ok and [m["session_id"] for m in store.drafts()] == [sid]
+    assert any("demo is compacting" in n.text and n.severity == "warning" for n in done.notices), done.notices
+
+
+def test_an_answer_to_a_waiting_permission_goes_at_once_whatever_the_mode(hub, store, sid):
+    ref = store.post_item(sid, "question", "which?")
+    store.set_answer(sid, ref, '{"from": "AskUserQuestion"}')
+    in_cycle(store, sid)
+    assert hub.submit((sid, ref), "the first").ok
+    assert not store.drafts(sid) and store.pending(sid), "sent, never queued: queueing is refused"
+
+
+@pytest.mark.parametrize("state, status, ended, desc", [
+    ("preparing", "dead", True, "its host died hard: failed by the sweep"),
+    ("compacting", "dead", True, "dead mid-/compact: failed"),
+    ("preparing", "live", False, "running: the host's to end"),
+    ("compacting", "stalled", True, "its host wedged (no heartbeat): failed, so Relaunch is offered again"),
+])
+def test_the_sweep_ends_a_dead_sessions_cycle(hub, store, sid, monkeypatch, state, status, ended, desc):
+    in_cycle(store, sid, state)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
+    hub.refresh()
+    assert store.compaction(sid)["state"] == ("failed" if ended else state), desc
+
+
+@pytest.mark.parametrize("abort, command, desc", [
+    (False, None, "Keep waiting: closed, nothing interrupted"),
+    (True, "interrupt", "Abort: the notes turn interrupted, which cancels the cycle"),
+])
+def test_notes_wait_buttons(hub, store, sid, abort, command, desc):
+    from claude_wheelhouse.store import NOTES_WAIT
+    in_cycle(store, sid)
+    ref = store.post_marked_question(sid, "keep waiting?", "", NOTES_WAIT)
+    assert hub.notes_wait(sid, ref, abort).ok, desc
+    assert store.item(sid, ref)["status"] == "closed" and store.session(sid)["host_command"] == command, desc
+    assert not hub.notes_wait(sid, ref, abort).ok, f"{desc}: once"
+
+
+@pytest.mark.parametrize("act, desc", [
+    (lambda h, sid: h.host_command(sid, "compact"), "Compact: refused, its host would never end the cycle"),
+    (lambda h, sid: h.compact_then_relaunch(sid, (4242, 1)), "Relaunch, compact first: relaunched without compacting"),
+])
+def test_an_older_host_is_never_given_a_cycle(hub, store, sid, monkeypatch, act, desc):
+    host(store, sid)
+    store.db.execute("UPDATE sessions SET code_version = 23")
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    monkeypatch.setattr(hub_mod.os, "kill", lambda *a: None)
+    hub.refresh()
+    done = act(hub, sid)
+    assert store.compaction(sid)["state"] is None and not compacting_now(store.session(sid)), desc
+    assert any("older wheelhouse code" in n.text for n in done.notices), f"{desc}: {done.notices}"
+
+
+@pytest.mark.parametrize("runner_, shell, desc", [("tab", None, "a terminal tab"), ("sdk", "tab", "handed to a shell tab")])
+def test_park_with_compact_first_is_refused_in_a_tab(hub, store, sid, monkeypatch, runner_, shell, desc):
+    store.set_runner(sid, runner_)
+    store.db.execute("UPDATE sessions SET shell = ?", (shell,))
+    done = hub.ask(sid, "park", compact=True)
+    assert not done.ok and "compaction isn't offered" in done.notices[0].text, desc
+    assert store.session(sid)["park_requested_at"] is None and store.compaction(sid)["state"] is None, desc
+
+
+@pytest.mark.parametrize("origin, age, state, desc", [
+    ("person", 30, "requested", "pressed 30 s ago, not yet claimed: within CLAIM_WITHIN"),
+    ("person", 61, "failed", "unclaimed past CLAIM_WITHIN (an older or wedged host): failed, unlocked"),
+    ("park", 61, "requested", "Park's waits for its park, an hour, not CLAIM_WITHIN"),
+    ("park", host_mod.PARK_COMPACT_WITHIN + 1, "failed", "Park's past its own deadline: failed"),
+])
+def test_an_unclaimed_cycle_has_a_deadline(hub, store, sid, monkeypatch, origin, age, state, desc):
+    from datetime import datetime, timedelta, timezone
+    host(store, sid)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    store.queue(sid, "queued")
+    if origin == "park":
+        store.request(sid, "park", True)
+    else:
+        store.command(sid, "compact")
+    at = (datetime.now(timezone.utc) - timedelta(seconds=age)).isoformat(timespec="microseconds")
+    store.db.execute("UPDATE sessions SET compaction_at = ?", (at,))
+    hub.refresh()
+    assert store.compaction(sid)["state"] == state, desc
+    assert len(store.drafts(sid)) == 1, f"{desc}: drafts stay queued"
+
+
+def test_a_refresh_with_no_stale_cycle_takes_no_write(hub, store, sid, monkeypatch):
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    store.command(sid, "compact")
+    monkeypatch.setattr(store, "expire_requested", lambda *a: pytest.fail("a write taken on a fresh cycle"))
+    monkeypatch.setattr(store, "move_compaction", lambda *a: pytest.fail("a write taken on a live session"))
+    hub.refresh()
+
+
+@pytest.mark.parametrize("in_cycle, queued, desc", [
+    (False, True, "no cycle: an answer to a waiting question queues in Queued mode, as before"),
+    (True, False, "during a cycle: sent at once, as queueing is refused"),
+])
+def test_a_waiting_calls_answer_goes_at_once_only_during_a_cycle(hub, store, sid, in_cycle, queued, desc):
+    ref = store.post_item(sid, "question", "which?")
+    store.set_answer(sid, ref, '{"from": "AskUserQuestion"}')
+    if in_cycle:
+        store.command(sid, "compact")
+    assert hub.submit((sid, ref), "the first").ok, desc
+    assert bool(store.drafts(sid)) == queued and bool(store.pending(sid)) == (not queued), desc

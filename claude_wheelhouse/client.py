@@ -636,6 +636,11 @@ class RemoteClient:
         item = target and target[1] and self.item(*target)
         return item if item and item["kind"] == "permission" and item["status"] == "open" else None
 
+    def notes_question(self, target):
+        """As Hub.notes_question: the daemon marks the item, as it serves no answers."""
+        item = target and target[1] and self.item(*target)
+        return item if item and item["status"] == "open" and item.get("notes_wait") else None
+
     def compact_question(self, target):
         """As Hub.compact_question: the daemon marks the item, as it serves no answers."""
         item = target and target[1] and self.item(*target)
@@ -835,6 +840,9 @@ class RemoteClient:
 
     def mark_seen(self, sid: str, ref: str) -> bool:
         return self.quietly(f"/items/{sid}/{ref}/seen", {})
+
+    def notes_wait(self, sid: str, ref: str, abort: bool) -> Done:
+        return self.done(f"/items/{sid}/{ref}/notes-wait", {"abort": abort})
 
     def close(self, sid: str, ref: str, closed: bool, status: str | None = None) -> Done:
         return self.done(f"/items/{sid}/{ref}/close", {"closed": closed} | ({"status": status} if status else {}))
