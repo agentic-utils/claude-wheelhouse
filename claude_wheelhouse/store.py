@@ -96,7 +96,10 @@ DECISION_FIELDS = (("why", "Why"),)
 # 24: the compaction cycle (#244, sessions.compaction): from the press to /compact's end the store
 # refuses every send, queue, park, relaunch and second Compact, and the host moves the state on.
 # An older host never moves it, so its sessions would stay blue and closed: Compact waits for a relaunch.
-PROTOCOL_VERSION = 24
+# 25: the compaction cycle's task item (COMPACTION_TASK), which the session must never see: an older
+# MCP server lists it (list_items) and an older reminder after compaction names it; and the tab
+# plugin's PreCompact hook (compaction-start), which an older tab doesn't have.
+PROTOCOL_VERSION = 25
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
@@ -141,6 +144,14 @@ COMPACTION_ORIGINS = ("person", "model", "relaunch", "park", "quiet", "auto")
 PARK_REFUSED = ("this session is being compacted, and can't park until that has finished: end your turn, and "
                 "call park_session again once the compaction is done")
 COMPACTING_REFUSED = "{name} is compacting: {action} once it's done, or Interrupt to cancel the compaction."
+# the cycle's task item (#244), the wheelhouse's own: never in what the session is told or lists
+COMPACTION_TASK = '{"from": "compaction"}'
+# the task item's status at each state, and its note there ({origin}, {why}: stage notes)
+COMPACTION_ITEM = {"requested": ("running", "asked for by {origin}"), "preparing": ("running", "collecting notes"),
+                   "compacting": ("running", "compacting"), "completed": ("done", "{why}"),
+                   "failed": ("blocked", "failed: {why}"), "cancelled": ("dropped", "{why}")}
+ORIGIN_WORDS = {"person": "you (Compact)", "model": "the session (request_compact)", "relaunch": "Relaunch",
+                "park": "Park, compact first", "quiet": "the quiet mark", "auto": "Claude Code, at full context"}
 # the host's question when a notes turn runs past NOTES_TIMEOUT: Keep waiting or Abort, buttons only
 NOTES_WAIT = '{"from": "compaction wait"}'
 # an item's answer column marks a question the host asked for Claude Code's AskUserQuestion
@@ -211,6 +222,12 @@ def redacted(text: str) -> str:
     return re.sub(r"(https?://[^\s?]+)\?\S*(?:code|error)=\S*", r"\1?[redacted]", text)
 
 
+def wheelhouse_item(answer: str | None) -> bool:
+    """An item the wheelhouse posted for the person, never the session's: a question of its own
+    (wheelhouse_question) or a compaction's task (COMPACTION_TASK)."""
+    return answer == COMPACTION_TASK or wheelhouse_question(answer)
+
+
 def wheelhouse_question(answer: str | None) -> bool:
     """A question the wheelhouse asks the person itself (Compact, an MCP server, a compaction's
     wait for its notes), not the session: it never means the session waits on the person, nor
@@ -273,6 +290,15 @@ CREATE TABLE IF NOT EXISTS agent_items (
     item_ref   TEXT NOT NULL,
     PRIMARY KEY (session_id, agent_id)
 );
+CREATE TABLE IF NOT EXISTS compaction_stages (
+    session_id TEXT NOT NULL,
+    cycle_id   TEXT NOT NULL,
+    state      TEXT NOT NULL,
+    at         TEXT NOT NULL,
+    origin     TEXT,
+    note       TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS compaction_stages_session ON compaction_stages (session_id, at);
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -784,6 +810,7 @@ class Store:
         if person and s["compaction_origin"] == "quiet" and s["compaction"] in ("requested", "preparing"):
             db.execute("UPDATE sessions SET compaction = 'cancelled', compaction_at = ? WHERE id = ?", (stamp(), sid))
             db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
+            Store.staged(db, sid, "cancelled", "you wrote in, so it was called off")
         elif compacting_now(s):
             raise Compacting(session_name(s), action)
 
@@ -791,9 +818,10 @@ class Store:
     def drop_park_cycle(db, sid: str) -> None:
         """Park's Compact first called off before its /compact (the request cancelled, the park
         never coming, or parked without compacting): its cycle, still requested, is cancelled."""
-        db.execute("UPDATE sessions SET compaction = 'cancelled', compaction_at = ? WHERE id = ? "
-                   "AND compaction = 'requested' AND compaction_origin = 'park'", (stamp(), sid))
-        db.execute("DELETE FROM settings WHERE key = ? AND changes() > 0", (COMPACT_CUTOFF + sid,))
+        if db.execute("UPDATE sessions SET compaction = 'cancelled', compaction_at = ? WHERE id = ? "
+                      "AND compaction = 'requested' AND compaction_origin = 'park'", (stamp(), sid)).rowcount:
+            db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
+            Store.staged(db, sid, "cancelled", "the park was called off")
 
     def cancel_park_cycle(self, sid: str) -> None:
         with self.tx() as db:
@@ -822,6 +850,7 @@ class Store:
             if expired:
                 db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
                 self.drop_compact_command(db, sid)
+                self.staged(db, sid, "failed", f"no host took it up within {within:g} s")
         return bool(expired)
 
     def drop_park_request(self, sid: str) -> None:
@@ -845,8 +874,37 @@ class Store:
         cid = secrets.token_hex(4)
         db.execute("UPDATE sessions SET compaction = ?, compaction_id = ?, compaction_origin = ?, compaction_then = ?, "
                    "compaction_at = ?, compaction_item = NULL WHERE id = ?", (state, cid, origin, then, stamp(), sid))
-        Store.compact_cut(db, sid, fresh=True)
+        Store.compact_cut(db, sid, fresh=True)   # first: the task item, posted after, is never locked
+        s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
+        k = f": {s['context_tokens'] // 1000}k context" if s["context_tokens"] else ""
+        ref = Store._insert_item(db, sid, "task", f"Compact {session_name(s)}{k}", "", "running")
+        db.execute("UPDATE items SET answer = ? WHERE session_id = ? AND ref = ?", (COMPACTION_TASK, sid, ref))
+        db.execute("UPDATE sessions SET compaction_item = ? WHERE id = ?", (ref, sid))
+        Store.staged(db, sid, state)
         return cid
+
+    @staticmethod
+    def staged(db, sid: str, state: str, why: str = "") -> None:
+        """The cycle has entered state (begin_cycle, move_compaction, or an end written directly):
+        its stage kept for the conversation (compaction_stages), and its task item's status and
+        note moved with it, in the same transaction."""
+        s = db.execute("SELECT compaction_id, compaction_origin, compaction_item FROM sessions WHERE id = ?",
+                       (sid,)).fetchone()
+        if s is None or s[0] is None:
+            return
+        db.execute("INSERT INTO compaction_stages (session_id, cycle_id, state, at, origin, note) VALUES (?, ?, ?, ?, ?, ?)",
+                   (sid, s[0], state, stamp(), s[1], why))
+        if s[2] is None:
+            return
+        status, note = COMPACTION_ITEM[state]
+        note = note.format(origin=ORIGIN_WORDS.get(s[1], s[1]), why=why or state)
+        db.execute("UPDATE items SET status = ?, updated_at = ? WHERE session_id = ? AND ref = ?", (status, now(), sid, s[2]))
+        Store._said(db, sid, s[2], note, "note")
+
+    def stages(self, sid: str) -> list[sqlite3.Row]:
+        """The session's compaction stages, oldest first: cycle_id, state, at (UTC), origin, note."""
+        return self._all("SELECT cycle_id, state, at, origin, note FROM compaction_stages WHERE session_id = ? "
+                         "ORDER BY at, rowid", (sid,))
 
     def start_compaction(self, sid: str, origin: str, state: str = "requested", then: str | None = None) -> str | None:
         """The host starts a cycle of its own (the quiet mark's, Park's Compact first, Claude Code's
@@ -857,7 +915,7 @@ class Store:
                 return None
             return self.begin_cycle(db, sid, origin, state, then)
 
-    def move_compaction(self, sid: str, cid: str, state: str) -> bool:
+    def move_compaction(self, sid: str, cid: str, state: str, why: str = "") -> bool:
         """The host moves its cycle on: only the cycle it holds (cid), and only while active, so a
         cycle the hub's sweep has ended stays ended. Whether it moved. An end lets the cut-off go."""
         assert state in COMPACTION_ACTIVE + COMPACTION_ENDS
@@ -865,6 +923,8 @@ class Store:
             was = db.execute("SELECT compaction FROM sessions WHERE id = ? AND compaction_id = ?", (sid, cid)).fetchone()
             moved = db.execute(f"UPDATE sessions SET compaction = ?, compaction_at = ? WHERE id = ? AND compaction_id = ? "
                                f"AND compaction IN {COMPACTION_ACTIVE}", (state, stamp(), sid, cid)).rowcount
+            if moved:
+                self.staged(db, sid, state, why)
             if moved and state in COMPACTION_ENDS:
                 db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
                 if was[0] == "requested":
@@ -1216,6 +1276,7 @@ class Store:
     def end(self, sid: str) -> None:
         with self.tx() as db:
             db.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+            db.execute("DELETE FROM compaction_stages WHERE session_id = ?", (sid,))
             # its PR merges held for a resume that won't come (steps.held_key), its compaction's cut-off
             db.execute("DELETE FROM settings WHERE key IN (?, ?)", (f"step.held.{sid}", COMPACT_CUTOFF + sid))
 
@@ -1416,13 +1477,14 @@ class Store:
                      if i["kind"] == "question" and i["status"] not in CLOSED and mcp_server(i["answer"]) == server),
                     None)
 
-    def post_marked_question(self, sid: str, title: str, body: str, mark: str) -> str:
+    def post_marked_question(self, sid: str, title: str, body: str, mark: str, parent: str | None = None) -> str:
         """A question of the host's own, marked in its answer column as it is posted: one
-        transaction, so no reader sees it unmarked."""
+        transaction, so no reader sees it unmarked. parent: the item it goes under."""
         with self.tx() as db:
             self._require(db, sid)
             ref = self._insert_item(db, sid, "question", title, body, INITIAL_STATUS["question"])
-            db.execute("UPDATE items SET answer = ? WHERE session_id = ? AND ref = ?", (mark, sid, ref))
+            db.execute("UPDATE items SET answer = ?, parent_ref = ? WHERE session_id = ? AND ref = ?",
+                       (mark, parent, sid, ref))
         return ref
 
     @staticmethod
@@ -1660,7 +1722,7 @@ class Store:
             return []
         cutoff = ((at or datetime.now(timezone.utc)) - DOUBT_AFTER).isoformat(timespec="seconds")
         rows = self._all(
-            f"""SELECT ref, kind, status FROM items i WHERE session_id = ?
+            f"""SELECT ref, kind, status FROM items i WHERE session_id = ? AND coalesce(answer, '') != '{COMPACTION_TASK}'
                 AND max(coalesce(session_at, created_at), CASE WHEN kind IN ('question', 'doc') THEN coalesce(
                     (SELECT max({REACHED.format(m="m.")}) FROM messages m WHERE m.session_id = i.session_id
                      AND m.item_ref = i.ref AND m.author = 'person' AND m.draft = 0), '') ELSE '' END) <= ?
@@ -1680,9 +1742,9 @@ class Store:
     def open_items(self, sid: str) -> list[sqlite3.Row]:
         """What a session is told after a compaction: every task not settled and every open
         question, as list_items orders them; no agent, decision or permission items."""
-        return [r for r in self.items(sid, include_closed=False)
-                if (r["kind"] == "task" and r["status"] not in SETTLED["task"])
-                or (r["kind"] == "question" and r["status"] == "open" and not wheelhouse_question(r["answer"]))]
+        return [r for r in self.items(sid, include_closed=False) if not wheelhouse_item(r["answer"])
+                and ((r["kind"] == "task" and r["status"] not in SETTLED["task"])
+                     or (r["kind"] == "question" and r["status"] == "open"))]
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's answer to a permission item: allow, always (allow, and keep the rule

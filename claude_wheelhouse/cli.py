@@ -129,8 +129,42 @@ def open_items() -> None:
     from .launch import after_compaction
     from .store import Store
     sid = os.environ.get("WHEELHOUSE_SESSION_ID")
-    if sid and (text := after_compaction(Store(), sid)):
+    if not sid:
+        return
+    store = Store()
+    tab_compaction(store, sid, end=True)   # first: the reminder lists no compaction task
+    if text := after_compaction(store, sid):
         print(f"[wheelhouse] {text}")
+
+
+def tab_compaction(store, sid: str, end: bool = False, trigger: str = "auto") -> None:
+    """A tab's compaction (#244), from the plugin's hooks: Claude Code's PreCompact starts a
+    cycle at compacting (auto, its own at full context; manual, /compact typed: the person's),
+    and its SessionStart after a compaction (end) completes it. The tab's own typing is the
+    tab's: only what the wheelhouse sends it is held. Never fails the hook: a compaction goes
+    ahead whatever the wheelhouse records."""
+    try:
+        row = store.compaction(sid)
+        if end:
+            if row is not None and row["state"] == "compacting":
+                store.move_compaction(sid, row["id"], "completed", "compacted in its tab")
+        else:
+            store.start_compaction(sid, "auto" if trigger == "auto" else "person", "compacting")
+    except Exception as e:   # a locked or missing database: the hook says nothing to Claude Code
+        print(f"wheelhouse: compaction not recorded: {e}", file=sys.stderr)
+
+
+def compaction_hook() -> None:
+    """claude-wheelhouse compaction-start: the plugin's PreCompact hook in a launched tab."""
+    import json
+    sid = os.environ.get("WHEELHOUSE_SESSION_ID")
+    try:
+        trigger = json.loads(sys.stdin.read() or "{}").get("trigger", "auto")
+    except ValueError:
+        trigger = "auto"
+    if sid:
+        from .store import Store
+        tab_compaction(Store(), sid, trigger=trigger)
 
 
 ARGS_HEAD = ("The app's command line args (make args). Give them to make run in ARGS, for example\n"
@@ -217,6 +251,8 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("monitor", help="the per-session plugin monitor")
     sub.add_parser("open-items", help="inside a launched tab: print the session's open items (the plugin's "
                    "hook, after a compaction)")
+    sub.add_parser("compaction-start", help="inside a launched tab: record its compaction starting (the plugin's "
+                   "PreCompact hook)")
     sub.add_parser("protocol", help="print everything wheelhouse puts into a launched session", parents=[sdk])
     notes = sub.add_parser("notes", help="print a release's notes as Markdown, from the features it registered "
                            "(whatsnew.py)")
@@ -331,6 +367,8 @@ def main() -> None:
         modules_command(args.action, args.name)
     elif args.cmd == "open-items":
         open_items()
+    elif args.cmd == "compaction-start":
+        compaction_hook()
     elif args.cmd == "monitor":
         from .monitor import main as monitor_main
         monitor_main()

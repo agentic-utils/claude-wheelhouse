@@ -62,7 +62,7 @@ OVERSIZE = "wheelhouse-oversize"
 
 @dataclass
 class Entry:
-    who: str     # you | claude | tool | note
+    who: str     # you | claude | tool | note | stage | crew (a compaction's, #244)
     text: str
     at: str = ""  # ISO timestamp, UTC
 
@@ -278,14 +278,15 @@ def _hhmm(at: str) -> str:
 
 
 def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=None,
-           sending=()) -> list[tuple[str, str]]:
+           sending=(), stages=()) -> list[tuple[str, str]]:
     """The conversation as (who, markdown) blocks, then the person's general messages on
     their way: sent, but not yet taken up by the session, Claude Code holding them (held)
     or the wheelhouse not yet passing them on (sending); then those still queued for it.
     who is head, warn, note, tool, you or claude: the app colours
     the person's words apart from Claude's. tab None: the session runs in the wheelhouse,
     where its permission prompts and questions are items, so there's no tab to wait in.
-    full: the person's message by id (entries)."""
+    full: the person's message by id (entries). stages: a compaction's stage lines and crew
+    excerpts (#244), as Entry("stage" or "crew", text, at), placed by time among the rest."""
     where = (f"_Tab: **{tab}**. Permission prompts and slash commands need that tab._" if tab else
              "_Runs in the wheelhouse: its permission prompts and questions come to the inbox. "
              "Shell opens it in a terminal tab._")
@@ -294,7 +295,10 @@ def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=
         out.append(("note", "_No transcript found for this session yet._"))
     elif tab and (waiting := waiting_in_tab(recs)):
         out.append(("warn", f"> ⚠ **Waiting for you in its tab:** {waiting}."))
-    out += [entry_block(e) for e in entries(recs or [], full)]
+    said = entries(recs or [], full)
+    if stages:   # by time, a stage after anything said at the same moment
+        said = sorted([*said, *stages], key=lambda e: (e.at[:26], e.who in ("stage", "crew")))
+    out += [entry_block(e) for e in said]
     on_way = held(recs or [], full)
     shown = Counter(on_way)   # one passed on as these were read is Claude Code's already: shown once, two the same twice
     for body in sending:
@@ -313,6 +317,8 @@ def entry_block(e: Entry, label: str | None = None) -> tuple[str, str]:
         return "tool", "`⚙ " + e.text.replace("`", "'") + "`"
     if e.who == "note":
         return "note", f"_{e.text}{_hhmm(e.at)}_"
+    if e.who in ("stage", "crew"):   # plain Text, never Markdown (#244): the app renders it as is
+        return e.who, e.text
     text = hard_breaks(e.text) if e.who == "you" else e.text
     return e.who, f"**{label or e.who}**{_hhmm(e.at)}\n\n{text}"
 

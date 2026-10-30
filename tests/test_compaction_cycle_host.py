@@ -282,7 +282,8 @@ def test_writing_in_once_the_quiet_marks_compact_has_gone_is_refused(host, store
         store.send(sid, "I'm back")
     with pytest.raises(Compacting):
         store.queue(sid, "I'm back")
-    assert store.compaction(sid)["state"] == "compacting" and not store.messages(sid)
+    assert store.compaction(sid)["state"] == "compacting"
+    assert not [m for m in store.messages(sid) if m["author"] == "person"]
 
 
 def test_claude_codes_own_compaction_ends_its_cycle_at_the_boundary_mid_turn(streamed, store, sid):
@@ -438,7 +439,7 @@ def test_an_end_its_turn_couldnt_write_is_owed_with_its_then(host, store, sid, m
     monkeypatch.setattr(host_mod, "STEADY_TRIES", ())
     monkeypatch.setattr(store, "move_compaction", lambda *a: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
     end(host, compacted=True)
-    assert host.cycle is not None and host.owed == ("completed", "", "send") and store.drafts(sid)
+    assert host.cycle is not None and host.owed[0::2] == ("completed", "send") and store.drafts(sid)
     monkeypatch.setattr(store, "move_compaction", real)
     run(host.poll())
     assert store.compaction(sid)["state"] == "completed" and host.cycle is None and not store.drafts(sid)

@@ -1715,3 +1715,26 @@ def test_a_waiting_calls_answer_goes_at_once_only_during_a_cycle(hub, store, sid
         store.command(sid, "compact")
     assert hub.submit((sid, ref), "the first").ok, desc
     assert bool(store.drafts(sid)) == queued and bool(store.pending(sid)) == (not queued), desc
+
+
+def test_compaction_entries_place_stage_lines_and_the_crew(store, sid):
+    """#244: each stage's art and its dim detail, and while it runs the crew's excerpts, seeded by
+    the cycle so every refresh shows the same, one at each stage change."""
+    from datetime import datetime, timezone
+    from claude_wheelhouse.hub import compaction_entries
+    store.command(sid, "compact")
+    cid = store.compaction(sid)["id"]
+    store.move_compaction(sid, cid, "preparing")
+    t0 = datetime.fromisoformat(store.stages(sid)[-1]["at"]).timestamp()
+    stages = store.stages(sid)
+    later = compaction_entries(stages, True, t0 + 65)
+    assert later == compaction_entries(stages, True, t0 + 65), "the same at every refresh"
+    whos = [e.who for e in later]
+    assert whos.count("stage") == 1 and 3 <= whos.count("crew") <= 4, whos   # requested shows no line
+    assert later[0].text.startswith("▐█          █▌ walls closing in\n"), later[0].text
+    assert all(e.at <= datetime.fromtimestamp(t0 + 65, timezone.utc).isoformat() for e in later)
+    store.move_compaction(sid, cid, "compacting")
+    store.move_compaction(sid, cid, "completed", "220k → 40k")
+    done = compaction_entries(store.stages(sid), False, t0 + 3600)
+    assert done[-1].who == "stage" or any(e.text.startswith("▐████████████▌ compacted\n220k → 40k") for e in done)
+    assert len([e for e in done if e.who == "crew"]) < 10, "no crew once it has ended"

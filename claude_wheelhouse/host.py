@@ -989,13 +989,13 @@ class Host:
 
     # the compaction cycle (#244, .plan/244-compaction-cycle.md)
 
-    async def move(self, state: str) -> None:
+    async def move(self, state: str, why: str = "") -> None:
         """The cycle to its next active state, here and in the store, retried through a locked
         database (steady): leaving requested is the host's claim, which CLAIM_WITHIN waits for."""
         c = self.cycle
         c.state, c.since = state, time.monotonic()
         try:
-            await self.steady(self.store.move_compaction, self.sid, c.id, state)
+            await self.steady(self.store.move_compaction, self.sid, c.id, state, why)
             self.owed_move = None
         except sqlite3.OperationalError:   # still locked: owed, retried each pass (cycle_due)
             self.owed_move = state
@@ -1013,7 +1013,7 @@ class Host:
         self.close_wait("the notes came back: compacting now")
         c.line, c.waited = line, None   # the clock again, from /compact taken up
         c.key = await self.turn(f"/compact {notes}".rstrip(), compacting=line)
-        await self.move("compacting")
+        await self.move("compacting", "" if notes else "no notes came back, so compacted without them")
 
     def end_cycle(self, state: str, why: str = "") -> None:
         """The cycle ends: completed, failed or cancelled. Its question closes; a /compact turn
@@ -1022,10 +1022,10 @@ class Host:
         if c is None:   # one the host never took (Interrupt pressed before the host saw Compact)
             row = self.store.compaction(self.sid)
             if row is not None and row["state"] == "requested" and state != "completed":
-                self.store.move_compaction(self.sid, row["id"], state)
+                self.store.move_compaction(self.sid, row["id"], state, why)
             return
         # the store first: a locked database leaves the cycle held, for the next pass (cycle_due)
-        self.store.move_compaction(self.sid, c.id, state)
+        self.store.move_compaction(self.sid, c.id, state, why)
         self.cycle = None
         if c.key in self.sent:
             self.late_key = c.key
@@ -1087,8 +1087,8 @@ class Host:
                 c.question, c.waited = None, at
         elif c.state == "preparing" and c.waited is not None and at - c.waited > NOTES_TIMEOUT:   # from taken up
             name = self.store.session(self.sid)["name"] or self.sid[:8]
-            c.question = self.store.post_marked_question(self.sid, NOTES_WAIT_TITLE.format(name=name),
-                                                         NOTES_WAIT_BODY, NOTES_WAIT)
+            c.question = self.store.post_marked_question(self.sid, NOTES_WAIT_TITLE.format(name=name), NOTES_WAIT_BODY,
+                                                         NOTES_WAIT, parent=self.store.compaction(self.sid)["item"])
 
     def close_wait(self, why: str, c: Cycle | None = None) -> None:
         """The cycle's Keep waiting or Abort question, if open, closes: no longer asked."""
@@ -1240,6 +1240,7 @@ class Host:
                                        f"error: {(m.result or m.subtype)[:80]}")
         self.compacted_last = self.compacted_from is not None
         then, driven = None, False
+        tokens = await self.context()   # first: a completed cycle's note says before and after
         if c is not None and c.state == "compacting" and (c.origin == "auto" or c.key not in self.sent):
             driven = c.origin != "auto"   # Claude Code's own is "automatic" to the session
             if self.compacted_last:
@@ -1247,7 +1248,9 @@ class Host:
                 if then == "park":   # the park is the cycle's end: parked first, then completed
                     self.store.set_parked(self.sid, True)
                     self.parked_it, then = True, "end"   # nothing more said or sent
-                if not await self.close_cycle("completed", then=None if then == "end" else then):
+                after = f"{(tokens or 0) // 1000}k" if tokens is not None else "?"
+                if not await self.close_cycle("completed", f"{self.compacted_from // 1000}k → {after}",
+                                              then=None if then == "end" else then):
                     then = "end" if then == "end" else None   # its then waits for the end (owed)
             else:
                 ended = "cancelled" if interrupted else "failed"
@@ -1255,7 +1258,6 @@ class Host:
                                f"not compacted: {(m.result or m.subtype or 'no compaction')[:80]}")
         elif self.late_key is not None and self.late_key not in self.sent:   # a /compact its cycle gave up on
             driven, self.late_key = True, None
-        tokens = await self.context()
         if tokens is not None:
             self.tokens = tokens
             self.nudge(tokens, compacted=self.compacted_last)   # closed first: the reminder never lists it

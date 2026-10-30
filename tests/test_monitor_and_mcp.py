@@ -542,3 +542,25 @@ def test_parking_itself_drops_a_pending_compact_request(store, sid):
     store.park(sid, keep="the plan")
     s = store.session(sid)
     assert (s["compact_request"], s["compact_requested_at"]) == (None, None), "the park's compaction replaces it"
+
+
+@pytest.mark.parametrize("trigger, origin, desc", [
+    ("auto", "auto", "Claude Code's own, at full context"),
+    ("manual", "person", "/compact typed in the tab: the person's"),
+])
+def test_a_tabs_compaction_is_a_cycle_from_its_hooks(store, sid, monkeypatch, capsys, trigger, origin, desc):
+    """#244, Q4: the plugin's PreCompact hook starts the cycle at compacting (blue, the wheelhouse's
+    sends held, the task item); its SessionStart after compaction completes it."""
+    import json
+    from claude_wheelhouse import cli
+    from claude_wheelhouse.store import compacting_now
+    monkeypatch.setenv("WHEELHOUSE_SESSION_ID", sid)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"hook_event_name": "PreCompact", "trigger": trigger})))
+    monkeypatch.setattr("claude_wheelhouse.store.db_path", lambda: store.path)
+    cli.compaction_hook()
+    c = store.compaction(sid)
+    assert (c["state"], c["origin"]) == ("compacting", origin) and compacting_now(store.session(sid)), desc
+    assert store.item(sid, c["item"])["status"] == "running", desc
+    cli.open_items()
+    assert store.compaction(sid)["state"] == "completed", desc
+    assert "Compact" not in capsys.readouterr().out, f"{desc}: the reminder never lists its task"

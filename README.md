@@ -817,7 +817,14 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   session is still writing its notes after 2 minutes, a question asks whether to keep
   waiting (asked again 2 minutes later) or abort (the notes turn is interrupted, nothing is
   compacted, and queued answers stay queued); `/compact` itself has 10 minutes before the
-  cycle fails. The session can also ask for a compaction itself, with
+  cycle fails. Each compaction is also a task in the inbox, "Compact demo: 220k context", that
+  moves with it (running, then done with the tokens before and after, blocked with why it
+  failed, or dropped) and holds the 2-minute question under it; the session never sees it.
+  The conversation shows each stage as a blue line of the detention-level trash compactor
+  closing in, and while it runs, the odd panicked exchange between the crew and the droids.
+  A session in a terminal tab gets the same, from the plugin's PreCompact hook, whether
+  `/compact` was typed there or Claude Code compacted by itself; there the wheelhouse can hold
+  only what it sends, never what's typed in the tab. The session can also ask for a compaction itself, with
   the `request_compact` tool and the notes it wants kept, for long autonomous runs: the
   wheelhouse compacts it once its turn ends, never during it, as if you had pressed Compact
   with those instructions (then just compact). One request at a time, none within 30
