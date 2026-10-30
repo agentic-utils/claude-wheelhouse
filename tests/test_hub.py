@@ -1778,3 +1778,36 @@ def test_a_wake_never_sends_on_a_compaction_task(hub, store, sid, opened):
     assert not done.ok and "own record of a compaction" in done.notices[0].text
     assert not opened and not store.pending(sid), "not woken, nothing sent"
 
+
+
+@pytest.mark.parametrize("records, start_exists, want_dir, said, desc", [
+    ([{"type": "user", "cwd": "WT"}], True, "WT", None, "the transcript's newest cwd: a worktree it cd'd into"),
+    ([{"type": "user", "cwd": "START"}, {"type": "assistant", "cwd": "WT"}, {"type": "x"}], True, "WT", None,
+     "the newest record that has one"),
+    ([{"type": "user", "cwd": "WT"}, {"type": "assistant", "cwd": "GONE", "isSidechain": True}], True, "WT", None,
+     "a subagent's record, elsewhere, never counts"),
+    (None, True, "START", None, "no transcript: where it started"),
+    ([{"type": "user", "cwd": "GONE"}], True, "HOME", "GONE is gone", "its directory gone: home, said"),
+    (None, False, "HOME", "START is gone", "where it started gone too"),
+    ("none", True, "HOME", None, "no session: home, nothing said"),
+])
+def test_open_shell_picks_the_sessions_live_directory(store, projects, monkeypatch, records, start_exists, want_dir,
+                                                      said, desc):
+    """#257: Shell opens where the session works now, else home with a notice naming the one gone."""
+    root = projects / "dirs"
+    paths = {"START": root / "start", "WT": root / "wt", "GONE": root / "gone", "HOME": root / "home"}
+    for name in ("WT", "HOME") + (("START",) if start_exists else ()):
+        paths[name].mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(paths["HOME"]))
+    sid = store.create_session(str(paths["START"]), name="demo")
+    if isinstance(records, list):
+        folder = projects / "projects" / "p"
+        folder.mkdir(parents=True)
+        folder.joinpath(f"{sid}.jsonl").write_text(
+            "".join(json.dumps({**r, **({"cwd": str(paths[r["cwd"]])} if "cwd" in r else {})}) + "\n" for r in records))
+    opened = []
+    monkeypatch.setattr(launch, "open_shell", lambda st, cwd, title, **kw: opened.append((cwd, title)))
+    done = Hub(store).open_shell(None if records == "none" else sid)
+    assert done.ok and opened == [(str(paths[want_dir]), "shell" if records == "none" else "demo")], desc
+    warnings = [e.text.replace(str(root) + "/", "") for e in done.notices if e.severity == "warning"]
+    assert (warnings[0].upper().startswith(said.split()[0]) if said else not warnings), f"{desc}: {warnings}"

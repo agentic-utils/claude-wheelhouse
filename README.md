@@ -443,16 +443,23 @@ session.
   a tooltip saying what it does: its lifecycle (Rename on a running session, Relaunch
   (Unpark on a parked one), Forget (Stop & Forget on a running one) and Fork on any, and Park on one
   that isn't parked), then its
-  conversation (Mode, and Send on one that isn't dead). A button that's off, whatever the reason, is
+  conversation (Mode, and Send on one that isn't dead), and Shell on any. A button that's off, whatever the reason, is
   dark grey with black text. One you press stays off until what it started has finished: Interrupt
   until the session is interrupted, Compact until it's compacted (Compact on the question suggesting it,
-  until that question closes), Shell until the tab has it, Model until the session runs on the new
+  until that question closes), Handover until the tab has it, Model until the session runs on the new
   one, Relaunch and Unpark until it's running again, Park until it's parked, Forget until it's gone,
   Fork until the fork is made or fails. With no word from the session in 30 seconds it comes back on
   and says so. New (`Alt+N`), Adopt (`Alt+A`, a list of the sessions on disk you can adopt) and
   Relaunch all (`Alt+Shift+L`) act on no one session, so they're keys in the footer. Ctrl+S, Ctrl+T and the
   hint under the answer box act on or describe the same session (with none selected, the highlighted item's).
-  An item opened full screen has Mode, Send and the rest in its bar, for its own session. New session (directory, optional name, optional ticket, opening brief,
+  An item opened full screen has Mode, Send and the rest in its bar, for its own session.
+  Shell (`Alt+H`, from anywhere) opens a quick shell, your login shell in a new terminal tab
+  titled `⌁ <session>`, in the directory the session in context works in now (a worktree it
+  moved into included), or your home directory with none, or with that directory gone (said so).
+  `exit` or Ctrl+D closes it; the wheelhouse doesn't track it, and it never touches the session.
+  With `--connect` to another machine it would open there, so it says so and opens nothing. A
+  session run in the wheelhouse is handed to a real Claude Code tab by Handover to Claude Code in
+  a shell, in its right-click menu (no key); it comes back when you `/exit` the tab. New session (directory, optional name, optional ticket, opening brief,
   model and effort) opens Claude in a Windows Terminal tab. The new session is selected in the session list
   as soon as its row appears, unless you have picked another session or are typing in the answer box by then;
   a fork is selected the same way once it's made.
@@ -791,7 +798,7 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   and authorise it: the wheelhouse reconnects it every few minutes for two hours, so the
   question closes by itself, or reply anything to reconnect it at once. For a server of
   your own, Claude Code waits for the browser to come back and connects it itself; if the
-  browser can't reach it, paste the address the browser ends on as your reply. Shell
+  browser can't reach it, paste the address the browser ends on as your reply. Handover
   closes these questions, as `/mcp` in the tab does the same.
 - `Alt+Shift+M` lists the MCP servers of the session in context, as its host last saw
   them (it looks again as the dialog opens), those that need you first, each with its
@@ -804,16 +811,16 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   button: `/mcp` or the settings turn them on. A session not running shows its last look;
   a tab session says to use `/mcp` there.
 - Operations: from the press of Park, Stop & Forget, Relaunch (Unpark, Relaunch all, or Ctrl+S
-  on a stopped session), the Shell hand-over to Claude Code, New session or Adopt, or the start
+  on a stopped session), Handover (to Claude Code in a shell), New session or Adopt, or the start
   of a compaction, to its end, the session is busy and its eye in the session list sweeps
   blue, running or not. A launch ends when the new process has registered (within 90 seconds,
   or it fails with a warning), a hand-over once the tab has it. Fork blues the new session,
   never the one forked.
   While it is busy, sending (now, Ctrl+S, Send, Send all) and every other operation (Park,
-  Park now, Stop & Forget either way, Relaunch, Unpark, Fork, Shell, Compact) are refused
+  Park now, Stop & Forget either way, Relaunch, Unpark, Fork, Handover, Compact) are refused
   with one message ("demo is busy parking: send once it's done, or Interrupt to abort it.").
-  Drafting and queueing stay open, and an answer to a permission or question the session is
-  waiting on still goes. Interrupt aborts the operation and nothing else: a park or Stop &
+  Drafting, queueing and Shell (a quick shell is no operation) stay open, and an answer to a
+  permission or question the session is waiting on still goes. Interrupt aborts the operation and nothing else: a park or Stop &
   Forget not yet passed on is dropped silently; one the session has heard, or a park already
   under way (compacting included, its tokens spent), is called off, and the session is told
   to carry on as before. A park or Stop & Forget the session hasn't acted on within 15

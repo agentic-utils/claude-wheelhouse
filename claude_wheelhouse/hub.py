@@ -1235,6 +1235,34 @@ class Hub:
         return Done().say(f"{display_name(s)}'s {'Relaunch' if op[0] == 'relaunch' else 'start'} aborted: "
                           "it stops as soon as it has started")
 
+    def shell_dir(self, sid: str | None) -> tuple[str | None, str | None]:
+        """Where a quick shell for a session opens (#257): (directory, the one wanted if it's
+        gone). Its live directory, the newest transcript record's cwd (a session that cds into
+        a worktree works there), else the one it was started in; with no session, or that
+        directory gone, (None, it) for the caller to choose."""
+        s = self.store.session(sid) if sid else None
+        if s is None:
+            return None, None
+        want = transcript.live_cwd(sid) or s["cwd"]
+        return (want, None) if os.path.isdir(want) else (None, want)
+
+    def open_shell(self, sid: str | None) -> Done:
+        """Shell (#257): a new terminal tab with the person's login shell, in the session's
+        directory (shell_dir), else home with a notice naming the one gone. Not a session:
+        nothing tracks it, and nothing about the session changes."""
+        cwd, gone = self.shell_dir(sid)
+        s = self.store.session(sid) if sid else None
+        done = Done()
+        if cwd is None:
+            cwd = os.path.expanduser("~")
+            if gone:
+                done.say(f"{gone} is gone: the shell opens in {cwd}", "warning")
+        try:
+            launch.open_shell(self.store, cwd, display_name(s) if s else "shell")
+        except (OSError, ValueError) as e:
+            return Done(False).say(f"couldn't open a shell: {e}", "error")
+        return done.say(f"shell opened in {cwd}")
+
     # model and effort (.plan/model-effort.md)
 
     def hosted_now(self, s) -> bool:

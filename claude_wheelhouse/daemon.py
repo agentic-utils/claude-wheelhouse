@@ -425,6 +425,7 @@ class Daemon:
             Route("/sessions/{sid}/info", self.query(lambda request: self.hub.session_info(request.path_params["sid"]))),
             Route("/sessions/{sid}/{action}", self.command(self.session_command), methods=["POST"]),
             Route("/dispatch", self.command(lambda request, body: self.hub.send_all()), methods=["POST"]),
+            Route("/shell", self.command(self.open_shell), methods=["POST"]),
             Route("/items", self.query(self.items)),
             Route("/items/{sid}/{ref}/thread", self.query(self.thread)),
             Route("/items/{sid}/{ref}/permission", self.command(self.permission), methods=["POST"]),
@@ -1131,6 +1132,13 @@ class Daemon:
         if action not in commands:
             raise Refused(404, f"no command {action}")
         return commands[action](sid)
+
+    def open_shell(self, request: Request, body: dict) -> Done:
+        """Shell (#257): a quick shell's tab, on this machine's screen, so refused (403) from
+        another machine, where nobody would see it."""
+        if not this_machine(request):
+            raise Refused(403, "a shell opens on the wheelhouse's own machine: this wheelhouse doesn't open them remotely")
+        return self.hub.open_shell(text(body, "sid", False))
 
     def permission(self, request: Request, body: dict) -> Done:
         """Allow, Always or Deny, once: a permission already decided, by another client or
