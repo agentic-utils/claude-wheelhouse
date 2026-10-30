@@ -19,7 +19,7 @@ import threading
 import time
 import weakref
 from datetime import datetime, timezone
-from typing import Callable, Self
+from typing import Callable, NamedTuple, Self
 
 from rich.markdown import Markdown as RichMarkdown
 from rich.segment import Segment
@@ -245,6 +245,19 @@ def rehome(widget: Widget, to: Widget) -> None:
     widget.app.update_styles(widget)
     old.refresh(layout=True)
     to.refresh(layout=True)
+
+
+class ClickOpened(NamedTuple):
+    """What a click on a doc did as it opened its editor, undone if the click turns out to be a
+    double-click's first (WheelhouseApp.undo_click, #253): when and where on the screen, the
+    doc item's quote it replaced and the tab its panes showed."""
+    editor: "DocEditor"
+    when: float
+    at: Offset
+    target: tuple[str, str] | None
+    quote: str | None
+    panes: "DocPanes | None"
+    tab: str | None
 
 
 # where a double-click opens what Detail shows full screen, or goes back from it (full_screen_click, #253)
@@ -668,9 +681,9 @@ class Transcript(Widget, can_focus=False):
         """A click on the doc shown (not a drag, which selects), at a row: its editor opens
         there, or moves there if it's open (DocEditor)."""
 
-        def __init__(self, view: "Transcript", row: int):
+        def __init__(self, view: "Transcript", row: int, at: Offset | None = None):
             super().__init__()
-            self.view, self.row = view, row
+            self.view, self.row, self.at = view, row, at   # at: where on the screen (full_screen_soon)
 
     def __init__(self, placeholder: str = "", focusable: bool = False, **kwargs):
         super().__init__(**kwargs)
@@ -773,7 +786,7 @@ class Transcript(Widget, can_focus=False):
         """A click on a doc (a left click, not one ending a drag, which leaves a selection)
         opens its editor there. The event goes on: a double click still selects a word."""
         if self.doc_at is not None and event.button == 1 and event.chain == 1 and self.text_selection is None:
-            self.post_message(self.DocClicked(self, event.y))
+            self.post_message(self.DocClicked(self, event.y, event.screen_offset))
 
     def render_off_loop(self, key: tuple) -> None:
         """A long doc block rendered at a width on a thread (_block_strips keeps it), then laid
@@ -2499,7 +2512,10 @@ class DocEditor(TextArea):
 
     def place(self, line: int, column: int = 0) -> None:
         """The cursor to a place in the source, scrolled to the editor's middle: driven by
-        the viewer, so the viewer doesn't follow it."""
+        the viewer, so the viewer doesn't follow it. Not once closed meanwhile (a double-click's
+        second press, WheelhouseApp.undo_click)."""
+        if self.key is None:
+            return
         line = min(line, self.document.line_count - 1)
         self.block = self.view.block_rows(carried(self.shown, self.text, line))
         self.mark("viewer")
@@ -4525,9 +4541,10 @@ class WheelhouseApp(App):
         # the modules installed, those switched off (claude-wheelhouse modules disable) marked so
         self.modules = api.switch_off(api.load(), api.disabled(self.client.setting(api.DISABLED)))
         self.shown_doc: tuple[str, str] | None = None   # a module's doc in Detail (show_doc): (path, title)
-        # what a click on a doc just did, to be undone if it was a double-click's first
-        # (full_screen_click): the editor it opened, when, and the doc item's quote it replaced
-        self.click_opened: tuple = (None, 0.0, None, None)
+        # what a click on a doc just did, undone if it is a double-click's first (full_screen_soon)
+        self.click_opened: ClickOpened | None = None
+        self.swallow_up = False   # that double-click's release, kept from the widgets too
+        self.went_full = 0.0   # when a double-click last opened or left full screen: a third click isn't another
         self.detail_note: str | None = None   # why nothing is selected, if a module's pick said (unselect)
         self.doc_edits: dict[str, DocEdit] = {}   # each doc's unsaved edits, by its path (DocEditor.edits)
         # a doc item in Detail and full screen (.plan/docs-section.md): split or tabbed (Ctrl+L,
@@ -4745,21 +4762,32 @@ class WheelhouseApp(App):
         if widget is None or not any(w.id in FULL_SCREEN_AREAS for w in widget.ancestors_with_self) \
                 or any(isinstance(w, (Button, ScrollBar)) for w in widget.ancestors_with_self):
             return False
+        return self.go_full()
+
+    def full_screen_soon(self, event: events.MouseDown) -> bool:
+        """A press where a click on a doc just opened its editor, soon enough to make a
+        double-click of it: the editor has taken the room under the pointer (split, the lower
+        rows; tabbed, the whole pane), so the press is taken here, before the editor or its
+        splitter can take it for a double-click of their own (#253)."""
+        opened = self.click_opened
+        if opened is None or event.button != 1 or event.is_forwarded or event.screen_offset != opened.at \
+                or time.monotonic() - opened.when > self.CLICK_CHAIN_TIME_THRESHOLD:
+            return False
+        self.swallow_up = True
+        self.go_full()
+        return True
+
+    def go_full(self) -> bool:
+        """What the screen in front shows full screen, or back from it: the double-click's
+        work (full_screen_click, full_screen_soon). False where there's nothing to go to."""
+        screen, now = self.screen, time.monotonic()
         main = screen is self.screen_stack[0]
         if main and not self.shown_doc and not (self.selected and self.selected[1]) \
-                or not main and not isinstance(screen, (ThreadView, DocView)):
+                or not main and not isinstance(screen, (ThreadView, DocView)) \
+                or now - self.went_full <= self.CLICK_CHAIN_TIME_THRESHOLD:
             return False
-        editor, at, target, quote = self.click_opened
-        self.click_opened = (None, 0.0, None, None)
-        if editor is not None and editor.key is not None and not editor.edited \
-                and time.monotonic() - at <= 2 * self.CLICK_CHAIN_TIME_THRESHOLD:
-            editor.close()
-            if target is not None:   # the quote it took, as before the click
-                if quote is None:
-                    self.doc_quotes.pop(target, None)
-                else:
-                    self.doc_quotes[target] = quote
-                self.paint_quote()
+        self.went_full = now
+        self.undo_click()
         screen.clear_selection()   # Textual's double-click selected the whole transcript
         if not main:
             screen.action_leave()
@@ -4771,6 +4799,24 @@ class WheelhouseApp(App):
             self.saw(*self.selected)
             self.open_full(*self.selected)
         return True
+
+    def undo_click(self) -> None:
+        """What a double-click's first click did on a doc undone (click_opened): its editor
+        closed, still unedited, the quote it took and the tab it showed as before."""
+        opened, self.click_opened = self.click_opened, None
+        if opened is None or opened.editor.key is None or opened.editor.edited \
+                or time.monotonic() - opened.when > 2 * self.CLICK_CHAIN_TIME_THRESHOLD:
+            return
+        opened.editor.close()
+        if opened.target is not None:
+            if opened.quote is None:
+                self.doc_quotes.pop(opened.target, None)
+            else:
+                self.doc_quotes[opened.target] = opened.quote
+            self.paint_quote()
+        if opened.panes is not None:
+            opened.panes.tab = opened.tab
+        self.repaint_doc()
 
     # right-click, as in a terminal
 
@@ -4785,6 +4831,11 @@ class WheelhouseApp(App):
             shown = self.away_window
             self.touched()
             woke = isinstance(event, events.Key) and event.key == "escape" and self.away_window not in (None, shown)
+        if isinstance(event, events.MouseDown) and self.full_screen_soon(event):
+            return
+        if isinstance(event, events.MouseUp) and self.swallow_up and not event.is_forwarded:
+            self.swallow_up = False
+            return
         if isinstance(event, (events.MouseDown, events.MouseUp)) and event.button == 3 and not event.is_forwarded:
             if isinstance(event, events.MouseDown) and not (self.session_menu(event) or self.pane_menu(event)):
                 self.right_click(event)
@@ -5893,17 +5944,20 @@ class WheelhouseApp(App):
     def doc_clicked(self, event: Transcript.DocClicked, editor: "DocEditor") -> None:
         """A click on a doc, in Detail or full screen: its editor opens there, in the thread's
         place (split) or as a tab (tabbed), and a doc item's next comment quotes the block clicked."""
+        if event.view.screen is not self.screen:   # a double-click's first, reaching it once that went full screen
+            return
         panes, doc, _ = self.doc_here()
         line = event.view.line_at(event.row)
         target = (doc["session_id"], doc["ref"]) if doc is not None else None
-        before = (editor.key is None, self.doc_quotes.get(target))
+        before = ClickOpened(editor, time.monotonic(), event.at, target, self.doc_quotes.get(target), panes,
+                             panes.tab if panes is not None else None)
+        closed = editor.key is None
         if doc is not None and line is not None:
             md = next((md for who, md in event.view.blocks if who == "doc"), "")
             self.doc_quotes[(doc["session_id"], doc["ref"])] = quote_of(md, line)
             self.paint_quote()
         editor.open_at(event.row)
-        if before[0] and editor.key is not None:   # undone if this click is a double-click's first
-            self.click_opened = (editor, time.monotonic(), target, before[1])
+        self.click_opened = before if closed and editor.key is not None and event.at is not None else None
         if doc is not None and editor.key is not None and self.doc_layout == TABBED:
             panes.tab = EDITOR_TAB
         self.repaint_doc()

@@ -9753,36 +9753,52 @@ async def test_mcp_servers_dialog_without_a_running_host(store, tmp_path, monkey
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("kind, times, full, desc", [
-    ("question", 1, None, "a question, one click: stays in Detail"),
-    ("question", 2, "ThreadView", "a question, double-click: full screen"),
-    ("task", 1, None, "a task, one click: stays in Detail"),
-    ("task", 2, "ThreadView", "a task, double-click: full screen"),
-    ("doc", 1, None, "a doc, one click: its editor, in Detail"),
-    ("doc", 2, "DocView", "a doc, double-click: full screen, not its editor"),
-    ("conversation", 2, None, "a conversation, double-click: no full screen to go to"),
+@pytest.mark.parametrize("kind, layout, row, times, full, desc", [
+    ("question", "split", 3, 1, None, "a question, one click: stays in Detail"),
+    ("question", "split", 3, 2, "ThreadView", "a question, double-click: full screen"),
+    ("task", "split", 3, 1, None, "a task, one click: stays in Detail"),
+    ("task", "split", 3, 2, "ThreadView", "a task, double-click: full screen"),
+    ("doc", "split", 3, 1, None, "a doc, one click: its editor, in Detail"),
+    ("doc", "split", 3, 2, "DocView", "a doc, double-click: full screen, not its editor"),
+    ("doc", "split", 20, 2, "DocView", "a doc's lower rows, where the editor opens: full screen all the same"),
+    ("doc", "tabbed", 3, 1, None, "a doc tabbed, one click: its editor's tab"),
+    ("doc", "tabbed", 3, 2, "DocView", "a doc tabbed, the editor's tab over it: full screen all the same"),
+    ("conversation", "split", 3, 2, None, "a conversation, double-click: no full screen to go to"),
 ])
-async def test_double_click_on_detail_goes_full_screen_and_back(store, sid, tmp_path, kind, times, full, desc):
+async def test_double_click_on_detail_goes_full_screen_and_back(store, sid, tmp_path, kind, layout, row, times, full,
+                                                                desc):
     """#253: a double-click on Detail opens what it shows full screen, documents included, and
-    one on the full screen goes back; a single click keeps its own job (a doc's editor)."""
+    one on the full screen goes back; a single click keeps its own job (a doc's editor). As the
+    terminal sends it (raw_click), where each press goes to what's under the pointer then."""
     if kind == "doc":
-        (tmp_path / "plan.md").write_text("# The plan\n\nBuild it well, with plenty of words to click on.\n")
+        (tmp_path / "plan.md").write_text("# The plan\n\n" + "".join(f"Step {i}, built well.\n\n" for i in range(30)))
         ref = store.post_doc(sid, "plan", str(tmp_path / "plan.md"))
     elif kind != "conversation":
         ref = store.post_item(sid, kind, "which db?", "Postgres or SQLite? " * 20)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
+        app.doc_layout = tui.TABBED if layout == "tabbed" else tui.SPLIT
         app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|" if kind == "conversation" else f"{sid}|{ref}"))
         await pilot.pause()
-        await pilot.click("#detail", offset=(3, 3), times=times)
+        at = app.detail.region.offset + (3, row)   # the same place twice, whatever opens under it
+        for _ in range(times):   # as a hand clicks: each click handled before the next
+            raw_click(app, app.screen, at)
+            await pilot.pause(0.05)
         await pilot.pause(0.2)
         assert type(app.screen).__name__ == (full or "Screen"), desc
-        assert (app.detail_editor.key is not None) == (kind == "doc" and times == 1), f"{desc}: Detail's editor"
-        assert bool(app.doc_quotes) == (kind == "doc" and times == 1), f"{desc}: a comment's quote, as the editor"
+        opened = kind == "doc" and times == 1
+        assert (app.detail_editor.key is not None) == opened, f"{desc}: Detail's editor"
+        assert bool(app.doc_quotes) == opened, f"{desc}: a comment's quote, as the editor"
         if full is None:
             return
-        await pilot.click("#docview" if full == "DocView" else "#thread", offset=(3, 3), times=2)
+        await pilot.pause(0.6)   # a new double-click, not more of the last one
+        at = app.screen.query_one("#docview" if full == "DocView" else "#thread").region.offset + (3, row)
+        for _ in range(2):
+            raw_click(app, app.screen, at)
+            await pilot.pause(0.05)
         await pilot.pause(0.2)
         assert len(app.screen_stack) == 1, f"{desc}: a double-click there goes back"
         assert app.detail_editor.key is None and not app.screen.selections, f"{desc}: no editor, nothing selected"
+        if kind == "doc":
+            assert app.detail_panes.tab == tui.DOC_TAB, f"{desc}: the doc's tab, as before"
