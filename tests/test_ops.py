@@ -293,6 +293,25 @@ def test_a_called_off_op_cant_be_acted_on_from_the_turn_it_was_told_in(hub, stor
     late()   # a later turn's own park or end is its own
 
 
+@pytest.mark.parametrize("what, how", [("end", "overdue"), ("park", "overdue"), ("end", "interrupt"),
+                                       ("park", "interrupt"), ("park", "cancel")])
+def test_a_request_never_told_never_refuses_the_turn(hub, store, hosted, what, how):
+    """Review 4: asked mid-turn and called off before it was told: that turn's own park or end goes."""
+    sid = hosted
+    store.set_activity(sid, "idle")
+    store.set_activity(sid, "thinking")   # the turn running at the press
+    into(store, sid, what, "requested")
+    if how == "overdue":
+        overdue(store, sid)
+        hub.refresh()
+    elif how == "interrupt":
+        hub.host_command(sid, "interrupt")
+    else:
+        store.cancel_request(sid, what)
+    assert store.op(sid)["state"] in ("failed", "cancelled")
+    {"end": lambda: store.end_session(sid), "park": lambda: store.park(sid, compact=False, reason="x")}[what]()
+
+
 @pytest.mark.parametrize("what", ["end", "park"])
 def test_a_turn_ended_since_the_tell_may_park_or_end_unprompted(hub, store, hosted, what):
     """Review 3: the told turn ended without acting; the op fails later. The next turn's own call goes."""

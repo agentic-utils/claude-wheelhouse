@@ -1006,11 +1006,17 @@ class Store:
         s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
         if s is None or s["op"] != what or s["op_state"] not in ("failed", "cancelled"):
             return
+        # only an op the session heard of: its end wrote the cancel message (told or parking, unpark_request),
+        # at or after op_at (messages are stamped to the second)
+        cancel = db.execute("SELECT delivered_at FROM messages WHERE session_id = ? AND body = ? AND "
+                            "substr(created_at, 1, 19) >= substr(?, 1, 19) ORDER BY id DESC",
+                            (sid, CANCELLED.format(what=what), s["op_at"])).fetchone()
+        if cancel is None:
+            return
         if runner(s) == "sdk" and not s["shell"] and s["idle_at"]:
-            late = s["idle_at"] < s["op_at"]   # no turn has ended since it was told (or asked, or parked)
+            late = s["idle_at"] < s["op_at"]   # no turn has ended since it was told (or parked)
         else:
-            late = db.execute("SELECT 1 FROM messages WHERE session_id = ? AND body = ? AND delivered_at IS NULL",
-                              (sid, CANCELLED.format(what=what))).fetchone() is not None
+            late = cancel["delivered_at"] is None
         if late:
             raise ValueError(f"the {what} request was cancelled: carry on as before, and don't call {call}")
 
