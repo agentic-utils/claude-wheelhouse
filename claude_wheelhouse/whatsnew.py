@@ -89,8 +89,8 @@ DIALOGS = (
          ACTION, ask="Press Delete now to close D1, or press the button.", button="Close D1 (Delete)"),
     Stop("docs", "items", "Documents",
          "A session declares each document it writes for you to read (a design, plan or report) as a doc item "
-         "(M), under the item it belongs to, and Detail shows it rendered. Click the document there to edit it, "
-         "and Enter opens it full screen.",
+         "(M), under the item it belongs to, and Detail shows it rendered. Click the document there to edit it; "
+         "a double-click, or Enter, opens it full screen.",
          ACTION, ask="Open the demo's story now: click M1, The bedtime story, under its task, or press the button.",
          button="Read M1 (Click)"),
     Stop("conversation", "detail", "The conversation",
@@ -279,6 +279,9 @@ FEATURES: tuple[Feature, ...] = (
     # notes only: the docs box has no line to spare at 80x24 without covering M1
     Feature("doc-quote", UNRELEASED, ADVANCED,
             note="Click a block of a doc and your next comment on it quotes that block."),
+    Feature("detail-double-click", UNRELEASED, ADVANCED,
+            note="Double-click what Detail shows, a doc included, to open it full screen, and double-click again "
+                 "to go back. A single click keeps its own job, such as editing a doc."),
     Feature("layout-keys", UNRELEASED, ADVANCED,
             note="Alt+Up and Alt+Down reorder rows; drag a splitter to resize panes, and double-click it to reset."),
     Feature("key-modifiers", UNRELEASED, ADVANCED,
