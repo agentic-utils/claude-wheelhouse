@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 59, 2026-10-30T14:40:12Z, source cc5c1cbb3b8eb3f4 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 85, 2026-10-30T15:13:25Z, source bc974a4eeab9bb90 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -34,11 +34,15 @@ daemon running.
 - Park: a session writes its handoff and stops, kept dimmed until Unpark.
 - Forget: the session leaves the wheelhouse (its data deleted); Adopt brings one back.
 - Relaunch: start a session again where it left off.
+- Dead: a session not running and not parked (an Available one), red in the session list; its rows dim in every pane (session list, inbox, PRs, Decisions) until it runs again.
 - Fork: a new session carrying on from another's conversation.
 - Pin: an item kept through Delete, Ctrl+A, Ctrl+Delete and autocleanse.
 - Completed: an item done with (a task done or dropped, a subagent done or failed, a PR merged or closed, a question answered, a decision seen, a doc read). Ctrl+Delete deletes them all at once (Ctrl+Z undoes it); autocleanse hides each 5 minutes after it completed (AUTOCLEANSE_MINUTES, 0 off) until Alt+V shows it.
 - Session steps: what the wheelhouse tells a session at compaction, ending, resuming or a
   merged PR (command palette, Session steps).
+- Compaction: in a tab, Claude Code compacting (by itself, or `/compact` typed there) shows as a
+  task in the inbox ("Compact <name>: <k>k context", done once compacted) and blue lines in the
+  conversation, and the session's eye is blue meanwhile; what you send it waits until it's done.
 - Tour: the guided tour, resumed with Alt+T while the title bar shows its badge.
 
 ## Where to look in the source
@@ -224,7 +228,7 @@ Tab goes round the session list, the card of what happened while you were away w
 
 ### Mouse
 
-Click selects a row; in the session list, a click on the selected session or the list's title past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may keep Shift+click for itself: Ctrl+Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or Backspace closes them together, the highlight going to the row above the topmost one taken, and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the right-hand end of its row: a click there hides them, and the + it becomes shows them again. A click on a doc opens its editor below it there, as a click on it moves it while it's open. A click on a line of the card of what happened while you were away jumps to it, and its ✕ dismisses it. A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. A click on an emoji suggestion under the answer box takes it in place of the code typed. A click on the ⓘ at the stats pane's top right opens the selected session's info: its id (C copies it), user and machine, directory, branch, model, mode, start, transcript and its MCP server, flagged when stale. Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. Drag the lines between the panes to resize them (they light up under the pointer); the sizes are kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; Session steps there has what the wheelhouse tells a session at each event.
+Click selects a row; in the session list, a click on the selected session or the list's title past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may keep Shift+click for itself: Ctrl+Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or Backspace closes them together, the highlight going to the row above the topmost one taken, and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the right-hand end of its row: a click there hides them, and the + it becomes shows them again. A click on a doc opens its editor below it there, as a click on it moves it while it's open. A click on a line of the card of what happened while you were away jumps to it, and its ✕ dismisses it. A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. A click on an emoji suggestion under the answer box takes it in place of the code typed. A click on the ⓘ at the stats pane's top right opens the selected session's info: its id (C copies it), user and machine, directory, branch, model, mode, start, transcript and its MCP server, flagged when stale. Double-click selects a word, but on what Detail shows (an item, a doc) it opens it full screen, as Enter on its inbox row does, and on a full-screen item's thread or doc it goes back, as Esc does. Right-click on a session in the session list selects it and opens a menu of its buttons; elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. Drag the lines between the panes to resize them (they light up under the pointer); the sizes are kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; Session steps there has what the wheelhouse tells a session at each event.
 
 ### Buttons
 
@@ -354,6 +358,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Fork (Alt+K) carries a session on in a copy, in a new worktree, taking the items you choose.
 - Stats' - and + zoom its charts out to days, and its cache line says when the next turn costs more.
 - Click a block of a doc and your next comment on it quotes that block.
+- Double-click what Detail shows, a doc included, to open it full screen, and double-click again to go back. A single click keeps its own job, such as editing a doc.
 - Alt+Up and Alt+Down reorder rows; drag a splitter to resize panes, and double-click it to reset.
 - Every key has a modifier, so a letter typed in the answer box is always just typed, and the app's own keys work from there: Ctrl+Q quits, F1 lists the keys, Alt+N is New session.
 - With no session selected, the inbox lists each session's conversation (💬, named after the session) at the top, and orders its items by session name within each status.
@@ -362,3 +367,5 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - A completed item leaves the inbox 5 minutes after it completed (AUTOCLEANSE_MINUTES in a .env, 0 for never); Alt+V shows it again.
 - Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it.
 - The ⓘ at the stats pane's top right shows the selected session's info: its id (C copies it), user, machine, branch, model, transcript, and its MCP server's code, flagged when it needs a relaunch.
+- Every compaction, in a tab too, is a task in the inbox that follows it to done, failed or dropped, and the conversation shows its stages as the trash compactor's walls closing in, with the crew and the droids panicking while it runs.
+- A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at.

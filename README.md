@@ -265,7 +265,7 @@ session.
   room); or **tabbed**, Doc and Thread (with its count of new replies) as tabs, switched
   by `Ctrl+PageUp` and `Ctrl+PageDown` or a click, where typing on the Doc tab moves you
   to Thread with what you typed. `Ctrl+L` switches between the two, kept as
-  `layout.doc-view`; `Enter` opens the doc full screen, laid out the same way. A comment
+  `layout.doc-view`; `Enter`, or a double-click on the doc, opens it full screen, laid out the same way. A comment
   goes to the session that posted the doc, on its ref, queued or sent at once by the
   session's mode, as an answer does. After a click on a block of the doc, the comment
   quotes that block's first line (shown in the box's title); `Esc` in the empty box drops
@@ -427,7 +427,9 @@ session.
   which a session run in the wheelhouse is asked whether to Compact), cyan while it starts or relaunches,
   yellow when stalled (its Claude Code runs, but its wheelhouse MCP server hasn't checked in
   for 2 minutes), magenta while it's been asked to park or forget, red when dead (its Claude
-  Code isn't running) and grey when parked. While a session is busy (its Cylon eye sweeping), its dot
+  Code isn't running) and grey when parked. A dead session's rows are dimmed in every pane: its
+  row here (the dot kept red), its inbox items and conversation, its PRs (each PR's light kept
+  bright) and the decisions in a repo no other session works in, until it runs again. While a session is busy (its Cylon eye sweeping), its dot
   flashes, 0.7 seconds in its colour and 0.7 seconds dimmed; with the animation off
   (`ANIMATION_FPS=0`) it stays steady. A row selected or under the mouse keeps its dot's colour, and an
   item's status its own, on the row's shade.
@@ -463,7 +465,7 @@ session.
   is the only way to: a `/rename` in Claude Code isn't picked up, and the next launch
   gives Claude Code the wheelhouse's name again.
   A session is in one of four states. Active: running (starting, stalled, busy and the rest
-  only decorate it). Available: not running and not parked, shown red, as after a reboot or a
+  only decorate it). Available: not running and not parked, shown red (its rows dimmed), as after a reboot or a
   crash. Parked: not running, by intent, dimmed at the foot of the list. Forgotten: no longer
   in the wheelhouse at all, which Adopt can bring back. Relaunch starts an Available or Parked
   session again where it left off; on a running one it stops it (a tab's Claude Code or a
@@ -637,7 +639,10 @@ highlight goes to the row immediately above the topmost row it took, or to the n
 if that was the first.
 
 Text: drag the mouse over the conversation or a thread to select part of it (shown black
-on white), double-click to select a word, `Ctrl+A` in the answer box selects its text (in the item list it marks the finished rows; in a doc opened
+on white), double-click to select a word (not in Detail showing an item or a doc, where a
+double-click opens it full screen as `Enter` on its inbox row does, nor on a full-screen
+item, where it goes back as `Esc` does; a double-click on a link or button there does that
+link's or button's job), `Ctrl+A` in the answer box selects its text (in the item list it marks the finished rows; in a doc opened
 full screen it selects the whole doc), and `Ctrl+C` copies the selection (through the terminal, which Windows Terminal supports). Right-click on a session in the session list selects it and opens a menu of
 its buttons (greyed as they are under the list; Esc or a click outside closes it); on a PR in the PRs pane, a menu of its
 actions (of every PR marked, if it is one). Elsewhere right-click does as a
@@ -771,8 +776,8 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   whole), and with an item in doubt it is the check, `Check: T1 running, Q2 reply owed`,
   which the session answers by correcting what's finished. It stops once the session has
   been quiet 8 hours. Then a session run in the wheelhouse is compacted while its cache is
-  still warm (asked first, as Compact asks, and compacted without notes if none come back
-  in 10 minutes), and a tab idle-compacts by itself about 54 minutes later (the wheelhouse
+  still warm (asked first, as Compact asks, and compacted without notes if its notes turn
+  ends without them; writing to it before its `/compact` goes calls that off), and a tab idle-compacts by itself about 54 minutes later (the wheelhouse
   launches tabs to do so past 150k tokens). `--keepalive-hours N` (on the app or `claude-wheelhouse daemon`), or
   `WHEELHOUSE_KEEPALIVE_HOURS=N`, or `KEEPALIVE_HOURS=N` in a `.env` (see
   [Settings](#settings)), sets another limit; fractions are allowed and 0
@@ -804,11 +809,27 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   instructions for the compaction (none: the session is asked what to keep) and what follows
   it: just compact, send its queued answers in the same one prompt as that reminder (the
   default), or park it at once, sending nothing more, so nothing writes the compacted context
-  to the cache until it is unparked. While a compaction is under way, from Compact pressed
-  until the host says it's compacted (or got no notes, failed or was interrupted), through
-  the turn that collects its notes and the `/compact` turn alike, Compact is off,
-  the session's inbox items and Detail dim and ignore clicks, and its eye in the session
-  list sweeps blue instead of red. The session can also ask for a compaction itself, with
+  to the cache until it is unparked. A compaction is one cycle, however it starts (Compact,
+  the question's Compact, Relaunch or Park compacting first, the session's own request, the
+  8-hour mark, or Claude Code compacting by itself at full context): from the press until
+  `/compact` has ended, or the cycle fails or is cancelled, the session is closed. Sending
+  (now or with Ctrl+S), queueing, Park, Unpark, Relaunch, Shell, Stop & Forget's "Let it
+  know" and a second Compact are refused with one message ("demo is compacting: send once
+  it's done, or Interrupt to cancel the compaction."), and the answer box keeps your text;
+  Interrupt, "Just stop it" and an answer to a permission or question the notes turn is
+  waiting on still go. Throughout, Compact is off, the session's inbox items and Detail dim
+  and ignore clicks, and its eye in the session list sweeps blue instead of red. If the
+  session is still writing its notes after 2 minutes, a question asks whether to keep
+  waiting (asked again 2 minutes later) or abort (the notes turn is interrupted, nothing is
+  compacted, and queued answers stay queued); `/compact` itself has 10 minutes before the
+  cycle fails. Each compaction is also a task in the inbox, "Compact demo: 220k context", that
+  moves with it (running, then done with the tokens before and after, blocked with why it
+  failed, or dropped) and holds the 2-minute question under it; the session never sees it.
+  The conversation shows each stage as a blue line of the detention-level trash compactor
+  closing in, and while it runs, the odd panicked exchange between the crew and the droids.
+  A session in a terminal tab gets the same, from the plugin's PreCompact hook, whether
+  `/compact` was typed there or Claude Code compacted by itself; there the wheelhouse can hold
+  only what it sends, never what's typed in the tab. The session can also ask for a compaction itself, with
   the `request_compact` tool and the notes it wants kept, for long autonomous runs: the
   wheelhouse compacts it once its turn ends, never during it, as if you had pressed Compact
   with those instructions (then just compact). One request at a time, none within 30

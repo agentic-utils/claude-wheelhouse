@@ -10,7 +10,7 @@ from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parent
 GROUP = "claude_wheelhouse.modules"   # api.GROUP, not imported: api imports half the package
-API = 10   # the daemon's routes as this code serves and calls them: another number won't do
+API = 11   # the daemon's routes as this code serves and calls them: another number won't do
 
 
 @functools.lru_cache(maxsize=1)

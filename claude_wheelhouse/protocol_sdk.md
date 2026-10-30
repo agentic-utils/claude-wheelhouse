@@ -32,6 +32,9 @@ to a session: launch.protocol_file drops it. -->
   `request_compact(keep)`, `keep` being what to carry through (open threads, decisions,
   files, the next step). The wheelhouse compacts you once your turn ends, never during it,
   so end your turn soon after. One request at a time, and not again within 30 minutes.
+- When the wheelhouse asks you for notes to keep through compaction, write them and end
+  your turn: the person can't send you anything until the compaction is done, and after 2
+  minutes they are asked whether to keep waiting.
 - If your work needs an MCP server Claude Code lists as requiring authentication, or one
   that has failed, call `request_mcp_signin(server, why)` instead of telling the person to
   authorise it elsewhere, then carry on with what you can. Don't ask about a server you

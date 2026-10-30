@@ -35,8 +35,18 @@ def dirs(ctx: api.Context) -> list[tuple[Path, str]]:
 
 def routes(ctx: api.Context) -> list[api.Route]:
     def decisions(call: api.Call):
-        found = dirs(ctx)
-        return {"decisions": scan.as_json(SCANNER.scan(found)), "dirs": [str(d) for d, _ in found]}
+        sessions = ctx.sessions()
+        pairs = api.decision_dirs(sessions)
+        found = [(d, root.name) for d, root in pairs]
+        rows = scan.as_json(SCANNER.scan(found))
+        # dead: no session but a dead, unparked one works in its repo or declared it, so it's
+        # dimmed (#252); a repo's decision directories are every one its sessions declared
+        living = [s for s in sessions if not s.get("dead")]
+        roots = {api.git_root(s["cwd"]) for s in living} - {None}
+        alive = {d for d, root in pairs if root in roots} | {d for d, _ in api.decision_dirs(living)}
+        for r in rows:
+            r["dead"] = Path(r["path"]).parent not in alive
+        return {"decisions": rows, "dirs": [str(d) for d, _ in found]}
     return [api.Route("decisions", decisions)]
 
 
@@ -117,7 +127,9 @@ class Decisions(Vertical):
         (a selection change ticks too, for the stats pane); at once when the sessions'
         directories or the doc dirs they declared have changed (a session started in another
         repo, set_doc_dirs)."""
-        where = tuple(sorted((s.get("cwd") or "", tuple(s.get("doc_dirs") or ())) for s in self.ctx.sessions()))
+        # a session dying or coming back changes which rows are dimmed (#252): asked at once too
+        where = tuple(sorted((s.get("cwd") or "", tuple(s.get("doc_dirs") or ()), bool(s.get("dead")))
+                             for s in self.ctx.sessions()))
         if time.monotonic() - self.asked_at >= EVERY or where != self.where:
             self.where = where
             self.ask()
@@ -198,8 +210,9 @@ class Decisions(Vertical):
             mark = self.sort[-1] if self.sort[:-1] == key else ""
             table.add_column(f"{label} {mark}" if mark else label, key=key, width=w)
         for r in rows:
-            cells = [r["number"], Text(r["status"], style=LOOKS.get(r["status"], "")), r["title"], r["repo"]]
-            table.add_row(*map(api.plain, cells[:len(columns)]), key=r["path"])   # a title as itself, never markup
+            cells = tuple(map(api.plain, [r["number"], Text(r["status"], style=LOOKS.get(r["status"], "")),
+                                          r["title"], r["repo"]][:len(columns)]))   # a title as itself, never markup
+            table.add_row(*(api.faded(cells) if r.get("dead") else cells), key=r["path"])
         if at is not None and at in table.rows:
             table.move_cursor(row=table.get_row_index(at), animate=False)
 

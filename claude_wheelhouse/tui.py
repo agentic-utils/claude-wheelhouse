@@ -19,7 +19,7 @@ import threading
 import time
 import weakref
 from datetime import datetime, timezone
-from typing import Callable, Self
+from typing import Callable, NamedTuple, Self
 
 from rich.markdown import Markdown as RichMarkdown
 from rich.segment import Segment
@@ -64,16 +64,16 @@ from textual.widgets import (
 )
 
 from . import api, away, callout, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
-from .rows import KIND_COLOUR, KeepColours, RowTips, marked, plain
+from .rows import KIND_COLOUR, KeepColours, RowTips, faded, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
-from .host import AWAITING_NOTES, HOLD_EXPIRED, MCP_CONNECTOR, NUDGE_TOKENS, SHELL_OPENING
-from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, wake_verb, compacting_now, state as hub_state, Event, aimed, display_name, host_context, short
+from .host import MCP_CONNECTOR, NUDGE_TOKENS, SHELL_OPENING
+from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, wake_verb, compacting_now, lifeless, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
 from .tour import LIT as tour_lit, NOTES, PAUSED, ROWS as tour_rows, SHUN as tour_shun, TOPUP, TOUR, Tour, offered, opening
-from .store import (DEFAULT_THEN, DELETED, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
+from .store import (DEFAULT_THEN, DELETED, HOST_QUESTION, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mcp_servers, mode, pinned, runner, spared, stamp, standing)
 from .unsent import Unsent
 
@@ -104,7 +104,8 @@ COMPACTING_LOCKED = "That session is compacting: its items open once it's done" 
 UNDO_LANDING = "{key}: the undo is still putting rows back, try again in a moment"   # Delete asked mid-undo (#235)
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
-         "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8"}
+         "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8",
+         "stage": "#2f8cff", "crew": "#2f8cff"}   # a compaction's stage lines and crew (#244): its eye's blue
 # a doc block (doc_blocks) longer than this is rendered on a thread (Transcript._layout): a
 # 42 KB one takes Rich a second or two, which the loop would otherwise stall for
 RENDER_OFF_LOOP = 2000
@@ -247,6 +248,21 @@ def rehome(widget: Widget, to: Widget) -> None:
     to.refresh(layout=True)
 
 
+class ClickOpened(NamedTuple):
+    """What a click on a doc did as it opened its editor, undone if the click turns out to be a
+    double-click's first (WheelhouseApp.undo_click, #253): when and where on the screen, the
+    doc item's quote it replaced and the tab its panes showed."""
+    editor: "DocEditor"
+    when: float
+    at: Offset
+    target: tuple[str, str] | None
+    quote: str | None
+    panes: "DocPanes | None"
+    tab: str | None
+
+
+# where a double-click opens what Detail shows full screen, or goes back from it (full_screen_click, #253)
+FULL_SCREEN_AREAS = {"detail-scroll", "detail-thread-scroll", "thread-scroll", "docview-scroll", "docview-thread-scroll"}
 LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of its parent
 # a doc item in Detail and full screen (.plan/docs-section.md): split, the doc over its thread
 # (their splitter kept as layout.doc-thread), or tabbed (Doc, Thread, and Editor while it's
@@ -552,8 +568,18 @@ def _block_lines(who: str, md: str, width: int, console) -> list:
     """A block's rendered segments at one width: rendered once, though Textual measures a
     widget's height and then draws it, and a new turn leaves every older block as it was."""
     r = Text(md.strip("`"), style=VOICE[who]) if who == "tool" else pr_text(md) if who == "pr" \
-        else RichMarkdown(md, style=VOICE[who])
+        else stage_text(who, md) if who in ("stage", "crew") else RichMarkdown(md, style=VOICE[who])
     return list(console.render(r, console.options.update_width(width)))
+
+
+def stage_text(who: str, text: str) -> Text:
+    """A compaction's stage lines or crew excerpt (#244) as plain Text, never Markdown (which
+    would turn its art into rules and bullets): each line cut with an ellipsis, not wrapped; a
+    stage's lines after its first dim."""
+    out = Text(no_wrap=True, overflow="ellipsis")
+    for i, line in enumerate(text.split("\n")):
+        out.append(("\n" if i else "") + line, style=VOICE[who] + (" dim" if who == "stage" and i else ""))
+    return out
 
 
 def pr_text(md: str) -> Text | RichMarkdown:
@@ -666,9 +692,9 @@ class Transcript(Widget, can_focus=False):
         """A click on the doc shown (not a drag, which selects), at a row: its editor opens
         there, or moves there if it's open (DocEditor)."""
 
-        def __init__(self, view: "Transcript", row: int):
+        def __init__(self, view: "Transcript", row: int, at: Offset | None = None):
             super().__init__()
-            self.view, self.row = view, row
+            self.view, self.row, self.at = view, row, at   # at: where on the screen (full_screen_soon)
 
     def __init__(self, placeholder: str = "", focusable: bool = False, **kwargs):
         super().__init__(**kwargs)
@@ -771,7 +797,7 @@ class Transcript(Widget, can_focus=False):
         """A click on a doc (a left click, not one ending a drag, which leaves a selection)
         opens its editor there. The event goes on: a double click still selects a word."""
         if self.doc_at is not None and event.button == 1 and event.chain == 1 and self.text_selection is None:
-            self.post_message(self.DocClicked(self, event.y))
+            self.post_message(self.DocClicked(self, event.y, event.screen_offset))
 
     def render_off_loop(self, key: tuple) -> None:
         """A long doc block rendered at a width on a thread (_block_strips keeps it), then laid
@@ -1590,14 +1616,6 @@ class ItemList(SinkList):
         self.extend_to(self.cursor_key())
 
 
-def faded(cells: tuple) -> tuple:
-    """A row's cells dimmed, whatever their own colours: its session is being compacted (#150)."""
-    out = tuple(c.copy() if isinstance(c, Text) else Text(str(c)) for c in cells)
-    for c in out:
-        c.stylize("dim")
-    return out
-
-
 class Compose(TextArea):
     """An answer box. Ctrl+A selects all of it, as in other editors (TextArea's own is line
     start). Ctrl+Enter submits what's typed: queued or sent at once, by the session's mode.
@@ -1764,8 +1782,7 @@ def under_way(button: str, s, status: str, relaunching: bool) -> bool:
     question's Compact have no column: their word is a notice, or the question closing."""
     command, activity = models.field(s, "host_command"), models.field(s, "activity") or ""
     if button == "compact":
-        return (command == "compact" or activity == AWAITING_NOTES
-                or activity.startswith("compacting") and activity != HOLD_EXPIRED)
+        return command == "compact" or compacting_now(s)
     if button in ("interrupt", "shell"):
         return command == button or button == "shell" and activity == SHELL_OPENING and not models.field(s, "shell")
     if button == "model":
@@ -2037,6 +2054,16 @@ class CompactButtons(Horizontal):
         radios = then_radios("compact-then")
         radios.can_focus = False   # no Tab stop (tab_stops), and a click leaves the answer box where it was: 3 to 5 press them
         yield radios
+        # on the host's question when a compaction's notes run long (#244), instead of the above
+        yield BarButton("Keep waiting", "success", id="keep-waiting", compact=True, tooltip=BUTTONS["keep-waiting"])
+        yield BarButton("Abort", "error", id="abort-compaction", compact=True, tooltip=BUTTONS["abort-compaction"])
+
+    def waiting(self, on: bool) -> None:
+        """The notes question's buttons (on), or the question suggesting Compact's."""
+        for w in self.children:
+            shown = on == (w.id in ("keep-waiting", "abort-compaction"))
+            if w.display != shown:
+                w.display = shown
 
     @property
     def then(self) -> str:
@@ -2497,7 +2524,10 @@ class DocEditor(TextArea):
 
     def place(self, line: int, column: int = 0) -> None:
         """The cursor to a place in the source, scrolled to the editor's middle: driven by
-        the viewer, so the viewer doesn't follow it."""
+        the viewer, so the viewer doesn't follow it. Not once closed meanwhile (a double-click's
+        second press, WheelhouseApp.undo_click)."""
+        if self.key is None:
+            return
         line = min(line, self.document.line_count - 1)
         self.block = self.view.block_rows(carried(self.shown, self.text, line))
         self.mark("viewer")
@@ -4075,6 +4105,10 @@ BUTTONS = {
     "compact-now": ("Compact (Alt+Y, over the answer box, on the question suggesting it): compact the session, with the "
                     "instructions typed in the box if any, else it's asked what to keep; then as chosen beside it: "
                     "Alt+D just compact, Alt+E send the queued answers in the same prompt, Alt+X park it at once"),
+    "keep-waiting": ("Keep waiting (Alt+Y, on the question asking whether to wait for a compaction's notes): "
+                     "the session carries on writing them, and you're asked again if it is still going in 2 minutes"),
+    "abort-compaction": ("Abort (Alt+D, on the same question): interrupt the notes turn and cancel the compaction; "
+                         "nothing is compacted, and queued messages stay queued"),
     "leave-it": "Leave it (Alt+W): close the question; it isn't asked again until the context has been under 200k and passes it again",
     "interrupt": "Interrupt (Alt+I): stop the session's current turn, like Esc in Claude Code",
     "compact": ("Compact (Alt+C): compact the session with instructions of your own, or with what it says to keep; "
@@ -4116,6 +4150,8 @@ BUTTON_KEYS = [
 # the permission keys, Alt+Y, Alt+W and Alt+D, on the question suggesting Compact: Compact,
 # Leave it and the first then-choice; Alt+E and Alt+X (BUTTON_KEYS) the other two
 NUDGE_KEYS = {"allow": "compact-now", "always": "leave-it", "deny": "compact-then-compact"}
+# and on the question whether to wait for a compaction's notes (#244): Keep waiting and Abort
+WAIT_KEYS = {"allow": "keep-waiting", "deny": "abort-compaction"}
 # for the F1 overlay, keys bound elsewhere: Tab and Shift+Tab are every screen's own
 # (app.focus_next, which is cycle_focus), the lists' cursor keys DataTable's
 TAB_KEYS = [Binding("tab", "app.focus_next"), Binding("shift+tab", "app.focus_previous")]
@@ -4156,7 +4192,8 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "A click on an emoji suggestion under the answer box takes it in place of the code typed. "
          "A click on the ⓘ at the stats pane's top right opens the selected session's info: its id (C copies it), "
          "user and machine, directory, branch, model, mode, start, transcript and its MCP server, flagged when stale. "
-         "Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; "
+         "Double-click selects a word, but on what Detail shows (an item, a doc) it opens it full screen, as Enter on its "
+         "inbox row does, and on a full-screen item's thread or doc it goes back, as Esc does. Right-click on a session in the session list selects it and opens a menu of its buttons; "
          "elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap "
@@ -4176,7 +4213,7 @@ DIALOGS = ("Esc, or a click outside the box, cancels a dialog (not the tutorial 
 # confirmed) or the screen shows them (a host's session, which runs on with it off). Out of
 # it, a key of one that doesn't show says it doesn't apply, as any other button's does
 SDK_BUTTONS = ("interrupt", "compact", "shell", "model", "allow", "always", "deny", "compact-now", "leave-it",
-               "compact-then-send", "compact-then-park")
+               "compact-then-send", "compact-then-park", "keep-waiting", "abort-compaction")
 SDK_WHOSE = (", Model on one run in the wheelhouse; then Mode, Send on one that isn't dead, "
              "and on one run in the wheelhouse Interrupt, Compact and Shell. Its effort is the slider at the top of "
              "the stats pane.")
@@ -4522,6 +4559,10 @@ class WheelhouseApp(App):
         # the modules installed, those switched off (claude-wheelhouse modules disable) marked so
         self.modules = api.switch_off(api.load(), api.disabled(self.client.setting(api.DISABLED)))
         self.shown_doc: tuple[str, str] | None = None   # a module's doc in Detail (show_doc): (path, title)
+        # what a click on a doc just did, undone if it is a double-click's first (full_screen_soon)
+        self.click_opened: ClickOpened | None = None
+        self.swallow_up = False   # that double-click's release, kept from the widgets too
+        self.went_full = 0.0   # when a double-click last opened or left full screen: a third click isn't another
         self.detail_note: str | None = None   # why nothing is selected, if a module's pick said (unselect)
         self.doc_edits: dict[str, DocEdit] = {}   # each doc's unsaved edits, by its path (DocEditor.edits)
         # a doc item in Detail and full screen (.plan/docs-section.md): split or tabbed (Ctrl+L,
@@ -4725,8 +4766,75 @@ class WheelhouseApp(App):
         self.call_after_refresh(self.fit_layout)
 
     def on_click(self, event: events.Click) -> None:
-        if event.chain == 2:
+        if event.chain == 2 and not (event.button == 1 and self.full_screen_click(event)):
             select_word(self.screen, event.screen_x, event.screen_y)
+
+    def full_screen_click(self, event: events.Click) -> bool:
+        """A double-click on what Detail shows, an item or a module's doc, opens it full
+        screen, as Enter on its inbox row does; one on a full-screen item's thread or doc goes
+        back, as Esc does (#253). Not on a button or a scrollbar there, nor a link, whose click
+        is its own (stopped before it gets here), nor on a conversation, which has no full
+        screen. The editor the double-click's first click opened on a doc, still unedited,
+        closes again: that click was half of this one. False where it does nothing."""
+        widget, screen = event.widget, self.screen
+        if widget is None or not any(w.id in FULL_SCREEN_AREAS for w in widget.ancestors_with_self) \
+                or any(isinstance(w, (Button, ScrollBar)) for w in widget.ancestors_with_self):
+            return False
+        return self.go_full()
+
+    def full_screen_soon(self, event: events.MouseDown) -> bool:
+        """A press where a click on a doc just opened its editor, soon enough to make a
+        double-click of it: the editor has taken the room under the pointer (split, the lower
+        rows; tabbed, the whole pane), so the press is taken here, before the editor or its
+        splitter can take it for a double-click of their own (#253)."""
+        opened = self.click_opened
+        if opened is None or event.button != 1 or event.is_forwarded or event.screen_offset != opened.at \
+                or time.monotonic() - opened.when > self.CLICK_CHAIN_TIME_THRESHOLD:
+            return False
+        self.swallow_up = True
+        self.go_full()
+        return True
+
+    def go_full(self) -> bool:
+        """What the screen in front shows full screen, or back from it: the double-click's
+        work (full_screen_click, full_screen_soon). False where there's nothing to go to."""
+        screen, now = self.screen, time.monotonic()
+        main = screen is self.screen_stack[0]
+        if main and not self.shown_doc and not (self.selected and self.selected[1]) \
+                or not main and not isinstance(screen, (ThreadView, DocView)) \
+                or now - self.went_full <= self.CLICK_CHAIN_TIME_THRESHOLD:
+            return False
+        self.went_full = now
+        self.undo_click()
+        screen.clear_selection()   # Textual's double-click selected the whole transcript
+        if not main:
+            screen.action_leave()
+        elif self.shown_doc:
+            self.open_doc(*self.shown_doc)
+        elif "|".join(self.selected) in self.items_table.locked:   # its session is being compacted (#150)
+            self.notify(COMPACTING_LOCKED, severity="warning")
+        else:
+            self.saw(*self.selected)
+            self.open_full(*self.selected)
+        return True
+
+    def undo_click(self) -> None:
+        """What a double-click's first click did on a doc undone (click_opened): its editor
+        closed, still unedited, the quote it took and the tab it showed as before."""
+        opened, self.click_opened = self.click_opened, None
+        if opened is None or opened.editor.key is None or opened.editor.edited \
+                or time.monotonic() - opened.when > 2 * self.CLICK_CHAIN_TIME_THRESHOLD:
+            return
+        opened.editor.close()
+        if opened.target is not None:
+            if opened.quote is None:
+                self.doc_quotes.pop(opened.target, None)
+            else:
+                self.doc_quotes[opened.target] = opened.quote
+            self.paint_quote()
+        if opened.panes is not None:
+            opened.panes.tab = opened.tab
+        self.repaint_doc()
 
     # right-click, as in a terminal
 
@@ -4741,6 +4849,13 @@ class WheelhouseApp(App):
             shown = self.away_window
             self.touched()
             woke = isinstance(event, events.Key) and event.key == "escape" and self.away_window not in (None, shown)
+        if isinstance(event, events.MouseDown) and not event.is_forwarded:
+            self.swallow_up = False   # a swallowed press released outside the terminal: not this one's
+            if self.full_screen_soon(event):
+                return
+        if isinstance(event, events.MouseUp) and self.swallow_up and not event.is_forwarded:
+            self.swallow_up = False
+            return
         if isinstance(event, (events.MouseDown, events.MouseUp)) and event.button == 3 and not event.is_forwarded:
             if isinstance(event, events.MouseDown) and not (self.session_menu(event) or self.pane_menu(event)):
                 self.right_click(event)
@@ -5311,6 +5426,10 @@ class WheelhouseApp(App):
         self.eye_frame = self.frame
         self.session_list.sweep(self.eye_frame)
 
+    def lifeless_sids(self) -> set[str]:
+        """The sessions dead and not parked (hub.lifeless), whose rows every pane dims (#252)."""
+        return {s["id"] for s in self.sessions if lifeless(self.shown_status(s["id"]), s["parked"])}
+
     def paint_sessions(self) -> None:
         """Every session: parked ones dimmed, at the foot of the list's room (they fall there
         as they park, and rise as they're unparked: Sink), so the buttons below still reach
@@ -5336,7 +5455,10 @@ class WheelhouseApp(App):
             # a parked session's questions wait for its unpark: dimmed and still, not calling (#210)
             q = (Text(str(s["open_questions"]), style="dim #ffd300" if s["parked"] else "bold #ffd300 blink")
                  if s["open_questions"] else "")
-            rows.append((s["id"], (dot, name, self.context_cell(s), q, unseen, queued, busy)))
+            cells = (name, self.context_cell(s), q, unseen, queued)
+            if lifeless(st, s["parked"]):   # dead, not parked: dimmed, its dot kept red (#252)
+                cells = faded(cells)
+            rows.append((s["id"], (dot, *cells, busy)))   # the eye's room drawn over as it is (sweep)
         # a long name widened its column and pushed ? and D past the pane's edge, scrolled out
         # of sight: it is cut to the room the others leave, at whatever width the pane is (#51)
         fits = table.name_room([cells for _, cells in rows])
@@ -5400,7 +5522,7 @@ class WheelhouseApp(App):
         if self.autocleanse and not self.show_finished:   # completed a while ago: off until Alt+V (#235)
             at, held = datetime.now(timezone.utc), under_way_parents(found, busy)
             found = [it for it in found if item_key(it) in held or not self.completed_hidden(it, busy, at)]
-        compacting = self.compacting()
+        compacting, dead = self.compacting(), self.lifeless_sids()
         keyed = self.ranked_keyed(found, processing, busy, names)
         cuts = self.cutoffs()
         table.locked = {key for key, it in keyed if self.locks(it, cuts)}
@@ -5428,6 +5550,8 @@ class WheelhouseApp(App):
             if conv in compacting:
                 cells = faded(cells)
                 table.locked.add(f"{conv}|")
+            elif conv in dead:   # its session dead, not parked: dimmed, still selectable (#252)
+                cells = faded(cells)
             conversations.append((f"{conv}|", cells))
         if self.filter_sid:
             rows_out += conversations
@@ -5459,7 +5583,9 @@ class WheelhouseApp(App):
                 cells = (pin, "", ref_text(it, child=True), shown, titled(it, "dim"))
             else:   # a subagent, tucked under its session's name
                 cells = (pin, name if nested == 0 else "", ref_text(it, child=True), shown, titled(it, "dim"))
-            if key_of[id(it)] in table.locked:   # dimmed, clicks and keys ignored, until it's compacted (#150)
+            # dimmed, clicks and keys ignored, until it's compacted (#150); or dimmed alone, its
+            # session dead and not parked (#252)
+            if key_of[id(it)] in table.locked or it["session_id"] in dead:
                 cells = faded(cells)
             rows_out.append((key_of[id(it)], cells))
             tips[key_of[id(it)]] = item_tip(it)
@@ -5849,13 +5975,20 @@ class WheelhouseApp(App):
     def doc_clicked(self, event: Transcript.DocClicked, editor: "DocEditor") -> None:
         """A click on a doc, in Detail or full screen: its editor opens there, in the thread's
         place (split) or as a tab (tabbed), and a doc item's next comment quotes the block clicked."""
+        if event.view.screen is not self.screen:   # a double-click's first, reaching it once that went full screen
+            return
         panes, doc, _ = self.doc_here()
         line = event.view.line_at(event.row)
+        target = (doc["session_id"], doc["ref"]) if doc is not None else None
+        before = ClickOpened(editor, time.monotonic(), event.at, target, self.doc_quotes.get(target), panes,
+                             panes.tab if panes is not None else None)
+        closed = editor.key is None
         if doc is not None and line is not None:
             md = next((md for who, md in event.view.blocks if who == "doc"), "")
             self.doc_quotes[(doc["session_id"], doc["ref"])] = quote_of(md, line)
             self.paint_quote()
         editor.open_at(event.row)
+        self.click_opened = before if closed and editor.key is not None and event.at is not None else None
         if doc is not None and editor.key is not None and self.doc_layout == TABBED:
             panes.tab = EDITOR_TAB
         self.repaint_doc()
@@ -6348,8 +6481,9 @@ class WheelhouseApp(App):
         return self.filter_sid if any(s["id"] == self.filter_sid for s in self.sessions) else None
 
     def module_sessions(self) -> list[dict]:
+        dead = self.lifeless_sids()
         return [{"id": s["id"], "name": s["name"] or short(s["id"]), "running": self.running(s["id"]),
-                 "context": host_context(s), "cwd": s["cwd"], "doc_dirs": docroots.declared(s["doc_dirs"]),
+                 "dead": s["id"] in dead, "context": host_context(s), "cwd": s["cwd"], "doc_dirs": docroots.declared(s["doc_dirs"]),
                  **self.client.model_state(s)} for s in self.sessions]
 
     def set_effort(self, sid: str, effort: str) -> None:
@@ -6430,8 +6564,13 @@ class WheelhouseApp(App):
     @staticmethod
     def locks(it, cuts: dict) -> bool:
         """Whether an item of a compacting session (cuts) is locked: at or below its cut-off.
-        One posted since is never locked; without a cut-off, all are."""
+        One posted since is never locked; without a cut-off, all are. Never a call the session's
+        turn waits on (an open permission, or the host's AskUserQuestion): answering it is allowed
+        during a cycle (#244), or the turn, and the notes ask behind it, would never end."""
         if it["session_id"] not in cuts:
+            return False
+        if it["status"] == "open" and (it["kind"] == "permission" or models.field(it, "answer") == HOST_QUESTION
+                                       or models.field(it, "host_question")):
             return False
         return cuts[it["session_id"]] is None or it["id"] <= cuts[it["session_id"]]
 
@@ -6505,7 +6644,10 @@ class WheelhouseApp(App):
             if r.target is not None and not (asking and r.target == self.bar_item(self.screen)):
                 r.target = None
         denying = any(r.target for r in reasons)
-        nudged = self.nudged(self.bar_item(self.screen))
+        waiting = self.notes_waiting(self.bar_item(self.screen))
+        nudged = waiting or self.nudged(self.bar_item(self.screen))
+        for row in compact_rows:
+            row.waiting(waiting)
         sessions = {s["id"]: s for s in self.sessions}
         s = sessions.get(self.bar_session(self.screen))
         if bar.conversation:
@@ -6542,7 +6684,7 @@ class WheelhouseApp(App):
             self.screen.set_focus(self.items_table)
         compacting = s is not None and "compact-now" in self.busy_buttons(s)
         for row in compact_rows:
-            show_button(row, "compact-now", "Compact", compacting)
+            show_button(row, "compact-now", "Compact", compacting, not waiting)
         show_button(bar, "send-all", f"Send all ({total})", not total)
         if s is not None and runner(s) == "sdk":
             bar.activity("in a shell tab" if s["shell"] else (s["activity"] or "") if self.running(s["id"]) else "")
@@ -7112,10 +7254,14 @@ class WheelhouseApp(App):
         sid, ref = event.row_key.value.split("|")
         self.saw(sid, ref or None)
         if ref:
-            item = self.client.item(sid, ref)
-            self.push_screen(DocView(sid, ref) if item is not None and item["kind"] == "doc" else ThreadView(sid, ref))
+            self.open_full(sid, ref)
         else:   # the conversation is already in the pane: Enter goes to its box, at once
             self.screen.set_focus(self.answer)
+
+    def open_full(self, sid: str, ref: str) -> None:
+        """An item full screen: a doc item's DocView, any other's ThreadView."""
+        item = self.client.item(sid, ref)
+        self.push_screen(DocView(sid, ref) if item is not None and item["kind"] == "doc" else ThreadView(sid, ref))
 
     def highlight_session(self, sid: str | None) -> None:
         """Keep the session list's highlight on the session in context: one current session
@@ -8005,6 +8151,20 @@ class WheelhouseApp(App):
         else:
             self.compact_now(target)
 
+    @on(Button.Pressed, "#keep-waiting, #abort-compaction")
+    def notes_wait_pressed(self, event: Button.Pressed) -> None:
+        """The question whether to wait for a compaction's notes (#244): Keep waiting, or Abort."""
+        self.settle()
+        target = self.bar_item(event.button.screen)
+        if target and self.notes_waiting(target):
+            self.told(self.client.notes_wait(*target, event.button.id == "abort-compaction"))
+            self.refresh_data()
+
+    def notes_waiting(self, target) -> bool:
+        """Whether the item in context is the host's open question whether to wait for a
+        compaction's notes (NOTES_WAIT)."""
+        return self.client.notes_question(target) is not None
+
     def nudged(self, target) -> bool:
         """Whether the item in context is the question suggesting Compact, of a session whose
         host is running: the conversation's own Compact button shows only then too."""
@@ -8104,7 +8264,9 @@ class WheelhouseApp(App):
         sid = self.current_session() if button_id == "park" else None
         if sid and self.state(self.row(sid)) == "parked":   # P presses Unpark, the Relaunch button there
             button_id = "relaunch"
-        if button_id in NUDGE_KEYS and any(showing(r) for r in self.screen.query(CompactButtons)):
+        if button_id in WAIT_KEYS and any(showing(b) for b in self.screen.query("#keep-waiting")):
+            button_id = WAIT_KEYS[button_id]   # on the question whether to wait for a compaction's notes
+        elif button_id in NUDGE_KEYS and any(showing(r) for r in self.screen.query(CompactButtons)):
             button_id = NUDGE_KEYS[button_id]   # 1 to 3 on the question suggesting Compact: its own
         button = next(iter(self.screen.query(f"#{button_id}")), None)
         if button is None:   # not on this screen (Model, in a full-screen item's bar): said all the same

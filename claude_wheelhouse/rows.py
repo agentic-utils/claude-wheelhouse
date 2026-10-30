@@ -34,6 +34,15 @@ def marked(cells: tuple) -> tuple:
     return out
 
 
+def faded(cells: tuple) -> tuple:
+    """A row's cells dimmed, each keeping its own hue: its session is being compacted (#150), or
+    is dead and not parked (hub.lifeless, #252)."""
+    out = tuple(c.copy() if isinstance(c, Text) else Text(str(c)) for c in cells)
+    for c in out:
+        c.stylize("dim")
+    return out
+
+
 def plain(cell):
     """A cell as its own text, never markup: a DataTable parses a str cell as markup, so a
     session's title or name holding [@click=...] ran an action when clicked (#139)."""

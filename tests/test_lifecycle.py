@@ -611,6 +611,7 @@ async def test_quitting_mid_relaunch(store, sid, monkeypatch, stopped, keys, lau
 async def test_quitting_while_compacting_first(store, sid, monkeypatch, keys, exited, desc):
     store.set_runner(sid, "sdk")
     store.db.execute("UPDATE sessions SET claude_pid = 4242, claude_start = 1, boot_id = 'b', context_tokens = 200000")
+    store.mark_version(sid)   # on current code: an older host is relaunched without compacting (#244)
     fake_status(monkeypatch, "live")
     monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
     exits = []

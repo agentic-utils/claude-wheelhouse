@@ -41,7 +41,9 @@ anything here seems to conflict with them, follow yours.
   a report. Several questions are several items. In chat, refer to them by ref. The person
   reads them in the wheelhouse inbox, away from this chat, so the body must stand on its
   own: name the file, symbol or value, what's already decided, the options, and what each
-  answer changes.
+  answer changes. List the options as markdown bullet points, one per option, each
+  starting with its label (`- (a) ...`) and saying what choosing it changes; mark the one
+  you recommend.
 - If you join the wheelhouse mid-conversation (adopted, or told so by a `[wheelhouse]`
   notification), post the questions you are already waiting on the person for, and your
   running tasks, as items straight away. Check `list_items` first so you don't post twice.
