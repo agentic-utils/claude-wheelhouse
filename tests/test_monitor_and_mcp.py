@@ -563,7 +563,7 @@ def test_a_tabs_compaction_is_a_cycle_from_its_hooks(store, sid, monkeypatch, ca
     assert store.item(sid, c["item"])["status"] == "running", desc
     cli.open_items()
     assert store.compaction(sid)["state"] == "completed", desc
-    assert "Compact" not in capsys.readouterr().out, f"{desc}: the reminder never lists its task"
+    assert store.item(sid, c["item"])["status"] == "done", f"{desc}: its task done with it"
 
 
 def test_a_tabs_compaction_says_its_sizes_from_its_transcript(store, sid, tmp_path, monkeypatch):

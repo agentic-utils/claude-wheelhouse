@@ -640,3 +640,14 @@ def test_claude_codes_own_compaction_says_its_size_on_its_task(streamed, store, 
     assert c["state"] == "completed" and store.item(sid, c["item"])["status"] == "done"
     assert store.thread(sid, c["item"])[-1]["body"] == "950k → 31k", "before and after, from its boundary"
     assert store.item(sid, c["item"])["title"] == "Compact demo: 950k context"
+
+
+def test_a_locked_context_write_never_stops_a_cycle_ending(host, store, sid, monkeypatch):
+    """PR 2 review: the context size is a nicety; a lock on it mustn't keep the cycle open."""
+    import sqlite3
+    store.set_runner(sid, "sdk")
+    store.command(sid, "compact", notes="keep Q1")
+    run(host.poll())
+    monkeypatch.setattr(store, "set_context", lambda *a: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
+    end(host, compacted=True)
+    assert store.compaction(sid)["state"] == "completed" and host.cycle is None

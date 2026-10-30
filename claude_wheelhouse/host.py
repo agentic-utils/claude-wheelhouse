@@ -1306,7 +1306,8 @@ class Host:
             return None
         tokens, top = usage.get("totalTokens"), usage.get("maxTokens")
         if isinstance(tokens, int) and isinstance(top, int):
-            self.store.set_context(self.sid, tokens, top)
+            with contextlib.suppress(sqlite3.OperationalError):   # a nicety: never what ends a cycle (#244)
+                self.store.set_context(self.sid, tokens, top)
             return tokens
         return None
 
