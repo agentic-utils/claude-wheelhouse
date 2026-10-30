@@ -675,7 +675,7 @@ class Hub:
                 self.store.take_command(sid, what)   # (a Shell stays: the person's, for the new host)
             row = self.store.compaction(sid)
             if row is not None and row["state"] == "requested":   # its Compact, untaken: the cycle goes with it
-                self.store.move_compaction(sid, row["id"], "cancelled")
+                self.store.move_compaction(sid, row["id"], "cancelled", "the relaunch went ahead before it began")
             done = self.stop_host(sid, host, self.store.relaunch_may_tab(sid))
             for notice in done.notices:
                 self.emit(notice)

@@ -595,7 +595,7 @@ def test_a_claim_locked_past_steady_is_owed_to_the_next_pass(host, store, sid, m
     monkeypatch.setattr(host_mod, "STEADY_TRIES", ())
     monkeypatch.setattr(store, "move_compaction", lambda *a: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
     run(host.poll())
-    assert host.owed_move == "preparing" and store.compaction(sid)["state"] == "requested"
+    assert host.owed_move == ("preparing", "") and store.compaction(sid)["state"] == "requested"
     monkeypatch.setattr(store, "move_compaction", real)
     run(host.poll())
     assert host.owed_move is None and store.compaction(sid)["state"] == "preparing"

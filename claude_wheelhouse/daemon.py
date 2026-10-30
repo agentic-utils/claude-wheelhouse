@@ -55,9 +55,9 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from . import api, auth, away, docroots, features, fingerprint, liveness, models, served, steps, transcript_usage, tutorial
-from .hub import Done, Event, Hub, host_context
+from .hub import Done, Event, Hub, compaction_entries, host_context
 from .host import MCP_DOS
-from .store import COMPACT_QUESTION, HOST_QUESTION, NOTES_SEEN, NOTES_WAIT, THEN, TOUR_AT, SessionGone, Store, inbox_rank, mode, runner, standing
+from .store import COMPACT_QUESTION, HOST_QUESTION, NOTES_SEEN, NOTES_WAIT, THEN, TOUR_AT, SessionGone, Store, compacting_now, inbox_rank, mode, runner, standing
 
 ADDRESS = "127.0.0.1"   # the port is features.port()
 TICK = 1.0           # seconds between the hub's refreshes, as the TUI's tick
@@ -583,6 +583,9 @@ class Daemon:
         (stamp_of)."""
         for sid, follower in list(self.hub.followers.items()):
             stamp = stamp_of(follower)
+            s = self.hub.by_id.get(sid)
+            if s is not None and compacting_now(s):   # its crew's excerpts come due as time passes (#244)
+                stamp = (stamp, len(compaction_entries(self.hub.store.stages(sid), True)))
             if stamp is not None and stamp != self.grown.get(sid):
                 self.publish("conversation", sid)
             self.grown[sid] = stamp

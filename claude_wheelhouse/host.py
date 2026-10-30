@@ -375,7 +375,7 @@ class Host:
         # a cycle's end its turn couldn't write (a database locked past steady's tries): (state,
         # why, then), written by the next pass, then its then carried out (cycle_due)
         self.owed: tuple[str, str, str | None] | None = None
-        self.owed_move: str | None = None   # likewise a move on (the claim), owed to the next pass
+        self.owed_move: tuple[str, str] | None = None   # likewise a move on (the claim) and its note, owed
         self.late_key: str | None = None
         self.cold_for: float | None = None   # the quiet the quiet mark's compaction was for (cold_due)
         self.park_told: float | None = None   # when the park request went to the session (monotonic)
@@ -998,7 +998,7 @@ class Host:
             await self.steady(self.store.move_compaction, self.sid, c.id, state, why)
             self.owed_move = None
         except sqlite3.OperationalError:   # still locked: owed, retried each pass (cycle_due)
-            self.owed_move = state
+            self.owed_move = (state, why)
 
     async def ask_notes(self, why: str = PRESSED_COMPACT) -> None:
         """The Before Compact step and the keep ask, as the notes turn: preparing."""
@@ -1055,7 +1055,7 @@ class Host:
         keep waiting or abort (never cancelled unasked); /compact past COMPACT_TIMEOUT fails.
         First, an end owed (close_cycle) is written, and its then carried out."""
         if self.owed_move is not None and self.cycle is not None:   # a move (the claim) a lock kept unwritten
-            self.store.move_compaction(self.sid, self.cycle.id, self.owed_move)   # still locked: raised, tried next pass
+            self.store.move_compaction(self.sid, self.cycle.id, *self.owed_move)   # still locked: raised, tried next pass
             self.owed_move = None
         if self.owed is not None and self.cycle is not None:
             state, why, then = self.owed
@@ -1723,7 +1723,8 @@ class Host:
         taken = s["host_command"] == "compact" or parking
         if row is not None and (row["state"] in ("preparing", "compacting")
                                 or row["state"] == "requested" and not taken):   # nothing will take it
-            self.store.move_compaction(self.sid, row["id"], "failed")
+            self.store.move_compaction(self.sid, row["id"], "failed", "the host restarted, or took the session back "
+                                       "from its tab, and couldn't carry it on")
         for item in self.store.items(self.sid, include_closed=False):
             if item["kind"] == "question" and item["answer"] == NOTES_WAIT and item["status"] not in CLOSED:
                 self.close_quietly(item["ref"], "question", LOST_ON_RESTART)
