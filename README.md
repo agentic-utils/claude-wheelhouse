@@ -490,8 +490,8 @@ session.
   default), at `<main checkout>/.worktrees/<branch>`, on a new branch from the session's last
   commit (`<branch>-fork` unless changed), or this one. Uncommitted changes stay where they are:
   the dialog warns when there are any, and the fork is told it won't see them. A
-  pending Park or Stop & Forget, its button back on after 30 seconds, is pressed again to choose: `Alt+C` cancels the request, `Alt+O` forces
-  it (the session is stopped at once, without its steps), `Esc` leaves it be. In the session's
+  pending Park or Stop & Forget, its button back on after 30 seconds, is pressed again to choose: `Alt+C` cancels the request, `Esc` leaves it be.
+  It is never forced: Park, Park now, Stop & Forget and Relaunch all wait for it, and Interrupt aborts it. In the session's
   tab, `/wheelhouse park` and `/wheelhouse end` do the same from there. A tab closes once its
   session stops, by `/exit` or by the wheelhouse: its shell then exits cleanly, which Windows
   Terminal's default `closeOnExit` takes as the end of the tab. If Claude Code fails instead,
@@ -803,6 +803,18 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   this session's alone (a stdio server's process restarts). Disabled servers have no
   button: `/mcp` or the settings turn them on. A session not running shows its last look;
   a tab session says to use `/mcp` there.
+- Operations: from the press of Park or Stop & Forget, or the start of a compaction, to its
+  end, the session is busy and its eye in the session list sweeps blue, running or not.
+  While it is busy, sending (now, Ctrl+S, Send, Send all) and every other operation (Park,
+  Park now, Stop & Forget either way, Relaunch, Unpark, Fork, Shell, Compact) are refused
+  with one message ("demo is busy parking: send once it's done, or Interrupt to abort it.").
+  Drafting and queueing stay open, and an answer to a permission or question the session is
+  waiting on still goes. Interrupt aborts the operation and nothing else: a park or Stop &
+  Forget not yet passed on is dropped silently; one the session has heard, or a park already
+  under way (compacting included, its tokens spent), is called off, and the session is told
+  to carry on as before. A park or Stop & Forget the session hasn't acted on within 15
+  minutes fails with a warning ("demo couldn't be parked within 15 minutes: it carries on as
+  it was."), as does one whose session stops running first.
 - After a compaction, the session is told its open tasks and questions, with their titles,
   once. A session run in the wheelhouse has a Compact button, and past 200k of context a
   question suggesting it, answered with buttons (Compact, Leave it); both take optional
@@ -812,12 +824,8 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   to the cache until it is unparked. A compaction is one cycle, however it starts (Compact,
   the question's Compact, Relaunch or Park compacting first, the session's own request, the
   8-hour mark, or Claude Code compacting by itself at full context): from the press until
-  `/compact` has ended, or the cycle fails or is cancelled, the session is closed. Sending
-  (now or with Ctrl+S), queueing, Park, Unpark, Relaunch, Shell, Stop & Forget's "Let it
-  know" and a second Compact are refused with one message ("demo is compacting: send once
-  it's done, or Interrupt to cancel the compaction."), and the answer box keeps your text;
-  Interrupt, "Just stop it" and an answer to a permission or question the notes turn is
-  waiting on still go. Throughout, Compact is off, the session's inbox items and Detail dim
+  `/compact` has ended, or the cycle fails or is cancelled, the session is busy, as during
+  any operation (below, Operations). Throughout, Compact is off, the session's inbox items and Detail dim
   and ignore clicks, and its eye in the session list sweeps blue instead of red. If the
   session is still writing its notes after 2 minutes, a question asks whether to keep
   waiting (asked again 2 minutes later) or abort (the notes turn is interrupted, nothing is

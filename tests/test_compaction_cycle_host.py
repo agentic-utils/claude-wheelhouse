@@ -8,7 +8,7 @@ import pytest
 
 from claude_wheelhouse import host as host_mod
 from claude_wheelhouse.host import Host
-from claude_wheelhouse.store import NOTES_WAIT, Compacting, compacting_now
+from claude_wheelhouse.store import NOTES_WAIT, Busy, compacting_now
 
 from test_host import FakeClient, StreamClient, feed, finish_at, host, result, run, streamed, text  # noqa: F401
 
@@ -228,7 +228,7 @@ def test_ctrl_s_mid_prep_is_refused(host, store, sid):
     store.command(sid, "compact")
     run(host.poll())
     assert store.compaction(sid)["state"] == "preparing"
-    with pytest.raises(Compacting, match="is compacting: send once it's done"):
+    with pytest.raises(Busy, match="is busy compacting: send once it's done"):
         store.dispatch(sid)
     run(host.poll())
     assert len(host.client.queries) == 1, f"nothing went into the notes turn: {host.client.queries}"
@@ -241,7 +241,7 @@ def test_a_second_compact_mid_compact_is_refused_and_the_first_completes_driven(
     run(host.poll())
     notes(host)
     first = store.compaction(sid)["id"]
-    with pytest.raises(Compacting, match="compact once it's done"):
+    with pytest.raises(Busy, match="compact once it's done"):
         store.command(sid, "compact")
     run(host.poll())
     assert host.client.queries[-1] == "/compact keep Q1" and len(host.client.queries) == 2
@@ -279,12 +279,11 @@ def test_writing_in_once_the_quiet_marks_compact_has_gone_is_refused(host, store
     run(host.poll())
     notes(host)
     assert store.compaction(sid)["state"] == "compacting"
-    with pytest.raises(Compacting):
+    with pytest.raises(Busy):
         store.send(sid, "I'm back")
-    with pytest.raises(Compacting):
-        store.queue(sid, "I'm back")
+    store.queue(sid, "I'm back")   # queueing is always allowed (Q244): only dispatch waits
     assert store.compaction(sid)["state"] == "compacting"
-    assert not [m for m in store.messages(sid) if m["author"] == "person"]
+    assert [m["draft"] for m in store.messages(sid) if m["author"] == "person"] == [1]
 
 
 def test_claude_codes_own_compaction_ends_its_cycle_at_the_boundary_mid_turn(streamed, store, sid):
@@ -407,8 +406,9 @@ def test_park_with_compact_first_closes_the_session_from_the_press(host, store, 
     store.send(sid, "sent before the press")
     store.request(sid, "park", True)
     assert compacting_now(store.session(sid)), "blue at the press"
-    with pytest.raises(Compacting):
-        store.queue(sid, "after the press")
+    with pytest.raises(Busy):
+        store.send(sid, "after the press")
+    store.queue(sid, "queued after the press")   # Q244: queueing stays open
     run(host.poll())
     assert len(host.client.queries) == 1 and "sent before the press" not in host.client.queries[0], \
         f"the park request alone goes; the earlier message is held: {host.client.queries}"
@@ -453,18 +453,14 @@ def aged(store, sid, seconds):
     store.db.execute("UPDATE sessions SET compaction_at = ? WHERE id = ?", (at, sid))
 
 
-@pytest.mark.parametrize("age, state, desc", [
-    (host_mod.PARK_COMPACT_WITHIN - 60, "requested", "within the deadline: still waiting for the park"),
-    (host_mod.PARK_COMPACT_WITHIN + 1, "failed", "past it: failed, unlocked, its Compact first gone"),
-])
-def test_parks_cycle_has_a_deadline_the_host_checks(host, store, sid, age, state, desc):
+def test_parks_cycle_is_left_to_its_ops_deadline_by_the_host(host, store, sid):
+    """#249: the park's op owns the deadline (Hub.sweep_ops), so the host never fails its cycle itself."""
     store.set_runner(sid, "sdk")
     store.request(sid, "park", True)
     run(host.poll())
-    aged(store, sid, age)
+    aged(store, sid, host_mod.PARK_WITHIN + 1)
     run(host.poll())
-    assert store.compaction(sid)["state"] == state, desc
-    assert bool(store.session(sid)["park_compact"]) == (state == "requested"), desc
+    assert store.compaction(sid)["state"] == "requested" and store.session(sid)["park_compact"]
 
 
 def test_the_hubs_sweep_fails_an_expired_park_cycle_whoever_hosts_it(store, sid, monkeypatch):
@@ -472,7 +468,8 @@ def test_the_hubs_sweep_fails_an_expired_park_cycle_whoever_hosts_it(store, sid,
     from claude_wheelhouse.hub import Hub
     store.set_runner(sid, "sdk")
     store.request(sid, "park", True)
-    aged(store, sid, host_mod.PARK_COMPACT_WITHIN + 1)
+    aged(store, sid, host_mod.PARK_WITHIN + 1)
+    store.db.execute("UPDATE sessions SET op_deadline = compaction_at WHERE id = ?", (sid,))
     monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
     Hub(store).refresh()
     assert store.compaction(sid)["state"] == "failed" and not compacting_now(store.session(sid))

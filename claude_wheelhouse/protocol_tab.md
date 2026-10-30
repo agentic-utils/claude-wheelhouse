@@ -11,7 +11,9 @@
 - `/wheelhouse park` and `/wheelhouse end` handle the session's lifecycle (also
   `/wheelhouse:wheelhouse`). The wheelhouse may ask you to park or end (Stop & Forget), in a
   `[wheelhouse]` notification; do it as the notification says. If a later one says the
-  request was cancelled, carry on as before. `park_session` and `end_session` stop this
+  request was cancelled, carry on as before. While it is parking, compacting or ending this
+  session, `end_session` and `park_session` are refused but for the one it asked for.
+  `park_session` and `end_session` stop this
   session a moment after they return: call them last.
 - While the person is away, the wheelhouse may send a `[wheelhouse] Keepalive` or
   `[wheelhouse] Check:` notification about every 50 minutes to keep your prompt cache warm.

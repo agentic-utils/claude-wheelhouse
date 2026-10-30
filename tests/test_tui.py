@@ -241,10 +241,12 @@ async def test_confirm_keys_stay_in_the_dialog(store, sid, key, expected, desc):
 
 @pytest.mark.anyio
 async def test_enter_on_a_destructive_confirm_declines(store, sid):
-    """R6: Confirm opens on No, so a reflex Enter on "Force end" keeps the wheelhouse data."""
+    """R6: Confirm opens on No, so a reflex Enter on a Forget keeps the wheelhouse data. (A pending
+    request's Force, where this began, has gone: #249.)"""
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        app.resolve_request(sid, "end", "force")
+        app.push_screen(Confirm("Forget demo? Its wheelhouse data is deleted."),
+                        lambda yes: yes and store.end(sid))
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
@@ -1986,8 +1988,6 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
      "review 16 (2): X Enter renames, and the second Enter is the session list's"),
     ("session-list", "alpha", ("alt+n", "tab", "enter", "escape"), {"stack": ("Screen", "NewSession"), "focus": "browse"},
      "review 16 (3): Enter on Browse opens the picker, and the Esc behind it closes the picker, not New session"),
-    ("session-list", "alpha", ("alt+p", "alt+o", "alt+y"), {"stack": ("Screen",), "parked": True},
-     "F on the Choice asks to confirm Force, and the Y behind it confirms"),
     ("session-list", "alpha", ("alt+p", "alt+c", "alt+p"), {"stack": ("Screen", "ParkSession"), "pending": None},
      "C cancels the request before the P behind it, which asks afresh: Park's dialog, as alpha runs in the wheelhouse"),
     ("session-list", "alpha", ("alt+m", "down", "enter"), {"stack": ("Screen",), "model": "claude-sonnet-5-5"},
@@ -2013,7 +2013,6 @@ async def test_a_key_lands_before_the_next_acts(store, tmp_path, monkeypatch, fo
 @pytest.mark.parametrize("focus, at, burst, desc", [
     ("items", "qa", ("alt+h", "enter", "alt+y"), "a focused button's Enter, then a dialog key"),
     ("session-list", "alpha", ("alt+p", "enter", "escape"), "the Choice's Enter, then Esc"),
-    ("session-list", "alpha", ("alt+p", "alt+o", "alt+y"), "a dialog's answer that opens another"),
     ("session-list", "alpha", ("alt+p", "alt+c", "alt+p"), "a dialog's answer, then a key that reads what it did"),
     ("session-list", "alpha", ("alt+r", "x", "enter", "ctrl+q"), "an input's Enter, then a key on the screen behind"),
     ("session-list", "alpha", ("alt+r", "x", "enter", "enter"), "an input's Enter twice"),
@@ -2771,7 +2770,7 @@ async def test_one_click_on_a_dead_session_opens_one_prompt_and_yes_closes_it(st
 
 @pytest.mark.parametrize("screen, labels, desc", [
     (lambda: Confirm("ok?"), ["Yes [Alt+Y]", "No [Alt+N]"], "the relaunch and destructive confirms"),
-    (lambda: Choice("hm?"), ["Cancel request [Alt+C]", "Force [Alt+O]", "Leave it [Esc]"], "a pending request's choice"),
+    (lambda: Choice("hm?"), ["Cancel request [Alt+C]", "Leave it [Esc]"], "a pending request's choice"),
     (lambda: RelaunchChoice("big?"), ["Compact first [Alt+C]", "Relaunch now [Alt+R]", "Cancel [Esc]"],
      "Relaunch of a big session"),
 ])
@@ -4894,7 +4893,7 @@ async def test_a_refused_send_keeps_the_text_and_says_why(store, tmp_path, monke
         await pilot.pause()
         left = app.answer.text
     assert left == "use Postgres", f"{desc}: the box keeps the text"
-    assert "hosted is compacting: send once it's done, or Interrupt to cancel the compaction." in toasts, \
+    assert "hosted is busy compacting: send once it's done, or Interrupt to abort it." in toasts, \
         f"{desc}: {toasts}"
     assert not store.drafts(sid) and not store.pending(sid), desc
 
@@ -6469,7 +6468,7 @@ async def test_a_long_prompt_wraps_in_its_dialog(store, sid, dialog, height, des
     (lambda app, sid, cwd: ParkSession("demo", True), "Park: was top-left"),
     (lambda app, sid, cwd: ForgetChoice("Forget demo?", True), "Forget: was top-left"),
     (lambda app, sid, cwd: Confirm("Relaunch demo?"), "a confirmation"),
-    (lambda app, sid, cwd: Choice("Force it?"), "a choice"),
+    (lambda app, sid, cwd: Choice("Cancel it?"), "a choice"),
     (lambda app, sid, cwd: RelaunchChoice("Relaunch demo?"), "Relaunch's choice: was top-left"),
     (lambda app, sid, cwd: tui.TourInvite(), "the tour's invite: was a line across the top"),
     (lambda app, sid, cwd: tui.KeysHelp(), "the keys"),
@@ -6520,7 +6519,7 @@ OPEN = object()   # the dialog still open: Enter was its focus's own (a list's, 
     (lambda app, sid, cwd: ForgetChoice("Forget demo?", True), None, None, "tell",
      ["forget-tell", "forget-stop", "forget-cancel"], "Forget: Enter the focused default"),
     (lambda app, sid, cwd: Confirm("Relaunch demo?"), False, False, False, ["no", "yes"], "a confirmation: No focused"),
-    (lambda app, sid, cwd: Choice("Force it?"), "leave", "leave", "cancel", ["cancel", "force", "leave"], "a choice"),
+    (lambda app, sid, cwd: Choice("Cancel it?"), "leave", "leave", "cancel", ["cancel", "leave"], "a choice"),
     (lambda app, sid, cwd: RelaunchChoice("Relaunch demo?"), None, None, None,
      ["relaunch-cancel", "relaunch-compact", "relaunch-now"], "Relaunch's choice: Cancel focused"),
     (lambda app, sid, cwd: tui.TourInvite(), "later", "later", "start", ["invite-start", "invite-later", "invite-never"],
