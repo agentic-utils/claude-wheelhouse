@@ -4831,8 +4831,10 @@ class WheelhouseApp(App):
             shown = self.away_window
             self.touched()
             woke = isinstance(event, events.Key) and event.key == "escape" and self.away_window not in (None, shown)
-        if isinstance(event, events.MouseDown) and self.full_screen_soon(event):
-            return
+        if isinstance(event, events.MouseDown) and not event.is_forwarded:
+            self.swallow_up = False   # a swallowed press released outside the terminal: not this one's
+            if self.full_screen_soon(event):
+                return
         if isinstance(event, events.MouseUp) and self.swallow_up and not event.is_forwarded:
             self.swallow_up = False
             return

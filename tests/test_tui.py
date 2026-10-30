@@ -2564,7 +2564,7 @@ async def test_a_changed_transcript_keeps_a_scrolled_up_place(blocks, top, new, 
 
 
 class WordTranscript(OneTranscript):
-    on_click = WheelhouseApp.on_click
+    on_click, full_screen_click = WheelhouseApp.on_click, WheelhouseApp.full_screen_click
 
 
 @pytest.mark.anyio
@@ -2592,7 +2592,7 @@ async def test_a_double_click_selects_the_word_under_it(at, chain, selected, des
 
 
 class OneBox(App):
-    on_click = WheelhouseApp.on_click
+    on_click, full_screen_click = WheelhouseApp.on_click, WheelhouseApp.full_screen_click
 
     def compose(self) -> ComposeResult:
         yield TextArea("first line\nalpha beta-gamma  delta")
