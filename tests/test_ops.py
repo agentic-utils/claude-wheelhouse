@@ -265,27 +265,45 @@ async def test_the_eye_is_blue_while_an_op_runs_running_or_not(store, hosted, mo
 
 
 @pytest.mark.parametrize("what, how, desc", [
-    ("end", "overdue", "Stop & Forget told, past its deadline: a late end_session is refused"),
-    ("park", "overdue", "Park told, past its deadline: a late park_session is refused"),
+    ("end", "overdue", "Stop & Forget told, past its deadline: a late end_session from the told turn is refused"),
+    ("park", "overdue", "Park told, past its deadline: a late park_session from the told turn is refused"),
     ("end", "interrupt", "Stop & Forget told, aborted: the same"),
     ("park", "interrupt", "Park told, aborted: the same"),
 ])
-def test_a_called_off_op_cant_be_acted_on_late(hub, store, hosted, what, how, desc):
-    """Review 1: the session's turn that was told outlives the op; until it has the cancel message, it can't act."""
+def test_a_called_off_op_cant_be_acted_on_from_the_turn_it_was_told_in(hub, store, hosted, what, how, desc):
+    """Review: the told turn outlives its op. Handed the cancel message mid-turn, it still can't act on
+    the request; a later turn, unprompted, can."""
     sid = hosted
+    store.set_activity(sid, "idle")   # an earlier turn ended
     into(store, sid, what, "told")
+    store.set_activity(sid, "thinking")   # the told turn runs on
     if how == "overdue":
         overdue(store, sid)
         hub.refresh()
     else:
         hub.host_command(sid, "interrupt")
+        store.take_command(sid)
+    store.db.execute("UPDATE messages SET delivered_at = '2026-01-01' WHERE session_id = ?", (sid,))   # handed over mid-turn
     late = {"end": lambda: store.end_session(sid), "park": lambda: store.park(sid, compact=False, reason="x")}[what]
-    with pytest.raises(ValueError, match=f"the {what} request was called off"):
+    with pytest.raises(ValueError, match=f"the {what} request was cancelled: carry on as before"):
         late()
     s = store.session(sid)
-    assert s is not None and not s["parked"], desc
+    assert s is not None and not s["parked"] and s["activity"] == "thinking", f"{desc}: no side effect"
+    store.set_activity(sid, "idle")   # that turn has ended
+    late()   # a later turn's own park or end is its own
+
+
+@pytest.mark.parametrize("what", ["end", "park"])
+def test_with_no_turn_end_known_the_cancel_messages_handover_is_the_boundary(hub, store, hosted, what):
+    """A tab, an older host, or a host with no turn ended yet (idle_at unknown)."""
+    sid = hosted
+    into(store, sid, what, "told")
+    hub.host_command(sid, "interrupt")
+    late = {"end": lambda: store.end_session(sid), "park": lambda: store.park(sid, compact=False, reason="x")}[what]
+    with pytest.raises(ValueError, match="cancelled"):
+        late()
     store.db.execute("UPDATE messages SET delivered_at = '2026-01-01' WHERE session_id = ?", (sid,))
-    late()   # once it has heard, a park or end of its own is its own
+    late()
 
 
 def test_an_overdue_parking_is_said_as_parked(hub, store, hosted, monkeypatch):

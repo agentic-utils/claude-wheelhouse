@@ -459,7 +459,10 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  # the operation under way (#249, OPS): its kind, state (OP_ACTIVE, OP_ENDS), id, who began it,
                  # when the state was entered and its absolute deadline (both UTC). The last one stays till the next
                  ("sessions", "op", "TEXT"), ("sessions", "op_state", "TEXT"), ("sessions", "op_id", "TEXT"),
-                 ("sessions", "op_origin", "TEXT"), ("sessions", "op_at", "TEXT"), ("sessions", "op_deadline", "TEXT")]
+                 ("sessions", "op_origin", "TEXT"), ("sessions", "op_at", "TEXT"), ("sessions", "op_deadline", "TEXT"),
+                 # when its host last ended a turn (set_activity, UTC): a call from the turn an op was told in, after
+                 # that op was called off, is late (refuse_late)
+                 ("sessions", "idle_at", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -825,6 +828,7 @@ class Store:
                 self.compact_cut(db, sid, fresh=False)
             elif text.startswith(COMPACT_ENDS):
                 db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
+                db.execute("UPDATE sessions SET idle_at = ? WHERE id = ?", (stamp(), sid))   # a turn has ended
 
     @staticmethod
     def compact_cut(db, sid: str, fresh: bool) -> None:
@@ -991,12 +995,21 @@ class Store:
 
     @staticmethod
     def refuse_late(db, sid: str, what: str, call: str) -> None:
-        """A park or end the session was told of, called off (Interrupt, or past its deadline) before
-        it acted: its own late park_session or end_session is refused until it has taken the cancel
-        message, so it can't park or end after the person was told it carries on (#249)."""
-        if db.execute("SELECT 1 FROM messages WHERE session_id = ? AND body = ? "
-                      "AND delivered_at IS NULL", (sid, CANCELLED.format(what=what))).fetchone():
-            raise ValueError(f"the {what} request was called off: carry on as before, and don't call {call}")
+        """A park or end called off (Interrupt, or past its deadline) before the session acted: its own
+        park_session or end_session from the turn it was told in is refused, so it can't park or end
+        after the person was told it carries on (#249). A later turn's, unprompted, goes. The turn
+        boundary is its host's last turn end (idle_at); with none known (a tab, an older host, no turn
+        ended yet), until the session has been handed the cancel message."""
+        s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
+        if s is None or s["op"] != what or s["op_state"] not in ("failed", "cancelled"):
+            return
+        if runner(s) == "sdk" and not s["shell"] and s["idle_at"]:
+            late = s["idle_at"] < s["op_at"]
+        else:
+            late = db.execute("SELECT 1 FROM messages WHERE session_id = ? AND body = ? AND delivered_at IS NULL",
+                              (sid, CANCELLED.format(what=what))).fetchone() is not None
+        if late:
+            raise ValueError(f"the {what} request was cancelled: carry on as before, and don't call {call}")
 
     def fail_op(self, sid: str, oid: str, why: str) -> sqlite3.Row | None:
         """A park or end past its deadline, or whose host has died or stalled, fails (Hub.sweep_ops):
