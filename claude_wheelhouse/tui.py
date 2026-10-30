@@ -247,6 +247,8 @@ def rehome(widget: Widget, to: Widget) -> None:
     to.refresh(layout=True)
 
 
+# where a double-click opens what Detail shows full screen, or goes back from it (full_screen_click, #253)
+FULL_SCREEN_AREAS = {"detail-scroll", "detail-thread-scroll", "thread-scroll", "docview-scroll", "docview-thread-scroll"}
 LAYOUT = "layout."   # settings: each splitter's size, by its key, as a share of its parent
 # a doc item in Detail and full screen (.plan/docs-section.md): split, the doc over its thread
 # (their splitter kept as layout.doc-thread), or tabbed (Doc, Thread, and Editor while it's
@@ -4156,7 +4158,8 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "A click on an emoji suggestion under the answer box takes it in place of the code typed. "
          "A click on the ⓘ at the stats pane's top right opens the selected session's info: its id (C copies it), "
          "user and machine, directory, branch, model, mode, start, transcript and its MCP server, flagged when stale. "
-         "Double-click selects a word. Right-click on a session in the session list selects it and opens a menu of its buttons; "
+         "Double-click selects a word, but on what Detail shows (an item, a doc) it opens it full screen, as Enter on its "
+         "inbox row does, and on a full-screen item's thread or doc it goes back, as Esc does. Right-click on a session in the session list selects it and opens a menu of its buttons; "
          "elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. "
          "Drag the lines between the panes to resize them (they light up under the pointer); the sizes are "
          "kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap "
@@ -4522,6 +4525,9 @@ class WheelhouseApp(App):
         # the modules installed, those switched off (claude-wheelhouse modules disable) marked so
         self.modules = api.switch_off(api.load(), api.disabled(self.client.setting(api.DISABLED)))
         self.shown_doc: tuple[str, str] | None = None   # a module's doc in Detail (show_doc): (path, title)
+        # what a click on a doc just did, to be undone if it was a double-click's first
+        # (full_screen_click): the editor it opened, when, and the doc item's quote it replaced
+        self.click_opened: tuple = (None, 0.0, None, None)
         self.detail_note: str | None = None   # why nothing is selected, if a module's pick said (unselect)
         self.doc_edits: dict[str, DocEdit] = {}   # each doc's unsaved edits, by its path (DocEditor.edits)
         # a doc item in Detail and full screen (.plan/docs-section.md): split or tabbed (Ctrl+L,
@@ -4725,8 +4731,46 @@ class WheelhouseApp(App):
         self.call_after_refresh(self.fit_layout)
 
     def on_click(self, event: events.Click) -> None:
-        if event.chain == 2:
+        if event.chain == 2 and not (event.button == 1 and self.full_screen_click(event)):
             select_word(self.screen, event.screen_x, event.screen_y)
+
+    def full_screen_click(self, event: events.Click) -> bool:
+        """A double-click on what Detail shows, an item or a module's doc, opens it full
+        screen, as Enter on its inbox row does; one on a full-screen item's thread or doc goes
+        back, as Esc does (#253). Not on a button or a scrollbar there, nor a link, whose click
+        is its own (stopped before it gets here), nor on a conversation, which has no full
+        screen. The editor the double-click's first click opened on a doc, still unedited,
+        closes again: that click was half of this one. False where it does nothing."""
+        widget, screen = event.widget, self.screen
+        if widget is None or not any(w.id in FULL_SCREEN_AREAS for w in widget.ancestors_with_self) \
+                or any(isinstance(w, (Button, ScrollBar)) for w in widget.ancestors_with_self):
+            return False
+        main = screen is self.screen_stack[0]
+        if main and not self.shown_doc and not (self.selected and self.selected[1]) \
+                or not main and not isinstance(screen, (ThreadView, DocView)):
+            return False
+        editor, at, target, quote = self.click_opened
+        self.click_opened = (None, 0.0, None, None)
+        if editor is not None and editor.key is not None and not editor.edited \
+                and time.monotonic() - at <= 2 * self.CLICK_CHAIN_TIME_THRESHOLD:
+            editor.close()
+            if target is not None:   # the quote it took, as before the click
+                if quote is None:
+                    self.doc_quotes.pop(target, None)
+                else:
+                    self.doc_quotes[target] = quote
+                self.paint_quote()
+        screen.clear_selection()   # Textual's double-click selected the whole transcript
+        if not main:
+            screen.action_leave()
+        elif self.shown_doc:
+            self.open_doc(*self.shown_doc)
+        elif "|".join(self.selected) in self.items_table.locked:   # its session is being compacted (#150)
+            self.notify(COMPACTING_LOCKED, severity="warning")
+        else:
+            self.saw(*self.selected)
+            self.open_full(*self.selected)
+        return True
 
     # right-click, as in a terminal
 
@@ -5851,11 +5895,15 @@ class WheelhouseApp(App):
         place (split) or as a tab (tabbed), and a doc item's next comment quotes the block clicked."""
         panes, doc, _ = self.doc_here()
         line = event.view.line_at(event.row)
+        target = (doc["session_id"], doc["ref"]) if doc is not None else None
+        before = (editor.key is None, self.doc_quotes.get(target))
         if doc is not None and line is not None:
             md = next((md for who, md in event.view.blocks if who == "doc"), "")
             self.doc_quotes[(doc["session_id"], doc["ref"])] = quote_of(md, line)
             self.paint_quote()
         editor.open_at(event.row)
+        if before[0] and editor.key is not None:   # undone if this click is a double-click's first
+            self.click_opened = (editor, time.monotonic(), target, before[1])
         if doc is not None and editor.key is not None and self.doc_layout == TABBED:
             panes.tab = EDITOR_TAB
         self.repaint_doc()
@@ -7112,10 +7160,14 @@ class WheelhouseApp(App):
         sid, ref = event.row_key.value.split("|")
         self.saw(sid, ref or None)
         if ref:
-            item = self.client.item(sid, ref)
-            self.push_screen(DocView(sid, ref) if item is not None and item["kind"] == "doc" else ThreadView(sid, ref))
+            self.open_full(sid, ref)
         else:   # the conversation is already in the pane: Enter goes to its box, at once
             self.screen.set_focus(self.answer)
+
+    def open_full(self, sid: str, ref: str) -> None:
+        """An item full screen: a doc item's DocView, any other's ThreadView."""
+        item = self.client.item(sid, ref)
+        self.push_screen(DocView(sid, ref) if item is not None and item["kind"] == "doc" else ThreadView(sid, ref))
 
     def highlight_session(self, sid: str | None) -> None:
         """Keep the session list's highlight on the session in context: one current session

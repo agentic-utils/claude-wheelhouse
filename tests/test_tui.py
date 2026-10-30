@@ -9750,3 +9750,39 @@ async def test_mcp_servers_dialog_without_a_running_host(store, tmp_path, monkey
         assert says in str(dialog.query_one("#mcp-when", Label).content), desc
         assert list(dialog.query(".mcp-row Button")) == [], desc
         assert store.take_mcp_asks(sid) == [], f"{desc}: no host to ask"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("kind, times, full, desc", [
+    ("question", 1, None, "a question, one click: stays in Detail"),
+    ("question", 2, "ThreadView", "a question, double-click: full screen"),
+    ("task", 1, None, "a task, one click: stays in Detail"),
+    ("task", 2, "ThreadView", "a task, double-click: full screen"),
+    ("doc", 1, None, "a doc, one click: its editor, in Detail"),
+    ("doc", 2, "DocView", "a doc, double-click: full screen, not its editor"),
+    ("conversation", 2, None, "a conversation, double-click: no full screen to go to"),
+])
+async def test_double_click_on_detail_goes_full_screen_and_back(store, sid, tmp_path, kind, times, full, desc):
+    """#253: a double-click on Detail opens what it shows full screen, documents included, and
+    one on the full screen goes back; a single click keeps its own job (a doc's editor)."""
+    if kind == "doc":
+        (tmp_path / "plan.md").write_text("# The plan\n\nBuild it well, with plenty of words to click on.\n")
+        ref = store.post_doc(sid, "plan", str(tmp_path / "plan.md"))
+    elif kind != "conversation":
+        ref = store.post_item(sid, kind, "which db?", "Postgres or SQLite? " * 20)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|" if kind == "conversation" else f"{sid}|{ref}"))
+        await pilot.pause()
+        await pilot.click("#detail", offset=(3, 3), times=times)
+        await pilot.pause(0.2)
+        assert type(app.screen).__name__ == (full or "Screen"), desc
+        assert (app.detail_editor.key is not None) == (kind == "doc" and times == 1), f"{desc}: Detail's editor"
+        assert bool(app.doc_quotes) == (kind == "doc" and times == 1), f"{desc}: a comment's quote, as the editor"
+        if full is None:
+            return
+        await pilot.click("#docview" if full == "DocView" else "#thread", offset=(3, 3), times=2)
+        await pilot.pause(0.2)
+        assert len(app.screen_stack) == 1, f"{desc}: a double-click there goes back"
+        assert app.detail_editor.key is None and not app.screen.selections, f"{desc}: no editor, nothing selected"

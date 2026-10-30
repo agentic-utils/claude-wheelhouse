@@ -265,7 +265,7 @@ session.
   room); or **tabbed**, Doc and Thread (with its count of new replies) as tabs, switched
   by `Ctrl+PageUp` and `Ctrl+PageDown` or a click, where typing on the Doc tab moves you
   to Thread with what you typed. `Ctrl+L` switches between the two, kept as
-  `layout.doc-view`; `Enter` opens the doc full screen, laid out the same way. A comment
+  `layout.doc-view`; `Enter`, or a double-click on the doc, opens it full screen, laid out the same way. A comment
   goes to the session that posted the doc, on its ref, queued or sent at once by the
   session's mode, as an answer does. After a click on a block of the doc, the comment
   quotes that block's first line (shown in the box's title); `Esc` in the empty box drops
@@ -637,7 +637,10 @@ highlight goes to the row immediately above the topmost row it took, or to the n
 if that was the first.
 
 Text: drag the mouse over the conversation or a thread to select part of it (shown black
-on white), double-click to select a word, `Ctrl+A` in the answer box selects its text (in the item list it marks the finished rows; in a doc opened
+on white), double-click to select a word (not in Detail showing an item or a doc, where a
+double-click opens it full screen as `Enter` on its inbox row does, nor on a full-screen
+item, where it goes back as `Esc` does; a double-click on a link or button there does that
+link's or button's job), `Ctrl+A` in the answer box selects its text (in the item list it marks the finished rows; in a doc opened
 full screen it selects the whole doc), and `Ctrl+C` copies the selection (through the terminal, which Windows Terminal supports). Right-click on a session in the session list selects it and opens a menu of
 its buttons (greyed as they are under the list; Esc or a click outside closes it); on a PR in the PRs pane, a menu of its
 actions (of every PR marked, if it is one). Elsewhere right-click does as a
