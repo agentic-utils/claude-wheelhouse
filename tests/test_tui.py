@@ -440,7 +440,8 @@ async def test_send_bar_and_session_buttons_follow_the_queues(store, sid, tmp_pa
         await pick(app, pilot, sid)
         bar = lambda: {b.id: (str(b.label), b.disabled) for b in app.screen.query("SendBar Button") if b.display}
         assert bar() == {"send-all": ("Send all (0)", True)}, "the inbox's bar: only Send all (D20)"
-        assert session_buttons(app) == {"mode": ("Mode: Queued", False), "send": ("Send (0)", True)}, \
+        assert session_buttons(app) == {"mode": ("Mode: Queued", False), "send": ("Send (0)", True),
+                                     "shell": ("Shell", False)}, \
             "the highlighted session's, nothing queued"
         store.queue(sid, "a")
         store.queue(other, "b")
