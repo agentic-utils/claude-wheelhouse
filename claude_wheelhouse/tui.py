@@ -73,7 +73,7 @@ from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
 from .tour import LIT as tour_lit, NOTES, PAUSED, ROWS as tour_rows, SHUN as tour_shun, TOPUP, TOUR, Tour, offered, opening
-from .store import (DEFAULT_THEN, DELETED, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
+from .store import (DEFAULT_THEN, DELETED, HOST_QUESTION, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mcp_servers, mode, pinned, runner, spared, stamp, standing)
 from .unsent import Unsent
 
@@ -6445,8 +6445,13 @@ class WheelhouseApp(App):
     @staticmethod
     def locks(it, cuts: dict) -> bool:
         """Whether an item of a compacting session (cuts) is locked: at or below its cut-off.
-        One posted since is never locked; without a cut-off, all are."""
+        One posted since is never locked; without a cut-off, all are. Never a call the session's
+        turn waits on (an open permission, or the host's AskUserQuestion): answering it is allowed
+        during a cycle (#244), or the turn, and the notes ask behind it, would never end."""
         if it["session_id"] not in cuts:
+            return False
+        if it["status"] == "open" and (it["kind"] == "permission" or models.field(it, "answer") == HOST_QUESTION
+                                       or models.field(it, "host_question")):
             return False
         return cuts[it["session_id"]] is None or it["id"] <= cuts[it["session_id"]]
 

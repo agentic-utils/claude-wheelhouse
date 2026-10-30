@@ -9822,3 +9822,16 @@ async def test_mcp_servers_dialog_without_a_running_host(store, tmp_path, monkey
         assert says in str(dialog.query_one("#mcp-when", Label).content), desc
         assert list(dialog.query(".mcp-row Button")) == [], desc
         assert store.take_mcp_asks(sid) == [], f"{desc}: no host to ask"
+
+
+@pytest.mark.parametrize("kind, status, mark, locked, desc", [
+    ("task", "running", {}, True, "an item before the press: locked while compacting (#150)"),
+    ("permission", "open", {}, False, "a permission the turn waits on: answerable, or the cycle never moves (#244)"),
+    ("permission", "allowed", {}, True, "a permission already answered: locked as any other"),
+    ("question", "open", {"answer": '{"from": "AskUserQuestion"}'}, False, "the host's AskUserQuestion, in process"),
+    ("question", "open", {"host_question": True}, False, "the same through the daemon, which serves no answers"),
+    ("question", "open", {"answer": None}, True, "the session's own question: locked"),
+])
+def test_a_call_the_turn_waits_on_is_never_locked_by_a_compaction(kind, status, mark, locked, desc):
+    it = {"session_id": "s1", "id": 3, "kind": kind, "status": status, **mark}
+    assert WheelhouseApp.locks(it, {"s1": 5}) == locked, desc
