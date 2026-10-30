@@ -137,6 +137,9 @@ COMPACTION_ENDS = ("completed", "failed", "cancelled")
 # who started it: the person's Compact, the session's request_compact, Relaunch or Park compacting
 # first, the quiet mark's (KEEPALIVE_HOURS), or Claude Code's own (the PreCompact hook)
 COMPACTION_ORIGINS = ("person", "model", "relaunch", "park", "quiet", "auto")
+# park_session's refusal during a cycle, said to the session itself
+PARK_REFUSED = ("this session is being compacted, and can't park until that has finished: end your turn, and "
+                "call park_session again once the compaction is done")
 COMPACTING_REFUSED = "{name} is compacting: {action} once it's done, or Interrupt to cancel the compaction."
 # the host's question when a notes turn runs past NOTES_TIMEOUT: Keep waiting or Abort, buttons only
 NOTES_WAIT = '{"from": "compaction wait"}'
@@ -1187,9 +1190,12 @@ class Store:
         way. Not hosted (a tab), nothing compacts. Whether it compacts."""
         keep, reason = keep.strip(), reason.strip()
         with self.tx() as db:
-            s = db.execute("SELECT park_requested_at, park_compact FROM sessions WHERE id = ?", (sid,)).fetchone()
+            s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
             if s is None:
                 raise SessionGone(sid)
+            # refused during a compaction cycle (#244), but Park's own with Compact first, whose park this is
+            if compacting_now(s) and not (s["compaction_origin"] == "park" and s["compaction"] == "requested"):
+                raise ValueError(PARK_REFUSED)
             asked = s["park_requested_at"] is not None
             if not hosted:
                 compact = False

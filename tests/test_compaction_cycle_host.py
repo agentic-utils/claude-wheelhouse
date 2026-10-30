@@ -551,3 +551,49 @@ def test_the_claim_is_retried_through_a_locked_database(host, store, sid, monkey
     monkeypatch.setattr(store, "move_compaction", flaky)
     run(host.poll())
     assert tries == ["preparing", "preparing"] and store.compaction(sid)["state"] == "preparing"
+
+
+@pytest.mark.parametrize("start, refused, desc", [
+    (lambda s, sid: s.command(sid, "compact"), True, "the person's Compact: park_session refused, said to the session"),
+    (lambda s, sid: s.request(sid, "park", True), False, "Park with Compact first: this park is its own step"),
+    (lambda s, sid: None, False, "no cycle: parks as ever"),
+])
+def test_park_session_during_a_cycle(store, sid, start, refused, desc):
+    """Round 8 (1): the session can't park itself mid-cycle, or a second /compact would follow."""
+    from claude_wheelhouse.store import PARK_REFUSED
+    store.set_runner(sid, "sdk")
+    start(store, sid)
+    if refused:
+        with pytest.raises(ValueError, match="can't park until that has finished"):
+            store.park(sid, compact=True, keep="notes")
+        assert not store.session(sid)["parked"] and PARK_REFUSED, desc
+    else:
+        store.park(sid, compact=True, keep="notes")
+        assert store.session(sid)["parked"], desc
+
+
+def test_no_keepalive_while_a_cycle_waits_to_be_claimed(host, store, sid):
+    """Round 8 (2): pressed, not yet claimed: no keepalive goes ahead of the notes ask."""
+    store.set_runner(sid, "sdk")
+    store.post_item(sid, "question", "which db?")   # waits on the person
+    host.tokens = 200_000
+    host.last_turn = time.monotonic() - host_mod.KEEPALIVE_AFTER - 1
+    host.quiet_since = time.monotonic() - 60
+    assert host.keepalive_due(time.monotonic()), "due with no cycle"
+    store.command(sid, "compact")
+    assert not host.keepalive_due(time.monotonic()), "never while the store says a cycle is active"
+
+
+def test_a_claim_locked_past_steady_is_owed_to_the_next_pass(host, store, sid, monkeypatch):
+    """Round 8 (3): a long lock never fails the cycle spuriously: the claim is owed and retried."""
+    import sqlite3
+    store.set_runner(sid, "sdk")
+    store.command(sid, "compact")
+    real = store.move_compaction
+    monkeypatch.setattr(host_mod, "STEADY_TRIES", ())
+    monkeypatch.setattr(store, "move_compaction", lambda *a: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
+    run(host.poll())
+    assert host.owed_move == "preparing" and store.compaction(sid)["state"] == "requested"
+    monkeypatch.setattr(store, "move_compaction", real)
+    run(host.poll())
+    assert host.owed_move is None and store.compaction(sid)["state"] == "preparing"

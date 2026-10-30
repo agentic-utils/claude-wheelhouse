@@ -375,6 +375,7 @@ class Host:
         # a cycle's end its turn couldn't write (a database locked past steady's tries): (state,
         # why, then), written by the next pass, then its then carried out (cycle_due)
         self.owed: tuple[str, str, str | None] | None = None
+        self.owed_move: str | None = None   # likewise a move on (the claim), owed to the next pass
         self.late_key: str | None = None
         self.cold_for: float | None = None   # the quiet the quiet mark's compaction was for (cold_due)
         self.park_told: float | None = None   # when the park request went to the session (monotonic)
@@ -935,7 +936,7 @@ class Host:
                 and at - self.quiet_since < self.keepalive_for):
             return False
         session = self.store.session(self.sid)
-        return (session is not None and not session["parked"]
+        return (session is not None and not session["parked"] and not compacting_now(session)   # a cycle: never (#244)
                 and (self.waits_on_person() or bool(self.store.in_doubt(self.sid))))
 
     def person_back(self, m) -> None:
@@ -959,7 +960,7 @@ class Host:
                 and at - self.last_turn < PARK_COMPACT_WITHIN):
             return False
         session = self.store.session(self.sid)
-        return (session is not None and not session["parked"]
+        return (session is not None and not session["parked"] and not compacting_now(session)   # a cycle: never (#244)
                 and (self.waits_on_person() or bool(self.store.in_doubt(self.sid))))
 
     def waits_on_person(self) -> bool:
@@ -993,7 +994,11 @@ class Host:
         database (steady): leaving requested is the host's claim, which CLAIM_WITHIN waits for."""
         c = self.cycle
         c.state, c.since = state, time.monotonic()
-        await self.steady(self.store.move_compaction, self.sid, c.id, state)
+        try:
+            await self.steady(self.store.move_compaction, self.sid, c.id, state)
+            self.owed_move = None
+        except sqlite3.OperationalError:   # still locked: owed, retried each pass (cycle_due)
+            self.owed_move = state
 
     async def ask_notes(self, why: str = PRESSED_COMPACT) -> None:
         """The Before Compact step and the keep ask, as the notes turn: preparing."""
@@ -1049,6 +1054,9 @@ class Host:
         """The cycle's clocks, each poll: the notes turn past NOTES_TIMEOUT asks the person to
         keep waiting or abort (never cancelled unasked); /compact past COMPACT_TIMEOUT fails.
         First, an end owed (close_cycle) is written, and its then carried out."""
+        if self.owed_move is not None and self.cycle is not None:   # a move (the claim) a lock kept unwritten
+            self.store.move_compaction(self.sid, self.cycle.id, self.owed_move)   # still locked: raised, tried next pass
+            self.owed_move = None
         if self.owed is not None and self.cycle is not None:
             state, why, then = self.owed
             self.end_cycle(state, why)   # still locked: raised, and the next pass tries again
