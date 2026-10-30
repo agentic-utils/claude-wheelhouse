@@ -1075,12 +1075,21 @@ def hosted(store, sid, monkeypatch):
 
 
 async def compacting(app, pilot, store, sid, hosted, end: str | None = None):
-    """The session's host records a compaction starting (end None), or its end: "compacted",
-    or "host gone", stopped mid-way with its line left (store.compacting_now). The app ticks."""
+    """The session's compaction cycle (#244) starting (end None), as Compact and its host start
+    it, or its end: "compacted", or "host gone", stopped mid-way with the cycle left
+    (store.compacting_now). The app ticks."""
     if end == "host gone":
         hosted["liveness"] = "dead"
+    elif end:
+        cid = store.compaction(sid)["id"]
+        store.move_compaction(sid, cid, "compacting")
+        store.move_compaction(sid, cid, "completed")
+        store.set_activity(sid, "idle · compacted")
     else:
-        store.set_activity(sid, "idle · compacted" if end else "compacting: collecting notes")
+        store.command(sid, "compact")
+        store.take_command(sid)
+        store.move_compaction(sid, store.compaction(sid)["id"], "preparing")
+        store.set_activity(sid, "compacting: collecting notes")
     app.refresh_data()
     await pilot.pause()
 
