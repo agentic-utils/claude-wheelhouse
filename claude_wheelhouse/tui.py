@@ -2088,6 +2088,9 @@ class CompactButtons(Horizontal):
         return then_choice(self.query_one(RadioSet))
 
 
+HELD_RUN_ROWS: weakref.WeakKeyDictionary[Screen, list] = weakref.WeakKeyDictionary()   # each screen's RunButtons
+
+
 class RunButtons(Horizontal):
     """Over the answer box while the item in context is a command item not closed (#257): Run,
     which opens the command in RunCommand. A real button, never a segment of the item's text,
@@ -6793,7 +6796,10 @@ class WheelhouseApp(App):
         if doc_gone and not self.focus_answer():
             self.screen.set_focus(self.items_table)
         command = self.command_item(self.bar_item(self.screen))
-        for row in self.screen.query(RunButtons):
+        rows = HELD_RUN_ROWS.get(self.screen)
+        if rows is None:   # held once found, as bar_widgets holds the rest: a repaint never queries
+            rows = HELD_RUN_ROWS[self.screen] = list(self.screen.query(RunButtons))
+        for row in rows:
             if row.display != (command is not None):
                 row.display = command is not None
                 self.refit()
