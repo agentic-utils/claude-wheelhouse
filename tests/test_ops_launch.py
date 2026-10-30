@@ -276,6 +276,7 @@ def test_interrupt_requeues_only_the_wakes_own_send(hub, store, sid, monkeypatch
     store.send(sid, "sent before the crash")
     store.queue(sid, "queued for the wake")
     assert hub.wake_and_send(sid, text="and this").ok
+    store.notice(sid, "[wheelhouse] PR 7 merged")   # the wheelhouse's own, after the wake
     assert hub.host_command(sid, "interrupt").ok
     assert [m["body"] for m in store.drafts(sid)] == ["queued for the wake", "and this"]
-    assert [m["body"] for m in store.pending(sid)] == ["sent before the crash"]
+    assert [m["body"] for m in store.pending(sid)] == ["sent before the crash", "[wheelhouse] PR 7 merged"]

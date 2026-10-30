@@ -1103,9 +1103,9 @@ class Store:
                 return None
             db.execute("UPDATE sessions SET relaunch = NULL WHERE id = ?", (sid,))
             if op[1] == "starting" and (s["op_origin"] or "").startswith("wake:"):   # only the wake's own send
+                first, last = map(int, s["op_origin"].split(":")[1:])
                 db.execute("UPDATE messages SET draft = 1 WHERE session_id = ? AND draft = 0 AND author = 'person' "
-                           "AND id >= ? AND claimed_at IS NULL AND delivered_at IS NULL",
-                           (sid, int(s["op_origin"].split(":")[1])))
+                           "AND id BETWEEN ? AND ? AND claimed_at IS NULL AND delivered_at IS NULL", (sid, first, last))
             self.move_op(db, sid, op[0], "cancelled")
             if op[1] == "stopping":   # no process to stop: the mark is a deadline kept only by a starting one
                 db.execute("UPDATE sessions SET op_deadline = NULL WHERE id = ?", (sid,))
@@ -2328,8 +2328,9 @@ class Store:
                 self._mark_seen(db, sid, item_ref)
                 db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at) "
                            "VALUES (?, ?, 'person', ?, ?)", (sid, item_ref, body, now()))
-            if own:   # where the wake's send begins, so an Interrupt queues exactly it again (abort_launch)
-                db.execute("UPDATE sessions SET op_origin = ? WHERE id = ?", (f"wake:{first}", sid))
+            if own:   # the wake's send, first and last id, so an Interrupt queues exactly it again (abort_launch)
+                last = db.execute("SELECT coalesce(max(id), 0) FROM messages").fetchone()[0]
+                db.execute("UPDATE sessions SET op_origin = ? WHERE id = ?", (f"wake:{first}:{last}", sid))
         return moved + (body is not None)
 
     def awaiting(self) -> set[tuple[str, str]]:
