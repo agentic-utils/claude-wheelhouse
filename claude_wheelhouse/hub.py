@@ -35,7 +35,7 @@ from . import adopt, api, away, compactor, features, fingerprint, fork, launch, 
 from .docroots import DOC_CAP
 from .host import (COMPACT_TIMEOUT, PARK_COMPACT_WITHIN, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, keepalive_body,
                    waits_on_person)
-from .store import (COMPACT_QUESTION, NOTES_WAIT, ORIGIN_WORDS, Compacting, DISMISSABLE, compacting_now, PRS_SINCE, STATUSES, SessionGone, requested_expired, Store, can_queue,
+from .store import (COMPACT_QUESTION, NOTES_WAIT, ORIGIN_WORDS, Refused, wheelhouse_item, Compacting, DISMISSABLE, compacting_now, PRS_SINCE, STATUSES, SessionGone, requested_expired, Store, can_queue,
                     PROTOCOL_VERSION, mcp_servers, mode, needs_relaunch, runner, standing)
 
 RUNNING = ("live", "stalled", "starting")
@@ -116,7 +116,7 @@ def refusable(method):
     def act(self, *args, **kwargs):
         try:
             return method(self, *args, **kwargs)
-        except Compacting as e:
+        except Refused as e:
             return Done(False).say(str(e), "warning")
     return act
 
@@ -374,7 +374,8 @@ class Hub:
         its cycle ended, and lets it go (cycle_due)."""
         for s in self.sessions:
             if compacting_now(s) and self.statuses[s["id"]] in ("dead", "stalled") and s["compaction_id"]:
-                if self.store.move_compaction(s["id"], s["compaction_id"], "failed"):
+                why = "its host stalled" if self.statuses[s["id"]] == "stalled" else "its host stopped"
+                if self.store.move_compaction(s["id"], s["compaction_id"], "failed", why):
                     print(f"wheelhouse: {display_name(s)}'s compaction failed: its host "
                           f"{'stalled' if self.statuses[s['id']] == 'stalled' else 'is not running'}",
                           file=sys.stderr, flush=True)
@@ -786,7 +787,7 @@ class Hub:
         s = self.row(sid)
         t = fork.tree(s["cwd"])
         items = [(r["ref"], r["kind"], r["status"], r["title"]) for r in self.store.items(sid, include_closed=False)
-                 if r["status"] in fork.MOVABLE.get(r["kind"], ())]
+                 if r["status"] in fork.MOVABLE.get(r["kind"], ()) and not wheelhouse_item(r["answer"])]
         return fork.Plan(f"{display_name(s)} (fork)", s["cwd"], t, fork.default_branch(t, s["cwd"]) if t.can_branch else "",
                          items)
 
@@ -804,7 +805,7 @@ class Hub:
             return Done(False).say(f"{name} would open in a tab: fork it from the daemon's machine", "warning")
         refs = list(dict.fromkeys(refs))
         bad = [r for r in refs if (i := self.store.item(sid, r)) is None
-               or i["status"] not in fork.MOVABLE.get(i["kind"], ())]
+               or i["status"] not in fork.MOVABLE.get(i["kind"], ()) or wheelhouse_item(i["answer"])]
         if bad:
             return Done(False).say(f"{', '.join(bad)} can't move: only a todo or blocked task, or an open "
                                    "question", "error")

@@ -143,6 +143,8 @@ COMPACTION_ORIGINS = ("person", "model", "relaunch", "park", "quiet", "auto")
 # park_session's refusal during a cycle, said to the session itself
 PARK_REFUSED = ("this session is being compacted, and can't park until that has finished: end your turn, and "
                 "call park_session again once the compaction is done")
+COMPACTING_IN_TAB = "{name} is compacting in its tab: {action} once it's done."
+NOT_THE_SESSIONS = "{ref} is the wheelhouse's own record of a compaction: there's no session to send it to"
 COMPACTING_REFUSED = "{name} is compacting: {action} once it's done, or Interrupt to cancel the compaction."
 # the cycle's task item (#244), the wheelhouse's own: never in what the session is told or lists
 COMPACTION_TASK = '{"from": "compaction"}'
@@ -451,11 +453,16 @@ CLAIM_TIMEOUT = 30   # seconds before a claim from a monitor that died mid-print
 KEYS_KEPT = timedelta(days=1)   # how long the daemon answers a request sent again the same
 
 
-class Compacting(ValueError):
-    """Refused: the session is in a compaction cycle (COMPACTION_ACTIVE)."""
+class Refused(ValueError):
+    """A person's write the store refuses, said as a warning (Hub.refusable)."""
 
-    def __init__(self, name: str, action: str):
-        super().__init__(COMPACTING_REFUSED.format(name=name, action=action))
+
+class Compacting(Refused):
+    """Refused: the session is in a compaction cycle (COMPACTION_ACTIVE). In a tab, which has no
+    Interrupt, it is waited out (tab)."""
+
+    def __init__(self, name: str, action: str, tab: bool = False):
+        super().__init__((COMPACTING_IN_TAB if tab else COMPACTING_REFUSED).format(name=name, action=action))
 
 
 def session_name(s) -> str:
@@ -812,7 +819,7 @@ class Store:
             db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
             Store.staged(db, sid, "cancelled", "you wrote in, so it was called off")
         elif compacting_now(s):
-            raise Compacting(session_name(s), action)
+            raise Compacting(session_name(s), action, tab=runner(s) != "sdk" or bool(s["shell"]))
 
     @staticmethod
     def drop_park_cycle(db, sid: str) -> None:
@@ -1921,6 +1928,7 @@ class Store:
         during a compaction cycle (Compacting), but an answer to a call the notes turn waits on
         (waited_on), so it can't wedge on its own prompt."""
         with self.tx() as db:
+            self.refuse_wheelhouse_item(db, sid, item_ref)
             if not self.waited_on(db, sid, item_ref):
                 self.refuse_compacting(db, sid, "send", person=True)
             self._require(db, sid)
@@ -1929,6 +1937,13 @@ class Store:
                 "INSERT INTO messages (session_id, item_ref, author, body, created_at) VALUES (?, ?, 'person', ?, ?)",
                 (sid, item_ref, body, now()),
             )
+
+    @staticmethod
+    def refuse_wheelhouse_item(db, sid: str, ref: str | None) -> None:
+        """Refused: a message on a compaction's task item, which no session ever sees (#244)."""
+        if ref and db.execute("SELECT 1 FROM items WHERE session_id = ? AND ref = ? AND answer = ?",
+                              (sid, ref, COMPACTION_TASK)).fetchone():
+            raise Refused(NOT_THE_SESSIONS.format(ref=ref))
 
     @staticmethod
     def waited_on(db, sid: str, ref: str | None) -> bool:
@@ -1955,6 +1970,7 @@ class Store:
         an unseen decision marks it seen, in the same transaction (_mark_seen). Refused during a
         compaction cycle (Compacting)."""
         with self.tx() as db:
+            self.refuse_wheelhouse_item(db, sid, item_ref)
             self.refuse_compacting(db, sid, "queue", person=True)
             self._mark_seen(db, sid, item_ref)
             db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, draft) "

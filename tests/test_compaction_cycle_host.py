@@ -222,6 +222,7 @@ def test_abort_on_the_notes_question_cancels(host, store, sid):
 # the 29 Oct repros (design section 1), as regression tests
 
 def test_ctrl_s_mid_prep_is_refused(host, store, sid):
+    store.set_runner(sid, "sdk")
     ref = store.post_item(sid, "question", "which db?")
     store.queue(sid, "use Postgres", ref)
     store.command(sid, "compact")
@@ -618,3 +619,21 @@ def test_interrupt_after_the_notes_came_never_compacts(host, store, sid):
     run(host.poll())
     assert not any(q.startswith("/compact") for q in host.client.queries), host.client.queries
     assert store.compaction(sid)["state"] == "cancelled" and host.cycle is None and host.late_key is None
+
+
+def test_claude_codes_own_compaction_says_its_size_on_its_task(streamed, store, sid):
+    """PR 2 review: an auto cycle ends at its boundary, its task's note giving the size before."""
+    from test_host import boundary
+    store.set_runner(sid, "sdk")
+    h = streamed
+
+    async def go():
+        await h.turn("work")
+        await h.pre_compact({"trigger": "auto"}, None, None)
+        for m in (h.client.replay(0), boundary(), None):
+            h.client.feed.put_nowait(m)
+        await h.read()
+    run(go())
+    c = store.compaction(sid)
+    assert c["state"] == "completed" and store.item(sid, c["item"])["status"] == "done"
+    assert store.thread(sid, c["item"])[-1]["body"].startswith("150k before")

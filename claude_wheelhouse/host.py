@@ -1153,7 +1153,7 @@ class Host:
                     meta = m.data.get("compact_metadata") or m.data.get("compactMetadata") or {}
                     self.compacted_from = meta.get("pre_tokens") or meta.get("preTokens") or 0
                     if self.cycle is not None and self.cycle.origin == "auto":   # Claude Code's own, mid-turn: done now
-                        self.end_cycle("completed")
+                        self.end_cycle("completed", f"{self.compacted_from // 1000}k before; sized again as its turn ends")
                 elif isinstance(m, ResultMessage):
                     ended = [self.sent.pop(k) for k in self.taken_up if k in self.sent]
                     if not ended and self.sent and getattr(m, "origin", None) is None:

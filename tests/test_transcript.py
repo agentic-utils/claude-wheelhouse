@@ -333,3 +333,14 @@ def test_a_subagents_prompt_shows_however_long_it_runs(tmp_path, monkeypatch):
     labels = [md.split("**")[1] for who, md in transcript.agent_blocks(
         [user("stop")], prompt=user("find the bug")) if who == "you"]
     assert labels == ["prompt", "session"], "a later turn of the session's is labelled as its"
+
+
+def test_stage_lines_go_by_time_and_an_untimed_entry_stays_put():
+    from claude_wheelhouse import transcript as tr
+    recs = [{"type": tr.OVERSIZE},
+            {"type": "user", "message": {"content": "first"}, "timestamp": "2026-10-29T10:00:00.000000+00:00"},
+            {"type": "user", "message": {"content": "second"}, "timestamp": "2026-10-29T10:05:00.000000+00:00"}]
+    stage = tr.Entry("stage", "▐█          █▌ walls closing in", "2026-10-29T10:02:00.000000+00:00")
+    out = tr.blocks("demo", None, recs, stages=(stage,))
+    whos = [who for who, _ in out[1:]]
+    assert whos == ["note", "you", "stage", "you"], out

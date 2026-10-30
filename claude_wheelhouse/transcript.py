@@ -296,8 +296,13 @@ def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=
     elif tab and (waiting := waiting_in_tab(recs)):
         out.append(("warn", f"> ⚠ **Waiting for you in its tab:** {waiting}."))
     said = entries(recs or [], full)
-    if stages:   # by time, a stage after anything said at the same moment
-        said = sorted([*said, *stages], key=lambda e: (e.at[:26], e.who in ("stage", "crew")))
+    if stages:   # by time, a stage after anything said at the same moment; one with no time stays put
+        merged, todo = [], sorted(stages, key=lambda e: e.at)
+        for e in said:
+            while e.at and todo and todo[0].at[:26] < e.at[:26]:
+                merged.append(todo.pop(0))
+            merged.append(e)
+        said = merged + todo
     out += [entry_block(e) for e in said]
     on_way = held(recs or [], full)
     shown = Counter(on_way)   # one passed on as these were read is Claude Code's already: shown once, two the same twice

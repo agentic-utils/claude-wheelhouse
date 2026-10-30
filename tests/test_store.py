@@ -1149,6 +1149,7 @@ REFUSED = [
 @pytest.mark.parametrize("act, action, desc", REFUSED)
 def test_a_compaction_cycle_refuses_every_write(store, sid, state, act, action, desc):
     from claude_wheelhouse.store import Compacting
+    store.set_runner(sid, "sdk")   # a host's: a tab's is waited out, worded without Interrupt
     store.queue(sid, "queued before")
     cycle_in(store, sid, state)
     before = ([dict(m) for m in store.messages(sid)], dict(store.session(sid)))
@@ -1278,3 +1279,10 @@ def test_the_session_never_sees_its_compaction_task(store, sid):
     store.db.execute("UPDATE items SET created_at = '2000-01-01', session_at = '2000-01-01'")
     store.mark_version(sid)
     assert not [d for d in store.in_doubt(sid) if d.startswith(ref + " ")], "never a keepalive's check"
+
+
+def test_a_tabs_refusal_never_offers_interrupt(store, sid):
+    from claude_wheelhouse.store import Compacting
+    store.start_compaction(sid, "auto", "compacting")   # its PreCompact hook
+    with pytest.raises(Compacting, match="^demo is compacting in its tab: send once it's done.$"):
+        store.send(sid, "hi")
