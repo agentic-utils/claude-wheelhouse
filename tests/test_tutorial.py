@@ -1297,7 +1297,7 @@ def test_the_overlay_lists_every_button():
 
 def test_the_overlay_leaves_sdk_mode_out_unless_it_is_on():
     text = keys_help()
-    for word in ("Interrupt", "Compact", "Shell", "Model", "Allow", "Always", "Deny", "effort", "run in the wheelhouse"):
+    for word in ("Interrupt", "Compact", "Handover", "Model", "Allow", "Always", "Deny", "effort", "run in the wheelhouse"):
         assert word not in text, word
     for b in WheelhouseApp.BINDINGS:
         if b.action not in {f"press('{x}')" for x in SDK_BUTTONS}:
