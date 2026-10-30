@@ -494,3 +494,27 @@ def test_the_park_is_the_cycles_end(host, store, sid):
     store.move_compaction = lambda *a: (order.append(a[2]), real_move(*a))[1]
     end(host, compacted=True)
     assert order == ["parked", "completed"] and store.session(sid)["parked"], order
+
+
+def test_messages_sent_before_the_press_are_held_while_requested(host, store, sid):
+    """Round 6 (1): pressed, not yet claimed: what was sent before goes after the cycle, never
+    as a turn the notes ask could merge into."""
+    store.set_runner(sid, "sdk")
+    store.send(sid, "sent before the press")
+    store.command(sid, "compact")
+    run(host.poll())
+    assert len(host.client.queries) == 1 and "pressed Compact" in host.client.queries[0], host.client.queries
+    assert store.pending(sid), "held, unclaimed"
+
+
+def test_interrupt_during_parks_requested_cycle_drops_the_park_too(host, store, sid):
+    """Round 6 (5): Interrupt before the session has parked: the request, its Compact first and
+    the cycle all go, so it never compacts later under a new cycle."""
+    store.set_runner(sid, "sdk")
+    store.request(sid, "park", True)
+    run(host.poll())
+    store.command(sid, "interrupt")
+    run(host.poll())
+    s = store.session(sid)
+    assert store.compaction(sid)["state"] == "cancelled" and not compacting_now(s)
+    assert (s["park_requested_at"], s["park_compact"]) == (None, 0)

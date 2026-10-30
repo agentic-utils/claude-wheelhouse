@@ -34,7 +34,7 @@ from . import adopt, api, away, features, fingerprint, fork, launch, liveness, m
 from .docroots import DOC_CAP
 from .host import (PARK_COMPACT_WITHIN, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, keepalive_body,
                    waits_on_person)
-from .store import (COMPACT_QUESTION, NOTES_WAIT, Compacting, DISMISSABLE, compacting_now, PRS_SINCE, STATUSES, SessionGone, Store, can_queue,
+from .store import (COMPACT_QUESTION, NOTES_WAIT, Compacting, DISMISSABLE, compacting_now, PRS_SINCE, STATUSES, SessionGone, requested_expired, Store, can_queue,
                     PROTOCOL_VERSION, mcp_servers, mode, needs_relaunch, runner, standing)
 
 RUNNING = ("live", "stalled", "starting")
@@ -341,9 +341,10 @@ class Hub:
                 if self.store.move_compaction(s["id"], s["compaction_id"], "failed"):
                     print(f"wheelhouse: {display_name(s)}'s compaction failed: its host isn't running",
                           file=sys.stderr, flush=True)
-            elif self.store.expire_park_cycle(s["id"], PARK_COMPACT_WITHIN):   # whoever's host, or none
-                print(f"wheelhouse: {display_name(s)}'s Park with Compact first failed: it didn't park within "
-                      f"{PARK_COMPACT_WITHIN // 60} minutes", file=sys.stderr, flush=True)
+            elif (within := requested_expired(s, PARK_COMPACT_WITHIN)) is not None:   # read first: no lock
+                if self.store.expire_requested(s["id"], s["compaction_id"], within):
+                    print(f"wheelhouse: {display_name(s)}'s compaction failed: no host took it up within "
+                          f"{within:g} s", file=sys.stderr, flush=True)
 
     def note_quiet(self) -> None:
         """A session parked, ended or stopped since the last refresh (or, at a hub's first,
@@ -951,7 +952,8 @@ class Hub:
                 return Done(False).say(str(e.args[0]), "warning")
             done.denied = True
             done.say(f"denied {target[1]}, with your message")
-        elif now or mode(s) == "immediate" or self.store.waits_on(*target):   # a call waiting: never queued (#244)
+        elif now or mode(s) == "immediate" or (compacting_now(s) and self.store.waits_on(*target)):
+            # during a cycle a call the notes turn waits on is answered at once: queueing is refused (#244)
             self.store.send(target[0], text, target[1])
             done.say(f"sent to {aimed(target)}{self.late(target[0])}")
             if mode(s) == "queued" and (drafts := self.store.drafts(target[0])):

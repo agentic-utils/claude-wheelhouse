@@ -472,6 +472,27 @@ def compacting_now(s) -> bool:
     return (s["compaction"] if "compaction" in s.keys() else None) in COMPACTION_ACTIVE
 
 
+# how long a cycle may stay requested before a host claims it (moves it on, at its next poll:
+# the claim, never the notes turn starting, so a session in a long turn never fails); past it the
+# cycle fails (a host that can't drive it: older code, wedged). Park's Compact first waits for
+# its park instead, PARK_COMPACT_WITHIN (host.py), passed in as park_within
+CLAIM_WITHIN = 60
+
+
+def requested_expired(s, park_within: float) -> float | None:
+    """A session row's cycle, still requested past its deadline: that deadline (seconds), to
+    expire it with (Store.expire_requested); None otherwise. Read only: no write lock taken."""
+    if models_field(s, "compaction") != "requested" or not models_field(s, "compaction_at"):
+        return None
+    within = park_within if s["compaction_origin"] == "park" else CLAIM_WITHIN
+    age = (datetime.now(timezone.utc) - datetime.fromisoformat(s["compaction_at"])).total_seconds()
+    return within if age > within else None
+
+
+def models_field(s, key: str):
+    return s[key] if key in s.keys() else None
+
+
 def default_runner(sdk: bool | None = None) -> str:
     """How a new session runs. sdk: whether SDK mode is on, else features.sdk_enabled().
     With it off, a session runs in a tab whatever WHEELHOUSE_RUNNER says."""
@@ -784,18 +805,28 @@ class Store:
             self.drop_park_cycle(db, sid)
         return took
 
-    def expire_park_cycle(self, sid: str, within: float) -> bool:
-        """Park's Compact first has a deadline as every state does: still requested `within`
-        seconds after the press (its park never came), the cycle fails and its Compact first goes,
-        in one transaction, checked by the host and by the hub's sweep. Whether it expired."""
+    def expire_requested(self, sid: str, cid: str, within: float) -> bool:
+        """A cycle still requested `within` seconds after its press fails (requested_expired):
+        only that cycle, and only if no host has claimed it meanwhile. A Park's Compact first goes
+        with it, in the same transaction; queued drafts stay queued. Whether it expired."""
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=within)).isoformat(timespec="microseconds")
         with self.tx() as db:
-            expired = db.execute("UPDATE sessions SET compaction = 'failed', compaction_at = ?, park_compact = 0, "
-                                 "park_keep = NULL WHERE id = ? AND compaction = 'requested' AND "
-                                 "compaction_origin = 'park' AND compaction_at < ?", (stamp(), sid, cutoff)).rowcount
+            expired = db.execute("UPDATE sessions SET compaction = 'failed', compaction_at = ?, park_compact = CASE "
+                                 "WHEN compaction_origin = 'park' THEN 0 ELSE park_compact END, park_keep = CASE "
+                                 "WHEN compaction_origin = 'park' THEN NULL ELSE park_keep END WHERE id = ? AND "
+                                 "compaction_id = ? AND compaction = 'requested' AND compaction_at < ?",
+                                 (stamp(), sid, cid, cutoff)).rowcount
             if expired:
                 db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
         return bool(expired)
+
+    def drop_park_request(self, sid: str) -> None:
+        """Interrupt during Park with Compact first, before it has parked: its request, its
+        Compact first and its cycle all go, with nothing said to the session (Interrupt is)."""
+        with self.tx() as db:
+            db.execute("UPDATE sessions SET park_requested_at = NULL, park_told_at = NULL, park_compact = 0, "
+                       "park_keep = NULL WHERE id = ?", (sid,))
+            self.drop_park_cycle(db, sid)
 
     def check_compacting(self, sid: str, action: str) -> None:
         """Compacting if the session is in a compaction cycle: for the hub's actions that are

@@ -35,7 +35,7 @@ from pathlib import Path
 from . import features, liveness, models, plan_usage, steps, transcript, transcript_usage
 from .launch import PROTOCOL_SDK, after_compaction, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT, request_text
-from .store import (CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, HOST_QUESTION, NOTES_WAIT, SessionGone, compacting_now, Store, callback_url, db_path,
+from .store import (CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, HOST_QUESTION, NOTES_WAIT, SessionGone, compacting_now, requested_expired, Store, callback_url, db_path,
                     mcp_named, mcp_question, mcp_server, now, runner, wheelhouse_question)
 
 POLL_SECONDS = 1.0
@@ -738,12 +738,14 @@ class Host:
         # during a compaction cycle, turns and requests sent before it began are held until it
         # ends (#244): only what a call waiting on the person takes goes
         await self.cycle_due()
-        if self.cycle is None and self.store.expire_park_cycle(self.sid, PARK_COMPACT_WITHIN):
+        if (self.cycle is None and (within := requested_expired(session, PARK_COMPACT_WITHIN)) is not None
+                and self.store.expire_requested(self.sid, session["compaction_id"], within)):
             self.park_told = None   # its park never came: unlocked, the session as it was
-        # Park with Compact first: its cycle runs from the press, so the person's messages are
-        # held while the park request still goes to the session
+            session = self.store.session(self.sid)
+        # held whenever the store says a cycle is active, requested included; Park with Compact
+        # first's request still goes to the session, as its cycle's first step
         parking = self.cycle is None and compacting_now(session) and session["compaction_origin"] == "park"
-        await self.deliver(session, hold=self.cycle is not None or parking, tell=parking or None)
+        await self.deliver(session, hold=self.cycle is not None or compacting_now(session), tell=parking or None)
         await self.reconcile(session)
         asks = self.store.take_mcp_asks(self.sid)
         if asks or (self.mcp_items and time.monotonic() - self.mcp_checked > MCP_RECHECK):
@@ -765,6 +767,8 @@ class Host:
             self.store.drop_compact_request(self.sid)
         if command == "interrupt":
             await self.client.interrupt()
+            if self.cycle is None and session["compaction_origin"] == "park" and compacting_now(session):
+                self.store.drop_park_request(self.sid)   # Park's Compact first, not yet parked: all of it goes
             self.end_cycle("cancelled", "cancelled by Interrupt")
             self.store.set_interrupted(self.sid)   # durable: the line below is the next turn's to change
             self.store.set_activity(self.sid, "interrupted")
@@ -1698,7 +1702,7 @@ class Host:
         parking = row is not None and row["origin"] == "park" and row["state"] == "requested" and s["park_compact"]
         if parking and not s["parked"] and s["park_requested_at"]:
             # Park's Compact first, its request told to a Claude Code now gone: told again, so this
-            # host's clock (park_told) runs, under the cycle's own deadline (expire_park_cycle)
+            # host's clock (park_told) runs, under the cycle's own deadline (expire_requested)
             self.store.untell_request(self.sid, "park")
         elif parking and not s["parked"]:
             parking = False   # neither asked nor parked: nothing would drive it

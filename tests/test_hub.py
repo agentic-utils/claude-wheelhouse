@@ -1671,3 +1671,46 @@ def test_park_with_compact_first_is_refused_in_a_tab(hub, store, sid, monkeypatc
     done = hub.ask(sid, "park", compact=True)
     assert not done.ok and "compaction isn't offered" in done.notices[0].text, desc
     assert store.session(sid)["park_requested_at"] is None and store.compaction(sid)["state"] is None, desc
+
+
+@pytest.mark.parametrize("origin, age, state, desc", [
+    ("person", 30, "requested", "pressed 30 s ago, not yet claimed: within CLAIM_WITHIN"),
+    ("person", 61, "failed", "unclaimed past CLAIM_WITHIN (an older or wedged host): failed, unlocked"),
+    ("park", 61, "requested", "Park's waits for its park, an hour, not CLAIM_WITHIN"),
+    ("park", host_mod.PARK_COMPACT_WITHIN + 1, "failed", "Park's past its own deadline: failed"),
+])
+def test_an_unclaimed_cycle_has_a_deadline(hub, store, sid, monkeypatch, origin, age, state, desc):
+    from datetime import datetime, timedelta, timezone
+    host(store, sid)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    store.queue(sid, "queued")
+    if origin == "park":
+        store.request(sid, "park", True)
+    else:
+        store.command(sid, "compact")
+    at = (datetime.now(timezone.utc) - timedelta(seconds=age)).isoformat(timespec="microseconds")
+    store.db.execute("UPDATE sessions SET compaction_at = ?", (at,))
+    hub.refresh()
+    assert store.compaction(sid)["state"] == state, desc
+    assert len(store.drafts(sid)) == 1, f"{desc}: drafts stay queued"
+
+
+def test_a_refresh_with_no_stale_cycle_takes_no_write(hub, store, sid, monkeypatch):
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    store.command(sid, "compact")
+    monkeypatch.setattr(store, "expire_requested", lambda *a: pytest.fail("a write taken on a fresh cycle"))
+    monkeypatch.setattr(store, "move_compaction", lambda *a: pytest.fail("a write taken on a live session"))
+    hub.refresh()
+
+
+@pytest.mark.parametrize("in_cycle, queued, desc", [
+    (False, True, "no cycle: an answer to a waiting question queues in Queued mode, as before"),
+    (True, False, "during a cycle: sent at once, as queueing is refused"),
+])
+def test_a_waiting_calls_answer_goes_at_once_only_during_a_cycle(hub, store, sid, in_cycle, queued, desc):
+    ref = store.post_item(sid, "question", "which?")
+    store.set_answer(sid, ref, '{"from": "AskUserQuestion"}')
+    if in_cycle:
+        store.command(sid, "compact")
+    assert hub.submit((sid, ref), "the first").ok, desc
+    assert bool(store.drafts(sid)) == queued and bool(store.pending(sid)) == (not queued), desc
