@@ -1171,7 +1171,10 @@ GONE = "host has stopped: Relaunch it from the daemon's machine"
     (False, "tab", "/sessions/{sid}/relaunch", {}, None, REMOTE, 403, OFF, [], "Relaunch of a dead session: a tab"),
     (False, "tab", "/relaunch-all", {"sids": ["{sid}"]}, None, REMOTE, 403, OFF, [], "Relaunch all: tabs"),
     (False, "tab", "/adopt", {"id": "adoptee"}, None, REMOTE, 403, OFF, [], "Adopt: a tab"),
-    (False, "tab", "/sessions/{sid}/shell", {}, None, REMOTE, 403, OFF, [], "Shell: the host hands over to a tab"),
+    (False, "tab", "/sessions/{sid}/shell", {}, None, REMOTE, 403, OFF, [], "Handover: the host hands over to a tab"),
+    (False, "tab", "/shell", {"sid": "{sid}"}, None, REMOTE, 403, "doesn't open them remotely", [],
+     "Shell: a quick shell's tab (#257)"),
+    (False, "tab", "/shell", {"sid": "{sid}"}, None, HERE, 200, "shell opened", ["shell"], "Shell here"),
     (True, "tab", "/relaunch-all", {"sids": ["{sid}"]}, "stale", REMOTE, 200, "relaunching 0", [],
      "live at the last tick, gone since (review 75): not Available as shown, so left, and no tab"),
     (True, "sdk", "/sessions/{sid}/relaunch", {}, "tut", REMOTE, 200, "relaunching", ["host"],
@@ -1206,6 +1209,7 @@ async def test_another_machine_opens_no_tab(store, tmp_path, monkeypatch, sdk, e
     opened = []
     monkeypatch.setattr(launch, "open_tab", lambda store, sid, notice=True: opened.append("tab"))
     monkeypatch.setattr(launch, "open_host", lambda store, sid: opened.append("host"))
+    monkeypatch.setattr(launch, "open_shell", lambda *a, **k: opened.append("shell"))
     monkeypatch.setattr(hub_mod.Hub, "host_command", lambda self, sid, what: opened.append(what) or hub_mod.Done())
     monkeypatch.setattr(liveness, "running_pid", lambda *a, **k: None)
     sid = store.create_session(str(tmp_path), name="demo", runner="sdk" if how == "host" else "tab")
