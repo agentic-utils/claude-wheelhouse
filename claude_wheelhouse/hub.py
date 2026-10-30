@@ -45,12 +45,13 @@ def send_or_queue(store: Store, sid: str, ref: str, text: str) -> str:
     """A message of the person's that goes out without them pressing send: a run's output
     (#257). Queued while the session is parked or busy (operating, #249: the store's one busy
     check), never refused or dropped (D232), else sent or queued by the session's mode, as
-    submit does. An operation starting between the look and the send queues it too.
-    SessionGone if the session has gone. "sent" or "queued"."""
+    submit does: the send itself is the check (Busy queues it), so the quiet mark's cycle is
+    called off and the output goes, as a person's answer would. SessionGone if the session has
+    gone. "sent" or "queued"."""
     s = store.session(sid)
     if s is None:
         raise SessionGone(sid)
-    if mode(s) == "immediate" and not s["parked"] and operating(s) is None:
+    if mode(s) == "immediate" and not s["parked"]:
         try:
             store.send(sid, text, ref)
             return "sent"

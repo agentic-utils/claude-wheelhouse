@@ -1821,6 +1821,8 @@ def test_open_shell_picks_the_sessions_live_directory(store, projects, monkeypat
      "compacting (blue): queued, never refused (D232)"),
     ("immediate", False, "op = 'park', op_state = 'told'", "queued", "parking (blue): queued, never refused"),
     ("immediate", False, "op = 'relaunch', op_state = 'starting'", "queued", "relaunching (blue): queued"),
+    ("immediate", False, "compaction = 'requested', compaction_origin = 'quiet'", "sent",
+     "the quiet mark's cycle: called off and sent, as a person's answer"),
 ])
 def test_send_or_queue(store, sid, mode_, parked, busy, want, desc):
     """#257: a run's output goes as an answer would, through #249's one busy check (operating)."""
@@ -1834,7 +1836,7 @@ def test_send_or_queue(store, sid, mode_, parked, busy, want, desc):
 
 
 def test_send_or_queue_busy_after_the_look(store, sid, monkeypatch):
-    """An operation starting between send_or_queue's look and the send: queued, not lost (#249, #257)."""
+    """The send refused as busy (an operation under way): queued, not lost (#249, #257)."""
     ref = store.post_command(sid, "ls", "List")[0]
     store.db.execute("UPDATE sessions SET send_mode = 'immediate'")
 
