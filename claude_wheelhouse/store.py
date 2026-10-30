@@ -25,7 +25,10 @@ DEFAULT_DB = Path.home() / ".local/state/claude-wheelhouse/wheelhouse.db"
 # (never by the session itself). Allow or Deny answer it; a message on it denies with that text.
 # doc: a markdown document the session declares for the person to read (post_doc), M for markdown
 # pr: a pull request the session made (post_pr, prs.py), its ref the repo's PR number (PR108)
-KINDS = {"task": "T", "question": "Q", "agent": "A", "decision": "D", "permission": "P", "doc": "M", "pr": "PR"}
+# command: a shell command the session asks the person to run themselves (suggest_command, #257),
+# its title the one-line why and its body the command, run from the app's Run dialog
+KINDS = {"task": "T", "question": "Q", "agent": "A", "decision": "D", "permission": "P", "doc": "M", "pr": "PR",
+         "command": "C"}
 STATUSES = {
     "task": {"todo", "running", "blocked", "waiting", "done", "dropped"},
     "question": {"open", "answered", "closed"},
@@ -37,16 +40,18 @@ STATUSES = {
     "doc": {"new", "updated", "read"},
     # GitHub's, never the session's or the person's (set_pr_states, from the PRs pane's fetch)
     "pr": {"draft", "open", "merged", "closed"},
+    # the person's: new until run, run once run at least once, closed if dismissed unrun
+    "command": {"new", "run", "closed"},
 }
 INITIAL_STATUS = {"task": "todo", "question": "open", "agent": "running", "decision": "unseen",
-                  "permission": "open", "doc": "new", "pr": "open"}
+                  "permission": "open", "doc": "new", "pr": "open", "command": "new"}
 CLOSED = {"done", "dropped", "closed", "failed", "allowed", "denied"}
 # Where an item stands in the inbox (standing), one table for every kind (T71). Active: ranked
 # as it has always been. Settled: done with, but kept in sight: dimmed, after the rest. Finished:
 # off the inbox until F shows it (closed, a permission answered, or dismissed by the person).
 SETTLED = {"task": {"done", "dropped"}, "question": {"answered"}, "decision": {"seen"},
            "agent": {"done", "failed"}, "permission": set(), "doc": {"read"},
-           "pr": {"merged", "closed"}}
+           "pr": {"merged", "closed"}, "command": {"run"}}
 # kinds whose settled items the person dismisses (Delete), recorded in items.dismissed; a
 # question or a decision is closed instead. A PR is dismissed whatever its state (never on GitHub)
 DISMISSABLE = ("task", "agent", "doc", "pr")
@@ -99,7 +104,9 @@ DECISION_FIELDS = (("why", "Why"),)
 # 25: the compaction cycle's task item (COMPACTION_TASK), which the session must never see: an older
 # MCP server lists it (list_items) and an older reminder after compaction names it; and the tab
 # plugin's PreCompact hook (compaction-start), which an older tab doesn't have.
-PROTOCOL_VERSION = 25
+# 26: command items and the suggest_command tool (#257), with a protocol rule to use it rather than a
+# code block to copy: an older session never posts one, and isn't told to.
+PROTOCOL_VERSION = 26
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
@@ -410,6 +417,8 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "park_compact", "INTEGER NOT NULL DEFAULT 0"), ("items", "parent_ref", "TEXT"),
                  # the person's order (ordering.py): a row's place, and the group it was placed in
                  ("items", "pos", "REAL"), ("items", "pos_group", "TEXT"),
+                 # a command item's: whether its session asked for the output (suggest_command, #257)
+                 ("items", "want_output", "INTEGER"),
                  ("sessions", "pos", "REAL"), ("sessions", "pos_group", "TEXT"),
                  # where its repo's decisions are, as it declared them (set_doc_dirs): JSON, NULL for docs/adr
                  ("sessions", "doc_dirs", "TEXT"),
@@ -1317,6 +1326,8 @@ class Store:
             raise ValueError("a doc is posted with its path (post_doc)")
         if kind == "pr":
             raise ValueError("a PR is posted with its url (post_pr)")
+        if kind == "command":
+            raise ValueError("a command is posted with suggest_command")
         if kind == "decision":
             body = decision_body(body, status, decision)
             status = None
@@ -1327,6 +1338,50 @@ class Store:
         with self.tx() as db:
             self._require(db, sid)
             return self._insert_item(db, sid, kind, title, body, status, pinned)
+
+    def post_command(self, sid: str, command: str, why: str, want_output: bool = False) -> tuple[str, bool]:
+        """A command the session asks the person to run (#257): why its title, the command its
+        body, both checked (quickshell.check_command, check_why). The same command posted
+        again by the same session is the same item, back to new with this why. (ref, whether
+        it was new.) want_output: the session asks for what it prints (items.want_output)."""
+        from .quickshell import check_command, check_why
+        check_command(command)
+        check_why(why)
+        why = why.strip()
+        with self.tx() as db:
+            self._require(db, sid)
+            row = db.execute("SELECT ref FROM items WHERE session_id = ? AND kind = 'command' AND body = ? "
+                             "ORDER BY id LIMIT 1", (sid, command)).fetchone()
+            if row is None:
+                ref, new = self._insert_item(db, sid, "command", why, command, INITIAL_STATUS["command"]), True
+            else:
+                ref, new = row["ref"], False
+            db.execute("UPDATE items SET title = ?, status = 'new', dismissed = NULL, want_output = ?, updated_at = ?, "
+                       "session_at = ? WHERE session_id = ? AND ref = ?", (why, int(want_output), now(), now(), sid, ref))
+            return ref, new
+
+    def close_command(self, sid: str, ref: str, closed: bool = True, status: str | None = None) -> None:
+        """The person closes a command item unrun (Delete), or reopens it, as new or as status (#257)."""
+        status = "closed" if closed else status or "new"
+        self._check_status("command", status)
+        with self.tx() as db:
+            self._require(db, sid)
+            if not db.execute("UPDATE items SET status = ?, updated_at = ? WHERE session_id = ? AND ref = ? "
+                              "AND kind = 'command'", (status, now(), sid, ref)).rowcount:
+                raise KeyError(f"no command {ref} in this session")
+
+    def ran(self, sid: str, ref: str, note: str | None = None) -> None:
+        """The person ran a command item (#257): it goes to run, and with note, its thread gains
+        it as a note of theirs the session is never sent (messages.kind 'run', delivered)."""
+        with self.tx() as db:
+            self._require(db, sid)
+            if not db.execute("UPDATE items SET status = 'run', updated_at = ? WHERE session_id = ? AND ref = ? "
+                              "AND kind = 'command'", (now(), sid, ref)).rowcount:
+                raise KeyError(f"no command {ref} in this session")
+            if note:
+                db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, claimed_at, "
+                           "delivered_at, kind) VALUES (?, ?, 'person', ?, ?, ?, ?, 'run')",
+                           (sid, ref, note, now(), now(), now()))
 
     def post_doc(self, sid: str, title: str, path: str, parent: str | None = None, pinned: bool = True) -> str:
         """A markdown document the session declares for the person to read: its absolute path,
@@ -1864,6 +1919,9 @@ class Store:
         if item["kind"] == "pr":
             raise ValueError(f"{item['ref']} is a PR: its status comes from GitHub. Change its title or "
                              "parent, or reply without a status.")
+        if item["kind"] == "command":
+            raise ValueError(f"{item['ref']} is a command: whether it was run is the person's. Suggest it "
+                             "again to change it, or reply without a status.")
         cls._check_status(item["kind"], status)
 
     @staticmethod

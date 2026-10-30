@@ -832,6 +832,19 @@ class RemoteClient:
     def open_shell(self, sid: str | None) -> Done:
         return self.done("/shell", {"sid": sid})
 
+    def shell_dir(self, sid: str | None) -> tuple[str | None, str | None]:
+        """Where a quick shell for the session opens (Hub.shell_dir)."""
+        if not sid:
+            return None, None
+        try:
+            cwd, gone = self.get(f"/sessions/{sid}/shell-dir")
+        except Refused as e:
+            raise hub_error(e) from None
+        return cwd, gone
+
+    def run_command(self, sid: str, ref: str, text: str, send: bool) -> Done:
+        return self.done(f"/items/{sid}/{ref}/run", {"text": text, "send": send})
+
     def mcp(self, sid: str, do: str, server: str = "", url: str | None = None) -> Done:
         return self.done(f"/sessions/{sid}/mcp", {"do": do, "server": server, "url": url})
 

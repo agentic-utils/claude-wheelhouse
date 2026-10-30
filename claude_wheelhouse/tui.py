@@ -63,7 +63,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, away, callout, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
+from . import api, away, callout, quickshell, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .rows import KIND_COLOUR, KeepColours, RowTips, faded, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
@@ -111,7 +111,7 @@ VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
 RENDER_OFF_LOOP = 2000
 CALLS_WAIT = 10   # seconds the app's close waits for a Delete's calls under way (delete_off_thread)
 RENDERING = ("note", "_rendering…_")
-CLOSABLE = {"question": "answered", "decision": "seen"}   # what Delete closes, and what Ctrl+R reopening makes it
+CLOSABLE = {"question": "answered", "decision": "seen", "command": "new"}   # what Delete closes, and what Ctrl+R reopening makes it
 
 
 def closable(item) -> bool:
@@ -530,6 +530,18 @@ def pr_body(item) -> str:
     return f"Pull request **{owner}/{repo}#{n}**: [{item['body']}]({item['body']})" if repo else item["body"]
 
 
+def fence(text: str, info: str = "") -> str:
+    """text in a Markdown code block, its fence longer than any run of backticks in it."""
+    ticks = "`" * max(3, max((len(m) for m in re.findall(r"`+", text)), default=0) + 1)
+    return f"{ticks}{info}\n{text}\n{ticks}"
+
+
+def command_body(item) -> str:
+    """A command item's detail (#257): the command in a code block, exactly as it runs; its
+    why is the item's title. Run, under it, opens it (RunButtons)."""
+    return fence(item["body"], "bash")
+
+
 def thread_blocks(found, session_name: str = "") -> list[tuple[str, str]]:
     """An item's detail and conversation, oldest first, as (who, markdown) blocks, from the
     item and its messages (client.thread): the person's messages (queued ones marked, and
@@ -543,9 +555,12 @@ def thread_blocks(found, session_name: str = "") -> list[tuple[str, str]]:
     where = f"{session_name} · " if session_name else ""
     out = [("head", f"## {ref} · {item['title']}\n\n{where}`{item['kind']}` · **{item['status']}**"
                     f"{' · answer queued' if queued else ''} · updated {item['updated_at']}"),
-           ("pr", pr_body(item)) if item["kind"] == "pr" else ("claude", item["body"] or "_no detail_")]
+           ("pr", pr_body(item)) if item["kind"] == "pr" else
+           ("claude", command_body(item)) if item["kind"] == "command" else ("claude", item["body"] or "_no detail_")]
     for m in msgs:
-        if m["author"] == "person":
+        if m["author"] == "person" and m["kind"] == "run":   # a run whose output wasn't sent: never the session's (#257)
+            out.append(("note", f"_{m['body']}_"))
+        elif m["author"] == "person":
             out.append(("you", f"**you{' · queued' if m['draft'] else ' · sending' if not m['delivered_at'] else ''}** · "
                                f"{m['created_at']}\n\n"
                                f"{transcript.hard_breaks(m['body'])}"))
@@ -2073,6 +2088,19 @@ class CompactButtons(Horizontal):
         return then_choice(self.query_one(RadioSet))
 
 
+class RunButtons(Horizontal):
+    """Over the answer box while the item in context is a command item not closed (#257): Run,
+    which opens the command in RunCommand. A real button, never a segment of the item's text,
+    so no session text reaches markup."""
+    DEFAULT_CSS = """
+    RunButtons { height: 1; display: none; background: #12122a; }
+    RunButtons Button { min-width: 12; margin: 0 1 0 0; padding: 0 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield BarButton("Run", "success", id="run-command", compact=True, tooltip=BUTTONS["run-command"])
+
+
 class ThreadView(Screen):
     """One item full screen: its detail, the whole conversation and a compose box. The app's
     refresh tick repaints it, so a reply shows up while it's open; typed text is untouched."""
@@ -2093,6 +2121,7 @@ class ThreadView(Screen):
         yield PermissionButtons()
         yield DenyReason()
         yield CompactButtons()
+        yield RunButtons()
         yield Compose(id="thread-answer")
         yield Hint(classes="answer-hint")
         yield SendBar(conversation=True)
@@ -3466,6 +3495,66 @@ class CompactSession(Dialog):
         self.action_answer({"notes": emoji.convert(notes) or None, "then": then_choice(self.query_one(RadioSet))})
 
 
+class RunCommand(Dialog):
+    """Run, on a command item (#257): the command in an editable box, never soft-wrapped (a
+    horizontal scrollbar instead) so its line breaks are the real ones, with focus in it so a
+    stray Enter edits rather than runs; and whether the output goes back to the session,
+    ticked when it asked (want_output). Run checks the box as suggest_command does
+    (quickshell.check_command), refusing with the place. Answers {"text", "send"}, or None."""
+    ACTION = "run-go"
+    BINDINGS = [Binding("ctrl+enter", "run", show=False, priority=True)]
+    DEFAULT_CSS = """
+    RunCommand #run-text { height: 22; }
+    RunCommand #run-warning { color: #ffd300; padding: 0 0 0 4; }
+    RunCommand #run-error { color: #ff2a6d; }
+    """
+
+    def __init__(self, ref: str, name: str, why: str, cwd: str, text: str, wanted: bool):
+        super().__init__()
+        self.ref, self.name_, self.why, self.cwd, self.text, self.wanted = ref, name, why, cwd, text, wanted
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(f"Run {self.ref} from {self.name_}", classes="dialog-title", markup=False)
+            yield Label(self.why, classes="dialog-prompt", markup=False)
+            yield Label(f"in {self.cwd}", classes="dialog-note", markup=False)
+            yield TextArea(self.text, id="run-text", soft_wrap=False, show_line_numbers=False)
+            yield Checkbox(f"Send the output back to {self.name_}" + (" (it asked for it)" if self.wanted else ""),
+                           self.wanted, id="run-send")
+            yield Label("It goes into the session's transcript: untick if it may show secrets.", id="run-warning",
+                        markup=False)
+            yield Label("", id="run-error", markup=False)
+            with Horizontal(classes="buttons"):
+                yield Button("Run  Ctrl+Enter", variant="success", id="run-go")
+                yield Button("Cancel  Escape", id="run-cancel")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self.query_one("#run-warning").display = self.wanted
+        self.query_one("#run-text", TextArea).focus()
+
+    @on(Checkbox.Changed, "#run-send")
+    def send_changed(self, event: Checkbox.Changed) -> None:
+        self.query_one("#run-warning").display = event.value
+
+    def action_run(self) -> None:
+        self.query_one("#run-go", Button).press()
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id != "run-go":
+            self.action_answer(None)
+            return
+        text = self.query_one("#run-text", TextArea).text
+        try:
+            quickshell.check_command(text)
+        except ValueError as e:
+            self.query_one("#run-error", Label).update(Text(str(e)))
+            return
+        self.action_answer({"text": text, "send": self.query_one("#run-send", Checkbox).value})
+
+
 class ParkSession(Dialog):
     """Park a session run in the wheelhouse: it writes its handoff notes and parks, then with
     Compact first ticked it is compacted before its host stops, nothing sent after. Ticked by
@@ -4122,6 +4211,8 @@ BUTTONS = {
                 "then just that, its queued answers sent in the same prompt (the default), or parked at once"),
     "shell": ("Shell (Alt+H, from anywhere): a quick shell in a new terminal tab, in the session in context's "
               "directory (where it works now), or home with none; exit or Ctrl+D closes it"),
+    "run-command": ("Run (on a command a session suggested): opens it in a box you can edit, with whether its output "
+                    "goes back to the session; Run there runs it in a new terminal tab in the session's directory"),
     "handover": ("Handover to Claude Code in a shell (in the session list's right-click menu only, no key): open a "
                  "session run in the wheelhouse in a real Claude Code tab; it comes back when you /exit"),
     "model": "Model (Alt+M): change the model a session run in the wheelhouse runs on, live; its prompt cache goes with the old one",
@@ -4668,6 +4759,7 @@ class WheelhouseApp(App):
                     yield PermissionButtons()
                     yield DenyReason()
                     yield CompactButtons()
+                    yield RunButtons()
                     yield Compose(id="answer")
                     yield Hint(classes="answer-hint")
         yield SendBar()
@@ -6699,6 +6791,11 @@ class WheelhouseApp(App):
                     self.refit()   # a row more or less over the answer box
         if doc_gone and not self.focus_answer():
             self.screen.set_focus(self.items_table)
+        command = self.command_item(self.bar_item(self.screen))
+        for row in self.screen.query(RunButtons):
+            if row.display != (command is not None):
+                row.display = command is not None
+                self.refit()
         compacting = s is not None and "compact-now" in self.busy_buttons(s)
         for row in compact_rows:
             show_button(row, "compact-now", "Compact", compacting, not waiting)
@@ -8154,6 +8251,39 @@ class WheelhouseApp(App):
         self.push_screen(Confirm(f"Open {self.label(sid)} in a terminal tab? The wheelhouse hands it over, "
                                  "and takes it back when you /exit the tab."),
                          lambda yes: yes and self.host_command(sid, "shell", press_as="handover"))
+
+    def command_item(self, target):
+        """The item in context if it's a command item not closed (#257), else None."""
+        item = target and target[1] and self.client.item(*target)
+        return item if item and item["kind"] == "command" and item["status"] != "closed" else None
+
+    @on(Button.Pressed, "#run-command")
+    def run_pressed(self, event: Button.Pressed) -> None:
+        """Run, on a command item (#257): RunCommand with its text and whether the session asked
+        for the output; its answer run in a quick shell's tab (Hub.run_command)."""
+        self.settle()
+        target = self.bar_item(event.button.screen)
+        if not target or self.command_item(target) is None:
+            return
+        if self.client.elsewhere:
+            self.notify("Run opens a tab on the machine the wheelhouse runs on, which isn't this one: "
+                        "nothing run", severity="warning")
+            return
+        found = self.client.thread(*target)
+        if found is None:
+            return
+        item = found[0]
+        cwd, gone = self.client.shell_dir(target[0])
+        self.push_screen(RunCommand(item["ref"], self.display_name(self.row(target[0])), item["title"],
+                                    cwd or f"{gone} (gone: Run refuses)", item["body"], bool(item["want_output"])),
+                         lambda answer: answer and self.run_command(target, answer))
+
+    def run_command(self, target: tuple[str, str], answer: dict) -> None:
+        try:
+            self.told(self.client.run_command(*target, answer["text"], answer["send"]))
+        except ValueError as e:   # in process: the hub's own check (the dialog's ran first)
+            self.notify(str(e), severity="warning")
+        self.refresh_data()
 
     @on(Button.Pressed, "#shell")
     def shell_pressed(self, event: Button.Pressed) -> None:

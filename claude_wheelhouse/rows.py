@@ -20,6 +20,7 @@ KIND_COLOUR = {
     "doc": "",
     "agent": "grey58",
     "permission": "dark_orange",
+    "command": "turquoise2",   # a command the session asks you to run (#257)
 }
 
 

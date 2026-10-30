@@ -1804,3 +1804,67 @@ def test_open_shell_picks_the_sessions_live_directory(store, projects, monkeypat
     assert done.ok and opened == [(str(paths[want_dir]), "shell" if records == "none" else "demo")], desc
     warnings = [e.text.replace(str(root) + "/", "") for e in done.notices if e.severity == "warning"]
     assert (warnings[0].upper().startswith(said.split()[0]) if said else not warnings), f"{desc}: {warnings}"
+
+
+@pytest.mark.parametrize("mode_, parked, compacting, want, desc", [
+    ("immediate", False, False, "sent", "Immediate: sent"),
+    ("queued", False, False, "queued", "Queued: queued for Send"),
+    ("immediate", True, False, "queued", "parked: queued, for the resume"),
+    ("immediate", False, True, "Compacting", "compacting: refused, the caller waits"),
+])
+def test_send_or_queue(store, sid, mode_, parked, compacting, want, desc):
+    """#257: a run's output goes as an answer would; the one place #249's busy rule joins."""
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.db.execute("UPDATE sessions SET send_mode = ?, parked = ?", (mode_, int(parked)))
+    if compacting:
+        store.db.execute("UPDATE sessions SET compaction = 'compacting', compaction_origin = 'person'")
+    if want == "Compacting":
+        with pytest.raises(hub_mod.Compacting):
+            hub_mod.send_or_queue(store, sid, ref, "out")
+        return
+    assert hub_mod.send_or_queue(store, sid, ref, "out") == want, desc
+    queued = [m["body"] for m in store.drafts(sid)]
+    assert queued == (["out"] if want == "queued" else []), desc
+
+
+@pytest.mark.parametrize("text, send, gone, ok, note, desc", [
+    ("ls", False, False, True, "ran", "as suggested, unticked: run, noted"),
+    ("ls -l", False, False, True, "ran, edited", "edited: noted so"),
+    ("ls", True, False, True, None, "ticked: run, the output its record"),
+    ("ls", False, True, False, None, "its directory gone: refused, nothing run"),
+])
+def test_run_command(store, projects, monkeypatch, text, send, gone, ok, note, desc):
+    """#257: Run writes a 0600 file and opens a tab whose command line carries only the
+    database's path and the key; refused rather than run elsewhere when the directory's gone."""
+    work = projects / "work"
+    work.mkdir()
+    sid = store.create_session(str(work), name="demo")
+    ref = store.post_command(sid, "ls", "List")[0]
+    if gone:
+        work.rmdir()
+    opened = []
+    monkeypatch.setattr(launch, "open_shell", lambda st, cwd, title, command=None, note="": opened.append((cwd, command)))
+    done = Hub(store).run_command(sid, ref, text, send)
+    assert done.ok == ok, desc
+    item = store.item(sid, ref)
+    assert item["status"] == ("run" if ok else "new"), desc
+    notes = [m["body"] for m in store.thread(sid, ref) if m["kind"] == "run"]
+    assert [n.split(" ", 2)[0] + (", edited" if n.endswith("edited") else "") for n in notes] == \
+        ([note] if note else []), desc
+    if not ok:
+        assert opened == [] and "gone" in done.notices[0].text, desc
+        return
+    (cwd, command), = opened
+    assert cwd == str(work) and command[2:5] == ["claude_wheelhouse", "shell", "--db"], desc
+    assert command[5] == str(store.path), f"{desc}: the database, a scratch one too"
+    payload = json.loads((store.path.parent / "shell" / command[6]).read_text())
+    assert (payload["text"], payload["want"], payload["edited"]) == (text, send, text != "ls"), desc
+
+
+def test_close_and_reopen_a_command(store, sid):
+    ref = store.post_command(sid, "ls", "List")[0]
+    hub = Hub(store)
+    hub.close(sid, ref, True)
+    assert store.item(sid, ref)["status"] == "closed"
+    hub.close(sid, ref, False)
+    assert store.item(sid, ref)["status"] == "new"
