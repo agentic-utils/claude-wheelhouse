@@ -10050,3 +10050,67 @@ async def test_double_click_on_detail_goes_full_screen_and_back(store, sid, tmp_
         assert app.detail_editor.key is None and not app.screen.selections, f"{desc}: no editor, nothing selected"
         if kind == "doc":
             assert app.detail_panes.tab == tui.DOC_TAB, f"{desc}: the doc's tab, as before"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("want_output, edit, untick, sent, error, desc", [
+    (False, None, False, [("ls -la", False)], None, "as suggested: Run runs the box's text, output not asked"),
+    (True, None, False, [("ls -la", True)], None, "asked for: ticked, and sent so"),
+    (True, None, True, [("ls -la", False)], None, "the person unticks it"),
+    (False, "ls -la | head", False, [("ls -la | head", False)], None, "edited: exactly what the box holds"),
+    (False, "ls ’x", False, [], "U+2019 at line 1, column 4", "a paste outside ASCII: refused with its place"),
+])
+async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path, monkeypatch, want_output, edit,
+                                                                  untick, sent, error, desc):
+    """#257: Run on a command item opens RunCommand, focus in the box; Run there runs exactly its
+    text, with the checkbox's choice; a box holding what can't be read as it runs is refused."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="demo")
+    ref, _ = store.post_command(sid, "ls -la", "List the files", want_output)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        got = []
+        app.client.run_command = lambda s, r, text, send: got.append((text, send)) or tui.Done()
+        await to_first_item(app, pilot)
+        app.items_table.move_cursor(row=app.items_table.keys().index(f"{sid}|{ref}"))
+        await pilot.pause()
+        app.paint_sendbar()
+        await pilot.pause()
+        run = app.screen.query_one("#run-command", Button)
+        assert tui.showing(run), f"{desc}: Run shows on a command item"
+        run.press()
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, tui.RunCommand), desc
+        box = dialog.query_one("#run-text", TextArea)
+        assert app.focused is box and box.text == "ls -la" and not box.soft_wrap, f"{desc}: focus in the box"
+        check = dialog.query_one("#run-send", tui.Checkbox)
+        assert check.value == want_output, desc
+        assert dialog.query_one("#run-warning").display == want_output, f"{desc}: the warning while ticked"
+        if edit is not None:
+            box.text = edit
+        if untick:
+            check.value = False
+            await pilot.pause()
+            assert not dialog.query_one("#run-warning").display, desc
+        await pilot.press("enter")   # a stray Enter edits, never runs
+        await pilot.pause()
+        assert got == [] and isinstance(app.screen, tui.RunCommand), f"{desc}: Enter in the box runs nothing"
+        box.text = edit or "ls -la"   # the newline Enter typed taken out again
+        dialog.query_one("#run-go", Button).press()
+        await pilot.pause()
+        assert got == sent, desc
+        if error:
+            assert error in str(dialog.query_one("#run-error", Label).content), desc
+            assert isinstance(app.screen, tui.RunCommand), f"{desc}: still open to fix"
+
+
+def test_a_command_items_thread_shows_the_command_and_the_run():
+    """#257: the command in a code block, as it runs; a run whose output wasn't sent as a dim note."""
+    item = {"ref": "C1", "title": "List", "kind": "command", "status": "run", "updated_at": "t", "body": "ls ```x"}
+    msgs = [{"author": "person", "kind": "run", "body": "ran 14:05", "created_at": "t", "draft": 0, "delivered_at": "t"}]
+    blocks = tui.thread_blocks((item, msgs))
+    assert blocks[1] == ("claude", "````bash\nls ```x\n````")
+    assert blocks[2] == ("note", "_ran 14:05_")

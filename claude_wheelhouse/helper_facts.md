@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 102, 2026-10-30T22:17:25Z, source 6e22cba1c1f2d0ae (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 103, 2026-10-30T22:18:43Z, source 94fc1b1dc0332a8f (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -29,7 +29,7 @@ daemon running.
 
 ## Words the app uses
 
-- Item: anything a session posts. Kinds: task, question, decision, subagent (A), PR, doc.
+- Item: anything a session posts. Kinds: task, question, decision, subagent (A), PR, doc, command (C: a shell command a session asks the person to run, with a Run button that opens it in an editable box with a "Send the output back" checkbox, then runs it in a quick shell's tab).
 - Queued and Immediate: a session's send mode. Queued holds answers until Send (Ctrl+S).
 - Park: a session writes its handoff and stops, kept dimmed until Unpark.
 - Busy (blue eye): from Park, Stop & Forget, Relaunch, Handover, New session, Adopt, a
@@ -249,6 +249,8 @@ The buttons under the session list act on the session highlighted there, and onl
 
 - Shell (Alt+H, from anywhere): a quick shell in a new terminal tab, in the session in context's directory (where it works now), or home with none; exit or Ctrl+D closes it
 
+- Run (on a command a session suggested): opens it in a box you can edit, with whether its output goes back to the session; Run there runs it in a new terminal tab in the session's directory
+
 - Relaunch / Unpark (Alt+L in the session list): start the session again where it left off, stopping it first if it's running (asked only if it's mid-turn); on a parked one, Unpark (Alt+P too)
 
 - Rename (Alt+R in the session list): the session's name in the wheelhouse
@@ -380,3 +382,4 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Park, Stop & Forget, Relaunch, Handover, New session, Adopt and a fork's new session keep it blue from the press until done: sends and other operations wait, queueing stays open, Interrupt aborts it, and one that can't finish in time is called off with a warning.
 - A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at.
 - Shell (Alt+H, from anywhere) opens a quick shell in a new terminal tab, in the directory the session in context works in now, or home. Handing a session run in the wheelhouse to a Claude Code tab is now Handover to Claude Code in a shell, in its right-click menu.
+- A session can suggest a shell command for you to run: a C item with a Run button that opens it in an editable box and runs it in a new terminal tab, sending the output back if you tick it.

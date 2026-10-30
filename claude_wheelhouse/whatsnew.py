@@ -333,6 +333,9 @@ FEATURES: tuple[Feature, ...] = (
             note="Shell (Alt+H, from anywhere) opens a quick shell in a new terminal tab, in the directory the "
                  "session in context works in now, or home. Handing a session run in the wheelhouse to a Claude Code "
                  "tab is now Handover to Claude Code in a shell, in its right-click menu."),
+    Feature("command-items", UNRELEASED, ADVANCED,
+            note="A session can suggest a shell command for you to run: a C item with a Run button that opens it "
+                 "in an editable box and runs it in a new terminal tab, sending the output back if you tick it."),
 
 )
 

@@ -11,7 +11,7 @@ import pytest
 
 from claude_wheelhouse import fork as fork_mod, host as host_mod, hub as hub_mod, launch, liveness, models, plan_usage, subagents, transcript, transcript_usage, tutorial, whatsnew
 from claude_wheelhouse.hub import Hub
-from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone, compacting_now, mode as store_mode
+from claude_wheelhouse.store import PROTOCOL_VERSION, Busy, SessionGone, compacting_now, mode as store_mode
 
 real_open_session = launch.open_session   # before any test stubs it
 
@@ -1811,3 +1811,88 @@ def test_open_shell_picks_the_sessions_live_directory(store, projects, monkeypat
     assert done.ok and opened == [(str(paths[want_dir]), "shell" if records == "none" else "demo")], desc
     warnings = [e.text.replace(str(root) + "/", "") for e in done.notices if e.severity == "warning"]
     assert (warnings[0].upper().startswith(said.split()[0]) if said else not warnings), f"{desc}: {warnings}"
+
+
+@pytest.mark.parametrize("mode_, parked, busy, want, desc", [
+    ("immediate", False, None, "sent", "Immediate: sent"),
+    ("queued", False, None, "queued", "Queued: queued for Send"),
+    ("immediate", True, None, "queued", "parked: queued, for the resume"),
+    ("immediate", False, "compaction = 'compacting', compaction_origin = 'person'", "queued",
+     "compacting (blue): queued, never refused (D232)"),
+    ("immediate", False, "op = 'park', op_state = 'told'", "queued", "parking (blue): queued, never refused"),
+    ("immediate", False, "op = 'relaunch', op_state = 'starting'", "queued", "relaunching (blue): queued"),
+])
+def test_send_or_queue(store, sid, mode_, parked, busy, want, desc):
+    """#257: a run's output goes as an answer would, through #249's one busy check (operating)."""
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.db.execute("UPDATE sessions SET send_mode = ?, parked = ?", (mode_, int(parked)))
+    if busy:
+        store.db.execute(f"UPDATE sessions SET {busy}")
+    assert hub_mod.send_or_queue(store, sid, ref, "out") == want, desc
+    queued = [m["body"] for m in store.drafts(sid)]
+    assert queued == (["out"] if want == "queued" else []), desc
+
+
+def test_send_or_queue_busy_after_the_look(store, sid, monkeypatch):
+    """An operation starting between send_or_queue's look and the send: queued, not lost (#249, #257)."""
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.db.execute("UPDATE sessions SET send_mode = 'immediate'")
+
+    def busy(*_):
+        raise Busy("demo", "send", "park")
+    monkeypatch.setattr(store, "send", busy)
+    assert hub_mod.send_or_queue(store, sid, ref, "out") == "queued"
+    assert [m["body"] for m in store.drafts(sid)] == ["out"]
+
+
+@pytest.mark.parametrize("text, send, gone, ok, note, desc", [
+    ("ls", False, False, True, "ran", "as suggested, unticked: run, noted"),
+    ("ls -l", False, False, True, "ran, edited", "edited: noted so"),
+    ("ls", True, False, True, None, "ticked: run, the output its record"),
+    ("ls", False, True, False, None, "its directory gone: refused, nothing run"),
+])
+def test_run_command(store, projects, monkeypatch, text, send, gone, ok, note, desc):
+    """#257: Run writes a 0600 file and opens a tab whose command line carries only the
+    database's path and the key; refused rather than run elsewhere when the directory's gone."""
+    work = projects / "work"
+    work.mkdir()
+    sid = store.create_session(str(work), name="demo")
+    ref = store.post_command(sid, "ls", "List")[0]
+    if gone:
+        work.rmdir()
+    opened = []
+    monkeypatch.setattr(launch, "open_shell", lambda st, cwd, title, command=None, note="": opened.append((cwd, command)))
+    done = Hub(store).run_command(sid, ref, text, send)
+    assert done.ok == ok, desc
+    item = store.item(sid, ref)
+    assert item["status"] == ("run" if ok else "new"), desc
+    notes = [m["body"] for m in store.thread(sid, ref) if m["kind"] == "run"]
+    assert [n.split(" ", 2)[0] + (", edited" if n.endswith("edited") else "") for n in notes] == \
+        ([note] if note else []), desc
+    if not ok:
+        assert opened == [] and "gone" in done.notices[0].text, desc
+        return
+    (cwd, command), = opened
+    assert cwd == str(work) and command[2:5] == ["claude_wheelhouse", "shell", "--db"], desc
+    assert command[5] == str(store.path), f"{desc}: the database, a scratch one too"
+    payload = json.loads((store.path.parent / "shell" / command[6]).read_text())
+    assert (payload["text"], payload["want"], payload["edited"]) == (text, send, text != "ls"), desc
+
+
+def test_close_and_reopen_a_command(store, sid):
+    ref = store.post_command(sid, "ls", "List")[0]
+    hub = Hub(store)
+    hub.close(sid, ref, True)
+    assert store.item(sid, ref)["status"] == "closed"
+    hub.close(sid, ref, False)
+    assert store.item(sid, ref)["status"] == "new"
+
+
+def test_a_runs_note_is_never_the_sessions(store, sid):
+    """#257: the note an unsent run leaves is the person's alone: the session's view of the
+    thread leaves it out, and it never makes the item await a reply."""
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.ran(sid, ref, "ran 14:05")
+    assert [m["body"] for m in store.thread(sid, ref)] == ["ran 14:05"]
+    assert list(store.thread(sid, ref, in_flight=False)) == []
+    assert (sid, ref) not in store.awaiting()

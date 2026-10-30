@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import adopt, api, away, compactor, features, fingerprint, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
+from . import adopt, api, away, quickshell, compactor, features, fingerprint, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
 from .docroots import DOC_CAP
 from .host import (KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, keepalive_body,
                    waits_on_person)
@@ -39,6 +39,26 @@ from .store import (COMPACT_QUESTION, NOTES_WAIT, ORIGIN_WORDS, Refused, Busy, R
                     PROTOCOL_VERSION, mcp_servers, mode, needs_relaunch, runner, standing)
 
 RUNNING = ("live", "stalled", "starting")
+
+
+def send_or_queue(store: Store, sid: str, ref: str, text: str) -> str:
+    """A message of the person's that goes out without them pressing send: a run's output
+    (#257). Queued while the session is parked or busy (operating, #249: the store's one busy
+    check), never refused or dropped (D232), else sent or queued by the session's mode, as
+    submit does. An operation starting between the look and the send queues it too.
+    SessionGone if the session has gone. "sent" or "queued"."""
+    s = store.session(sid)
+    if s is None:
+        raise SessionGone(sid)
+    if mode(s) == "immediate" and not s["parked"] and operating(s) is None:
+        try:
+            store.send(sid, text, ref)
+            return "sent"
+        except Busy:
+            pass
+    store.queue(sid, text, ref)
+    return "queued"
+
 # a hosted session's activity when nothing is under way: errored and stopped count as resting
 RESTING = ("idle", "interrupted", "stopped", "in a shell tab", "error")
 PENDING = {"end": "forgetting", "park": "parking"}
@@ -288,6 +308,7 @@ class Hub:
 
     def __init__(self, store: Store | None = None, spawn=None, post=None, sdk: bool | None = None):
         self.store = store or Store()
+        quickshell.sweep(self.store.path)   # a run's files left by a tab closed mid-run (#257)
         # SDK mode (features.py, EXPERIMENTAL: the author's alone until Anthropic's terms are
         # confirmed): off, no new session runs in a host, whoever asks (a surface, a daemon's
         # client), and a host's model and effort aren't changed. A session hosted already keeps
@@ -1235,6 +1256,36 @@ class Hub:
         return Done().say(f"{display_name(s)}'s {'Relaunch' if op[0] == 'relaunch' else 'start'} aborted: "
                           "it stops as soon as it has started")
 
+    def run_command(self, sid: str, ref: str, text: str, send: bool) -> Done:
+        """Run, from a command item's dialog (#257): the text, checked again (quickshell.check_command),
+        written to a 0600 file under a random key, and a quick shell's tab opened in the session's
+        directory to run it (quickshell.run), its command line carrying only the database's path
+        and the key. Refused, never moved to home, if that directory is gone: a command in the
+        wrong repo is the failure to avoid. The item goes to run; unless the output is sent, with
+        a note of the run the session isn't sent (Store.ran)."""
+        item = self.store.item(sid, ref)
+        if item is None or item["kind"] != "command":
+            self.row(sid)   # SessionGone if that's why
+            return Done(False).say(f"no command {ref} in this session", "warning")
+        quickshell.check_command(text)
+        s = self.store.session(sid)
+        cwd, gone = self.shell_dir(sid)
+        if cwd is None:
+            return Done(False).say(f"{gone} is gone: {ref} wasn't run", "warning")
+        edited = text != item["body"]
+        db = self.store.path
+        key = quickshell.write(db, {"sid": sid, "ref": ref, "name": display_name(s), "cwd": cwd, "text": text,
+                                    "edited": edited, "want": bool(send)})
+        try:
+            launch.open_shell(self.store, cwd, f"{ref} {display_name(s)}",
+                              [sys.executable, "-m", "claude_wheelhouse", "shell", "--db", str(db), key], note=ref)
+        except (OSError, ValueError) as e:
+            (quickshell.shell_dir(db) / key).unlink(missing_ok=True)
+            return Done(False).say(f"couldn't open a shell: {e}", "error")
+        note = None if send else f"ran {time.strftime('%H:%M')}" + (", edited" if edited else "")
+        self.store.ran(sid, ref, note)
+        return Done().say(f"running {ref} in {cwd}" + (f": its output goes to {display_name(s)}" if send else ""))
+
     def shell_dir(self, sid: str | None) -> tuple[str | None, str | None]:
         """Where a quick shell for a session opens (#257): (directory, the one wanted if it's
         gone). Its live directory, the newest transcript record's cwd (a session that cds into
@@ -1388,12 +1439,15 @@ class Hub:
             raise KeyError(f"no item {ref} in this session")
         if closed and standing(item) == "finished":
             return Done(False)
-        if status is not None and (item["kind"] not in ("question", "decision") or status not in STATUSES[item["kind"]]):
+        if status is not None and (item["kind"] not in ("question", "decision", "command")
+                                   or status not in STATUSES[item["kind"]]):
             raise ValueError(f"{ref} can't be reopened as {status}")
         if not closed:   # Ctrl+R: one deleted with its parent comes back too
             self.store.undelete(sid, ref)
         if item["kind"] == "decision":
             self.store.close_decision(sid, ref, closed, status)
+        elif item["kind"] == "command":
+            self.store.close_command(sid, ref, closed, status)
         elif item["kind"] in DISMISSABLE:
             self.store.dismiss(sid, ref, closed)
         else:
