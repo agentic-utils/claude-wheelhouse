@@ -1176,6 +1176,7 @@ async def test_a_dead_sessions_prs_are_dimmed_their_light_kept(store, sid, githu
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         if life == "revived":
+            assert dimmed(app.query_one("#pr-list").get_row_at(0)[0]), f"{desc}: dim first"
             status["now"] = "live"
             app.refresh_data()
             await pilot.pause()

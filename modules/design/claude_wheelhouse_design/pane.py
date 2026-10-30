@@ -35,10 +35,15 @@ def dirs(ctx: api.Context) -> list[tuple[Path, str]]:
 
 def routes(ctx: api.Context) -> list[api.Route]:
     def decisions(call: api.Call):
-        found = dirs(ctx)
+        sessions = ctx.sessions()
+        pairs = api.decision_dirs(sessions)
+        found = [(d, root.name) for d, root in pairs]
         rows = scan.as_json(SCANNER.scan(found))
-        # dead: no session but a dead, unparked one looks in its directory, so it's dimmed (#252)
-        alive = {d for d, _ in api.decision_dirs([s for s in ctx.sessions() if not s.get("dead")])}
+        # dead: no session but a dead, unparked one works in its repo or declared it, so it's
+        # dimmed (#252); a repo's decision directories are every one its sessions declared
+        living = [s for s in sessions if not s.get("dead")]
+        roots = {api.git_root(s["cwd"]) for s in living} - {None}
+        alive = {d for d, root in pairs if root in roots} | {d for d, _ in api.decision_dirs(living)}
         for r in rows:
             r["dead"] = Path(r["path"]).parent not in alive
         return {"decisions": rows, "dirs": [str(d) for d, _ in found]}

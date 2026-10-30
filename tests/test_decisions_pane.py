@@ -433,6 +433,7 @@ async def test_decisions_only_dead_sessions_look_at_are_dimmed(store, sid, decis
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         if life == "revived":
+            assert dimmed(app.query_one("#decision-list").get_row_at(0)[0]), f"{desc}: dim first"
             status["now"] = "live"
             app.refresh_data()
             await settled(app, pilot)
@@ -443,13 +444,21 @@ async def test_decisions_only_dead_sessions_look_at_are_dimmed(store, sid, decis
 
 
 @pytest.mark.anyio
-async def test_a_decision_a_live_session_shares_stays_bright(store, sid, decisions, tmp_path, monkeypatch):
+@pytest.mark.parametrize("declared, desc", [
+    (None, "both on the default docs/adr"),
+    ("docs/decisions", "the dead one declared the directory, the live one nothing"),
+])
+async def test_a_decision_a_live_session_shares_stays_bright(store, sid, decisions, tmp_path, monkeypatch, declared, desc):
     """#252: one dead session and one live in the same repo: its decisions aren't dimmed."""
     from claude_wheelhouse import liveness
+    if declared:   # its three decisions there instead: the repo looks only where it was told
+        repo(tmp_path, {"0004-ACCEPTED-a.md": "# A\n", "0005-ACCEPTED-b.md": "# B\n", "0006-ACCEPTED-c.md": "# C\n"},
+             where=declared)
+        store.set_doc_dirs(sid, [declared])
     other = store.create_session(str(tmp_path), name="other")
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live" if s["id"] == other else "dead")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         table = app.query_one("#decision-list")
-        assert table.row_count == 3 and not any(dimmed(c) for i in range(3) for c in table.get_row_at(i))
+        assert table.row_count == 3 and not any(dimmed(c) for i in range(3) for c in table.get_row_at(i)), desc

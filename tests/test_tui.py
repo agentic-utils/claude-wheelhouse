@@ -6163,6 +6163,12 @@ async def test_a_dead_sessions_rows_are_dimmed(store, sid, monkeypatch, row, lif
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         if life == "revived":
+            if row == "session":
+                assert dimmed_cell(app.query_one("#session-list", DataTable).get_row(sid)[1]), f"{desc}: dim first"
+            else:
+                t = app.query_one("#items", DataTable)
+                key = f"{sid}|" if row == "conversation" else next(k for k in t.keys() if k and k.endswith("Q1"))
+                assert dimmed_cell(t.get_row(key)[-1]), f"{desc}: dim first"
             status["now"] = "live"
             app.refresh_data()
             await pilot.pause()
