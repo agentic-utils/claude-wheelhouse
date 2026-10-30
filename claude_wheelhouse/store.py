@@ -12,6 +12,7 @@ import re
 import secrets
 import sqlite3
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -155,10 +156,15 @@ OP_ACTIVE = ("requested", "told", "parking", "stopping", "starting", "opening")
 OP_ENDS = ("completed", "failed", "cancelled")
 # what a busy session is doing, by its operation's kind (operating), for the refusal and the notices
 OP_DOING = {"compact": "compacting", "park": "parking", "end": "being stopped and forgotten",
-            "relaunch": "relaunching", "start": "starting", "handover": "opening a shell tab"}
+            "relaunch": "relaunching", "start": "starting", "handover": "handing over to Claude Code in a shell"}
 # seconds a Park or Stop & Forget has from its press to the session acting on it (Q243): past it the
 # operation fails, and the session carries on as it was
 PARK_WITHIN = 15 * 60
+# seconds a launched session has to register (liveness.STARTING_GRACE), and each hand-over state has
+STARTING_WITHIN = 90
+HANDOVER_WITHIN = 60
+# seconds past the hub's own Relaunch deadline before the sweep fails a relaunch it lost track of
+RELAUNCH_SLACK = 60
 # seconds /compact may run before its cycle fails (host.py's clock); a park compacting first has that
 # besides PARK_WITHIN, as it parks before it compacts
 COMPACT_TIMEOUT = 600
@@ -866,6 +872,8 @@ class Store:
                 self.refuse_busy(db, sid, "compact" if what == "compact" else "open a shell tab")
             self._require(db, sid)
             db.execute("UPDATE sessions SET host_command = ?, compact_plan = ? WHERE id = ?", (what, plan, sid))
+            if what == "shell":   # the hand-over to a Claude Code tab (#249): the host takes it, then hands over
+                self.begin_op(db, sid, "handover", "requested", "person", HANDOVER_WITHIN)
             if what == "compact":
                 self.begin_cycle(db, sid, origin, "requested", then)
 
@@ -967,9 +975,11 @@ class Store:
         """The session's active op of this kind (and id, given one), in one of `since`, enters state;
         an active state with a new deadline (within), else the old one stands. Whether it moved."""
         assert state in OP_ACTIVE + OP_ENDS
-        # op_at is when its last active state was entered: an end keeps it, so a told op's stays its tell (refuse_late)
+        # op_at is when its last active state was entered: an end keeps it, so a told op's stays its tell (refuse_late).
+        # An end clears the deadline: only an aborted launch's sets one again, its mark (abort_launch)
+        ended = state in OP_ENDS
         return db.execute(f"UPDATE sessions SET op_state = ?, op_at = CASE WHEN ? IN {OP_ENDS} THEN op_at ELSE ? END, "
-                          f"op_deadline = coalesce(?, op_deadline) "
+                          f"op_deadline = CASE WHEN {int(ended)} THEN NULL ELSE coalesce(?, op_deadline) END "
                           f"WHERE id = ? AND op = ? AND op_state IN ({', '.join('?' * len(since))}) "
                           f"AND (? IS NULL OR op_id = ?)",
                           (state, state, stamp(), None if within is None else due(within), sid, kind, *since, oid, oid)
@@ -1021,14 +1031,21 @@ class Store:
             raise ValueError(f"the {what} request was cancelled: carry on as before, and don't call {call}")
 
     def fail_op(self, sid: str, oid: str, why: str) -> sqlite3.Row | None:
-        """A park or end past its deadline, or whose host has died or stalled, fails (Hub.sweep_ops):
-        only that op, only while active, its request and inner cycle cleared in the same transaction.
-        A parking session stays parked (it has, and its host stops). The row before, if it failed."""
+        """An op past its deadline, or whose session stopped running before it acted, fails
+        (Hub.sweep_ops): only that op, only while active, its payload (a park or end's request and
+        inner cycle, a relaunch's, a Shell untaken) cleared in the same transaction. A parking
+        session stays parked (it has, and its host stops). The row before, if it failed."""
         with self.tx() as db:
             s = db.execute("SELECT * FROM sessions WHERE id = ? AND op_id = ?", (sid, oid)).fetchone()
-            if s is None or s["op_state"] not in OP_ACTIVE or s["op"] not in REQUESTS:
+            if s is None or s["op_state"] not in OP_ACTIVE:
                 return None
-            if s["op_state"] == "parking":
+            if s["op"] == "relaunch" and s["op_state"] != "starting":   # its payload goes with it
+                db.execute("UPDATE sessions SET relaunch = NULL WHERE id = ?", (sid,))
+            elif s["op"] == "handover":   # a Shell the host never took
+                db.execute("UPDATE sessions SET host_command = NULL WHERE id = ? AND host_command = 'shell'", (sid,))
+            elif s["op"] not in REQUESTS:
+                pass   # starting: the launch has gone as far as it will
+            elif s["op_state"] == "parking":
                 if s["compaction_origin"] == "park" and compacting_now(s):
                     db.execute("UPDATE sessions SET compaction = 'failed', compaction_at = ? WHERE id = ?", (stamp(), sid))
                     db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
@@ -1053,8 +1070,13 @@ class Store:
         The (kind, state) aborted, or None when no park or end was under way."""
         with self.tx() as db:
             s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
-            if s is None or (op := operating(s)) is None or op[0] not in REQUESTS:
+            if s is None or (op := operating(s)) is None or op[0] not in REQUESTS + ("handover",):
                 return None
+            if op[0] == "handover":   # untaken, the Shell goes; taken, the hand-over is under way (Hub.host_command)
+                if op[1] == "requested":
+                    db.execute("UPDATE sessions SET host_command = NULL WHERE id = ? AND host_command = 'shell'", (sid,))
+                    self.move_op(db, sid, "handover", "cancelled")
+                return op
             self.unpark_request(db, sid, op[0], s)
             if op[1] == "parking":
                 db.execute("UPDATE sessions SET parked = 0 WHERE id = ?", (sid,))
@@ -1062,6 +1084,34 @@ class Store:
             if op[1] != "requested" and runner(s) == "sdk" and not s["shell"]:
                 db.execute("UPDATE sessions SET host_command = 'interrupt', compact_plan = NULL WHERE id = ?", (sid,))
         return op
+
+    def fail_launch(self, sid: str) -> None:
+        """The launch itself failed (wt.exe missing, already running...), said already: its op fails now."""
+        with self.tx() as db:
+            for kind in ("relaunch", "start"):
+                self.move_op(db, sid, kind, "failed", since=("starting",))
+
+    def abort_launch(self, sid: str) -> tuple[str, str] | None:
+        """Interrupt during a Relaunch stopping the host, or a launch starting (#249, section 4), decided
+        and done in one transaction. Stopping: the signal can't be taken back, so its payload goes and
+        the new process is never started. Starting: what was sent with it (a wake's send) and not yet
+        claimed goes back to the queue as drafts, and the op keeps a deadline, which marks its process
+        as one to stop once it registers (Hub.stop_aborted_launch); a Relaunch's payload goes too. The
+        (kind, state) aborted, or None for neither."""
+        with self.tx() as db:
+            s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
+            op = None if s is None else (s["op"], s["op_state"])
+            if op not in (("relaunch", "stopping"), ("relaunch", "starting"), ("start", "starting")):
+                return None
+            db.execute("UPDATE sessions SET relaunch = NULL WHERE id = ?", (sid,))
+            if op[1] == "starting" and (s["op_origin"] or "").startswith("wake:"):   # only the wake's own send
+                first, last = map(int, s["op_origin"].split(":")[1:])
+                db.execute("UPDATE messages SET draft = 1 WHERE session_id = ? AND draft = 0 AND author = 'person' "
+                           "AND id BETWEEN ? AND ? AND claimed_at IS NULL AND delivered_at IS NULL", (sid, first, last))
+            self.move_op(db, sid, op[0], "cancelled")
+            if op[1] == "starting":   # the mark of a process to stop once it registers: only this end sets it
+                db.execute("UPDATE sessions SET op_deadline = ? WHERE id = ?", (due(STARTING_WITHIN), sid))
+            return op
 
     @staticmethod
     def begin_cycle(db, sid: str, origin: str, state: str, then: str | None = None, tokens: int | None = None) -> str:
@@ -1214,6 +1264,8 @@ class Store:
             row = db.execute("SELECT host_command FROM sessions WHERE id = ?", (sid,)).fetchone()
             if row and row[0] and only in (None, row[0]):
                 db.execute("UPDATE sessions SET host_command = NULL WHERE id = ?", (sid,))
+                if row[0] == "shell":
+                    self.move_op(db, sid, "handover", "opening", HANDOVER_WITHIN, since=("requested",))
             else:
                 return None
         return row[0]
@@ -1236,9 +1288,10 @@ class Store:
             db.execute("UPDATE sessions SET shell = ? WHERE id = ?", (state, sid))
             if state is not None:
                 self.unrequest_compact(db, sid)
+                self.move_op(db, sid, "handover", "completed", since=("requested", "opening"))
 
     def set_relaunch(self, sid: str, host: tuple | None, deadline: float = 0.0, asked: float | None = None,
-                     may_tab: bool = True) -> None:
+                     may_tab: bool = True, ends: str = "failed") -> None:
         """A Relaunch under way: the host it stopped (or, compacting first, will stop once
         the session is compacted, the epoch second Compact was asked for in `asked`), (pid,
         start time), and the epoch second it gives up by, so a wheelhouse started again
@@ -1256,6 +1309,14 @@ class Store:
         with self.tx() as db:
             db.execute("UPDATE sessions SET relaunch = ? WHERE id = ?",
                        (json.dumps(relaunch) if relaunch else None, sid))
+            # its op (#249): compacting first (requested), or stopping the host, until the launch starts it
+            # (launching); done with before then, it ends as `ends` (given up: failed; Interrupt: cancelled)
+            if host:
+                state, within = "requested" if asked is not None else "stopping", deadline - time.time() + RELAUNCH_SLACK
+                if not self.move_op(db, sid, "relaunch", state, within, since=("requested", "stopping")):
+                    self.begin_op(db, sid, "relaunch", state, "person", within)
+            else:
+                self.move_op(db, sid, "relaunch", ends, since=("requested", "stopping"))
 
     def relaunches(self) -> dict[str, tuple[float, tuple, float | None]]:
         """Each Relaunch under way, by session: (its epoch deadline, the host it stopped,
@@ -1332,6 +1393,20 @@ class Store:
                           WHERE id = ?""", (now(), sid))
             for what in REQUESTS:   # their op fails with them (#249)
                 self.move_op(db, sid, what, "failed")
+            self.launching(db, sid)
+
+    @staticmethod
+    def launching(db, sid: str) -> None:
+        """The launch's op (#249), in mark_launched's transaction: a Relaunch that stopped the host
+        starts, and any other launch begins one, start for a session's first (New session, Adopt, a
+        fork's child), relaunch after (Relaunch, Unpark, a wake's send), until the new process
+        registers (_register). A host handing its session to a shell tab (shell) launches none."""
+        s = db.execute("SELECT shell, heartbeat_at IS NULL AND claude_pid IS NULL AS first FROM sessions WHERE id = ?",
+                       (sid,)).fetchone()
+        if s is None or s["shell"]:
+            return
+        if not Store.move_op(db, sid, "relaunch", "starting", STARTING_WITHIN, since=("requested", "stopping")):
+            Store.begin_op(db, sid, "start" if s["first"] else "relaunch", "starting", "launch", STARTING_WITHIN)
 
     def register(self, sid: str, pid: int, start: int, boot_id: str) -> None:
         with self.tx() as db:
@@ -1354,6 +1429,8 @@ class Store:
             "code_version = ? WHERE id = ?",
             (pid, start, boot_id, now(), PROTOCOL_VERSION, sid),
         )
+        for kind in ("relaunch", "start"):   # the new process: its launch's op has ended (#249)
+            Store.move_op(db, sid, kind, "completed", since=("starting",))
 
     def request_end(self, sid: str) -> None:
         self.request(sid, "end")
@@ -2230,7 +2307,7 @@ class Store:
                               (sid,)).fetchall()
         return len(sent)
 
-    def dispatch_last(self, sid: str, body: str | None = None, item_ref: str | None = None) -> int:
+    def dispatch_last(self, sid: str, body: str | None = None, item_ref: str | None = None, waking: bool = False) -> int:
         """Send the session's drafts, and body if given, behind every message sent before them,
         in one transaction: a session woken to send them (Hub.wake_and_send) reads the resume
         notice its launch left first, then the person's words, oldest first, in the one batch
@@ -2239,7 +2316,12 @@ class Store:
         operation (Busy), and on a compaction's task item (Refused)."""
         with self.tx() as db:
             self.refuse_wheelhouse_item(db, sid, item_ref)
-            self.refuse_busy(db, sid, "send", person=True)
+            s = db.execute("SELECT op, op_state FROM sessions WHERE id = ?", (sid,)).fetchone()
+            # a wake's own send, as its launch starts (#249): the op's payload, never refused by it
+            own = waking and s is not None and s["op"] in ("relaunch", "start") and s["op_state"] == "starting"
+            if not own:
+                self.refuse_busy(db, sid, "send", person=True)
+            first = db.execute("SELECT coalesce(max(id), 0) + 1 FROM messages").fetchone()[0]
             moved = db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, kind) "
                                "SELECT session_id, item_ref, author, body, created_at, kind FROM messages "
                                "WHERE session_id = ? AND draft = 1 ORDER BY id", (sid,)).rowcount
@@ -2248,6 +2330,9 @@ class Store:
                 self._mark_seen(db, sid, item_ref)
                 db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at) "
                            "VALUES (?, ?, 'person', ?, ?)", (sid, item_ref, body, now()))
+            if own:   # the wake's send, first and last id, so an Interrupt queues exactly it again (abort_launch)
+                last = db.execute("SELECT coalesce(max(id), 0) FROM messages").fetchone()[0]
+                db.execute("UPDATE sessions SET op_origin = ? WHERE id = ?", (f"wake:{first}:{last}", sid))
         return moved + (body is not None)
 
     def awaiting(self) -> set[tuple[str, str]]:

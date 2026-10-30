@@ -35,7 +35,7 @@ from . import adopt, api, away, compactor, features, fingerprint, fork, launch, 
 from .docroots import DOC_CAP
 from .host import (KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, keepalive_body,
                    waits_on_person)
-from .store import (COMPACT_QUESTION, NOTES_WAIT, ORIGIN_WORDS, Refused, Busy, REQUESTS, wheelhouse_item, COMPACT_TIMEOUT, OP_DOING, PARK_WITHIN, DISMISSABLE, compacting_now, operating, op_overdue, PRS_SINCE, STATUSES, SessionGone, requested_expired, Store, can_queue,
+from .store import (COMPACT_QUESTION, NOTES_WAIT, ORIGIN_WORDS, Refused, Busy, REQUESTS, wheelhouse_item, COMPACT_TIMEOUT, OP_DOING, PARK_WITHIN, STARTING_WITHIN, HANDOVER_WITHIN, DISMISSABLE, compacting_now, operating, op_overdue, PRS_SINCE, STATUSES, SessionGone, requested_expired, Store, can_queue,
                     PROTOCOL_VERSION, mcp_servers, mode, needs_relaunch, runner, standing)
 
 RUNNING = ("live", "stalled", "starting")
@@ -121,9 +121,20 @@ def refusable(method):
     return act
 
 
+ABORTED = {"park": "park", "end": "Stop & Forget", "handover": "handover to Claude Code in a shell"}
+
+
 def op_failed(s, kind: str, status: str, overdue: bool) -> str:
-    """The warning notice for a park or end that failed (Q246), naming it and why. One already
-    parked (parking) stays parked: its turn or compaction ran past its own clock."""
+    """The warning notice for an op that failed (Q246), naming it and why. One already parked
+    (parking) stays parked: its turn or compaction ran past its own clock."""
+    name = display_name(s)
+    if kind in ("relaunch", "start") and s["op_state"] == "starting":
+        return f"{name} didn't start within {STARTING_WITHIN} s: Relaunch it."
+    if kind == "relaunch":
+        return f"{name} wasn't relaunched: Relaunch it."
+    if kind == "handover":
+        why = f"didn't finish within {HANDOVER_WITHIN} s" if overdue else "failed: its host isn't running"
+        return f"{name}'s handover to Claude Code in a shell {why}."
     what = "parked" if kind == "park" else "stopped and forgotten"
     if s["op_state"] == "parking":
         minutes = round((epoch(s["op_deadline"]) - epoch(s["op_at"])) / 60)
@@ -311,6 +322,7 @@ class Hub:
         # with the epoch second Compact was asked for
         self.compacting: dict[str, float] = {sid: asked for sid, (*_, asked) in under_way.items()
                                              if asked is not None}
+        self.stopped_launches: set[str] = set()   # launches Interrupt aborted (op ids), their process stopped (#249)
         self.followers: dict[str, transcript.Follower] = {}
         # each session's context size for the session list: read on workers, by a follower
         # shared with the stats pane (transcript_usage.follower), so each transcript is read once
@@ -420,7 +432,11 @@ class Hub:
         host died or stalled with it parked). Read first: a write only for an op to move."""
         for s in self.sessions:
             op, status = operating(s), self.statuses[s["id"]]
-            if op is None or op[0] not in REQUESTS:
+            if op is None:
+                self.stop_aborted_launch(s, status)
+                continue
+            if op[0] not in REQUESTS:
+                self.sweep_driven(s, op, status)
                 continue
             dead = status not in RUNNING
             if op[1] == "parking" and s["parked"] and (dead or status == "stalled"):
@@ -428,6 +444,35 @@ class Hub:
             elif op_overdue(s) or (dead and op[1] != "parking"):
                 if self.store.fail_op(s["id"], s["op_id"], "past its deadline" if op_overdue(s) else "its host stopped"):
                     self.announce(op_failed(s, op[0], status, overdue=op_overdue(s)), "warning", s["id"])
+
+    def sweep_driven(self, s, op: tuple[str, str], status: str) -> None:
+        """A relaunch, start or handover's way out (#249): starting, past STARTING_WITHIN (the launch
+        never registered); a relaunch the hub lost track of, past its own deadline and slack; a
+        handover past HANDOVER_WITHIN a state, or untaken by a host that has gone. Each fails, said."""
+        kind, st = op
+        if kind == "compact":
+            return
+        if kind == "relaunch" and st != "starting" and s["id"] in self.relaunching:
+            return   # the hub drives it, with its own deadline (finish_relaunches)
+        if op_overdue(s) or (kind == "handover" and st == "requested" and status not in RUNNING):
+            if self.store.fail_op(s["id"], s["op_id"], "past its deadline"):
+                if kind == "relaunch" and st != "starting":
+                    self.relaunching.pop(s["id"], None)
+                    self.compacting.pop(s["id"], None)
+                    self.lapsed.discard(s["id"])
+                self.announce(op_failed(s, kind, status, overdue=op_overdue(s)), "warning", s["id"])
+
+    def stop_aborted_launch(self, s, status: str) -> None:
+        """A launch Interrupt aborted while it was starting: its process, once it has registered, is
+        stopped, once (#249, section 4). The session ends Available, to Relaunch."""
+        if (s["op"] in ("relaunch", "start") and s["op_state"] == "cancelled" and s["op_deadline"]
+                and status in RUNNING and s["op_id"] not in self.stopped_launches
+                and liveness.registered_this_launch(s)):
+            self.stopped_launches.add(s["op_id"])
+            try:
+                self.stop_process(s)
+            except OSError as e:
+                self.announce(f"couldn't stop {display_name(s)}: {e}", "error", s["id"])
 
     def note_quiet(self) -> None:
         """A session parked, ended or stopped since the last refresh (or, at a hub's first,
@@ -511,14 +556,21 @@ class Hub:
             else:
                 launch.open_session(self.store, sid, may_tab)
         except launch.NotHere as e:
+            self.store.fail_launch(sid)
             return Done(False).say(elsewhere or str(e), "warning")
         except Exception as e:   # already running, wt.exe missing...
+            self.store.fail_launch(sid)
             return Done(False).say(str(e), "error")
         return Done()
 
-    def relaunch(self, sid: str, may_tab: bool = True, elsewhere: str | None = None) -> Done:
+    def relaunch(self, sid: str, may_tab: bool = True, elsewhere: str | None = None, own: bool = False) -> Done:
         """An Available or Parked session brought back where it left off, and unparked (Relaunch,
-        Unpark). Whether it was."""
+        Unpark). Whether it was. Refused while busy (#249), but a Relaunch's own (own)."""
+        if not own:
+            try:
+                self.store.check_busy(sid, "relaunch")
+            except Refused as e:
+                return Done(False).say(str(e), "warning")
         done = self.open_session(sid, restore=True, may_tab=may_tab, elsewhere=elsewhere)
         if done.ok:
             self.store.set_parked(sid, False)
@@ -543,17 +595,17 @@ class Hub:
         done = self.relaunch(sid, may_tab)
         if not done.ok:
             return done
-        n = self.store.dispatch_last(sid, text, item_ref)
+        n = self.store.dispatch_last(sid, text, item_ref, waking=True)
         return Done().say(f"{verb} {display_name(s)}" + (f": {n} sent with it" if n else ""))
 
     def host_gone(self, sid: str, s, may_tab: bool) -> Done:
         """Relaunch of a host that has gone meanwhile: it comes back as a dead session does
         (relaunch), and for another machine (may_tab false) not in a tab."""
         return self.relaunch(sid, may_tab,
-                             f"{display_name(s)}'s host has stopped: Relaunch it from the daemon's machine")
+                             f"{display_name(s)}'s host has stopped: Relaunch it from the daemon's machine", own=True)
 
     @refusable
-    def stop_host(self, sid: str, host: tuple, may_tab: bool = True) -> Done:
+    def stop_host(self, sid: str, host: tuple, may_tab: bool = True, own: bool = False) -> Done:
         """Refused during a compaction cycle (#244). Stop a running session for Relaunch: a host as SIGTERM does (its own clean stop:
         Claude Code is disconnected, and an open permission or question closes as withdrawn,
         or as lost when the new host starts); a tab's Claude Code the same way, its process
@@ -561,8 +613,10 @@ class Hub:
         may have sat open meanwhile, so only the process it was asked about, (pid, start
         time), is stopped. finish_relaunches starts it again once the process has gone: a
         tab in a new tab. A host's session out in a shell tab goes back to its waiting host
-        as that tab stops, which is its relaunch. Whether anything changed."""
-        self.store.check_busy(sid, "relaunch")
+        as that tab stops, which is its relaunch. Whether anything changed. own: the Relaunch's
+        own stop, once compacted (compacting_relaunch), never refused by its own op (#249)."""
+        if not own:
+            self.store.check_busy(sid, "relaunch")
         s = self.row(sid)
         if not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
             return self.host_gone(sid, s, may_tab)   # gone meanwhile: nothing to stop
@@ -664,7 +718,7 @@ class Hub:
         return Done().say(f"relaunching {display_name(s)}: compacting first (it's asked what to keep)")
 
     def relaunch_under_way(self, sid: str, host: tuple | None, asked: float | None = None,
-                           may_tab: bool = True) -> None:
+                           may_tab: bool = True, ends: str = "failed") -> None:
         """A Relaunch that has stopped a session's host, or is compacting before it does
         (Compact asked for at the epoch second `asked`), kept here and in the store; or, with
         no host, done with. may_tab false: another machine asked, and it carries on so
@@ -681,7 +735,7 @@ class Hub:
             self.relaunching.pop(sid, None)
             self.lapsed.discard(sid)
             self.compacting.pop(sid, None)
-            self.store.set_relaunch(sid, None)
+            self.store.set_relaunch(sid, None, ends=ends)
 
     def compacting_relaunch(self, sid: str, s, host: tuple, deadline: float) -> None:
         """A Relaunch compacting first, while its host still runs. Once the session is
@@ -718,7 +772,7 @@ class Hub:
             row = self.store.compaction(sid)
             if row is not None and row["state"] == "requested":   # its Compact, untaken: the cycle goes with it
                 self.store.move_compaction(sid, row["id"], "cancelled", "the relaunch went ahead before it began")
-            done = self.stop_host(sid, host, self.store.relaunch_may_tab(sid))
+            done = self.stop_host(sid, host, self.store.relaunch_may_tab(sid), own=True)
             for notice in done.notices:
                 self.emit(notice)
             if not done.ok:
@@ -929,6 +983,7 @@ class Hub:
         try:
             (launch.open_host if how == "sdk" else launch.open_tab)(self.store, new, notice=False)
         except Exception as e:   # wt.exe missing...: the fork stays, to Relaunch
+            self.store.fail_launch(new)
             self.announce(f"forked {name}, but it didn't start: {e}. Relaunch it", "error", sid=sid)
             return
         self.announce(f"forked {display_name(s)} as {name}"
@@ -1140,9 +1195,13 @@ class Hub:
             s = self.listed(sid)
         except SessionGone:
             return Done(False)
+        if what == "interrupt" and (done := self.abort_launch(sid, s)) is not None:   # hub-driven: here (#249)
+            return done
         if what == "interrupt" and (aborted := self.store.abort(sid)) is not None:   # Q245: the op, nothing else
-            return Done().say(f"{display_name(s)}'s {'park' if aborted[0] == 'park' else 'Stop & Forget'} "
-                              "aborted: it carries on as it was")
+            if aborted == ("handover", "opening"):
+                return Done(False).say(f"{display_name(s)} is being handed over to Claude Code in a shell already: "
+                                       "it can't be aborted now", "warning")
+            return Done().say(f"{display_name(s)}'s {ABORTED[aborted[0]]} aborted: it carries on as it was")
         if what == "compact" and (runner(s) != "sdk" or s["shell"] or not self.running(sid)):
             return Done(False).say(f"{display_name(s)} isn't running in the wheelhouse: nothing to {what}", "warning")
         if what == "compact" and needs_relaunch(s):   # its host would never end the cycle (#244)
@@ -1156,9 +1215,25 @@ class Hub:
                            "shell": "opening a terminal tab"}[what])
         stored = self.store.relaunches().get(sid)
         if what == "interrupt" and stored is not None and stored[2] is not None:
-            self.relaunch_under_way(sid, None)
+            self.relaunch_under_way(sid, None, ends="cancelled")
             done.say("its Relaunch, waiting on Compact, is cancelled: it stays as it is", "warning")
         return done
+
+    def abort_launch(self, sid: str, s) -> Done | None:
+        """Interrupt during a Relaunch stopping the host, or a launch starting (#249, section 4): done
+        here, never left as a command for a later host. Stopping: the signal can't be taken back, so
+        the new process is never started. Starting: the launch's op cancelled, its wake's send back
+        in the queue, and the new process stopped once it registers (sweep_ops). None for any other."""
+        if (op := self.store.abort_launch(sid)) is None:   # decided in the store, never on a stale row
+            return None
+        self.relaunching.pop(sid, None)   # the hub's memory of it goes with the store's
+        self.compacting.pop(sid, None)
+        self.lapsed.discard(sid)
+        if op[1] == "stopping":
+            return Done().say(f"{display_name(s)}'s Relaunch aborted: its host had been asked to stop, so it "
+                              "stays stopped")
+        return Done().say(f"{display_name(s)}'s {'Relaunch' if op[0] == 'relaunch' else 'start'} aborted: "
+                          "it stops as soon as it has started")
 
     # model and effort (.plan/model-effort.md)
 

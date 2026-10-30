@@ -323,9 +323,9 @@ FEATURES: tuple[Feature, ...] = (
                  "dropped, and the conversation shows its stages as the trash compactor's walls closing in, "
                  "with the crew and the droids panicking while it runs."),
     Feature("ops-blue", UNRELEASED, ADVANCED,
-            note="Park and Stop & Forget keep the session blue from the press until it has parked or gone: sends and "
-                 "other operations wait, queueing stays open, Interrupt aborts it, and one not done within 15 "
-                 "minutes is called off with a warning."),
+            note="Park, Stop & Forget, Relaunch, Shell's hand-over, New session, Adopt and a fork's new session keep it "
+                 "blue from the press until done: sends and other operations wait, queueing stays open, Interrupt "
+                 "aborts it, and one that can't finish in time is called off with a warning."),
     Feature("dead-dim", UNRELEASED, ADVANCED,
             note="A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, "
                  "its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at."),
