@@ -251,7 +251,7 @@ def test_a_relaunch_drops_leftover_requests(store, sid, what):
     store.mark_launched(sid)
     s = store.session(sid)
     assert s["end_requested_at"] is None and s["park_requested_at"] is None
-    assert store.op(sid)["state"] == "failed", "its op fails with it (#249)"
+    assert store.op(sid)["kind"] == "start", "its op fails with it, the first launch's in its place (#249)"
 
 
 def test_a_relaunch_in_the_second_of_the_last_runs_final_beat_is_starting(store, sid, monkeypatch):

@@ -793,28 +793,29 @@ def test_a_compacting_relaunch_is_carried_on_by_a_hub_started_again(store, sid, 
     assert sid in again.relaunching and sid in again.compacting
 
 
-def test_a_command_pressed_as_compact_first_stops_the_host_stays_for_the_next(hub, store, sid, monkeypatch):
-    """Only the Compact it asked for is taken back: a Shell pressed meanwhile is the new host's."""
+def test_a_shell_pressed_while_relaunching_compact_first_is_refused(hub, store, sid, monkeypatch):
+    """#249: a Relaunch is an operation; Shell waits for it, and nothing is left for the new host."""
+    from claude_wheelhouse.store import Busy
     alive = {4242}
     killed, _ = compacting(hub, store, sid, monkeypatch, alive)
     compacted_to(store, sid, 40_000, "idle")
-    store.command(sid, "shell")
+    with pytest.raises(Busy, match="busy relaunching"):
+        store.command(sid, "shell")
     hub.refresh()
     hub.finish_relaunches()
-    assert killed == [4242] and store.session(sid)["host_command"] == "shell"
+    assert killed == [4242] and store.session(sid)["host_command"] is None
 
 
 @pytest.mark.parametrize("pending, left, desc", [
     ("interrupt", None, "an Interrupt pressed in the gap: not left to greet the new host as interrupted"),
     ("compact", None, "the Compact it asked for, untaken: not run again"),
-    ("shell", "shell", "a Shell: the person's, left for the new host"),
 ])
 def test_stopping_for_the_relaunch_clears_only_what_would_misgreet_the_new_host(hub, store, sid, monkeypatch,
                                                                                 pending, left, desc):
     alive = {4242}
     killed, _ = compacting(hub, store, sid, monkeypatch, alive)
     compacted_to(store, sid, 40_000, "idle")
-    store.command(sid, pending)
+    store.db.execute("UPDATE sessions SET host_command = ?", (pending,))   # left in the gap, as by older code
     hub.refresh()
     hub.finish_relaunches()
     assert killed == [4242] and store.session(sid)["host_command"] == left, desc

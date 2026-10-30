@@ -236,7 +236,8 @@ def test_a_sweep_with_nothing_to_move_takes_no_write(hub, store, hosted, monkeyp
 def test_a_relaunch_fails_a_leftover_op(store, hosted):
     into(store, hosted, "park", "told")
     store.mark_launched(hosted)
-    assert store.op(hosted)["state"] == "failed" and not operating(store.session(hosted))
+    s = store.session(hosted)
+    assert store.op(hosted)["kind"] == "relaunch" and not s["park_requested_at"], "the park's op gone, the launch's begun"
 
 
 def test_a_v25_style_park_completes_by_what_the_hub_sees(hub, store, hosted, monkeypatch):

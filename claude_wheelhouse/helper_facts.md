@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 94, 2026-10-30T21:51:21Z, source f62beb09dcb01a5e (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 96, 2026-10-30T21:51:27Z, source a506fffbb9d56a3a (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -32,7 +32,8 @@ daemon running.
 - Item: anything a session posts. Kinds: task, question, decision, subagent (A), PR, doc.
 - Queued and Immediate: a session's send mode. Queued holds answers until Send (Ctrl+S).
 - Park: a session writes its handoff and stops, kept dimmed until Unpark.
-- Busy (blue eye): from Park, Stop & Forget or a compaction until it ends, sends and other
+- Busy (blue eye): from Park, Stop & Forget, Relaunch, Shell's hand-over, New session, Adopt, a
+  fork's new session or a compaction until it ends, sends and other
   operations are refused ("is busy parking: ... or Interrupt to abort it"); queueing stays open,
   Interrupt aborts it, and a park or Stop & Forget not done in 15 minutes fails with a warning.
 - Forget: the session leaves the wheelhouse (its data deleted); Adopt brings one back.
@@ -371,5 +372,5 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it.
 - The ⓘ at the stats pane's top right shows the selected session's info: its id (C copies it), user, machine, branch, model, transcript, and its MCP server's code, flagged when it needs a relaunch.
 - Every compaction, in a tab too, is a task in the inbox that follows it to done, failed or dropped, and the conversation shows its stages as the trash compactor's walls closing in, with the crew and the droids panicking while it runs.
-- Park and Stop & Forget keep the session blue from the press until it has parked or gone: sends and other operations wait, queueing stays open, Interrupt aborts it, and one not done within 15 minutes is called off with a warning.
+- Park, Stop & Forget, Relaunch, Shell's hand-over, New session, Adopt and a fork's new session keep it blue from the press until done: sends and other operations wait, queueing stays open, Interrupt aborts it, and one that can't finish in time is called off with a warning.
 - A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at.

@@ -803,8 +803,12 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   this session's alone (a stdio server's process restarts). Disabled servers have no
   button: `/mcp` or the settings turn them on. A session not running shows its last look;
   a tab session says to use `/mcp` there.
-- Operations: from the press of Park or Stop & Forget, or the start of a compaction, to its
-  end, the session is busy and its eye in the session list sweeps blue, running or not.
+- Operations: from the press of Park, Stop & Forget, Relaunch (Unpark, Relaunch all, or Ctrl+S
+  on a stopped session), the Shell hand-over to Claude Code, New session or Adopt, or the start
+  of a compaction, to its end, the session is busy and its eye in the session list sweeps
+  blue, running or not. A launch ends when the new process has registered (within 90 seconds,
+  or it fails with a warning), a hand-over once the tab has it. Fork blues the new session,
+  never the one forked.
   While it is busy, sending (now, Ctrl+S, Send, Send all) and every other operation (Park,
   Park now, Stop & Forget either way, Relaunch, Unpark, Fork, Shell, Compact) are refused
   with one message ("demo is busy parking: send once it's done, or Interrupt to abort it.").
@@ -814,7 +818,10 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   under way (compacting included, its tokens spent), is called off, and the session is told
   to carry on as before. A park or Stop & Forget the session hasn't acted on within 15
   minutes fails with a warning ("demo couldn't be parked within 15 minutes: it carries on as
-  it was."), as does one whose session stops running first.
+  it was."), as does one whose session stops running first. Interrupt during a Relaunch whose
+  host has been asked to stop leaves it stopped; during a launch, the new process is stopped
+  as soon as it has started, and what Ctrl+S sent with it goes back to the queue. A hand-over
+  can be aborted until its host has taken it.
 - After a compaction, the session is told its open tasks and questions, with their titles,
   once. A session run in the wheelhouse has a Compact button, and past 200k of context a
   question suggesting it, answered with buttons (Compact, Leave it); both take optional

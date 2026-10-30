@@ -6538,7 +6538,10 @@ class WheelhouseApp(App):
         dead = self.statuses.get(s["id"]) == "dead"
         busy = self.busy_buttons(s)
         return [("mode", *mode_, True), ("send", f"Send ({n})", not n, not dead),
-                *[(b, b.capitalize(), b in busy, hosted) for b in ("interrupt", "compact", "shell")]]
+                # Interrupt also while a host's session is blue but not running (a Relaunch stopping it,
+                # its launch starting): it aborts the operation (#249)
+                *[(b, b.capitalize(), b in busy, hosted or b == "interrupt" and runner(s) == "sdk" and bool(operating(s)))
+                  for b in ("interrupt", "compact", "shell")]]
 
     def busy_buttons(self, s) -> set[str]:
         """A session's busy buttons (#107): those whose action, pressed here or shown under way

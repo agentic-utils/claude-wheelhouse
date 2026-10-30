@@ -128,3 +128,13 @@ Where the build settled something the design left open, or departed from it:
 - **`TUI.compacting()` keeps its running filter** for what it still does, locking and dimming a compacting session's items (#165: a stopped host's items come back at once). The eye's blue, running or not, is the new `TUI.blue()`, read from `operating`.
 - **The quiet mark's cache-life check** (`cold_due`) keeps its hour as `CACHE_LIFE`: it was `PARK_COMPACT_WITHIN`'s second use.
 - **A called-off park or end can't be acted on late.** A failed op doesn't interrupt the running turn (no side effects); an aborted one interrupts only as section 4 says. Either way, `park_session` and `end_session` from the turn that was told are refused ("the park request was cancelled: carry on as before"). The turn boundary is the host's last turn end, `sessions.idle_at`, compared with when the op entered its last active state (`op_at`, which an end keeps: for a told op, its tell). Only an op the session heard of (its end wrote the cancel message) refuses anything. With none known (a tab, an older host, no turn ended yet), the boundary is the cancel message's handover. An unprompted call in a later turn goes.
+
+## 11. As built (PR 2: relaunch, start, handover)
+
+- **The op row rides on the existing payloads.** `set_relaunch` writes the relaunch op (`requested` compacting first, else `stopping`), `mark_launched` moves it to `starting` or begins one (`start` for a session's first launch, else `relaunch`), and registration completes it, each in the same transaction. The hub's Relaunch memory (`relaunching`, `compacting`, `lapsed`) and the `relaunch` payload stay as the driver and the restart re-drive; the sweep fails a relaunch only once no hub tracks it (its deadline plus `RELAUNCH_SLACK`). Moving that memory into the row is left undone: it changes no behaviour.
+- **A host's hand-over launches no op of its own**: its tab is opened after `shell = 'tab'`, which completes the handover.
+- **Interrupt in `opening`** (the host has taken Shell and is disconnecting, a second or two) is refused with a warning rather than undone: the host has already let go of the session.
+- **A launch that fails outright** (wt.exe missing, already running) fails its op at once, as its error is said, rather than waiting out its 90 seconds.
+- **An aborted launch's process** is stopped once it registers (the sweep, once per hub); until it registers there is no pid to stop.
+- **Fork** blues the child from its launch, not from its row's creation (the worktree and transcript copy come before the launch).
+- **Interrupt shows for a host's session while it is blue**, running or not (a Relaunch stopping it, its launch starting). A tab's session has no Interrupt: its launch is bounded by its 90 seconds.
