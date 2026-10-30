@@ -2161,7 +2161,8 @@ class Store:
         monitor is printing those)."""
         return self._all(
             """SELECT * FROM messages WHERE session_id = ? AND item_ref = ?
-               AND (? OR ((delivered_at IS NOT NULL OR claimed_at IS NULL) AND draft = 0)) ORDER BY id""",
+               AND (? OR ((delivered_at IS NOT NULL OR claimed_at IS NULL) AND draft = 0
+                          AND coalesce(kind, '') != 'run')) ORDER BY id""",   # a run's note is never the session's (#257)
             (sid, ref, in_flight),
         )
 
@@ -2229,7 +2230,7 @@ STATUS = "status"
 # one, when a reply was all a session wrote on an item: it counts as a reply (#76)
 AWAITING = f"""SELECT session_id, item_ref FROM messages WHERE item_ref IS NOT NULL AND draft = 0
               GROUP BY session_id, item_ref
-              HAVING max(CASE WHEN author = 'person' THEN id END) >
+              HAVING max(CASE WHEN author = 'person' AND coalesce(kind, '') != 'run' THEN id END) >
                      coalesce(max(CASE WHEN author = 'claude' AND coalesce(kind, 'reply') IN ('reply', '{STATUS}')
                                   THEN id END), 0)"""
 # D28, on items aliased i: answered and sent, not yet replied to, nothing more queued. Shown as

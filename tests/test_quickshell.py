@@ -117,3 +117,9 @@ def test_sweep_deletes_files_over_a_day_old(tmp_path):
 ])
 def test_message(payload, status, output, want, desc):
     assert quickshell.message(payload, status, output) == want, desc
+
+
+def test_a_key_is_never_read_as_an_option(tmp_path):
+    """#257: the key is the tab's last argument: never one starting with -."""
+    keys = [quickshell.write(tmp_path / "w.db", {"text": "ls"}) for _ in range(200)]
+    assert all(quickshell.KEY.fullmatch(k) and not k.startswith("-") for k in keys)

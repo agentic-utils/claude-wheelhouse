@@ -1870,3 +1870,13 @@ def test_close_and_reopen_a_command(store, sid):
     assert store.item(sid, ref)["status"] == "closed"
     hub.close(sid, ref, False)
     assert store.item(sid, ref)["status"] == "new"
+
+
+def test_a_runs_note_is_never_the_sessions(store, sid):
+    """#257: the note an unsent run leaves is the person's alone: the session's view of the
+    thread leaves it out, and it never makes the item await a reply."""
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.ran(sid, ref, "ran 14:05")
+    assert [m["body"] for m in store.thread(sid, ref)] == ["ran 14:05"]
+    assert list(store.thread(sid, ref, in_flight=False)) == []
+    assert (sid, ref) not in store.awaiting()

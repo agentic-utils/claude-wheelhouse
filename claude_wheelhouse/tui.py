@@ -558,7 +558,7 @@ def thread_blocks(found, session_name: str = "") -> list[tuple[str, str]]:
            ("pr", pr_body(item)) if item["kind"] == "pr" else
            ("claude", command_body(item)) if item["kind"] == "command" else ("claude", item["body"] or "_no detail_")]
     for m in msgs:
-        if m["author"] == "person" and m["kind"] == "run":   # a run whose output wasn't sent: never the session's (#257)
+        if m["author"] == "person" and "kind" in m.keys() and m["kind"] == "run":   # a run whose output wasn't sent: never the session's (#257)
             out.append(("note", f"_{m['body']}_"))
         elif m["author"] == "person":
             out.append(("you", f"**you{' · queued' if m['draft'] else ' · sending' if not m['delivered_at'] else ''}** · "
@@ -3521,7 +3521,8 @@ class RunCommand(Dialog):
             yield TextArea(self.text, id="run-text", soft_wrap=False, show_line_numbers=False)
             yield Checkbox(f"Send the output back to {self.name_}" + (" (it asked for it)" if self.wanted else ""),
                            self.wanted, id="run-send")
-            yield Label("It goes into the session's transcript: untick if it may show secrets.", id="run-warning",
+            yield Label("The output (and the command, if you edit it) goes into the session's transcript: "
+                        "untick if it may show secrets.", id="run-warning",
                         markup=False)
             yield Label("", id="run-error", markup=False)
             with Horizontal(classes="buttons"):

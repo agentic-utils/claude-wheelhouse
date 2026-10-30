@@ -24,7 +24,7 @@ from pathlib import Path
 MAX_LINES = 20
 MAX_CHARS = 2000
 CAP, HEAD, TAIL = 16_000, 4_000, 12_000   # a capture's characters kept: the first HEAD and the last TAIL
-KEY = re.compile(r"[A-Za-z0-9_-]{16,64}")
+KEY = re.compile(r"[0-9a-f]{48}")   # write's token_hex(24)
 STALE = 24 * 3600   # seconds after which a shell file left behind (a tab closed mid-run) is deleted
 
 
@@ -98,7 +98,7 @@ def shell_dir(db: Path) -> Path:
 
 def write(db: Path, payload: dict) -> str:
     """The run's file (mode 0600, created new) under a random key: the key."""
-    key = secrets.token_urlsafe(24)
+    key = secrets.token_hex(24)   # never starting with -, which the tab's argv would read as an option
     fd = os.open(shell_dir(db) / key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as f:
         json.dump(payload, f)
@@ -146,7 +146,7 @@ unset WH_CMD WH_HEAD WH_RC WH_RAN
 
 def bash(db: Path, env: dict, cmd: str, head: str, ran: bool = False) -> None:
     """Exec bash with RC, the command in its environment."""
-    rc = shell_dir(db) / (secrets.token_urlsafe(24) + ".rc")
+    rc = shell_dir(db) / (secrets.token_hex(24) + ".rc")
     fd = os.open(rc, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(RC)
@@ -190,9 +190,15 @@ def run(key: str, db: Path) -> None:
     fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     os.close(fd)
     print(f"\n\033[2m{head} (its output goes back to {name}; a cd or export in it doesn't stay)\033[0m\n{text}\n")
-    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)   # Ctrl+C is the command's, through script's pty
+    # Ctrl+C is the command's, through script's pty: a handler of ours, not SIG_IGN, which the
+    # command would inherit across exec and then never stop
+    previous = signal.signal(signal.SIGINT, lambda *_: None)
+    exe = shutil.which("bash") or "/bin/bash"
     try:
-        status = subprocess.run(["script", "-qefc", text, str(out)], env={**env, "SHELL": shutil.which("bash") or "/bin/bash"}).returncode
+        # an interactive bash, as the unticked run's, so ~/.bashrc's PATH and aliases hold; the
+        # text in its environment, never in the command line script hands its shell
+        status = subprocess.run(["script", "-qefc", f"{exe} -ic 'eval \"$WH_CMD\"'", str(out)],
+                                env={**env, "SHELL": exe, "WH_CMD": text}).returncode
     finally:
         signal.signal(signal.SIGINT, previous)
     try:
@@ -201,17 +207,22 @@ def run(key: str, db: Path) -> None:
         out.unlink(missing_ok=True)
     store = Store(db)
     print()
-    while True:
-        try:
-            how = hub.send_or_queue(store, payload["sid"], ref, message(payload, status, captured))
-            break
-        except Compacting:
-            print(f"{name} is compacting: the output goes once it's done")
-            time.sleep(5)
-        except SessionGone:
-            print(f"{name} has gone from the wheelhouse: the output wasn't sent")
-            how = None
-            break
+    how, said = None, False
+    try:
+        while True:
+            try:
+                how = hub.send_or_queue(store, payload["sid"], ref, message(payload, status, captured))
+                break
+            except Compacting:   # the store takes nothing then (#244): it goes once that's done
+                if not said:
+                    print(f"{name} is compacting: the output goes once it's done (Ctrl+C gives up and drops it)")
+                    said = True
+                time.sleep(5)
+            except SessionGone:
+                print(f"{name} has gone from the wheelhouse: the output wasn't sent")
+                break
+    except KeyboardInterrupt:
+        print("\nyou stopped waiting: the output wasn't sent")
     if how:
         print(f"output {how} to {name} as a reply on {ref}")
     bash(db, env, text, head, ran=True)
