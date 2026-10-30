@@ -686,8 +686,11 @@ class Prs(Vertical):
         rows = sorted_by(self.listed(), self.sort)
         table.marked &= {r["url"] for r in rows}   # a marked PR that went is unmarked
         width = self.content_size.width
+        # a PR whose session is dead and not parked is dimmed, as its inbox row is (#252)
+        dead = {s["id"] for s in self.ctx.sessions() if s.get("dead")}
+        dim = {r["url"] for r in rows if r["item"] is not None and r["item"]["session_id"] in dead}
         drawn = (tuple(tuple(sorted((k, str(v)) for k, v in r.items())) for r in rows), self.sort, width,
-                 tuple(sorted(table.marked)))
+                 tuple(sorted(table.marked)), tuple(sorted(dim)))
         if drawn == self.drawn:
             return
         self.drawn = drawn
@@ -708,6 +711,8 @@ class Prs(Vertical):
             cells = {"pr": Text(f"PR{r['number']}", style=api.KIND_COLOUR["pr"]), "repo": short(r),
                      "title": r["title"], "light": self.dot(r)}
             shown = tuple(api.plain(cells[k]) for k, _ in columns)   # a title as itself, never markup
+            if r["url"] in dim:   # its light kept at full strength: GitHub's state stays legible
+                shown = tuple(c if k == "light" else api.faded((c,))[0] for c, (k, _) in zip(shown, columns))
             table.add_row(*(api.marked(shown) if r["url"] in table.marked else shown), key=r["url"])
         if at is not None and at in table.rows:
             table.move_cursor(row=table.get_row_index(at), animate=False)

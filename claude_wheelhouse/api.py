@@ -58,7 +58,7 @@ from .docroots import Outside, confine  # noqa: F401  (a path resolved, if a doc
 from .models import EFFORTS, name as model_label  # noqa: F401
 # a pull request's URL read (prs.py), and how the lists colour a kind and show a row's full text
 from .prs import STATES as PR_STATES, canonical as pr_url, link as pr_link, parse as parse_pr, repo_of  # noqa: F401
-from .rows import KIND_COLOUR, KeepColours, RowTips, marked, plain  # noqa: F401
+from .rows import KIND_COLOUR, KeepColours, RowTips, faded, marked, plain  # noqa: F401
 from .plan_usage import EVERY as USAGE_EVERY, AccountUsage  # noqa: F401
 from .transcript_usage import (AMBER, BUCKET, CHARTS, DAY, HOT, HOUR, OK, PARTIAL, SERIES,  # noqa: F401
                                SPAN, WARN, WEEK, History, Snapshot, Turn, UsageFollower, clock,
@@ -142,7 +142,8 @@ class Context:
     """All a module gets from the hub. Read-only: a module never writes the hub's data but
     through the commands given here (set_effort)."""
     state_dir: Path
-    # the hub's sessions: id, name, whether it's running, "context", a HostContext for an
+    # the hub's sessions: id, name, whether it's running, "dead" (dead and not parked: its rows
+    # dimmed in every pane, hub.lifeless, #252), "context", a HostContext for an
     # SDK-hosted session whose host has recorded one, else None, and what it is set to run
     # on (Hub.model_state): "model" and "effort" (None where unknown), "pending" (the host
     # has yet to apply them: "applying" or "on relaunch") and "effort_live" (its effort can

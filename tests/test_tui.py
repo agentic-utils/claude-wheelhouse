@@ -6127,6 +6127,65 @@ async def test_parked_sessions_stay_in_the_list_after_the_rest(store, sid, tmp_p
         assert "blink" in active_q and "dim" not in active_q, active_q
 
 
+def dimmed_cell(cell) -> bool:
+    """Whether a table cell is drawn dim, by its own style or a span over it."""
+    return isinstance(cell, Text) and ("dim" in str(cell.style) or any("dim" in str(sp.style) for sp in cell.spans))
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("row, life, dim, desc", [
+    ("session", "dead", True, "a dead session's row dims, its dot kept red"),
+    ("session", "live", False, "a live session's row stays bright"),
+    ("session", "parked", True, "a parked session's name dims, as it did before"),
+    ("session", "revived", False, "relaunched: its row brightens at the next refresh"),
+    ("item", "dead", True, "a dead session's inbox item dims"),
+    ("item", "live", False, "a live session's inbox item stays bright"),
+    ("item", "parked", None, "a parked session's items are off the inbox"),
+    ("item", "revived", False, "relaunched: its items brighten at the next refresh"),
+    ("conversation", "dead", True, "a dead session's conversation row dims"),
+    ("conversation", "live", False, "a live session's conversation row stays bright"),
+    ("conversation", "parked", None, "a parked session's conversation is off the inbox"),
+    ("conversation", "revived", False, "relaunched: its conversation row brightens"),
+])
+async def test_a_dead_sessions_rows_are_dimmed(store, sid, monkeypatch, row, life, dim, desc):
+    """#252: a session dead and not parked keeps its red dot, and its rows dim in the session
+    list and the inbox; they stay selectable, and brighten once it runs again. A parked one
+    is dimmed as it was (#58, #210), its items off the inbox."""
+    from claude_wheelhouse import liveness
+    from claude_wheelhouse.tui import STATUS_STYLE
+    status = {"now": "live" if life == "live" else "dead"}
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: status["now"])
+    store.post_item(sid, "question", "which db?")
+    if life == "parked":
+        store.set_parked(sid, True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if life == "revived":
+            status["now"] = "live"
+            app.refresh_data()
+            await pilot.pause()
+        if row == "session":
+            t = app.query_one("#session-list", DataTable)
+            cells = t.get_row(sid)
+            assert not dimmed_cell(cells[0]), f"{desc}: the dot keeps its colour"
+            if life == "dead":
+                assert str(cells[0].style) == STATUS_STYLE["dead"], f"{desc}: the dot stays red"
+            assert dimmed_cell(cells[1]) == dim, desc
+            return
+        t = app.query_one("#items", DataTable)
+        key = f"{sid}|" if row == "conversation" else next((k for k in t.keys() if k and k.endswith("Q1")), None)
+        if dim is None:
+            assert key not in t.rows, desc
+            return
+        assert dimmed_cell(t.get_row(key)[-1]) == dim, desc
+        if row == "item":   # visual only: still picked by a click
+            await pilot.click(t, offset=(t.region.width // 2, t.get_row_index(key) + 1))
+            await pilot.pause()
+            assert app.selected == (sid, "Q1"), f"{desc}: selectable"
+
+
 def test_the_keys_overlay_has_relaunch_and_no_tabs():
     from claude_wheelhouse.tui import keys_help
     text = keys_help(sdk=True)

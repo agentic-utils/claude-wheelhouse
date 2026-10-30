@@ -88,6 +88,13 @@ def state(status: str, parked) -> str:
     return "parked" if parked else "available"
 
 
+def lifeless(shown: str, parked) -> bool:
+    """Dead but not parked (#252): its process gone without the person parking it, so its
+    rows are dimmed in every pane, its dot kept red. `shown` is its shown status
+    (shown_status), so one being relaunched already isn't."""
+    return shown == "dead" and not parked
+
+
 def waking(s) -> str:
     """What bringing a session that isn't running back is called: a parked one is unparked,
     any other relaunched (VERBS)."""

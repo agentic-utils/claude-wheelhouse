@@ -311,6 +311,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("session-info", UNRELEASED, ADVANCED,
             note="The ⓘ at the stats pane's top right shows the selected session's info: its id (C copies it), "
                  "user, machine, branch, model, transcript, and its MCP server's code, flagged when it needs a relaunch."),
+    Feature("dead-dim", UNRELEASED, ADVANCED,
+            note="A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, "
+                 "its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at."),
 
 )
 

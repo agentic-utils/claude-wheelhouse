@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 56, 2026-10-29T11:52:22Z, source cc5c1cbb3b8eb3f4 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 57, 2026-10-30T10:31:59Z, source d792a2ead0ccab83 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -34,6 +34,7 @@ daemon running.
 - Park: a session writes its handoff and stops, kept dimmed until Unpark.
 - Forget: the session leaves the wheelhouse (its data deleted); Adopt brings one back.
 - Relaunch: start a session again where it left off.
+- Dead: a session not running and not parked (an Available one), red in the session list; its rows dim in every pane (session list, inbox, PRs, Decisions) until it runs again.
 - Fork: a new session carrying on from another's conversation.
 - Pin: an item kept through Delete, Ctrl+A, Ctrl+Delete and autocleanse.
 - Completed: an item done with (a task done or dropped, a subagent done or failed, a PR merged or closed, a question answered, a decision seen, a doc read). Ctrl+Delete deletes them all at once (Ctrl+Z undoes it); autocleanse hides each 5 minutes after it completed (AUTOCLEANSE_MINUTES, 0 off) until Alt+V shows it.
@@ -362,3 +363,4 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - A completed item leaves the inbox 5 minutes after it completed (AUTOCLEANSE_MINUTES in a .env, 0 for never); Alt+V shows it again.
 - Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it.
 - The ⓘ at the stats pane's top right shows the selected session's info: its id (C copies it), user, machine, branch, model, transcript, and its MCP server's code, flagged when it needs a relaunch.
+- A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at.
