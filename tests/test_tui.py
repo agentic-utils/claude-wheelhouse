@@ -241,10 +241,12 @@ async def test_confirm_keys_stay_in_the_dialog(store, sid, key, expected, desc):
 
 @pytest.mark.anyio
 async def test_enter_on_a_destructive_confirm_declines(store, sid):
-    """R6: Confirm opens on No, so a reflex Enter on "Force end" keeps the wheelhouse data."""
+    """R6: Confirm opens on No, so a reflex Enter on a Forget keeps the wheelhouse data. (A pending
+    request's Force, where this began, has gone: #249.)"""
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        app.resolve_request(sid, "end", "force")
+        app.push_screen(Confirm("Forget demo? Its wheelhouse data is deleted."),
+                        lambda yes: yes and store.end(sid))
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
