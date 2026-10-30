@@ -1,6 +1,6 @@
 # Quick shell, and commands a session asks Doug to run
 
-Issue: #257. Status: design, revised with Doug's answers (Q238 to Q241), for review.
+Issue: #257. Status: design, revised with Doug's answers (Q238 to Q241, and the run-notification question), for review.
 
 The ask, in Doug's words (30 Oct): "Add a way for me to launch a shell for a quick command;
 then, when a session suggests a Bash excerpt to me, let Wheelhouse display that with a
@@ -20,6 +20,9 @@ Settled with Doug:
   button for handing an SDK session over to a tab, it's a rare operation; rename it
   "Handover to Claude Code in a shell" so it is no longer listed as "Shell" in the F1 help
   box, then the name "Shell" can be repurposed for this."
+- Telling the session about a run: "c, and, add an argument to suggest_command() tool so
+  the model can request that I send output back to it. I can then accept or override that
+  request with the checkbox."
 
 Two parts, landing in this order: the shell, then command items.
 
@@ -60,7 +63,7 @@ unmaintained and fights the app for keys) and a one-line prompt with output in a
 No detection: the session asks, as it asks a question. A new MCP tool:
 
 ```
-suggest_command(command: str, why: str) -> str   # "C4: shown to the person"
+suggest_command(command: str, why: str, want_output: bool = False) -> str   # "C4: shown"
 ```
 
 **A new kind, `command`, ref `C<n>`** (C is free). Not a task: a task's statuses are the
@@ -94,6 +97,8 @@ segment in the text, so no session text ever reaches markup.
 │ │gh pr view 263 --json mergeStateStatus,headRefOid                         │ │
 │ │                                                                          │ │
 │ └──────────────────────────────────────────────────────────────────────────┘ │
+│ [X] Send the output back to wheelhouse-ui (it asked for it)                  │
+│     It goes into the session's transcript: untick if it may show secrets.    │
 │                                                     [ Run  Ctrl+Enter ]      │
 │                                                     [ Cancel  Escape ]       │
 └──────────────────────────────────────────────────────────────────────────────┘
@@ -117,23 +122,51 @@ command, puts it in history and `eval`s it, leaving an ordinary shell at the pro
 The text travels in that process's environment, never on a command line, so nothing passes
 through cmd.exe or wt.exe quoting. (macOS zsh: the same through a `ZDOTDIR` rc.)
 
-**After a run**: the item goes to `run` and its detail gains a dim line `ran 14:05` (with
-`, edited` if the box changed), kept as an item note (a `messages` row the session isn't
-sent). `launch.log` gets the time, session, ref, directory and the exact text run. The
-output stays in the tab: the session never sees it, though `list_items` shows the status.
+**The checkbox**, "Send the output back to <session>": ticked when the session passed
+`want_output=True` (the caption then adds "(it asked for it)"), unticked otherwise, and
+Doug's to flip either way. The warning line under it shows whenever it's ticked.
+
+**Unticked**: the command runs as above and the session gets nothing. The item goes to
+`run` and its detail gains a dim note `ran 14:05` (`, edited` if the box changed), a
+`messages` row the session isn't sent.
+
+**Ticked**, the rc runs the command under `script -qefc "$WH_CMD" <file>` instead of
+`eval`: it keeps a real tty (colours, `sudo`'s password prompt, `less` all work, and
+`sudo` turns echo off, so a typed password isn't captured), writes everything shown to a
+0600 file beside the database (`shell/<key>.out`), and returns the command's exit status.
+`script -c` runs it in a child shell, so a `cd` or `export` in it doesn't stay in the tab;
+the rc says so when it prints the command. When the command ends (Ctrl+C included, exit
+130), the tab's `shell <key>` process, which waits on it rather than exec'ing, then:
+
+1. Cleans the capture: ANSI escapes stripped, each `\r`-overwritten line (a progress bar)
+   kept at its last state, `script`'s own header and footer dropped.
+2. Caps it at 16,000 characters: the first 4,000 and the last 12,000, with
+   `[... 312 lines cut ...]` between, as the end usually holds the error.
+3. Sends one person message on the `C<n>` item: `ran C4 in <dir>, exit 1` (`, edited`,
+   with the text run in a code block, when the box changed), then the output in a fenced
+   block. It goes through the normal send path, queued or sent by the session's mode and
+   #249's busy rule, so a parked session gets it on resume like any message.
+4. Deletes the capture file, prints `output sent to wheelhouse-ui as a reply on C4`, and
+   execs the ordinary interactive shell.
+
+If the tab is closed mid-run, nothing is sent: the next app start deletes `shell/` files
+over a day old. `launch.log` gets the time, session, ref, directory, exact text run and
+whether output was sent, either way.
 
 ## 3. Compatibility and the protocol
 
 - **Store**: `command` in `KINDS`, `STATUSES` and `INITIAL_STATUS`; no new column (the
   item note is a `messages` row). Items are per session, so a session on older code never
   meets a command item: only a new session can post one.
-- **`PROTOCOL_VERSION` 24**: a new tool and a protocol rule sessions must follow. Older
+- **`PROTOCOL_VERSION` 26**: a new tool and a protocol rule sessions must follow. Older
   sessions show as needing a relaunch; until then they just don't suggest commands.
 - **protocol.md** gains one rule: "When you want the person to run a shell command
   themselves (one that needs their credentials, their eyes, or their machine outside your
   sandbox), post it with `suggest_command`, not as a code block to copy: `why` says in one
   line what it does or shows. Plain ASCII only; write a placeholder as `<name>`. They may
-  edit it before running. You won't see its output: ask for what you need back."
+  edit it before running. Pass `want_output=True` if you need what it prints: the output
+  then comes back as a reply on the item when they run it, unless they untick it. Without
+  it you see nothing, so don't wait for it."
 - The tool's docstring, `launch.JOINED_TEXT` if it lists tools, and the helper facts move
   in step; the daemon gains a `shell` route (additive; the fingerprint restarts an older
   daemon).
@@ -148,13 +181,6 @@ output stays in the tab: the session never sees it, though `list_items` shows th
    the run note; README, a feature and tour tip.
 
 ## Open questions for Doug
-
-**Q1. Tell the session when a command has run?** (Decides whether a run interrupts it.)
-
-- (a) No: the status changes, which `list_items` shows; Doug says more if he wants
-  (recommended: a run often has nothing for the session, and a message starts a turn).
-- (b) Yes: a short message "ran C4 (edited)" goes to the session, starting a turn.
-- (c) A checkbox in the modal, "tell the session", off by default.
 
 **Q2. Handover's place.** (Decides whether SDK sessions keep a visible way back to a tab.)
 
